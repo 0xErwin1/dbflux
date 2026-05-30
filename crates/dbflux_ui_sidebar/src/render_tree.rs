@@ -391,15 +391,20 @@ pub(super) fn render_tree_item(
                     )
                 })
                 .when(!is_being_renamed, |el| {
-                    el.child(div().flex_1().overflow_hidden().text_ellipsis().child(
-                        sidebar_tree_label(
-                            item.label.clone(),
-                            node_kind,
-                            is_active,
-                            is_active_database,
-                            label_color,
-                        ),
-                    ))
+                    el.child(
+                        div()
+                            .flex_1()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(sidebar_tree_label(
+                                item.label.clone(),
+                                node_kind,
+                                is_active,
+                                is_active_database,
+                                label_color,
+                            )),
+                    )
                 })
                 .when(
                     matches!(
