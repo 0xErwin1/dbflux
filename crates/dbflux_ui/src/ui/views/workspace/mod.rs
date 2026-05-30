@@ -7,6 +7,7 @@ mod render;
 pub use inspector::{WorkspaceInspector, WorkspaceInspectorEvent};
 
 use crate::app::{AppStateChanged, AppStateEntity};
+use dbflux_ui_base::AppStateGlobal;
 use dbflux_components;
 use dbflux_core::observability::actions::CONFIG_CHANGE;
 use dbflux_ui_base::modals::{
@@ -42,7 +43,7 @@ use crate::ui::overlays::sql_preview_modal::SqlPreviewModal;
 use crate::ui::overlays::sso_wizard::{SsoWizard, SsoWizardEvent};
 use crate::ui::tokens::{Heights, Radii, Spacing};
 use crate::ui::views::sidebar::{Sidebar, SidebarEvent, SidebarTab};
-use crate::ui::views::status_bar::{StatusBar, ToggleTasksPanel};
+use crate::ui::views::status_bar::{OpenAuditWithCorrelation, StatusBar, ToggleTasksPanel};
 use crate::ui::views::tasks_panel::TasksPanel;
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 #[cfg(test)]
@@ -338,6 +339,9 @@ impl Workspace {
         cx.set_global(ToastGlobal {
             host: toast_host.clone(),
         });
+        cx.set_global(AppStateGlobal {
+            entity: app_state.clone(),
+        });
 
         let sidebar = cx.new(|cx| Sidebar::new(app_state.clone(), window, cx));
         let sidebar_dock = cx.new(|cx| SidebarDock::new(sidebar.clone(), cx));
@@ -502,6 +506,15 @@ impl Workspace {
         cx.subscribe(&status_bar, |this, _, _: &ToggleTasksPanel, cx| {
             this.toggle_tasks_panel(cx);
         })
+        .detach();
+
+        cx.subscribe_in(
+            &status_bar,
+            window,
+            |this, _, event: &OpenAuditWithCorrelation, window, cx| {
+                this.open_audit_viewer_with_correlation(event.0, window, cx);
+            },
+        )
         .detach();
 
         cx.subscribe_in(

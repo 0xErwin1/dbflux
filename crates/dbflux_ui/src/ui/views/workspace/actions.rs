@@ -236,6 +236,66 @@ impl Workspace {
             .push(cx);
     }
 
+    /// Opens (or focuses) the audit viewer pre-filtered by correlation id.
+    ///
+    /// When an audit tab is already open, the correlation filter is applied to
+    /// the existing tab and it is brought to focus. When `correlation_id` is
+    /// `None`, the audit viewer opens with the default user-error filter
+    /// (`action = "user_error"`). When no tab is open and a specific id was
+    /// provided, a new tab is created pre-filtered by that id.
+    pub(super) fn open_audit_viewer_with_correlation(
+        &mut self,
+        correlation_id: Option<uuid::Uuid>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::document::AuditDocument;
+        use crate::ui::document::DocumentKey;
+
+        let existing_id = self
+            .tab_manager
+            .read(cx)
+            .find_by_key(&DocumentKey::Audit, cx);
+
+        if let Some(id) = existing_id {
+            self.tab_manager.update(cx, |mgr, cx| {
+                if let Some(tab) = mgr.documents().iter().find(|t| t.id() == id) {
+                    let pane = tab.as_pane();
+                    if let Some(f) = &pane.set_correlation_filter {
+                        f(correlation_id.map(|u| u.to_string()), cx);
+                    }
+                }
+                mgr.activate(id, cx);
+            });
+
+            self.set_focus(crate::keymap::FocusTarget::Document, window, cx);
+            return;
+        }
+
+        match correlation_id {
+            Some(id) => {
+                let doc = cx.new(|cx| {
+                    AuditDocument::new_with_correlation_id(
+                        id,
+                        self.app_state.clone(),
+                        window,
+                        cx,
+                    )
+                });
+                let pane = AuditDocument::into_pane(doc, cx);
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.open(Tab::Pane(Box::new(pane)), cx);
+                });
+            }
+            None => {
+                self.open_audit_viewer(window, cx);
+                return;
+            }
+        }
+
+        self.set_focus(crate::keymap::FocusTarget::Document, window, cx);
+    }
+
     /// Opens a `ChartDocument` pre-populated with the metric selected in the
     /// sidebar and immediately executes it.
     ///

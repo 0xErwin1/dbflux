@@ -86,6 +86,12 @@ pub struct PaneHandle {
     /// Sets the category filter on audit-style documents.
     pub set_category_filter: Option<Box<dyn Fn(Option<String>, &mut App)>>,
 
+    /// Sets (or clears) the correlation-id filter on audit-style documents.
+    ///
+    /// `Some(id_string)` applies the filter; `None` clears it.
+    /// `None` on the outer `Option` means the document does not support this operation.
+    pub set_correlation_filter: Option<Box<dyn Fn(Option<String>, &mut App)>>,
+
     /// Returns true when this pane matches a given event-stream target.
     pub matches_event_stream:
         Option<Box<dyn Fn(uuid::Uuid, &dbflux_core::EventStreamTarget, &App) -> bool>>,
@@ -148,6 +154,7 @@ impl PaneHandle {
             matches_dedup_key,
             subscribe,
             set_category_filter: None,
+            set_correlation_filter: None,
             matches_event_stream: None,
             is_file_backed_empty: None,
             session_tab_snapshot: None,
