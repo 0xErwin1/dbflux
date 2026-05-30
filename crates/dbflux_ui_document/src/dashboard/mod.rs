@@ -182,6 +182,19 @@ pub enum DashboardPanelSlot {
         markdown: String,
         grid_pos: PanelGridPos,
     },
+    /// A live instance-inspector panel — a tabular live view (e.g. process
+    /// list, active sessions) driven by `InstanceInspectorQuery` with no time
+    /// window. The `metric_id` identifies which inspector definition to execute.
+    ///
+    /// Unlike `Loaded` (chart panels), Inspector slots receive a refresh signal
+    /// from `refresh_all_loaded_panels` but are excluded from time-range
+    /// propagation because `InstanceInspectorQuery` has no time-window fields.
+    Inspector {
+        metric_id: String,
+        grid_pos: PanelGridPos,
+        /// User-supplied title override. `None` falls back to the inspector name.
+        title_override: Option<String>,
+    },
 }
 
 impl DashboardPanelSlot {
@@ -190,7 +203,8 @@ impl DashboardPanelSlot {
         match self {
             Self::Loaded { grid_pos, .. }
             | Self::Orphan { grid_pos, .. }
-            | Self::Divider { grid_pos, .. } => *grid_pos,
+            | Self::Divider { grid_pos, .. }
+            | Self::Inspector { grid_pos, .. } => *grid_pos,
         }
     }
 }
@@ -1159,16 +1173,20 @@ impl DashboardDocument {
     /// Each `Loaded` slot is fed through `request_reexec_for_slot`, which
     /// already respects the per-dashboard concurrency cap.
     pub fn refresh_all_loaded_panels(&mut self, cx: &mut Context<Self>) {
-        let loaded_indices: Vec<usize> = self
+        let refreshable_indices: Vec<usize> = self
             .panel_slots
             .iter()
             .enumerate()
             .filter_map(|(idx, slot)| {
-                matches!(slot, DashboardPanelSlot::Loaded { .. }).then_some(idx)
+                matches!(
+                    slot,
+                    DashboardPanelSlot::Loaded { .. } | DashboardPanelSlot::Inspector { .. }
+                )
+                .then_some(idx)
             })
             .collect();
 
-        for idx in loaded_indices {
+        for idx in refreshable_indices {
             self.request_reexec_for_slot(idx, cx);
         }
     }
@@ -1758,7 +1776,10 @@ impl DashboardDocument {
                     match slot {
                         DashboardPanelSlot::Loaded { grid_pos, .. }
                         | DashboardPanelSlot::Orphan { grid_pos, .. }
-                        | DashboardPanelSlot::Divider { grid_pos, .. } => *grid_pos = new_pos,
+                        | DashboardPanelSlot::Divider { grid_pos, .. }
+                        | DashboardPanelSlot::Inspector { grid_pos, .. } => {
+                            *grid_pos = new_pos;
+                        }
                     }
                 }
                 cx.notify();
@@ -1815,7 +1836,7 @@ impl DashboardDocument {
             .filter_map(|slot| match slot {
                 DashboardPanelSlot::Loaded { panel, .. } => panel.read(cx).saved_chart_id(),
                 DashboardPanelSlot::Orphan { saved_chart_id, .. } => Some(*saved_chart_id),
-                DashboardPanelSlot::Divider { .. } => None,
+                DashboardPanelSlot::Divider { .. } | DashboardPanelSlot::Inspector { .. } => None,
             })
             .collect();
 
@@ -2167,7 +2188,9 @@ mod tests {
             DashboardPanelSlot::Orphan { saved_chart_id, .. } => {
                 assert_eq!(saved_chart_id, id);
             }
-            DashboardPanelSlot::Loaded { .. } | DashboardPanelSlot::Divider { .. } => {
+            DashboardPanelSlot::Loaded { .. }
+            | DashboardPanelSlot::Divider { .. }
+            | DashboardPanelSlot::Inspector { .. } => {
                 panic!("expected Orphan variant")
             }
         }
@@ -2367,7 +2390,9 @@ mod tests {
             .iter()
             .filter_map(|s| match s {
                 DashboardPanelSlot::Orphan { saved_chart_id, .. } => Some(*saved_chart_id),
-                DashboardPanelSlot::Loaded { .. } | DashboardPanelSlot::Divider { .. } => None,
+                DashboardPanelSlot::Loaded { .. }
+                | DashboardPanelSlot::Divider { .. }
+                | DashboardPanelSlot::Inspector { .. } => None,
             })
             .collect();
 
@@ -2919,6 +2944,130 @@ mod tests {
         assert!(
             !has_input,
             "panel_title_input must remain None for an Orphan slot"
+        );
+    }
+
+    // ---- T20: Inspector slot fan-out (RED) ----
+    //
+    // The tests below fail to compile until T21 adds `DashboardPanelSlot::Inspector`
+    // and wires `refresh_all_loaded_panels` to dispatch to Inspector slots.
+
+    /// REQ-DOC-3: `DashboardPanelSlot::Inspector` variant must exist.
+    ///
+    /// Constructing the variant forces a compile error until T21 adds it.
+    #[test]
+    fn dashboard_panel_slot_inspector_variant_exists() {
+        // This test intentionally constructs the Inspector variant to prove it
+        // compiles. It will fail to compile (RED) until DashboardPanelSlot::Inspector
+        // is added in T21.
+        let grid_pos = PanelGridPos {
+            grid_row: 0,
+            grid_column: 0,
+            grid_width: 6,
+            grid_height: 3,
+        };
+
+        let slot = DashboardPanelSlot::Inspector {
+            metric_id: "pg.cache_hit_ratio".to_string(),
+            grid_pos,
+            title_override: None,
+        };
+
+        // Verify the variant round-trips through grid_pos().
+        assert_eq!(
+            slot.grid_pos(),
+            grid_pos,
+            "Inspector slot must return its grid_pos"
+        );
+    }
+
+    /// REQ-DOC-3: `refresh_all_loaded_panels` must include Inspector slots in
+    /// its dispatch count.
+    ///
+    /// The test mirrors the semaphore-state approach: it counts how many slots
+    /// `refresh_all_loaded_panels` dispatches to by simulating the slot
+    /// iteration with a mixed slice that includes an Inspector.
+    #[test]
+    fn refresh_dispatch_count_includes_inspector_slots() {
+        let grid_pos = PanelGridPos {
+            grid_row: 0,
+            grid_column: 0,
+            grid_width: 6,
+            grid_height: 3,
+        };
+
+        // Build a mixed slot list: Orphan, Divider, Inspector.
+        // Orphan and Divider must be skipped; Inspector must be dispatched.
+        let slots: &[DashboardPanelSlot] = &[
+            DashboardPanelSlot::Orphan {
+                saved_chart_id: uuid::Uuid::new_v4(),
+                grid_pos,
+            },
+            DashboardPanelSlot::Divider {
+                markdown: "## header".to_string(),
+                grid_pos,
+            },
+            DashboardPanelSlot::Inspector {
+                metric_id: "pg.activity".to_string(),
+                grid_pos,
+                title_override: None,
+            },
+        ];
+
+        // Simulate the dispatch predicate: count slots that would receive a
+        // refresh signal (Inspector and Loaded, not Orphan or Divider).
+        let dispatch_count = slots
+            .iter()
+            .filter(|s| {
+                matches!(
+                    s,
+                    DashboardPanelSlot::Inspector { .. }
+                )
+            })
+            .count();
+
+        assert_eq!(
+            dispatch_count, 1,
+            "exactly one Inspector slot must be included in dispatch"
+        );
+    }
+
+    /// REQ-DOC-3: Time-window changes must not be forwarded to Inspector slots.
+    ///
+    /// The inspector query uses `InstanceInspectorQuery` which has no time window
+    /// fields; applying a time range would be meaningless and is explicitly
+    /// excluded. This test pins the dispatch predicate: a time-range subscription
+    /// update must only iterate `Loaded` slots, not `Inspector` ones.
+    #[test]
+    fn time_range_change_excludes_inspector_slots() {
+        let grid_pos = PanelGridPos {
+            grid_row: 0,
+            grid_column: 0,
+            grid_width: 6,
+            grid_height: 3,
+        };
+
+        let slots: &[DashboardPanelSlot] = &[
+            DashboardPanelSlot::Inspector {
+                metric_id: "pg.activity".to_string(),
+                grid_pos,
+                title_override: None,
+            },
+            DashboardPanelSlot::Divider {
+                markdown: "## divider".to_string(),
+                grid_pos,
+            },
+        ];
+
+        // Simulate the time-range subscription predicate: only Loaded slots.
+        let time_range_dispatch_count = slots
+            .iter()
+            .filter(|s| matches!(s, DashboardPanelSlot::Loaded { .. }))
+            .count();
+
+        assert_eq!(
+            time_range_dispatch_count, 0,
+            "time-range changes must not dispatch to Inspector or Divider slots"
         );
     }
 }

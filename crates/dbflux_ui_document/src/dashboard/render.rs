@@ -166,6 +166,15 @@ impl Render for DashboardDocument {
                         .filter(|s| !s.trim().is_empty())
                         .cloned()
                         .unwrap_or_else(|| panel.read(cx).title()),
+                    DashboardPanelSlot::Inspector {
+                        metric_id,
+                        title_override,
+                        ..
+                    } => title_override
+                        .as_ref()
+                        .filter(|s| !s.trim().is_empty())
+                        .cloned()
+                        .unwrap_or_else(|| metric_id.clone()),
                     DashboardPanelSlot::Orphan { .. } => "Chart not found".to_string(),
                     DashboardPanelSlot::Divider { .. } => String::new(),
                 };
@@ -287,6 +296,18 @@ impl Render for DashboardDocument {
                             .on_click(on_toggle)
                             .child(Text::heading(chevron))
                             .child(Text::heading(label))
+                            .into_any_element()
+                    }
+                    DashboardPanelSlot::Inspector { metric_id, .. } => {
+                        div()
+                            .id(("panel-card", panel_index))
+                            .size_full()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .justify_center()
+                            .text_sm()
+                            .child(format!("Inspector: {metric_id}"))
                             .into_any_element()
                     }
                 };
