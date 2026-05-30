@@ -28,7 +28,10 @@ pub mod tab_bar;
 mod tab_manager;
 mod task_runner;
 mod types;
+pub mod instance_inspector;
 pub mod refresh;
+
+pub use instance_inspector::InspectorPanel;
 
 pub use audit::AuditDocument;
 pub use chart_document::ChartDocument;
