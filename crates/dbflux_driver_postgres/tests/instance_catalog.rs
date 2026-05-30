@@ -165,6 +165,52 @@ fn fetch_locks_snapshot_has_expected_columns() {
     .unwrap();
 }
 
+/// BF2: all numeric metric fetches must return Ok (not panic) on a fresh Postgres
+/// instance that has no user tables yet, where aggregate queries over
+/// pg_statio_user_tables return NULL instead of a number.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn all_numeric_metrics_return_ok_on_empty_instance() {
+    containers::with_postgres_url(|uri| -> Result<(), DbError> {
+        let conn = connect(uri)?;
+
+        let numeric_metrics = [
+            "pg.tps",
+            "pg.cache_hit_ratio",
+            "pg.active_connections",
+            "pg.idle_connections",
+            "pg.blocks_read",
+        ];
+
+        for metric_id in numeric_metrics {
+            let result = conn.execute(&metric_req(metric_id));
+            assert!(
+                result.is_ok(),
+                "metric {metric_id} must not panic/error on empty instance; got: {:?}",
+                result.err()
+            );
+
+            let result = result.unwrap();
+            assert!(
+                !result.rows.is_empty(),
+                "metric {metric_id} must return at least one row"
+            );
+
+            if metric_id == "pg.cache_hit_ratio" {
+                if let Some(dbflux_core::Value::Float(ratio)) = result.rows[0].get(1) {
+                    assert!(
+                        *ratio >= 0.0 && *ratio <= 100.0,
+                        "cache_hit_ratio must be in [0, 100] on empty instance; got {ratio}"
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    })
+    .unwrap();
+}
+
 #[test]
 #[ignore = "requires Docker daemon"]
 fn pg_stat_statements_gating_logic() {

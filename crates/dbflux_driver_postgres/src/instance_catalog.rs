@@ -216,6 +216,19 @@ fn pg_error(e: postgres::Error) -> DbError {
     DbError::QueryFailed(e.to_string().into())
 }
 
+/// Extract a nullable `f64` column from a postgres row, defaulting to `fallback`
+/// when the column value is SQL NULL.
+///
+/// Aggregate queries over empty tables (e.g. `SUM(...)` with no rows) legally
+/// return NULL; deserializing NULL into a non-Option type panics at the
+/// rust-postgres level. This helper is the single NULL-safe extraction point
+/// for all numeric scalar fetches in this file.
+fn float_or(row: &postgres::Row, idx: usize, fallback: f64) -> Result<f64, DbError> {
+    row.try_get::<_, Option<f64>>(idx)
+        .map_err(pg_error)
+        .map(|opt| opt.unwrap_or(fallback))
+}
+
 #[async_trait]
 impl InstanceCatalog for PgInstanceCatalog {
     async fn list_metrics(&self) -> Result<Vec<InstanceMetricDef>, DbError> {
@@ -277,7 +290,7 @@ fn fetch_tps(client: &mut Client) -> Result<QueryResult, DbError> {
         )
         .map_err(pg_error)?;
 
-    let tps: f64 = row.get(0);
+    let tps = float_or(&row, 0, 0.0)?;
 
     Ok(single_sample_result(
         vec![timestamp_col("timestamp_ms"), float_col("tps")],
@@ -288,9 +301,10 @@ fn fetch_tps(client: &mut Client) -> Result<QueryResult, DbError> {
 fn fetch_cache_hit_ratio(client: &mut Client) -> Result<QueryResult, DbError> {
     let row = client
         .query_one(
-            "SELECT CASE WHEN (heap_blks_hit + heap_blks_read) = 0 THEN 100.0 \
-                         ELSE ROUND(100.0 * heap_blks_hit::numeric \
-                              / (heap_blks_hit + heap_blks_read), 2) \
+            "SELECT CASE WHEN COALESCE(heap_blks_hit, 0) + COALESCE(heap_blks_read, 0) = 0 \
+                         THEN 100.0 \
+                         ELSE ROUND(100.0 * COALESCE(heap_blks_hit, 0)::numeric \
+                              / (COALESCE(heap_blks_hit, 0) + COALESCE(heap_blks_read, 0)), 2) \
                     END::float8 AS hit_ratio \
              FROM ( \
                SELECT SUM(heap_blks_hit) AS heap_blks_hit, \
@@ -301,7 +315,7 @@ fn fetch_cache_hit_ratio(client: &mut Client) -> Result<QueryResult, DbError> {
         )
         .map_err(pg_error)?;
 
-    let ratio: f64 = row.get(0);
+    let ratio = float_or(&row, 0, 100.0)?;
 
     Ok(single_sample_result(
         vec![
@@ -320,7 +334,7 @@ fn fetch_connection_count(client: &mut Client, state: &str) -> Result<QueryResul
         )
         .map_err(pg_error)?;
 
-    let count: f64 = row.get(0);
+    let count = float_or(&row, 0, 0.0)?;
 
     Ok(single_sample_result(
         vec![timestamp_col("timestamp_ms"), float_col("connection_count")],
@@ -337,7 +351,7 @@ fn fetch_blocks_read(client: &mut Client) -> Result<QueryResult, DbError> {
         )
         .map_err(pg_error)?;
 
-    let blocks: f64 = row.get(0);
+    let blocks = float_or(&row, 0, 0.0)?;
 
     Ok(single_sample_result(
         vec![timestamp_col("timestamp_ms"), float_col("blocks_read")],
@@ -354,7 +368,7 @@ fn fetch_stat_statements_mean_exec(client: &mut Client) -> Result<QueryResult, D
         )
         .map_err(pg_error)?;
 
-    let mean_ms: f64 = row.get(0);
+    let mean_ms = float_or(&row, 0, 0.0)?;
 
     Ok(single_sample_result(
         vec![timestamp_col("timestamp_ms"), float_col("mean_exec_ms")],
