@@ -74,7 +74,7 @@ pub use connection::dashboard_import::{
 
 pub use connection::dashboard_source::{DashboardRef, DashboardSource, RemoteDashboard};
 
-pub use connection::instance_catalog::{
+pub use connection::{
     InstanceCatalog, InstanceInspectorDef, InstanceMetricDef, InstanceMetricId, InstanceMetricUnit,
 };
 

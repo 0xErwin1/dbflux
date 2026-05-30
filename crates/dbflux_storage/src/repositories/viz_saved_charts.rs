@@ -1176,6 +1176,7 @@ mod tests {
                     panel_kind: "chart".to_string(),
                     saved_chart_id: id.to_string(),
                     divider_markdown: None,
+                    inspector_metric_id: None,
                     title_override: None,
                     grid_row: 0,
                     grid_column: 0,

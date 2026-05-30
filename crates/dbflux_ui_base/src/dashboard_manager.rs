@@ -231,6 +231,7 @@ fn panel_to_dto(panel: &DashboardPanel) -> DashboardPanelDto {
         panel_kind,
         saved_chart_id,
         divider_markdown,
+        inspector_metric_id: None,
         title_override: panel.title_override.clone(),
         grid_row: panel.grid_row as i64,
         grid_column: panel.grid_column as i64,
