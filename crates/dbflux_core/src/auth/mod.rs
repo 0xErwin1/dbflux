@@ -13,10 +13,11 @@ use crate::DbError;
 use crate::driver::form::DriverFormDef;
 use crate::values::CompositeValueResolver;
 
-pub use edit::{AuthSaveOutcome, AwsEditFile, AwsEditSnapshot, AwsSectionHash};
+pub use edit::{AuthEditSnapshot, AuthEditTarget, AuthSaveOutcome};
 pub use identity::{AWS_AUTH_NAMESPACE, aws_profile_uuid};
 pub use refs::{AuthProfileLookup, expand_auth_profile_refs};
 pub use types::*;
+pub use types::{AuthEditCapabilities, DanglingMessage};
 
 /// Request to fetch the available options for a `DynamicSelect` field.
 ///
@@ -194,36 +195,33 @@ pub trait DynAuthProvider: Send + Sync {
         false
     }
 
-    /// Capture a section-hash snapshot at the moment the edit form opens.
+    /// Capture a provider-internal snapshot at the moment the edit form opens.
     ///
-    /// The returned `AwsEditSnapshot` is an opaque token: it holds the
-    /// SHA-256 digest(s) of the on-disk section byte slice(s) so the write
-    /// seam can detect external edits before committing (spec R9.3.1).
+    /// The returned `AuthEditSnapshot` wraps an opaque provider-specific token
+    /// (e.g. section hashes for AWS file-backed providers).  The UI passes it
+    /// back to `save_edit` unchanged.
     ///
-    /// The default implementation returns an empty snapshot (both hashes
-    /// `None`), which means the provider does not support file-backed editing.
-    /// AWS providers override this to capture real section hashes.
-    fn open_edit_snapshot(&self, _name: &str) -> AwsEditSnapshot {
-        AwsEditSnapshot {
-            config_section: None,
-            credentials_section: None,
-        }
+    /// The default returns a unit snapshot, meaning the provider does not
+    /// support file-backed editing.  Providers that write to external files
+    /// override this to capture their conflict-detection state.
+    fn open_edit_snapshot(&self, _name: &str) -> AuthEditSnapshot {
+        AuthEditSnapshot::new(())
     }
 
-    /// Persist the user's edited fields to the provider's backing file(s).
+    /// Persist the user's edited fields to the provider's backing store.
     ///
-    /// Compares the current on-disk section hash(es) against `snapshot` under
-    /// the file lock. Returns `Conflict` or `PartialSaved` when a concurrent
-    /// external change is detected (spec R9.3.4, R9.3.5).
+    /// Providers that support file-backed editing compare the current on-disk
+    /// state against the `snapshot` captured at `open_edit_snapshot` time.
+    /// They return `Conflict` or `PartialSaved` when a concurrent external
+    /// change is detected.
     ///
-    /// The default implementation returns `AuthSaveOutcome::Saved` without
-    /// writing anything — safe no-op for non-file-backed providers. AWS
-    /// providers override this with a real atomic write-back.
+    /// The default returns `AuthSaveOutcome::Saved` without writing anything —
+    /// a safe no-op for providers that store profiles in DBFlux's SQLite store.
     fn save_edit(
         &self,
         _name: &str,
         _fields: &HashMap<String, String>,
-        _snapshot: &AwsEditSnapshot,
+        _snapshot: &AuthEditSnapshot,
     ) -> AuthSaveOutcome {
         AuthSaveOutcome::Saved
     }
@@ -377,7 +375,7 @@ impl DynAuthProvider for SharedDynAuthProvider {
         self.provider.fetch_dynamic_options(profile, request).await
     }
 
-    fn open_edit_snapshot(&self, name: &str) -> AwsEditSnapshot {
+    fn open_edit_snapshot(&self, name: &str) -> AuthEditSnapshot {
         self.provider.open_edit_snapshot(name)
     }
 
@@ -385,7 +383,7 @@ impl DynAuthProvider for SharedDynAuthProvider {
         &self,
         name: &str,
         fields: &HashMap<String, String>,
-        snapshot: &AwsEditSnapshot,
+        snapshot: &AuthEditSnapshot,
     ) -> AuthSaveOutcome {
         self.provider.save_edit(name, fields, snapshot)
     }
@@ -462,7 +460,7 @@ impl DynAuthProvider for std::sync::Arc<dyn DynAuthProvider> {
         self.as_ref().fetch_dynamic_options(profile, request).await
     }
 
-    fn open_edit_snapshot(&self, name: &str) -> AwsEditSnapshot {
+    fn open_edit_snapshot(&self, name: &str) -> AuthEditSnapshot {
         self.as_ref().open_edit_snapshot(name)
     }
 
@@ -470,7 +468,7 @@ impl DynAuthProvider for std::sync::Arc<dyn DynAuthProvider> {
         &self,
         name: &str,
         fields: &HashMap<String, String>,
-        snapshot: &AwsEditSnapshot,
+        snapshot: &AuthEditSnapshot,
     ) -> AuthSaveOutcome {
         self.as_ref().save_edit(name, fields, snapshot)
     }
@@ -533,6 +531,7 @@ mod tests {
                     supported: true,
                     verification_url_progress: true,
                 },
+                edit: None,
             };
 
             &CAPABILITIES
@@ -588,6 +587,7 @@ mod tests {
                     supported: true,
                     verification_url_progress: false,
                 },
+                edit: None,
             };
 
             &CAPABILITIES

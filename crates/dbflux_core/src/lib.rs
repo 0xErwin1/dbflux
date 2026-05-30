@@ -23,9 +23,10 @@ pub use access::{AccessHandle, AccessKind, AccessManager};
 pub use document_id::DocumentId;
 
 pub use auth::{
-    AuthFormDef, AuthProfile, AuthProfileSummary, AuthProvider, AuthSaveOutcome, AuthSession,
-    AuthSessionState, AwsEditFile, AwsEditSnapshot, DynAuthProvider, FetchOptionsError,
-    FetchOptionsRequest, FetchOptionsResponse, ImportableProfile, ResolvedCredentials,
+    AuthEditCapabilities, AuthEditSnapshot, AuthEditTarget, AuthFormDef, AuthProfile,
+    AuthProfileSummary, AuthProvider, AuthSaveOutcome, AuthSession, AuthSessionState,
+    DanglingMessage, DynAuthProvider, FetchOptionsError, FetchOptionsRequest, FetchOptionsResponse,
+    ImportableProfile, ResolvedCredentials,
 };
 
 pub use config::{
