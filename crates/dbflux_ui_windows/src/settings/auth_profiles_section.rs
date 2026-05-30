@@ -12,8 +12,8 @@ use dbflux_components::primitives::focus_frame;
 use dbflux_components::primitives::{Icon as FluxIcon, Label, Text};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
 use dbflux_core::{
-    AccessKind, AuthProfile, AuthSaveOutcome, AwsEditFile, AwsEditSnapshot, FetchOptionsError,
-    FetchOptionsRequest, FormFieldKind, RefreshTrigger,
+    AccessKind, AuthEditCapabilities, AuthEditSnapshot, AuthProfile, AuthSaveOutcome,
+    DanglingMessage, FetchOptionsError, FetchOptionsRequest, FormFieldKind, RefreshTrigger,
 };
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
@@ -67,7 +67,7 @@ pub(super) struct AuthProfilesSection {
     ///
     /// `None` for stored (non-reflected) profiles — those use the standard
     /// SQLite save path which has no snapshot concept.
-    edit_snapshot: Option<AwsEditSnapshot>,
+    edit_snapshot: Option<AuthEditSnapshot>,
     /// Non-`None` when a `save_edit` call returned `Conflict` or `PartialSaved`.
     /// Contains a human-readable message to display, plus `true` if a Reload
     /// button should be shown.
@@ -211,12 +211,14 @@ fn build_auth_profile_from_form(
     })
 }
 
-/// Returns a human-readable label for an `AwsEditFile` variant, used in
-/// conflict and partial-save messages shown in the Settings UI.
-fn file_label(file: AwsEditFile) -> &'static str {
-    match file {
-        AwsEditFile::Config => "~/.aws/config",
-        AwsEditFile::Credentials => "~/.aws/credentials",
+const MIRROR_LABEL_FALLBACK: &str = "Read-only — managed externally";
+const SUCCESS_WRITTEN_FALLBACK: &str = "Profile saved.";
+const NAME_HINT_FALLBACK: &str = "";
+
+fn dangling_fallback() -> DanglingMessage {
+    DanglingMessage {
+        title: "Profile reference invalid".to_string(),
+        body: "This profile cannot be loaded.".to_string(),
     }
 }
 
@@ -1318,8 +1320,18 @@ impl AuthProfilesSection {
                     self.profile_is_read_only = false;
                     self.profile_dangling_origin = None;
 
-                    self.provider_login_status =
-                        Some(("Profile written to ~/.aws/config.".to_string(), true));
+                    let success_text = self
+                        .app_state
+                        .read(cx)
+                        .auth_provider_by_id(&profile.provider_id)
+                        .and_then(|p| {
+                            p.capabilities()
+                                .edit
+                                .as_ref()
+                                .map(|e| e.success_written.clone())
+                        })
+                        .unwrap_or_else(|| SUCCESS_WRITTEN_FALLBACK.to_string());
+                    self.provider_login_status = Some((success_text, true));
                     cx.notify();
                     return;
                 }
@@ -1374,7 +1386,7 @@ impl AuthProfilesSection {
         &mut self,
         name: String,
         provider_id: String,
-        snapshot: AwsEditSnapshot,
+        snapshot: AuthEditSnapshot,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1456,16 +1468,27 @@ impl AuthProfilesSection {
                     self.load_profile_into_form(id, window, cx);
                 }
 
-                self.provider_login_status = Some(("Profile saved.".to_string(), true));
+                let success_text = self
+                    .app_state
+                    .read(cx)
+                    .auth_provider_by_id(&provider_id)
+                    .and_then(|p| {
+                        p.capabilities()
+                            .edit
+                            .as_ref()
+                            .map(|e| e.success_written.clone())
+                    })
+                    .unwrap_or_else(|| SUCCESS_WRITTEN_FALLBACK.to_string());
+                self.provider_login_status = Some((success_text, true));
                 cx.notify();
             }
 
-            AuthSaveOutcome::Conflict { file } => {
+            AuthSaveOutcome::Conflict { target } => {
                 // Section changed on disk since the form was opened — block save.
-                let file_label = file_label(file);
+                let label = &target.label;
                 self.edit_conflict_msg = Some((
                     format!(
-                        "This profile was modified on disk ({file_label}) since you opened it. \
+                        "This profile was modified on disk ({label}) since you opened it. \
                          Reload to see the current values before saving."
                     ),
                     true,
@@ -1477,9 +1500,9 @@ impl AuthProfilesSection {
                 written,
                 conflicted,
             } => {
-                // One file succeeded; the other conflicted.
-                let written_label = file_label(written);
-                let conflicted_label = file_label(conflicted);
+                // One resource succeeded; the other conflicted.
+                let written_label = &written.label;
+                let conflicted_label = &conflicted.label;
                 self.edit_conflict_msg = Some((
                     format!(
                         "{written_label} was saved successfully, but {conflicted_label} was \
@@ -2061,6 +2084,12 @@ impl AuthProfilesSection {
 
         let dangling_origin = self.profile_dangling_origin.clone();
 
+        let edit_caps: Option<AuthEditCapabilities> = self
+            .selected_provider_id
+            .as_deref()
+            .and_then(|id| self.app_state.read(cx).auth_provider_by_id(id))
+            .and_then(|p| p.capabilities().edit.clone());
+
         layout::sticky_form_shell(
             div()
                 .child(Label::new(profile_name))
@@ -2070,20 +2099,13 @@ impl AuthProfilesSection {
                 .flex_col()
                 .gap_3()
                 .when_some(dangling_origin, |content, origin| {
-                    let (banner_text, hint_text) = if origin == "keyring-only" {
-                        (
-                            "Profile reference not found in ~/.aws/config",
-                            "This profile no longer exists in ~/.aws/config. \
-                             Its credentials entry may still be in ~/.aws/credentials. \
-                             You can re-add the profile manually or remove this connection binding.",
-                        )
-                    } else {
-                        (
-                            "Profile config file is missing",
-                            "The AWS config file for this profile could not be located. \
-                             Check ~/.aws/config and re-add the profile if needed.",
-                        )
-                    };
+                    let dangling = edit_caps
+                        .as_ref()
+                        .and_then(|e| e.dangling_messages.get(&origin))
+                        .cloned()
+                        .unwrap_or_else(dangling_fallback);
+                    let banner_text = dangling.title;
+                    let hint_text = dangling.body;
 
                     content.child(
                         div()
@@ -2116,7 +2138,12 @@ impl AuthProfilesSection {
                         .flex_col()
                         .gap_1()
                         .child(Label::new("Source"))
-                        .child(Text::body("Reflected from ~/.aws/config — read-only")),
+                        .child(Text::body(
+                            edit_caps
+                                .as_ref()
+                                .map(|e| e.mirror_label.clone())
+                                .unwrap_or_else(|| MIRROR_LABEL_FALLBACK.to_string()),
+                        )),
                 )
                 .children(field_rows.into_iter().map(|(label, value)| {
                     div()
@@ -2140,6 +2167,12 @@ impl AuthProfilesSection {
 
         let theme = cx.theme().clone();
         let is_editing = self.editing_profile_id.is_some();
+
+        let edit_caps: Option<AuthEditCapabilities> = self
+            .selected_provider_id
+            .as_deref()
+            .and_then(|id| self.app_state.read(cx).auth_provider_by_id(id))
+            .and_then(|p| p.capabilities().edit.clone());
 
         // Drive DynamicSelect fetches for the current provider's fields.
         // `fetch_dynamic_options_if_needed` is a no-op for fields already
@@ -2335,19 +2368,26 @@ impl AuthProfilesSection {
                         && self.auth_focus == AuthFocus::Form
                         && self.content_focused;
                     let is_reflected = self.edit_snapshot.is_some();
-                    // Reflected profiles: name is the section key in ~/.aws/config
-                    // and cannot be renamed from the DBFlux edit form (spec non-req).
+                    let name_hint = if is_reflected {
+                        let hint = edit_caps
+                            .as_ref()
+                            .map(|e| e.name_field_hint.as_str())
+                            .unwrap_or(NAME_HINT_FALLBACK);
+                        if hint.is_empty() {
+                            None
+                        } else {
+                            Some(hint.to_string())
+                        }
+                    } else {
+                        None
+                    };
                     self.render_input_row_disabled(
                         "Name",
                         &self.input_name,
                         AuthFormField::Name,
                         is_focused,
                         is_reflected,
-                        if is_reflected {
-                            Some("Profile name is read from ~/.aws/config and cannot be renamed here.".to_string())
-                        } else {
-                            None
-                        },
+                        name_hint,
                         None,
                         cx,
                     )
@@ -3323,13 +3363,26 @@ mod tests {
     /// is render-only and cannot be unit-tested here.
     #[::core::prelude::v1::test]
     fn conflict_message_references_file_and_suggests_reload() {
-        // Simulate what `save_edit_profile` produces on Conflict { Config }.
-        let file = AwsEditFile::Config;
-        let file_name = file_label(file);
-        let msg = format!(
-            "This profile was modified on disk ({file_name}) since you opened it. \
-             Reload to see the current values before saving."
-        );
+        use dbflux_core::{AuthEditTarget, AuthSaveOutcome};
+
+        let outcome = AuthSaveOutcome::Conflict {
+            target: AuthEditTarget {
+                id: "config".to_string(),
+                label: "~/.aws/config".to_string(),
+            },
+        };
+
+        let msg = match &outcome {
+            AuthSaveOutcome::Conflict { target } => {
+                let label = &target.label;
+                format!(
+                    "This profile was modified on disk ({label}) since you opened it. \
+                     Reload to see the current values before saving."
+                )
+            }
+            _ => panic!("unexpected outcome variant"),
+        };
+
         assert!(
             msg.contains("~/.aws/config"),
             "conflict message must name the affected file"
@@ -3348,14 +3401,35 @@ mod tests {
     /// (written and conflicted) and offers a Reload affordance (spec S35).
     #[::core::prelude::v1::test]
     fn partial_saved_message_names_both_files() {
-        let written = AwsEditFile::Config;
-        let conflicted = AwsEditFile::Credentials;
-        let msg = format!(
-            "{} was saved successfully, but {} was modified on disk since you opened \
-             the form. Reload to refresh the credentials section and re-apply your changes.",
-            file_label(written),
-            file_label(conflicted),
-        );
+        use dbflux_core::{AuthEditTarget, AuthSaveOutcome};
+
+        let outcome = AuthSaveOutcome::PartialSaved {
+            written: AuthEditTarget {
+                id: "config".to_string(),
+                label: "~/.aws/config".to_string(),
+            },
+            conflicted: AuthEditTarget {
+                id: "credentials".to_string(),
+                label: "~/.aws/credentials".to_string(),
+            },
+        };
+
+        let msg = match &outcome {
+            AuthSaveOutcome::PartialSaved {
+                written,
+                conflicted,
+            } => {
+                let written_label = &written.label;
+                let conflicted_label = &conflicted.label;
+                format!(
+                    "{written_label} was saved successfully, but {conflicted_label} was modified \
+                     on disk since you opened the form. Reload to refresh the credentials section \
+                     and re-apply your changes."
+                )
+            }
+            _ => panic!("unexpected outcome variant"),
+        };
+
         assert!(
             msg.contains("~/.aws/config"),
             "partial-saved message must name the written file"
@@ -3379,16 +3453,25 @@ mod tests {
     /// where the type is matched and messages are constructed.
     #[::core::prelude::v1::test]
     fn auth_save_outcome_debug_has_no_secrets() {
-        use dbflux_core::AuthSaveOutcome;
+        use dbflux_core::{AuthEditTarget, AuthSaveOutcome};
+
+        let config_target = AuthEditTarget {
+            id: "config".to_string(),
+            label: "~/.aws/config".to_string(),
+        };
+        let credentials_target = AuthEditTarget {
+            id: "credentials".to_string(),
+            label: "~/.aws/credentials".to_string(),
+        };
 
         let outcomes = [
             AuthSaveOutcome::Saved,
             AuthSaveOutcome::Conflict {
-                file: AwsEditFile::Config,
+                target: config_target.clone(),
             },
             AuthSaveOutcome::PartialSaved {
-                written: AwsEditFile::Config,
-                conflicted: AwsEditFile::Credentials,
+                written: config_target,
+                conflicted: credentials_target,
             },
         ];
 
@@ -3402,30 +3485,6 @@ mod tests {
                     "AuthSaveOutcome debug must not contain '{pattern}' (found in: {repr})"
                 );
             }
-        }
-    }
-
-    /// E5.2: `file_label` returns the correct file path strings.
-    #[::core::prelude::v1::test]
-    fn file_label_returns_correct_paths() {
-        assert_eq!(file_label(AwsEditFile::Config), "~/.aws/config");
-        assert_eq!(file_label(AwsEditFile::Credentials), "~/.aws/credentials");
-    }
-
-    /// E5.3: `AwsEditFile` variants are distinct and `file_label` output
-    /// contains no credential values.
-    #[::core::prelude::v1::test]
-    fn file_label_contains_no_credential_material() {
-        for file in [AwsEditFile::Config, AwsEditFile::Credentials] {
-            let label = file_label(file);
-            assert!(
-                !label.contains("AKIA"),
-                "file label must not contain access key patterns"
-            );
-            assert!(
-                !label.contains("secret"),
-                "file label must not contain 'secret'"
-            );
         }
     }
 
