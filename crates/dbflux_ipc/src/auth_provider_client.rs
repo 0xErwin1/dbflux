@@ -734,6 +734,7 @@ mod tests {
                         supported: true,
                         verification_url_progress: true,
                     },
+                    edit: None,
                 },
             },
         ))

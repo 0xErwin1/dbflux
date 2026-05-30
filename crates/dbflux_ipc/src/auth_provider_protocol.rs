@@ -489,6 +489,7 @@ mod tests {
                     supported: true,
                     verification_url_progress: true,
                 },
+                edit: None,
             },
         };
 
@@ -575,6 +576,21 @@ mod tests {
         assert_eq!(
             *restored_json, original_data,
             "JSON value must be bit-for-bit equal after round-trip"
+        );
+    }
+
+    /// S-CAP-1: `AuthProviderCapabilities` JSON without an `edit` key
+    /// deserializes with `edit == None`. This validates the backward-compat
+    /// `#[serde(default)]` annotation on the `edit` field (older providers
+    /// that do not advertise edit capabilities must not fail deserialization).
+    #[test]
+    fn capabilities_without_edit_key_deserializes_edit_as_none() {
+        let json = r#"{"login":{"supported":true,"verification_url_progress":false}}"#;
+        let caps: AuthProviderCapabilities =
+            serde_json::from_str(json).expect("must deserialize without edit key");
+        assert!(
+            caps.edit.is_none(),
+            "edit must be None when the key is absent from the JSON payload"
         );
     }
 }
