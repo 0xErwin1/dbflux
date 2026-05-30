@@ -131,37 +131,43 @@ fn dto_to_chart(dto: SavedChartDto) -> Result<SavedChart, StorageError> {
             }
         }
         "metric" => {
-            if dto.metric_series.is_empty() {
-                return Err(StorageError::Data(
-                    "metric source must carry at least one series row".to_string(),
-                ));
+            // Disambiguate: CloudWatch metric (has metric_series rows) vs.
+            // per-driver instance metric (has a row in viz_saved_chart_source_instance_metric).
+            if let Some(metric_id) = dto.instance_metric_id {
+                SavedChartSource::InstanceMetric { metric_id }
+            } else {
+                if dto.metric_series.is_empty() {
+                    return Err(StorageError::Data(
+                        "metric source must carry at least one series row".to_string(),
+                    ));
+                }
+
+                // Group dimensions by series_index for stable per-series ordering.
+                let mut dims_by_series: std::collections::HashMap<i64, Vec<(String, String)>> =
+                    std::collections::HashMap::new();
+                for d in &dto.metric_dimensions {
+                    dims_by_series
+                        .entry(d.series_index)
+                        .or_default()
+                        .push((d.dim_key.clone(), d.dim_value.clone()));
+                }
+
+                let series: Vec<MetricSeries> = dto
+                    .metric_series
+                    .iter()
+                    .map(|s| MetricSeries {
+                        namespace: s.namespace.clone(),
+                        metric_name: s.metric_name.clone(),
+                        dimensions: dims_by_series.remove(&s.series_index).unwrap_or_default(),
+                        period_seconds: s.period_seconds as u32,
+                        statistic: s.statistic.clone(),
+                        region: s.region.clone(),
+                        label: s.label.clone(),
+                    })
+                    .collect();
+
+                SavedChartSource::Metric { series }
             }
-
-            // Group dimensions by series_index for stable per-series ordering.
-            let mut dims_by_series: std::collections::HashMap<i64, Vec<(String, String)>> =
-                std::collections::HashMap::new();
-            for d in &dto.metric_dimensions {
-                dims_by_series
-                    .entry(d.series_index)
-                    .or_default()
-                    .push((d.dim_key.clone(), d.dim_value.clone()));
-            }
-
-            let series: Vec<MetricSeries> = dto
-                .metric_series
-                .iter()
-                .map(|s| MetricSeries {
-                    namespace: s.namespace.clone(),
-                    metric_name: s.metric_name.clone(),
-                    dimensions: dims_by_series.remove(&s.series_index).unwrap_or_default(),
-                    period_seconds: s.period_seconds as u32,
-                    statistic: s.statistic.clone(),
-                    region: s.region.clone(),
-                    label: s.label.clone(),
-                })
-                .collect();
-
-            SavedChartSource::Metric { series }
         }
         other => {
             return Err(StorageError::Data(format!(
@@ -202,6 +208,12 @@ fn chart_to_dto(
     // Decompose source variant into flat columns + series/dimension child rows.
     let mut metric_series: Vec<MetricSeriesDto> = Vec::new();
     let mut metric_dimensions: Vec<MetricDimensionDto> = Vec::new();
+
+    let instance_metric_id: Option<String> = if let SavedChartSource::InstanceMetric { metric_id } = &chart.source {
+        Some(metric_id.clone())
+    } else {
+        None
+    };
 
     let (
         source_kind,
@@ -270,6 +282,9 @@ fn chart_to_dto(
 
             ("metric".to_string(), None, None, None, None, None, None)
         }
+        SavedChartSource::InstanceMetric { .. } => {
+            ("metric".to_string(), None, None, None, None, None, None)
+        }
     };
 
     SavedChartDto {
@@ -314,6 +329,7 @@ fn chart_to_dto(
         binding_y,
         metric_series,
         metric_dimensions,
+        instance_metric_id,
     }
 }
 
@@ -1027,6 +1043,77 @@ mod tests {
             assert_eq!(s.region.as_deref(), Some("us-east-1"));
         } else {
             panic!("expected Metric variant after reload");
+        }
+    }
+
+    #[test]
+    fn test_saved_chart_instance_metric_source_roundtrip() {
+        let rt = temp_storage();
+        let conn = rt.viz_connection();
+        let repo = Arc::new(SavedChartsRepository::new(Arc::clone(&conn)));
+
+        let profile_id = Uuid::new_v4();
+        insert_test_profile(&conn, profile_id);
+
+        let now = Utc::now();
+        let chart = SavedChart {
+            id: Uuid::new_v4(),
+            name: "instance-metric-chart".to_string(),
+            profile_id,
+            source: SavedChartSource::InstanceMetric {
+                metric_id: "pg.cache_hit_ratio".to_string(),
+            },
+            chart_spec: ChartSpec {
+                kind: ChartKind::Line,
+                x_axis: AxisSpec {
+                    column_index: 0,
+                    label: "ts".to_string(),
+                    kind: AxisKind::Time,
+                    unit: None,
+                },
+                series: vec![SeriesSpec {
+                    column_index: 1,
+                    label: "value".to_string(),
+                    color_slot: 0,
+                }],
+                legend_visible: false,
+                decimation_threshold: 10_000,
+                binding: BindingSpec {
+                    x: 0,
+                    y: vec![1],
+                    group_by: None,
+                    filter: None,
+                    aggregation: AggKind::None,
+                },
+                track_source_indices: false,
+                y_scale: YScale::Linear,
+            },
+            bindings: BindingSpec {
+                x: 0,
+                y: vec![1],
+                group_by: None,
+                filter: None,
+                aggregation: AggKind::None,
+            },
+            time_range_preset: None,
+            refresh_policy: SavedChartRefreshPolicy::Off,
+            created_at: now,
+            updated_at: now,
+        };
+        let chart_id = chart.id;
+
+        let mut manager = SavedChartManager::new(Arc::clone(&repo));
+        manager.upsert(chart);
+
+        let manager2 = SavedChartManager::new(Arc::clone(&repo));
+        assert_eq!(manager2.all_charts().len(), 1);
+        let loaded = &manager2.all_charts()[0];
+        assert_eq!(loaded.id, chart_id);
+
+        if let SavedChartSource::InstanceMetric { metric_id } = &loaded.source {
+            assert_eq!(metric_id, "pg.cache_hit_ratio");
+        } else {
+            panic!("expected InstanceMetric variant after reload, got: {:?}", loaded.source);
         }
     }
 }

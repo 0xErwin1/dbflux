@@ -1693,7 +1693,8 @@ impl Workspace {
                 self.open_collection_document(chart.profile_id, collection, window, cx);
             }
             dbflux_components::saved_chart::SavedChartSource::Query { .. }
-            | dbflux_components::saved_chart::SavedChartSource::Metric { .. } => {
+            | dbflux_components::saved_chart::SavedChartSource::Metric { .. }
+            | dbflux_components::saved_chart::SavedChartSource::InstanceMetric { .. } => {
                 // Validate before allocating an entity — from_saved checks the source variant.
                 let validation = crate::ui::document::ChartDocument::validate_saved_source(&chart);
                 if let Err(e) = validation {

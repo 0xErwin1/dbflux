@@ -276,7 +276,7 @@ impl ChartDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<Self, String> {
-        use dbflux_components::chart::MetricSource;
+        use dbflux_components::chart::{InstanceMetricSource, MetricSource};
 
         match &saved.source {
             // Collection sources are not routed through ChartDocument in W0.
@@ -293,6 +293,24 @@ impl ChartDocument {
             SavedChartSource::Metric { series } => {
                 let source = MetricSource {
                     series: series.clone(),
+                };
+
+                let mut doc = Self::new_with_source(
+                    Some(saved.profile_id),
+                    saved.name.clone(),
+                    Box::new(source),
+                    app_state,
+                    window,
+                    cx,
+                );
+                doc.saved_chart_id = Some(saved.id);
+                return Ok(doc);
+            }
+
+            // Instance metric sources follow the same self-executing pattern as Metric.
+            SavedChartSource::InstanceMetric { metric_id } => {
+                let source = InstanceMetricSource {
+                    metric_id: metric_id.clone(),
                 };
 
                 let mut doc = Self::new_with_source(
@@ -479,7 +497,9 @@ impl ChartDocument {
     /// Call this before allocating an entity to avoid panicking inside `cx.new`.
     pub fn validate_saved_source(saved: &SavedChart) -> Result<(), String> {
         match &saved.source {
-            SavedChartSource::Query { .. } | SavedChartSource::Metric { .. } => Ok(()),
+            SavedChartSource::Query { .. }
+            | SavedChartSource::Metric { .. }
+            | SavedChartSource::InstanceMetric { .. } => Ok(()),
             SavedChartSource::Collection { .. } => Err(
                 "Collection source not supported in ChartDocument; open via DataDocument"
                     .to_string(),

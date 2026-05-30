@@ -458,6 +458,53 @@ impl ChartDataSource for MetricSource {
 }
 
 // ---------------------------------------------------------------------------
+// InstanceMetricSource
+// ---------------------------------------------------------------------------
+
+/// A per-driver instance metric source resolved from `SavedChartSource::InstanceMetric`.
+///
+/// Builds a `ChartDataPlan::Driver` request carrying `InstanceMetricQuery`.
+/// A time window is required; returns `ChartSourceError::WindowRequired` when
+/// no window is supplied.
+#[derive(Debug, Clone)]
+pub struct InstanceMetricSource {
+    pub metric_id: String,
+}
+
+impl ChartDataSource for InstanceMetricSource {
+    fn clone_box(&self) -> Box<dyn ChartDataSource> {
+        Box::new(self.clone())
+    }
+
+    fn describe(&self) -> ChartSourceDescription {
+        ChartSourceDescription {
+            title: Some(self.metric_id.clone()),
+        }
+    }
+
+    fn is_self_executing(&self) -> bool {
+        true
+    }
+
+    fn build_plan(&self, window: Option<TimeWindow>) -> Result<ChartDataPlan, ChartSourceError> {
+        let w = window.ok_or(ChartSourceError::WindowRequired)?;
+
+        let exec_ctx = ExecutionContext {
+            source: Some(ExecutionSourceContext::InstanceMetricQuery {
+                metric_id: self.metric_id.clone(),
+                start_ms: w.start_ms,
+                end_ms: w.end_ms,
+            }),
+            ..ExecutionContext::default()
+        };
+
+        let request = QueryRequest::new(String::new()).with_execution_context(Some(exec_ctx));
+
+        Ok(ChartDataPlan::Driver(request))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // AuditSource
 // ---------------------------------------------------------------------------
 
@@ -529,6 +576,9 @@ pub fn resolve_source(source: &SavedChartSource) -> Box<dyn ChartDataSource> {
         }),
         SavedChartSource::Metric { series } => Box::new(MetricSource {
             series: series.clone(),
+        }),
+        SavedChartSource::InstanceMetric { metric_id } => Box::new(InstanceMetricSource {
+            metric_id: metric_id.clone(),
         }),
     }
 }

@@ -89,6 +89,8 @@ pub struct SavedChartDto {
     pub metric_series: Vec<MetricSeriesDto>,
     /// Ordered dimension pairs for every series under `SavedChartSource::Metric`.
     pub metric_dimensions: Vec<MetricDimensionDto>,
+    /// Metric id for `SavedChartSource::InstanceMetric`. `None` for other kinds.
+    pub instance_metric_id: Option<String>,
 }
 
 /// Repository for `viz_saved_charts`.
@@ -465,6 +467,28 @@ impl SavedChartsRepository {
             })?;
         }
 
+        // 5. Atomically replace instance metric source child row in this transaction.
+        tx.execute(
+            "DELETE FROM viz_saved_chart_source_instance_metric WHERE chart_id = ?1",
+            [&chart.id],
+        )
+        .map_err(|source| StorageError::Sqlite {
+            path: DB_PATH.into(),
+            source,
+        })?;
+
+        if let Some(metric_id) = &chart.instance_metric_id {
+            tx.execute(
+                "INSERT INTO viz_saved_chart_source_instance_metric (chart_id, metric_id)
+                 VALUES (?1, ?2)",
+                rusqlite::params![chart.id, metric_id],
+            )
+            .map_err(|source| StorageError::Sqlite {
+                path: DB_PATH.into(),
+                source,
+            })?;
+        }
+
         tx.commit().map_err(|source| StorageError::Sqlite {
             path: DB_PATH.into(),
             source,
@@ -659,6 +683,36 @@ impl SavedChartsRepository {
                     charts[idx].metric_dimensions.push(d);
                 }
             }
+
+            // Fetch instance_metric_id for InstanceMetric charts (one row per chart at most).
+            let inst_sql = format!(
+                "SELECT chart_id, metric_id
+                 FROM viz_saved_chart_source_instance_metric
+                 WHERE chart_id IN ({placeholders})"
+            );
+            let mut stmt = conn
+                .prepare(&inst_sql)
+                .map_err(|source| StorageError::Sqlite {
+                    path: DB_PATH.into(),
+                    source,
+                })?;
+
+            let inst_rows: Vec<(String, String)> = stmt
+                .query_map(rusqlite::params_from_iter(chart_ids.iter()), |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|source| StorageError::Sqlite {
+                    path: DB_PATH.into(),
+                    source,
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            for (chart_id, metric_id) in inst_rows {
+                if let Some(&idx) = index_map.get(&chart_id) {
+                    charts[idx].instance_metric_id = Some(metric_id);
+                }
+            }
         }
 
         Ok(charts)
@@ -736,6 +790,7 @@ fn map_parent_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SavedChartDto> {
         binding_y: vec![],
         metric_series: vec![],
         metric_dimensions: vec![],
+        instance_metric_id: None,
     })
 }
 
@@ -807,6 +862,7 @@ fn make_chart(id: Uuid, profile_id: Uuid, source_kind: &str) -> SavedChartDto {
         binding_y: vec![],
         metric_series: vec![],
         metric_dimensions: vec![],
+        instance_metric_id: None,
     }
 }
 
@@ -872,6 +928,7 @@ fn make_metric_chart(id: Uuid, profile_id: Uuid) -> SavedChartDto {
                 dim_value: "us-east-1".to_string(),
             },
         ],
+        instance_metric_id: None,
     }
 }
 
