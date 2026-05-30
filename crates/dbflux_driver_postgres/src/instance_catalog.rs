@@ -183,6 +183,24 @@ impl PgInstanceCatalog {
         })
     }
 
+    /// Static list of row-level actions for the given inspector metric.
+    ///
+    /// Used by the trait implementation and by unit tests (no live connection required).
+    pub fn static_row_actions(metric_id: &str) -> Vec<dbflux_core::InspectorRowAction> {
+        match metric_id {
+            "pg.activity" => vec![dbflux_core::InspectorRowAction {
+                id: "kill".to_string(),
+                label: "Terminate connection".to_string(),
+                description: Some(
+                    "Calls pg_terminate_backend(pid) to terminate the selected backend process."
+                        .to_string(),
+                ),
+                is_destructive: true,
+            }],
+            _ => Vec::new(),
+        }
+    }
+
     fn probe_pg_stat_statements(client: &mut Client) -> bool {
         client
             .query_one(
@@ -304,6 +322,51 @@ impl InstanceCatalog for PgInstanceCatalog {
 
     fn default_dashboard(&self) -> Option<DefaultInstanceDashboard> {
         Self::static_default_dashboard()
+    }
+
+    fn row_actions(&self, metric_id: &str) -> Vec<dbflux_core::InspectorRowAction> {
+        Self::static_row_actions(metric_id)
+    }
+
+    async fn execute_row_action(
+        &self,
+        metric_id: &str,
+        action_id: &str,
+        row_values: &[dbflux_core::Value],
+    ) -> Result<(), DbError> {
+        if metric_id == "pg.activity" && action_id == "kill" {
+            let pid_str = match row_values.first() {
+                Some(dbflux_core::Value::Text(s)) => s.clone(),
+                Some(dbflux_core::Value::Int(n)) => n.to_string(),
+                _ => {
+                    return Err(DbError::QueryFailed(
+                        "pg.activity kill: could not read pid from row"
+                            .to_string()
+                            .into(),
+                    ));
+                }
+            };
+
+            let pid: i32 = pid_str.trim().parse().map_err(|_| {
+                DbError::QueryFailed(
+                    format!("pg.activity kill: pid '{pid_str}' is not a valid integer").into(),
+                )
+            })?;
+
+            let mut client = self.client.lock().map_err(|_| {
+                DbError::QueryFailed("postgres client mutex poisoned".to_string().into())
+            })?;
+
+            client
+                .execute("SELECT pg_terminate_backend($1)", &[&pid])
+                .map_err(pg_error)?;
+
+            return Ok(());
+        }
+
+        Err(DbError::NotSupported(format!(
+            "row action '{action_id}' not supported for inspector '{metric_id}'"
+        )))
     }
 
     async fn fetch_metric_series(
@@ -692,6 +755,26 @@ mod tests {
                 i.default_refresh_secs
             );
         }
+    }
+
+    /// BF8: PgInstanceCatalog must return a kill action for pg.activity and
+    /// empty actions for other inspectors.
+    #[test]
+    fn pg_row_actions_activity_returns_kill() {
+        let actions = PgInstanceCatalog::static_row_actions("pg.activity");
+        assert_eq!(
+            actions.len(),
+            1,
+            "pg.activity must expose exactly one row action"
+        );
+        assert_eq!(actions[0].id, "kill");
+        assert!(actions[0].is_destructive, "kill action must be destructive");
+    }
+
+    #[test]
+    fn pg_row_actions_locks_returns_empty() {
+        let actions = PgInstanceCatalog::static_row_actions("pg.locks");
+        assert!(actions.is_empty(), "pg.locks must have no row actions");
     }
 
     /// BF7: PgInstanceCatalog must return a non-None default dashboard with at

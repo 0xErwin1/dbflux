@@ -133,6 +133,19 @@ impl DataSource {
 /// Events emitted by DataGridPanel.
 #[derive(Clone, Debug)]
 pub enum DataGridEvent {
+    /// A row-level action (e.g. kill/cancel) was requested for a row.
+    ///
+    /// Emitted instead of the normal context menu when the panel has a
+    /// `row_action_provider` that returns at least one action for the
+    /// clicked row.
+    RowActionRequested {
+        row: usize,
+        action_id: String,
+        action_label: String,
+        is_destructive: bool,
+        row_values: Vec<Value>,
+        position: Point<Pixels>,
+    },
     /// Request to hide the results panel.
     RequestHide,
     /// Request to maximize/restore the results panel.
@@ -312,6 +325,10 @@ enum SqlGenerateKind {
     Delete,
 }
 
+/// Callback type for providing row-level inspector actions (e.g. kill/cancel).
+type RowActionProvider =
+    Arc<dyn Fn(&str) -> Vec<dbflux_core::InspectorRowAction> + Send + Sync>;
+
 /// Reusable data grid panel with filter bar, grid, toolbar, and status bar.
 /// Used both embedded in ScriptDocument and as standalone DataDocument.
 pub struct DataGridPanel {
@@ -408,6 +425,13 @@ pub struct DataGridPanel {
     inspector_row: Option<(usize, usize)>,
 
     export_menu_open: bool,
+
+    /// Optional provider for row-level kill/cancel actions.
+    ///
+    /// When set, right-clicking a row emits `DataGridEvent::RowActionRequested`
+    /// for the first destructive action the provider returns, instead of opening
+    /// the normal context menu. Used by `InspectorPanel` to offer kill actions.
+    row_action_provider: Option<RowActionProvider>,
 
     /// When `true`, the filter/limit/refresh-button toolbar row is suppressed
     /// from `DataGridPanel::render` because it has been moved into the hosting
@@ -841,11 +865,58 @@ impl DataGridPanel {
             row_inspector_content: None,
             inspector_row: None,
             export_menu_open: false,
+            row_action_provider: None,
             toolbar_in_chrome_row: false,
             chart_shell: None,
             chart_source_time_range_panel: None,
             pending_collection_chart_save: None,
         }
+    }
+
+    /// Attach a row-action provider to this panel.
+    ///
+    /// When set, right-clicking a row emits `DataGridEvent::RowActionRequested`
+    /// for the first action returned by the provider, instead of the normal
+    /// context menu. Pass `metric_id` as the key; the provider returns the list
+    /// of actions from `InstanceCatalog::row_actions`.
+    pub fn set_row_action_provider(&mut self, provider: RowActionProvider) {
+        self.row_action_provider = Some(provider);
+    }
+
+    /// Returns the metric_id embedded in the `QueryResult` source string, or
+    /// `None` for table/collection sources.
+    ///
+    /// `DataGridPanel::new_for_result` stores the metric_id in `original_query`
+    /// when created by `InspectorPanel`. That field is reused here as the key
+    /// forwarded to the row-action provider.
+    fn row_action_metric_id(&self) -> Option<String> {
+        match &self.source {
+            DataSource::QueryResult { original_query, .. } => Some(original_query.clone()),
+            _ => None,
+        }
+    }
+
+    /// Collects all cell values for `visual_row` from the current result.
+    ///
+    /// Returns an empty `Vec` when the row index is out of bounds or no
+    /// `table_state` exists.
+    fn collect_row_values(&self, visual_row: usize, cx: &App) -> Vec<Value> {
+        use dbflux_components::components::data_table::model::VisualRowSource;
+
+        let Some(table_state) = &self.table_state else {
+            return Vec::new();
+        };
+
+        let ts = table_state.read(cx);
+        let buffer = ts.edit_buffer();
+        let visual_order = buffer.compute_visual_order();
+
+        let base_row = match visual_order.get(visual_row).copied() {
+            Some(VisualRowSource::Base(idx)) => self.result.rows.get(idx),
+            _ => None,
+        };
+
+        base_row.cloned().unwrap_or_default()
     }
 
     /// Enable panel control buttons (hide, maximize) for embedded panels.
@@ -1567,23 +1638,51 @@ impl DataGridPanel {
                         this.handle_save_row(*row_idx, cx);
                     }
                     DataTableEvent::ContextMenuRequested { row, col, position } => {
-                        this.context_menu = Some(TableContextMenu {
-                            row: *row,
-                            col: *col,
-                            position: *position,
-                            sql_submenu_open: false,
-                            copy_query_submenu_open: false,
-                            filter_submenu_open: false,
-                            order_submenu_open: false,
-                            selected_index: 0,
-                            submenu_selected_index: 0,
-                            is_document_view: false,
-                            doc_field_path: None,
-                            doc_field_value: None,
-                        });
-                        this.pending_context_menu_focus = true;
-                        cx.emit(DataGridEvent::Focused);
-                        cx.notify();
+                        // When a row-action provider is set, check if the
+                        // inspector metric has any actions for this row.
+                        // If yes, emit RowActionRequested for the first action
+                        // instead of opening the normal context menu.
+                        let row_action_dispatched =
+                            if let Some(provider) = this.row_action_provider.as_ref() {
+                                let metric_id = this.row_action_metric_id();
+                                let actions = provider(metric_id.as_deref().unwrap_or(""));
+                                if let Some(action) = actions.into_iter().next() {
+                                    let row_values = this.collect_row_values(*row, cx);
+                                    cx.emit(DataGridEvent::RowActionRequested {
+                                        row: *row,
+                                        action_id: action.id,
+                                        action_label: action.label,
+                                        is_destructive: action.is_destructive,
+                                        row_values,
+                                        position: *position,
+                                    });
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            };
+
+                        if !row_action_dispatched {
+                            this.context_menu = Some(TableContextMenu {
+                                row: *row,
+                                col: *col,
+                                position: *position,
+                                sql_submenu_open: false,
+                                copy_query_submenu_open: false,
+                                filter_submenu_open: false,
+                                order_submenu_open: false,
+                                selected_index: 0,
+                                submenu_selected_index: 0,
+                                is_document_view: false,
+                                doc_field_path: None,
+                                doc_field_value: None,
+                            });
+                            this.pending_context_menu_focus = true;
+                            cx.emit(DataGridEvent::Focused);
+                            cx.notify();
+                        }
                     }
                     // Keyboard-triggered row operations
                     DataTableEvent::DeleteRowRequested(row) => {

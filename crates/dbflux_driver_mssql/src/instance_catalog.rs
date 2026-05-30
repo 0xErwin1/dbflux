@@ -189,6 +189,22 @@ impl MssqlInstanceCatalog {
         })
     }
 
+    /// Static list of row-level actions for the given inspector metric.
+    pub fn static_row_actions(metric_id: &str) -> Vec<dbflux_core::InspectorRowAction> {
+        match metric_id {
+            "mssql.active_sessions" => vec![dbflux_core::InspectorRowAction {
+                id: "kill".to_string(),
+                label: "Kill session".to_string(),
+                description: Some(
+                    "Executes KILL <session_id> to terminate the selected SQL Server session."
+                        .to_string(),
+                ),
+                is_destructive: true,
+            }],
+            _ => Vec::new(),
+        }
+    }
+
     /// Returns `true` if the connection has `VIEW SERVER STATE` permission.
     ///
     /// Called once at catalog construction time. When permission is absent, the
@@ -250,6 +266,21 @@ fn tiberius_error(e: tiberius::error::Error) -> DbError {
     DbError::QueryFailed(e.to_string().into())
 }
 
+fn kill_session(inner: &mut MssqlConnectionInner, sql: &str) -> Result<(), DbError> {
+    let sql = sql.to_string();
+    inner.runtime.block_on(async {
+        let client = inner
+            .client
+            .as_mut()
+            .ok_or_else(|| DbError::QueryFailed("no active client".to_string().into()))?;
+        client
+            .simple_query(sql.as_str())
+            .await
+            .map_err(tiberius_error)?;
+        Ok::<(), DbError>(())
+    })
+}
+
 #[async_trait]
 impl InstanceCatalog for MssqlInstanceCatalog {
     async fn list_metrics(&self) -> Result<Vec<InstanceMetricDef>, DbError> {
@@ -294,6 +325,52 @@ impl InstanceCatalog for MssqlInstanceCatalog {
             .map_err(|_| DbError::QueryFailed("mssql inner mutex poisoned".to_string().into()))?;
 
         dispatch_inspector_snapshot(&mut inner, metric_id)
+    }
+
+    fn row_actions(&self, metric_id: &str) -> Vec<dbflux_core::InspectorRowAction> {
+        Self::static_row_actions(metric_id)
+    }
+
+    async fn execute_row_action(
+        &self,
+        metric_id: &str,
+        action_id: &str,
+        row_values: &[dbflux_core::Value],
+    ) -> Result<(), DbError> {
+        if metric_id == "mssql.active_sessions" && action_id == "kill" {
+            let session_id: i64 = match row_values.first() {
+                Some(dbflux_core::Value::Int(n)) => *n,
+                Some(dbflux_core::Value::Text(s)) => s.trim().parse().map_err(|_| {
+                    DbError::QueryFailed(
+                        format!(
+                            "mssql.active_sessions kill: session_id '{s}' is not a valid integer"
+                        )
+                        .into(),
+                    )
+                })?,
+                _ => {
+                    return Err(DbError::QueryFailed(
+                        "mssql.active_sessions kill: could not read session_id from row"
+                            .to_string()
+                            .into(),
+                    ));
+                }
+            };
+
+            let sql = format!("KILL {session_id}");
+
+            let mut inner = self.inner.lock().map_err(|_| {
+                DbError::QueryFailed("mssql inner mutex poisoned".to_string().into())
+            })?;
+
+            kill_session(&mut inner, &sql)?;
+
+            return Ok(());
+        }
+
+        Err(DbError::NotSupported(format!(
+            "row action '{action_id}' not supported for inspector '{metric_id}'"
+        )))
     }
 }
 
@@ -599,6 +676,29 @@ mod tests {
         assert!(
             inspectors.is_empty(),
             "inspectors must be empty when VIEW SERVER STATE permission is absent"
+        );
+    }
+
+    /// BF8: mssql.active_sessions inspector must advertise exactly one kill action.
+    #[test]
+    fn mssql_row_actions_active_sessions_returns_kill() {
+        let actions = MssqlInstanceCatalog::static_row_actions("mssql.active_sessions");
+        assert_eq!(
+            actions.len(),
+            1,
+            "mssql.active_sessions must have exactly one row action"
+        );
+        assert_eq!(actions[0].id, "kill");
+        assert!(actions[0].is_destructive);
+    }
+
+    /// BF8: unknown inspector must return no row actions.
+    #[test]
+    fn mssql_row_actions_unknown_returns_empty() {
+        let actions = MssqlInstanceCatalog::static_row_actions("mssql.does_not_exist");
+        assert!(
+            actions.is_empty(),
+            "unknown inspector must return no row actions"
         );
     }
 

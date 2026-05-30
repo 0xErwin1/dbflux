@@ -8,18 +8,24 @@
 pub mod pane;
 
 use super::DataGridPanel;
+use super::data_grid_panel::DataGridEvent;
 use super::handle::DocumentEvent;
 use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
 use crate::refresh::MIN_REFRESH_FLOOR_SECS;
 use dbflux_app::keymap::{Command, ContextId};
+use dbflux_components::icons::AppIcon;
+use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_panel};
 use dbflux_components::result_panel::{ResultPanel, ViewHandle};
+use dbflux_components::tokens::{Radii, Spacing};
 use dbflux_core::{
-    ExecutionContext, ExecutionSourceContext, QueryRequest, QueryResult, RefreshPolicy,
+    ExecutionContext, ExecutionSourceContext, QueryRequest, QueryResult, RefreshPolicy, Value,
 };
 use dbflux_ui_base::AppStateEntity;
+use dbflux_ui_base::AsyncUpdateResultExt;
 use gpui::prelude::*;
-use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Task, Window};
+use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Subscription, Task, Window};
+use gpui_component::ActiveTheme;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -27,6 +33,13 @@ use uuid::Uuid;
 struct PendingResult {
     task_id: dbflux_core::TaskId,
     result: Result<QueryResult, dbflux_core::DbError>,
+}
+
+/// State held while the kill-confirmation modal is visible.
+struct PendingKillConfirm {
+    action_id: String,
+    action_label: String,
+    row_values: Vec<Value>,
 }
 
 /// Live tabular inspector panel tied to a specific instance-metric inspector.
@@ -68,6 +81,13 @@ pub struct InspectorPanel {
 
     /// Chrome-row host built lazily alongside `data_grid` on first render.
     pub(super) result_panel: Option<Entity<ResultPanel>>,
+
+    /// Subscription kept alive while `data_grid` exists, routing
+    /// `DataGridEvent::RowActionRequested` events to this panel.
+    _data_grid_subscription: Option<Subscription>,
+
+    /// State while the kill-confirmation modal is visible.
+    pending_kill_confirm: Option<PendingKillConfirm>,
 }
 
 impl EventEmitter<DocumentEvent> for InspectorPanel {}
@@ -98,6 +118,8 @@ impl InspectorPanel {
             data_grid: None,
             pending_grid_result: None,
             result_panel: None,
+            _data_grid_subscription: None,
+            pending_kill_confirm: None,
         }
     }
 
@@ -284,6 +306,170 @@ impl InspectorPanel {
     }
 }
 
+impl InspectorPanel {
+    fn cancel_kill_action(&mut self, cx: &mut Context<Self>) {
+        self.pending_kill_confirm = None;
+        cx.notify();
+    }
+
+    fn confirm_kill_action(&mut self, cx: &mut Context<Self>) {
+        let Some(confirm) = self.pending_kill_confirm.take() else {
+            return;
+        };
+
+        let profile_id = self.profile_id;
+        let metric_id = self.metric_id.clone();
+        let action_id = confirm.action_id.clone();
+        let row_values = confirm.row_values.clone();
+        let action_label = confirm.action_label.clone();
+        let audit_service = self.app_state.read(cx).audit_service().clone();
+
+        let connection: Option<Arc<dyn dbflux_core::Connection>> = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .and_then(|c| c.resolve_connection_for_execution(None).ok());
+
+        cx.notify();
+
+        let Some(conn) = connection else {
+            log::warn!(
+                "[inspector kill] connection not found for profile {}",
+                profile_id
+            );
+            return;
+        };
+
+        cx.spawn(async move |_this, _cx| {
+            let catalog = conn.instance_catalog();
+            let result = match catalog {
+                Some(cat) => {
+                    cat.execute_row_action(&metric_id, &action_id, &row_values)
+                        .await
+                }
+                None => Err(dbflux_core::DbError::NotSupported(
+                    "driver does not support instance catalog".to_string(),
+                )),
+            };
+
+            emit_kill_audit(
+                &audit_service,
+                &metric_id,
+                &action_id,
+                &action_label,
+                profile_id,
+                &result,
+            );
+
+            if let Err(e) = result {
+                log::warn!("[inspector kill] row action '{}' failed: {}", action_id, e);
+            }
+        })
+        .detach();
+    }
+
+    fn render_kill_confirm_modal(
+        &self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        use gpui::div;
+
+        let btn_hover = theme.muted;
+
+        let action_label = self
+            .pending_kill_confirm
+            .as_ref()
+            .map(|c| c.action_label.clone())
+            .unwrap_or_else(|| "Kill".to_string());
+
+        let title = format!("{}?", action_label);
+        let description =
+            "This action will terminate the selected operation. It cannot be undone.".to_string();
+
+        div()
+            .id("kill-confirm-overlay")
+            .absolute()
+            .inset_0()
+            .bg(overlay_bg(theme))
+            .flex()
+            .items_center()
+            .justify_center()
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            })
+            .child(
+                surface_panel(cx)
+                    .rounded(Radii::MD)
+                    .min_w(gpui::px(300.0))
+                    .flex()
+                    .flex_col()
+                    .gap(Spacing::MD)
+                    .p(Spacing::MD)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                Icon::new(AppIcon::TriangleAlert)
+                                    .medium()
+                                    .color(theme.warning),
+                            )
+                            .child(Text::heading(title)),
+                    )
+                    .child(Text::muted(description))
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap(Spacing::SM)
+                            .child(
+                                div()
+                                    .id("kill-cancel-btn")
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .px(Spacing::SM)
+                                    .py(Spacing::XS)
+                                    .rounded(Radii::SM)
+                                    .cursor_pointer()
+                                    .bg(theme.secondary)
+                                    .hover(|d| d.bg(btn_hover))
+                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                        this.cancel_kill_action(cx);
+                                    }))
+                                    .child(
+                                        Icon::new(AppIcon::X).small().color(theme.muted_foreground),
+                                    )
+                                    .child(Text::caption("Cancel")),
+                            )
+                            .child(
+                                div()
+                                    .id("kill-confirm-btn")
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .px(Spacing::SM)
+                                    .py(Spacing::XS)
+                                    .rounded(Radii::SM)
+                                    .cursor_pointer()
+                                    .bg(theme.danger)
+                                    .hover(|d| d.opacity(0.9))
+                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                        this.confirm_kill_action(cx);
+                                    }))
+                                    .child(
+                                        Icon::new(AppIcon::Delete).small().color(theme.background),
+                                    )
+                                    .child(Text::caption("Confirm").color(theme.background)),
+                            ),
+                    ),
+            )
+    }
+}
+
 impl Render for InspectorPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use gpui::div;
@@ -302,15 +488,50 @@ impl Render for InspectorPanel {
             let app_state = self.app_state.clone();
             let metric_id = self.metric_id.clone();
 
+            // Capture a connection clone for the row-action provider.
+            let connection_for_actions: Option<Arc<dyn dbflux_core::Connection>> = self
+                .app_state
+                .read(cx)
+                .connections()
+                .get(&profile_id)
+                .and_then(|c| c.resolve_connection_for_execution(None).ok());
+
             let grid = cx.new(|cx| {
-                DataGridPanel::new_for_result(
+                let mut panel = DataGridPanel::new_for_result(
                     result,
-                    metric_id,
+                    metric_id.clone(),
                     Some(profile_id),
                     app_state,
                     window,
                     cx,
-                )
+                );
+
+                if let Some(conn) = connection_for_actions {
+                    panel.set_row_action_provider(Arc::new(move |mid| {
+                        conn.instance_catalog()
+                            .map(|cat| cat.row_actions(mid))
+                            .unwrap_or_default()
+                    }));
+                }
+
+                panel
+            });
+
+            let subscription = cx.subscribe(&grid, |this, _grid, event: &DataGridEvent, cx| {
+                if let DataGridEvent::RowActionRequested {
+                    action_id,
+                    action_label,
+                    row_values,
+                    ..
+                } = event
+                {
+                    this.pending_kill_confirm = Some(PendingKillConfirm {
+                        action_id: action_id.clone(),
+                        action_label: action_label.clone(),
+                        row_values: row_values.clone(),
+                    });
+                    cx.notify();
+                }
             });
 
             let view_handle = DataGridPanel::into_view_handle(grid.clone(), cx);
@@ -318,15 +539,23 @@ impl Render for InspectorPanel {
 
             self.data_grid = Some(grid);
             self.result_panel = Some(panel);
+            self._data_grid_subscription = Some(subscription);
         }
 
         let focus_handle = self.focus_handle.clone();
 
         if let Some(result_panel) = self.result_panel.as_ref().cloned() {
+            let theme = cx.theme().clone();
+            let has_kill_confirm = self.pending_kill_confirm.is_some();
+
             return div()
                 .size_full()
+                .relative()
                 .track_focus(&focus_handle)
                 .child(result_panel)
+                .when(has_kill_confirm, |d| {
+                    d.child(self.render_kill_confirm_modal(&theme, cx))
+                })
                 .into_any();
         }
 
@@ -374,6 +603,58 @@ fn build_inspector_request(metric_id: &str) -> QueryRequest {
             ..Default::default()
         }),
         ..Default::default()
+    }
+}
+
+fn emit_kill_audit(
+    audit_service: &dbflux_audit::AuditService,
+    metric_id: &str,
+    action_id: &str,
+    action_label: &str,
+    profile_id: Uuid,
+    result: &Result<(), dbflux_core::DbError>,
+) {
+    use dbflux_core::chrono::Utc;
+    use dbflux_core::observability::{
+        EventCategory, EventOutcome, EventRecord, EventSeverity, EventSink,
+    };
+
+    let (severity, outcome, action_key) = match result {
+        Ok(()) => (
+            EventSeverity::Info,
+            EventOutcome::Success,
+            "inspector_row_action",
+        ),
+        Err(_) => (
+            EventSeverity::Error,
+            EventOutcome::Failure,
+            "inspector_row_action_failed",
+        ),
+    };
+
+    let summary = match result {
+        Ok(()) => format!(
+            "Inspector row action '{}' ({}) executed on inspector '{}' (profile {})",
+            action_label, action_id, metric_id, profile_id
+        ),
+        Err(e) => format!(
+            "Inspector row action '{}' ({}) failed on '{}' (profile {}): {}",
+            action_label, action_id, metric_id, profile_id, e
+        ),
+    };
+
+    let event = EventRecord::new(
+        Utc::now().timestamp_millis(),
+        severity,
+        EventCategory::Query,
+        outcome,
+    )
+    .with_action(action_key.to_string())
+    .with_summary(summary)
+    .with_actor_id("ui:user");
+
+    if let Err(e) = audit_service.record(event) {
+        log::warn!("[inspector kill] failed to record audit event: {}", e);
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::{DbError, QueryResult};
+use crate::{DbError, QueryResult, Value};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -83,6 +83,23 @@ pub struct DefaultInstanceDashboard {
     pub panels: Vec<DefaultDashboardPanel>,
 }
 
+/// A row-level action exposed by an inspector panel (e.g. "Kill connection").
+///
+/// Returned by `InstanceCatalog::row_actions()`. The UI renders these as a
+/// right-click context menu in the inspector data grid. `is_destructive`
+/// signals that the action requires a confirmation modal before execution.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InspectorRowAction {
+    /// Unique action identifier, stable across calls (used as a key in `execute_row_action`).
+    pub id: String,
+    /// Human-readable label shown in the context menu.
+    pub label: String,
+    /// Optional longer description shown in the confirmation modal.
+    pub description: Option<String>,
+    /// When `true`, the UI shows a confirmation modal before executing.
+    pub is_destructive: bool,
+}
+
 /// Trait for drivers that expose live operational metrics and inspector snapshots.
 ///
 /// Implementations may probe the database (e.g. check `pg_extension`) during
@@ -126,6 +143,36 @@ pub trait InstanceCatalog: Send + Sync {
     /// provide a curated metric/inspector layout.
     fn default_dashboard(&self) -> Option<DefaultInstanceDashboard> {
         None
+    }
+
+    /// Returns the row-level actions available for the given inspector `metric_id`.
+    ///
+    /// Each action is shown in the inspector's right-click context menu. The
+    /// default implementation returns an empty list (no row actions).
+    fn row_actions(&self, metric_id: &str) -> Vec<InspectorRowAction> {
+        let _ = metric_id;
+        Vec::new()
+    }
+
+    /// Execute a row-level action identified by `action_id` on a specific row.
+    ///
+    /// `row_values` contains the values of every column in the clicked row, in
+    /// column order as returned by the inspector snapshot. The driver is
+    /// responsible for extracting the relevant identifier (e.g. PID, session ID)
+    /// from the correct column index.
+    ///
+    /// Returns `Ok(())` on success. The default implementation returns
+    /// `DbError::NotSupported`.
+    async fn execute_row_action(
+        &self,
+        metric_id: &str,
+        action_id: &str,
+        row_values: &[Value],
+    ) -> Result<(), DbError> {
+        let _ = (metric_id, action_id, row_values);
+        Err(DbError::NotSupported(format!(
+            "row action '{action_id}' not supported"
+        )))
     }
 }
 
@@ -311,6 +358,106 @@ mod tests {
         assert!(
             catalog.default_dashboard().is_none(),
             "default_dashboard() must return None when not overridden"
+        );
+    }
+
+    /// BF8: `InspectorRowAction` must round-trip through serde.
+    #[test]
+    fn inspector_row_action_serde_roundtrip() {
+        let action = InspectorRowAction {
+            id: "kill".to_string(),
+            label: "Kill connection".to_string(),
+            description: Some("Terminates the backend process.".to_string()),
+            is_destructive: true,
+        };
+
+        let json = serde_json::to_string(&action).unwrap();
+        let restored: InspectorRowAction = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.id, action.id);
+        assert_eq!(restored.label, action.label);
+        assert_eq!(restored.description, action.description);
+        assert_eq!(restored.is_destructive, action.is_destructive);
+    }
+
+    /// BF8: the default `row_actions()` implementation returns an empty vec.
+    #[test]
+    fn row_actions_default_impl_returns_empty() {
+        struct MinimalCatalog2;
+
+        #[async_trait::async_trait]
+        impl InstanceCatalog for MinimalCatalog2 {
+            async fn list_metrics(&self) -> Result<Vec<InstanceMetricDef>, DbError> {
+                Ok(vec![])
+            }
+
+            async fn list_inspectors(&self) -> Result<Vec<InstanceInspectorDef>, DbError> {
+                Ok(vec![])
+            }
+
+            async fn fetch_metric_series(
+                &self,
+                _metric_id: &str,
+                _start_ms: i64,
+                _end_ms: i64,
+            ) -> Result<QueryResult, DbError> {
+                Err(DbError::NotSupported("test".to_string()))
+            }
+
+            async fn fetch_inspector_snapshot(
+                &self,
+                _metric_id: &str,
+            ) -> Result<QueryResult, DbError> {
+                Err(DbError::NotSupported("test".to_string()))
+            }
+        }
+
+        let catalog = MinimalCatalog2;
+        let actions = catalog.row_actions("any.inspector");
+        assert!(
+            actions.is_empty(),
+            "row_actions() must return empty vec when not overridden"
+        );
+    }
+
+    /// BF8: the default `execute_row_action()` implementation returns NotSupported.
+    #[test]
+    fn execute_row_action_default_returns_not_supported() {
+        struct MinimalCatalog3;
+
+        #[async_trait::async_trait]
+        impl InstanceCatalog for MinimalCatalog3 {
+            async fn list_metrics(&self) -> Result<Vec<InstanceMetricDef>, DbError> {
+                Ok(vec![])
+            }
+
+            async fn list_inspectors(&self) -> Result<Vec<InstanceInspectorDef>, DbError> {
+                Ok(vec![])
+            }
+
+            async fn fetch_metric_series(
+                &self,
+                _metric_id: &str,
+                _start_ms: i64,
+                _end_ms: i64,
+            ) -> Result<QueryResult, DbError> {
+                Err(DbError::NotSupported("test".to_string()))
+            }
+
+            async fn fetch_inspector_snapshot(
+                &self,
+                _metric_id: &str,
+            ) -> Result<QueryResult, DbError> {
+                Err(DbError::NotSupported("test".to_string()))
+            }
+        }
+
+        let catalog = MinimalCatalog3;
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(catalog.execute_row_action("any.inspector", "kill", &[]));
+        assert!(
+            matches!(result, Err(DbError::NotSupported(_))),
+            "execute_row_action() must return NotSupported when not overridden"
         );
     }
 }

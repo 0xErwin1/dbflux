@@ -188,6 +188,21 @@ impl MysqlInstanceCatalog {
         })
     }
 
+    /// Static list of row-level actions for the given inspector metric.
+    pub fn static_row_actions(metric_id: &str) -> Vec<dbflux_core::InspectorRowAction> {
+        match metric_id {
+            "mysql.processlist" => vec![dbflux_core::InspectorRowAction {
+                id: "kill".to_string(),
+                label: "Kill process".to_string(),
+                description: Some(
+                    "Executes KILL <id> to terminate the selected connection.".to_string(),
+                ),
+                is_destructive: true,
+            }],
+            _ => Vec::new(),
+        }
+    }
+
     pub fn probe_performance_schema(conn: &mut Conn) -> bool {
         conn.query_first::<String, _>(
             "SELECT 'ok' FROM information_schema.SCHEMATA WHERE schema_name = 'performance_schema'",
@@ -292,6 +307,49 @@ impl InstanceCatalog for MysqlInstanceCatalog {
             .map_err(|_| DbError::QueryFailed("mysql conn mutex poisoned".to_string().into()))?;
 
         dispatch_inspector_snapshot(&mut conn, metric_id)
+    }
+
+    fn row_actions(&self, metric_id: &str) -> Vec<dbflux_core::InspectorRowAction> {
+        Self::static_row_actions(metric_id)
+    }
+
+    async fn execute_row_action(
+        &self,
+        metric_id: &str,
+        action_id: &str,
+        row_values: &[dbflux_core::Value],
+    ) -> Result<(), DbError> {
+        if metric_id == "mysql.processlist" && action_id == "kill" {
+            let id: u64 = match row_values.first() {
+                Some(dbflux_core::Value::Int(n)) => *n as u64,
+                Some(dbflux_core::Value::Text(s)) => s.trim().parse().map_err(|_| {
+                    DbError::QueryFailed(
+                        format!("mysql.processlist kill: id '{s}' is not a valid integer").into(),
+                    )
+                })?,
+                _ => {
+                    return Err(DbError::QueryFailed(
+                        "mysql.processlist kill: could not read id from row"
+                            .to_string()
+                            .into(),
+                    ));
+                }
+            };
+
+            let mut conn = self.conn.lock().map_err(|_| {
+                DbError::QueryFailed("mysql conn mutex poisoned".to_string().into())
+            })?;
+
+            use mysql::prelude::Queryable;
+            conn.exec_drop(format!("KILL {id}"), ())
+                .map_err(mysql_error)?;
+
+            return Ok(());
+        }
+
+        Err(DbError::NotSupported(format!(
+            "row action '{action_id}' not supported for inspector '{metric_id}'"
+        )))
     }
 }
 
@@ -500,6 +558,21 @@ mod tests {
             mysql_advertises_instance_capabilities(),
             "MySQL METADATA must include INSTANCE_METRICS and INSTANCE_INSPECTOR bits"
         );
+    }
+
+    /// BF8: MysqlInstanceCatalog must return a kill action for mysql.processlist.
+    #[test]
+    fn mysql_row_actions_processlist_returns_kill() {
+        let actions = MysqlInstanceCatalog::static_row_actions("mysql.processlist");
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].id, "kill");
+        assert!(actions[0].is_destructive);
+    }
+
+    #[test]
+    fn mysql_row_actions_unknown_returns_empty() {
+        let actions = MysqlInstanceCatalog::static_row_actions("unknown");
+        assert!(actions.is_empty());
     }
 
     /// BF7: MysqlInstanceCatalog must return a non-None default dashboard with

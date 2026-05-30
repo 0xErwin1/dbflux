@@ -203,6 +203,21 @@ impl RedisInstanceCatalog {
         })
     }
 
+    /// Static list of row-level actions for the given inspector metric.
+    pub fn static_row_actions(metric_id: &str) -> Vec<dbflux_core::InspectorRowAction> {
+        match metric_id {
+            "redis.client_list" => vec![dbflux_core::InspectorRowAction {
+                id: "kill".to_string(),
+                label: "Kill client".to_string(),
+                description: Some(
+                    "Sends CLIENT KILL ID <id> to disconnect the selected client.".to_string(),
+                ),
+                is_destructive: true,
+            }],
+            _ => Vec::new(),
+        }
+    }
+
     /// Parses the flat `INFO` output into a `HashMap<field_name, value_string>`.
     ///
     /// Lines starting with `#` are section headers and are skipped. Empty lines are skipped.
@@ -298,6 +313,48 @@ impl InstanceCatalog for RedisInstanceCatalog {
         })?;
 
         dispatch_inspector_snapshot(&mut conn, metric_id)
+    }
+
+    fn row_actions(&self, metric_id: &str) -> Vec<dbflux_core::InspectorRowAction> {
+        Self::static_row_actions(metric_id)
+    }
+
+    async fn execute_row_action(
+        &self,
+        metric_id: &str,
+        action_id: &str,
+        row_values: &[dbflux_core::Value],
+    ) -> Result<(), DbError> {
+        if metric_id == "redis.client_list" && action_id == "kill" {
+            let client_id: String = match row_values.first() {
+                Some(dbflux_core::Value::Text(s)) => s.trim().to_string(),
+                Some(dbflux_core::Value::Int(n)) => n.to_string(),
+                _ => {
+                    return Err(DbError::QueryFailed(
+                        "redis.client_list kill: could not read client id from row"
+                            .to_string()
+                            .into(),
+                    ));
+                }
+            };
+
+            let mut conn = self.connection.lock().map_err(|_| {
+                DbError::QueryFailed("redis connection mutex poisoned".to_string().into())
+            })?;
+
+            redis::cmd("CLIENT")
+                .arg("KILL")
+                .arg("ID")
+                .arg(&client_id)
+                .query::<()>(&mut *conn)
+                .map_err(redis_error)?;
+
+            return Ok(());
+        }
+
+        Err(DbError::NotSupported(format!(
+            "row action '{action_id}' not supported for inspector '{metric_id}'"
+        )))
     }
 }
 
@@ -536,6 +593,29 @@ instantaneous_output_kbps:20.3
     fn sensitive_client_fields_list_is_non_empty() {
         assert!(!SENSITIVE_CLIENT_FIELDS.is_empty());
         assert!(SENSITIVE_CLIENT_FIELDS.contains(&"addr"));
+    }
+
+    /// BF8: redis.client_list inspector must advertise exactly one kill action.
+    #[test]
+    fn redis_row_actions_client_list_returns_kill() {
+        let actions = RedisInstanceCatalog::static_row_actions("redis.client_list");
+        assert_eq!(
+            actions.len(),
+            1,
+            "redis.client_list must have exactly one row action"
+        );
+        assert_eq!(actions[0].id, "kill");
+        assert!(actions[0].is_destructive);
+    }
+
+    /// BF8: unknown inspector must return no row actions.
+    #[test]
+    fn redis_row_actions_unknown_returns_empty() {
+        let actions = RedisInstanceCatalog::static_row_actions("redis.does_not_exist");
+        assert!(
+            actions.is_empty(),
+            "unknown inspector must return no row actions"
+        );
     }
 
     /// BF7: RedisInstanceCatalog must return a non-None default dashboard with

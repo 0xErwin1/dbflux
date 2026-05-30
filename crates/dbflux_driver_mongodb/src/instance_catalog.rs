@@ -120,6 +120,21 @@ impl MongoInstanceCatalog {
         }]
     }
 
+    /// Static list of row-level actions for the given inspector metric.
+    pub fn static_row_actions(metric_id: &str) -> Vec<dbflux_core::InspectorRowAction> {
+        match metric_id {
+            "mongo.current_op" => vec![dbflux_core::InspectorRowAction {
+                id: "kill".to_string(),
+                label: "Kill operation".to_string(),
+                description: Some(
+                    "Calls db.killOp(opid) to terminate the selected operation.".to_string(),
+                ),
+                is_destructive: true,
+            }],
+            _ => Vec::new(),
+        }
+    }
+
     /// Curated "Instance Overview" dashboard layout for MongoDB.
     ///
     /// Row 0: queries/sec (cols 0-5) | current connections (cols 6-11)
@@ -285,6 +300,51 @@ impl InstanceCatalog for MongoInstanceCatalog {
             .map_err(|_| DbError::QueryFailed("mongo client mutex poisoned".to_string().into()))?;
 
         dispatch_inspector_snapshot(&client, metric_id)
+    }
+
+    fn row_actions(&self, metric_id: &str) -> Vec<dbflux_core::InspectorRowAction> {
+        Self::static_row_actions(metric_id)
+    }
+
+    async fn execute_row_action(
+        &self,
+        metric_id: &str,
+        action_id: &str,
+        row_values: &[dbflux_core::Value],
+    ) -> Result<(), DbError> {
+        if metric_id == "mongo.current_op" && action_id == "kill" {
+            let opid: i64 = match row_values.first() {
+                Some(dbflux_core::Value::Int(n)) => *n,
+                Some(dbflux_core::Value::Float(f)) => *f as i64,
+                Some(dbflux_core::Value::Text(s)) => s.trim().parse().map_err(|_| {
+                    DbError::QueryFailed(
+                        format!("mongo.current_op kill: opid '{s}' is not a valid integer").into(),
+                    )
+                })?,
+                _ => {
+                    return Err(DbError::QueryFailed(
+                        "mongo.current_op kill: could not read opid from row"
+                            .to_string()
+                            .into(),
+                    ));
+                }
+            };
+
+            let client = self.client.lock().map_err(|_| {
+                DbError::QueryFailed("mongo client mutex poisoned".to_string().into())
+            })?;
+
+            let db = get_admin_db(&client);
+            db.run_command(bson::doc! { "killOp": 1, "op": opid })
+                .run()
+                .map_err(mongo_error)?;
+
+            return Ok(());
+        }
+
+        Err(DbError::NotSupported(format!(
+            "row action '{action_id}' not supported for inspector '{metric_id}'"
+        )))
     }
 }
 
@@ -554,6 +614,29 @@ mod tests {
         assert!(
             mongo_advertises_instance_capabilities(),
             "MongoDB METADATA must include INSTANCE_METRICS and INSTANCE_INSPECTOR bits"
+        );
+    }
+
+    /// BF8: mongo.current_op inspector must advertise exactly one kill action.
+    #[test]
+    fn mongo_row_actions_current_op_returns_kill() {
+        let actions = MongoInstanceCatalog::static_row_actions("mongo.current_op");
+        assert_eq!(
+            actions.len(),
+            1,
+            "mongo.current_op must have exactly one row action"
+        );
+        assert_eq!(actions[0].id, "kill");
+        assert!(actions[0].is_destructive);
+    }
+
+    /// BF8: unknown inspector must return no row actions.
+    #[test]
+    fn mongo_row_actions_unknown_returns_empty() {
+        let actions = MongoInstanceCatalog::static_row_actions("mongo.does_not_exist");
+        assert!(
+            actions.is_empty(),
+            "unknown inspector must return no row actions"
         );
     }
 
