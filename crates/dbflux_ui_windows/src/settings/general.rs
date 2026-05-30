@@ -6,6 +6,7 @@ use dbflux_components::tokens::Radii;
 use dbflux_components::typography::{Body, FieldLabel, SubSectionLabel};
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
@@ -401,13 +402,13 @@ impl GeneralSection {
         if let Err(e) =
             dbflux_app::config_loader::save_general_settings(runtime, &self.gen_settings)
         {
-            log::error!("Failed to save general settings to SQLite: {}", e);
-            let body = e.to_string();
-            Toast::error("Failed to save")
-                .meta_right(now_hms())
-                .body(body.clone())
-                .action(copy_action(format!("Failed to save: {}", body)))
-                .push(cx);
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    format!("Failed to save general settings: {e}"),
+                ),
+                cx,
+            );
             return;
         }
 

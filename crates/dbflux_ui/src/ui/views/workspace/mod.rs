@@ -16,6 +16,7 @@ use dbflux_ui_base::modals::{
     ModalDeleteDashboardConfirm, ModalDeleteSavedChartConfirm, ModalRenameItem, RenameItemOutcome,
     RenameItemRequest, RenameTarget, RequestMetricsForNamespace,
 };
+use dbflux_ui_base::{AppStateGlobal, OpenAuditRequested};
 
 #[cfg(feature = "mcp")]
 use crate::app::McpRuntimeEventRaised;
@@ -338,6 +339,9 @@ impl Workspace {
         cx.set_global(ToastGlobal {
             host: toast_host.clone(),
         });
+        cx.set_global(AppStateGlobal {
+            entity: app_state.clone(),
+        });
 
         let sidebar = cx.new(|cx| Sidebar::new(app_state.clone(), window, cx));
         let sidebar_dock = cx.new(|cx| SidebarDock::new(sidebar.clone(), cx));
@@ -502,6 +506,15 @@ impl Workspace {
         cx.subscribe(&status_bar, |this, _, _: &ToggleTasksPanel, cx| {
             this.toggle_tasks_panel(cx);
         })
+        .detach();
+
+        cx.subscribe_in(
+            &app_state,
+            window,
+            |this, _, event: &OpenAuditRequested, window, cx| {
+                this.open_audit_viewer_with_correlation(event.0, window, cx);
+            },
+        )
         .detach();
 
         cx.subscribe_in(

@@ -2953,6 +2953,7 @@ dependencies = [
  "rusqlite",
  "serde_json",
  "tempfile",
+ "tracing",
  "uuid",
 ]
 
