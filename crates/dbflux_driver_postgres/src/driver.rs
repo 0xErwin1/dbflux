@@ -14,6 +14,7 @@ use dbflux_core::{
     CreateTypeRequest, CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo,
     DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DeploymentClass,
     DescribeRequest, DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits,
+    ExecutionSourceContext, InstanceCatalog,
     DriverMetadata, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation,
     ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind, FormSection, FormTab,
     FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection,
@@ -58,7 +59,9 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::RETURNING.bits()
             | DriverCapabilities::TRANSACTIONAL_DDL.bits()
             | DriverCapabilities::ROUTINES.bits()
-            | DriverCapabilities::MULTI_STATEMENT.bits(),
+            | DriverCapabilities::MULTI_STATEMENT.bits()
+            | DriverCapabilities::INSTANCE_METRICS.bits()
+            | DriverCapabilities::INSTANCE_INSPECTOR.bits(),
     ),
     default_port: Some(5432),
     uri_scheme: "postgresql".into(),
@@ -980,7 +983,7 @@ impl PostgresDriver {
             log::info!("[CONNECT] PostgreSQL connection established via URI");
 
             return Ok(Box::new(PostgresConnection {
-                client: Mutex::new(client),
+                client: Arc::new(Mutex::new(client)),
                 ssh_tunnel: None,
                 cancel_token,
                 active_query: RwLock::new(None),
@@ -1009,7 +1012,7 @@ impl PostgresDriver {
         log::info!("[CONNECT] PostgreSQL connection established via URI");
 
         Ok(Box::new(PostgresConnection {
-            client: Mutex::new(client),
+            client: Arc::new(Mutex::new(client)),
             ssh_tunnel: None,
             cancel_token,
             active_query: RwLock::new(None),
@@ -1047,7 +1050,7 @@ impl PostgresDriver {
         log::info!("Successfully connected to {}:{}", host, port);
 
         Ok(Box::new(PostgresConnection {
-            client: Mutex::new(client),
+            client: Arc::new(Mutex::new(client)),
             ssh_tunnel: None,
             cancel_token,
             active_query: RwLock::new(None),
@@ -1125,7 +1128,7 @@ impl PostgresDriver {
         );
 
         Ok(Box::new(PostgresConnection {
-            client: Mutex::new(client),
+            client: Arc::new(Mutex::new(client)),
             ssh_tunnel: Some(tunnel),
             cancel_token,
             active_query: RwLock::new(None),
@@ -1164,7 +1167,7 @@ fn parse_pg_uri_sslmode(uri: &str) -> PgUriSslMode {
 }
 
 pub struct PostgresConnection {
-    client: Mutex<Client>,
+    client: Arc<Mutex<Client>>,
     #[allow(dead_code)]
     ssh_tunnel: Option<SshTunnel>,
     cancel_token: PgCancelToken,
@@ -1434,8 +1437,42 @@ impl Connection for PostgresConnection {
         Ok(())
     }
 
+    fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
+        Some(Box::new(
+            crate::instance_catalog::PgInstanceCatalog::new(Arc::clone(&self.client)),
+        ))
+    }
+
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
         self.cancelled.store(false, Ordering::SeqCst);
+
+        if let Some(source) = req
+            .execution_context
+            .as_ref()
+            .and_then(|ctx| ctx.source.as_ref())
+        {
+            match source {
+                ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
+                    let mut client = self.client.lock().map_err(|_| {
+                        DbError::QueryFailed("postgres client mutex poisoned".to_string().into())
+                    })?;
+                    return crate::instance_catalog::dispatch_metric_series(
+                        &mut client,
+                        metric_id,
+                    );
+                }
+                ExecutionSourceContext::InstanceInspectorQuery { metric_id } => {
+                    let mut client = self.client.lock().map_err(|_| {
+                        DbError::QueryFailed("postgres client mutex poisoned".to_string().into())
+                    })?;
+                    return crate::instance_catalog::dispatch_inspector_snapshot(
+                        &mut client,
+                        metric_id,
+                    );
+                }
+                _ => {}
+            }
+        }
 
         let start = Instant::now();
         let query_id = Uuid::new_v4();

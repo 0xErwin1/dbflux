@@ -12,6 +12,7 @@ license.workspace = true
 [dependencies]
 dbflux_core = { path = "../dbflux_core" }
 dbflux_ssh = { path = "../dbflux_ssh" }
+async-trait = "0.1"
 chrono = "0.4"
 hex = "0.4"
 log = "0.4"
