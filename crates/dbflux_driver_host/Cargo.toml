@@ -13,7 +13,7 @@ name = "dbflux-driver-host"
 path = "src/main.rs"
 
 [dependencies]
-dbflux_core = { path = "../dbflux_core" }
+dbflux_core = { path = "../dbflux_core", features = ["tracing-bridge"] }
 dbflux_ipc = { path = "../dbflux_ipc" }
 interprocess.workspace = true
 serde.workspace = true

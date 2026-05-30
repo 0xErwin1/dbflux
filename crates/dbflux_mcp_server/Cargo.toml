@@ -23,7 +23,7 @@ aws = ["dbflux_aws", "dbflux_ssm"]
 
 [dependencies]
 # DBFlux core crates
-dbflux_core = { workspace = true }
+dbflux_core = { workspace = true, features = ["tracing-bridge"] }
 dbflux_mcp = { workspace = true }
 dbflux_policy = { workspace = true }
 dbflux_approval = { workspace = true }
