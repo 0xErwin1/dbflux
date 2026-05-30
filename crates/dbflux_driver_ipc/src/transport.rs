@@ -948,12 +948,112 @@ fn validate_response_protocol_version(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_call_request_envelope, protocol_supports_semantic_planning,
+        RpcClient, build_call_request_envelope, protocol_supports_semantic_planning,
         validate_hello_selected_version, validate_response_protocol_version,
     };
+    use dbflux_ipc::audit::{AuditEventEmitDto, EventCategoryDto, EventOutcomeDto, EventSeverityDto, ExternalAuditEmitter, ExternalAuditSource};
     use dbflux_ipc::driver_protocol::DriverRequestBody;
-    use dbflux_ipc::{ProtocolVersion, driver_rpc_supported_versions};
+    use dbflux_ipc::{ProtocolVersion, driver_rpc_supported_versions, driver_socket_name};
+    use std::sync::{Arc, Mutex};
     use uuid::Uuid;
+
+    struct RecordingEmitter {
+        calls: Mutex<Vec<(ExternalAuditSource, AuditEventEmitDto)>>,
+    }
+
+    impl RecordingEmitter {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                calls: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn call_count(&self) -> usize {
+            self.calls.lock().unwrap().len()
+        }
+    }
+
+    impl ExternalAuditEmitter for RecordingEmitter {
+        fn emit(&self, source: ExternalAuditSource, dto: AuditEventEmitDto) {
+            self.calls.lock().unwrap().push((source, dto));
+        }
+    }
+
+    fn fake_audit_dto() -> AuditEventEmitDto {
+        AuditEventEmitDto {
+            ts_ms: 1_000_000,
+            level: EventSeverityDto::Info,
+            category: EventCategoryDto::Connection,
+            outcome: EventOutcomeDto::Success,
+            action: "test_action".to_string(),
+            summary: "test summary".to_string(),
+            object_type: None,
+            object_id: None,
+            duration_ms: None,
+            error_code: None,
+            error_message: None,
+            details_json: None,
+        }
+    }
+
+    #[test]
+    fn rpc_client_with_audit_capability_dispatches_emit_frame_to_emitter() {
+        use dbflux_test_support::{FakeDriverAction, FakeDriverRpcConfig, FakeDriverRpcServer};
+
+        let socket_id = format!("test-audit-emit-{}", Uuid::new_v4());
+        let server = FakeDriverRpcServer::start(
+            FakeDriverRpcConfig::new(&socket_id)
+                .with_audit_emit_capability()
+                .with_actions(vec![FakeDriverAction::EmitAuditThenPong(fake_audit_dto())]),
+        )
+        .expect("fake driver server must start");
+
+        let emitter = RecordingEmitter::new();
+        let socket_name = driver_socket_name(&socket_id).expect("socket name");
+        let client = RpcClient::connect_with_audit(
+            socket_name.borrow(),
+            socket_id.clone(),
+            Some(emitter.clone() as Arc<dyn ExternalAuditEmitter>),
+        )
+        .expect("connect must succeed");
+
+        client.ping(Uuid::nil()).expect("ping must succeed");
+
+        server.wait().expect("server must exit cleanly");
+
+        assert_eq!(emitter.call_count(), 1, "emitter must be called once");
+    }
+
+    #[test]
+    fn rpc_client_without_audit_capability_drops_emit_frame_silently() {
+        use dbflux_test_support::{FakeDriverAction, FakeDriverRpcConfig, FakeDriverRpcServer};
+
+        let socket_id = format!("test-audit-no-cap-{}", Uuid::new_v4());
+        let server = FakeDriverRpcServer::start(
+            FakeDriverRpcConfig::new(&socket_id)
+                .with_actions(vec![FakeDriverAction::EmitAuditThenPong(fake_audit_dto())]),
+        )
+        .expect("fake driver server must start");
+
+        let emitter = RecordingEmitter::new();
+        let socket_name = driver_socket_name(&socket_id).expect("socket name");
+        let client = RpcClient::connect_with_audit(
+            socket_name.borrow(),
+            socket_id.clone(),
+            Some(emitter.clone() as Arc<dyn ExternalAuditEmitter>),
+        )
+        .expect("connect must succeed");
+
+        client.ping(Uuid::nil()).expect("ping must succeed");
+
+        server.wait().expect("server must exit cleanly");
+
+        assert_eq!(
+            emitter.call_count(),
+            0,
+            "emitter must not be called when capability is absent"
+        );
+    }
 
     #[test]
     fn semantic_planning_requires_driver_rpc_v1_1_or_newer() {
