@@ -6,7 +6,7 @@ pub mod store;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 
 use dbflux_core::observability::{EventRecord, EventSink as CoreEventSink, EventSinkError};
 use dbflux_storage::error::RepositoryError;
@@ -91,6 +91,11 @@ pub struct AuditService {
     capture_query_text: Arc<AtomicBool>,
     /// Maximum allowed size for the stored details_json payload.
     max_detail_bytes: Arc<AtomicUsize>,
+    /// Shared with the tracing bridge's `AuditLayer` so runtime level changes
+    /// take effect without reinitializing the subscriber.
+    bridge_min_level: Option<Arc<AtomicU8>>,
+    /// Shared with the tracing bridge to expose drop count via `AuditService`.
+    bridge_drop_counter: Option<Arc<AtomicU64>>,
 }
 
 const DEFAULT_MAX_DETAIL_BYTES: usize = 65_536;
@@ -104,7 +109,50 @@ impl AuditService {
             enabled: Arc::new(AtomicBool::new(true)),
             capture_query_text: Arc::new(AtomicBool::new(false)),
             max_detail_bytes: Arc::new(AtomicUsize::new(DEFAULT_MAX_DETAIL_BYTES)),
+            bridge_min_level: None,
+            bridge_drop_counter: None,
         }
+    }
+
+    /// Attaches the tracing bridge's shared atomics so level changes and drop counts
+    /// are visible through `AuditService::set_log_capture_min_level` and
+    /// `AuditService::dropped_log_event_count`.
+    pub fn attach_bridge(
+        &mut self,
+        min_level: Arc<AtomicU8>,
+        drop_counter: Arc<AtomicU64>,
+    ) {
+        self.bridge_min_level = Some(min_level);
+        self.bridge_drop_counter = Some(drop_counter);
+    }
+
+    /// Updates the tracing bridge capture threshold at runtime and persists it.
+    ///
+    /// Updates the shared `AtomicU8` immediately (no subscriber reinit) and
+    /// writes the new value to `cfg_audit_settings` so it survives restart.
+    pub fn set_log_capture_min_level(
+        &self,
+        level: dbflux_core::observability::EventSeverity,
+    ) -> Result<(), AuditError> {
+        if let Some(min_level_arc) = &self.bridge_min_level {
+            let code = severity_to_level_code(level);
+            min_level_arc.store(code, Ordering::Relaxed);
+        }
+
+        self.store.update_log_capture_min_level(level.as_str())?;
+
+        Ok(())
+    }
+
+    /// Returns the count of events dropped by the tracing bridge since startup.
+    ///
+    /// This includes events dropped due to queue overflow and events dropped
+    /// before the audit sink was installed (pre-init window).
+    pub fn dropped_log_event_count(&self) -> u64 {
+        self.bridge_drop_counter
+            .as_ref()
+            .map(|c| c.load(Ordering::Relaxed))
+            .unwrap_or(0)
     }
 
     pub fn new_sqlite_default() -> Result<Self, AuditError> {
@@ -689,6 +737,20 @@ pub fn pivot_long_to_wide(
 ///
 /// This allows services to emit audit events through the `EventSink` trait
 /// interface, which is the primary way service layers emit events.
+/// Maps `EventSeverity` to the level code ordinal used by the tracing bridge's
+/// `AtomicU8` gate. Mirrors `LevelCode` without requiring the `tracing-bridge`
+/// feature flag on this crate.
+fn severity_to_level_code(level: dbflux_core::observability::EventSeverity) -> u8 {
+    use dbflux_core::observability::EventSeverity;
+    match level {
+        EventSeverity::Trace => 0,
+        EventSeverity::Debug => 1,
+        EventSeverity::Info => 2,
+        EventSeverity::Warn => 3,
+        EventSeverity::Error | EventSeverity::Fatal => 4,
+    }
+}
+
 impl CoreEventSink for AuditService {
     fn record(&self, event: EventRecord) -> Result<EventRecord, EventSinkError> {
         AuditService::record(self, event).map_err(|e| e.into())
