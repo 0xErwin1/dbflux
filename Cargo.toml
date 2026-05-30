@@ -92,7 +92,7 @@ rfd = "0.17"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-uuid = { version = "1", features = ["v4", "v5", "serde"] }
+uuid = { version = "1", features = ["v4", "v5", "v7", "serde"] }
 thiserror = "2"
 dirs = "5"
 rusqlite = { version = "0.32", features = ["bundled"] }

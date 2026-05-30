@@ -18,15 +18,19 @@ pub mod saved_chart_manager;
 pub mod sql_preview_modal;
 pub mod sso_wizard;
 pub mod toast;
+pub mod user_error;
 
 mod style_guardrails;
 
 #[cfg(feature = "mcp")]
 pub use app_state_entity::McpRuntimeEventRaised;
-pub use app_state_entity::{AppStateChanged, AppStateEntity, AuthProfileCreated};
+pub use app_state_entity::{
+    AppStateChanged, AppStateEntity, AppStateGlobal, AuthProfileCreated, UserErrorReported,
+};
 pub use async_ext::AsyncUpdateResultExt;
 pub use dashboard_manager::{
     Dashboard, DashboardManager, DashboardPanel, DashboardPanelDraft, DashboardPanelKind,
 };
 pub use keymap::{default_keymap, key_chord_from_gpui};
 pub use saved_chart_manager::SavedChartManager;
+pub use user_error::{ErrorKind, UserFacingError, report_error, report_error_async};

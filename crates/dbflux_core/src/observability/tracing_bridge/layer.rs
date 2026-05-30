@@ -177,6 +177,10 @@ fn build_record(event: &tracing::Event<'_>) -> Option<EventRecord> {
         }
     }
 
+    if let Some(cid) = visitor.correlation_id {
+        record.correlation_id = Some(cid);
+    }
+
     if let Some(details_json_raw) = visitor.details_json {
         record = record.with_details_json(details_json_raw);
     } else if !visitor.extra_fields.is_empty() || overflow_message.is_some() {
@@ -233,6 +237,8 @@ fn parse_actor_type(s: &str) -> Option<EventActorType> {
 /// Visits tracing event fields and extracts known named fields into typed slots.
 ///
 /// Unknown fields accumulate in `extra_fields` for inclusion in `details_json`.
+/// The `correlation_id` slot is populated explicitly so the value lands in
+/// `EventRecord.correlation_id` rather than in `details_json`/`extra_fields`.
 #[derive(Default)]
 struct AuditFieldVisitor {
     pub category: Option<String>,
@@ -245,6 +251,7 @@ struct AuditFieldVisitor {
     pub outcome: Option<String>,
     pub details_json: Option<String>,
     pub message: Option<String>,
+    pub correlation_id: Option<String>,
     pub extra_fields: serde_json::Map<String, serde_json::Value>,
 }
 
@@ -295,7 +302,11 @@ impl Visit for AuditFieldVisitor {
 
 impl AuditFieldVisitor {
     fn record_string(&mut self, field: &Field, value: String) {
-        match field.name() {
+        self.record_string_by_name(field.name(), value);
+    }
+
+    fn record_string_by_name(&mut self, name: &str, value: String) {
+        match name {
             "message" => self.message = Some(value),
             "category" => self.category = Some(value),
             "actor_type" => self.actor_type = Some(value),
@@ -306,6 +317,7 @@ impl AuditFieldVisitor {
             "action" => self.action = Some(value),
             "outcome" => self.outcome = Some(value),
             "details_json" => self.details_json = Some(value),
+            "correlation_id" => self.correlation_id = Some(value),
             other => {
                 self.extra_fields
                     .insert(other.to_owned(), serde_json::Value::String(value));
@@ -317,6 +329,37 @@ impl AuditFieldVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -- M1-T1: AuditFieldVisitor correlation_id extraction tests --
+
+    #[test]
+    fn visitor_captures_correlation_id_into_slot_not_extra_fields() {
+        let mut visitor = AuditFieldVisitor::default();
+
+        visitor.record_string_by_name("correlation_id", "0192cf4a-dead-7000-beef-000000000001".to_owned());
+
+        assert_eq!(
+            visitor.correlation_id.as_deref(),
+            Some("0192cf4a-dead-7000-beef-000000000001"),
+            "correlation_id must land in the dedicated slot"
+        );
+        assert!(
+            !visitor.extra_fields.contains_key("correlation_id"),
+            "correlation_id must NOT appear in extra_fields"
+        );
+    }
+
+    #[test]
+    fn visitor_other_unknown_fields_go_to_extra_fields() {
+        let mut visitor = AuditFieldVisitor::default();
+        visitor.record_string_by_name("some_custom_field", "some_value".to_owned());
+
+        assert!(
+            visitor.extra_fields.contains_key("some_custom_field"),
+            "unknown fields still go to extra_fields"
+        );
+        assert!(visitor.correlation_id.is_none());
+    }
 
     #[test]
     fn passes_level_gate_filters_debug_and_trace() {

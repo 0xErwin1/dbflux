@@ -6,8 +6,9 @@
 use std::sync::Arc;
 
 use dbflux_app::AppState;
+use dbflux_core::observability::EventSeverity;
 use dbflux_storage::bootstrap::StorageRuntime;
-use gpui::{EventEmitter, WindowHandle};
+use gpui::{Entity, EventEmitter, Global, WindowHandle};
 use gpui_component::Root;
 use uuid::Uuid;
 
@@ -20,6 +21,16 @@ use crate::saved_chart_manager::SavedChartManager;
 
 /// Emitted when the app state changes in ways that require UI updates.
 pub struct AppStateChanged;
+
+/// Emitted each time `report_error` fires for a new user-facing failure.
+///
+/// Subscribers (e.g., `StatusBar`) use this to update the unread-error badge
+/// without depending on `AppStateChanged` polling.
+#[derive(Clone, Copy)]
+pub struct UserErrorReported {
+    pub correlation_id: Uuid,
+    pub severity: EventSeverity,
+}
 
 /// Emitted when an auth profile is created (used to update the sidebar).
 #[derive(Clone)]
@@ -74,6 +85,11 @@ pub struct AppStateEntity {
     /// Picked up by the sidebar on `AppStateChanged` to drive
     /// disconnect + connect for that profile.
     pub pending_reconnect_request: Option<Uuid>,
+
+    /// Count of user-facing errors reported since the last `clear_unread_errors`
+    /// call. Ephemeral — resets to 0 on every app start. The audit log is the
+    /// durable record; this counter only drives the status-bar badge.
+    pub unread_error_count: u32,
 }
 
 impl AppStateEntity {
@@ -98,6 +114,7 @@ impl AppStateEntity {
             dashboards,
             pending_edit_reconnect_prompt: None,
             pending_reconnect_request: None,
+            unread_error_count: 0,
         }
     }
 
@@ -122,7 +139,37 @@ impl AppStateEntity {
             dashboards,
             pending_edit_reconnect_prompt: None,
             pending_reconnect_request: None,
+            unread_error_count: 0,
         }
+    }
+
+    /// Increments the unread-error counter and notifies subscribers.
+    ///
+    /// Called exclusively by `report_error` — no other path should increment
+    /// the counter to avoid double-counting.
+    pub fn note_user_error(
+        &mut self,
+        correlation_id: Uuid,
+        severity: EventSeverity,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.unread_error_count = self.unread_error_count.saturating_add(1);
+        cx.emit(UserErrorReported { correlation_id, severity });
+        cx.emit(AppStateChanged);
+        cx.notify();
+    }
+
+    /// Resets the unread-error counter to zero.
+    ///
+    /// Called when the user opens the audit panel via the badge click,
+    /// acknowledging all pending error notifications.
+    pub fn clear_unread_errors(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.unread_error_count == 0 {
+            return;
+        }
+        self.unread_error_count = 0;
+        cx.emit(AppStateChanged);
+        cx.notify();
     }
 }
 
@@ -152,6 +199,21 @@ impl std::ops::DerefMut for AppStateEntity {
 
 impl EventEmitter<AppStateChanged> for AppStateEntity {}
 impl EventEmitter<AuthProfileCreated> for AppStateEntity {}
+impl EventEmitter<UserErrorReported> for AppStateEntity {}
 
 #[cfg(feature = "mcp")]
 impl EventEmitter<McpRuntimeEventRaised> for AppStateEntity {}
+
+// ============================================================================
+// AppStateGlobal — GPUI global wrapper for the AppStateEntity
+// ============================================================================
+
+/// GPUI global that holds the `AppStateEntity` handle so that `report_error`
+/// can reach it without requiring callers to pass the entity explicitly.
+///
+/// Registered in workspace startup via `cx.set_global(AppStateGlobal { entity })`.
+pub struct AppStateGlobal {
+    pub entity: Entity<AppStateEntity>,
+}
+
+impl Global for AppStateGlobal {}
