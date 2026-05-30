@@ -25,7 +25,8 @@ mod style_guardrails;
 #[cfg(feature = "mcp")]
 pub use app_state_entity::McpRuntimeEventRaised;
 pub use app_state_entity::{
-    AppStateChanged, AppStateEntity, AppStateGlobal, AuthProfileCreated, UserErrorReported,
+    AppStateChanged, AppStateEntity, AppStateGlobal, AuthProfileCreated, OpenAuditRequested,
+    UserErrorReported,
 };
 pub use async_ext::AsyncUpdateResultExt;
 pub use dashboard_manager::{

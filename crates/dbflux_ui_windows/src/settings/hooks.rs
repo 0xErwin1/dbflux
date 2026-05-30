@@ -687,13 +687,11 @@ impl HooksSection {
         if let Err(e) =
             dbflux_app::config_loader::save_hook_definitions(runtime, &self.hook_definitions)
         {
-            log::error!("Failed to save hooks to SQLite: {}", e);
-            let toast_body = e.to_string();
-            Toast::error("Failed to save hooks")
-                .meta_right(now_hms())
-                .body(toast_body.clone())
-                .action(copy_action(format!("Failed to save hooks: {}", toast_body)))
-                .push(cx);
+            report_error(
+                UserFacingError::new(ErrorKind::Storage, "Failed to save hooks")
+                    .with_cause(e.to_string()),
+                cx,
+            );
             return;
         }
 

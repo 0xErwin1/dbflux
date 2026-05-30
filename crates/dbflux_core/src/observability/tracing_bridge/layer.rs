@@ -264,11 +264,14 @@ impl Visit for AuditFieldVisitor {
         let name = field.name();
         if name == "message" {
             self.message = Some(format!("{value:?}").trim_matches('"').to_owned());
-        } else {
-            let string_value = format!("{value:?}");
-            self.extra_fields
-                .insert(name.to_owned(), serde_json::Value::String(string_value));
+            return;
         }
+
+        // Strip the surrounding `"..."` that Debug adds for string-like values
+        // so the % / Display sigil round-trips into the typed slots cleanly.
+        let raw = format!("{value:?}");
+        let string_value = raw.trim_matches('"').to_owned();
+        self.record_string_by_name(name, string_value);
     }
 
     fn record_f64(&mut self, field: &Field, value: f64) {

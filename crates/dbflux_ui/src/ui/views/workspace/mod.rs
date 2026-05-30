@@ -9,7 +9,6 @@ pub use inspector::{WorkspaceInspector, WorkspaceInspectorEvent};
 use crate::app::{AppStateChanged, AppStateEntity};
 use dbflux_components;
 use dbflux_core::observability::actions::CONFIG_CHANGE;
-use dbflux_ui_base::AppStateGlobal;
 use dbflux_ui_base::modals::{
     AddPanelOutcome, AddPanelRequest, CreateDashboardOutcome, CreateDashboardRequest,
     DeleteDashboardOutcome, DeleteDashboardRequest, DeleteSavedChartOutcome,
@@ -17,6 +16,7 @@ use dbflux_ui_base::modals::{
     ModalDeleteDashboardConfirm, ModalDeleteSavedChartConfirm, ModalRenameItem, RenameItemOutcome,
     RenameItemRequest, RenameTarget, RequestMetricsForNamespace,
 };
+use dbflux_ui_base::{AppStateGlobal, OpenAuditRequested};
 
 #[cfg(feature = "mcp")]
 use crate::app::McpRuntimeEventRaised;
@@ -43,7 +43,7 @@ use crate::ui::overlays::sql_preview_modal::SqlPreviewModal;
 use crate::ui::overlays::sso_wizard::{SsoWizard, SsoWizardEvent};
 use crate::ui::tokens::{Heights, Radii, Spacing};
 use crate::ui::views::sidebar::{Sidebar, SidebarEvent, SidebarTab};
-use crate::ui::views::status_bar::{OpenAuditWithCorrelation, StatusBar, ToggleTasksPanel};
+use crate::ui::views::status_bar::{StatusBar, ToggleTasksPanel};
 use crate::ui::views::tasks_panel::TasksPanel;
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 #[cfg(test)]
@@ -509,9 +509,9 @@ impl Workspace {
         .detach();
 
         cx.subscribe_in(
-            &status_bar,
+            &app_state,
             window,
-            |this, _, event: &OpenAuditWithCorrelation, window, cx| {
+            |this, _, event: &OpenAuditRequested, window, cx| {
                 this.open_audit_viewer_with_correlation(event.0, window, cx);
             },
         )

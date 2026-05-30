@@ -121,7 +121,7 @@ impl UserFacingError {
 /// | Inside a `cx.update(|cx| { ... })`      | `report_error`          |
 pub fn report_error(err: UserFacingError, cx: &mut App) {
     use crate::app_state_entity::AppStateGlobal;
-    use crate::toast::{Toast, copy_action, now_hms};
+    use crate::toast::{Toast, ToastAction, copy_action, now_hms};
 
     let id_str = err.correlation_id.to_string();
     let kind_str = err.kind.as_str();
@@ -159,10 +159,20 @@ pub fn report_error(err: UserFacingError, cx: &mut App) {
         toast = toast.body(a.clone());
     }
 
+    let id_for_action = err.correlation_id;
+    let view_in_audit =
+        ToastAction::new("view-in-audit", "View in Audit").on_click(move |cx: &mut App| {
+            if let Some(g) = cx.try_global::<AppStateGlobal>() {
+                let entity = g.entity.clone();
+                entity.update(cx, |s, cx| s.request_open_audit(Some(id_for_action), cx));
+            }
+        });
+
     toast = toast
         .meta_right(now_hms())
         .details(format!("Correlation: {id_str}"))
-        .action(copy_action(format!("{summary}\nCorrelation: {id_str}")));
+        .action(copy_action(format!("{summary}\nCorrelation: {id_str}")))
+        .action(view_in_audit);
 
     toast.push(cx);
 

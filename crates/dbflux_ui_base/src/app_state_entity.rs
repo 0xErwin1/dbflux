@@ -32,6 +32,16 @@ pub struct UserErrorReported {
     pub severity: EventSeverity,
 }
 
+/// Requests that the workspace open the audit document, optionally filtered
+/// by a specific `correlation_id`.
+///
+/// Emitted by the status-bar badge click (with `None`, opens with the default
+/// user-error filter) and by the "View in Audit" action on error toasts (with
+/// the toast's correlation id). Keeping a single event keeps the audit-open
+/// path uniform — the workspace subscribes once.
+#[derive(Clone, Copy)]
+pub struct OpenAuditRequested(pub Option<Uuid>);
+
 /// Emitted when an auth profile is created (used to update the sidebar).
 #[derive(Clone)]
 pub struct AuthProfileCreated {
@@ -162,6 +172,16 @@ impl AppStateEntity {
         cx.notify();
     }
 
+    /// Emits an `OpenAuditRequested` event so the workspace opens (or focuses)
+    /// the audit document with the matching correlation filter.
+    pub fn request_open_audit(
+        &mut self,
+        correlation_id: Option<Uuid>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        cx.emit(OpenAuditRequested(correlation_id));
+    }
+
     /// Resets the unread-error counter to zero.
     ///
     /// Called when the user opens the audit panel via the badge click,
@@ -203,6 +223,7 @@ impl std::ops::DerefMut for AppStateEntity {
 impl EventEmitter<AppStateChanged> for AppStateEntity {}
 impl EventEmitter<AuthProfileCreated> for AppStateEntity {}
 impl EventEmitter<UserErrorReported> for AppStateEntity {}
+impl EventEmitter<OpenAuditRequested> for AppStateEntity {}
 
 #[cfg(feature = "mcp")]
 impl EventEmitter<McpRuntimeEventRaised> for AppStateEntity {}

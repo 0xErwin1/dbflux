@@ -8,15 +8,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use std::time::Duration;
-use uuid::Uuid;
 
 pub struct ToggleTasksPanel;
-
-/// Emitted by `StatusBar` when the user clicks the error badge.
-///
-/// The workspace subscribes to this and calls `open_audit_viewer_with_correlation`.
-/// `None` means "open the audit viewer with the default user-error filter".
-pub struct OpenAuditWithCorrelation(pub Option<Uuid>);
 
 pub struct StatusBar {
     app_state: Entity<AppStateEntity>,
@@ -30,7 +23,6 @@ pub struct StatusBar {
 }
 
 impl EventEmitter<ToggleTasksPanel> for StatusBar {}
-impl EventEmitter<OpenAuditWithCorrelation> for StatusBar {}
 
 impl StatusBar {
     pub fn new(
@@ -313,8 +305,8 @@ impl Render for StatusBar {
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.app_state.update(cx, |s, cx| {
                                         s.clear_unread_errors(cx);
+                                        s.request_open_audit(None, cx);
                                     });
-                                    cx.emit(OpenAuditWithCorrelation(None));
                                 })),
                         )
                     })
