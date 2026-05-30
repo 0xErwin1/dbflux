@@ -405,6 +405,8 @@ The host owns all identity, correlation, and rate-limiting fields. An external s
 | `correlation_id` | Host-generated; one per session for drivers, one per request for auth providers |
 | `ts_ms` | Service-supplied but clamped if drift from host wall clock exceeds five minutes |
 
+`correlation_id` is structurally guaranteed to be host-generated because `AuditEventEmitDto` (the IPC payload type) has no `correlation_id` field. External services cannot supply one — the field was intentionally omitted from the DTO at design time (ADR-3) rather than accepted and validated away. As a result, the scenario "driver DTO carries a forged correlation_id and the host overrides it at runtime" is impossible at the type level; the stored value is always produced by the host's correlation-id allocation logic.
+
 ### Category whitelist
 
 Drivers may emit `Connection`, `Query`, and `System` events. Auth providers may emit only `Connection` events. Any frame with a disallowed category is silently dropped.
