@@ -293,6 +293,16 @@ impl Connection for CloudWatchConnection {
                     started,
                 );
             }
+            ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
+                return Err(DbError::NotSupported(format!(
+                    "CloudWatch does not support instance metrics (metric_id: {metric_id})"
+                )));
+            }
+            ExecutionSourceContext::InstanceInspectorQuery { metric_id } => {
+                return Err(DbError::NotSupported(format!(
+                    "CloudWatch does not support instance inspector (metric_id: {metric_id})"
+                )));
+            }
         };
 
         let query_mode = query_mode.as_deref().unwrap_or(CLOUDWATCH_QUERY_MODE_CWLI);

@@ -1,6 +1,7 @@
 pub(crate) mod context;
 pub mod dashboard_import;
 pub mod dashboard_source;
+pub mod instance_catalog;
 pub(crate) mod hook;
 pub(crate) mod item_manager;
 pub mod manager;
@@ -35,6 +36,9 @@ pub trait TreeStore {
 }
 
 pub use context::{ExecutionContext, ExecutionSourceContext, MetricQuerySeries};
+pub use instance_catalog::{
+    InstanceCatalog, InstanceInspectorDef, InstanceMetricDef, InstanceMetricId, InstanceMetricUnit,
+};
 pub use hook::{
     ConnectionHook, ConnectionHookBindings, ConnectionHooks, DetachedProcessHandle,
     DetachedProcessReceiver, DetachedProcessSender, HookContext, HookExecution, HookExecutionMode,
