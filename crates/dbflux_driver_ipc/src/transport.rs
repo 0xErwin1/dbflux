@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use dbflux_core::DbError;
 use dbflux_ipc::{
-    DRIVER_RPC_AUTH_TOKEN_ENV, DRIVER_RPC_VERSION, ProtocolVersion, RpcApiFamily,
+    DRIVER_RPC_AUTH_TOKEN_ENV, DRIVER_RPC_VERSION, ExternalAuditEmitter, ExternalAuditSource,
+    ProtocolVersion, RpcApiFamily,
     driver_protocol::{
         DriverCapability, DriverHelloRequest, DriverHelloResponse, DriverRequestBody,
         DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope,
@@ -16,6 +18,14 @@ pub struct RpcClient {
     stream: Arc<Mutex<IpcStream>>,
     request_id: Arc<Mutex<u64>>,
     hello: DriverHelloResponse,
+    /// Socket registry ID (`rpc:<socket_id>`) for correlation and logging.
+    socket_id: String,
+    /// Whether the driver advertised `DriverCapability::AuditEmit` in its hello.
+    audit_emit_capability: bool,
+    /// Sanitizing sink for audit frames emitted by this driver.
+    audit_emitter: Option<Arc<dyn ExternalAuditEmitter>>,
+    /// Per-session correlation IDs, allocated lazily on first audit emit for a session.
+    session_correlation_ids: Mutex<HashMap<Uuid, String>>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -53,6 +63,18 @@ impl From<RpcError> for DbError {
 impl RpcClient {
     /// Connects to a driver-host via a local socket name and performs the Hello handshake.
     pub fn connect(name: Name<'_>) -> Result<Self, RpcError> {
+        Self::connect_with_audit(name, String::new(), None)
+    }
+
+    /// Connects with an audit emitter attached for handling `EmitAuditEvent` frames.
+    ///
+    /// `socket_id` is the registry key (`rpc:<socket_id>`) used for correlation.
+    /// `audit_emitter` is `None` when audit emission is not wired (e.g. in tests).
+    pub fn connect_with_audit(
+        name: Name<'_>,
+        socket_id: String,
+        audit_emitter: Option<Arc<dyn ExternalAuditEmitter>>,
+    ) -> Result<Self, RpcError> {
         let stream =
             IpcStream::connect(name).map_err(|e| RpcError::ConnectionFailed(e.to_string()))?;
 
@@ -61,10 +83,18 @@ impl RpcClient {
 
         let hello = Self::perform_hello(&stream, &request_id)?;
 
+        let audit_emit_capability = hello
+            .capabilities
+            .contains(&DriverCapability::AuditEmit);
+
         let client = Self {
             stream,
             request_id,
             hello,
+            socket_id,
+            audit_emit_capability,
+            audit_emitter,
+            session_correlation_ids: Mutex::new(HashMap::new()),
         };
 
         Ok(client)
@@ -781,8 +811,13 @@ impl RpcClient {
     }
 
     /// Low-level send/receive with request-ID correlation.
+    ///
+    /// Intercepts `EmitAuditEvent` intermediate frames (`done=false`) and dispatches
+    /// them to the audit emitter when the driver has the `AuditEmit` capability.
+    /// All other frames (including the terminal frame) are returned to the caller.
     fn send_raw(&self, request: DriverRequestEnvelope) -> Result<DriverResponseEnvelope, RpcError> {
         let expected_id = request.request_id;
+        let request_session_id = request.session_id;
 
         let mut stream = self
             .stream
@@ -791,16 +826,55 @@ impl RpcClient {
 
         framing::send_msg(&mut *stream, &request).map_err(RpcError::Io)?;
 
-        let response: DriverResponseEnvelope =
-            framing::recv_msg(&mut *stream).map_err(RpcError::Io)?;
+        loop {
+            let response: DriverResponseEnvelope =
+                framing::recv_msg(&mut *stream).map_err(RpcError::Io)?;
 
-        if response.request_id != expected_id {
-            return Err(RpcError::Protocol("Request ID mismatch".into()));
+            if response.request_id != expected_id {
+                return Err(RpcError::Protocol("Request ID mismatch".into()));
+            }
+
+            validate_response_protocol_version(
+                request.protocol_version,
+                response.protocol_version,
+            )?;
+
+            match response.body {
+                DriverResponseBody::EmitAuditEvent(ref dto) if !response.done => {
+                    if self.audit_emit_capability {
+                        if let Some(sink) = &self.audit_emitter {
+                            let session_id = response.session_id.or(request_session_id);
+                            let correlation_id = self.correlation_id_for_session(session_id);
+                            sink.emit(
+                                ExternalAuditSource::Driver {
+                                    socket_id: self.socket_id.clone(),
+                                    session_id,
+                                    correlation_id,
+                                },
+                                dto.clone(),
+                            );
+                        }
+                    }
+                    // Loop to consume the next frame regardless of capability/emitter.
+                    continue;
+                }
+                _ => return Ok(response),
+            }
         }
+    }
 
-        validate_response_protocol_version(request.protocol_version, response.protocol_version)?;
+    fn correlation_id_for_session(&self, session_id: Option<Uuid>) -> String {
+        let Some(session_id) = session_id else {
+            return Uuid::new_v4().to_string();
+        };
 
-        Ok(response)
+        let mut map = self
+            .session_correlation_ids
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        map.entry(session_id)
+            .or_insert_with(|| Uuid::new_v4().to_string())
+            .clone()
     }
 
     fn next_request_id(&self) -> Result<u64, RpcError> {

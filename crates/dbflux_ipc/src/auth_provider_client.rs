@@ -145,6 +145,31 @@ impl RpcAuthProvider {
         self
     }
 
+    /// Constructs a minimal provider for testing the dispatch loop without a real socket.
+    #[cfg(test)]
+    fn new_for_test(
+        socket_id: &str,
+        provider_id: &str,
+        audit_emit_opt_in: bool,
+        audit_emitter: Option<Arc<dyn ExternalAuditEmitter>>,
+    ) -> Self {
+        use dbflux_core::auth::AuthProviderCapabilities;
+        use crate::envelope::AUTH_PROVIDER_RPC_VERSION;
+
+        Self {
+            socket_id: socket_id.to_string(),
+            provider_id: provider_id.to_string(),
+            display_name: "Test Provider".to_string(),
+            form_definition: dbflux_core::auth::AuthFormDef { tabs: vec![] },
+            capabilities: AuthProviderCapabilities::default(),
+            selected_version: AUTH_PROVIDER_RPC_VERSION,
+            secret_dependency_opt_in: false,
+            audit_emit_opt_in,
+            audit_emitter,
+            launch: None,
+        }
+    }
+
     #[allow(clippy::result_large_err)]
     fn connect_stream(&self) -> Result<IpcStream, DbError> {
         ensure_host_running_for(&self.socket_id, self.launch.as_ref())?;
@@ -220,15 +245,22 @@ impl RpcAuthProvider {
         body: AuthProviderRequestBody,
     ) -> Result<Vec<AuthProviderResponseEnvelope>, DbError> {
         let mut stream = self.connect_stream()?;
-        let request = AuthProviderRequestEnvelope::new(self.selected_version, 1, body);
+        self.dispatch_request_loop(&mut stream, body)
+    }
 
+    fn dispatch_request_loop<S: std::io::Read + std::io::Write>(
+        &self,
+        stream: &mut S,
+        body: AuthProviderRequestBody,
+    ) -> Result<Vec<AuthProviderResponseEnvelope>, DbError> {
+        let request = AuthProviderRequestEnvelope::new(self.selected_version, 1, body);
         let correlation_id = uuid::Uuid::new_v4().to_string();
 
-        framing::send_msg(&mut stream, &request)?;
+        framing::send_msg(&mut *stream, &request)?;
 
         let mut responses = Vec::new();
         loop {
-            let response: AuthProviderResponseEnvelope = framing::recv_msg(&mut stream)?;
+            let response: AuthProviderResponseEnvelope = framing::recv_msg(&mut *stream)?;
 
             if response.request_id != request.request_id {
                 return Err(DbError::connection_failed(format!(
@@ -1066,6 +1098,186 @@ mod tests {
         assert!(
             !normalized.audit_emit_opt_in,
             "v1.2 hello must have audit_emit_opt_in == false"
+        );
+    }
+
+    // =========================================================================
+    // Layer C: dispatch_request_loop — audit frame interception
+    // =========================================================================
+
+    use std::sync::{Arc, Mutex};
+    use crate::audit::{AuditEventEmitDto, EventCategoryDto, EventOutcomeDto, EventSeverityDto, ExternalAuditEmitter, ExternalAuditSource};
+
+    /// In-memory stream that supplies pre-encoded response bytes and absorbs writes.
+    struct MockStream {
+        reader: std::io::Cursor<Vec<u8>>,
+        writer: Vec<u8>,
+    }
+
+    impl MockStream {
+        fn new(response_bytes: Vec<u8>) -> Self {
+            Self {
+                reader: std::io::Cursor::new(response_bytes),
+                writer: Vec::new(),
+            }
+        }
+    }
+
+    impl std::io::Read for MockStream {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.reader.read(buf)
+        }
+    }
+
+    impl std::io::Write for MockStream {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.writer.write(buf)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.writer.flush()
+        }
+    }
+
+    /// Recording emitter that captures every `emit` call for test assertions.
+    #[derive(Default)]
+    struct RecordingEmitter {
+        calls: Arc<Mutex<Vec<ExternalAuditSource>>>,
+    }
+
+    impl RecordingEmitter {
+        fn call_count(&self) -> usize {
+            self.calls.lock().unwrap().len()
+        }
+    }
+
+    impl ExternalAuditEmitter for RecordingEmitter {
+        fn emit(&self, source: ExternalAuditSource, _dto: AuditEventEmitDto) {
+            self.calls.lock().unwrap().push(source);
+        }
+    }
+
+    fn minimal_emit_dto() -> AuditEventEmitDto {
+        AuditEventEmitDto {
+            ts_ms: 1_700_000_000_000,
+            level: EventSeverityDto::Info,
+            category: EventCategoryDto::Connection,
+            action: "connect".to_string(),
+            outcome: EventOutcomeDto::Success,
+            summary: "provider connected".to_string(),
+            object_type: None,
+            object_id: None,
+            duration_ms: None,
+            error_code: None,
+            error_message: None,
+            details_json: None,
+        }
+    }
+
+    fn encode_response(envelope: &AuthProviderResponseEnvelope) -> Vec<u8> {
+        let mut buf = Vec::new();
+        framing::send_msg(&mut buf, envelope).expect("encode response");
+        buf
+    }
+
+
+    fn emit_audit_frame(request_id: u64, dto: AuditEventEmitDto) -> AuthProviderResponseEnvelope {
+        AuthProviderResponseEnvelope {
+            protocol_version: crate::AUTH_PROVIDER_RPC_VERSION,
+            request_id,
+            done: false,
+            body: AuthProviderResponseBody::EmitAuditEvent(dto),
+        }
+    }
+
+    fn login_result_frame(request_id: u64) -> AuthProviderResponseEnvelope {
+        use crate::auth_provider_protocol::AuthSessionDto;
+        AuthProviderResponseEnvelope {
+            protocol_version: crate::AUTH_PROVIDER_RPC_VERSION,
+            request_id,
+            done: true,
+            body: AuthProviderResponseBody::LoginResult {
+                session: AuthSessionDto {
+                    provider_id: "test-auth".to_string(),
+                    profile_id: uuid::Uuid::nil(),
+                    expires_at: None,
+                    session_data: None,
+                },
+            },
+        }
+    }
+
+    /// Scenario P-03-a: Provider has opt-in=true and emitter attached.
+    /// One EmitAuditEvent frame (done=false) followed by a terminal LoginResult (done=true).
+    /// Emitter should be called once; caller receives only the LoginResult.
+    #[test]
+    fn test_send_request_dispatches_emit_audit_frame() {
+        let emitter = Arc::new(RecordingEmitter::default());
+        let provider = RpcAuthProvider::new_for_test(
+            "test-sock",
+            "test-auth",
+            true,
+            Some(emitter.clone() as Arc<dyn ExternalAuditEmitter>),
+        );
+
+        let mut response_bytes = Vec::new();
+        response_bytes.extend(encode_response(&emit_audit_frame(1, minimal_emit_dto())));
+        response_bytes.extend(encode_response(&login_result_frame(1)));
+
+        let mut stream = MockStream::new(response_bytes);
+        let responses = provider
+            .dispatch_request_loop(
+                &mut stream,
+                AuthProviderRequestBody::Login(crate::auth_provider_protocol::LoginRequest {
+                    profile_json: "{}".to_string(),
+                }),
+            )
+            .expect("dispatch should succeed");
+
+        assert_eq!(emitter.call_count(), 1, "emitter must be called once for the EmitAuditEvent frame");
+        assert_eq!(responses.len(), 1, "caller must receive only the terminal LoginResult");
+        assert!(
+            matches!(responses[0].body, AuthProviderResponseBody::LoginResult { .. }),
+            "terminal response must be LoginResult"
+        );
+    }
+
+    /// Scenario B-04-a: Provider has opt-in=false.
+    /// EmitAuditEvent frame arrives; emitter must NOT be called.
+    /// Caller receives only the terminal LoginResult.
+    #[test]
+    fn test_send_request_opt_in_false_drops_emit_frame() {
+        let emitter = Arc::new(RecordingEmitter::default());
+        let provider = RpcAuthProvider::new_for_test(
+            "test-sock",
+            "test-auth",
+            false,
+            Some(emitter.clone() as Arc<dyn ExternalAuditEmitter>),
+        );
+
+        let mut response_bytes = Vec::new();
+        response_bytes.extend(encode_response(&emit_audit_frame(1, minimal_emit_dto())));
+        response_bytes.extend(encode_response(&login_result_frame(1)));
+
+        let mut stream = MockStream::new(response_bytes);
+        let responses = provider
+            .dispatch_request_loop(
+                &mut stream,
+                AuthProviderRequestBody::Login(crate::auth_provider_protocol::LoginRequest {
+                    profile_json: "{}".to_string(),
+                }),
+            )
+            .expect("dispatch should succeed even with opt-in=false");
+
+        assert_eq!(
+            emitter.call_count(),
+            0,
+            "emitter must NOT be called when audit_emit_opt_in=false"
+        );
+        assert_eq!(responses.len(), 1, "caller must still receive the terminal LoginResult");
+        assert!(
+            matches!(responses[0].body, AuthProviderResponseBody::LoginResult { .. }),
+            "terminal response must be LoginResult"
         );
     }
 }

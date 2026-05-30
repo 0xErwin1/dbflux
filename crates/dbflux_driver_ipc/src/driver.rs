@@ -11,6 +11,7 @@ use dbflux_core::{
     ConnectionProfile, DbConfig, DbError, DbKind, DriverFormDef, DriverMetadata, FormValues,
 };
 use dbflux_ipc::driver_protocol::DriverResponseBody;
+use dbflux_ipc::ExternalAuditEmitter;
 use interprocess::local_socket::{GenericNamespaced, Name, Stream as IpcStream, prelude::*};
 
 use crate::connection::IpcConnection;
@@ -100,6 +101,9 @@ pub struct IpcDriver {
     form_definition: DriverFormDef,
     settings_schema: Option<Arc<DriverFormDef>>,
     launch: Option<IpcDriverLaunchConfig>,
+    /// Audit emitter passed to each `RpcClient` connection for intercepting
+    /// `EmitAuditEvent` frames from the driver host.
+    audit_emitter: Option<Arc<dyn ExternalAuditEmitter>>,
 }
 
 #[derive(Clone, Debug)]
@@ -132,11 +136,22 @@ impl IpcDriver {
             form_definition,
             settings_schema: settings_schema.map(Arc::new),
             launch: None,
+            audit_emitter: None,
         }
     }
 
     pub fn with_launch_config(mut self, launch: IpcDriverLaunchConfig) -> Self {
         self.launch = Some(launch);
+        self
+    }
+
+    /// Attaches an audit emitter for routing `EmitAuditEvent` frames from the driver host.
+    ///
+    /// Each `RpcClient` built by this driver's connection methods will receive a clone
+    /// of this `Arc`, so audit frames are routed to the sanitizing sink without
+    /// requiring `dbflux_driver_ipc` to depend on `dbflux_audit` directly.
+    pub fn with_audit_emitter(mut self, emitter: Arc<dyn ExternalAuditEmitter>) -> Self {
+        self.audit_emitter = Some(emitter);
         self
     }
 
@@ -696,7 +711,12 @@ impl dbflux_core::DbDriver for IpcDriver {
 
         let name = Self::parse_socket_name(&self.socket_id)?;
 
-        let client = RpcClient::connect(name).map_err(DbError::from)?;
+        let client = RpcClient::connect_with_audit(
+            name,
+            self.socket_id.clone(),
+            self.audit_emitter.clone(),
+        )
+        .map_err(DbError::from)?;
 
         let profile_json = serde_json::to_string(profile)
             .map_err(|e| DbError::InvalidProfile(format!("JSON serialization failed: {e}")))?;
@@ -742,7 +762,12 @@ impl dbflux_core::DbDriver for IpcDriver {
 
         let name = Self::parse_socket_name(&self.socket_id)?;
 
-        let client = RpcClient::connect(name).map_err(DbError::from)?;
+        let client = RpcClient::connect_with_audit(
+            name,
+            self.socket_id.clone(),
+            self.audit_emitter.clone(),
+        )
+        .map_err(DbError::from)?;
 
         let profile_json = serde_json::to_string(profile)
             .map_err(|e| DbError::InvalidProfile(format!("JSON serialization failed: {e}")))?;

@@ -92,23 +92,17 @@ pub struct AuditEventEmitDto {
     /// Human-readable summary.  Required, non-empty.
     pub summary: String,
     /// Type of object involved (e.g. `"table"`, `"collection"`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub object_type: Option<String>,
     /// Identifier of the specific object involved.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub object_id: Option<String>,
     /// Duration of the action in milliseconds.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<i64>,
     /// Short error code string when `outcome == Failure`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_code: Option<String>,
     /// Human-readable error message when `outcome == Failure`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
     /// Additional structured detail as a JSON object string.
     /// Capped to 64 KiB by `AuditService::preprocess_event_for_storage`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub details_json: Option<String>,
 }
 
