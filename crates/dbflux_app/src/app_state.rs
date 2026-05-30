@@ -2485,6 +2485,34 @@ impl AppState {
         &self.audit_service
     }
 
+    /// Wires the tracing bridge's shared atomics into the audit service so that
+    /// `set_log_capture_min_level` can update the bridge threshold at runtime
+    /// and `dropped_log_event_count` can report the drop counter.
+    ///
+    /// Must be called before any clone of `AuditService` is handed out; the
+    /// `Option<Arc<AtomicU8>>` inside `AuditService` is not shared across
+    /// clones.
+    pub fn attach_tracing_bridge(
+        &mut self,
+        min_level: std::sync::Arc<std::sync::atomic::AtomicU8>,
+        drop_counter: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    ) {
+        self.audit_service.attach_bridge(min_level, drop_counter);
+    }
+
+    /// Returns the persisted `log_capture_min_level` value from audit settings.
+    ///
+    /// Returns `"info"` if the settings row has not been seeded yet.
+    pub fn log_capture_min_level_setting(&self) -> String {
+        self.storage_runtime
+            .audit_settings()
+            .get()
+            .ok()
+            .flatten()
+            .map(|s| s.log_capture_min_level)
+            .unwrap_or_else(|| "info".to_owned())
+    }
+
     pub fn is_audit_degraded(&self) -> bool {
         self.audit_degraded
     }

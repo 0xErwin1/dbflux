@@ -17,14 +17,13 @@ gpui.workspace = true
 gpui-component.workspace = true
 dbflux_app.workspace = true
 dbflux_ui = { workspace = true }
-dbflux_core.workspace = true
+dbflux_core = { workspace = true, features = ["tracing-bridge"] }
 dbflux_ipc.workspace = true
 dbflux_driver_ipc.workspace = true
 dbflux_audit.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
 uuid.workspace = true
 log.workspace = true
-env_logger.workspace = true
 serde_json.workspace = true
 dirs.workspace = true
 rfd.workspace = true

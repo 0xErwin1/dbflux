@@ -446,9 +446,10 @@ mod tests {
             .await;
 
         if let Err(ref err) = result {
-            eprintln!(
-                "Authorization failed: code={:?}, message={}",
-                err.code, err.message
+            tracing::error!(
+                code = ?err.code,
+                message = %err.message,
+                "Authorization failed"
             );
         }
         assert!(

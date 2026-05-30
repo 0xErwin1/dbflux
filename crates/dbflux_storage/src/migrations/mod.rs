@@ -152,6 +152,7 @@ impl MigrationRegistry {
         registry.register(mod_011_viz_saved_chart_metric_source::MigrationImpl);
         registry.register(mod_012_viz_saved_chart_metric_series::MigrationImpl);
         registry.register(mod_013_viz_dashboard_panel_kind::MigrationImpl);
+        registry.register(mod_014_audit_settings_log_capture_min_level::MigrationImpl);
         registry
     }
 
@@ -305,6 +306,7 @@ mod mod_011_connection_drop_auth_profile_fk;
 mod mod_011_viz_saved_chart_metric_source;
 mod mod_012_viz_saved_chart_metric_series;
 mod mod_013_viz_dashboard_panel_kind;
+mod mod_014_audit_settings_log_capture_min_level;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
