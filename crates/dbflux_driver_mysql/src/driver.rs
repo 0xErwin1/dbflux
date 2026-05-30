@@ -11,6 +11,7 @@ use dbflux_core::{
     ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult,
     DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
     DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection, DriverCapabilities,
+    ExecutionSourceContext, InstanceCatalog,
     DriverFormDef, DriverLimits, DriverMetadata, DropForeignKeyRequest, DropIndexRequest,
     ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind, FormSection, FormTab,
     FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection,
@@ -47,7 +48,9 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
             | DriverCapabilities::CHECK_CONSTRAINTS.bits()
             | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
             | DriverCapabilities::ROUTINES.bits()
-            | DriverCapabilities::MULTI_STATEMENT.bits(),
+            | DriverCapabilities::MULTI_STATEMENT.bits()
+            | DriverCapabilities::INSTANCE_METRICS.bits()
+            | DriverCapabilities::INSTANCE_INSPECTOR.bits(),
     ),
     default_port: Some(3306),
     uri_scheme: "mysql".into(),
@@ -198,7 +201,9 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
             | DriverCapabilities::CHECK_CONSTRAINTS.bits()
             | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
             | DriverCapabilities::ROUTINES.bits()
-            | DriverCapabilities::MULTI_STATEMENT.bits(),
+            | DriverCapabilities::MULTI_STATEMENT.bits()
+            | DriverCapabilities::INSTANCE_METRICS.bits()
+            | DriverCapabilities::INSTANCE_INSPECTOR.bits(),
     ),
     default_port: Some(3306),
     uri_scheme: "mariadb".into(),
@@ -1091,7 +1096,7 @@ impl MysqlDriver {
         );
 
         Ok(Box::new(MysqlConnection {
-            catalog_conn: Mutex::new(catalog_conn),
+            catalog_conn: Arc::new(Mutex::new(catalog_conn)),
             query_conn: Mutex::new(QueryConnState {
                 conn: query_conn,
                 current_database: None,
@@ -1167,7 +1172,7 @@ impl MysqlDriver {
         );
 
         Ok(Box::new(MysqlConnection {
-            catalog_conn: Mutex::new(catalog_conn),
+            catalog_conn: Arc::new(Mutex::new(catalog_conn)),
             query_conn: Mutex::new(QueryConnState {
                 conn: query_conn,
                 current_database: None,
@@ -1298,7 +1303,7 @@ impl MysqlDriver {
         );
 
         Ok(Box::new(MysqlConnection {
-            catalog_conn: Mutex::new(catalog_conn),
+            catalog_conn: Arc::new(Mutex::new(catalog_conn)),
             query_conn: Mutex::new(QueryConnState {
                 conn: query_conn,
                 current_database: None,
@@ -1472,7 +1477,7 @@ struct QueryConnState {
 
 pub struct MysqlConnection {
     /// Connection for catalog/schema operations (schema browsing, table details).
-    catalog_conn: Mutex<Conn>,
+    catalog_conn: Arc<Mutex<Conn>>,
 
     /// Connection for query execution (editor queries, table browser).
     query_conn: Mutex<QueryConnState>,
@@ -1731,8 +1736,47 @@ impl Connection for MysqlConnection {
         Ok(())
     }
 
+    fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
+        let mut conn = self.catalog_conn.lock().ok()?;
+        let ps_available =
+            crate::instance_catalog::MysqlInstanceCatalog::probe_performance_schema(&mut conn);
+
+        Some(Box::new(crate::instance_catalog::MysqlInstanceCatalog::new(
+            Arc::clone(&self.catalog_conn),
+            ps_available,
+        )))
+    }
+
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
         self.cancelled.store(false, Ordering::SeqCst);
+
+        if let Some(source) = req
+            .execution_context
+            .as_ref()
+            .and_then(|ctx| ctx.source.as_ref())
+        {
+            match source {
+                ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
+                    let mut conn = self.query_conn.lock().map_err(|_| {
+                        DbError::QueryFailed("mysql conn mutex poisoned".to_string().into())
+                    })?;
+                    return crate::instance_catalog::dispatch_metric_series(
+                        &mut conn.conn,
+                        metric_id,
+                    );
+                }
+                ExecutionSourceContext::InstanceInspectorQuery { metric_id } => {
+                    let mut conn = self.query_conn.lock().map_err(|_| {
+                        DbError::QueryFailed("mysql conn mutex poisoned".to_string().into())
+                    })?;
+                    return crate::instance_catalog::dispatch_inspector_snapshot(
+                        &mut conn.conn,
+                        metric_id,
+                    );
+                }
+                _ => {}
+            }
+        }
 
         let start = Instant::now();
 
