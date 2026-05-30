@@ -185,7 +185,7 @@ fn clamp_timestamp(ts_ms: i64, config: &ExternalAuditConfig) -> i64 {
 /// 5. Timestamp clamping (prevents rewriting history)
 ///
 /// Then forwards the sanitized record to `AuditService` via `EventSink::record`.
-/// All drop paths increment `drop_counter` and log at `debug!`; IPC is never
+/// All drop paths increment `drop_counter` and log at `warn!`; IPC is never
 /// blocked or errored due to audit failures.
 pub(crate) struct ExternalAuditSink {
     audit: Arc<dyn EventSink>,
