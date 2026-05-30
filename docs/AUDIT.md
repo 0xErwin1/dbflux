@@ -330,6 +330,14 @@ There is a brief gap between process start and sink installation during which ev
 
 Events emitted from `dbflux_core::observability::tracing_bridge` are excluded from the bridge to prevent feedback loops where bridge diagnostics feed back into themselves. This is enforced by the `BRIDGE_INTERNAL_TARGET` constant checked in `AuditLayer::on_event`.
 
+### Target Allowlist
+
+Only events whose `target` starts with `dbflux` are mirrored to the audit store. Upstream dependencies such as `gpui`, `blade_graphics`, `naga`, `wgpu`, `hyper`, and `tokio` emit verbose `INFO`-level traces (render-loop texture and buffer lifecycle, surface present mode, HTTP request lifecycle, etc.) that would otherwise drown the audit log in operational noise without any value for after-the-fact diagnosis.
+
+These events still flow through the fmt layer and remain visible in stderr (or the log file) per `RUST_LOG`. The gate lives in `passes_target_gate` in `layer.rs` and runs before record construction.
+
+To audit an event from a non-`dbflux` source, wrap the emission in a dbflux module and re-emit with a dbflux target — the bridge intentionally does not let upstream targets through.
+
 ### Named Tracing Fields
 
 The bridge recognizes these named fields on tracing events and maps them to `EventRecord` fields:

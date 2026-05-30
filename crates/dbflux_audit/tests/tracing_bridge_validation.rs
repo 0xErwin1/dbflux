@@ -76,7 +76,6 @@ fn system_records_for_all_prefix_map_modules_pass_validate() {
         "dbflux_ipc::framing",
         "dbflux_driver_host::main",
         "dbflux_ui::workspace",
-        "unknown::crate::module",
     ];
 
     for target in module_targets {

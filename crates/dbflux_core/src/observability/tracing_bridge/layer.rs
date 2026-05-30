@@ -10,6 +10,16 @@ use super::category::{BRIDGE_INTERNAL_TARGET, resolve_category};
 
 const SUMMARY_MAX_CHARS: usize = 512;
 
+/// Target prefix that gates audit capture.
+///
+/// Only events emitted from dbflux crates (or `log::*!` calls bridged through
+/// `tracing-log` with a `dbflux*` target) are mirrored to the audit log. Events
+/// from upstream deps such as `gpui`, `blade_graphics`, `naga`, `wgpu`, `hyper`,
+/// etc. would otherwise drown the audit table in render-loop and HTTP noise
+/// (texture/buffer create+destroy, surface present mode, request lifecycle).
+/// They still flow through the fmt layer and stay visible via `RUST_LOG`.
+const BRIDGE_TARGET_PREFIX: &str = "dbflux";
+
 /// Tracing layer that routes events to the audit store via a bounded channel.
 pub(crate) struct AuditLayer {
     pub(crate) min_level: Arc<AtomicU8>,
@@ -34,11 +44,13 @@ where
             return;
         }
 
-        if event
-            .metadata()
-            .target()
-            .starts_with(BRIDGE_INTERNAL_TARGET)
-        {
+        let target = event.metadata().target();
+
+        if target.starts_with(BRIDGE_INTERNAL_TARGET) {
+            return;
+        }
+
+        if !passes_target_gate(target) {
             return;
         }
 
@@ -56,6 +68,15 @@ where
             }
         }
     }
+}
+
+/// Returns true if the event target is one we want to audit.
+///
+/// Upstream crates (GPUI rendering, networking stacks, etc.) emit verbose
+/// INFO-level traces that have no operational value in the audit log; this
+/// gate keeps the audit table focused on dbflux-originated events.
+pub(crate) fn passes_target_gate(target: &str) -> bool {
+    target.starts_with(BRIDGE_TARGET_PREFIX)
 }
 
 /// Returns true if the event level meets or exceeds the minimum threshold.
@@ -319,6 +340,31 @@ mod tests {
     fn passes_level_gate_info_with_info_threshold() {
         // INFO (2) >= INFO threshold (2) — passes
         assert!(passes_level_gate(&tracing::Level::INFO, 2));
+    }
+
+    #[test]
+    fn target_gate_passes_dbflux_targets() {
+        assert!(passes_target_gate("dbflux"));
+        assert!(passes_target_gate("dbflux_core::connection::manager"));
+        assert!(passes_target_gate("dbflux_app::access_manager"));
+        assert!(passes_target_gate("dbflux_driver_postgres"));
+    }
+
+    #[test]
+    fn target_gate_rejects_upstream_dep_targets() {
+        // These are the actual noise sources observed in production audit
+        // dumps: GPUI render-loop, graphics backend, naga shader compiler.
+        assert!(!passes_target_gate("gpui"));
+        assert!(!passes_target_gate("gpui::renderer"));
+        assert!(!passes_target_gate("blade_graphics"));
+        assert!(!passes_target_gate("blade_graphics::vulkan::device"));
+        assert!(!passes_target_gate("naga::back"));
+        assert!(!passes_target_gate("wgpu"));
+        assert!(!passes_target_gate("hyper::client"));
+        assert!(!passes_target_gate("tokio::runtime"));
+        // Empty target or unrelated module
+        assert!(!passes_target_gate(""));
+        assert!(!passes_target_gate("some_random_crate"));
     }
 
     #[test]
