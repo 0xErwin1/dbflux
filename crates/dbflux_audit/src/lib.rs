@@ -6,7 +6,7 @@ pub mod store;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use dbflux_core::observability::{EventRecord, EventSink as CoreEventSink, EventSinkError};
 use dbflux_storage::error::RepositoryError;
@@ -117,11 +117,7 @@ impl AuditService {
     /// Attaches the tracing bridge's shared atomics so level changes and drop counts
     /// are visible through `AuditService::set_log_capture_min_level` and
     /// `AuditService::dropped_log_event_count`.
-    pub fn attach_bridge(
-        &mut self,
-        min_level: Arc<AtomicU8>,
-        drop_counter: Arc<AtomicU64>,
-    ) {
+    pub fn attach_bridge(&mut self, min_level: Arc<AtomicU8>, drop_counter: Arc<AtomicU64>) {
         self.bridge_min_level = Some(min_level);
         self.bridge_drop_counter = Some(drop_counter);
     }

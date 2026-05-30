@@ -1,12 +1,10 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
 use tracing::field::{Field, Visit};
 use tracing_subscriber::Layer;
 
-use crate::observability::types::{
-    EventActorType, EventOutcome, EventRecord, EventSeverity,
-};
+use crate::observability::types::{EventActorType, EventOutcome, EventRecord, EventSeverity};
 
 use super::category::{BRIDGE_INTERNAL_TARGET, resolve_category};
 
@@ -24,12 +22,23 @@ impl<S> Layer<S> for AuditLayer
 where
     S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
 {
-    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
-        if !passes_level_gate(event.metadata().level(), self.min_level.load(Ordering::Relaxed)) {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        if !passes_level_gate(
+            event.metadata().level(),
+            self.min_level.load(Ordering::Relaxed),
+        ) {
             return;
         }
 
-        if event.metadata().target().starts_with(BRIDGE_INTERNAL_TARGET) {
+        if event
+            .metadata()
+            .target()
+            .starts_with(BRIDGE_INTERNAL_TARGET)
+        {
             return;
         }
 
@@ -154,10 +163,10 @@ fn build_record(event: &tracing::Event<'_>) -> Option<EventRecord> {
         if let Some(full_msg) = overflow_message {
             map.insert("message".to_owned(), serde_json::Value::String(full_msg));
         }
-        if !map.is_empty() {
-            if let Ok(json) = serde_json::to_string(&map) {
-                record = record.with_details_json(json);
-            }
+        if !map.is_empty()
+            && let Ok(json) = serde_json::to_string(&map)
+        {
+            record = record.with_details_json(json);
         }
     }
 
@@ -229,10 +238,8 @@ impl Visit for AuditFieldVisitor {
             self.message = Some(format!("{value:?}").trim_matches('"').to_owned());
         } else {
             let string_value = format!("{value:?}");
-            self.extra_fields.insert(
-                name.to_owned(),
-                serde_json::Value::String(string_value),
-            );
+            self.extra_fields
+                .insert(name.to_owned(), serde_json::Value::String(string_value));
         }
     }
 
@@ -240,8 +247,7 @@ impl Visit for AuditFieldVisitor {
         self.extra_fields.insert(
             field.name().to_owned(),
             serde_json::Value::Number(
-                serde_json::Number::from_f64(value)
-                    .unwrap_or(serde_json::Number::from(0u64)),
+                serde_json::Number::from_f64(value).unwrap_or(serde_json::Number::from(0u64)),
             ),
         );
     }
@@ -261,10 +267,8 @@ impl Visit for AuditFieldVisitor {
     }
 
     fn record_bool(&mut self, field: &Field, value: bool) {
-        self.extra_fields.insert(
-            field.name().to_owned(),
-            serde_json::Value::Bool(value),
-        );
+        self.extra_fields
+            .insert(field.name().to_owned(), serde_json::Value::Bool(value));
     }
 }
 

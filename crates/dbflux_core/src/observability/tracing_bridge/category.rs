@@ -53,10 +53,10 @@ pub(crate) const PREFIX_CATEGORY_MAP: &[(&str, EventCategory)] = &[
 /// unconditionally returns `System`. This guarantees `validate_event` never
 /// rejects bridge events for missing structured fields.
 pub(crate) fn resolve_category(target: &str, explicit: Option<&str>) -> EventCategory {
-    if let Some(name) = explicit {
-        if let Some(cat) = EventCategory::from_str_repr(name) {
-            return coerce_to_bridge_allowed(cat);
-        }
+    if let Some(name) = explicit
+        && let Some(cat) = EventCategory::from_str_repr(name)
+    {
+        return coerce_to_bridge_allowed(cat);
     }
 
     let resolved = PREFIX_CATEGORY_MAP

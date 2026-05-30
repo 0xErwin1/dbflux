@@ -88,9 +88,7 @@ fn drain_loop(
 mod tests {
     use super::*;
     use crate::observability::source::{EventSink, EventSinkError};
-    use crate::observability::types::{
-        EventCategory, EventOutcome, EventRecord, EventSeverity,
-    };
+    use crate::observability::types::{EventCategory, EventOutcome, EventRecord, EventSeverity};
     use std::sync::OnceLock;
     use std::sync::atomic::AtomicUsize;
     use std::time::Duration;
@@ -113,10 +111,7 @@ mod tests {
     }
 
     impl EventSink for CountingSink {
-        fn record(
-            &self,
-            event: EventRecord,
-        ) -> Result<EventRecord, EventSinkError> {
+        fn record(&self, event: EventRecord) -> Result<EventRecord, EventSinkError> {
             self.count.fetch_add(1, Ordering::Relaxed);
             Ok(event)
         }
@@ -203,7 +198,9 @@ mod tests {
         let sink_slot: Arc<OnceLock<Arc<dyn EventSink>>> = Arc::new(OnceLock::new());
 
         let received = Arc::new(AtomicUsize::new(0));
-        let sink = CountingSink { count: received.clone() };
+        let sink = CountingSink {
+            count: received.clone(),
+        };
         sink_slot.set(Arc::new(sink)).ok();
 
         let handle = spawn_drain_thread(

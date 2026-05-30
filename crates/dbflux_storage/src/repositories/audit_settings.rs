@@ -57,7 +57,8 @@ impl AuditSettingsRepository {
                 purge_on_startup: row.get::<_, i32>(9)? != 0,
                 background_purge_interval_minutes: row.get::<_, i32>(10)? as u32,
                 updated_at: row.get(11)?,
-                log_capture_min_level: row.get::<_, Option<String>>(12)?
+                log_capture_min_level: row
+                    .get::<_, Option<String>>(12)?
                     .unwrap_or_else(|| "info".to_owned()),
             })
         });

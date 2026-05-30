@@ -23,7 +23,13 @@ use session::SessionManager;
 use uuid::Uuid;
 
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    use dbflux_core::observability::tracing_bridge::{BridgeConfig, FmtWriter, init_tracing};
+    let _ = init_tracing(BridgeConfig {
+        include_audit_layer: false,
+        fmt_writer: FmtWriter::Stderr,
+        env_filter_default: "info",
+        ..BridgeConfig::default()
+    });
 
     let args = parse_args();
     let auth_token = std::env::var(DRIVER_RPC_AUTH_TOKEN_ENV)

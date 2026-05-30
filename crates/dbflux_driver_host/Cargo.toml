@@ -20,7 +20,6 @@ serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 log.workspace = true
-env_logger.workspace = true
 
 [features]
 sqlite = ["dbflux_driver_sqlite"]

@@ -24,7 +24,6 @@ dbflux_audit.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
 uuid.workspace = true
 log.workspace = true
-env_logger.workspace = true
 serde_json.workspace = true
 dirs.workspace = true
 rfd.workspace = true

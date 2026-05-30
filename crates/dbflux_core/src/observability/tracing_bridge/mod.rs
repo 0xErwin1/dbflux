@@ -10,7 +10,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -191,7 +191,9 @@ pub enum ShutdownError {
 impl std::fmt::Display for ShutdownError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ShutdownError::DrainTimeout { remaining_in_flight } => {
+            ShutdownError::DrainTimeout {
+                remaining_in_flight,
+            } => {
                 write!(f, "drain timeout, {remaining_in_flight} events remaining")
             }
             ShutdownError::JoinPanic => write!(f, "drain thread panicked"),
@@ -354,7 +356,12 @@ pub fn init_tracing(config: BridgeConfig) -> Result<BridgeHandle, InitError> {
         }
     }
 
-    LogTracer::init().map_err(InitError::LogTracerInit)?;
+    // `LogTracer::init()` registers the global `log` backend so that `log::*!`
+    // macros are forwarded to the tracing subscriber.  A `SetLoggerError` means
+    // another logger is already registered (e.g. the Rust test runner or a dep
+    // that initialised first), which is acceptable — the tracing subscriber is
+    // still installed and tracing events still work.
+    let _ = LogTracer::init();
 
     Ok(BridgeHandle {
         min_level: min_level_arc,

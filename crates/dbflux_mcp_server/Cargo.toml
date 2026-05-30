@@ -60,9 +60,8 @@ chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
 rusqlite.workspace = true
 
-# Logging (keeping existing, will migrate to tracing later)
 log.workspace = true
-env_logger.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 # Test support
