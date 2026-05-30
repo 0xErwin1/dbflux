@@ -71,6 +71,10 @@ manager. Windows and macOS use their default linker and are unaffected.
   - Use `.log_err()` when ignoring but wanting visibility
   - Use `match` or `if let Err(...)` for custom logic
 - Ensure async errors propagate to UI so users get meaningful feedback
+- For user-visible operation failures (storage, network, driver, config), use `report_error` / `report_error_async` from `dbflux_ui_base::user_error` instead of `log::error!` + manual `Toast::error()`. This ensures the status bar badge count is updated and the failure is correlated via UUID v7 in the audit trail.
+  - Foreground context (`&mut App` or `&mut Context<T>`): `report_error(UserFacingError::new(ErrorKind::Storage, msg), cx)`
+  - Async context (`cx.spawn` / background): `report_error_async(UserFacingError::new(ErrorKind::Network, msg), &cx)`
+  - `ErrorKind` variants: `Storage`, `Network`, `Auth`, `Hook`, `Driver`, `User`, `Config`
 
 ### File Organization
 
