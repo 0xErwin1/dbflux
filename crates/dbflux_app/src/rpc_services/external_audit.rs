@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use dbflux_core::observability::{
@@ -61,6 +61,9 @@ pub(crate) struct ExternalAuditConfig {
     /// Maximum tolerated drift between DTO timestamp and host wall clock
     /// before the host clamps the value to now (in milliseconds).
     pub max_ts_drift_ms: i64,
+    /// Maximum byte length for `details_json`. Payloads exceeding this are
+    /// truncated at the nearest valid UTF-8 character boundary before storage.
+    pub max_detail_bytes: usize,
 }
 
 impl Default for ExternalAuditConfig {
@@ -69,6 +72,7 @@ impl Default for ExternalAuditConfig {
             capacity: 100.0,
             refill_rate: 100.0 / 60.0,
             max_ts_drift_ms: 5 * 60 * 1_000,
+            max_detail_bytes: 65_536,
         }
     }
 }
@@ -106,7 +110,11 @@ pub(crate) trait ExternalAuditContextProvider: Send + Sync {
 pub(crate) struct NoOpContextProvider;
 
 impl ExternalAuditContextProvider for NoOpContextProvider {
-    fn driver_context(&self, socket_id: &str, _session_id: Option<Uuid>) -> Option<DriverEmitContext> {
+    fn driver_context(
+        &self,
+        socket_id: &str,
+        _session_id: Option<Uuid>,
+    ) -> Option<DriverEmitContext> {
         Some(DriverEmitContext {
             connection_id: None,
             database_name: None,
@@ -212,12 +220,13 @@ impl ExternalAuditSink {
     }
 
     fn drop(&self, socket_id: &str, reason: &str) {
-        self.drop_counter.fetch_add(1, Ordering::Relaxed);
-        log::debug!(
+        let count = self.drop_counter.fetch_add(1, Ordering::Relaxed) + 1;
+        log::warn!(
             target: "external_audit",
-            "dropped emit from socket={}: {}",
+            "dropped emit from socket={}: {} (total drops: {})",
             socket_id,
-            reason
+            reason,
+            count
         );
     }
 }
@@ -247,7 +256,11 @@ impl ExternalAuditEmitter for ExternalAuditSink {
         if !allowed {
             self.drop(
                 &socket_id,
-                &format!("category {:?} not allowed for {}", category, source.kind_label()),
+                &format!(
+                    "category {:?} not allowed for {}",
+                    category,
+                    source.kind_label()
+                ),
             );
             return;
         }
@@ -259,44 +272,64 @@ impl ExternalAuditEmitter for ExternalAuditSink {
         }
 
         // Step 4: identity/context override.
-        let (actor_type, source_id, actor_id, connection_id, database_name, driver_id, correlation_id) =
-            match &source {
-                ExternalAuditSource::Driver {
-                    socket_id,
-                    session_id,
-                    correlation_id,
-                } => {
-                    let ctx = self.context_provider.driver_context(socket_id, *session_id);
-                    (
-                        EventActorType::ExternalDriver,
-                        EventSourceId::ExternalDriver,
-                        Some(format!("rpc:{}", socket_id)),
-                        ctx.as_ref()
-                            .and_then(|c| c.connection_id.map(|u| u.to_string())),
-                        ctx.as_ref().and_then(|c| c.database_name.clone()),
-                        Some(
-                            ctx.map(|c| c.driver_id)
-                                .unwrap_or_else(|| format!("rpc:{}", socket_id)),
-                        ),
-                        Some(correlation_id.clone()),
-                    )
-                }
-                ExternalAuditSource::AuthProvider {
-                    provider_id,
-                    correlation_id,
-                    ..
-                } => (
-                    EventActorType::ExternalAuthProvider,
-                    EventSourceId::ExternalAuthProvider,
-                    Some(provider_id.clone()),
-                    None,
-                    None,
-                    None,
+        let (
+            actor_type,
+            source_id,
+            actor_id,
+            connection_id,
+            database_name,
+            driver_id,
+            correlation_id,
+        ) = match &source {
+            ExternalAuditSource::Driver {
+                socket_id,
+                session_id,
+                correlation_id,
+            } => {
+                let ctx = self.context_provider.driver_context(socket_id, *session_id);
+                (
+                    EventActorType::ExternalDriver,
+                    EventSourceId::ExternalDriver,
+                    Some(format!("rpc:{}", socket_id)),
+                    ctx.as_ref()
+                        .and_then(|c| c.connection_id.map(|u| u.to_string())),
+                    ctx.as_ref().and_then(|c| c.database_name.clone()),
+                    Some(
+                        ctx.map(|c| c.driver_id)
+                            .unwrap_or_else(|| format!("rpc:{}", socket_id)),
+                    ),
                     Some(correlation_id.clone()),
-                ),
-            };
+                )
+            }
+            ExternalAuditSource::AuthProvider {
+                provider_id,
+                correlation_id,
+                ..
+            } => (
+                EventActorType::ExternalAuthProvider,
+                EventSourceId::ExternalAuthProvider,
+                Some(provider_id.clone()),
+                None,
+                None,
+                None,
+                Some(correlation_id.clone()),
+            ),
+        };
 
-        // Step 5: build and store the record.
+        // Step 5: truncate oversized details_json at a valid UTF-8 boundary, then
+        // build and store the record. AuditService::enforce_max_detail_bytes would
+        // reject (not truncate) if we let it exceed the limit, which would silently
+        // drop the event — contrary to REQ-S-05.
+        let details_json = dto.details_json.map(|d| {
+            let max = self.config.max_detail_bytes;
+            if d.len() > max {
+                let boundary = d.floor_char_boundary(max);
+                d[..boundary].to_string()
+            } else {
+                d
+            }
+        });
+
         let record = EventRecord {
             id: None,
             ts_ms: clamp_timestamp(dto.ts_ms, &self.config),
@@ -313,7 +346,7 @@ impl ExternalAuditEmitter for ExternalAuditSink {
             object_type: dto.object_type,
             object_id: dto.object_id,
             summary: dto.summary,
-            details_json: dto.details_json,
+            details_json,
             error_code: dto.error_code,
             error_message: dto.error_message,
             duration_ms: dto.duration_ms,
@@ -339,11 +372,11 @@ impl ExternalAuditEmitter for ExternalAuditSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
     use dbflux_core::observability::{EventRecord, EventSink, EventSinkError};
     use dbflux_ipc::audit::{
         AuditEventEmitDto, EventCategoryDto, EventOutcomeDto, EventSeverityDto, ExternalAuditSource,
     };
+    use std::sync::{Arc, Mutex};
 
     // --- Test doubles ---
 
@@ -649,15 +682,81 @@ mod tests {
             minimal_dto(EventCategoryDto::Connection),
         );
 
-        assert_eq!(recording.count(), 1, "event must still record without connection context");
+        assert_eq!(
+            recording.count(),
+            1,
+            "event must still record without connection context"
+        );
 
         let record = &recording.all()[0];
-        assert!(record.connection_id.is_none(), "connection_id must be None when context is unavailable");
-        assert!(record.database_name.is_none(), "database_name must be None when context is unavailable");
+        assert!(
+            record.connection_id.is_none(),
+            "connection_id must be None when context is unavailable"
+        );
+        assert!(
+            record.database_name.is_none(),
+            "database_name must be None when context is unavailable"
+        );
         assert_eq!(
             record.driver_id.as_deref(),
             Some("rpc:null-ctx-sock"),
             "driver_id must default to rpc:<socket_id> when context is unavailable"
+        );
+    }
+
+    /// IT-13: details_json > max_detail_bytes is stored with truncated details_json, not rejected.
+    ///
+    /// REQ-S-05 / Scenario S-05-a.
+    #[test]
+    fn test_oversized_details_json_is_truncated_not_rejected() {
+        let recording = Arc::new(RecordingEventSink::default());
+        let drop_counter = Arc::new(AtomicU64::new(0));
+        let max_bytes = 100_usize;
+
+        let config = ExternalAuditConfig {
+            max_detail_bytes: max_bytes,
+            ..ExternalAuditConfig::default()
+        };
+
+        let sink = ExternalAuditSink::new(
+            recording.clone() as Arc<dyn EventSink>,
+            drop_counter.clone(),
+            Arc::new(NoOpContextProvider),
+            config,
+        );
+
+        let oversized = "x".repeat(max_bytes + 500);
+        assert!(
+            oversized.len() > max_bytes,
+            "precondition: oversized must exceed max_detail_bytes"
+        );
+
+        let mut dto = minimal_dto(EventCategoryDto::Connection);
+        dto.details_json = Some(oversized.clone());
+
+        sink.emit(driver_source("trunc-sock"), dto);
+
+        assert_eq!(recording.count(), 1, "event must be stored, not dropped");
+        assert_eq!(
+            drop_counter.load(Ordering::Relaxed),
+            0,
+            "oversized details_json must not increment drop counter"
+        );
+
+        let stored = &recording.all()[0];
+        let stored_details = stored
+            .details_json
+            .as_ref()
+            .expect("details_json must be present");
+        assert!(
+            stored_details.len() <= max_bytes,
+            "stored details_json length {} must be <= max_detail_bytes {}",
+            stored_details.len(),
+            max_bytes
+        );
+        assert!(
+            oversized.starts_with(stored_details.as_str()),
+            "stored details_json must be a prefix of the original"
         );
     }
 }
