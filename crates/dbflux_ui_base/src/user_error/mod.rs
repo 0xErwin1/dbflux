@@ -196,8 +196,10 @@ pub fn report_error(err: UserFacingError, cx: &mut App) {
 /// | Inside `cx.spawn(async ...)`            | `report_error_async`    |
 /// | Inside a `cx.update(|cx| { ... })`      | `report_error`          |
 pub fn report_error_async(err: UserFacingError, cx: &AsyncApp) {
+    use crate::AsyncUpdateResultExt;
+
     let cx = cx.clone();
-    let _ = cx.update(move |cx| report_error(err, cx));
+    cx.update(move |cx| report_error(err, cx)).log_if_dropped();
 }
 
 #[cfg(test)]
