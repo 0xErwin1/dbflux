@@ -123,6 +123,13 @@ pub struct ChartDocument {
     /// for `DocumentKey::InstanceMetric` dedup.
     initial_instance_metric_id: Option<String>,
 
+    /// Initial preset index passed to `TimeRangePanel::new` on first render.
+    ///
+    /// Index 3 = Last24Hours (default for most sources).
+    /// Index 0 = Last15min (set by `open_instance_metric` for InstanceMetric sources).
+    /// The value is consumed once — after the panel is created it has no further effect.
+    initial_time_range_index: usize,
+
     // Save flow
     saved_chart_id: Option<Uuid>,
     name_prompt: Option<NamePromptState>,
@@ -267,6 +274,7 @@ impl ChartDocument {
             pending_data_source: None,
             initial_metric_identity: None,
             initial_instance_metric_id: None,
+            initial_time_range_index: 3,
             saved_chart_id: None,
             name_prompt: None,
             pending_toast: None,
@@ -477,6 +485,7 @@ impl ChartDocument {
             pending_data_source: None,
             initial_metric_identity,
             initial_instance_metric_id: None,
+            initial_time_range_index: 3,
             saved_chart_id: None,
             name_prompt: None,
             pending_toast: None,
@@ -585,6 +594,20 @@ impl ChartDocument {
     /// `InstanceMetricsFolder`. Enables `DocumentKey::InstanceMetric` dedup.
     pub fn set_instance_metric_identity(&mut self, metric_id: String) {
         self.initial_instance_metric_id = Some(metric_id);
+    }
+
+    /// Override the initial `TimeRangePanel` preset index used on first render.
+    ///
+    /// Index 0 = Last15min. Index 3 = Last24Hours (default). The value is
+    /// consumed once at the moment the panel is lazily created; changing it
+    /// after the first render has no effect because the panel already exists.
+    pub fn set_initial_time_range_preset(&mut self, index: usize) {
+        self.initial_time_range_index = index;
+    }
+
+    /// Returns the initial `TimeRangePanel` preset index set for this document.
+    pub fn initial_time_range_index(&self) -> usize {
+        self.initial_time_range_index
     }
 
     /// Returns `true` when this document was opened for the given
@@ -2458,5 +2481,133 @@ mod tests {
             !src.is_accumulating(),
             "QuerySource must report is_accumulating() == false"
         );
+    }
+
+    // ---- BF6: InstanceMetric default time range and refresh policy ----
+
+    /// BF6: after `set_initial_time_range_preset(0)`, the chart must report
+    /// `initial_time_range_index() == 0` (preset index 0 = Last15min).
+    #[gpui::test]
+    fn instance_metric_chart_has_15min_initial_preset(cx: &mut gpui::TestAppContext) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<ChartDocument>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+
+        cx.add_window_view({
+            let app_state = app_state.clone();
+            let doc_holder = doc_holder.clone();
+            move |window, cx| {
+                let source = dbflux_components::chart::InstanceMetricSource {
+                    metric_id: "pg.tps".to_string(),
+                };
+                let doc = cx.new(|cx| {
+                    let mut chart = ChartDocument::new_with_source(
+                        None,
+                        "pg.tps".to_string(),
+                        Box::new(source),
+                        app_state,
+                        window,
+                        cx,
+                    );
+                    chart.set_initial_time_range_preset(0);
+                    chart
+                });
+                doc_holder.replace(Some(doc.clone()));
+                gpui_component::Root::new(doc, window, cx)
+            }
+        });
+
+        let doc = doc_holder.borrow().clone().expect("entity created");
+        cx.update(|cx| {
+            let chart = doc.read(cx);
+            assert_eq!(
+                chart.initial_time_range_index(),
+                0,
+                "InstanceMetric chart must have initial preset index 0 (15min)"
+            );
+        });
+    }
+
+    /// BF6: a chart whose `set_refresh_policy` is called with `Interval{10}` must
+    /// report that policy from `refresh_policy()`.
+    #[gpui::test]
+    fn instance_metric_chart_has_10s_refresh_policy(cx: &mut gpui::TestAppContext) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<ChartDocument>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+
+        cx.add_window_view({
+            let app_state = app_state.clone();
+            let doc_holder = doc_holder.clone();
+            move |window, cx| {
+                let source = dbflux_components::chart::InstanceMetricSource {
+                    metric_id: "pg.tps".to_string(),
+                };
+                let doc = cx.new(|cx| {
+                    ChartDocument::new_with_source(
+                        None,
+                        "pg.tps".to_string(),
+                        Box::new(source),
+                        app_state,
+                        window,
+                        cx,
+                    )
+                });
+                doc.update(cx, |chart, cx| {
+                    chart.set_refresh_policy(RefreshPolicy::Interval { every_secs: 10 }, cx);
+                });
+                doc_holder.replace(Some(doc.clone()));
+                gpui_component::Root::new(doc, window, cx)
+            }
+        });
+
+        let doc = doc_holder.borrow().clone().expect("entity created");
+        cx.update(|cx| {
+            let chart = doc.read(cx);
+            assert_eq!(
+                chart.refresh_policy(),
+                RefreshPolicy::Interval { every_secs: 10 },
+                "chart must report the 10s interval policy after set_refresh_policy"
+            );
+        });
+    }
+
+    /// BF6 control: a Query-source chart must keep the default preset index
+    /// (3 = Last24Hours) and Manual refresh policy without any overrides.
+    #[gpui::test]
+    fn query_source_chart_keeps_default_24h_manual_refresh(cx: &mut gpui::TestAppContext) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<ChartDocument>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+
+        cx.add_window_view({
+            let app_state = app_state.clone();
+            let doc_holder = doc_holder.clone();
+            move |window, cx| {
+                let doc = cx.new(|cx| {
+                    ChartDocument::new(None, "SELECT 1".to_string(), app_state, window, cx)
+                });
+                doc_holder.replace(Some(doc.clone()));
+                gpui_component::Root::new(doc, window, cx)
+            }
+        });
+
+        let doc = doc_holder.borrow().clone().expect("entity created");
+        cx.update(|cx| {
+            let chart = doc.read(cx);
+            assert_eq!(
+                chart.initial_time_range_index(),
+                3,
+                "Query-source chart must keep default preset index 3 (Last24Hours)"
+            );
+            assert_eq!(
+                chart.refresh_policy(),
+                RefreshPolicy::Manual,
+                "Query-source chart must keep Manual refresh policy"
+            );
+        });
     }
 }

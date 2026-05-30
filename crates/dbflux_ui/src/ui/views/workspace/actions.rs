@@ -349,7 +349,14 @@ impl Workspace {
                 cx,
             );
             chart.set_instance_metric_identity(metric_id_for_identity);
+            // InstanceMetric sources poll at 10-second intervals and default to a
+            // 15-minute rolling window (index 0 in TimeRangePanel's preset list).
+            chart.set_initial_time_range_preset(0);
             chart
+        });
+
+        doc.update(cx, |chart, cx| {
+            chart.set_refresh_policy(dbflux_core::RefreshPolicy::Interval { every_secs: 10 }, cx);
         });
 
         let pane = ChartDocument::into_pane(doc, cx);
