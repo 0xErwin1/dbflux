@@ -7,6 +7,10 @@ string. This document describes the supported chart types, how the engine
 auto-detects axes, how charts are persisted, and how a chart is created from
 the UI.
 
+For dashboards (grids of saved charts with a shared time range), the
+visualization storage tables (`viz_*`), and the driver seams for
+importing/browsing upstream dashboards, see [`DASHBOARDS.md`](./DASHBOARDS.md).
+
 ## Overview
 
 The chart engine lives in the `dbflux_components` crate under

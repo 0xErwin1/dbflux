@@ -362,11 +362,14 @@ Key abstractions for UI adaptation:
 1. Create `crates/dbflux_driver_<name>/`
 2. Implement `DbDriver` and `Connection` from `dbflux_core`
 3. Define `DriverMetadata` with appropriate `DatabaseCategory`, `QueryLanguage`, and `DriverCapabilities`
-4. Implement `ErrorFormatter` for driver-specific error messages
-5. Implement `QueryGenerator` when the driver can generate native mutation/read templates for UI previews, copy-as-query, or MCP previews
-6. Add feature flag in `crates/dbflux/Cargo.toml` (binary) and `crates/dbflux_app/Cargo.toml`. No UI crate gains a per-driver feature flag.
-7. Register in `AppState::new()` under `#[cfg(feature = "name")]`
-8. **Set `ColumnMeta::kind` on every column** using the `ColumnKind` enum (Timestamp, Float, Integer, Text, Unknown). The chart engine uses `ColumnKind` exclusively — it never inspects `type_name` strings or driver identifiers. Columns with `kind = Unknown` are excluded from chart auto-detection. Use `ColumnKind::Timestamp` for time columns, `ColumnKind::Float`/`Integer` for numeric columns, and `ColumnKind::Text` for string columns.
+4. Define the connection form in the driver crate (e.g. `const DRIVER_FORM: DriverFormDef`) and return it from `DbDriver::form_definition()`. Form definitions live with the driver, not in `dbflux_core`.
+5. Implement `ErrorFormatter` for driver-specific error messages
+6. Implement `QueryGenerator` when the driver can generate native mutation/read templates for UI previews, copy-as-query, or MCP previews
+7. Implement `LanguageService` when the driver speaks a non-SQL dialect (e.g. `TSqlLanguageService` lives in `dbflux_driver_mssql`). SQL drivers can reuse `SqlLanguageService` from `dbflux_core`.
+8. Add feature flag in `crates/dbflux/Cargo.toml` (binary) and `crates/dbflux_app/Cargo.toml`. No UI crate gains a per-driver feature flag.
+9. Register in `AppState::new()` under `#[cfg(feature = "name")]`
+10. **Set `ColumnMeta::kind` on every column** using the `ColumnKind` enum (Timestamp, Float, Integer, Text, Unknown). The chart engine uses `ColumnKind` exclusively — it never inspects `type_name` strings or driver identifiers. Columns with `kind = Unknown` are excluded from chart auto-detection. Use `ColumnKind::Timestamp` for time columns, `ColumnKind::Float`/`Integer` for numeric columns, and `ColumnKind::Text` for string columns.
+11. Optional: implement `DashboardSource` and/or `DashboardImporter` and advertise `DriverCapabilities::DASHBOARD_SYNC` / `DASHBOARD_IMPORT` to let the UI browse/import upstream dashboards (see `docs/DASHBOARDS.md`).
 
 For external RPC-backed drivers, keep discovery/adaptation in `dbflux_app::rpc_services` rather than adding a parallel bootstrap path.
 
@@ -461,6 +464,26 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - MCP settings section for trusted clients, roles, and policies
 - `AuditDocument` as the unified audit viewer for all event categories (no separate MCP audit surface)
 - `LoginModal` and `SsoWizard` overlays for AWS SSO authentication flow
+
+### Dashboards & Saved Charts
+
+- Saved charts and dashboards are persisted in SQLite under the `viz_*` table prefix (`viz_dashboards`, `viz_dashboard_panels`, `viz_saved_charts`, `viz_saved_chart_series`, `viz_saved_chart_binding_y`, `viz_saved_chart_source_metric_*`). Repositories live in `crates/dbflux_storage/src/repositories/viz_*.rs`.
+- In-memory managers wrap the repositories: `DashboardManager` (`crates/dbflux_ui_base/src/dashboard_manager.rs`) for `Dashboard` / `DashboardPanel` / `DashboardPanelKind { Chart | Divider }`, and `SavedChartManager` (`crates/dbflux_ui_base/src/saved_chart_manager.rs`) for `SavedChart` + `SavedChartRefreshPolicy`. Writes go to the repo first; caches update only on success.
+- `DashboardDocument` (`crates/dbflux_ui_document/src/dashboard/`) hosts a 12-column grid of chart panels (each a `Loaded`/`Orphan` `ChartDocument`) with a shared `TimeRangePanel`. Dedup key: `DocumentKey::Dashboard { dashboard_id }`.
+- Driver seams (UI never branches on driver id):
+  - `DashboardSource` (`dbflux_core/src/connection/dashboard_source.rs`) — lists upstream dashboards; gated by `DriverCapabilities::DASHBOARD_SYNC`.
+  - `DashboardImporter` (`dbflux_core/src/connection/dashboard_import.rs`) — parses upstream JSON into `WidgetImportSpec`s; gated by `DriverCapabilities::DASHBOARD_IMPORT`.
+  - CloudWatch is the reference implementation (read-only browse + import, never writes back upstream).
+- Remote dashboard listings are session-scoped via `RemoteDashboardCache` (`crates/dbflux_app/src/remote_dashboard_cache.rs`); they do not persist across restart.
+
+Full reference: `docs/DASHBOARDS.md`.
+
+### Language Services
+
+- `LanguageService` trait in `crates/dbflux_core/src/query/language_service.rs` exposes `validate`, `detect_dangerous`, and `editor_diagnostics`. `SqlLanguageService` is the default impl for relational drivers.
+- Non-SQL dialects ship their `LanguageService` from the driver crate (e.g. `TSqlLanguageService` lives in `dbflux_driver_mssql`; MongoDB and Redis dangerous detection live in their own driver crates and route through `classify_query_for_language(&QueryLanguage, &str)`).
+- `DangerousQueryKind` enumerates risky patterns across SQL (`DeleteNoWhere`, `UpdateNoWhere`, `Truncate`, `Drop`, `Alter`, `Script`), MongoDB (`deleteMany`, `updateMany`, `dropCollection`, `dropDatabase`), and Redis (`FlushAll`, `FlushDb`, `MultiDelete`, `KeysPattern`).
+- The UI must call into the dispatcher; do NOT add per-driver dangerous-query branches in `dbflux_ui`.
 
 ### Platform Detection
 

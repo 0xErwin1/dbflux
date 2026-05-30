@@ -534,16 +534,17 @@ crates/
 
 2. **`PaneHandle`** (`pane.rs`) — closure-erasing shell that replaces the old closed `DocumentHandle` enum. Each of the 22 operations (render, focus, dispatch_command, meta_snapshot, tab_title, can_close, connection_id, active_context, change_summary, refresh_policy, set_active_tab, set_refresh_policy, flush_auto_save, matches_dedup_key, subscribe, plus optional helpers) is a `Box<dyn Fn>` closure capturing the typed `Entity<T>`. `PaneHandle` is `!Clone`. Each document type provides `XxxDocument::into_pane(entity, cx) -> PaneHandle` in its own `pane.rs` file (all under `crates/dbflux_ui_document/src/`). Adding a new document type requires no changes to `workspace/mod.rs`, `tab_manager.rs`, `tab_bar.rs`, or `handle.rs`.
 
-3. **`DocumentKey`** (`dedup.rs`) — 7-variant identity enum (`Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`) used for tab deduplication. Replaces the six `is_*` methods on the old `DocumentHandle`. Call sites use `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`.
+3. **`DocumentKey`** (`dedup.rs`) — identity enum used for tab deduplication. Variants: `Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`, `Routine`, `MetricChart`, `Dashboard`. Replaces the `is_*` methods on the old `DocumentHandle`. Call sites use `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`.
 
 4. **`DocumentEvent`** (`handle.rs`, ~30 LOC) — unified event enum replacing four per-document event enums that were deleted. Variants: `MetaChanged`, `ExecutionStarted`, `ExecutionFinished`, `RequestClose`, `RequestFocus`, `RequestSqlPreview`, `OpenInspector`, `ChartThisQuery`.
 
 5. **`ResultPanel` + `ViewHandle`** (`crates/dbflux_components/src/result_panel/mod.rs`) — universal chrome host. `ResultPanel` owns a chrome row and delegates body rendering to a `ViewHandle` (7 closures: render, focus, focus_handle, toolbar_segments, available_modes, current_mode, set_mode). The slot system (`ToolbarSegment { position: SegmentPosition::{Left,Center,Right}, index: u16, builder }`) lets views contribute arbitrary chrome: `ResultPanel` merges built-in segments (mode bar at Left/0 when `available_modes.len() >= 2`) and view-provided segments, sorts by `(position, index)`, and renders them in a `flex_wrap` row.
 
-**The five document types**
+**The document types**
 
 - `DataDocument` (`crates/dbflux_ui_document/src/data_document/`) — thin shell around `DataGridPanel` + `ResultPanel`. DataGridPanel mounts as a `ViewHandle`; a filter bar is injected as a Center/0 segment.
-- `ChartDocument` (`crates/dbflux_ui_document/src/chart_document/`) — `ChartShell` entity + lazy `Option<Entity<ResultPanel>>`. Chart area, axis bar, and action buttons mount as Left/Center/Right segments.
+- `ChartDocument` (`crates/dbflux_ui_document/src/chart_document/`) — `ChartShell` entity + lazy `Option<Entity<ResultPanel>>`. Chart area, axis bar, and action buttons mount as Left/Center/Right segments. Renders standalone or embedded inside a `DashboardDocument` panel.
+- `DashboardDocument` (`crates/dbflux_ui_document/src/dashboard/`) — named grid of chart panels with a shared `TimeRangePanel` and refresh policy. Each panel is either a `Loaded` `ChartDocument` entity or an `Orphan` placeholder for a deleted chart. Panel re-execution is bounded by `PANEL_REEXEC_CAP`. See `docs/DASHBOARDS.md`.
 - `CodeDocument` (`crates/dbflux_ui_document/src/code/`) — multi-tab editor. Each result tab wraps its `DataGridPanel` in its own `ResultPanel`. Outer chrome (editor, context bar, tab strip) is self-rendered.
 - `KeyValueDocument` (`crates/dbflux_ui_document/src/key_value/`) — self-renders. `KeyValueView` is a file-level boundary struct (not a separate GPUI entity) grouping render helpers extracted from `key_value/render.rs`.
 - `AuditDocument` (`crates/dbflux_ui_document/src/audit/`) — self-renders. `LogStreamView` is a file-level boundary struct. Body extracted to `audit/render.rs` and `audit/commands.rs` as sibling `impl AuditDocument` files.
@@ -571,6 +572,21 @@ crates/
 - Document preview modal: `crates/dbflux_components/src/modals/document_preview.rs` full-screen JSON document preview with an inline JSON editor. (Shim at the old overlay path in `dbflux_ui`.)
 - Command palette: `crates/dbflux_ui/src/ui/overlays/command_palette.rs` fuzzy-search command palette for all app actions.
 
+### Dashboards & Saved Charts
+
+DBFlux persists chart configurations as **Saved Charts** and groups them into **Dashboards** (a grid of chart panels and optional markdown dividers, with a shared time range + refresh policy). Drivers opt into dashboard import/browse via generic core seams — the UI never branches on driver IDs.
+
+- **Storage**: `viz_*` tables in `~/.local/share/dbflux/dbflux.db`. Repositories live in `crates/dbflux_storage/src/repositories/viz_dashboards.rs`, `viz_dashboard_panels.rs`, and `viz_saved_charts.rs`. `SavedChartDto` is an aggregate root that writes across three tables atomically.
+- **Managers** (in-memory caches over repositories): `DashboardManager` (`crates/dbflux_ui_base/src/dashboard_manager.rs`) with `Dashboard`, `DashboardPanel`, `DashboardPanelKind { Chart { saved_chart_id } | Divider { markdown } }`, `DashboardPanelDraft`; `SavedChartManager` (`crates/dbflux_ui_base/src/saved_chart_manager.rs`) owns `SavedChart` lifecycle and `SavedChartRefreshPolicy` (`Off` | `Interval { every_secs }`).
+- **Session cache for remote listings**: `RemoteDashboardCache` (`crates/dbflux_app/src/remote_dashboard_cache.rs`) — not persisted across restart.
+- **Documents**: `ChartDocument` (`crates/dbflux_ui_document/src/chart_document/`) keyed by `DocumentKey::Chart`; `DashboardDocument` (`crates/dbflux_ui_document/src/dashboard/`) keyed by `DocumentKey::Dashboard`. Dashboard panels embed `ChartDocument` entities (`Loaded` / `Orphan`); the shared `TimeRangePanel` propagates window changes to every loaded panel via subscriptions.
+- **Driver seams**:
+  - `DashboardImporter` (`crates/dbflux_core/src/connection/dashboard_import.rs`) — drivers parse upstream dashboard JSON into `WidgetImportSpec`s. Carries `MetricView { TimeSeries | StackedArea | SingleValue }`, `ImportedMetricSeries`, and native `WidgetLayout` coordinates. Gated by `DriverCapabilities::DASHBOARD_IMPORT`.
+  - `DashboardSource` (`crates/dbflux_core/src/connection/dashboard_source.rs`) — drivers list upstream dashboards with `RemoteDashboard` / `DashboardRef` (optional ISO8601 `last_modified`). Gated by `DriverCapabilities::DASHBOARD_SYNC`.
+  - `CloudWatchDashboardSource` + `CloudWatchDashboardImporter` in `crates/dbflux_driver_cloudwatch/` implement both for read-only browse + import. DBFlux never writes back to CloudWatch dashboards.
+
+See `docs/DASHBOARDS.md` for the full reference and `docs/CHARTS.md` for the chart engine.
+
 ### Schema & Navigation
 
 - Sidebar: `crates/dbflux_ui_sidebar/src/` displays two tabs — Connections (schema tree with folder organization, drag-drop, multi-selection) and Scripts (file/folder management for saved query files, script hooks, and other user files). Switch tabs with `q` or `e` keys. Shows tables/collections, columns, indexes per database category with lazy loading. Re-exported via a shim at `crates/dbflux_ui/src/ui/views/sidebar/mod.rs`.
@@ -584,8 +600,9 @@ crates/
 - **Driver capabilities**: `crates/dbflux_core/src/driver/capabilities.rs` defines:
   - `DatabaseCategory`: Relational, Document, KeyValue, Graph, TimeSeries, WideColumn, LogStream
   - `QueryLanguage`: Sql, CloudWatchLogsInsightsQl, OpenSearchPpl, OpenSearchSql, MongoQuery, RedisCommands, Cypher, InfluxQuery, Flux, Cql, Lua, Python, Bash (each carries editor mode, placeholder, comment prefix)
-  - `DriverCapabilities`: `u64` bitflags for features like PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, MULTI_STATEMENT, ROUTINES, STORED_PROCEDURES, etc.
+  - `DriverCapabilities`: `u64` bitflags for features like PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, MULTI_STATEMENT, ROUTINES, STORED_PROCEDURES, DASHBOARD_IMPORT, DASHBOARD_SYNC, etc.
   - `DriverMetadata`: static driver info (id, name, category, query_language, capabilities, icon)
+- **Driver-owned connection forms**: each `DbDriver` returns its `&DriverFormDef` from `form_definition()`. Form definitions live in the driver crate (e.g. `dbflux_driver_cloudwatch::driver::CLOUDWATCH_FORM`), not in core. `DriverFormDef` carries tabs → sections → fields, where `FormFieldKind` covers `Text`, `Password`, `WriteOnly` (secrets), `FilePath`, `Select`, `DynamicSelect` (runtime-fetched options, `depends_on` + `RefreshTrigger`), and `AuthProfileRef { provider_id }`.
 - **Error formatting**: `crates/dbflux_core/src/core/error_formatter.rs` provides `ErrorFormatter` trait for driver-specific error messages with context (detail, hint, column, table, constraint).
 - Core domain API: `crates/dbflux_core/src/core/traits.rs` defines `DbDriver`, `Connection`, SQL generation, cancellation contracts, and generic driver-to-UI seams such as `EventStreamTarget` and `SourceContextSpec`.
 - **Query generation**: `crates/dbflux_core/src/query/generator.rs` defines `QueryGenerator` as the driver-owned source of truth for mutation text plus read/query templates. SQL drivers use `SqlMutationGenerator`; MongoDB, Redis, and DynamoDB expose their own native generators. The UI and MCP access generators through `Connection::query_generator()` so previews and copied queries come from the driver rather than a UI-local formatter.
@@ -602,7 +619,10 @@ crates/
 
 - `crates/dbflux_app/src/auth_provider_registry.rs` maintains runtime `DynAuthProvider` registration in the app crate and avoids hardcoding AWS provider logic in connection UI flows.
 - `crates/dbflux_core/src/auth/` defines provider contracts (`AuthFormDef`, `DynAuthProvider`, `ImportableProfile`, `after_profile_saved`) and serializable auth profile/session types.
-- `AuthProfile` storage migrated from provider-specific nested `config` payloads to provider-agnostic `fields`, with compatibility deserialization for legacy entries.
+- `AuthProfile` uses a flat provider-agnostic `fields: HashMap<String, String>` (migrated from nested `config` payloads, with compatibility deserialization for legacy entries). Two extra flags model the live-reflection layer:
+  - `read_only: bool` — set when the profile is reflected from an external source of truth (e.g. `~/.aws/config`); DBFlux does not edit reflected profiles.
+  - `dangling_origin: Option<String>` — marks stored profiles that lost their backing source. Values: `"keyring-only"` (only the keyring secret remains), `"file-gone"` (the file entry disappeared).
+- **AWS live profile reflection**: `dbflux_aws/src/config.rs` reads `~/.aws/config` and `~/.aws/credentials` as the source of truth via `CachedAwsConfig` (mtime-keyed dual cache, one per file). `AwsProfileInfo` carries `is_sso`, `is_sso_session`, `sso_session` (named reference), `sso_start_url`, `sso_region`, `sso_account_id`, `sso_role_name`. AWS SSO sessions appear as first-class auth profile entries (`[sso-session <name>]`); profiles that reference them are expanded before login/validation.
 - `crates/dbflux_core/src/access/mod.rs` introduces provider-agnostic `AccessKind::Managed { provider, params }` with transparent migration from legacy `method = "ssm"` profile JSON.
 - `crates/dbflux_core/src/pipeline/mod.rs` runs pre-connect stages (`Authenticating` -> `ResolvingValues` -> `OpeningAccess`) and publishes `PipelineState` updates to UI watchers.
 - `crates/dbflux_app/src/access_manager.rs` provides the app-side `AccessManager` implementation for direct and managed access providers (currently `aws-ssm`).
@@ -660,7 +680,7 @@ crates/
   - Document: insertOne/updateOne/deleteOne/deleteMany
   - Key-Value: SET/DELETE/HASH_SET/SET_ADD/LIST_PUSH/ZSET_ADD and their remove counterparts, plus STREAM_ADD
 - **Key-value types**: `crates/dbflux_core/src/data/key_value.rs` defines Vec-based request structs for variadic Redis commands (e.g., `HashSetRequest.fields: Vec<(String, String)>`, `SetAddRequest.members: Vec<String>`).
-- **Query safety**: `crates/dbflux_core/src/query/language_service.rs` detects dangerous queries across all languages (SQL DELETE/DROP/TRUNCATE, MongoDB deleteMany/drop, Redis FLUSHALL/FLUSHDB/KEYS) and prompts for confirmation before execution.
+- **Query safety / `LanguageService`**: `crates/dbflux_core/src/query/language_service.rs` defines the `LanguageService` trait (`validate`, `detect_dangerous`, `editor_diagnostics`) and a default `SqlLanguageService` impl reused by relational drivers. Non-SQL dialects (MongoDB, Redis, T-SQL) ship their own implementations from the matching driver crate (e.g. `TSqlLanguageService` lives in `dbflux_driver_mssql`). `DangerousQueryKind` covers SQL `DeleteNoWhere` / `UpdateNoWhere` / `Truncate` / `Drop` / `Alter` / `Script`, MongoDB `deleteMany` / `updateMany` / `dropCollection` / `dropDatabase`, and Redis `FlushAll` / `FlushDb` / `MultiDelete` / `KeysPattern`. The dispatcher `classify_query_for_language(&QueryLanguage, &str)` routes to the right classifier so the UI never branches on driver id.
 
 ### Storage & Configuration
 
@@ -670,6 +690,7 @@ crates/
 - `cfg_*` — config domain (profiles, auth, proxy, SSH, hooks, services, governance, drivers, folders)
 - `st_*` — state domain (sessions, tabs, query history, saved queries, recent items, UI state, schema cache)
 - `aud_*` — audit domain (audit events, entities, attributes)
+- `viz_*` — visualization domain (dashboards, dashboard panels, saved charts and their bindings/series)
 - `sys_*` — system domain (migrations, metadata, legacy imports)
 
 **Storage crate** (`dbflux_storage/`):
@@ -738,7 +759,7 @@ crates/
 - Tunnel infrastructure: `crates/dbflux_tunnel_core/` provides RAII `Tunnel` with `TunnelConnector` trait and `ForwardingConnection<R>` bidirectional forwarder.
 - Proxy tunneling: `crates/dbflux_proxy/` implements SOCKS5 and HTTP CONNECT proxy tunnels via `TunnelConnector`.
 - SSH tunneling: `crates/dbflux_ssh/src/lib.rs` implements SSH tunnel via `TunnelConnector`, all operations serialized to one thread for libssh2 safety.
-- Export: `crates/dbflux_export/` provides shape-based export (CSV, JSON pretty/compact, Text, Binary/Hex/Base64). Format availability is determined by `QueryResultShape`, not by driver. Each format has its own module (`binary.rs`, `csv.rs`, `json.rs`, `text.rs`).
+- Export: `crates/dbflux_export/` provides shape-based export (CSV, JSON pretty/compact, Text, Binary/Hex/Base64). Format availability is determined by `QueryResultShape`, not by driver. Each format has its own module (`binary.rs`, `csv.rs`, `json.rs`, `text.rs`). File-dialog availability is probed at runtime via `dbflux_ui_base/src/file_dialog.rs::is_native_file_dialog_available()` (on Linux: checks `PATH` for `xdg-desktop-portal`, `zenity`, `kdialog`); when no backend is available, exports fall back to `fallback_export_dir()` (`~/.local/share/dbflux/exports/`) with `unique_path_in()` deconfliction. A clipboard export path is also available as an alternative target.
 - Test support: `crates/dbflux_test_support/` provides Docker container management and fixtures for live integration tests across all drivers. DynamoDB Local is used only for integration tests and local validation; production usage targets remote AWS DynamoDB endpoints.
 - Icon system: `AppIcon` enum defined in `crates/dbflux_components/src/icons/mod.rs`; embedded SVG bytes and the `ALL_ICONS` list remain at `crates/dbflux_ui/src/ui/icons/mod.rs` (resources live under `crates/dbflux_ui/resources/`), loaded via `assets.rs`.
 - Platform detection: `crates/dbflux_ui_base/src/platform.rs` handles X11/Wayland differences with `is_x11()`, `floating_window_kind()`, and `apply_window_options()` for proper window min size hints. (Shim at `crates/dbflux_ui/src/platform.rs`.)
@@ -851,6 +872,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
   - `cfg_folders` (connection tree organization)
   - `st_sessions`, `st_tabs`, `st_query_history`, `st_saved_queries`, `st_recent_items`, `st_ui_state`
   - `aud_audit_events`, `aud_audit_entities`, `aud_audit_attributes`
+  - `viz_dashboards`, `viz_dashboard_panels`, `viz_saved_charts`, `viz_saved_chart_series`, `viz_saved_chart_binding_y`, `viz_saved_chart_source_metric_dimensions`, `viz_saved_chart_source_metric_series`
   - `sys_migrations`, `sys_legacy_imports`
 - Legacy JSON import: On first startup, `dbflux_storage/src/legacy.rs` imports existing JSON files into SQLite if they exist:
   - `~/.config/dbflux/profiles.json` → `cfg_connection_profiles`
