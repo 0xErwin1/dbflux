@@ -39,6 +39,32 @@ Microsoft SQL Server driver for DBFlux, built on the
   single empty primary. Callers that want to walk every set use
   `QueryResult::iter_result_sets()`.
 
+### Instance Metrics
+
+Exposes a curated set of live server metrics sourced from `sys.dm_os_performance_counters`:
+
+- `mssql.batch_requests_per_sec` — T-SQL batch requests per second
+- `mssql.compilations_per_sec` — SQL compilations per second
+- `mssql.recompilations_per_sec` — SQL re-compilations per second
+- `mssql.user_connections` — current open user connections
+- `mssql.lock_waits_per_sec` — lock waits per second (`_Total` instance)
+- `mssql.page_reads_per_sec` — buffer pool page reads per second
+- `mssql.page_writes_per_sec` — buffer pool page writes per second
+- `mssql.buffer_cache_hit_ratio` — buffer cache hit ratio (percent)
+- `mssql.server_memory_kb` — total server memory in KB
+
+Each metric is returned as a single `(timestamp_ms, value)` row for live charting.
+
+Requires the `VIEW SERVER STATE` server permission. Without it, `list_metrics()` returns an empty list and a warning is logged. The driver probes this permission once at catalog construction time.
+
+### Instance Inspector
+
+Exposes tabular snapshots of running server state:
+
+- `mssql.active_sessions` — user sessions from `sys.dm_exec_sessions` joined with `sys.dm_exec_requests` (session id, login name, host name, program name, status, CPU time, memory usage, command, request status, wait type, wait time, blocking session id)
+
+Requires the `VIEW SERVER STATE` permission.
+
 ### Query cancellation
 
 - Cancellation is implemented as `KILL <spid>` issued from a fresh
@@ -158,6 +184,10 @@ Microsoft SQL Server driver for DBFlux, built on the
   `NOT VALID` + `VALIDATE CONSTRAINT`.
 
 ## Limitations
+
+- Instance metrics and inspector features require the `VIEW SERVER STATE` server permission. Without it, both `list_metrics()` and `list_inspectors()` return empty lists rather than an error.
+
+- Instance metrics return a single data point per call (current value from `sys.dm_os_performance_counters`), not a historical time series. Rate counters (e.g. `mssql.batch_requests_per_sec`) represent the server-side running average as reported by the DMV, not a delta computed by the driver.
 
 - Minimum supported SQL Server: 2016 (13.0). The driver uses
   `DROP INDEX IF EXISTS … ON …` syntax that older servers reject with a
