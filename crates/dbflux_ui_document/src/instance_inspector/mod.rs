@@ -7,12 +7,13 @@
 
 pub mod pane;
 
+use super::DataGridPanel;
 use super::handle::DocumentEvent;
 use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
 use crate::refresh::MIN_REFRESH_FLOOR_SECS;
 use dbflux_app::keymap::{Command, ContextId};
-use dbflux_components::result_panel::ResultPanel;
+use dbflux_components::result_panel::{ResultPanel, ViewHandle};
 use dbflux_core::{
     ExecutionContext, ExecutionSourceContext, QueryRequest, QueryResult, RefreshPolicy,
 };
@@ -52,7 +53,20 @@ pub struct InspectorPanel {
 
     focus_handle: FocusHandle,
 
-    #[allow(dead_code)]
+    /// `DataGridPanel` entity that owns the rendered result table.
+    ///
+    /// Instantiated lazily on the first render after a successful fetch, because
+    /// `DataGridPanel::new_for_result` requires a `Window` reference (for its
+    /// `InputState` fields) that is only available during `render()`.
+    data_grid: Option<Entity<DataGridPanel>>,
+
+    /// Buffered result waiting for the first render to create `data_grid`.
+    ///
+    /// Written by `apply_result` when no grid exists yet; consumed and cleared
+    /// by `render()` which uses it to construct `DataGridPanel::new_for_result`.
+    pending_grid_result: Option<Arc<QueryResult>>,
+
+    /// Chrome-row host built lazily alongside `data_grid` on first render.
     pub(super) result_panel: Option<Entity<ResultPanel>>,
 }
 
@@ -81,6 +95,8 @@ impl InspectorPanel {
             app_state,
             pending_result: None,
             focus_handle: cx.focus_handle(),
+            data_grid: None,
+            pending_grid_result: None,
             result_panel: None,
         }
     }
@@ -139,6 +155,12 @@ impl InspectorPanel {
 
     pub fn metric_id(&self) -> &str {
         &self.metric_id
+    }
+
+    /// Returns `true` if the panel has received at least one successful result.
+    #[cfg(test)]
+    pub(crate) fn has_result(&self) -> bool {
+        self.result.is_some()
     }
 
     /// Schedule a fresh inspector snapshot fetch.
@@ -214,7 +236,16 @@ impl InspectorPanel {
             Ok(result) => {
                 self.state = DocumentState::Clean;
                 self.last_error = None;
-                self.result = Some(Arc::new(result));
+
+                let arc = Arc::new(result);
+
+                if let Some(grid) = &self.data_grid {
+                    grid.update(cx, |g, cx| g.set_result((*arc).clone(), cx));
+                } else {
+                    self.pending_grid_result = Some(arc.clone());
+                }
+
+                self.result = Some(arc);
             }
             Err(err) => {
                 self.state = DocumentState::Error;
@@ -254,12 +285,60 @@ impl InspectorPanel {
 }
 
 impl Render for InspectorPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use gpui::div;
 
         if let Some(pending) = self.pending_result.take() {
             self.apply_result(pending, cx);
         }
+
+        // Lazily construct the DataGridPanel + ResultPanel when the first
+        // successful result arrives. Both require a Window reference (for
+        // InputState / TimeRangePanel internals), so they cannot be created
+        // outside render().
+        if self.data_grid.is_none() {
+            if let Some(result) = self.pending_grid_result.take() {
+                let profile_id = self.profile_id;
+                let app_state = self.app_state.clone();
+                let metric_id = self.metric_id.clone();
+
+                let grid = cx.new(|cx| {
+                    DataGridPanel::new_for_result(
+                        result,
+                        metric_id,
+                        Some(profile_id),
+                        app_state,
+                        window,
+                        cx,
+                    )
+                });
+
+                let view_handle = DataGridPanel::into_view_handle(grid.clone(), cx);
+                let panel = cx.new(|cx| ResultPanel::new(view_handle, cx));
+
+                self.data_grid = Some(grid);
+                self.result_panel = Some(panel);
+            }
+        }
+
+        let focus_handle = self.focus_handle.clone();
+
+        if let Some(result_panel) = self.result_panel.as_ref().cloned() {
+            return div()
+                .size_full()
+                .track_focus(&focus_handle)
+                .child(result_panel)
+                .into_any();
+        }
+
+        // No result yet — show a loading or error placeholder.
+        let msg = if let Some(err) = &self.last_error {
+            format!("Error: {err}")
+        } else if self.state == DocumentState::Loading {
+            "Loading…".to_string()
+        } else {
+            "No data. Connect and click Refresh.".to_string()
+        };
 
         div()
             .size_full()
@@ -268,7 +347,9 @@ impl Render for InspectorPanel {
             .items_center()
             .justify_center()
             .text_sm()
-            .child(format!("Inspector: {}", self.metric_id))
+            .track_focus(&focus_handle)
+            .child(msg)
+            .into_any()
     }
 }
 
@@ -299,6 +380,7 @@ fn build_inspector_request(metric_id: &str) -> QueryRequest {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use dbflux_core::ExecutionSourceContext;
 
     /// REQ-DOC-3, REQ-UI-2: `build_inspector_context` must produce an
@@ -338,5 +420,84 @@ mod tests {
             metric_id, "pg.locks",
             "metric_id must match the constructed value"
         );
+    }
+
+    /// BF4: after `apply_result` is called with a successful `QueryResult`,
+    /// `has_result()` must return `true` and `pending_grid_result` must be
+    /// populated (since no `data_grid` exists yet in a non-rendered panel).
+    ///
+    /// Uses `#[gpui::test]` because `apply_result` calls
+    /// `runner.complete_primary` which requires a GPUI `App` context.
+    #[gpui::test]
+    fn apply_result_sets_result_and_pending_grid(cx: &mut gpui::TestAppContext) {
+        use dbflux_core::{ColumnKind, ColumnMeta, QueryResult, QueryResultShape};
+        use dbflux_storage::bootstrap::StorageRuntime;
+        use std::time::Duration;
+
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_cx| dbflux_ui_base::toast::ToastHost::new());
+            cx.set_global(dbflux_ui_base::toast::ToastGlobal { host });
+        });
+
+        let app_state: Entity<AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = StorageRuntime::in_memory().expect("in-memory storage");
+                AppStateEntity::new_with_storage_runtime(runtime)
+            })
+        });
+
+        let profile_id = uuid::Uuid::new_v4();
+        let panel: Entity<super::InspectorPanel> = cx.update(|cx| {
+            cx.new(|cx| {
+                super::InspectorPanel::new(profile_id, "pg.activity".to_string(), app_state, cx)
+            })
+        });
+
+        let synthetic_result = QueryResult {
+            shape: QueryResultShape::Table,
+            columns: vec![ColumnMeta {
+                name: "pid".to_string(),
+                type_name: "int4".to_string(),
+                kind: ColumnKind::Integer,
+                nullable: true,
+                is_primary_key: false,
+            }],
+            rows: vec![vec![dbflux_core::Value::Int(42)]],
+            affected_rows: None,
+            execution_time: Duration::ZERO,
+            text_body: None,
+            raw_bytes: None,
+            next_page_token: None,
+            resolved_window: None,
+            metadata_extra: None,
+            additional_results: Vec::new(),
+        };
+
+        cx.update(|cx| {
+            panel.update(cx, |p, cx| {
+                let task_id = uuid::Uuid::nil();
+                p.apply_result(
+                    super::PendingResult {
+                        task_id,
+                        result: Ok(synthetic_result),
+                    },
+                    cx,
+                );
+            });
+        });
+
+        cx.update(|cx| {
+            let p = panel.read(cx);
+            assert!(
+                p.has_result(),
+                "apply_result with Ok must set result to Some"
+            );
+            assert!(
+                p.pending_grid_result.is_some(),
+                "apply_result must populate pending_grid_result when data_grid is None"
+            );
+        });
     }
 }

@@ -389,6 +389,10 @@ impl Workspace {
         let doc =
             cx.new(|cx| InspectorPanel::new(profile_id, metric_id, self.app_state.clone(), cx));
 
+        doc.update(cx, |panel, cx| {
+            panel.request_reexec(cx);
+        });
+
         let pane = InspectorPanel::into_pane(doc, cx);
         self.tab_manager.update(cx, |mgr, cx| {
             mgr.open(Tab::Pane(Box::new(pane)), cx);
