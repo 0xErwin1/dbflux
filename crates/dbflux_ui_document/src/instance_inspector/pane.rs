@@ -91,7 +91,7 @@ impl InspectorPanel {
                 Box::new(move |key, cx| {
                     let d = e.read(cx);
                     match key {
-                        DocumentKey::InspectorPanel {
+                        DocumentKey::InstanceInspector {
                             profile_id,
                             metric_id,
                         } => {

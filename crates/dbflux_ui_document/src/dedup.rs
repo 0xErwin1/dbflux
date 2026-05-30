@@ -71,11 +71,11 @@ pub enum DocumentKey {
 
     /// A chart document opened from the instance-metrics sidebar folder.
     /// Deduplicated by `(profile_id, metric_id)`.
-    InstanceMetricChart { profile_id: Uuid, metric_id: String },
+    InstanceMetric { profile_id: Uuid, metric_id: String },
 
     /// A live inspector panel document opened from the instance-inspectors
     /// sidebar folder. Deduplicated by `(profile_id, metric_id)`.
-    InspectorPanel { profile_id: Uuid, metric_id: String },
+    InstanceInspector { profile_id: Uuid, metric_id: String },
 }
 
 #[cfg(test)]
@@ -157,17 +157,17 @@ mod tests {
         let _ = format!("{:?}", metric_chart);
     }
 
-    /// InstanceMetricChart and InspectorPanel keys construct, clone, and debug correctly.
+    /// InstanceMetric and InstanceInspector keys construct, clone, and debug correctly.
     #[test]
     fn instance_metric_and_inspector_keys_construct_and_clone() {
         let id = Uuid::new_v4();
 
-        let inst_metric = DocumentKey::InstanceMetricChart {
+        let inst_metric = DocumentKey::InstanceMetric {
             profile_id: id,
             metric_id: "pg.cache_hit_ratio".to_string(),
         };
 
-        let inspector = DocumentKey::InspectorPanel {
+        let inspector = DocumentKey::InstanceInspector {
             profile_id: id,
             metric_id: "pg.activity".to_string(),
         };

@@ -307,7 +307,7 @@ impl Workspace {
 
     /// Open a `ChartDocument` for an instance metric leaf clicked in the sidebar.
     ///
-    /// Deduplicates by `(profile_id, metric_id)` using `DocumentKey::InstanceMetricChart`
+    /// Deduplicates by `(profile_id, metric_id)` using `DocumentKey::InstanceMetric`
     /// so clicking the same metric a second time focuses the existing tab rather
     /// than opening a duplicate.
     pub(super) fn open_instance_metric(
@@ -320,7 +320,7 @@ impl Workspace {
         use crate::ui::document::{ChartDocument, DocumentKey};
         use dbflux_components::chart::InstanceMetricSource;
 
-        let key = DocumentKey::InstanceMetricChart {
+        let key = DocumentKey::InstanceMetric {
             profile_id,
             metric_id: metric_id.clone(),
         };
@@ -361,7 +361,7 @@ impl Workspace {
 
     /// Open an `InspectorPanel` for an instance inspector leaf clicked in the sidebar.
     ///
-    /// Deduplicates by `(profile_id, metric_id)` using `DocumentKey::InspectorPanel`
+    /// Deduplicates by `(profile_id, metric_id)` using `DocumentKey::InstanceInspector`
     /// so clicking the same inspector a second time focuses the existing tab rather
     /// than opening a duplicate.
     pub(super) fn open_instance_inspector(
@@ -373,7 +373,7 @@ impl Workspace {
     ) {
         use crate::ui::document::{DocumentKey, InspectorPanel};
 
-        let key = DocumentKey::InspectorPanel {
+        let key = DocumentKey::InstanceInspector {
             profile_id,
             metric_id: metric_id.clone(),
         };
