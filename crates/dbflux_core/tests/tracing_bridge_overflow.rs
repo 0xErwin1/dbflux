@@ -50,8 +50,12 @@ mod overflow_tests {
             .install_sink(Arc::new(sink))
             .expect("sink install failed");
 
+        // The audit layer gates on `target.starts_with("dbflux")` to filter
+        // upstream-dep noise. Tests run under their own crate target by default
+        // (`tracing_bridge_overflow::...`), which would be filtered — pin the
+        // target explicitly so the bridge actually exercises the queue.
         for i in 0..100u32 {
-            tracing::warn!("overflow test event {}", i);
+            tracing::warn!(target: "dbflux_core::test::overflow", "overflow test event {}", i);
         }
 
         // Give the drain thread time to flush what it can.
