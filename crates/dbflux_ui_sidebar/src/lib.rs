@@ -821,6 +821,17 @@ pub struct Sidebar {
     ///
     /// Key is the parent node id string (MetricsFolder or MetricNamespaceFolder).
     metric_fetch_errors: HashMap<String, String>,
+    /// Session-scoped cache for `InstanceCatalog::list_metrics()` results.
+    /// Populated on first expansion of `InstanceMetricsFolder`, keyed by profile_id.
+    instance_metrics_cache: HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>>,
+    /// Session-scoped cache for `InstanceCatalog::list_inspectors()` results.
+    /// Populated on first expansion of `InstanceInspectorsFolder`, keyed by profile_id.
+    instance_inspectors_cache: HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>>,
+    /// In-flight `instance_catalog` fetch tasks, keyed by profile_id.
+    ///
+    /// A single fetch populates both `instance_metrics_cache` and
+    /// `instance_inspectors_cache` because the catalog returns both in one round-trip.
+    pending_instance_catalog_fetches: HashMap<Uuid, Task<()>>,
 }
 
 use dbflux_ui_base::toast::PendingToast;
@@ -1040,6 +1051,9 @@ impl Sidebar {
             pending_metric_fetches: HashMap::new(),
             pending_remote_dashboard_fetches: HashMap::new(),
             metric_fetch_errors: HashMap::new(),
+            instance_metrics_cache: HashMap::new(),
+            instance_inspectors_cache: HashMap::new(),
+            pending_instance_catalog_fetches: HashMap::new(),
         }
     }
 

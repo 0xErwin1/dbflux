@@ -374,6 +374,14 @@ impl Sidebar {
             self.spawn_fetch_remote_dashboards(*profile_id, cx);
         }
 
+        if let Some(SchemaNodeId::InstanceMetricsFolder { profile_id }) = &parsed {
+            self.spawn_fetch_instance_catalog(*profile_id, cx);
+        }
+
+        if let Some(SchemaNodeId::InstanceInspectorsFolder { profile_id }) = &parsed {
+            self.spawn_fetch_instance_catalog(*profile_id, cx);
+        }
+
         if matches!(parsed, Some(SchemaNodeId::Database { .. })) {
             self.handle_database_click(item_id, cx);
         }
@@ -636,6 +644,84 @@ impl Sidebar {
         });
 
         self.pending_remote_dashboard_fetches
+            .insert(profile_id, task);
+    }
+
+    /// Fetch instance metric and inspector definitions for a connection if not cached.
+    ///
+    /// A single background task calls both `list_metrics` and `list_inspectors` and
+    /// stores the results in `instance_metrics_cache` / `instance_inspectors_cache`.
+    /// Expanding either the `InstanceMetricsFolder` or the `InstanceInspectorsFolder`
+    /// triggers this fetch; deduplication ensures at most one in-flight task per profile.
+    pub(super) fn spawn_fetch_instance_catalog(
+        &mut self,
+        profile_id: Uuid,
+        cx: &mut Context<Self>,
+    ) {
+        if self.instance_metrics_cache.contains_key(&profile_id)
+            && self.instance_inspectors_cache.contains_key(&profile_id)
+        {
+            return;
+        }
+
+        if self
+            .pending_instance_catalog_fetches
+            .contains_key(&profile_id)
+        {
+            return;
+        }
+
+        let connection = match self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|c| c.connection.clone())
+        {
+            Some(c) => c,
+            None => return,
+        };
+
+        let sidebar = cx.entity().clone();
+
+        let background_task = cx.background_executor().spawn(async move {
+            let catalog = match connection.instance_catalog() {
+                Some(c) => c,
+                None => return Err("driver does not expose an instance catalog".to_string()),
+            };
+
+            let metrics = catalog.list_metrics().await.map_err(|e| e.to_string())?;
+            let inspectors = catalog.list_inspectors().await.map_err(|e| e.to_string())?;
+            Ok((metrics, inspectors))
+        });
+
+        let task = cx.spawn(async move |_this, cx| {
+            let result = background_task.await;
+            cx.update(|cx| {
+                sidebar.update(cx, |sidebar, cx| {
+                    sidebar.pending_instance_catalog_fetches.remove(&profile_id);
+                    match result {
+                        Ok((metrics, inspectors)) => {
+                            sidebar.instance_metrics_cache.insert(profile_id, metrics);
+                            sidebar
+                                .instance_inspectors_cache
+                                .insert(profile_id, inspectors);
+                        }
+                        Err(msg) => {
+                            log::warn!(
+                                "Failed to fetch instance catalog for {}: {}",
+                                profile_id,
+                                msg
+                            );
+                        }
+                    }
+                    sidebar.rebuild_tree_with_overrides(cx);
+                });
+            })
+            .log_if_dropped();
+        });
+
+        self.pending_instance_catalog_fetches
             .insert(profile_id, task);
     }
 
