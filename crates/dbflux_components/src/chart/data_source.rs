@@ -218,6 +218,18 @@ pub trait ChartDataSource: Send + 'static {
     fn is_self_executing(&self) -> bool {
         false
     }
+
+    /// Returns `true` when this source produces a single instantaneous sample
+    /// per fetch and requires the chart host to accumulate samples into a time
+    /// series rather than replacing the display on each fetch.
+    ///
+    /// `InstanceMetricSource` returns `true` — drivers return one row per poll
+    /// (the current gauge value). All other sources return full series natively
+    /// and must return `false` (the default) so that `ChartDocument` does not
+    /// accidentally buffer their already-complete results.
+    fn is_accumulating(&self) -> bool {
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -483,6 +495,10 @@ impl ChartDataSource for InstanceMetricSource {
     }
 
     fn is_self_executing(&self) -> bool {
+        true
+    }
+
+    fn is_accumulating(&self) -> bool {
         true
     }
 

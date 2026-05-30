@@ -145,6 +145,14 @@ pub struct ChartDocument {
     pub(super) embedded: bool,
 
     _subscriptions: Vec<Subscription>,
+
+    /// Sample accumulation buffer for `InstanceMetric` sources.
+    ///
+    /// Populated on first successful fetch when `data_source.is_accumulating()`
+    /// is true. Each subsequent fetch appends to the buffer and the chart shell
+    /// receives the full accumulated series rather than the single-point result.
+    /// Cleared when the data source changes or the document closes.
+    instance_metric_buffer: Option<InstantSeriesBuffer>,
 }
 
 impl ChartDocument {
@@ -267,6 +275,7 @@ impl ChartDocument {
             result_panel: None,
             embedded: false,
             _subscriptions: vec![metric_apply_sub, app_state_disconnect_sub],
+            instance_metric_buffer: None,
         }
     }
 
@@ -476,6 +485,7 @@ impl ChartDocument {
             focus_handle: cx.focus_handle(),
             focus_mode: ChartDocFocus::default(),
             _subscriptions: vec![metric_apply_sub, app_state_disconnect_sub],
+            instance_metric_buffer: None,
         }
     }
 
@@ -710,6 +720,10 @@ impl ChartDocument {
         self.data_source = source;
         self.pending_chart_reexecute = true;
 
+        // Drop the accumulation buffer when the source changes so stale
+        // samples from the previous metric do not bleed into the new series.
+        self.instance_metric_buffer = None;
+
         cx.emit(DocumentEvent::DataSourceChanged);
         cx.emit(DocumentEvent::MetaChanged);
         cx.notify();
@@ -838,6 +852,11 @@ impl ChartDocument {
     }
 
     /// Apply a completed query result to the chart shell.
+    ///
+    /// For accumulating sources (`is_accumulating() == true`) the raw
+    /// single-sample result is appended to `instance_metric_buffer` and the
+    /// shell receives the full accumulated series. For all other sources the
+    /// raw result is forwarded directly.
     fn apply_result(&mut self, pending: PendingResult, cx: &mut Context<Self>) {
         self.runner.complete_primary(pending.task_id, cx);
 
@@ -847,14 +866,23 @@ impl ChartDocument {
                 self.state = DocumentState::Clean;
 
                 let was_chart_mode = self.last_result.is_some();
-                let arc = Arc::new(result);
 
-                let arc_clone = arc.clone();
+                let display_result = if self.data_source.is_accumulating() {
+                    let buffer = self.instance_metric_buffer.get_or_insert_with(|| {
+                        InstantSeriesBuffer::new(result.columns.clone(), 120)
+                    });
+                    buffer.push_result(&result);
+                    Arc::new(buffer.to_query_result())
+                } else {
+                    Arc::new(result)
+                };
+
+                let display_clone = display_result.clone();
                 self.chart_shell.update(cx, |shell, cx| {
-                    shell.set_result(&arc_clone, was_chart_mode, cx);
+                    shell.set_result(&display_clone, was_chart_mode, cx);
                 });
 
-                self.last_result = Some(arc);
+                self.last_result = Some(display_result);
             }
             Err(err) => {
                 self.exec_state = ExecState::Error;
@@ -1375,6 +1403,77 @@ impl ChartHost for ChartDocument {
         // path in practice — re-execution goes through render's pending_run flag.
         let _ = window;
         let _ = cx;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// InstantSeriesBuffer
+// ---------------------------------------------------------------------------
+
+/// In-memory accumulator for instance-metric single-sample poll results.
+///
+/// Each `fetch_metric_series` call returns exactly one row (the current gauge
+/// value plus a timestamp). `ChartDocument` uses this buffer to stitch those
+/// samples into a visible time series: each successful fetch appends a new
+/// row, and the buffer is pruned to at most `max_samples` entries so memory
+/// stays bounded.
+///
+/// The buffer is owned by `ChartDocument` only when the active source returns
+/// `is_accumulating() == true`. For all other sources the field is `None`
+/// and accumulation is never invoked.
+pub(super) struct InstantSeriesBuffer {
+    columns: Vec<dbflux_core::ColumnMeta>,
+    rows: Vec<dbflux_core::Row>,
+    max_samples: usize,
+}
+
+impl InstantSeriesBuffer {
+    /// Create an empty buffer with the given column schema and retention cap.
+    pub(super) fn new(columns: Vec<dbflux_core::ColumnMeta>, max_samples: usize) -> Self {
+        Self {
+            columns,
+            rows: Vec::new(),
+            max_samples,
+        }
+    }
+
+    /// Append rows from a single-sample fetch result and prune to retention cap.
+    pub(super) fn push_result(&mut self, result: &dbflux_core::QueryResult) {
+        for row in &result.rows {
+            self.rows.push(row.clone());
+        }
+
+        if self.rows.len() > self.max_samples {
+            let overflow = self.rows.len() - self.max_samples;
+            self.rows.drain(..overflow);
+        }
+    }
+
+    /// Number of accumulated samples.
+    #[cfg(test)]
+    pub(super) fn sample_count(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// Build a `QueryResult` whose rows contain all accumulated samples.
+    ///
+    /// The schema (columns) is identical to the first fetch result so the
+    /// chart engine's column detection produces the same X/Y mapping as it
+    /// would for a native time-series result.
+    pub(super) fn to_query_result(&self) -> dbflux_core::QueryResult {
+        dbflux_core::QueryResult {
+            shape: dbflux_core::QueryResultShape::Table,
+            columns: self.columns.clone(),
+            rows: self.rows.clone(),
+            affected_rows: None,
+            execution_time: std::time::Duration::ZERO,
+            text_body: None,
+            raw_bytes: None,
+            next_page_token: None,
+            resolved_window: None,
+            metadata_extra: None,
+            additional_results: Vec::new(),
+        }
     }
 }
 
@@ -2219,6 +2318,145 @@ mod tests {
         assert_eq!(
             count_after_drop, count_after_first_tick,
             "notify count must not increase after entity drop — timer loop must be cancelled"
+        );
+    }
+
+    // ---- BF5: InstantSeriesBuffer accumulation ----
+
+    fn make_single_point_result(timestamp_ms: i64, value: f64) -> QueryResult {
+        use dbflux_core::{ColumnKind, ColumnMeta, QueryResultShape, Value};
+        use std::time::Duration;
+
+        QueryResult {
+            shape: QueryResultShape::Table,
+            columns: vec![
+                ColumnMeta {
+                    name: "timestamp_ms".to_string(),
+                    type_name: "int8".to_string(),
+                    kind: ColumnKind::Timestamp,
+                    nullable: false,
+                    is_primary_key: false,
+                },
+                ColumnMeta {
+                    name: "value".to_string(),
+                    type_name: "float8".to_string(),
+                    kind: ColumnKind::Float,
+                    nullable: false,
+                    is_primary_key: false,
+                },
+            ],
+            rows: vec![vec![Value::Int(timestamp_ms), Value::Float(value)]],
+            affected_rows: None,
+            execution_time: Duration::ZERO,
+            text_body: None,
+            raw_bytes: None,
+            next_page_token: None,
+            resolved_window: None,
+            metadata_extra: None,
+            additional_results: Vec::new(),
+        }
+    }
+
+    /// BF5: three sequential push_result calls must accumulate 3 samples.
+    #[test]
+    fn instant_series_buffer_accumulates_samples() {
+        use dbflux_core::ColumnKind;
+
+        let result1 = make_single_point_result(1_000, 10.0);
+        let mut buffer = InstantSeriesBuffer::new(result1.columns.clone(), 120);
+
+        buffer.push_result(&result1);
+        buffer.push_result(&make_single_point_result(2_000, 20.0));
+        buffer.push_result(&make_single_point_result(3_000, 30.0));
+
+        assert_eq!(
+            buffer.sample_count(),
+            3,
+            "three push_result calls must yield 3 accumulated samples"
+        );
+
+        let merged = buffer.to_query_result();
+        assert_eq!(merged.rows.len(), 3, "merged result must have 3 rows");
+        assert_eq!(
+            merged.columns.len(),
+            2,
+            "merged result must preserve 2 columns"
+        );
+        assert_eq!(
+            merged.columns[0].kind,
+            ColumnKind::Timestamp,
+            "first column kind must be Timestamp"
+        );
+        assert_eq!(
+            merged.columns[1].kind,
+            ColumnKind::Float,
+            "second column kind must be Float"
+        );
+    }
+
+    /// BF5: once sample_count exceeds max_samples, oldest entries are pruned.
+    #[test]
+    fn instant_series_buffer_prunes_oldest_beyond_max() {
+        use dbflux_core::Value;
+
+        let max = 3usize;
+        let first = make_single_point_result(1_000, 1.0);
+        let mut buffer = InstantSeriesBuffer::new(first.columns.clone(), max);
+
+        for i in 0..5u64 {
+            buffer.push_result(&make_single_point_result(i as i64 * 1_000, i as f64));
+        }
+
+        assert_eq!(
+            buffer.sample_count(),
+            max,
+            "buffer must not exceed max_samples after overflow"
+        );
+
+        let merged = buffer.to_query_result();
+
+        // The oldest two samples (timestamps 0, 1000) must have been dropped;
+        // only timestamps 2000, 3000, 4000 remain.
+        let timestamps: Vec<i64> = merged
+            .rows
+            .iter()
+            .map(|row| match &row[0] {
+                Value::Int(v) => *v,
+                _ => panic!("expected Int for timestamp column"),
+            })
+            .collect();
+
+        assert_eq!(
+            timestamps,
+            vec![2_000, 3_000, 4_000],
+            "oldest samples must be pruned when max_samples is exceeded"
+        );
+    }
+
+    /// BF5: InstanceMetricSource must return is_accumulating() == true.
+    #[test]
+    fn instance_metric_source_is_accumulating() {
+        let src = dbflux_components::chart::InstanceMetricSource {
+            metric_id: "pg.tps".to_string(),
+        };
+        assert!(
+            src.is_accumulating(),
+            "InstanceMetricSource must report is_accumulating() == true"
+        );
+    }
+
+    /// BF5: non-InstanceMetric sources must return is_accumulating() == false.
+    #[test]
+    fn query_source_is_not_accumulating() {
+        use dbflux_components::chart::resolve_source;
+        use dbflux_components::saved_chart::SavedChartSource;
+
+        let src = resolve_source(&SavedChartSource::Query {
+            query: "SELECT 1".to_string(),
+        });
+        assert!(
+            !src.is_accumulating(),
+            "QuerySource must report is_accumulating() == false"
         );
     }
 }

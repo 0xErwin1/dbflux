@@ -296,29 +296,28 @@ impl Render for InspectorPanel {
         // successful result arrives. Both require a Window reference (for
         // InputState / TimeRangePanel internals), so they cannot be created
         // outside render().
-        if self.data_grid.is_none() {
-            if let Some(result) = self.pending_grid_result.take() {
-                let profile_id = self.profile_id;
-                let app_state = self.app_state.clone();
-                let metric_id = self.metric_id.clone();
+        if self.data_grid.is_none() && self.pending_grid_result.is_some() {
+            let result = self.pending_grid_result.take().unwrap();
+            let profile_id = self.profile_id;
+            let app_state = self.app_state.clone();
+            let metric_id = self.metric_id.clone();
 
-                let grid = cx.new(|cx| {
-                    DataGridPanel::new_for_result(
-                        result,
-                        metric_id,
-                        Some(profile_id),
-                        app_state,
-                        window,
-                        cx,
-                    )
-                });
+            let grid = cx.new(|cx| {
+                DataGridPanel::new_for_result(
+                    result,
+                    metric_id,
+                    Some(profile_id),
+                    app_state,
+                    window,
+                    cx,
+                )
+            });
 
-                let view_handle = DataGridPanel::into_view_handle(grid.clone(), cx);
-                let panel = cx.new(|cx| ResultPanel::new(view_handle, cx));
+            let view_handle = DataGridPanel::into_view_handle(grid.clone(), cx);
+            let panel = cx.new(|cx| ResultPanel::new(view_handle, cx));
 
-                self.data_grid = Some(grid);
-                self.result_panel = Some(panel);
-            }
+            self.data_grid = Some(grid);
+            self.result_panel = Some(panel);
         }
 
         let focus_handle = self.focus_handle.clone();
