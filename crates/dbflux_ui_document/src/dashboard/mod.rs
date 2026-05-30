@@ -1924,6 +1924,18 @@ impl DashboardDocument {
             })
             .collect();
 
+        // Track existing inspector slots by (metric_id, grid_pos) for dedup.
+        let mut existing_inspectors: std::collections::HashSet<(String, u32)> = self
+            .panel_slots
+            .iter()
+            .filter_map(|slot| match slot {
+                DashboardPanelSlot::Inspector {
+                    entity, grid_pos, ..
+                } => Some((entity.read(cx).metric_id().to_string(), grid_pos.grid_row)),
+                _ => None,
+            })
+            .collect();
+
         let mut appended = 0usize;
         for panel in persisted_panels.iter() {
             let grid_pos = PanelGridPos {
@@ -1940,6 +1952,45 @@ impl DashboardDocument {
                     grid_pos,
                 });
                 appended += 1;
+                continue;
+            }
+
+            // Inspector slots are identified by metric_id + row (no SavedChart).
+            if let dbflux_ui_base::DashboardPanelKind::Inspector { metric_id } = &panel.kind {
+                let dedup_key = (metric_id.clone(), grid_pos.grid_row);
+                if !existing_inspectors.insert(dedup_key) {
+                    continue;
+                }
+
+                if let Some(profile_id) = self.profile_id {
+                    let metric_id = metric_id.clone();
+                    let app_state_inner = self.app_state.clone();
+                    let title_override = panel.title_override.clone();
+                    let inspector_entity = cx
+                        .new(|cx| InspectorPanel::new(profile_id, metric_id, app_state_inner, cx));
+                    inspector_entity.update(cx, |p, _cx| p.defer_initial_exec());
+
+                    let slot_idx = self.panel_slots.len();
+                    let sub = cx.subscribe(
+                        &inspector_entity,
+                        move |this: &mut Self,
+                              _panel,
+                              event: &DocumentEvent,
+                              cx: &mut Context<Self>| {
+                            if matches!(event, DocumentEvent::ExecutionFinished) {
+                                this.on_panel_execution_finished(slot_idx, cx);
+                            }
+                        },
+                    );
+                    self._subscriptions.push(sub);
+
+                    self.panel_slots.push(DashboardPanelSlot::Inspector {
+                        entity: inspector_entity,
+                        grid_pos,
+                        title_override,
+                    });
+                    appended += 1;
+                }
                 continue;
             }
 
@@ -2026,7 +2077,10 @@ impl DashboardDocument {
         let dashboard_id = self.dashboard_id;
         let drafts: Vec<DashboardPanelDraft> = chart_ids
             .into_iter()
-            .map(|saved_chart_id| DashboardPanelDraft::Chart { saved_chart_id })
+            .map(|saved_chart_id| DashboardPanelDraft::Chart {
+                saved_chart_id,
+                layout: None,
+            })
             .collect();
 
         let result = self.app_state.update(cx, |state, _cx| {

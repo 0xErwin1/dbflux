@@ -14,6 +14,12 @@ use crate::driver::MssqlConnectionInner;
 ///
 /// Each entry: `(counter_name, instance_name, metric_id, display_name, group, unit)`.
 /// `instance_name` is often `""` (empty) for instance-wide counters or a database name.
+/// Counter names in `PERFORMANCE_COUNTERS` that are ratio types in
+/// `sys.dm_os_performance_counters`. For these, SQL Server stores the numerator
+/// in the main row and the denominator in a paired `<name> base` row; the
+/// charted value must be `(numerator / denominator) * 100.0`.
+pub const RATIO_COUNTER_NAMES: &[&str] = &["Buffer cache hit ratio"];
+
 pub const PERFORMANCE_COUNTERS: &[(&str, &str, &str, &str, &str, InstanceMetricUnit)] = &[
     (
         "Batch Requests/sec",
@@ -360,6 +366,15 @@ impl InstanceCatalog for MssqlInstanceCatalog {
                 }
             };
 
+            if !(1..=32767).contains(&session_id) {
+                return Err(DbError::QueryFailed(
+                    format!(
+                        "mssql.active_sessions kill: session_id {session_id} out of valid range [1..32767]"
+                    )
+                    .into(),
+                ));
+            }
+
             let sql = format!("KILL {session_id}");
 
             let mut inner = self.inner.lock().map_err(|_| {
@@ -426,26 +441,29 @@ fn fetch_performance_counter(
          ensure callers are not passing external input"
     );
 
+    let is_ratio = RATIO_COUNTER_NAMES.contains(&counter_name);
     let ec = escape_mssql_literal(counter_name);
     let ei = escape_mssql_literal(instance_name);
-    let sql = format!(
-        "SELECT CAST(cntr_value AS float) \
-         FROM sys.dm_os_performance_counters \
-         WHERE counter_name = N'{ec}' \
-           AND (instance_name = N'{ei}' OR N'{ei}' = '' AND instance_name = '')"
-    );
 
-    let value = inner.runtime.block_on(async {
-        let client = inner
-            .client
-            .as_mut()
-            .ok_or_else(|| DbError::QueryFailed("no active client".to_string().into()))?;
-
-        let stream = client.simple_query(&sql).await.map_err(tiberius_error)?;
-        let row_opt = stream.into_row().await.map_err(tiberius_error)?;
-
-        Ok::<f64, DbError>(row_opt.and_then(|r| r.get::<f64, _>(0)).unwrap_or(0.0))
-    })?;
+    let value = if is_ratio {
+        fetch_ratio_counter(inner, &ec, &ei, counter_name)?
+    } else {
+        let sql = format!(
+            "SELECT CAST(cntr_value AS float) \
+             FROM sys.dm_os_performance_counters \
+             WHERE counter_name = N'{ec}' \
+               AND (instance_name = N'{ei}' OR N'{ei}' = '' AND instance_name = '')"
+        );
+        inner.runtime.block_on(async {
+            let client = inner
+                .client
+                .as_mut()
+                .ok_or_else(|| DbError::QueryFailed("no active client".to_string().into()))?;
+            let stream = client.simple_query(&sql).await.map_err(tiberius_error)?;
+            let row_opt = stream.into_row().await.map_err(tiberius_error)?;
+            Ok::<f64, DbError>(row_opt.and_then(|r| r.get::<f64, _>(0)).unwrap_or(0.0))
+        })?
+    };
 
     let row: Row = vec![Value::Int(now_epoch_ms()), Value::Float(value)];
 
@@ -462,6 +480,70 @@ fn fetch_performance_counter(
         metadata_extra: None,
         additional_results: Vec::new(),
     })
+}
+
+/// Fetches a ratio-type performance counter as a percentage.
+///
+/// Queries both the numerator row and the `<name> base` row in a single
+/// statement, then returns `(numerator / base) * 100.0`. Returns `0.0` and
+/// logs a warning when the base row is missing or zero.
+fn fetch_ratio_counter(
+    inner: &mut MssqlConnectionInner,
+    escaped_counter: &str,
+    escaped_instance: &str,
+    raw_counter_name: &str,
+) -> Result<f64, DbError> {
+    let base_name = format!("{raw_counter_name} base");
+    let eb = escape_mssql_literal(&base_name);
+
+    let sql = format!(
+        "SELECT counter_name, CAST(cntr_value AS float) \
+         FROM sys.dm_os_performance_counters \
+         WHERE counter_name IN (N'{escaped_counter}', N'{eb}') \
+           AND (instance_name = N'{escaped_instance}' OR N'{escaped_instance}' = '' AND instance_name = '')"
+    );
+
+    let (numerator, base) = inner.runtime.block_on(async {
+        let client = inner
+            .client
+            .as_mut()
+            .ok_or_else(|| DbError::QueryFailed("no active client".to_string().into()))?;
+
+        let results = client
+            .simple_query(&sql)
+            .await
+            .map_err(tiberius_error)?
+            .into_results()
+            .await
+            .map_err(tiberius_error)?;
+
+        let mut num: Option<f64> = None;
+        let mut den: Option<f64> = None;
+
+        for row in results.into_iter().flatten() {
+            let name: Option<&str> = row.get(0);
+            let val: Option<f64> = row.get(1);
+            if name == Some(raw_counter_name) {
+                num = val;
+            } else {
+                den = val;
+            }
+        }
+
+        Ok::<(Option<f64>, Option<f64>), DbError>((num, den))
+    })?;
+
+    match (numerator, base) {
+        (Some(n), Some(b)) if b != 0.0 => Ok((n / b) * 100.0),
+        (Some(_n), Some(_b)) => {
+            log::warn!("mssql ratio counter '{raw_counter_name}': base is zero, returning 0.0");
+            Ok(0.0)
+        }
+        _ => {
+            log::warn!("mssql ratio counter '{raw_counter_name}': base row missing, returning 0.0");
+            Ok(0.0)
+        }
+    }
 }
 
 fn fetch_active_sessions(inner: &mut MssqlConnectionInner) -> Result<QueryResult, DbError> {

@@ -155,6 +155,7 @@ impl MigrationRegistry {
         registry.register(mod_014_audit_settings_log_capture_min_level::MigrationImpl);
         registry.register(mod_014_viz_inspector_and_instance_metric::MigrationImpl);
         registry.register(mod_015_viz_inspector_saved_chart_id_constraint::MigrationImpl);
+        registry.register(mod_016_viz_divider_saved_chart_id_constraint::MigrationImpl);
         registry
     }
 
@@ -311,6 +312,7 @@ mod mod_013_viz_dashboard_panel_kind;
 mod mod_014_audit_settings_log_capture_min_level;
 mod mod_014_viz_inspector_and_instance_metric;
 mod mod_015_viz_inspector_saved_chart_id_constraint;
+mod mod_016_viz_divider_saved_chart_id_constraint;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;

@@ -37,16 +37,39 @@ pub struct Dashboard {
 
 /// Minimal payload for appending a new panel to a dashboard.
 ///
-/// `append_panels` assigns `panel_index`, places the panel on a new row past
-/// every existing panel at `grid_column = 0`, sets `grid_width = 12,
-/// grid_height = 2` (full-width on the canonical 12-column grid), and sets
-/// `title_override = None`.
+/// Layout override carried by a `DashboardPanelDraft`.
+///
+/// When present, `append_panels` uses these values directly instead of
+/// computing a sequential default position. All four fields must be present
+/// to apply the override; a partial set is ignored and the default is used.
+#[derive(Debug, Clone)]
+pub struct DraftGridLayout {
+    pub grid_row: u32,
+    pub grid_column: u32,
+    pub grid_width: u32,
+    pub grid_height: u32,
+}
+
+/// Draft descriptor passed to `append_panels`.
+///
+/// When `layout` is `None`, `append_panels` assigns `panel_index`, places
+/// the panel on a new row past every existing panel at `grid_column = 0`,
+/// sets `grid_width = 12, grid_height = 2` (full-width on the canonical
+/// 12-column grid), and sets `title_override = None`.
+///
+/// When `layout` is `Some`, those exact grid values are used instead.
 #[derive(Debug, Clone)]
 pub enum DashboardPanelDraft {
     /// A chart slot referencing an existing `SavedChart`.
-    Chart { saved_chart_id: Uuid },
+    Chart {
+        saved_chart_id: Uuid,
+        layout: Option<DraftGridLayout>,
+    },
     /// An inspector slot driven by an `InstanceInspectorQuery`.
-    Inspector { metric_id: String },
+    Inspector {
+        metric_id: String,
+        layout: Option<DraftGridLayout>,
+    },
 }
 
 /// What a `DashboardPanel` displays.
@@ -692,13 +715,26 @@ impl DashboardManager {
         for (i, draft) in drafts.into_iter().enumerate() {
             let panel_index = base_index + i as u32;
 
-            let kind = match draft {
-                DashboardPanelDraft::Chart { saved_chart_id } => {
-                    DashboardPanelKind::Chart { saved_chart_id }
+            let (kind, layout_override) = match draft {
+                DashboardPanelDraft::Chart {
+                    saved_chart_id,
+                    layout,
+                } => (DashboardPanelKind::Chart { saved_chart_id }, layout),
+                DashboardPanelDraft::Inspector { metric_id, layout } => {
+                    (DashboardPanelKind::Inspector { metric_id }, layout)
                 }
-                DashboardPanelDraft::Inspector { metric_id } => {
-                    DashboardPanelKind::Inspector { metric_id }
-                }
+            };
+
+            let (grid_row, grid_column, grid_width, grid_height) = if let Some(lo) = layout_override
+            {
+                (lo.grid_row, lo.grid_column, lo.grid_width, lo.grid_height)
+            } else {
+                (
+                    next_row,
+                    0,
+                    DEFAULT_NEW_PANEL_WIDTH,
+                    DEFAULT_NEW_PANEL_HEIGHT,
+                )
             };
 
             new_panels.push(DashboardPanel {
@@ -706,13 +742,13 @@ impl DashboardManager {
                 panel_index,
                 kind,
                 title_override: None,
-                grid_row: next_row,
-                grid_column: 0,
-                grid_width: DEFAULT_NEW_PANEL_WIDTH,
-                grid_height: DEFAULT_NEW_PANEL_HEIGHT,
+                grid_row,
+                grid_column,
+                grid_width,
+                grid_height,
             });
 
-            next_row = next_row.saturating_add(DEFAULT_NEW_PANEL_HEIGHT);
+            next_row = next_row.saturating_add(grid_height);
         }
 
         let dtos: Vec<DashboardPanelDto> = new_panels.iter().map(panel_to_dto).collect();
@@ -1139,9 +1175,11 @@ mod tests {
         let drafts = vec![
             DashboardPanelDraft::Chart {
                 saved_chart_id: Uuid::new_v4(),
+                layout: None,
             },
             DashboardPanelDraft::Chart {
                 saved_chart_id: Uuid::new_v4(),
+                layout: None,
             },
         ];
         mgr.append_panels(dash_id, drafts).unwrap();
@@ -1174,12 +1212,15 @@ mod tests {
             vec![
                 DashboardPanelDraft::Chart {
                     saved_chart_id: chart_a,
+                    layout: None,
                 },
                 DashboardPanelDraft::Chart {
                     saved_chart_id: chart_b,
+                    layout: None,
                 },
                 DashboardPanelDraft::Chart {
                     saved_chart_id: chart_c,
+                    layout: None,
                 },
             ],
         )
@@ -1218,12 +1259,15 @@ mod tests {
             vec![
                 DashboardPanelDraft::Chart {
                     saved_chart_id: chart_a,
+                    layout: None,
                 },
                 DashboardPanelDraft::Chart {
                     saved_chart_id: chart_b,
+                    layout: None,
                 },
                 DashboardPanelDraft::Chart {
                     saved_chart_id: chart_c,
+                    layout: None,
                 },
             ],
         )
@@ -1256,6 +1300,7 @@ mod tests {
             dash_id,
             vec![DashboardPanelDraft::Chart {
                 saved_chart_id: Uuid::new_v4(),
+                layout: None,
             }],
         )
         .unwrap();
@@ -1286,6 +1331,7 @@ mod tests {
             dash_id,
             vec![DashboardPanelDraft::Chart {
                 saved_chart_id: Uuid::new_v4(),
+                layout: None,
             }],
         )
         .unwrap();
@@ -1329,9 +1375,11 @@ mod tests {
             vec![
                 DashboardPanelDraft::Chart {
                     saved_chart_id: Uuid::new_v4(),
+                    layout: None,
                 },
                 DashboardPanelDraft::Chart {
                     saved_chart_id: Uuid::new_v4(),
+                    layout: None,
                 },
             ],
         )
@@ -1368,6 +1416,7 @@ mod tests {
             dash_id,
             vec![DashboardPanelDraft::Chart {
                 saved_chart_id: Uuid::new_v4(),
+                layout: None,
             }],
         )
         .unwrap();

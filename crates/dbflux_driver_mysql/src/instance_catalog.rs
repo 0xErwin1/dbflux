@@ -392,7 +392,12 @@ impl InstanceCatalog for MysqlInstanceCatalog {
     ) -> Result<(), DbError> {
         if metric_id == "mysql.processlist" && action_id == "kill" {
             let id: u64 = match row_values.first() {
-                Some(dbflux_core::Value::Int(n)) => *n as u64,
+                Some(dbflux_core::Value::Int(n)) if *n > 0 => *n as u64,
+                Some(dbflux_core::Value::Int(n)) => {
+                    return Err(DbError::QueryFailed(
+                        format!("mysql.processlist kill: id {n} is not a positive integer").into(),
+                    ));
+                }
                 Some(dbflux_core::Value::Text(s)) => s.trim().parse().map_err(|_| {
                     DbError::QueryFailed(
                         format!("mysql.processlist kill: id '{s}' is not a valid integer").into(),

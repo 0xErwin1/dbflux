@@ -535,8 +535,8 @@ impl Workspace {
                     let app_state = self.app_state.clone();
                     let inspector_entity =
                         cx.new(|cx| InspectorPanel::new(profile_id, metric_id, app_state, cx));
-                    inspector_entity.update(cx, |panel, cx| {
-                        panel.request_reexec(cx);
+                    inspector_entity.update(cx, |panel, _cx| {
+                        panel.defer_initial_exec();
                     });
                     DashboardPanelSlot::Inspector {
                         entity: inspector_entity,
@@ -653,9 +653,17 @@ impl Workspace {
                 let mut drafts: Vec<DashboardPanelDraft> = Vec::new();
 
                 for panel_def in &descriptor.panels {
+                    let panel_layout = Some(dbflux_ui_base::DraftGridLayout {
+                        grid_row: panel_def.grid_row,
+                        grid_column: panel_def.grid_column,
+                        grid_width: panel_def.grid_width,
+                        grid_height: panel_def.grid_height,
+                    });
+
                     if panel_def.is_inspector {
                         drafts.push(DashboardPanelDraft::Inspector {
                             metric_id: panel_def.metric_id.clone(),
+                            layout: panel_layout,
                         });
                     } else {
                         let now = Utc::now();
@@ -691,6 +699,7 @@ impl Workspace {
                         state.saved_charts.upsert(chart)?;
                         drafts.push(DashboardPanelDraft::Chart {
                             saved_chart_id: chart_id,
+                            layout: panel_layout,
                         });
                     }
                 }
@@ -2328,7 +2337,7 @@ impl Workspace {
                                 let inspector_entity = cx.new(|cx| {
                                     InspectorPanel::new(prof_id, metric_id, app_state_inner, cx)
                                 });
-                                inspector_entity.update(cx, |p, cx| p.request_reexec(cx));
+                                inspector_entity.update(cx, |p, _cx| p.defer_initial_exec());
                                 return DashboardPanelSlot::Inspector {
                                     entity: inspector_entity,
                                     grid_pos,
@@ -3596,6 +3605,7 @@ impl Workspace {
                 dashboard_id,
                 vec![DashboardPanelDraft::Chart {
                     saved_chart_id: chart_id,
+                    layout: None,
                 }],
             )
         });
@@ -3731,6 +3741,7 @@ impl Workspace {
                 dashboard_id,
                 vec![DashboardPanelDraft::Chart {
                     saved_chart_id: chart_id,
+                    layout: None,
                 }],
             )
         });
@@ -3762,7 +3773,10 @@ impl Workspace {
 
         let drafts: Vec<DashboardPanelDraft> = chart_ids
             .into_iter()
-            .map(|saved_chart_id| DashboardPanelDraft::Chart { saved_chart_id })
+            .map(|saved_chart_id| DashboardPanelDraft::Chart {
+                saved_chart_id,
+                layout: None,
+            })
             .collect();
 
         let result = self.app_state.update(cx, |state, _cx| {

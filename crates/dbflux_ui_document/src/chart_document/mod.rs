@@ -674,6 +674,11 @@ impl ChartDocument {
     ///
     /// Dropping the old `Task<()>` value cancels the spawned future, which is
     /// the cancellation mechanism for the timer loop.
+    ///
+    /// Callers that change the refresh policy (not merely restart the timer)
+    /// MUST go through `set_refresh_policy`, which handles `instance_metric_buffer`
+    /// invalidation on Interval→Manual transitions. Calling this method directly
+    /// bypasses that invariant.
     fn update_refresh_timer(&mut self, cx: &mut Context<Self>) {
         self._refresh_timer = None;
 
@@ -939,6 +944,7 @@ impl ChartDocument {
             }
         }
 
+        cx.emit(DocumentEvent::ExecutionFinished);
         cx.notify();
     }
 

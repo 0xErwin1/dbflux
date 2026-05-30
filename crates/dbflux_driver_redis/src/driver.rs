@@ -915,7 +915,7 @@ impl Connection for RedisConnection {
 
     fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
         Some(Box::new(
-            crate::instance_catalog::RedisInstanceCatalog::new(Arc::clone(&self.connection)),
+            crate::instance_catalog::RedisInstanceCatalog::new_probed(Arc::clone(&self.connection)),
         ))
     }
 

@@ -695,7 +695,9 @@ fn pg_text_opt(row: &postgres::Row, idx: usize) -> Value {
 }
 
 fn pg_f64_opt(row: &postgres::Row, idx: usize) -> Value {
-    row.get::<_, Option<f64>>(idx)
+    row.try_get::<_, Option<f64>>(idx)
+        .ok()
+        .flatten()
         .map(Value::Float)
         .unwrap_or(Value::Null)
 }

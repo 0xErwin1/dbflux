@@ -115,11 +115,48 @@ pub const SENSITIVE_CLIENT_FIELDS: &[&str] = &["addr", "laddr", "name"];
 
 pub struct RedisInstanceCatalog {
     connection: Arc<Mutex<redis::Connection>>,
+    kill_allowed: bool,
 }
 
 impl RedisInstanceCatalog {
     pub fn new(connection: Arc<Mutex<redis::Connection>>) -> Self {
-        Self { connection }
+        Self {
+            connection,
+            kill_allowed: false,
+        }
+    }
+
+    /// Constructs a catalog with a probed `kill_allowed` flag.
+    ///
+    /// Issues a `CLIENT KILL ID 99999999999` probe: `NOPERM` means no
+    /// permission; `ERR No such client` means the command is allowed but the
+    /// target was absent (expected). Defaults to `false` on mutex failure or
+    /// unexpected errors.
+    pub fn new_probed(connection: Arc<Mutex<redis::Connection>>) -> Self {
+        let kill_allowed = Self::probe_client_kill(&connection);
+        Self {
+            connection,
+            kill_allowed,
+        }
+    }
+
+    fn probe_client_kill(connection: &Arc<Mutex<redis::Connection>>) -> bool {
+        let Ok(mut conn) = connection.lock() else {
+            return false;
+        };
+        match redis::cmd("CLIENT")
+            .arg("KILL")
+            .arg("ID")
+            .arg(99_999_999_999u64)
+            .query::<()>(&mut *conn)
+        {
+            Ok(()) => true,
+            Err(e) => {
+                let msg = e.to_string();
+                // "ERR No such client" — command is permitted, target absent.
+                msg.contains("No such client")
+            }
+        }
     }
 
     pub fn static_metrics() -> Vec<InstanceMetricDef> {
@@ -316,6 +353,9 @@ impl InstanceCatalog for RedisInstanceCatalog {
     }
 
     fn row_actions(&self, metric_id: &str) -> Vec<dbflux_core::InspectorRowAction> {
+        if !self.kill_allowed {
+            return Vec::new();
+        }
         Self::static_row_actions(metric_id)
     }
 

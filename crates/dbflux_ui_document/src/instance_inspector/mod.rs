@@ -89,6 +89,14 @@ pub struct InspectorPanel {
 
     /// State while the kill-confirmation modal is visible.
     pending_kill_confirm: Option<PendingKillConfirm>,
+
+    /// Deferred first-fetch flag.
+    ///
+    /// Set on construction; drained on the first render pass after all parent
+    /// subscriptions (e.g. the dashboard semaphore) have been installed. This
+    /// guarantees the initial `ExecutionFinished` event is observed and the
+    /// semaphore is correctly decremented.
+    pending_initial_exec: bool,
 }
 
 impl EventEmitter<DocumentEvent> for InspectorPanel {}
@@ -121,7 +129,14 @@ impl InspectorPanel {
             result_panel: None,
             _data_grid_subscription: None,
             pending_kill_confirm: None,
+            pending_initial_exec: false,
         }
+    }
+
+    /// Sets the deferred-initial-exec flag so the first `request_reexec` fires
+    /// from `render()` after all parent subscriptions have been installed.
+    pub fn defer_initial_exec(&mut self) {
+        self.pending_initial_exec = true;
     }
 
     pub fn id(&self) -> DocumentId {
@@ -315,20 +330,25 @@ impl InspectorPanel {
         let profile_id = self.profile_id;
         let metric_id = self.metric_id.clone();
 
-        let connection: Option<Arc<dyn dbflux_core::Connection>> = self
+        // Snapshot the available actions using the current connection. We do not
+        // capture the Arc itself — `row_actions` returns static metadata and
+        // the snapshot is refreshed on every reconnect when this method is
+        // called again. Fail-closed: no actions if the connection is gone.
+        let actions: Vec<dbflux_core::InspectorRowAction> = self
             .app_state
             .read(cx)
             .connections()
             .get(&profile_id)
-            .and_then(|c| c.resolve_connection_for_execution(None).ok());
+            .and_then(|c| c.resolve_connection_for_execution(None).ok())
+            .and_then(|conn| conn.instance_catalog())
+            .map(|cat| cat.row_actions(&metric_id))
+            .unwrap_or_default();
 
-        if let Some(conn) = connection {
+        if !actions.is_empty() {
             grid.update(cx, |panel, _cx| {
                 panel.set_row_action_provider(Arc::new(move |mid| {
                     if mid == metric_id {
-                        conn.instance_catalog()
-                            .map(|cat| cat.row_actions(mid))
-                            .unwrap_or_default()
+                        actions.clone()
                     } else {
                         Vec::new()
                     }
@@ -357,7 +377,7 @@ impl InspectorPanel {
 
         cx.notify();
 
-        cx.spawn(async move |_this, cx| {
+        cx.spawn(async move |this, cx| {
             // Resolve the connection at execution time (after the user confirms),
             // not at click time. This prevents a stale Arc from being used if the
             // profile disconnects and reconnects between click and confirm.
@@ -404,6 +424,12 @@ impl InspectorPanel {
             if let Err(ref e) = result {
                 let uf = kill_error_to_user_facing(&action_id, &action_label, &metric_id, e);
                 report_error_async(uf, cx);
+            } else {
+                let _ = cx.update(|cx| {
+                    if let Some(entity) = this.upgrade() {
+                        entity.update(cx, |panel, cx| panel.request_reexec(cx));
+                    }
+                });
             }
         })
         .detach();
@@ -513,6 +539,11 @@ impl InspectorPanel {
 impl Render for InspectorPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use gpui::div;
+
+        if self.pending_initial_exec {
+            self.pending_initial_exec = false;
+            self.request_reexec(cx);
+        }
 
         if let Some(pending) = self.pending_result.take() {
             self.apply_result(pending, cx);
