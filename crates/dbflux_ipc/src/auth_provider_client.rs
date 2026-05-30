@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::process::{Child, Command};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -19,6 +19,7 @@ use crate::auth_provider_protocol::{
     AuthProviderResponseBody, AuthProviderResponseEnvelope, FetchFieldOptionsError,
     FetchFieldOptionsRequest, LoginRequest, ResolveCredentialsRequest, ValidateSessionRequest,
 };
+use crate::audit::{ExternalAuditEmitter, ExternalAuditSource};
 use crate::envelope::{AUTH_PROVIDER_RPC_API_CONTRACT, AUTH_PROVIDER_RPC_V1_2, ProtocolVersion};
 use crate::framing;
 use crate::socket::auth_provider_socket_name;
@@ -45,6 +46,10 @@ pub struct RpcAuthProvider {
     /// Whether the provider has opted in to receiving `Password`-kind field
     /// values in `FetchFieldOptions` requests (v1.2+ only).
     secret_dependency_opt_in: bool,
+    /// Whether the provider will emit `EmitAuditEvent` intermediate frames (v1.3+ only).
+    audit_emit_opt_in: bool,
+    /// Sanitizing sink for audit frames emitted by this provider.
+    audit_emitter: Option<Arc<dyn ExternalAuditEmitter>>,
     launch: Option<IpcServiceLaunchConfig>,
 }
 
@@ -56,6 +61,8 @@ struct NormalizedAuthProviderHelloResponse {
     capabilities: AuthProviderCapabilities,
     selected_version: ProtocolVersion,
     secret_dependency_opt_in: bool,
+    /// Whether the provider opted in to emitting audit events (v1.3+).
+    audit_emit_opt_in: bool,
 }
 
 impl RpcAuthProvider {
@@ -123,8 +130,19 @@ impl RpcAuthProvider {
             capabilities: hello.capabilities,
             selected_version: hello.selected_version,
             secret_dependency_opt_in: hello.secret_dependency_opt_in,
+            audit_emit_opt_in: hello.audit_emit_opt_in,
+            audit_emitter: None,
             launch,
         })
+    }
+
+    /// Attaches an audit emitter for routing `EmitAuditEvent` intermediate frames.
+    ///
+    /// Must be called after `probe` and before any `DynAuthProvider` method is invoked.
+    /// Has no effect unless the provider set `audit_emit_opt_in=true` in its hello.
+    pub fn with_audit_emitter(mut self, emitter: Arc<dyn ExternalAuditEmitter>) -> Self {
+        self.audit_emitter = Some(emitter);
+        self
     }
 
     #[allow(clippy::result_large_err)]
@@ -178,7 +196,8 @@ impl RpcAuthProvider {
         match response.body {
             AuthProviderResponseBody::Hello(_)
             | AuthProviderResponseBody::HelloV1_1(_)
-            | AuthProviderResponseBody::HelloV1_2(_) => {
+            | AuthProviderResponseBody::HelloV1_2(_)
+            | AuthProviderResponseBody::HelloV1_3(_) => {
                 let hello = normalize_hello_response(response.body)?;
 
                 validate_hello_selected_version(
@@ -203,6 +222,8 @@ impl RpcAuthProvider {
         let mut stream = self.connect_stream()?;
         let request = AuthProviderRequestEnvelope::new(self.selected_version, 1, body);
 
+        let correlation_id = uuid::Uuid::new_v4().to_string();
+
         framing::send_msg(&mut stream, &request)?;
 
         let mut responses = Vec::new();
@@ -217,7 +238,26 @@ impl RpcAuthProvider {
             }
 
             let done = response.done;
-            responses.push(response);
+
+            match &response.body {
+                AuthProviderResponseBody::EmitAuditEvent(dto) if !done => {
+                    if self.audit_emit_opt_in {
+                        if let Some(sink) = &self.audit_emitter {
+                            let source = ExternalAuditSource::AuthProvider {
+                                socket_id: self.socket_id.clone(),
+                                provider_id: self.provider_id.clone(),
+                                correlation_id: correlation_id.clone(),
+                            };
+                            sink.emit(source, dto.clone());
+                        }
+                    }
+                    // else: silently drop — provider did not set audit_emit_opt_in
+                    // Never push EmitAuditEvent frames to `responses` — keep it terminal-only.
+                }
+                _ => {
+                    responses.push(response);
+                }
+            }
 
             if done {
                 return Ok(responses);
@@ -524,6 +564,7 @@ fn normalize_hello_response(
             capabilities: AuthProviderCapabilities::default(),
             selected_version: hello.selected_version,
             secret_dependency_opt_in: false,
+            audit_emit_opt_in: false,
         }),
         AuthProviderResponseBody::HelloV1_1(hello) => Ok(NormalizedAuthProviderHelloResponse {
             provider_id: hello.provider_id,
@@ -532,6 +573,7 @@ fn normalize_hello_response(
             capabilities: hello.capabilities,
             selected_version: hello.selected_version,
             secret_dependency_opt_in: false,
+            audit_emit_opt_in: false,
         }),
         AuthProviderResponseBody::HelloV1_2(hello) => Ok(NormalizedAuthProviderHelloResponse {
             provider_id: hello.provider_id,
@@ -540,6 +582,16 @@ fn normalize_hello_response(
             capabilities: hello.capabilities,
             selected_version: hello.selected_version,
             secret_dependency_opt_in: hello.secret_dependency_opt_in,
+            audit_emit_opt_in: false,
+        }),
+        AuthProviderResponseBody::HelloV1_3(hello) => Ok(NormalizedAuthProviderHelloResponse {
+            provider_id: hello.provider_id,
+            display_name: hello.display_name,
+            form_definition: hello.form_definition,
+            capabilities: hello.capabilities,
+            selected_version: hello.selected_version,
+            secret_dependency_opt_in: hello.secret_dependency_opt_in,
+            audit_emit_opt_in: hello.audit_emit_opt_in,
         }),
         _ => Err(DbError::connection_failed(
             "Unexpected response to auth-provider Hello".to_string(),
@@ -699,6 +751,7 @@ mod tests {
     use super::*;
     use crate::auth_provider_protocol::{
         AuthProviderHelloResponse, AuthProviderHelloResponseV1_1, AuthProviderHelloResponseV1_2,
+        AuthProviderHelloResponseV1_3,
     };
     use dbflux_core::auth::{AuthFormDef, AuthProviderCapabilities, AuthProviderLoginCapabilities};
     use dbflux_core::{FormFieldDef, FormFieldKind, FormSection, FormTab, RefreshTrigger};
@@ -949,6 +1002,70 @@ mod tests {
         assert!(
             !deps.contains_key("other_secret"),
             "other_secret is a Password field not in depends_on — must be stripped even when opted in"
+        );
+    }
+
+    #[test]
+    fn test_auth_provider_hello_v1_3_serde() {
+        let response = AuthProviderHelloResponseV1_3 {
+            server_name: "test-provider".to_string(),
+            server_version: "1.0.0".to_string(),
+            selected_version: crate::ProtocolVersion::new(1, 3),
+            provider_id: "test-auth".to_string(),
+            display_name: "Test Auth".to_string(),
+            form_definition: AuthFormDef { tabs: vec![] },
+            capabilities: AuthProviderCapabilities::default(),
+            secret_dependency_opt_in: false,
+            audit_emit_opt_in: true,
+        };
+
+        let json = serde_json::to_string(&response).expect("serialize v1.3 hello");
+        let restored: AuthProviderHelloResponseV1_3 =
+            serde_json::from_str(&json).expect("deserialize v1.3 hello");
+
+        assert!(restored.audit_emit_opt_in);
+        assert_eq!(restored.provider_id, "test-auth");
+    }
+
+    #[test]
+    fn test_normalize_hello_v1_3_has_audit_emit_opt_in() {
+        let normalized = normalize_hello_response(AuthProviderResponseBody::HelloV1_3(
+            AuthProviderHelloResponseV1_3 {
+                server_name: "test-provider".to_string(),
+                server_version: "1.0.0".to_string(),
+                selected_version: crate::ProtocolVersion::new(1, 3),
+                provider_id: "test-auth".to_string(),
+                display_name: "Test Auth".to_string(),
+                form_definition: AuthFormDef { tabs: vec![] },
+                capabilities: AuthProviderCapabilities::default(),
+                secret_dependency_opt_in: false,
+                audit_emit_opt_in: true,
+            },
+        ))
+        .expect("v1.3 hello should normalize");
+
+        assert!(normalized.audit_emit_opt_in);
+    }
+
+    #[test]
+    fn test_normalize_hello_v1_2_has_opt_in_false() {
+        let normalized = normalize_hello_response(AuthProviderResponseBody::HelloV1_2(
+            AuthProviderHelloResponseV1_2 {
+                server_name: "test-provider".to_string(),
+                server_version: "1.0.0".to_string(),
+                selected_version: crate::ProtocolVersion::new(1, 2),
+                provider_id: "test-auth".to_string(),
+                display_name: "Test Auth".to_string(),
+                form_definition: AuthFormDef { tabs: vec![] },
+                capabilities: AuthProviderCapabilities::default(),
+                secret_dependency_opt_in: false,
+            },
+        ))
+        .expect("v1.2 hello should normalize");
+
+        assert!(
+            !normalized.audit_emit_opt_in,
+            "v1.2 hello must have audit_emit_opt_in == false"
         );
     }
 }

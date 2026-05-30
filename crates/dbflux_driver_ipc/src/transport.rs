@@ -897,7 +897,7 @@ mod tests {
     #[test]
     fn hello_selected_version_must_be_supported_by_both_peers() {
         let error = validate_hello_selected_version(
-            ProtocolVersion::new(1, 2),
+            ProtocolVersion::new(1, 99),
             driver_rpc_supported_versions(),
         )
         .expect_err("unsupported selection should be rejected");
