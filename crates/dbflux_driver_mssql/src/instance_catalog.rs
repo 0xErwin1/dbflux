@@ -405,17 +405,34 @@ pub(crate) fn dispatch_inspector_snapshot(
     }
 }
 
+/// Doubles any single-quote in `s` for safe interpolation into an MSSQL
+/// N'...' literal. Tiberius `simple_query` does not support parameter binding,
+/// so values must be escaped before interpolation.
+fn escape_mssql_literal(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
 fn fetch_performance_counter(
     inner: &mut MssqlConnectionInner,
     counter_name: &str,
     instance_name: &str,
     display_name: &str,
 ) -> Result<QueryResult, DbError> {
+    debug_assert!(
+        PERFORMANCE_COUNTERS
+            .iter()
+            .any(|(cn, inst, _, _, _, _)| *cn == counter_name && *inst == instance_name),
+        "fetch_performance_counter called with values not in PERFORMANCE_COUNTERS — \
+         ensure callers are not passing external input"
+    );
+
+    let ec = escape_mssql_literal(counter_name);
+    let ei = escape_mssql_literal(instance_name);
     let sql = format!(
         "SELECT CAST(cntr_value AS float) \
          FROM sys.dm_os_performance_counters \
-         WHERE counter_name = N'{counter_name}' \
-           AND (instance_name = N'{instance_name}' OR N'{instance_name}' = '' AND instance_name = '')"
+         WHERE counter_name = N'{ec}' \
+           AND (instance_name = N'{ei}' OR N'{ei}' = '' AND instance_name = '')"
     );
 
     let value = inner.runtime.block_on(async {
@@ -594,6 +611,16 @@ pub fn mssql_advertises_instance_capabilities() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// K2: single-quote characters must be doubled to prevent SQL injection via
+    /// interpolation into Tiberius `simple_query` literals.
+    #[test]
+    fn escape_mssql_literal_doubles_single_quotes() {
+        assert_eq!(escape_mssql_literal("it's"), "it''s");
+        assert_eq!(escape_mssql_literal("no quotes"), "no quotes");
+        assert_eq!(escape_mssql_literal("a'b'c"), "a''b''c");
+        assert_eq!(escape_mssql_literal(""), "");
+    }
 
     #[test]
     fn performance_counters_list_is_non_empty() {

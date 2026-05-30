@@ -4027,10 +4027,11 @@ impl Sidebar {
     }
 
     pub(super) fn refresh_connection(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
-        // Cancel pending metric catalog fetches before disconnect invalidates
-        // the cache. The foreground awaiter holding the cache-write closure is
-        // dropped, so stale data cannot land after the reconnect.
+        // Cancel pending metric catalog fetches and evict the stale cache
+        // before disconnect invalidates the connection. Mirrors what
+        // disconnect_profile does so reconnect always re-fetches fresh data.
         self.drop_pending_metric_fetches(profile_id);
+        self.clear_instance_catalog_cache(profile_id);
         self.app_state.update(cx, |state, cx| {
             state.cancel_detached_hook_tasks(profile_id);
             state.disconnect(profile_id);

@@ -606,11 +606,12 @@ impl Workspace {
     }
 
     /// Clone a read-only instance overview dashboard into a new persisted,
-    /// editable dashboard for the same profile and open it in a new tab.
+    /// editable dashboard for the same profile, copying all panels.
     ///
-    /// The new dashboard starts empty — panels cannot be copied directly because
-    /// the synthesized slots carry live entities (not persisted `SavedChart`
-    /// records). The user adds panels through the normal "Add Panel" flow.
+    /// For each chart panel in the overview, a `SavedChart` record is upserted
+    /// with `source = InstanceMetric { metric_id }`. Inspector panels are
+    /// persisted as `DashboardPanelDraft::Inspector`. The new dashboard then
+    /// has the same layout as the read-only overview.
     pub(super) fn save_overview_as_editable(
         &mut self,
         source_title: String,
@@ -618,23 +619,93 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use dbflux_components::saved_chart::{SavedChartRefreshPolicy, TimeRangePreset};
+        use dbflux_components::chart::{
+            AxisKind, AxisSpec, BindingSpec, ChartKind, ChartSpec, YScale,
+        };
+        use dbflux_components::saved_chart::{
+            SavedChart, SavedChartRefreshPolicy, SavedChartSource, TimeRangePreset,
+        };
+        use dbflux_core::chrono::Utc;
+        use dbflux_ui_base::DashboardPanelDraft;
 
         let new_name = format!("{} (editable)", source_title);
 
-        let create_result = self.app_state.update(cx, |state, _cx| {
-            state.dashboards.create_dashboard(
+        // Fetch the driver's default dashboard descriptor to enumerate panels.
+        let descriptor: Option<dbflux_core::DefaultInstanceDashboard> = {
+            let state = self.app_state.read(cx);
+            state
+                .connections()
+                .get(&profile_id)
+                .and_then(|c| c.connection.instance_catalog())
+                .and_then(|cat| cat.default_dashboard())
+        };
+
+        let result = self.app_state.update(cx, |state, _cx| {
+            let new_id = state.dashboards.create_dashboard(
                 new_name,
                 None,
                 profile_id,
                 Some(TimeRangePreset::Last15min),
                 SavedChartRefreshPolicy::Off,
-            )
+            )?;
+
+            if let Some(descriptor) = descriptor {
+                let mut drafts: Vec<DashboardPanelDraft> = Vec::new();
+
+                for panel_def in &descriptor.panels {
+                    if panel_def.is_inspector {
+                        drafts.push(DashboardPanelDraft::Inspector {
+                            metric_id: panel_def.metric_id.clone(),
+                        });
+                    } else {
+                        let now = Utc::now();
+                        let chart = SavedChart {
+                            id: uuid::Uuid::new_v4(),
+                            name: panel_def.metric_id.clone(),
+                            profile_id,
+                            source: SavedChartSource::InstanceMetric {
+                                metric_id: panel_def.metric_id.clone(),
+                            },
+                            chart_spec: ChartSpec {
+                                kind: ChartKind::Line,
+                                x_axis: AxisSpec {
+                                    column_index: 0,
+                                    label: String::new(),
+                                    kind: AxisKind::Time,
+                                    unit: None,
+                                },
+                                series: Vec::new(),
+                                legend_visible: false,
+                                decimation_threshold: 500,
+                                binding: BindingSpec::default(),
+                                track_source_indices: false,
+                                y_scale: YScale::Linear,
+                            },
+                            bindings: BindingSpec::default(),
+                            time_range_preset: Some(TimeRangePreset::Last15min),
+                            refresh_policy: SavedChartRefreshPolicy::Off,
+                            created_at: now,
+                            updated_at: now,
+                        };
+                        let chart_id = chart.id;
+                        state.saved_charts.upsert(chart)?;
+                        drafts.push(DashboardPanelDraft::Chart {
+                            saved_chart_id: chart_id,
+                        });
+                    }
+                }
+
+                if !drafts.is_empty() {
+                    state.dashboards.append_panels(new_id, drafts)?;
+                }
+            }
+
+            Ok::<uuid::Uuid, dbflux_storage::error::StorageError>(new_id)
         });
 
-        match create_result {
+        match result {
             Ok(new_id) => {
-                Toast::info("Created editable dashboard — add panels via the toolbar.")
+                Toast::info("Created editable dashboard with all overview panels.")
                     .meta_right(now_hms())
                     .push(cx);
                 self.open_dashboard(new_id, window, cx);
@@ -2245,6 +2316,27 @@ impl Workspace {
                             };
                         }
 
+                        // Inspector panels are instantiated as live entities.
+                        // `profile_id` comes from the dashboard's profile association.
+                        if let dbflux_ui_base::DashboardPanelKind::Inspector { metric_id } =
+                            &panel.kind
+                        {
+                            use crate::ui::document::InspectorPanel;
+                            if let Some(prof_id) = dashboard.profile_id {
+                                let metric_id = metric_id.clone();
+                                let app_state_inner = app_state.clone();
+                                let inspector_entity = cx.new(|cx| {
+                                    InspectorPanel::new(prof_id, metric_id, app_state_inner, cx)
+                                });
+                                inspector_entity.update(cx, |p, cx| p.request_reexec(cx));
+                                return DashboardPanelSlot::Inspector {
+                                    entity: inspector_entity,
+                                    grid_pos,
+                                    title_override: panel.title_override.clone(),
+                                };
+                            }
+                        }
+
                         let saved_chart_id = panel.saved_chart_id().unwrap_or_else(uuid::Uuid::nil);
 
                         let chart = app_state
@@ -2263,6 +2355,9 @@ impl Workspace {
                                     | dbflux_components::saved_chart::SavedChartSource::Metric {
                                         ..
                                     }
+                                    | dbflux_components::saved_chart::SavedChartSource::InstanceMetric {
+                                        ..
+                                    }
                             ) =>
                             {
                                 let app_state_inner = app_state.clone();
@@ -2273,7 +2368,7 @@ impl Workspace {
                                         window,
                                         cx,
                                     )
-                                    .expect("Query/Metric source validated before entity creation");
+                                    .expect("Query/Metric/InstanceMetric source validated before entity creation");
                                     // Mark embedded so the chart's own chrome
                                     // (title/Run/Save segments + internal
                                     // toolbar row) is suppressed; the
@@ -3499,7 +3594,7 @@ impl Workspace {
             }
             state.dashboards.append_panels(
                 dashboard_id,
-                vec![DashboardPanelDraft {
+                vec![DashboardPanelDraft::Chart {
                     saved_chart_id: chart_id,
                 }],
             )
@@ -3634,7 +3729,7 @@ impl Workspace {
             }
             state.dashboards.append_panels(
                 dashboard_id,
-                vec![DashboardPanelDraft {
+                vec![DashboardPanelDraft::Chart {
                     saved_chart_id: chart_id,
                 }],
             )
@@ -3667,7 +3762,7 @@ impl Workspace {
 
         let drafts: Vec<DashboardPanelDraft> = chart_ids
             .into_iter()
-            .map(|saved_chart_id| DashboardPanelDraft { saved_chart_id })
+            .map(|saved_chart_id| DashboardPanelDraft::Chart { saved_chart_id })
             .collect();
 
         let result = self.app_state.update(cx, |state, _cx| {

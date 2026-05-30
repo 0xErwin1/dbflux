@@ -658,6 +658,13 @@ impl ChartDocument {
     }
 
     pub fn set_refresh_policy(&mut self, policy: RefreshPolicy, cx: &mut Context<Self>) {
+        let was_interval = matches!(self.refresh_policy, RefreshPolicy::Interval { .. });
+        let now_manual = matches!(policy, RefreshPolicy::Manual);
+
+        if was_interval && now_manual && self.instance_metric_buffer.is_some() {
+            self.instance_metric_buffer = None;
+        }
+
         self.refresh_policy = policy;
         self.update_refresh_timer(cx);
     }
@@ -1475,16 +1482,27 @@ impl InstantSeriesBuffer {
         }
     }
 
+    /// Returns `true` when `incoming` columns are structurally incompatible with
+    /// the buffer's current schema — differing count, names, or `ColumnKind`s.
+    fn schema_changed(&self, incoming: &[dbflux_core::ColumnMeta]) -> bool {
+        if incoming.len() != self.columns.len() {
+            return true;
+        }
+        incoming
+            .iter()
+            .zip(self.columns.iter())
+            .any(|(a, b)| a.name != b.name || a.kind != b.kind)
+    }
+
     /// Append rows from a single-sample fetch result and prune to retention cap.
     ///
-    /// If the incoming result's column count differs from the buffer's schema
-    /// (e.g. a metric was removed or the driver changed its output between
-    /// fetches), the buffer is reset: accumulated rows are discarded and the
-    /// column schema is replaced with the new result's schema. This prevents
-    /// silently appending rows with mismatched column counts, which would
-    /// produce an unrenderable `QueryResult`.
+    /// If the incoming result's column schema (count, names, or kinds) differs
+    /// from the buffer's schema the buffer is reset: accumulated rows are
+    /// discarded and the column schema is replaced with the new result's schema.
+    /// This prevents silently appending rows with structurally mismatched columns,
+    /// which would produce an unrenderable `QueryResult`.
     pub(super) fn push_result(&mut self, result: &dbflux_core::QueryResult) {
-        if result.columns.len() != self.columns.len() {
+        if self.schema_changed(&result.columns) {
             self.rows.clear();
             self.columns = result.columns.clone();
         }

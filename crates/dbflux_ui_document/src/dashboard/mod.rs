@@ -437,22 +437,42 @@ impl DashboardDocument {
         );
         subscriptions.push(preset_persist_sub);
 
-        // Subscribe each loaded panel to ExecutionFinished to drain the queue.
+        // Subscribe each loaded panel and inspector slot to ExecutionFinished
+        // to drain the semaphore queue. Inspector slots emit ExecutionFinished
+        // from InspectorPanel::apply_result; without this subscription their
+        // semaphore slots are never released.
         for (idx, slot) in panel_slots.iter().enumerate() {
-            if let DashboardPanelSlot::Loaded { panel, .. } = slot {
-                let slot_idx = idx;
-                let sub = cx.subscribe(
-                    panel,
-                    move |this: &mut Self,
-                          _panel,
-                          event: &super::handle::DocumentEvent,
-                          cx: &mut Context<Self>| {
-                        if matches!(event, super::handle::DocumentEvent::ExecutionFinished) {
-                            this.on_panel_execution_finished(slot_idx, cx);
-                        }
-                    },
-                );
-                subscriptions.push(sub);
+            let slot_idx = idx;
+            match slot {
+                DashboardPanelSlot::Loaded { panel, .. } => {
+                    let sub = cx.subscribe(
+                        panel,
+                        move |this: &mut Self,
+                              _panel,
+                              event: &super::handle::DocumentEvent,
+                              cx: &mut Context<Self>| {
+                            if matches!(event, super::handle::DocumentEvent::ExecutionFinished) {
+                                this.on_panel_execution_finished(slot_idx, cx);
+                            }
+                        },
+                    );
+                    subscriptions.push(sub);
+                }
+                DashboardPanelSlot::Inspector { entity, .. } => {
+                    let sub = cx.subscribe(
+                        entity,
+                        move |this: &mut Self,
+                              _entity,
+                              event: &super::handle::DocumentEvent,
+                              cx: &mut Context<Self>| {
+                            if matches!(event, super::handle::DocumentEvent::ExecutionFinished) {
+                                this.on_panel_execution_finished(slot_idx, cx);
+                            }
+                        },
+                    );
+                    subscriptions.push(sub);
+                }
+                DashboardPanelSlot::Divider { .. } | DashboardPanelSlot::Orphan { .. } => {}
             }
         }
 
@@ -1359,7 +1379,7 @@ impl DashboardDocument {
     /// the entity in `dashboard_name_input`. The subscription is dropped when
     /// `commit_dashboard_name_edit` or `cancel_dashboard_name_edit` is called.
     pub fn start_dashboard_name_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.editing_dashboard_name {
+        if self.read_only || self.editing_dashboard_name {
             return;
         }
 
@@ -2006,7 +2026,7 @@ impl DashboardDocument {
         let dashboard_id = self.dashboard_id;
         let drafts: Vec<DashboardPanelDraft> = chart_ids
             .into_iter()
-            .map(|saved_chart_id| DashboardPanelDraft { saved_chart_id })
+            .map(|saved_chart_id| DashboardPanelDraft::Chart { saved_chart_id })
             .collect();
 
         let result = self.app_state.update(cx, |state, _cx| {

@@ -689,8 +689,8 @@ fn fetch_locks_snapshot(client: &mut Client) -> Result<QueryResult, DbError> {
 }
 
 fn pg_text_opt(row: &postgres::Row, idx: usize) -> Value {
-    row.get::<_, Option<String>>(idx)
-        .map(Value::Text)
+    row.try_get::<_, Option<String>>(idx)
+        .map(|opt| opt.map(Value::Text).unwrap_or(Value::Null))
         .unwrap_or(Value::Null)
 }
 

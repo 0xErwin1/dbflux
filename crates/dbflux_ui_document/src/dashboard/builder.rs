@@ -366,6 +366,7 @@ fn build_custom_time_controls(
 /// When `is_editing_title` is true, an `Input` entity is rendered inline for
 /// title editing; when false, the title is a clickable span that starts inline
 /// edit on single-click, and a drag handle on mouse-down.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn panel_header(
     panel_index: u32,
     title: &str,
@@ -373,6 +374,7 @@ pub(super) fn panel_header(
     _drag_active: bool,
     menu_open: bool,
     edit_mode: bool,
+    has_editable_title: bool,
     cx: &mut Context<DashboardDocument>,
 ) -> impl IntoElement {
     let is_editing = editing_input.is_some();
@@ -501,7 +503,7 @@ pub(super) fn panel_header(
                 .on_click(on_kebab_click);
 
             let menu_panel = if menu_open {
-                Some(panel_kebab_menu(panel_index, cx))
+                Some(panel_kebab_menu(panel_index, has_editable_title, cx))
             } else {
                 None
             };
@@ -541,23 +543,31 @@ pub(super) fn panel_header(
 /// danger color for `Remove panel`). Click handlers stash the chosen action
 /// in `pending_panel_menu_action`; the action is consumed at the start of the
 /// next `render` pass where a real `Window` is available.
-fn panel_kebab_menu(panel_index: u32, cx: &mut Context<DashboardDocument>) -> gpui::AnyElement {
+fn panel_kebab_menu(
+    panel_index: u32,
+    has_editable_title: bool,
+    cx: &mut Context<DashboardDocument>,
+) -> gpui::AnyElement {
     use dbflux_components::composites::{MenuItem, render_menu_items};
     use dbflux_components::icons::AppIcon;
 
-    // Items mirror the sidebar's two-section layout: actions, then a
-    // separator, then the destructive `Remove panel`.
-    let menu_items: Vec<MenuItem> = vec![
-        MenuItem::new("Configure…").icon(AppIcon::Settings),
-        MenuItem::new("Edit title…").icon(AppIcon::Pencil),
-        MenuItem::separator(),
-        MenuItem::new("Remove panel").icon(AppIcon::Delete).danger(),
-    ];
+    // Build the action list. "Edit title…" is omitted for slot types that
+    // carry no user-editable title (Inspector, Divider).
+    let mut menu_items: Vec<MenuItem> = vec![MenuItem::new("Configure…").icon(AppIcon::Settings)];
+    if has_editable_title {
+        menu_items.push(MenuItem::new("Edit title…").icon(AppIcon::Pencil));
+    }
+    menu_items.push(MenuItem::separator());
+    menu_items.push(MenuItem::new("Remove panel").icon(AppIcon::Delete).danger());
 
-    // The visible items list contains a separator, so map visual index back
-    // to the domain `PanelMenuAction` order (Configure=0, EditTitle=1,
-    // RemovePanel=2).
-    let visual_to_action: Vec<Option<usize>> = vec![Some(0), Some(1), None, Some(2)];
+    // Map visual index → domain PanelMenuAction index, skipping the separator
+    // and the conditionally absent "Edit title…" item.
+    let mut visual_to_action: Vec<Option<usize>> = vec![Some(0)]; // Configure
+    if has_editable_title {
+        visual_to_action.push(Some(1)); // EditTitle
+    }
+    visual_to_action.push(None); // separator
+    visual_to_action.push(Some(2)); // RemovePanel
 
     let weak = cx.weak_entity();
     let on_click = move |visual_idx: usize, app: &mut gpui::App| {

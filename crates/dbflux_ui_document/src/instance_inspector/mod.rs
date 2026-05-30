@@ -192,9 +192,7 @@ impl InspectorPanel {
     /// and dispatches through the connection. The query text is empty — the
     /// driver dispatches based solely on the source context variant.
     pub fn request_reexec(&mut self, cx: &mut Context<Self>) {
-        let Some(profile_id) = Some(self.profile_id) else {
-            return;
-        };
+        let profile_id = self.profile_id;
 
         let conn = {
             let state = self.app_state.read(cx);
@@ -276,6 +274,7 @@ impl InspectorPanel {
             }
         }
 
+        cx.emit(DocumentEvent::ExecutionFinished);
         cx.notify();
     }
 
@@ -308,6 +307,36 @@ impl InspectorPanel {
 }
 
 impl InspectorPanel {
+    /// Resolve the row-action provider from the current live connection and
+    /// install it on `grid`. Called each time a grid is created or updated so
+    /// the provider always reflects the active connection rather than a
+    /// connection captured at an earlier point in time.
+    fn refresh_row_action_provider(&self, grid: &Entity<DataGridPanel>, cx: &mut Context<Self>) {
+        let profile_id = self.profile_id;
+        let metric_id = self.metric_id.clone();
+
+        let connection: Option<Arc<dyn dbflux_core::Connection>> = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .and_then(|c| c.resolve_connection_for_execution(None).ok());
+
+        if let Some(conn) = connection {
+            grid.update(cx, |panel, _cx| {
+                panel.set_row_action_provider(Arc::new(move |mid| {
+                    if mid == metric_id {
+                        conn.instance_catalog()
+                            .map(|cat| cat.row_actions(mid))
+                            .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    }
+                }));
+            });
+        }
+    }
+
     fn cancel_kill_action(&mut self, cx: &mut Context<Self>) {
         self.pending_kill_confirm = None;
         cx.notify();
@@ -499,34 +528,21 @@ impl Render for InspectorPanel {
             let app_state = self.app_state.clone();
             let metric_id = self.metric_id.clone();
 
-            // Capture a connection clone for the row-action provider.
-            let connection_for_actions: Option<Arc<dyn dbflux_core::Connection>> = self
-                .app_state
-                .read(cx)
-                .connections()
-                .get(&profile_id)
-                .and_then(|c| c.resolve_connection_for_execution(None).ok());
-
             let grid = cx.new(|cx| {
-                let mut panel = DataGridPanel::new_for_result(
+                DataGridPanel::new_for_result(
                     result,
                     metric_id.clone(),
                     Some(profile_id),
                     app_state,
                     window,
                     cx,
-                );
-
-                if let Some(conn) = connection_for_actions {
-                    panel.set_row_action_provider(Arc::new(move |mid| {
-                        conn.instance_catalog()
-                            .map(|cat| cat.row_actions(mid))
-                            .unwrap_or_default()
-                    }));
-                }
-
-                panel
+                )
             });
+
+            // Resolve the row-action provider from the live connection. This
+            // runs at render time (not capture time), so it reflects the
+            // current connection rather than a stale Arc.
+            self.refresh_row_action_provider(&grid, cx);
 
             let subscription = cx.subscribe(&grid, |this, _grid, event: &DataGridEvent, cx| {
                 if let DataGridEvent::RowActionRequested {
@@ -673,7 +689,7 @@ fn emit_kill_audit(
     let event = EventRecord::new(
         Utc::now().timestamp_millis(),
         severity,
-        EventCategory::Query,
+        EventCategory::Governance,
         outcome,
     )
     .with_action(action_key.to_string())

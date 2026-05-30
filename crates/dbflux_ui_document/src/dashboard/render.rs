@@ -191,6 +191,10 @@ impl Render for DashboardDocument {
                     .as_ref()
                     .is_some_and(|m| m.panel_index == panel_index);
 
+                // Only Loaded slots carry a user-editable title. Inspector and
+                // Divider slots omit "Edit title…" from the context menu.
+                let has_editable_title = matches!(slot, DashboardPanelSlot::Loaded { .. });
+
                 let header: gpui::AnyElement = builder::panel_header(
                     panel_index,
                     &panel_title,
@@ -198,6 +202,7 @@ impl Render for DashboardDocument {
                     drag_active,
                     menu_open_for_this,
                     edit_mode,
+                    has_editable_title,
                     cx,
                 )
                 .into_any_element();
@@ -525,7 +530,7 @@ impl Render for DashboardDocument {
                             this.start_configure_panel(idx as usize, cx);
                         }
                     }
-                    "f2" => {
+                    "f2" if !this.is_read_only() => {
                         if let Some(idx) = this.focused_panel_index {
                             this.start_panel_title_edit(idx, window, cx);
                         }

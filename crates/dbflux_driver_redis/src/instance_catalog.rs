@@ -326,7 +326,7 @@ impl InstanceCatalog for RedisInstanceCatalog {
         row_values: &[dbflux_core::Value],
     ) -> Result<(), DbError> {
         if metric_id == "redis.client_list" && action_id == "kill" {
-            let client_id: String = match row_values.first() {
+            let raw_id: String = match row_values.first() {
                 Some(dbflux_core::Value::Text(s)) => s.trim().to_string(),
                 Some(dbflux_core::Value::Int(n)) => n.to_string(),
                 _ => {
@@ -338,6 +338,12 @@ impl InstanceCatalog for RedisInstanceCatalog {
                 }
             };
 
+            let client_id: u64 = raw_id.parse().map_err(|_| {
+                DbError::QueryFailed(
+                    format!("redis.client_list kill: invalid client id format: '{raw_id}'").into(),
+                )
+            })?;
+
             let mut conn = self.connection.lock().map_err(|_| {
                 DbError::QueryFailed("redis connection mutex poisoned".to_string().into())
             })?;
@@ -345,7 +351,7 @@ impl InstanceCatalog for RedisInstanceCatalog {
             redis::cmd("CLIENT")
                 .arg("KILL")
                 .arg("ID")
-                .arg(&client_id)
+                .arg(client_id)
                 .query::<()>(&mut *conn)
                 .map_err(redis_error)?;
 

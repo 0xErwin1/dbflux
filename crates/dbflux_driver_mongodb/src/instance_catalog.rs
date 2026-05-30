@@ -470,14 +470,20 @@ impl InstanceCatalog for MongoInstanceCatalog {
         row_values: &[dbflux_core::Value],
     ) -> Result<(), DbError> {
         if metric_id == "mongo.current_op" && action_id == "kill" {
-            let opid: i64 = match row_values.first() {
-                Some(dbflux_core::Value::Int(n)) => *n,
-                Some(dbflux_core::Value::Float(f)) => *f as i64,
-                Some(dbflux_core::Value::Text(s)) => s.trim().parse().map_err(|_| {
-                    DbError::QueryFailed(
-                        format!("mongo.current_op kill: opid '{s}' is not a valid integer").into(),
-                    )
-                })?,
+            // `opid` column is always Text (see `fetch_current_op`). Attempt
+            // numeric parse first; if that fails treat the value as an opaque
+            // string (Atlas/sharded clusters use ObjectId or shard-prefixed IDs).
+            let opid_bson: Bson = match row_values.first() {
+                Some(dbflux_core::Value::Int(n)) => Bson::Int64(*n),
+                Some(dbflux_core::Value::Float(f)) => Bson::Int64(*f as i64),
+                Some(dbflux_core::Value::Text(s)) => {
+                    let trimmed = s.trim();
+                    if let Ok(n) = trimmed.parse::<i64>() {
+                        Bson::Int64(n)
+                    } else {
+                        Bson::String(trimmed.to_string())
+                    }
+                }
                 _ => {
                     return Err(DbError::QueryFailed(
                         "mongo.current_op kill: could not read opid from row"
@@ -492,7 +498,7 @@ impl InstanceCatalog for MongoInstanceCatalog {
             })?;
 
             let db = get_admin_db(&client);
-            db.run_command(bson::doc! { "killOp": 1, "op": opid })
+            db.run_command(bson::doc! { "killOp": 1, "op": opid_bson })
                 .run()
                 .map_err(mongo_error)?;
 
@@ -642,10 +648,12 @@ fn fetch_current_op(client: &Client) -> Result<QueryResult, DbError> {
 
         let row: Row = vec![
             doc.get("opid")
-                .and_then(|v| v.as_i64().map(|i| Value::Text(i.to_string())))
-                .or_else(|| {
-                    doc.get("opid")
-                        .and_then(|v| v.as_str().map(|s| Value::Text(s.to_string())))
+                .and_then(|v| match v {
+                    Bson::Int64(n) => Some(Value::Text(n.to_string())),
+                    Bson::Int32(n) => Some(Value::Text(n.to_string())),
+                    Bson::String(s) => Some(Value::Text(s.clone())),
+                    Bson::ObjectId(oid) => Some(Value::Text(oid.to_hex())),
+                    _ => None,
                 })
                 .unwrap_or(Value::Null),
             doc.get("type")

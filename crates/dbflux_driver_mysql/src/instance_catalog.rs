@@ -458,7 +458,7 @@ fn fetch_global_status_value(
     display_name: &str,
 ) -> Result<QueryResult, DbError> {
     let row: Option<(String, String)> = conn
-        .query_first(format!("SHOW GLOBAL STATUS LIKE '{}'", var_name))
+        .exec_first("SHOW GLOBAL STATUS LIKE ?", (var_name,))
         .map_err(mysql_error)?;
 
     let value = match row {
