@@ -31,17 +31,9 @@ use std::collections::{HashSet, VecDeque};
 use std::time::Duration;
 use uuid::Uuid;
 
-/// Refresh-policy options exposed in the dashboard toolbar `Dropdown`.
-///
-/// Each entry pairs a `SavedChartRefreshPolicy` with the label shown in the
-/// dropdown trigger and items. Order is fixed so `index` lookups stay stable.
-pub(crate) const REFRESH_POLICY_OPTIONS: &[(SavedChartRefreshPolicy, &str)] = &[
-    (SavedChartRefreshPolicy::Off, "Off"),
-    (SavedChartRefreshPolicy::Interval { every_secs: 10 }, "10s"),
-    (SavedChartRefreshPolicy::Interval { every_secs: 30 }, "30s"),
-    (SavedChartRefreshPolicy::Interval { every_secs: 60 }, "1m"),
-    (SavedChartRefreshPolicy::Interval { every_secs: 300 }, "5m"),
-];
+/// Re-exported from the canonical list in `crate::refresh`. Exposed as
+/// `pub(crate)` here so the render module can access it via `super::`.
+pub(crate) use crate::refresh::REFRESH_POLICY_OPTIONS;
 
 /// Returns the index of `policy` inside `REFRESH_POLICY_OPTIONS`, falling back
 /// to `0` (Off) for any policy not in the canonical list.

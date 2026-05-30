@@ -28,6 +28,7 @@ pub mod tab_bar;
 mod tab_manager;
 mod task_runner;
 mod types;
+pub mod refresh;
 
 pub use audit::AuditDocument;
 pub use chart_document::ChartDocument;
