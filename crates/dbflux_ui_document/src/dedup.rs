@@ -76,6 +76,10 @@ pub enum DocumentKey {
     /// A live inspector panel document opened from the instance-inspectors
     /// sidebar folder. Deduplicated by `(profile_id, metric_id)`.
     InstanceInspector { profile_id: Uuid, metric_id: String },
+
+    /// The synthesized read-only "Instance Overview" dashboard opened from the
+    /// sidebar leaf. Deduplicated by `profile_id` — one per connection.
+    InstanceOverview { profile_id: Uuid },
 }
 
 #[cfg(test)]
@@ -202,5 +206,19 @@ mod tests {
         // Both must clone without panic.
         let _ = with_db.clone();
         let _ = without_db.clone();
+    }
+
+    /// BF7: `DocumentKey::InstanceOverview` must construct and round-trip through
+    /// clone and debug without panic.
+    #[test]
+    fn instance_overview_key_constructs_and_clones() {
+        let profile_id = Uuid::new_v4();
+        let key = DocumentKey::InstanceOverview { profile_id };
+        let cloned = key.clone();
+        let _ = format!("{:?}", cloned);
+        assert!(matches!(
+            key,
+            DocumentKey::InstanceOverview { profile_id: pid } if pid == profile_id
+        ));
     }
 }

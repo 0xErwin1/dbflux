@@ -51,6 +51,38 @@ pub struct InstanceInspectorDef {
     pub default_refresh_secs: u32,
 }
 
+/// One panel entry in a synthesized default dashboard.
+///
+/// Carries the metric or inspector ID, a layout hint, and whether the panel
+/// is a chart or an inspector table.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DefaultDashboardPanel {
+    /// Metric or inspector ID (e.g. `"pg.tps"`, `"pg.activity"`).
+    pub metric_id: String,
+    /// True when this panel is an inspector (tabular snapshot), false for metric charts.
+    pub is_inspector: bool,
+    /// Zero-based grid column (0..=11 on a 12-column grid).
+    pub grid_column: u32,
+    /// Zero-based grid row.
+    pub grid_row: u32,
+    /// Number of grid columns this panel spans (1..=12).
+    pub grid_width: u32,
+    /// Number of grid rows this panel spans.
+    pub grid_height: u32,
+}
+
+/// Synthesized descriptor for a driver's default "Instance Overview" dashboard.
+///
+/// Returned by `InstanceCatalog::default_dashboard()`. The UI constructs a
+/// read-only `DashboardDocument` from this at open time; no database writes
+/// are performed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DefaultInstanceDashboard {
+    pub title: String,
+    pub description: Option<String>,
+    pub panels: Vec<DefaultDashboardPanel>,
+}
+
 /// Trait for drivers that expose live operational metrics and inspector snapshots.
 ///
 /// Implementations may probe the database (e.g. check `pg_extension`) during
@@ -85,6 +117,16 @@ pub trait InstanceCatalog: Send + Sync {
     /// arbitrary columns (driver-defined). Always reflects the current moment;
     /// no time window applies.
     async fn fetch_inspector_snapshot(&self, metric_id: &str) -> Result<QueryResult, DbError>;
+
+    /// Returns a synthesized descriptor for this driver's default "Instance Overview"
+    /// dashboard, or `None` when the driver does not define a curated layout.
+    ///
+    /// The default implementation returns `None`. Drivers that support
+    /// `INSTANCE_METRICS` or `INSTANCE_INSPECTOR` should override this to
+    /// provide a curated metric/inspector layout.
+    fn default_dashboard(&self) -> Option<DefaultInstanceDashboard> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -192,5 +234,83 @@ mod tests {
         });
 
         assert!(handle.join().unwrap());
+    }
+
+    /// BF7: `DefaultInstanceDashboard` and `DefaultDashboardPanel` must round-trip
+    /// through serde without data loss.
+    #[test]
+    fn default_instance_dashboard_serde_roundtrip() {
+        let dashboard = DefaultInstanceDashboard {
+            title: "Instance Overview".to_string(),
+            description: Some("Key server metrics".to_string()),
+            panels: vec![
+                DefaultDashboardPanel {
+                    metric_id: "pg.tps".to_string(),
+                    is_inspector: false,
+                    grid_column: 0,
+                    grid_row: 0,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "pg.activity".to_string(),
+                    is_inspector: true,
+                    grid_column: 0,
+                    grid_row: 3,
+                    grid_width: 12,
+                    grid_height: 4,
+                },
+            ],
+        };
+
+        let json = serde_json::to_string(&dashboard).unwrap();
+        let restored: DefaultInstanceDashboard = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.title, dashboard.title);
+        assert_eq!(restored.panels.len(), 2);
+        assert_eq!(restored.panels[0].metric_id, "pg.tps");
+        assert!(!restored.panels[0].is_inspector);
+        assert_eq!(restored.panels[1].metric_id, "pg.activity");
+        assert!(restored.panels[1].is_inspector);
+    }
+
+    /// BF7: the default `default_dashboard()` implementation on the trait
+    /// returns `None` — drivers that don't override it produce no layout.
+    #[test]
+    fn default_dashboard_default_impl_returns_none() {
+        struct MinimalCatalog;
+
+        #[async_trait::async_trait]
+        impl InstanceCatalog for MinimalCatalog {
+            async fn list_metrics(&self) -> Result<Vec<InstanceMetricDef>, DbError> {
+                Ok(vec![])
+            }
+
+            async fn list_inspectors(&self) -> Result<Vec<InstanceInspectorDef>, DbError> {
+                Ok(vec![])
+            }
+
+            async fn fetch_metric_series(
+                &self,
+                _metric_id: &str,
+                _start_ms: i64,
+                _end_ms: i64,
+            ) -> Result<QueryResult, DbError> {
+                Err(DbError::NotSupported("test".to_string()))
+            }
+
+            async fn fetch_inspector_snapshot(
+                &self,
+                _metric_id: &str,
+            ) -> Result<QueryResult, DbError> {
+                Err(DbError::NotSupported("test".to_string()))
+            }
+        }
+
+        let catalog = MinimalCatalog;
+        assert!(
+            catalog.default_dashboard().is_none(),
+            "default_dashboard() must return None when not overridden"
+        );
     }
 }

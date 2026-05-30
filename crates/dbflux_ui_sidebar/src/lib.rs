@@ -205,6 +205,13 @@ pub enum SidebarEvent {
         metric_id: String,
     },
 
+    /// Open or focus the synthesized read-only "Instance Overview" dashboard.
+    ///
+    /// Emitted when the user clicks the `InstanceOverviewLeaf` node in the sidebar.
+    OpenInstanceOverview {
+        profile_id: Uuid,
+    },
+
     /// Request to prompt the user for an SSH tunnel passphrase.
     ///
     /// Emitted when a connection attempt fails with a passphrase-required error
@@ -1321,6 +1328,9 @@ impl Sidebar {
                     profile_id,
                     metric_id,
                 });
+            }
+            SchemaNodeId::InstanceOverviewLeaf { profile_id } => {
+                cx.emit(SidebarEvent::OpenInstanceOverview { profile_id });
             }
             SchemaNodeId::Database { .. } => {
                 self.handle_database_click(item_id, cx);

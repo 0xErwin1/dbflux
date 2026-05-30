@@ -817,6 +817,15 @@ impl Sidebar {
                 items
             }
 
+            SchemaNodeKind::InstanceOverviewLeaf => {
+                let mut items = Vec::new();
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item("Open", ContextMenuAction::Open)],
+                );
+                items
+            }
+
             _ => vec![],
         }
     }

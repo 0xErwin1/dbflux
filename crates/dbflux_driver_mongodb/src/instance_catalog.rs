@@ -4,8 +4,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use bson::{Bson, Document};
 use dbflux_core::{
-    ColumnKind, ColumnMeta, DbError, DriverCapabilities, InstanceCatalog, InstanceInspectorDef,
-    InstanceMetricDef, InstanceMetricUnit, QueryResult, QueryResultShape, Row, Value,
+    ColumnKind, ColumnMeta, DbError, DefaultDashboardPanel, DefaultInstanceDashboard,
+    DriverCapabilities, InstanceCatalog, InstanceInspectorDef, InstanceMetricDef,
+    InstanceMetricUnit, QueryResult, QueryResultShape, Row, Value,
 };
 use mongodb::sync::Client;
 
@@ -119,6 +120,63 @@ impl MongoInstanceCatalog {
         }]
     }
 
+    /// Curated "Instance Overview" dashboard layout for MongoDB.
+    ///
+    /// Row 0: queries/sec (cols 0-5) | current connections (cols 6-11)
+    /// Row 1: memory resident (cols 0-5) | global lock queue (cols 6-11)
+    /// Row 2: current operations inspector (full width)
+    pub fn static_default_dashboard() -> Option<DefaultInstanceDashboard> {
+        Some(DefaultInstanceDashboard {
+            title: "MongoDB Instance Overview".to_string(),
+            description: Some(
+                "Curated MongoDB serverStatus metrics and current-operations inspector."
+                    .to_string(),
+            ),
+            panels: vec![
+                DefaultDashboardPanel {
+                    metric_id: "mongo.opcounters.query".to_string(),
+                    is_inspector: false,
+                    grid_column: 0,
+                    grid_row: 0,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "mongo.connections.current".to_string(),
+                    is_inspector: false,
+                    grid_column: 6,
+                    grid_row: 0,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "mongo.mem.resident".to_string(),
+                    is_inspector: false,
+                    grid_column: 0,
+                    grid_row: 3,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "mongo.global_lock.queue".to_string(),
+                    is_inspector: false,
+                    grid_column: 6,
+                    grid_row: 3,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "mongo.current_op".to_string(),
+                    is_inspector: true,
+                    grid_column: 0,
+                    grid_row: 6,
+                    grid_width: 12,
+                    grid_height: 4,
+                },
+            ],
+        })
+    }
+
     /// Extracts a numeric value from a BSON document at a dotted path.
     ///
     /// Traverses nested documents using `.`-separated path segments.
@@ -200,6 +258,10 @@ impl InstanceCatalog for MongoInstanceCatalog {
 
     async fn list_inspectors(&self) -> Result<Vec<InstanceInspectorDef>, DbError> {
         Ok(Self::static_inspectors())
+    }
+
+    fn default_dashboard(&self) -> Option<DefaultInstanceDashboard> {
+        Self::static_default_dashboard()
     }
 
     async fn fetch_metric_series(
@@ -493,5 +555,45 @@ mod tests {
             mongo_advertises_instance_capabilities(),
             "MongoDB METADATA must include INSTANCE_METRICS and INSTANCE_INSPECTOR bits"
         );
+    }
+
+    /// BF7: MongoInstanceCatalog must return a non-None default dashboard with
+    /// panels that reference valid metric or inspector IDs.
+    #[test]
+    fn mongo_default_dashboard_is_non_none_and_valid() {
+        use dbflux_core::DefaultInstanceDashboard;
+
+        let dashboard: Option<DefaultInstanceDashboard> =
+            MongoInstanceCatalog::static_default_dashboard();
+
+        let dashboard =
+            dashboard.expect("MongoInstanceCatalog must return Some(default_dashboard)");
+        assert!(
+            !dashboard.panels.is_empty(),
+            "default dashboard must have at least one panel"
+        );
+        assert!(
+            !dashboard.title.is_empty(),
+            "default dashboard must have a non-empty title"
+        );
+
+        let metric_ids: Vec<String> = MongoInstanceCatalog::static_metrics()
+            .into_iter()
+            .map(|m| m.id)
+            .collect();
+        let inspector_ids: Vec<String> = MongoInstanceCatalog::static_inspectors()
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+
+        for panel in &dashboard.panels {
+            let valid =
+                metric_ids.contains(&panel.metric_id) || inspector_ids.contains(&panel.metric_id);
+            assert!(
+                valid,
+                "panel metric_id {:?} is not in static metrics or inspectors",
+                panel.metric_id
+            );
+        }
     }
 }

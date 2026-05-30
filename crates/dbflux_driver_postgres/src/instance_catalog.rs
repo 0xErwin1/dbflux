@@ -3,8 +3,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use dbflux_core::{
-    ColumnKind, ColumnMeta, DbError, DriverCapabilities, InstanceCatalog, InstanceInspectorDef,
-    InstanceMetricDef, InstanceMetricUnit, QueryResult, QueryResultShape, Row, Value,
+    ColumnKind, ColumnMeta, DbError, DefaultDashboardPanel, DefaultInstanceDashboard,
+    DriverCapabilities, InstanceCatalog, InstanceInspectorDef, InstanceMetricDef,
+    InstanceMetricUnit, QueryResult, QueryResultShape, Row, Value,
 };
 use postgres::Client;
 
@@ -126,6 +127,62 @@ impl PgInstanceCatalog {
         ]
     }
 
+    /// Curated "Instance Overview" dashboard layout for PostgreSQL.
+    ///
+    /// Row 0: TPS (cols 0-5) | cache hit ratio (cols 6-11)
+    /// Row 1: active conns (cols 0-5) | idle conns (cols 6-11)
+    /// Row 2: activity inspector (full width, cols 0-11)
+    pub fn static_default_dashboard() -> Option<DefaultInstanceDashboard> {
+        Some(DefaultInstanceDashboard {
+            title: "PostgreSQL Instance Overview".to_string(),
+            description: Some(
+                "Curated PostgreSQL instance metrics and active-session inspector.".to_string(),
+            ),
+            panels: vec![
+                DefaultDashboardPanel {
+                    metric_id: "pg.tps".to_string(),
+                    is_inspector: false,
+                    grid_column: 0,
+                    grid_row: 0,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "pg.cache_hit_ratio".to_string(),
+                    is_inspector: false,
+                    grid_column: 6,
+                    grid_row: 0,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "pg.active_connections".to_string(),
+                    is_inspector: false,
+                    grid_column: 0,
+                    grid_row: 3,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "pg.idle_connections".to_string(),
+                    is_inspector: false,
+                    grid_column: 6,
+                    grid_row: 3,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "pg.activity".to_string(),
+                    is_inspector: true,
+                    grid_column: 0,
+                    grid_row: 6,
+                    grid_width: 12,
+                    grid_height: 4,
+                },
+            ],
+        })
+    }
+
     fn probe_pg_stat_statements(client: &mut Client) -> bool {
         client
             .query_one(
@@ -243,6 +300,10 @@ impl InstanceCatalog for PgInstanceCatalog {
 
     async fn list_inspectors(&self) -> Result<Vec<InstanceInspectorDef>, DbError> {
         Ok(Self::static_inspectors())
+    }
+
+    fn default_dashboard(&self) -> Option<DefaultInstanceDashboard> {
+        Self::static_default_dashboard()
     }
 
     async fn fetch_metric_series(
@@ -629,6 +690,46 @@ mod tests {
                 "inspector {:?} default_refresh_secs {} is below the 10s floor",
                 i.id,
                 i.default_refresh_secs
+            );
+        }
+    }
+
+    /// BF7: PgInstanceCatalog must return a non-None default dashboard with at
+    /// least one panel, and every panel metric_id must be present in the static
+    /// metrics or inspectors list.
+    #[test]
+    fn pg_default_dashboard_is_non_none_and_valid() {
+        use dbflux_core::DefaultInstanceDashboard;
+
+        let dashboard: Option<DefaultInstanceDashboard> =
+            PgInstanceCatalog::static_default_dashboard();
+
+        let dashboard = dashboard.expect("PgInstanceCatalog must return Some(default_dashboard)");
+        assert!(
+            !dashboard.panels.is_empty(),
+            "default dashboard must have at least one panel"
+        );
+        assert!(
+            !dashboard.title.is_empty(),
+            "default dashboard must have a non-empty title"
+        );
+
+        let metric_ids: Vec<String> = PgInstanceCatalog::static_metrics()
+            .into_iter()
+            .map(|m| m.id)
+            .collect();
+        let inspector_ids: Vec<String> = PgInstanceCatalog::static_inspectors()
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+
+        for panel in &dashboard.panels {
+            let valid =
+                metric_ids.contains(&panel.metric_id) || inspector_ids.contains(&panel.metric_id);
+            assert!(
+                valid,
+                "panel metric_id {:?} is not in static metrics or inspectors",
+                panel.metric_id
             );
         }
     }

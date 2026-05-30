@@ -1015,6 +1015,7 @@ pub(crate) fn icon_for_node_kind(
         SchemaNodeKind::InstanceMetricLeaf => Some(AppIcon::ChartSpline),
         SchemaNodeKind::InstanceInspectorsFolder => Some(AppIcon::Server),
         SchemaNodeKind::InstanceInspectorLeaf => Some(AppIcon::Server),
+        SchemaNodeKind::InstanceOverviewLeaf => Some(AppIcon::Layers),
         _ => None,
     }
 }
@@ -1133,6 +1134,7 @@ fn resolve_node_icon(
             (Some(AppIcon::Server), "", params.color_orange)
         }
         SchemaNodeKind::InstanceInspectorLeaf => (Some(AppIcon::Server), "", params.color_teal),
+        SchemaNodeKind::InstanceOverviewLeaf => (Some(AppIcon::Layers), "", params.color_orange),
         _ => (None, "", theme.muted_foreground),
     }
 }

@@ -237,6 +237,16 @@ pub struct DashboardDocument {
     // not persisted across tab close/open.
     mode: DashboardMode,
 
+    /// When `true` the dashboard was synthesized from a driver's catalog and is
+    /// read-only. Edit-mode transitions are blocked; only "Save as" is allowed
+    /// to produce a mutable copy.
+    pub(crate) read_only: bool,
+
+    /// Connection profile this dashboard is tied to. `None` for dashboards that
+    /// are not profile-specific (regular saved dashboards). Set to `Some` on
+    /// read-only overview dashboards so dedup can match by profile.
+    pub(crate) profile_id: Option<Uuid>,
+
     // Shared controls
     shared_time_range: Entity<TimeRangePanel>,
 
@@ -362,6 +372,7 @@ impl DashboardDocument {
         shared_time_range: Entity<TimeRangePanel>,
         shared_time_range_preset: Option<TimeRangePreset>,
         shared_refresh_policy: SavedChartRefreshPolicy,
+        read_only: bool,
         app_state: Entity<AppStateEntity>,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -489,6 +500,8 @@ impl DashboardDocument {
             app_state,
             panel_slots,
             mode: DashboardMode::View,
+            read_only,
+            profile_id: None,
             shared_time_range,
             inflight_reexec_count: 0,
             pending_reexec: VecDeque::new(),
@@ -629,7 +642,15 @@ impl DashboardDocument {
     }
 
     pub fn connection_id(&self) -> Option<Uuid> {
-        None
+        self.profile_id
+    }
+
+    /// Bind this dashboard to a specific connection profile.
+    ///
+    /// Used by read-only synthesized dashboards so that dedup can match by
+    /// `DocumentKey::InstanceOverview { profile_id }`.
+    pub fn set_profile_id(&mut self, id: Uuid) {
+        self.profile_id = Some(id);
     }
 
     pub fn active_context(&self) -> ContextId {
@@ -779,7 +800,12 @@ impl DashboardDocument {
     ///
     /// Setting the mode to `View` clears any in-progress drag/resize so the
     /// user is not left with a stale ghost on the next render.
+    ///
+    /// No-op on read-only dashboards — Edit mode is never available there.
     pub fn set_mode(&mut self, mode: DashboardMode, cx: &mut Context<Self>) {
+        if self.read_only && matches!(mode, DashboardMode::Edit) {
+            return;
+        }
         if self.mode == mode {
             return;
         }
@@ -793,12 +819,23 @@ impl DashboardDocument {
     }
 
     /// Convenience: flip between Edit and View.
+    ///
+    /// No-op on read-only dashboards.
     pub fn toggle_mode(&mut self, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
         let next = match self.mode {
             DashboardMode::View => DashboardMode::Edit,
             DashboardMode::Edit => DashboardMode::View,
         };
         self.set_mode(next, cx);
+    }
+
+    /// Returns `true` when this dashboard was synthesized from a driver's
+    /// catalog and cannot be mutated by the user.
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
     }
 
     pub fn shared_time_range(&self) -> &Entity<TimeRangePanel> {
@@ -2698,6 +2735,7 @@ mod tests {
                 shared_time_range,
                 None,
                 SavedChartRefreshPolicy::Off,
+                false,
                 app_state,
                 cx,
             )
@@ -2907,6 +2945,7 @@ mod tests {
                     shared_time_range,
                     None,
                     SavedChartRefreshPolicy::Off,
+                    false,
                     app_state,
                     cx,
                 )

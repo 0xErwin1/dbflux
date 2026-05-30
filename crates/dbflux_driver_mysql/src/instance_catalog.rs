@@ -3,8 +3,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use dbflux_core::{
-    ColumnKind, ColumnMeta, DbError, DriverCapabilities, InstanceCatalog, InstanceInspectorDef,
-    InstanceMetricDef, InstanceMetricUnit, QueryResult, QueryResultShape, Row, Value,
+    ColumnKind, ColumnMeta, DbError, DefaultDashboardPanel, DefaultInstanceDashboard,
+    DriverCapabilities, InstanceCatalog, InstanceInspectorDef, InstanceMetricDef,
+    InstanceMetricUnit, QueryResult, QueryResultShape, Row, Value,
 };
 use mysql::{Conn, prelude::Queryable};
 
@@ -131,6 +132,62 @@ impl MysqlInstanceCatalog {
         }]
     }
 
+    /// Curated "Instance Overview" dashboard layout for MySQL.
+    ///
+    /// Row 0: queries/sec (cols 0-5) | threads connected (cols 6-11)
+    /// Row 1: threads running (cols 0-5) | buffer pool reads (cols 6-11)
+    /// Row 2: process list inspector (full width)
+    pub fn static_default_dashboard() -> Option<DefaultInstanceDashboard> {
+        Some(DefaultInstanceDashboard {
+            title: "MySQL Instance Overview".to_string(),
+            description: Some(
+                "Curated MySQL instance metrics and process-list inspector.".to_string(),
+            ),
+            panels: vec![
+                DefaultDashboardPanel {
+                    metric_id: "mysql.queries_per_sec".to_string(),
+                    is_inspector: false,
+                    grid_column: 0,
+                    grid_row: 0,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "mysql.threads_connected".to_string(),
+                    is_inspector: false,
+                    grid_column: 6,
+                    grid_row: 0,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "mysql.threads_running".to_string(),
+                    is_inspector: false,
+                    grid_column: 0,
+                    grid_row: 3,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "mysql.buffer_pool_reads".to_string(),
+                    is_inspector: false,
+                    grid_column: 6,
+                    grid_row: 3,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "mysql.processlist".to_string(),
+                    is_inspector: true,
+                    grid_column: 0,
+                    grid_row: 6,
+                    grid_width: 12,
+                    grid_height: 4,
+                },
+            ],
+        })
+    }
+
     pub fn probe_performance_schema(conn: &mut Conn) -> bool {
         conn.query_first::<String, _>(
             "SELECT 'ok' FROM information_schema.SCHEMATA WHERE schema_name = 'performance_schema'",
@@ -208,6 +265,10 @@ impl InstanceCatalog for MysqlInstanceCatalog {
 
     async fn list_inspectors(&self) -> Result<Vec<InstanceInspectorDef>, DbError> {
         Ok(Self::static_inspectors())
+    }
+
+    fn default_dashboard(&self) -> Option<DefaultInstanceDashboard> {
+        Self::static_default_dashboard()
     }
 
     async fn fetch_metric_series(
@@ -439,5 +500,45 @@ mod tests {
             mysql_advertises_instance_capabilities(),
             "MySQL METADATA must include INSTANCE_METRICS and INSTANCE_INSPECTOR bits"
         );
+    }
+
+    /// BF7: MysqlInstanceCatalog must return a non-None default dashboard with
+    /// panels that reference valid metric or inspector IDs.
+    #[test]
+    fn mysql_default_dashboard_is_non_none_and_valid() {
+        use dbflux_core::DefaultInstanceDashboard;
+
+        let dashboard: Option<DefaultInstanceDashboard> =
+            MysqlInstanceCatalog::static_default_dashboard();
+
+        let dashboard =
+            dashboard.expect("MysqlInstanceCatalog must return Some(default_dashboard)");
+        assert!(
+            !dashboard.panels.is_empty(),
+            "default dashboard must have at least one panel"
+        );
+        assert!(
+            !dashboard.title.is_empty(),
+            "default dashboard must have a non-empty title"
+        );
+
+        let metric_ids: Vec<String> = MysqlInstanceCatalog::static_metrics()
+            .into_iter()
+            .map(|m| m.id)
+            .collect();
+        let inspector_ids: Vec<String> = MysqlInstanceCatalog::static_inspectors()
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+
+        for panel in &dashboard.panels {
+            let valid =
+                metric_ids.contains(&panel.metric_id) || inspector_ids.contains(&panel.metric_id);
+            assert!(
+                valid,
+                "panel metric_id {:?} is not in static metrics or inspectors",
+                panel.metric_id
+            );
+        }
     }
 }

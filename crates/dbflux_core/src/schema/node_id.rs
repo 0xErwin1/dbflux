@@ -331,6 +331,12 @@ pub enum SchemaNodeId {
         profile_id: Uuid,
         metric_id: String,
     },
+
+    // Instance overview sidebar node (gated on INSTANCE_METRICS | INSTANCE_INSPECTOR)
+    /// Clickable leaf that opens the synthesized read-only "Instance Overview" dashboard.
+    InstanceOverviewLeaf {
+        profile_id: Uuid,
+    },
 }
 
 /// Simple kind enum for cheap matching without data.
@@ -395,6 +401,7 @@ pub enum SchemaNodeKind {
     InstanceMetricLeaf,
     InstanceInspectorsFolder,
     InstanceInspectorLeaf,
+    InstanceOverviewLeaf,
 }
 
 impl SchemaNodeId {
@@ -461,6 +468,7 @@ impl SchemaNodeId {
             Self::InstanceMetricLeaf { .. } => SchemaNodeKind::InstanceMetricLeaf,
             Self::InstanceInspectorsFolder { .. } => SchemaNodeKind::InstanceInspectorsFolder,
             Self::InstanceInspectorLeaf { .. } => SchemaNodeKind::InstanceInspectorLeaf,
+            Self::InstanceOverviewLeaf { .. } => SchemaNodeKind::InstanceOverviewLeaf,
         }
     }
 
@@ -524,7 +532,8 @@ impl SchemaNodeId {
             | Self::InstanceMetricsFolder { profile_id, .. }
             | Self::InstanceMetricLeaf { profile_id, .. }
             | Self::InstanceInspectorsFolder { profile_id, .. }
-            | Self::InstanceInspectorLeaf { profile_id, .. } => Some(*profile_id),
+            | Self::InstanceInspectorLeaf { profile_id, .. }
+            | Self::InstanceOverviewLeaf { profile_id, .. } => Some(*profile_id),
         }
     }
 }
@@ -586,6 +595,7 @@ const P_INST_METRICS_FOLDER: &str = "IMF";
 const P_INST_METRIC_LEAF: &str = "IML";
 const P_INST_INSPECTORS_FOLDER: &str = "IIF";
 const P_INST_INSPECTOR_LEAF: &str = "IIL";
+const P_INST_OVERVIEW_LEAF: &str = "IOL";
 // Dashboard and saved-chart sidebar node prefixes.
 // Note: P_SCRIPTS_FOLDER already uses "SCF", so we use distinct tags here.
 const P_DASHBOARDS_FOLDER: &str = "DBF";
@@ -1036,6 +1046,9 @@ impl fmt::Display for SchemaNodeId {
                 metric_id,
             } => {
                 write!(f, "{}|{}|{}", P_INST_INSPECTOR_LEAF, profile_id, metric_id)
+            }
+            Self::InstanceOverviewLeaf { profile_id } => {
+                write!(f, "{}|{}", P_INST_OVERVIEW_LEAF, profile_id)
             }
         }
     }
@@ -1707,6 +1720,12 @@ impl FromStr for SchemaNodeId {
                 })
             }
 
+            P_INST_OVERVIEW_LEAF => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                Ok(Self::InstanceOverviewLeaf { profile_id })
+            }
+
             _ => Err(err()),
         }
     }
@@ -1756,6 +1775,7 @@ impl SchemaNodeKind {
                 | Self::InstanceMetricLeaf
                 | Self::InstanceInspectorsFolder
                 | Self::InstanceInspectorLeaf
+                | Self::InstanceOverviewLeaf
         )
     }
 
@@ -1807,6 +1827,7 @@ impl SchemaNodeKind {
                 | Self::SavedChartItem
                 | Self::InstanceMetricLeaf
                 | Self::InstanceInspectorLeaf
+                | Self::InstanceOverviewLeaf
         )
     }
 }
@@ -2329,6 +2350,7 @@ mod tests {
             profile_id: uuid,
             metric_id: "pg.activity".into(),
         });
+        roundtrip(SchemaNodeId::InstanceOverviewLeaf { profile_id: uuid });
     }
 
     #[test]

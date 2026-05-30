@@ -3,8 +3,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use dbflux_core::{
-    ColumnKind, ColumnMeta, DbError, DriverCapabilities, InstanceCatalog, InstanceInspectorDef,
-    InstanceMetricDef, InstanceMetricUnit, QueryResult, QueryResultShape, Row, Value,
+    ColumnKind, ColumnMeta, DbError, DefaultDashboardPanel, DefaultInstanceDashboard,
+    DriverCapabilities, InstanceCatalog, InstanceInspectorDef, InstanceMetricDef,
+    InstanceMetricUnit, QueryResult, QueryResultShape, Row, Value,
 };
 
 use crate::driver::MssqlConnectionInner;
@@ -131,6 +132,63 @@ impl MssqlInstanceCatalog {
         }]
     }
 
+    /// Curated "Instance Overview" dashboard layout for SQL Server.
+    ///
+    /// Row 0: batch requests/sec (cols 0-5) | user connections (cols 6-11)
+    /// Row 1: lock waits/sec (cols 0-5) | buffer cache hit ratio (cols 6-11)
+    /// Row 2: active sessions inspector (full width)
+    pub fn static_default_dashboard() -> Option<DefaultInstanceDashboard> {
+        Some(DefaultInstanceDashboard {
+            title: "SQL Server Instance Overview".to_string(),
+            description: Some(
+                "Curated SQL Server performance counters and active-sessions inspector."
+                    .to_string(),
+            ),
+            panels: vec![
+                DefaultDashboardPanel {
+                    metric_id: "mssql.batch_requests_per_sec".to_string(),
+                    is_inspector: false,
+                    grid_column: 0,
+                    grid_row: 0,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "mssql.user_connections".to_string(),
+                    is_inspector: false,
+                    grid_column: 6,
+                    grid_row: 0,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "mssql.lock_waits_per_sec".to_string(),
+                    is_inspector: false,
+                    grid_column: 0,
+                    grid_row: 3,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "mssql.buffer_cache_hit_ratio".to_string(),
+                    is_inspector: false,
+                    grid_column: 6,
+                    grid_row: 3,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "mssql.active_sessions".to_string(),
+                    is_inspector: true,
+                    grid_column: 0,
+                    grid_row: 6,
+                    grid_width: 12,
+                    grid_height: 4,
+                },
+            ],
+        })
+    }
+
     /// Returns `true` if the connection has `VIEW SERVER STATE` permission.
     ///
     /// Called once at catalog construction time. When permission is absent, the
@@ -209,6 +267,10 @@ impl InstanceCatalog for MssqlInstanceCatalog {
         }
 
         Ok(Self::static_inspectors())
+    }
+
+    fn default_dashboard(&self) -> Option<DefaultInstanceDashboard> {
+        Self::static_default_dashboard()
     }
 
     async fn fetch_metric_series(
@@ -538,5 +600,45 @@ mod tests {
             inspectors.is_empty(),
             "inspectors must be empty when VIEW SERVER STATE permission is absent"
         );
+    }
+
+    /// BF7: MssqlInstanceCatalog must return a non-None default dashboard with
+    /// panels that reference valid metric or inspector IDs.
+    #[test]
+    fn mssql_default_dashboard_is_non_none_and_valid() {
+        use dbflux_core::DefaultInstanceDashboard;
+
+        let dashboard: Option<DefaultInstanceDashboard> =
+            MssqlInstanceCatalog::static_default_dashboard();
+
+        let dashboard =
+            dashboard.expect("MssqlInstanceCatalog must return Some(default_dashboard)");
+        assert!(
+            !dashboard.panels.is_empty(),
+            "default dashboard must have at least one panel"
+        );
+        assert!(
+            !dashboard.title.is_empty(),
+            "default dashboard must have a non-empty title"
+        );
+
+        let metric_ids: Vec<String> = MssqlInstanceCatalog::static_metrics()
+            .into_iter()
+            .map(|m| m.id)
+            .collect();
+        let inspector_ids: Vec<String> = MssqlInstanceCatalog::static_inspectors()
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+
+        for panel in &dashboard.panels {
+            let valid =
+                metric_ids.contains(&panel.metric_id) || inspector_ids.contains(&panel.metric_id);
+            assert!(
+                valid,
+                "panel metric_id {:?} is not in static metrics or inspectors",
+                panel.metric_id
+            );
+        }
     }
 }

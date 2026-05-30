@@ -45,7 +45,8 @@ pub use hook::{
     execute_streaming_process, output_channel,
 };
 pub use instance_catalog::{
-    InstanceCatalog, InstanceInspectorDef, InstanceMetricDef, InstanceMetricId, InstanceMetricUnit,
+    DefaultDashboardPanel, DefaultInstanceDashboard, InstanceCatalog, InstanceInspectorDef,
+    InstanceMetricDef, InstanceMetricId, InstanceMetricUnit,
 };
 pub use item_manager::{AuthProfileManager, Identifiable, ItemManager};
 pub use manager::{

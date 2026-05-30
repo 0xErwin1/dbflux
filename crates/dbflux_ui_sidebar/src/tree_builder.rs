@@ -544,10 +544,19 @@ impl Sidebar {
                 );
             }
 
-            // Instance metrics folder — appended after databases so the
-            // sidebar order is: Databases, Instance Metrics, Instance Inspectors.
+            // Instance overview, metrics, and inspectors — appended after databases.
+            // Sidebar order: Instance Overview, Instance Metrics, Instance Inspectors.
             // Capability-gated; no driver_id branching.
-            if conn_capabilities.contains(DriverCapabilities::INSTANCE_METRICS) {
+            let has_instance_metrics =
+                conn_capabilities.contains(DriverCapabilities::INSTANCE_METRICS);
+            let has_instance_inspector =
+                conn_capabilities.contains(DriverCapabilities::INSTANCE_INSPECTOR);
+
+            if has_instance_metrics || has_instance_inspector {
+                profile_children.push(Self::build_instance_overview_leaf(profile_id));
+            }
+
+            if has_instance_metrics {
                 let metric_children =
                     Self::build_instance_metric_leaf_children(profile_id, instance_metrics_cache);
                 profile_children.push(Self::build_instance_metrics_folder_item(
@@ -556,7 +565,7 @@ impl Sidebar {
                 ));
             }
 
-            if conn_capabilities.contains(DriverCapabilities::INSTANCE_INSPECTOR) {
+            if has_instance_inspector {
                 let inspector_children = Self::build_instance_inspector_leaf_children(
                     profile_id,
                     instance_inspectors_cache,
@@ -824,6 +833,18 @@ impl Sidebar {
                 )
             })
             .collect()
+    }
+
+    /// Build the `InstanceOverviewLeaf` sidebar item for a connected profile.
+    ///
+    /// This is a single non-folder leaf that opens the synthesized read-only
+    /// "Instance Overview" dashboard. It appears above the `InstanceMetricsFolder`
+    /// and `InstanceInspectorsFolder` when the driver advertises either capability.
+    pub(crate) fn build_instance_overview_leaf(profile_id: Uuid) -> TreeItem {
+        TreeItem::new(
+            SchemaNodeId::InstanceOverviewLeaf { profile_id }.to_string(),
+            "Instance Overview".to_string(),
+        )
     }
 
     /// Build the `DashboardItem` children for the `DashboardsFolder`.
@@ -3549,6 +3570,32 @@ mod tests {
             item.children.len(),
             1,
             "DatabasesFolder must pass through its children"
+        );
+    }
+
+    // ---- BF7: InstanceOverviewLeaf ----
+
+    /// BF7: `build_instance_overview_leaf` must return a `TreeItem` whose node ID
+    /// parses to `SchemaNodeId::InstanceOverviewLeaf { profile_id }`.
+    #[test]
+    fn build_instance_overview_leaf_carries_correct_node_id() {
+        use dbflux_core::SchemaNodeId;
+
+        let profile_id = Uuid::new_v4();
+        let item = Sidebar::build_instance_overview_leaf(profile_id);
+
+        let node_id: SchemaNodeId = item
+            .id
+            .as_ref()
+            .parse()
+            .expect("leaf must have a valid SchemaNodeId");
+
+        assert!(
+            matches!(
+                &node_id,
+                SchemaNodeId::InstanceOverviewLeaf { profile_id: pid } if *pid == profile_id
+            ),
+            "leaf must carry InstanceOverviewLeaf node ID: {node_id:?}"
         );
     }
 }

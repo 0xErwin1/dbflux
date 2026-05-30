@@ -4,8 +4,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use dbflux_core::{
-    ColumnKind, ColumnMeta, DbError, DriverCapabilities, InstanceCatalog, InstanceInspectorDef,
-    InstanceMetricDef, InstanceMetricUnit, QueryResult, QueryResultShape, Row, Value,
+    ColumnKind, ColumnMeta, DbError, DefaultDashboardPanel, DefaultInstanceDashboard,
+    DriverCapabilities, InstanceCatalog, InstanceInspectorDef, InstanceMetricDef,
+    InstanceMetricUnit, QueryResult, QueryResultShape, Row, Value,
 };
 /// Curated list of Redis INFO section field names mapped to chartable metrics.
 ///
@@ -146,6 +147,62 @@ impl RedisInstanceCatalog {
         }]
     }
 
+    /// Curated "Instance Overview" dashboard layout for Redis.
+    ///
+    /// Row 0: ops/sec (cols 0-5) | connected clients (cols 6-11)
+    /// Row 1: used memory (cols 0-5) | keyspace hits (cols 6-11)
+    /// Row 2: client list inspector (full width)
+    pub fn static_default_dashboard() -> Option<DefaultInstanceDashboard> {
+        Some(DefaultInstanceDashboard {
+            title: "Redis Instance Overview".to_string(),
+            description: Some(
+                "Curated Redis INFO metrics and connected-clients inspector.".to_string(),
+            ),
+            panels: vec![
+                DefaultDashboardPanel {
+                    metric_id: "redis.ops_per_sec".to_string(),
+                    is_inspector: false,
+                    grid_column: 0,
+                    grid_row: 0,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "redis.connected_clients".to_string(),
+                    is_inspector: false,
+                    grid_column: 6,
+                    grid_row: 0,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "redis.used_memory".to_string(),
+                    is_inspector: false,
+                    grid_column: 0,
+                    grid_row: 3,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "redis.keyspace_hits".to_string(),
+                    is_inspector: false,
+                    grid_column: 6,
+                    grid_row: 3,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "redis.client_list".to_string(),
+                    is_inspector: true,
+                    grid_column: 0,
+                    grid_row: 6,
+                    grid_width: 12,
+                    grid_height: 4,
+                },
+            ],
+        })
+    }
+
     /// Parses the flat `INFO` output into a `HashMap<field_name, value_string>`.
     ///
     /// Lines starting with `#` are section headers and are skipped. Empty lines are skipped.
@@ -216,6 +273,10 @@ impl InstanceCatalog for RedisInstanceCatalog {
 
     async fn list_inspectors(&self) -> Result<Vec<InstanceInspectorDef>, DbError> {
         Ok(Self::static_inspectors())
+    }
+
+    fn default_dashboard(&self) -> Option<DefaultInstanceDashboard> {
+        Self::static_default_dashboard()
     }
 
     async fn fetch_metric_series(
@@ -475,5 +536,45 @@ instantaneous_output_kbps:20.3
     fn sensitive_client_fields_list_is_non_empty() {
         assert!(!SENSITIVE_CLIENT_FIELDS.is_empty());
         assert!(SENSITIVE_CLIENT_FIELDS.contains(&"addr"));
+    }
+
+    /// BF7: RedisInstanceCatalog must return a non-None default dashboard with
+    /// panels that reference valid metric or inspector IDs.
+    #[test]
+    fn redis_default_dashboard_is_non_none_and_valid() {
+        use dbflux_core::DefaultInstanceDashboard;
+
+        let dashboard: Option<DefaultInstanceDashboard> =
+            RedisInstanceCatalog::static_default_dashboard();
+
+        let dashboard =
+            dashboard.expect("RedisInstanceCatalog must return Some(default_dashboard)");
+        assert!(
+            !dashboard.panels.is_empty(),
+            "default dashboard must have at least one panel"
+        );
+        assert!(
+            !dashboard.title.is_empty(),
+            "default dashboard must have a non-empty title"
+        );
+
+        let metric_ids: Vec<String> = RedisInstanceCatalog::static_metrics()
+            .into_iter()
+            .map(|m| m.id)
+            .collect();
+        let inspector_ids: Vec<String> = RedisInstanceCatalog::static_inspectors()
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+
+        for panel in &dashboard.panels {
+            let valid =
+                metric_ids.contains(&panel.metric_id) || inspector_ids.contains(&panel.metric_id);
+            assert!(
+                valid,
+                "panel metric_id {:?} is not in static metrics or inspectors",
+                panel.metric_id
+            );
+        }
     }
 }

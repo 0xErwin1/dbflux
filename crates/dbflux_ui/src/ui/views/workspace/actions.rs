@@ -407,6 +407,140 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
+    /// Open the synthesized read-only "Instance Overview" dashboard for a profile.
+    ///
+    /// The dashboard layout is produced by the driver's `InstanceCatalog::default_dashboard()`
+    /// at open time — no rows are written to the database. The resulting tab is
+    /// marked read-only so the user cannot mutate it; "Save as" produces an editable copy.
+    pub(super) fn open_instance_overview(
+        &mut self,
+        profile_id: uuid::Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::document::{
+            ChartDocument, DashboardDocument, DocumentKey, dashboard::DashboardPanelSlot,
+        };
+        use dbflux_components::chart::InstanceMetricSource;
+        use dbflux_components::common::time_range::view::TimeRangePanel;
+        use dbflux_components::saved_chart::{SavedChartRefreshPolicy, TimeRangePreset};
+        use dbflux_ui_document::dashboard::PanelGridPos;
+
+        // Stable synthetic UUID for dedup — derived so the same profile always
+        // opens the same overview tab.
+        let dashboard_id = uuid::Uuid::new_v5(
+            &uuid::Uuid::NAMESPACE_OID,
+            format!("instance_overview:{profile_id}").as_bytes(),
+        );
+
+        let key = DocumentKey::InstanceOverview { profile_id };
+
+        if let Some(existing_id) = self.tab_manager.read(cx).find_by_key(&key, cx) {
+            self.tab_manager.update(cx, |mgr, cx| {
+                mgr.activate(existing_id, cx);
+            });
+            self.set_focus(FocusTarget::Document, window, cx);
+            return;
+        }
+
+        // Retrieve the default dashboard descriptor from the driver's catalog.
+        let catalog_result: Option<dbflux_core::DefaultInstanceDashboard> = {
+            let state = self.app_state.read(cx);
+            let connected = state.connections().get(&profile_id);
+            connected
+                .and_then(|c| c.connection.instance_catalog())
+                .and_then(|catalog| catalog.default_dashboard())
+        };
+
+        let Some(descriptor) = catalog_result else {
+            dbflux_ui_base::toast::Toast::info(
+                "This driver does not define an Instance Overview dashboard.",
+            )
+            .meta_right(now_hms())
+            .push(cx);
+            return;
+        };
+
+        // Build panel slots from the descriptor.
+        let panel_slots: Vec<DashboardPanelSlot> = descriptor
+            .panels
+            .iter()
+            .map(|panel_def| {
+                let grid_pos = PanelGridPos {
+                    grid_row: panel_def.grid_row,
+                    grid_column: panel_def.grid_column,
+                    grid_width: panel_def.grid_width,
+                    grid_height: panel_def.grid_height,
+                };
+
+                if panel_def.is_inspector {
+                    DashboardPanelSlot::Inspector {
+                        metric_id: panel_def.metric_id.clone(),
+                        grid_pos,
+                        title_override: None,
+                    }
+                } else {
+                    let source = InstanceMetricSource {
+                        metric_id: panel_def.metric_id.clone(),
+                    };
+                    let metric_id_clone = panel_def.metric_id.clone();
+                    let app_state = self.app_state.clone();
+                    let panel_entity = cx.new(|cx| {
+                        let mut chart = ChartDocument::new_with_source(
+                            Some(profile_id),
+                            metric_id_clone.clone(),
+                            Box::new(source),
+                            app_state,
+                            window,
+                            cx,
+                        );
+                        chart.set_instance_metric_identity(metric_id_clone);
+                        chart.set_initial_time_range_preset(0);
+                        chart
+                    });
+                    panel_entity.update(cx, |chart, cx| {
+                        chart.set_embedded(true, cx);
+                    });
+                    panel_entity.update(cx, |chart, cx| {
+                        chart.set_refresh_policy(
+                            dbflux_core::RefreshPolicy::Interval { every_secs: 10 },
+                            cx,
+                        );
+                    });
+                    DashboardPanelSlot::Loaded {
+                        panel: panel_entity,
+                        grid_pos,
+                        title_override: None,
+                    }
+                }
+            })
+            .collect();
+
+        let shared_time_range = cx.new(|cx| TimeRangePanel::new("15m", Some(0), window, cx));
+
+        let doc = cx.new(|cx| {
+            let mut dashboard = DashboardDocument::new(
+                dashboard_id,
+                descriptor.title.clone(),
+                panel_slots,
+                shared_time_range,
+                Some(TimeRangePreset::Last15min),
+                SavedChartRefreshPolicy::Interval { every_secs: 10 },
+                true,
+                self.app_state.clone(),
+                cx,
+            );
+            dashboard.set_profile_id(profile_id);
+            dashboard
+        });
+
+        let pane = DashboardDocument::into_pane(doc, cx);
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
     #[cfg(feature = "mcp")]
     pub(super) fn open_mcp_approvals(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.mcp_approvals_view.update(cx, |view, cx| {
@@ -2042,6 +2176,7 @@ impl Workspace {
                 shared_time_range,
                 dashboard.shared_time_range_preset,
                 dashboard.shared_refresh_policy,
+                false,
                 app_state.clone(),
                 cx,
             )
@@ -2525,6 +2660,7 @@ impl Workspace {
                 shared_time_range,
                 None,
                 SavedChartRefreshPolicy::Off,
+                false,
                 app_state.clone(),
                 cx,
             )

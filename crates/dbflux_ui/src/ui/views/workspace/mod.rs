@@ -949,6 +949,9 @@ impl Workspace {
                 } => {
                     this.open_instance_inspector(*profile_id, metric_id.clone(), window, cx);
                 }
+                SidebarEvent::OpenInstanceOverview { profile_id } => {
+                    this.open_instance_overview(*profile_id, window, cx);
+                }
                 SidebarEvent::RequestTunnelAuth {
                     tunnel_id,
                     tunnel_name,
