@@ -750,14 +750,19 @@ impl Sidebar {
 
     /// Build `InstanceMetricLeaf` children for the `InstanceMetricsFolder`.
     ///
-    /// Returns a loading placeholder when the cache is empty (fetch not yet
-    /// complete), or one leaf per cached metric definition.
+    /// Returns a loading placeholder when the cache has no entry for `profile_id`
+    /// (fetch not yet complete), the "No metrics available" placeholder when the
+    /// cache entry is present but empty (probe completed, nothing to show), or one
+    /// leaf per cached metric definition once the fetch resolves.
     pub(crate) fn build_instance_metric_leaf_children(
         profile_id: Uuid,
         cache: &HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>>,
     ) -> Vec<TreeItem> {
         let Some(metrics) = cache.get(&profile_id) else {
-            return Vec::new();
+            return vec![TreeItem::new(
+                format!("instance-metrics-loading:{profile_id}"),
+                "Loading\u{2026}".to_string(),
+            )];
         };
 
         if metrics.is_empty() {
@@ -784,14 +789,19 @@ impl Sidebar {
 
     /// Build `InstanceInspectorLeaf` children for the `InstanceInspectorsFolder`.
     ///
-    /// Returns an empty vec when the cache is unpopulated, or one leaf per
-    /// cached inspector definition.
+    /// Returns a loading placeholder when the cache has no entry for `profile_id`
+    /// (fetch not yet complete), the "No inspectors available" placeholder when
+    /// the cache entry is present but empty, or one leaf per cached inspector
+    /// definition once the fetch resolves.
     pub(crate) fn build_instance_inspector_leaf_children(
         profile_id: Uuid,
         cache: &HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>>,
     ) -> Vec<TreeItem> {
         let Some(inspectors) = cache.get(&profile_id) else {
-            return Vec::new();
+            return vec![TreeItem::new(
+                format!("instance-inspectors-loading:{profile_id}"),
+                "Loading\u{2026}".to_string(),
+            )];
         };
 
         if inspectors.is_empty() {
@@ -3332,18 +3342,34 @@ mod tests {
         }
     }
 
-    /// REQ-UI-1 / RF1: when `instance_metrics_cache` has no entry for a profile,
-    /// `build_instance_metric_leaf_children` returns an empty vec (loading deferred
-    /// to expansion handler).
+    /// REQ-UI-1: when `instance_metrics_cache` has populated entries for a profile,
+    /// `build_instance_metric_leaf_children` returns one leaf per definition (no placeholders).
     #[test]
-    fn build_instance_metric_leaf_children_returns_empty_on_cache_miss() {
+    fn build_instance_metric_leaf_children_returns_no_placeholder_when_cache_populated() {
+        use dbflux_core::{InstanceMetricDef, InstanceMetricUnit};
+
         let profile_id = Uuid::new_v4();
-        let cache: HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>> = HashMap::new();
+        let defs = vec![InstanceMetricDef {
+            id: "pg.tps".to_string(),
+            display_name: "TPS".to_string(),
+            group: "Throughput".to_string(),
+            unit: InstanceMetricUnit::PerSecond,
+            description: None,
+            default_refresh_secs: 15,
+        }];
+        let mut cache: HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>> = HashMap::new();
+        cache.insert(profile_id, defs);
 
         let leaves = Sidebar::build_instance_metric_leaf_children(profile_id, &cache);
+
+        assert_eq!(
+            leaves.len(),
+            1,
+            "must return exactly one leaf for one metric"
+        );
         assert!(
-            leaves.is_empty(),
-            "must return empty vec when cache has no entry for this profile"
+            !leaves[0].id.to_string().contains("loading"),
+            "populated cache must not produce a loading placeholder"
         );
     }
 
@@ -3386,6 +3412,96 @@ mod tests {
                     if *pid == profile_id && metric_id == "pg.activity"
             ),
             "leaf must carry InstanceInspectorLeaf with correct ids; got {node_id:?}"
+        );
+    }
+
+    // ---- BF1: loading placeholder tests ----
+
+    /// BF1: when `instance_metrics_cache` has no entry for a profile,
+    /// `build_instance_metric_leaf_children` must return a single loading
+    /// placeholder so the parent folder is non-empty and shows a chevron.
+    #[test]
+    fn build_instance_metric_leaf_children_returns_loading_placeholder_on_cache_miss() {
+        let profile_id = Uuid::new_v4();
+        let cache: HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>> = HashMap::new();
+
+        let leaves = Sidebar::build_instance_metric_leaf_children(profile_id, &cache);
+
+        assert_eq!(
+            leaves.len(),
+            1,
+            "must return one loading placeholder when cache has no entry for this profile"
+        );
+        assert!(
+            leaves[0].id.to_string().contains("loading"),
+            "loading placeholder id must contain 'loading'; got {:?}",
+            leaves[0].id
+        );
+    }
+
+    /// BF1: when `instance_inspectors_cache` has no entry for a profile,
+    /// `build_instance_inspector_leaf_children` must return a single loading
+    /// placeholder so the parent folder is non-empty and shows a chevron.
+    #[test]
+    fn build_instance_inspector_leaf_children_returns_loading_placeholder_on_cache_miss() {
+        let profile_id = Uuid::new_v4();
+        let cache: HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>> = HashMap::new();
+
+        let leaves = Sidebar::build_instance_inspector_leaf_children(profile_id, &cache);
+
+        assert_eq!(
+            leaves.len(),
+            1,
+            "must return one loading placeholder when cache has no entry for this profile"
+        );
+        assert!(
+            leaves[0].id.to_string().contains("loading"),
+            "loading placeholder id must contain 'loading'; got {:?}",
+            leaves[0].id
+        );
+    }
+
+    /// BF1: empty Vec in cache (probe completed, nothing returned) must still
+    /// produce the "No metrics available" placeholder, not a loading placeholder.
+    #[test]
+    fn build_instance_metric_leaf_children_empty_cache_entry_shows_not_available() {
+        let profile_id = Uuid::new_v4();
+        let mut cache: HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>> = HashMap::new();
+        cache.insert(profile_id, Vec::new());
+
+        let leaves = Sidebar::build_instance_metric_leaf_children(profile_id, &cache);
+
+        assert_eq!(
+            leaves.len(),
+            1,
+            "must return one placeholder for empty entry"
+        );
+        assert!(
+            leaves[0].label.to_string().contains("No metrics"),
+            "empty-cache placeholder must say 'No metrics available'; got {:?}",
+            leaves[0].label
+        );
+    }
+
+    /// BF1: empty Vec in cache (probe completed, nothing returned) must still
+    /// produce the "No inspectors available" placeholder, not a loading placeholder.
+    #[test]
+    fn build_instance_inspector_leaf_children_empty_cache_entry_shows_not_available() {
+        let profile_id = Uuid::new_v4();
+        let mut cache: HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>> = HashMap::new();
+        cache.insert(profile_id, Vec::new());
+
+        let leaves = Sidebar::build_instance_inspector_leaf_children(profile_id, &cache);
+
+        assert_eq!(
+            leaves.len(),
+            1,
+            "must return one placeholder for empty entry"
+        );
+        assert!(
+            leaves[0].label.to_string().contains("No inspectors"),
+            "empty-cache placeholder must say 'No inspectors available'; got {:?}",
+            leaves[0].label
         );
     }
 
