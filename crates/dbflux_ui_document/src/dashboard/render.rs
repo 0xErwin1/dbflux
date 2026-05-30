@@ -167,14 +167,14 @@ impl Render for DashboardDocument {
                         .cloned()
                         .unwrap_or_else(|| panel.read(cx).title()),
                     DashboardPanelSlot::Inspector {
-                        metric_id,
+                        entity,
                         title_override,
                         ..
                     } => title_override
                         .as_ref()
                         .filter(|s| !s.trim().is_empty())
                         .cloned()
-                        .unwrap_or_else(|| metric_id.clone()),
+                        .unwrap_or_else(|| entity.read(cx).metric_id().to_string()),
                     DashboardPanelSlot::Orphan { .. } => "Chart not found".to_string(),
                     DashboardPanelSlot::Divider { .. } => String::new(),
                 };
@@ -298,16 +298,22 @@ impl Render for DashboardDocument {
                             .child(Text::heading(label))
                             .into_any_element()
                     }
-                    DashboardPanelSlot::Inspector { metric_id, .. } => div()
-                        .id(("panel-card", panel_index))
-                        .size_full()
-                        .flex()
-                        .flex_col()
-                        .items_center()
-                        .justify_center()
-                        .text_sm()
-                        .child(format!("Inspector: {metric_id}"))
-                        .into_any_element(),
+                    DashboardPanelSlot::Inspector { entity, .. } => card_focus_decoration(
+                        surface_card(cx)
+                            .id(("panel-card", panel_index))
+                            .size_full()
+                            .overflow_hidden()
+                            .relative()
+                            .flex()
+                            .flex_col()
+                            .on_mouse_down(gpui::MouseButton::Left, on_card_mouse_down)
+                            .child(header)
+                            .child(div().flex_1().overflow_hidden().child(entity.clone()))
+                            .when_some(resize_right, |el, r| el.child(r))
+                            .when_some(resize_bottom, |el, r| el.child(r))
+                            .when_some(resize_corner, |el, r| el.child(r)),
+                    )
+                    .into_any_element(),
                 };
 
                 // Position the panel absolutely on the 12-column grid.
@@ -524,7 +530,7 @@ impl Render for DashboardDocument {
                             this.start_panel_title_edit(idx, window, cx);
                         }
                     }
-                    "delete" | "backspace" => {
+                    "delete" | "backspace" if !this.is_read_only() => {
                         if let Some(idx) = this.focused_panel_index {
                             this.remove_panel(idx, cx);
                         }

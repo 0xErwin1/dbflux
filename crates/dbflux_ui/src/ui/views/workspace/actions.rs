@@ -530,8 +530,16 @@ impl Workspace {
                 };
 
                 if panel_def.is_inspector {
+                    use crate::ui::document::InspectorPanel;
+                    let metric_id = panel_def.metric_id.clone();
+                    let app_state = self.app_state.clone();
+                    let inspector_entity =
+                        cx.new(|cx| InspectorPanel::new(profile_id, metric_id, app_state, cx));
+                    inspector_entity.update(cx, |panel, cx| {
+                        panel.request_reexec(cx);
+                    });
                     DashboardPanelSlot::Inspector {
-                        metric_id: panel_def.metric_id.clone(),
+                        entity: inspector_entity,
                         grid_pos,
                         title_override: None,
                     }
@@ -595,6 +603,52 @@ impl Workspace {
             mgr.open(Tab::Pane(Box::new(pane)), cx);
         });
         self.set_focus(FocusTarget::Document, window, cx);
+    }
+
+    /// Clone a read-only instance overview dashboard into a new persisted,
+    /// editable dashboard for the same profile and open it in a new tab.
+    ///
+    /// The new dashboard starts empty — panels cannot be copied directly because
+    /// the synthesized slots carry live entities (not persisted `SavedChart`
+    /// records). The user adds panels through the normal "Add Panel" flow.
+    pub(super) fn save_overview_as_editable(
+        &mut self,
+        source_title: String,
+        profile_id: uuid::Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use dbflux_components::saved_chart::{SavedChartRefreshPolicy, TimeRangePreset};
+
+        let new_name = format!("{} (editable)", source_title);
+
+        let create_result = self.app_state.update(cx, |state, _cx| {
+            state.dashboards.create_dashboard(
+                new_name,
+                None,
+                profile_id,
+                Some(TimeRangePreset::Last15min),
+                SavedChartRefreshPolicy::Off,
+            )
+        });
+
+        match create_result {
+            Ok(new_id) => {
+                Toast::info("Created editable dashboard — add panels via the toolbar.")
+                    .meta_right(now_hms())
+                    .push(cx);
+                self.open_dashboard(new_id, window, cx);
+            }
+            Err(e) => {
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::Config,
+                        format!("Failed to create editable dashboard: {e}"),
+                    ),
+                    cx,
+                );
+            }
+        }
     }
 
     #[cfg(feature = "mcp")]

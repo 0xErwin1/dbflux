@@ -105,8 +105,8 @@ impl MysqlInstanceCatalog {
         Self {
             conn,
             performance_schema_available,
-            process_privilege: true,
-            connection_admin: true,
+            process_privilege: false,
+            connection_admin: false,
         }
     }
 

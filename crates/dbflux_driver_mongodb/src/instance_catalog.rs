@@ -97,9 +97,9 @@ impl MongoInstanceCatalog {
     pub fn new(client: Arc<Mutex<Client>>) -> Self {
         Self {
             client,
-            cluster_monitor: true,
-            inprog: true,
-            killop: true,
+            cluster_monitor: false,
+            inprog: false,
+            killop: false,
         }
     }
 
@@ -514,9 +514,19 @@ pub(crate) fn dispatch_metric_series(
         .find(|(_, id, _, _, _)| *id == metric_id);
 
     match entry {
-        Some((path, _, display_name, _, _)) => {
+        Some((path, metric_id_str, display_name, _, _)) => {
             let status = run_server_status(client)?;
-            let value = MongoInstanceCatalog::extract_path(&status, path).unwrap_or(0.0);
+            let value = MongoInstanceCatalog::extract_path(&status, path).ok_or_else(|| {
+                DbError::QueryFailed(
+                    format!(
+                        "serverStatus path '{}' not found — metric '{}' is not available \
+                         on this MongoDB version or deployment (Atlas, in-memory engine, \
+                         or older server may omit this field)",
+                        path, metric_id_str
+                    )
+                    .into(),
+                )
+            })?;
 
             let columns = vec![timestamp_col("timestamp_ms"), float_col(display_name)];
 

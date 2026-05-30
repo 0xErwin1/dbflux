@@ -265,16 +265,37 @@ pub(super) fn dashboard_toolbar(
         .tooltip(mode_tooltip)
         .on_click(move |event, window, app| on_toggle_mode(event, window, app));
 
-    // Group both right-anchored controls in one wrapper with its own gap so
-    // they don't visually collide with each other or the toolbar edge.
-    let right_group = div()
-        .flex_shrink_0()
-        .ml_auto()
-        .flex()
-        .items_center()
-        .gap(Spacing::SM)
-        .child(add_btn)
-        .child(mode_btn);
+    // Group right-anchored controls. Read-only dashboards omit the mutation
+    // affordances ("Add Panel" and the Edit/View toggle) but expose a
+    // "Save as editable" button so the user can clone the overview into a
+    // new persisted, mutable dashboard.
+    let is_read_only = dashboard.is_read_only();
+    let right_group = if is_read_only {
+        let on_save_as = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+            this.request_save_as_editable(cx);
+        });
+        let save_as_btn = ToolbarButton::new("dash-save-as-editable")
+            .label("Save as editable")
+            .variant(ToolbarButtonVariant::Default)
+            .tooltip("Clone this overview into a new editable dashboard")
+            .on_click(move |event, window, app| on_save_as(event, window, app));
+        div()
+            .flex_shrink_0()
+            .ml_auto()
+            .flex()
+            .items_center()
+            .gap(Spacing::SM)
+            .child(save_as_btn)
+    } else {
+        div()
+            .flex_shrink_0()
+            .ml_auto()
+            .flex()
+            .items_center()
+            .gap(Spacing::SM)
+            .child(add_btn)
+            .child(mode_btn)
+    };
 
     // Items pushed in order. When Custom is selected, the picker slots are
     // inserted between the preset dropdown and the refresh control, mirroring

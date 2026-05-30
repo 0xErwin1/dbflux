@@ -779,6 +779,28 @@ impl Sidebar {
         let selected_index = self.tree_state.read(cx).selected_index();
         self.active_databases = Self::extract_active_databases(self.app_state.read(cx));
 
+        // Evict catalog cache entries for profiles that are no longer
+        // connected. This handles the edge case where a disconnect happens
+        // via a code path that does not call `clear_instance_catalog_cache`
+        // directly (e.g. connection error, or reconnect to a different account
+        // on the same profile UUID).
+        let connected_profile_ids: std::collections::HashSet<Uuid> = self
+            .app_state
+            .read(cx)
+            .connections()
+            .keys()
+            .copied()
+            .collect();
+        let stale_metric_ids: Vec<Uuid> = self
+            .instance_metrics_cache
+            .keys()
+            .filter(|id| !connected_profile_ids.contains(id))
+            .copied()
+            .collect();
+        for profile_id in stale_metric_ids {
+            self.clear_instance_catalog_cache(profile_id);
+        }
+
         self.cleanup_stale_overrides(cx);
 
         let items = self.build_tree_items_with_overrides(cx);

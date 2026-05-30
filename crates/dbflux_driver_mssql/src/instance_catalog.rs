@@ -328,6 +328,9 @@ impl InstanceCatalog for MssqlInstanceCatalog {
     }
 
     fn row_actions(&self, metric_id: &str) -> Vec<dbflux_core::InspectorRowAction> {
+        if !self.view_server_state_available {
+            return Vec::new();
+        }
         Self::static_row_actions(metric_id)
     }
 

@@ -346,11 +346,26 @@ impl ChartDocument {
                 );
                 doc.saved_chart_id = Some(saved.id);
 
-                // Instance metric charts default to 30-second auto-refresh so
-                // the displayed series stays current without manual re-runs.
+                // Establish the instance-metric identity so DocumentKey::InstanceMetric
+                // deduplication works when the tab is re-opened.
+                doc.set_instance_metric_identity(metric_id.clone());
+
+                // Restore the 15-min rolling window default (preset index 0) so
+                // re-loading a saved chart behaves identically to a fresh open.
+                doc.set_initial_time_range_preset(0);
+
+                // Default to 30-second auto-refresh so the series stays current.
                 // The floor in `clamp_refresh_secs` ensures this is never below 10s.
-                doc.refresh_policy = RefreshPolicy::Interval { every_secs: 30 };
+                let policy = RefreshPolicy::Interval { every_secs: 30 };
+                doc.refresh_policy = policy;
                 doc.update_refresh_timer(cx);
+
+                // Sync the toolbar refresh-policy dropdown to reflect the loaded
+                // policy so it does not display "Manual" while the timer runs.
+                let policy_index = policy.index();
+                doc.refresh_dropdown.update(cx, |dropdown, cx| {
+                    dropdown.set_selected_index(Some(policy_index), cx);
+                });
 
                 return Ok(doc);
             }
@@ -1461,7 +1476,19 @@ impl InstantSeriesBuffer {
     }
 
     /// Append rows from a single-sample fetch result and prune to retention cap.
+    ///
+    /// If the incoming result's column count differs from the buffer's schema
+    /// (e.g. a metric was removed or the driver changed its output between
+    /// fetches), the buffer is reset: accumulated rows are discarded and the
+    /// column schema is replaced with the new result's schema. This prevents
+    /// silently appending rows with mismatched column counts, which would
+    /// produce an unrenderable `QueryResult`.
     pub(super) fn push_result(&mut self, result: &dbflux_core::QueryResult) {
+        if result.columns.len() != self.columns.len() {
+            self.rows.clear();
+            self.columns = result.columns.clone();
+        }
+
         for row in &result.rows {
             self.rows.push(row.clone());
         }

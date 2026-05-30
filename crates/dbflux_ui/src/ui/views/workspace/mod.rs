@@ -1187,6 +1187,17 @@ impl Workspace {
                     TabManagerEvent::RequestAddPanel { dashboard_id } => {
                         this.open_add_panel_picker(*dashboard_id, window, cx);
                     }
+                    TabManagerEvent::RequestSaveAsEditable {
+                        source_title,
+                        profile_id,
+                    } => {
+                        this.save_overview_as_editable(
+                            source_title.clone(),
+                            *profile_id,
+                            window,
+                            cx,
+                        );
+                    }
                     TabManagerEvent::Opened(_)
                     | TabManagerEvent::Closed(_)
                     | TabManagerEvent::Reordered => {

@@ -324,25 +324,34 @@ impl InspectorPanel {
         let row_values = confirm.row_values.clone();
         let action_label = confirm.action_label.clone();
         let audit_service = self.app_state.read(cx).audit_service().clone();
-
-        let connection: Option<Arc<dyn dbflux_core::Connection>> = self
-            .app_state
-            .read(cx)
-            .connections()
-            .get(&profile_id)
-            .and_then(|c| c.resolve_connection_for_execution(None).ok());
+        let app_state = self.app_state.clone();
 
         cx.notify();
 
-        let Some(conn) = connection else {
-            log::warn!(
-                "[inspector kill] connection not found for profile {}",
-                profile_id
-            );
-            return;
-        };
-
         cx.spawn(async move |_this, cx| {
+            // Resolve the connection at execution time (after the user confirms),
+            // not at click time. This prevents a stale Arc from being used if the
+            // profile disconnects and reconnects between click and confirm.
+            let connection: Option<Arc<dyn dbflux_core::Connection>> = cx
+                .update(|cx| {
+                    app_state
+                        .read(cx)
+                        .connections()
+                        .get(&profile_id)
+                        .and_then(|c| c.resolve_connection_for_execution(None).ok())
+                })
+                .ok()
+                .flatten();
+
+            let Some(conn) = connection else {
+                let uf = UserFacingError::new(
+                    ErrorKind::Driver,
+                    "Action cancelled — connection is no longer available. Reconnect and try again.",
+                );
+                report_error_async(uf, cx);
+                return;
+            };
+
             let catalog = conn.instance_catalog();
             let result = match catalog {
                 Some(cat) => {

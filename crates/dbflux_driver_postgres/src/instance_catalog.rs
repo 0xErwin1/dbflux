@@ -24,7 +24,7 @@ impl PgInstanceCatalog {
     pub fn new(client: Arc<Mutex<Client>>) -> Self {
         Self {
             client,
-            pg_signal_backend: true,
+            pg_signal_backend: false,
         }
     }
 

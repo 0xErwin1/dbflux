@@ -3899,8 +3899,11 @@ impl Sidebar {
                 // same profile_id to a different AWS account). Dropping the
                 // Task handle abandons the foreground awaiter, which is where
                 // the cache write now lives (see spawn_fetch_* refactor).
+                // Also evict the cached catalog entries so the next folder
+                // expand re-runs privilege probes against the new session.
                 sidebar.update(cx, |sidebar, _cx| {
                     sidebar.drop_pending_metric_fetches(profile_id);
+                    sidebar.clear_instance_catalog_cache(profile_id);
                 });
             }) {
                 log::warn!(
