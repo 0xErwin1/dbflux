@@ -2619,6 +2619,7 @@ dependencies = [
 name = "dbflux_driver_mongodb"
 version = "0.6.0-dev.10"
 dependencies = [
+ "async-trait",
  "base64 0.22.1",
  "bson",
  "chrono",
