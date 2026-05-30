@@ -121,7 +121,7 @@ impl UserFacingError {
 /// | Inside a `cx.update(|cx| { ... })`      | `report_error`          |
 pub fn report_error(err: UserFacingError, cx: &mut App) {
     use crate::app_state_entity::AppStateGlobal;
-    use crate::toast::{copy_action, now_hms, Toast};
+    use crate::toast::{Toast, copy_action, now_hms};
 
     let id_str = err.correlation_id.to_string();
     let kind_str = err.kind.as_str();
@@ -207,8 +207,7 @@ mod tests {
     #[test]
     fn with_correlation_id_overrides_generated_uuid() {
         let known = Uuid::nil();
-        let err = UserFacingError::new(ErrorKind::Storage, "io error")
-            .with_correlation_id(known);
+        let err = UserFacingError::new(ErrorKind::Storage, "io error").with_correlation_id(known);
         assert_eq!(err.correlation_id, known);
     }
 
@@ -227,14 +226,20 @@ mod tests {
         let err = UserFacingError::from_formatted(ErrorKind::Driver, fe);
         assert_eq!(err.kind, ErrorKind::Driver);
         assert_eq!(err.summary, "connection refused");
-        assert!(err.cause.is_some(), "cause must be populated from detail/code");
+        assert!(
+            err.cause.is_some(),
+            "cause must be populated from detail/code"
+        );
     }
 
     #[test]
     fn from_formatted_no_extras_has_no_cause() {
         let fe = FormattedError::new("simple error");
         let err = UserFacingError::from_formatted(ErrorKind::Network, fe);
-        assert!(err.cause.is_none(), "cause must be None when no detail/hint/code");
+        assert!(
+            err.cause.is_none(),
+            "cause must be None when no detail/hint/code"
+        );
     }
 
     #[test]

@@ -294,30 +294,29 @@ impl Render for StatusBar {
                     .flex_shrink_0()
                     .items_center()
                     .when(unread > 0, |this| {
-                        this.child(Self::vertical_divider(divider_color))
-                            .child(
-                                div()
-                                    .id("error-badge")
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .px(px(10.0))
-                                    .h(px(22.0))
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(cx.theme().secondary))
-                                    .child(
-                                        Icon::new(crate::ui::icons::AppIcon::CircleAlert)
-                                            .size(Heights::ICON_SM)
-                                            .color(SemBannerColors::for_current(cx).error_fg),
-                                    )
-                                    .child(Self::metadata_text(unread.to_string()))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.app_state.update(cx, |s, cx| {
-                                            s.clear_unread_errors(cx);
-                                        });
-                                        cx.emit(OpenAuditWithCorrelation(None));
-                                    })),
-                            )
+                        this.child(Self::vertical_divider(divider_color)).child(
+                            div()
+                                .id("error-badge")
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .px(px(10.0))
+                                .h(px(22.0))
+                                .cursor_pointer()
+                                .hover(|s| s.bg(cx.theme().secondary))
+                                .child(
+                                    Icon::new(crate::ui::icons::AppIcon::CircleAlert)
+                                        .size(Heights::ICON_SM)
+                                        .color(SemBannerColors::for_current(cx).error_fg),
+                                )
+                                .child(Self::metadata_text(unread.to_string()))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.app_state.update(cx, |s, cx| {
+                                        s.clear_unread_errors(cx);
+                                    });
+                                    cx.emit(OpenAuditWithCorrelation(None));
+                                })),
+                        )
                     })
                     .child(Self::vertical_divider(divider_color))
                     .child(

@@ -7,9 +7,9 @@ mod render;
 pub use inspector::{WorkspaceInspector, WorkspaceInspectorEvent};
 
 use crate::app::{AppStateChanged, AppStateEntity};
-use dbflux_ui_base::AppStateGlobal;
 use dbflux_components;
 use dbflux_core::observability::actions::CONFIG_CHANGE;
+use dbflux_ui_base::AppStateGlobal;
 use dbflux_ui_base::modals::{
     AddPanelOutcome, AddPanelRequest, CreateDashboardOutcome, CreateDashboardRequest,
     DeleteDashboardOutcome, DeleteDashboardRequest, DeleteSavedChartOutcome,

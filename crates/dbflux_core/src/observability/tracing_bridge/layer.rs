@@ -336,7 +336,10 @@ mod tests {
     fn visitor_captures_correlation_id_into_slot_not_extra_fields() {
         let mut visitor = AuditFieldVisitor::default();
 
-        visitor.record_string_by_name("correlation_id", "0192cf4a-dead-7000-beef-000000000001".to_owned());
+        visitor.record_string_by_name(
+            "correlation_id",
+            "0192cf4a-dead-7000-beef-000000000001".to_owned(),
+        );
 
         assert_eq!(
             visitor.correlation_id.as_deref(),

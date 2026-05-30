@@ -154,7 +154,10 @@ impl AppStateEntity {
         cx: &mut gpui::Context<Self>,
     ) {
         self.unread_error_count = self.unread_error_count.saturating_add(1);
-        cx.emit(UserErrorReported { correlation_id, severity });
+        cx.emit(UserErrorReported {
+            correlation_id,
+            severity,
+        });
         cx.emit(AppStateChanged);
         cx.notify();
     }

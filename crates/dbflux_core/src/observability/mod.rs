@@ -57,7 +57,12 @@ pub use types::{
 /// Call sites MUST use this function — never inline the `tracing::error!`
 /// call — to guarantee the field set remains consistent with the bridge.
 #[cfg(feature = "tracing-bridge")]
-pub fn emit_user_error_event(level: tracing::Level, summary: &str, correlation_id: &str, kind: &str) {
+pub fn emit_user_error_event(
+    level: tracing::Level,
+    summary: &str,
+    correlation_id: &str,
+    kind: &str,
+) {
     match level {
         tracing::Level::WARN => tracing::warn!(
             target: "dbflux_ui::user_error",

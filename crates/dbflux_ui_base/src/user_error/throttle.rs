@@ -49,7 +49,10 @@ impl TokenBucket {
         let refill_count =
             (elapsed.as_millis() / REFILL_INTERVAL.as_millis()).min(u8::MAX as u128) as u8;
         if refill_count > 0 {
-            self.tokens = self.tokens.saturating_add(refill_count).min(BUCKET_CAPACITY);
+            self.tokens = self
+                .tokens
+                .saturating_add(refill_count)
+                .min(BUCKET_CAPACITY);
             self.last_refill = now;
         }
     }
@@ -99,7 +102,10 @@ mod tests {
             bucket.try_consume();
         }
 
-        assert!(!bucket.try_consume(), "sixth consume must fail when bucket is empty");
+        assert!(
+            !bucket.try_consume(),
+            "sixth consume must fail when bucket is empty"
+        );
     }
 
     #[test]
@@ -116,7 +122,10 @@ mod tests {
 
         // Advance past one refill interval.
         set_fake_now(base + REFILL_INTERVAL + Duration::from_millis(1));
-        assert!(bucket.try_consume(), "one refilled token should allow one more consume");
+        assert!(
+            bucket.try_consume(),
+            "one refilled token should allow one more consume"
+        );
     }
 
     #[test]
@@ -135,8 +144,14 @@ mod tests {
 
         // Must succeed exactly BUCKET_CAPACITY times, then fail.
         for i in 1..=BUCKET_CAPACITY {
-            assert!(bucket.try_consume(), "consume {i} after refill must succeed");
+            assert!(
+                bucket.try_consume(),
+                "consume {i} after refill must succeed"
+            );
         }
-        assert!(!bucket.try_consume(), "capacity cap: no more than BUCKET_CAPACITY tokens");
+        assert!(
+            !bucket.try_consume(),
+            "capacity cap: no more than BUCKET_CAPACITY tokens"
+        );
     }
 }
