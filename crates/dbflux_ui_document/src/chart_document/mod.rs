@@ -322,6 +322,13 @@ impl ChartDocument {
                     cx,
                 );
                 doc.saved_chart_id = Some(saved.id);
+
+                // Instance metric charts default to 30-second auto-refresh so
+                // the displayed series stays current without manual re-runs.
+                // The floor in `clamp_refresh_secs` ensures this is never below 10s.
+                doc.refresh_policy = RefreshPolicy::Interval { every_secs: 30 };
+                doc.update_refresh_timer(cx);
+
                 return Ok(doc);
             }
 
@@ -576,8 +583,37 @@ impl ChartDocument {
         false
     }
 
-    pub fn set_refresh_policy(&mut self, policy: RefreshPolicy, _cx: &mut Context<Self>) {
+    pub fn set_refresh_policy(&mut self, policy: RefreshPolicy, cx: &mut Context<Self>) {
         self.refresh_policy = policy;
+        self.update_refresh_timer(cx);
+    }
+
+    /// Cancel any running timer and start a new one at the clamped interval, or
+    /// leave `_refresh_timer = None` when the policy is `Manual`.
+    ///
+    /// Dropping the old `Task<()>` value cancels the spawned future, which is
+    /// the cancellation mechanism for the timer loop.
+    fn update_refresh_timer(&mut self, cx: &mut Context<Self>) {
+        self._refresh_timer = None;
+
+        let Some(duration) = refresh_timer_duration(self.refresh_policy) else {
+            return;
+        };
+
+        self._refresh_timer = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(duration).await;
+
+                let _ = cx.update(|cx| {
+                    let Some(entity) = this.upgrade() else {
+                        return;
+                    };
+                    entity.update(cx, |doc, cx| {
+                        doc.mark_pending_reexecute(cx);
+                    });
+                });
+            }
+        }));
     }
 
     pub fn set_active_tab(&mut self, _active: bool) {}
@@ -1324,6 +1360,31 @@ fn should_render_stats_rail(rail_open: bool, rail_tab: crate::chart::ChartRailTa
     rail_open && rail_tab == crate::chart::ChartRailTab::Stats
 }
 
+/// Clamp `every_secs` to the 10-second minimum refresh floor defined in
+/// `crate::refresh::MIN_REFRESH_FLOOR_SECS`.
+///
+/// Values at or above the floor are returned unchanged. Values below (e.g. the
+/// legacy 1s/2s/5s options in `RefreshPolicy::ALL`) are raised to the floor so
+/// the UI never schedules sub-10-second polling.
+fn clamp_refresh_secs(every_secs: u32) -> u32 {
+    use crate::refresh::MIN_REFRESH_FLOOR_SECS;
+    every_secs.max(MIN_REFRESH_FLOOR_SECS as u32)
+}
+
+/// Return the `Duration` the auto-refresh timer should use for `policy`, or
+/// `None` if `policy` is `Manual` (no timer should be started).
+///
+/// The interval is clamped through `clamp_refresh_secs` so the effective
+/// minimum is always 10 seconds.
+fn refresh_timer_duration(policy: RefreshPolicy) -> Option<std::time::Duration> {
+    match policy {
+        RefreshPolicy::Manual => None,
+        RefreshPolicy::Interval { every_secs } => {
+            Some(std::time::Duration::from_secs(clamp_refresh_secs(every_secs) as u64))
+        }
+    }
+}
+
 /// Returns the new `(open, tab)` state after the Stats toolbar button is clicked.
 ///
 /// Toggling while already open on the Stats tab closes the rail. Clicking Stats
@@ -1881,6 +1942,98 @@ mod tests {
             tab,
             crate::chart::ChartRailTab::Stats,
             "switching from Configure must set tab to Stats"
+        );
+    }
+
+    // ---- T18: refresh timer behaviour ----
+
+    /// REQ-DOC-2: `clamp_refresh_secs` must return the input unchanged when it
+    /// is at or above the 10-second floor.
+    ///
+    /// This test will fail to compile until `clamp_refresh_secs` is added in T19.
+    #[test]
+    fn refresh_secs_at_or_above_floor_passes_through_unchanged() {
+        assert_eq!(
+            super::clamp_refresh_secs(10),
+            10,
+            "10s is exactly at the floor and must not be raised"
+        );
+        assert_eq!(
+            super::clamp_refresh_secs(30),
+            30,
+            "30s is above the floor and must not be altered"
+        );
+        assert_eq!(
+            super::clamp_refresh_secs(60),
+            60,
+            "60s is above the floor and must not be altered"
+        );
+    }
+
+    /// REQ-DOC-2: any interval below 10s must be clamped up to 10s.
+    ///
+    /// This test will fail to compile until `clamp_refresh_secs` is added in T19.
+    #[test]
+    fn refresh_secs_below_floor_is_clamped_to_10() {
+        assert_eq!(
+            super::clamp_refresh_secs(1),
+            10,
+            "1s must be clamped to the 10s floor"
+        );
+        assert_eq!(
+            super::clamp_refresh_secs(5),
+            10,
+            "5s must be clamped to the 10s floor"
+        );
+        assert_eq!(
+            super::clamp_refresh_secs(9),
+            10,
+            "9s must be clamped to the 10s floor"
+        );
+    }
+
+    /// REQ-DOC-2: `Manual` policy produces `None` from `refresh_timer_duration`,
+    /// which means `update_refresh_timer` must leave `_refresh_timer` as `None`.
+    ///
+    /// This test will fail to compile until `refresh_timer_duration` is added in T19.
+    #[test]
+    fn manual_policy_produces_no_timer_duration() {
+        let duration = super::refresh_timer_duration(RefreshPolicy::Manual);
+        assert!(
+            duration.is_none(),
+            "Manual policy must return None — no timer scheduled"
+        );
+    }
+
+    /// REQ-DOC-2: `Interval { every_secs: 5 }` (below floor) must produce a
+    /// duration of exactly 10 seconds after clamping.
+    ///
+    /// This test will fail to compile until `refresh_timer_duration` is added in T19.
+    #[test]
+    fn interval_below_floor_produces_10s_duration() {
+        use std::time::Duration;
+
+        let duration = super::refresh_timer_duration(RefreshPolicy::Interval { every_secs: 5 });
+        assert_eq!(
+            duration,
+            Some(Duration::from_secs(10)),
+            "5s interval must be clamped to 10s duration"
+        );
+    }
+
+    /// REQ-DOC-2: `Interval { every_secs: 30 }` (above floor) must produce a
+    /// duration of exactly 30 seconds.
+    ///
+    /// This test will fail to compile until `refresh_timer_duration` is added in T19.
+    #[test]
+    fn interval_above_floor_produces_exact_duration() {
+        use std::time::Duration;
+
+        let duration = super::refresh_timer_duration(RefreshPolicy::Interval { every_secs: 30 });
+        assert_eq!(
+            duration,
+            Some(Duration::from_secs(30)),
+            "30s interval must produce a 30s duration unchanged"
         );
     }
 
