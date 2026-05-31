@@ -935,8 +935,19 @@ impl QueryBuilderPanel {
             return;
         }
 
-        if target_len > current_len {
-            for i in current_len..target_len {
+        // On shrink, we cannot just truncate: the retained `InputState` entities
+        // still display the text from the removed-or-shifted ordinal positions,
+        // while the subscriptions captured an `idx` that now points to a
+        // different `JoinRow`. Result: user sees stale labels but mutations
+        // land on the shifted row. Clear and rebuild from scratch instead.
+        if target_len < current_len {
+            self.join_input_states.clear();
+            self.join_kind_dropdowns.clear();
+        }
+
+        let start = self.join_input_states.len();
+        if target_len > start {
+            for i in start..target_len {
                 let to_table_val = self.join_rows[i].to_table.clone();
                 let on_expr_val = match &self.join_rows[i].on {
                     JoinOn::RawExpression(expr) => expr.clone(),
@@ -1039,9 +1050,6 @@ impl QueryBuilderPanel {
                 self.join_kind_dropdowns.push(kind_dropdown);
                 self._input_subs.push(kind_sub);
             }
-        } else {
-            self.join_input_states.truncate(target_len);
-            self.join_kind_dropdowns.truncate(target_len);
         }
     }
 

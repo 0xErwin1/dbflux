@@ -1013,4 +1013,104 @@ mod tests {
         let loaded = repo.get(&id).expect("get").expect("exists");
         assert_eq!(loaded.joins, joins);
     }
+
+    #[test]
+    fn joins_conditions_nested_roundtrip() {
+        let (_, repo, profile_id) = setup("joins_cond_rt");
+
+        // (a.x = b.x AND a.y = b.y) OR (a.z = b.z)
+        let nested = JoinFilterNode::Group {
+            node_id: 0,
+            op: BoolOp::Or,
+            children: vec![
+                JoinFilterNode::Group {
+                    node_id: 0,
+                    op: BoolOp::And,
+                    children: vec![
+                        JoinFilterNode::Predicate(JoinPredicate {
+                            node_id: 0,
+                            left: "a.x".to_string(),
+                            op: Comparator::Eq,
+                            right: "b.x".to_string(),
+                        }),
+                        JoinFilterNode::Predicate(JoinPredicate {
+                            node_id: 0,
+                            left: "a.y".to_string(),
+                            op: Comparator::Eq,
+                            right: "b.y".to_string(),
+                        }),
+                    ],
+                },
+                JoinFilterNode::Predicate(JoinPredicate {
+                    node_id: 0,
+                    left: "a.z".to_string(),
+                    op: Comparator::Eq,
+                    right: "b.z".to_string(),
+                }),
+            ],
+        };
+
+        let joins = vec![JoinStep {
+            kind: JoinKind::Inner,
+            from_alias: "a".to_string(),
+            to_schema: None,
+            to_table: "b".to_string(),
+            to_alias: "b".to_string(),
+            on: JoinOn::Conditions(nested.clone()),
+        }];
+
+        let mut spec = base_spec();
+        spec.joins = joins;
+
+        let id = Uuid::now_v7().to_string();
+        repo.upsert_by_id(&id, &profile_id, "Nested", &spec)
+            .expect("upsert");
+
+        let loaded = repo.get(&id).expect("get").expect("exists");
+        assert_eq!(loaded.joins.len(), 1);
+        match &loaded.joins[0].on {
+            JoinOn::Conditions(root) => assert_eq!(root, &nested),
+            other => panic!("expected JoinOn::Conditions, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_conditions_envelope_legacy_object() {
+        let raw = r#"{
+            "op": "or",
+            "predicates": [
+                { "left": "a.id", "op": "Eq", "right": "b.id" },
+                { "left": "a.k",  "op": "Eq", "right": "b.k"  }
+            ]
+        }"#;
+
+        let parsed = parse_conditions_envelope(raw).expect("parses legacy object");
+        match parsed {
+            JoinOn::Conditions(JoinFilterNode::Group { op, children, .. }) => {
+                assert_eq!(op, BoolOp::Or);
+                assert_eq!(children.len(), 2);
+                assert!(matches!(
+                    &children[0],
+                    JoinFilterNode::Predicate(p) if p.left == "a.id" && p.right == "b.id"
+                ));
+            }
+            other => panic!("expected wrapped Group, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_conditions_envelope_legacy_bare_array() {
+        let raw = r#"[
+            { "left": "a.id", "op": "Eq", "right": "b.id" }
+        ]"#;
+
+        let parsed = parse_conditions_envelope(raw).expect("parses legacy array");
+        match parsed {
+            JoinOn::Conditions(JoinFilterNode::Group { op, children, .. }) => {
+                assert_eq!(op, BoolOp::And);
+                assert_eq!(children.len(), 1);
+            }
+            other => panic!("expected wrapped Group, got {other:?}"),
+        }
+    }
 }

@@ -1109,9 +1109,9 @@ mod tests {
     // -------------------------------------------------------------------------
 
     use crate::query::visual_query::{
-        BoolOp, Comparator, FilterNode, JoinKind, JoinOn, JoinStep, LiteralValue, Predicate,
-        PredicateValue, ProjectedColumn, Projection, SortDirection as VSort, SortEntry,
-        SourceTable, VisualQuerySpec,
+        BoolOp, Comparator, FilterNode, JoinFilterNode, JoinKind, JoinOn, JoinPredicate, JoinStep,
+        LiteralValue, Predicate, PredicateValue, ProjectedColumn, Projection,
+        SortDirection as VSort, SortEntry, SourceTable, VisualQuerySpec,
     };
 
     fn users_spec() -> VisualQuerySpec {
@@ -1617,6 +1617,124 @@ mod tests {
         assert!(first_join != second_join, "must have two separate JOINs");
         assert!(q.sql.contains("\"orders\""));
         assert!(q.sql.contains("\"items\""));
+    }
+
+    #[test]
+    fn join_conditions_nested_or_inside_and_root_parenthesises() {
+        let generator = SqlMutationGenerator::new(&DIALECT);
+        let mut spec = users_spec();
+
+        // Root AND of: (a.x = b.x OR a.y = b.y) AND (a.z = b.z)
+        let root = JoinFilterNode::Group {
+            node_id: 0,
+            op: BoolOp::And,
+            children: vec![
+                JoinFilterNode::Group {
+                    node_id: 0,
+                    op: BoolOp::Or,
+                    children: vec![
+                        JoinFilterNode::Predicate(JoinPredicate {
+                            node_id: 0,
+                            left: "a.x".to_string(),
+                            op: Comparator::Eq,
+                            right: "b.x".to_string(),
+                        }),
+                        JoinFilterNode::Predicate(JoinPredicate {
+                            node_id: 0,
+                            left: "a.y".to_string(),
+                            op: Comparator::Eq,
+                            right: "b.y".to_string(),
+                        }),
+                    ],
+                },
+                JoinFilterNode::Predicate(JoinPredicate {
+                    node_id: 0,
+                    left: "a.z".to_string(),
+                    op: Comparator::Eq,
+                    right: "b.z".to_string(),
+                }),
+            ],
+        };
+
+        spec.joins = vec![JoinStep {
+            kind: JoinKind::Inner,
+            from_alias: "a".to_string(),
+            to_schema: None,
+            to_table: "b".to_string(),
+            to_alias: "b".to_string(),
+            on: JoinOn::Conditions(root),
+        }];
+
+        let q = generator
+            .generate_select(&spec)
+            .expect("must succeed")
+            .expect("must be Some");
+
+        // Nested OR must be parenthesised; root AND must NOT add outer parens.
+        assert!(
+            q.sql.contains("(a.x = b.x OR a.y = b.y)"),
+            "expected parenthesised OR group, got: {}",
+            q.sql
+        );
+        assert!(
+            q.sql.contains("AND a.z = b.z"),
+            "expected AND between groups, got: {}",
+            q.sql
+        );
+        // Root AND must not wrap the whole expression: the closing paren of
+        // the OR sub-group is followed by " AND a.z = b.z" outside of any
+        // additional grouping.
+        assert!(
+            q.sql.contains(") AND a.z = b.z"),
+            "root AND should not be wrapped in outer parens, got: {}",
+            q.sql
+        );
+    }
+
+    #[test]
+    fn join_conditions_incomplete_predicates_skipped() {
+        let generator = SqlMutationGenerator::new(&DIALECT);
+        let mut spec = users_spec();
+
+        // One complete predicate, one half-typed (right empty).
+        let root = JoinFilterNode::Group {
+            node_id: 0,
+            op: BoolOp::And,
+            children: vec![
+                JoinFilterNode::Predicate(JoinPredicate {
+                    node_id: 0,
+                    left: "a.id".to_string(),
+                    op: Comparator::Eq,
+                    right: "b.a_id".to_string(),
+                }),
+                JoinFilterNode::Predicate(JoinPredicate {
+                    node_id: 0,
+                    left: "a.tenant".to_string(),
+                    op: Comparator::Eq,
+                    right: String::new(),
+                }),
+            ],
+        };
+
+        spec.joins = vec![JoinStep {
+            kind: JoinKind::Inner,
+            from_alias: "a".to_string(),
+            to_schema: None,
+            to_table: "b".to_string(),
+            to_alias: "b".to_string(),
+            on: JoinOn::Conditions(root),
+        }];
+
+        let q = generator
+            .generate_select(&spec)
+            .expect("must succeed")
+            .expect("must be Some");
+        assert!(q.sql.contains("a.id = b.a_id"), "got: {}", q.sql);
+        assert!(
+            !q.sql.contains("a.tenant"),
+            "incomplete leaf leaked into SQL: {}",
+            q.sql
+        );
     }
 
     #[test]

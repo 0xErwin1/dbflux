@@ -156,7 +156,7 @@ pub fn render_joins(
                 );
             }
 
-            JoinOn::RawExpression(expr) => {
+            JoinOn::RawExpression(_) => {
                 if let Some((_to_table_state, on_expr_state)) = join_states.get(i) {
                     let mut raw_row = div().flex().flex_row().gap_1().items_center().pl_2();
                     raw_row = raw_row.child(
@@ -175,7 +175,6 @@ pub fn render_joins(
                         ),
                     );
                     join_block = join_block.child(raw_row);
-                    let _ = expr;
                 }
             }
         }
