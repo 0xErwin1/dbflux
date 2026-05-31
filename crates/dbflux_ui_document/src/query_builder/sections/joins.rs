@@ -36,10 +36,16 @@ pub fn render_joins(
                 .flex()
                 .flex_row()
                 .gap_1()
-                .items_center()
-                .child(div().flex_1().text_sm().child(SharedString::from(
-                    "No foreign key metadata available. Enter conditions as raw expressions.",
-                )))
+                .items_start()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(gpui::px(0.0))
+                        .text_sm()
+                        .child(SharedString::from(
+                            "No foreign key metadata available. Enter conditions as raw expressions.",
+                        )),
+                )
                 .child(
                     Button::new("qb-dismiss-fk-banner", "✕")
                         .ghost()
