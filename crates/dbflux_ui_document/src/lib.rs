@@ -13,6 +13,7 @@ mod data_grid_panel;
 mod data_view;
 pub mod data_view_trait;
 pub mod dedup;
+pub mod query_builder;
 mod style_guardrails;
 
 #[cfg(feature = "mcp")]
