@@ -48,9 +48,10 @@ success.
 
 - **`DashboardManager`** (`crates/dbflux_ui_base/src/dashboard_manager.rs`) —
   domain types `Dashboard`, `DashboardPanel`, `DashboardPanelKind`
-  (`Chart { saved_chart_id }` | `Divider { markdown }`),
-  `DashboardPanelDraft`. New panels are appended at `grid_column = 0` on a
-  new row with `grid_width = 12, grid_height = 2`.
+  (`Chart { saved_chart_id }` | `Divider { markdown }` |
+  `Inspector { metric_id }`), `DashboardPanelDraft`. New dashboards are
+  created with `grid_columns = 12`; new panels are appended at
+  `grid_column = 0` on a new row with `grid_width = 12, grid_height = 2`.
 - **`SavedChartManager`** (`crates/dbflux_ui_base/src/saved_chart_manager.rs`)
   — owns the `SavedChart` lifecycle, including `SavedChartRefreshPolicy`
   (`Off` / `Interval { every_secs }`).
@@ -63,9 +64,14 @@ success.
 Dashboards open as a `DashboardDocument`
 (`crates/dbflux_ui_document/src/dashboard/`):
 
-- **Dedup key**: `DocumentKey::Dashboard { dashboard_id }`
+- **Dedup key**: `DocumentKey::Dashboard { dashboard_id }` (persisted) or
+  `DocumentKey::InstanceOverview { profile_id }` (auto-generated read-only).
 - **Chart panels**: each slot wraps a `ChartDocument` entity
   (`Loaded`) or a placeholder for a deleted chart (`Orphan`).
+- **Inspector panels**: each slot wraps an `InspectorPanel` entity that
+  hosts a `DataGridPanel` and refreshes on the dashboard's shared
+  interval. Driver-supplied row actions (e.g. terminate connection,
+  cancel query) appear in the row context menu.
 - **Shared toolbar**: a single `TimeRangePanel` propagates window changes
   to all loaded panels via subscriptions.
 - **Concurrency**: panel re-execution is bounded by `PANEL_REEXEC_CAP` to
@@ -109,6 +115,38 @@ imports as `SavedChart`s and lays out on a new `Dashboard`.
 The sidebar lists upstream dashboards through this seam; results are cached in
 `RemoteDashboardCache`. Selecting a remote dashboard triggers `DashboardImporter`
 to materialize it locally.
+
+### Instance metrics and inspectors
+
+- **Trait**: `InstanceCatalog`
+  (`crates/dbflux_core/src/connection/instance_catalog.rs`)
+- **Capabilities**: `DriverCapabilities::INSTANCE_METRICS` (time-series),
+  `DriverCapabilities::INSTANCE_INSPECTOR` (tabular snapshots)
+- **Value types**: `InstanceMetric`, `InstanceInspector`,
+  `DefaultInstanceDashboard`, `InspectorRowAction`
+
+Drivers expose live server metrics (e.g. `pg.tps`,
+`mysql.queries_per_sec`) and tabular inspectors (e.g. `pg.activity`,
+`mysql.processlist`, `mongo.currentop`, `redis.client_list`) through a
+single catalog. Each driver also publishes a
+`DefaultInstanceDashboard` descriptor with a fixed 12-column layout —
+the workspace opens this descriptor as a **read-only Instance
+Overview** dashboard (dedup key
+`DocumentKey::InstanceOverview { profile_id }`). The "Save as
+editable" action clones the layout into a persisted dashboard owned
+by the user.
+
+Inspector rows can declare `InspectorRowAction`s (e.g. *Terminate
+connection*). Action availability is gated by per-driver privilege
+probes (`pg_monitor` / `pg_signal_backend` for PostgreSQL, `PROCESS` /
+`CONNECTION_ADMIN` for MySQL, `killOp` for MongoDB, `CLIENT KILL` for
+Redis, `VIEW SERVER STATE` / `KILL` for SQL Server) so an
+under-privileged session never sees actions it could not execute.
+
+Every refresh timer (dashboard tick, chart standalone tick, inspector
+tick) checks `AppState::connections()` for the panel's profile and
+skips its work when the connection is closed; the timer stays alive
+so refresh resumes automatically on reconnect.
 
 ### CloudWatch implementation
 

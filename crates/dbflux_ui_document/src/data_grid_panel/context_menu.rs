@@ -101,6 +101,7 @@ impl DataGridPanel {
             is_document_view: false,
             doc_field_path: None,
             doc_field_value: None,
+            row_actions: Vec::new(),
         });
 
         // Focus the context menu to receive keyboard events
@@ -131,6 +132,7 @@ impl DataGridPanel {
             is_document_view: true,
             doc_field_path: None,
             doc_field_value: None,
+            row_actions: Vec::new(),
         });
 
         self.context_menu_focus.focus(window);
@@ -187,6 +189,7 @@ impl DataGridPanel {
             is_document_view: true,
             doc_field_path: field_path,
             doc_field_value: field_value,
+            row_actions: Vec::new(),
         });
 
         self.context_menu_focus.focus(window);
@@ -578,6 +581,7 @@ impl DataGridPanel {
         //   [Order trigger]?          (if has_order, shares separator with filter)
         //   [sep + GenSQL trigger]?   (if has_generate_sql)
         //   [sep + CopyQuery trigger]?(if has_copy_query)
+        //   [sep + row_action...]?    (if row_actions non-empty)
         let base_items = Self::build_context_menu_items(
             is_editable,
             is_document_view,
@@ -597,7 +601,21 @@ impl DataGridPanel {
 
         // CopyQuery: sep(1) + trigger(1) = 2
         let copy_query_slots = if has_copy_query { 2 } else { 0 };
-        let total_count = after_gen_sql + copy_query_slots;
+        let after_copy_query = after_gen_sql + copy_query_slots;
+
+        // RowActions: sep(1) + N action items
+        let row_action_count = self
+            .context_menu
+            .as_ref()
+            .map(|m| m.row_actions.len())
+            .unwrap_or(0);
+        let row_actions_slots = if row_action_count > 0 {
+            1 + row_action_count
+        } else {
+            0
+        };
+        let row_actions_start = after_copy_query; // index of the separator
+        let total_count = after_copy_query + row_actions_slots;
 
         let filter_trigger_idx = if has_filter {
             Some(base_count + 1) // after separator
@@ -681,6 +699,11 @@ impl DataGridPanel {
                 return true;
             }
 
+            // Row actions separator
+            if row_action_count > 0 && idx == row_actions_start {
+                return true;
+            }
+
             false
         };
 
@@ -723,7 +746,43 @@ impl DataGridPanel {
                 true
             }
             Command::MenuSelect => {
-                if let Some(ref mut menu) = self.context_menu {
+                // Check if the selected item is a row action before borrowing
+                // context_menu mutably, since emitting RowActionRequested needs
+                // self.context_menu = None and self.collect_row_values which
+                // cannot coexist with a live &mut borrow of the menu.
+                let pending_row_action: Option<(
+                    usize,
+                    Point<Pixels>,
+                    dbflux_core::InspectorRowAction,
+                )> = self.context_menu.as_ref().and_then(|menu| {
+                    if row_action_count > 0
+                        && menu.selected_index > row_actions_start
+                        && menu.selected_index <= row_actions_start + row_action_count
+                    {
+                        let action_idx = menu.selected_index - row_actions_start - 1;
+                        menu.row_actions
+                            .get(action_idx)
+                            .cloned()
+                            .map(|a| (menu.row, menu.position, a))
+                    } else {
+                        None
+                    }
+                });
+
+                if let Some((row, position, action)) = pending_row_action {
+                    let row_values = self.collect_row_values(row, cx);
+                    self.context_menu = None;
+                    self.restore_focus_after_context_menu(false, window, cx);
+                    cx.emit(DataGridEvent::RowActionRequested {
+                        row,
+                        action_id: action.id,
+                        action_label: action.label,
+                        is_destructive: action.is_destructive,
+                        row_values,
+                        position,
+                    });
+                    cx.notify();
+                } else if let Some(ref mut menu) = self.context_menu {
                     if menu.filter_submenu_open {
                         if let Some(action) = filter_submenu_actions
                             .get(menu.submenu_selected_index)
@@ -2243,6 +2302,121 @@ impl DataGridPanel {
                     })
                     .into_any_element(),
             );
+        }
+
+        // -- Row actions (driver-supplied, e.g. Kill / Cancel) --
+        // Rendered as plain flat items at the bottom of the menu, after a
+        // separator. Each item emits `RowActionRequested` directly on click
+        // rather than routing through `handle_context_menu_action`.
+        if !menu.row_actions.is_empty() {
+            let row = menu.row;
+            let position = menu.position;
+
+            menu_items.push(
+                div()
+                    .h(px(1.0))
+                    .mx(Spacing::SM)
+                    .my(Spacing::XS)
+                    .bg(theme.border)
+                    .into_any_element(),
+            );
+            visual_index += 1;
+
+            for (action_slot, action) in menu.row_actions.iter().cloned().enumerate() {
+                let current_index = visual_index;
+                let is_selected = current_index == selected_index;
+                let is_danger = action.is_destructive;
+
+                let label_color = if is_danger {
+                    theme.danger
+                } else {
+                    theme.foreground
+                };
+
+                let action_id = action.id.clone();
+                let action_label = action.label.clone();
+                let is_destructive = action.is_destructive;
+
+                menu_items.push(
+                    div()
+                        .id(SharedString::from(format!("row-action-{}", action_slot)))
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::SM)
+                        .h(Heights::ROW_COMPACT)
+                        .px(Spacing::SM)
+                        .mx(Spacing::XS)
+                        .rounded(Radii::SM)
+                        .cursor_pointer()
+                        .text_size(FontSizes::SM)
+                        .when(is_selected, |d| {
+                            d.bg(if is_danger {
+                                theme.danger.opacity(0.1)
+                            } else {
+                                theme.accent
+                            })
+                        })
+                        .when(!is_selected, |d| {
+                            d.hover(|d| {
+                                d.bg(if is_danger {
+                                    theme.danger.opacity(0.1)
+                                } else {
+                                    theme.secondary
+                                })
+                            })
+                        })
+                        .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                            if let Some(ref mut menu) = this.context_menu
+                                && menu.selected_index != current_index
+                            {
+                                menu.selected_index = current_index;
+                                cx.notify();
+                            }
+                        }))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            let row_values = this.collect_row_values(row, cx);
+                            this.context_menu = None;
+                            this.restore_focus_after_context_menu(false, window, cx);
+                            cx.emit(DataGridEvent::RowActionRequested {
+                                row,
+                                action_id: action_id.clone(),
+                                action_label: action_label.clone(),
+                                is_destructive,
+                                row_values,
+                                position,
+                            });
+                            cx.notify();
+                        }))
+                        .child(
+                            Icon::new(if is_danger {
+                                AppIcon::Power
+                            } else {
+                                AppIcon::Zap
+                            })
+                            .small()
+                            .color(if is_selected {
+                                if is_danger {
+                                    theme.danger
+                                } else {
+                                    theme.accent_foreground
+                                }
+                            } else {
+                                label_color
+                            }),
+                        )
+                        .child(Text::caption(action.label.clone()).color(if is_selected {
+                            if is_danger {
+                                theme.danger
+                            } else {
+                                theme.accent_foreground
+                            }
+                        } else {
+                            label_color
+                        }))
+                        .into_any_element(),
+                );
+                visual_index += 1;
+            }
         }
 
         // Use deferred() to render at window level for correct positioning

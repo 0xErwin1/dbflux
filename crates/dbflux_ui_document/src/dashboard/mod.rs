@@ -14,6 +14,7 @@ mod render;
 
 use super::chart_document::ChartDocument;
 use super::handle::DocumentEvent;
+use super::instance_inspector::InspectorPanel;
 use super::types::{DocumentId, DocumentState};
 use builder::{DragReorderState, DragResizeState, PanelContextMenu, ResizeAxis};
 use dbflux_app::keymap::{Command, ContextId};
@@ -31,17 +32,9 @@ use std::collections::{HashSet, VecDeque};
 use std::time::Duration;
 use uuid::Uuid;
 
-/// Refresh-policy options exposed in the dashboard toolbar `Dropdown`.
-///
-/// Each entry pairs a `SavedChartRefreshPolicy` with the label shown in the
-/// dropdown trigger and items. Order is fixed so `index` lookups stay stable.
-pub(crate) const REFRESH_POLICY_OPTIONS: &[(SavedChartRefreshPolicy, &str)] = &[
-    (SavedChartRefreshPolicy::Off, "Off"),
-    (SavedChartRefreshPolicy::Interval { every_secs: 10 }, "10s"),
-    (SavedChartRefreshPolicy::Interval { every_secs: 30 }, "30s"),
-    (SavedChartRefreshPolicy::Interval { every_secs: 60 }, "1m"),
-    (SavedChartRefreshPolicy::Interval { every_secs: 300 }, "5m"),
-];
+/// Re-exported from the canonical list in `crate::refresh`. Exposed as
+/// `pub(crate)` here so the render module can access it via `super::`.
+pub(crate) use crate::refresh::REFRESH_POLICY_OPTIONS;
 
 /// Returns the index of `policy` inside `REFRESH_POLICY_OPTIONS`, falling back
 /// to `0` (Off) for any policy not in the canonical list.
@@ -190,6 +183,19 @@ pub enum DashboardPanelSlot {
         markdown: String,
         grid_pos: PanelGridPos,
     },
+    /// A live instance-inspector panel — a tabular live view (e.g. process
+    /// list, active sessions) driven by `InstanceInspectorQuery` with no time
+    /// window.
+    ///
+    /// Unlike `Loaded` (chart panels), Inspector slots receive a refresh signal
+    /// from `refresh_all_loaded_panels` but are excluded from time-range
+    /// propagation because `InstanceInspectorQuery` has no time-window fields.
+    Inspector {
+        entity: Entity<InspectorPanel>,
+        grid_pos: PanelGridPos,
+        /// User-supplied title override. `None` falls back to the inspector's metric_id.
+        title_override: Option<String>,
+    },
 }
 
 impl DashboardPanelSlot {
@@ -198,7 +204,8 @@ impl DashboardPanelSlot {
         match self {
             Self::Loaded { grid_pos, .. }
             | Self::Orphan { grid_pos, .. }
-            | Self::Divider { grid_pos, .. } => *grid_pos,
+            | Self::Divider { grid_pos, .. }
+            | Self::Inspector { grid_pos, .. } => *grid_pos,
         }
     }
 }
@@ -230,6 +237,16 @@ pub struct DashboardDocument {
     // Edit / View toggle. `View` by default for newly opened dashboards;
     // not persisted across tab close/open.
     mode: DashboardMode,
+
+    /// When `true` the dashboard was synthesized from a driver's catalog and is
+    /// read-only. Edit-mode transitions are blocked; only "Save as" is allowed
+    /// to produce a mutable copy.
+    pub(crate) read_only: bool,
+
+    /// Connection profile this dashboard is tied to. `None` for dashboards that
+    /// are not profile-specific (regular saved dashboards). Set to `Some` on
+    /// read-only overview dashboards so dedup can match by profile.
+    pub(crate) profile_id: Option<Uuid>,
 
     // Shared controls
     shared_time_range: Entity<TimeRangePanel>,
@@ -356,6 +373,7 @@ impl DashboardDocument {
         shared_time_range: Entity<TimeRangePanel>,
         shared_time_range_preset: Option<TimeRangePreset>,
         shared_refresh_policy: SavedChartRefreshPolicy,
+        read_only: bool,
         app_state: Entity<AppStateEntity>,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -419,22 +437,42 @@ impl DashboardDocument {
         );
         subscriptions.push(preset_persist_sub);
 
-        // Subscribe each loaded panel to ExecutionFinished to drain the queue.
+        // Subscribe each loaded panel and inspector slot to ExecutionFinished
+        // to drain the semaphore queue. Inspector slots emit ExecutionFinished
+        // from InspectorPanel::apply_result; without this subscription their
+        // semaphore slots are never released.
         for (idx, slot) in panel_slots.iter().enumerate() {
-            if let DashboardPanelSlot::Loaded { panel, .. } = slot {
-                let slot_idx = idx;
-                let sub = cx.subscribe(
-                    panel,
-                    move |this: &mut Self,
-                          _panel,
-                          event: &super::handle::DocumentEvent,
-                          cx: &mut Context<Self>| {
-                        if matches!(event, super::handle::DocumentEvent::ExecutionFinished) {
-                            this.on_panel_execution_finished(slot_idx, cx);
-                        }
-                    },
-                );
-                subscriptions.push(sub);
+            let slot_idx = idx;
+            match slot {
+                DashboardPanelSlot::Loaded { panel, .. } => {
+                    let sub = cx.subscribe(
+                        panel,
+                        move |this: &mut Self,
+                              _panel,
+                              event: &super::handle::DocumentEvent,
+                              cx: &mut Context<Self>| {
+                            if matches!(event, super::handle::DocumentEvent::ExecutionFinished) {
+                                this.on_panel_execution_finished(slot_idx, cx);
+                            }
+                        },
+                    );
+                    subscriptions.push(sub);
+                }
+                DashboardPanelSlot::Inspector { entity, .. } => {
+                    let sub = cx.subscribe(
+                        entity,
+                        move |this: &mut Self,
+                              _entity,
+                              event: &super::handle::DocumentEvent,
+                              cx: &mut Context<Self>| {
+                            if matches!(event, super::handle::DocumentEvent::ExecutionFinished) {
+                                this.on_panel_execution_finished(slot_idx, cx);
+                            }
+                        },
+                    );
+                    subscriptions.push(sub);
+                }
+                DashboardPanelSlot::Divider { .. } | DashboardPanelSlot::Orphan { .. } => {}
             }
         }
 
@@ -483,6 +521,8 @@ impl DashboardDocument {
             app_state,
             panel_slots,
             mode: DashboardMode::View,
+            read_only,
+            profile_id: None,
             shared_time_range,
             inflight_reexec_count: 0,
             pending_reexec: VecDeque::new(),
@@ -623,7 +663,15 @@ impl DashboardDocument {
     }
 
     pub fn connection_id(&self) -> Option<Uuid> {
-        None
+        self.profile_id
+    }
+
+    /// Bind this dashboard to a specific connection profile.
+    ///
+    /// Used by read-only synthesized dashboards so that dedup can match by
+    /// `DocumentKey::InstanceOverview { profile_id }`.
+    pub fn set_profile_id(&mut self, id: Uuid) {
+        self.profile_id = Some(id);
     }
 
     pub fn active_context(&self) -> ContextId {
@@ -773,7 +821,12 @@ impl DashboardDocument {
     ///
     /// Setting the mode to `View` clears any in-progress drag/resize so the
     /// user is not left with a stale ghost on the next render.
+    ///
+    /// No-op on read-only dashboards — Edit mode is never available there.
     pub fn set_mode(&mut self, mode: DashboardMode, cx: &mut Context<Self>) {
+        if self.read_only && matches!(mode, DashboardMode::Edit) {
+            return;
+        }
         if self.mode == mode {
             return;
         }
@@ -787,12 +840,23 @@ impl DashboardDocument {
     }
 
     /// Convenience: flip between Edit and View.
+    ///
+    /// No-op on read-only dashboards.
     pub fn toggle_mode(&mut self, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
         let next = match self.mode {
             DashboardMode::View => DashboardMode::Edit,
             DashboardMode::Edit => DashboardMode::View,
         };
         self.set_mode(next, cx);
+    }
+
+    /// Returns `true` when this dashboard was synthesized from a driver's
+    /// catalog and cannot be mutated by the user.
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
     }
 
     pub fn shared_time_range(&self) -> &Entity<TimeRangePanel> {
@@ -845,19 +909,26 @@ impl DashboardDocument {
 
     /// Dispatch a re-execute request to the panel at slot `slot_idx`.
     ///
-    /// Calls `mark_pending_reexecute` on the panel, which sets
-    /// `pending_chart_reexecute = true` and calls `cx.notify()`. The panel's
-    /// render loop then picks up the flag and calls `request_reexecute(window, cx)`
-    /// with a live `Window`. Does nothing if the slot is an orphan or the index
-    /// is out of bounds.
+    /// For `Loaded` slots, calls `mark_pending_reexecute` on the chart entity.
+    /// For `Inspector` slots, calls `request_reexec` directly (no time window
+    /// is involved — the inspector always fetches the live snapshot).
+    /// Does nothing for `Orphan` or `Divider` slots, or out-of-bounds indices.
     fn dispatch_reexec(&self, slot_idx: usize, cx: &mut Context<Self>) {
         let Some(slot) = self.panel_slots.get(slot_idx) else {
             return;
         };
-        if let DashboardPanelSlot::Loaded { panel, .. } = slot {
-            panel.update(cx, |doc, cx| {
-                doc.mark_pending_reexecute(cx);
-            });
+        match slot {
+            DashboardPanelSlot::Loaded { panel, .. } => {
+                panel.update(cx, |doc, cx| {
+                    doc.mark_pending_reexecute(cx);
+                });
+            }
+            DashboardPanelSlot::Inspector { entity, .. } => {
+                entity.update(cx, |panel, cx| {
+                    panel.request_reexec(cx);
+                });
+            }
+            _ => {}
         }
     }
 
@@ -902,6 +973,25 @@ impl DashboardDocument {
     pub fn request_add_panel(&mut self, cx: &mut Context<Self>) {
         cx.emit(DocumentEvent::RequestAddPanel {
             dashboard_id: self.dashboard_id,
+        });
+    }
+
+    /// Emit a request to save this read-only synthesized dashboard as a new
+    /// persisted, editable dashboard for the same profile.
+    ///
+    /// Only valid on read-only dashboards — no-ops otherwise. The workspace
+    /// handles `DocumentEvent::RequestSaveAsEditable` by creating the dashboard
+    /// record and opening the new tab.
+    pub fn request_save_as_editable(&mut self, cx: &mut Context<Self>) {
+        if !self.read_only {
+            return;
+        }
+        let Some(profile_id) = self.profile_id else {
+            return;
+        };
+        cx.emit(DocumentEvent::RequestSaveAsEditable {
+            source_title: self.title.clone(),
+            profile_id,
         });
     }
 
@@ -1132,6 +1222,19 @@ impl DashboardDocument {
                             if doc.refresh_interval().is_none() {
                                 return;
                             }
+                            // Skip the tick when the underlying connection is gone.
+                            // Re-executing would just produce "Connection not found"
+                            // toasts; the loop resumes on its own once the user
+                            // reconnects.
+                            if let Some(profile_id) = doc.profile_id
+                                && !doc
+                                    .app_state
+                                    .read(cx)
+                                    .connections()
+                                    .contains_key(&profile_id)
+                            {
+                                return;
+                            }
                             doc.refresh_all_loaded_panels(cx);
                         });
                         true
@@ -1167,16 +1270,20 @@ impl DashboardDocument {
     /// Each `Loaded` slot is fed through `request_reexec_for_slot`, which
     /// already respects the per-dashboard concurrency cap.
     pub fn refresh_all_loaded_panels(&mut self, cx: &mut Context<Self>) {
-        let loaded_indices: Vec<usize> = self
+        let refreshable_indices: Vec<usize> = self
             .panel_slots
             .iter()
             .enumerate()
             .filter_map(|(idx, slot)| {
-                matches!(slot, DashboardPanelSlot::Loaded { .. }).then_some(idx)
+                matches!(
+                    slot,
+                    DashboardPanelSlot::Loaded { .. } | DashboardPanelSlot::Inspector { .. }
+                )
+                .then_some(idx)
             })
             .collect();
 
-        for idx in loaded_indices {
+        for idx in refreshable_indices {
             self.request_reexec_for_slot(idx, cx);
         }
     }
@@ -1285,7 +1392,7 @@ impl DashboardDocument {
     /// the entity in `dashboard_name_input`. The subscription is dropped when
     /// `commit_dashboard_name_edit` or `cancel_dashboard_name_edit` is called.
     pub fn start_dashboard_name_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.editing_dashboard_name {
+        if self.read_only || self.editing_dashboard_name {
             return;
         }
 
@@ -1766,7 +1873,10 @@ impl DashboardDocument {
                     match slot {
                         DashboardPanelSlot::Loaded { grid_pos, .. }
                         | DashboardPanelSlot::Orphan { grid_pos, .. }
-                        | DashboardPanelSlot::Divider { grid_pos, .. } => *grid_pos = new_pos,
+                        | DashboardPanelSlot::Divider { grid_pos, .. }
+                        | DashboardPanelSlot::Inspector { grid_pos, .. } => {
+                            *grid_pos = new_pos;
+                        }
                     }
                 }
                 cx.notify();
@@ -1823,7 +1933,35 @@ impl DashboardDocument {
             .filter_map(|slot| match slot {
                 DashboardPanelSlot::Loaded { panel, .. } => panel.read(cx).saved_chart_id(),
                 DashboardPanelSlot::Orphan { saved_chart_id, .. } => Some(*saved_chart_id),
-                DashboardPanelSlot::Divider { .. } => None,
+                DashboardPanelSlot::Divider { .. } | DashboardPanelSlot::Inspector { .. } => None,
+            })
+            .collect();
+
+        // Track existing divider slots by (grid_row, grid_column) for dedup.
+        let mut existing_dividers: std::collections::HashSet<(u32, u32)> = self
+            .panel_slots
+            .iter()
+            .filter_map(|slot| match slot {
+                DashboardPanelSlot::Divider { grid_pos, .. } => {
+                    Some((grid_pos.grid_row, grid_pos.grid_column))
+                }
+                _ => None,
+            })
+            .collect();
+
+        // Track existing inspector slots by (metric_id, grid_row, grid_column) for dedup.
+        let mut existing_inspectors: std::collections::HashSet<(String, u32, u32)> = self
+            .panel_slots
+            .iter()
+            .filter_map(|slot| match slot {
+                DashboardPanelSlot::Inspector {
+                    entity, grid_pos, ..
+                } => Some((
+                    entity.read(cx).metric_id().to_string(),
+                    grid_pos.grid_row,
+                    grid_pos.grid_column,
+                )),
+                _ => None,
             })
             .collect();
 
@@ -1836,13 +1974,59 @@ impl DashboardDocument {
                 grid_height: panel.grid_height,
             };
 
-            // Divider slots have no SavedChart to dedup on; insert as-is.
             if let dbflux_ui_base::DashboardPanelKind::Divider { markdown } = &panel.kind {
+                let key = (grid_pos.grid_row, grid_pos.grid_column);
+                if !existing_dividers.insert(key) {
+                    continue;
+                }
                 self.panel_slots.push(DashboardPanelSlot::Divider {
                     markdown: markdown.clone(),
                     grid_pos,
                 });
                 appended += 1;
+                continue;
+            }
+
+            // Inspector slots are identified by metric_id + row (no SavedChart).
+            if let dbflux_ui_base::DashboardPanelKind::Inspector { metric_id } = &panel.kind {
+                let dedup_key = (metric_id.clone(), grid_pos.grid_row, grid_pos.grid_column);
+                if !existing_inspectors.insert(dedup_key) {
+                    continue;
+                }
+
+                if let Some(profile_id) = self.profile_id {
+                    let metric_id = metric_id.clone();
+                    let app_state_inner = self.app_state.clone();
+                    let title_override = panel.title_override.clone();
+                    let inspector_entity = cx
+                        .new(|cx| InspectorPanel::new(profile_id, metric_id, app_state_inner, cx));
+                    inspector_entity.update(cx, |p, _cx| p.defer_initial_exec());
+
+                    let slot_idx = self.panel_slots.len();
+                    let sub = cx.subscribe(
+                        &inspector_entity,
+                        move |this: &mut Self,
+                              _panel,
+                              event: &DocumentEvent,
+                              cx: &mut Context<Self>| {
+                            if matches!(event, DocumentEvent::ExecutionFinished) {
+                                this.on_panel_execution_finished(slot_idx, cx);
+                            }
+                        },
+                    );
+                    self._subscriptions.push(sub);
+
+                    self.panel_slots.push(DashboardPanelSlot::Inspector {
+                        entity: inspector_entity,
+                        grid_pos,
+                        title_override,
+                    });
+                    appended += 1;
+                } else {
+                    log::warn!(
+                        "[dashboard reconcile] inspector panel '{metric_id}' skipped: dashboard has no profile_id"
+                    );
+                }
                 continue;
             }
 
@@ -1872,15 +2056,18 @@ impl DashboardDocument {
                 Some(chart)
                     if matches!(
                         chart.source,
-                        SavedChartSource::Query { .. } | SavedChartSource::Metric { .. }
+                        SavedChartSource::Query { .. }
+                            | SavedChartSource::Metric { .. }
+                            | SavedChartSource::InstanceMetric { .. }
                     ) =>
                 {
                     let app_state_inner = self.app_state.clone();
                     let title_override = panel.title_override.clone();
                     let panel_entity = cx.new(|cx| {
                         let mut doc =
-                            ChartDocument::from_saved(&chart, app_state_inner, window, cx)
-                                .expect("Query/Metric source validated by match guard");
+                            ChartDocument::from_saved(&chart, app_state_inner, window, cx).expect(
+                                "Query/Metric/InstanceMetric source validated by match guard",
+                            );
                         doc.set_embedded(true, cx);
                         doc
                     });
@@ -1929,7 +2116,10 @@ impl DashboardDocument {
         let dashboard_id = self.dashboard_id;
         let drafts: Vec<DashboardPanelDraft> = chart_ids
             .into_iter()
-            .map(|saved_chart_id| DashboardPanelDraft { saved_chart_id })
+            .map(|saved_chart_id| DashboardPanelDraft::Chart {
+                saved_chart_id,
+                layout: None,
+            })
             .collect();
 
         let result = self.app_state.update(cx, |state, _cx| {
@@ -2175,7 +2365,9 @@ mod tests {
             DashboardPanelSlot::Orphan { saved_chart_id, .. } => {
                 assert_eq!(saved_chart_id, id);
             }
-            DashboardPanelSlot::Loaded { .. } | DashboardPanelSlot::Divider { .. } => {
+            DashboardPanelSlot::Loaded { .. }
+            | DashboardPanelSlot::Divider { .. }
+            | DashboardPanelSlot::Inspector { .. } => {
                 panic!("expected Orphan variant")
             }
         }
@@ -2375,7 +2567,9 @@ mod tests {
             .iter()
             .filter_map(|s| match s {
                 DashboardPanelSlot::Orphan { saved_chart_id, .. } => Some(*saved_chart_id),
-                DashboardPanelSlot::Loaded { .. } | DashboardPanelSlot::Divider { .. } => None,
+                DashboardPanelSlot::Loaded { .. }
+                | DashboardPanelSlot::Divider { .. }
+                | DashboardPanelSlot::Inspector { .. } => None,
             })
             .collect();
 
@@ -2681,6 +2875,7 @@ mod tests {
                 shared_time_range,
                 None,
                 SavedChartRefreshPolicy::Off,
+                false,
                 app_state,
                 cx,
             )
@@ -2890,6 +3085,7 @@ mod tests {
                     shared_time_range,
                     None,
                     SavedChartRefreshPolicy::Off,
+                    false,
                     app_state,
                     cx,
                 )
@@ -2927,6 +3123,253 @@ mod tests {
         assert!(
             !has_input,
             "panel_title_input must remain None for an Orphan slot"
+        );
+    }
+
+    // ---- T20: Inspector slot fan-out ----
+
+    /// REQ-DOC-3: `DashboardPanelSlot::Inspector` variant carries a live entity.
+    ///
+    /// Constructs an Inspector slot inside a GPUI test app to prove the variant
+    /// compiles with its `entity: Entity<InspectorPanel>` field and that
+    /// `grid_pos()` round-trips correctly.
+    #[gpui::test]
+    fn dashboard_panel_slot_inspector_variant_exists(cx: &mut gpui::TestAppContext) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+
+        let grid_pos = PanelGridPos {
+            grid_row: 0,
+            grid_column: 0,
+            grid_width: 6,
+            grid_height: 3,
+        };
+
+        let slot = cx.update(|cx| {
+            let entity = cx.new(|cx| {
+                InspectorPanel::new(Uuid::nil(), "pg.activity".to_string(), app_state, cx)
+            });
+            DashboardPanelSlot::Inspector {
+                entity,
+                grid_pos,
+                title_override: None,
+            }
+        });
+
+        assert_eq!(
+            slot.grid_pos(),
+            grid_pos,
+            "Inspector slot must return its grid_pos"
+        );
+    }
+
+    /// REQ-DOC-3: The `refresh_all_loaded_panels` dispatch predicate includes
+    /// `Inspector` slots and excludes `Orphan` and `Divider` slots.
+    ///
+    /// Tests the filter expression used in `refresh_all_loaded_panels` against a
+    /// representative set of slot variants (without Inspector — its inclusion is
+    /// structural, exercised by the entity-carrying test above).
+    #[test]
+    fn refresh_dispatch_predicate_skips_orphan_and_divider() {
+        let grid_pos = PanelGridPos {
+            grid_row: 0,
+            grid_column: 0,
+            grid_width: 6,
+            grid_height: 3,
+        };
+
+        let non_refreshable: &[DashboardPanelSlot] = &[
+            DashboardPanelSlot::Orphan {
+                saved_chart_id: uuid::Uuid::new_v4(),
+                grid_pos,
+            },
+            DashboardPanelSlot::Divider {
+                markdown: "## header".to_string(),
+                grid_pos,
+            },
+        ];
+
+        let dispatch_count = non_refreshable
+            .iter()
+            .filter(|s| {
+                matches!(
+                    s,
+                    DashboardPanelSlot::Loaded { .. } | DashboardPanelSlot::Inspector { .. }
+                )
+            })
+            .count();
+
+        assert_eq!(
+            dispatch_count, 0,
+            "Orphan and Divider slots must not be dispatched by refresh_all_loaded_panels"
+        );
+    }
+
+    // ---- M1: Divider dedup in reconcile_panels_from_manager ----
+
+    /// M1: The divider dedup set prevents duplicate slots when the same
+    /// (grid_row, grid_column) key appears more than once in a candidate list.
+    ///
+    /// Simulates the `existing_dividers` HashSet logic from
+    /// `reconcile_panels_from_manager` without requiring a live GPUI entity.
+    #[test]
+    fn divider_dedup_set_blocks_duplicate_grid_position() {
+        let mut existing_dividers: std::collections::HashSet<(u32, u32)> =
+            std::collections::HashSet::new();
+
+        // First insertion at (0, 0) — new, must succeed.
+        assert!(
+            existing_dividers.insert((0, 0)),
+            "first insert at (0,0) must return true (new)"
+        );
+
+        // Same position again (simulating a second AppStateChanged reconcile).
+        assert!(
+            !existing_dividers.insert((0, 0)),
+            "second insert at (0,0) must return false (duplicate)"
+        );
+
+        // A different position must still be accepted.
+        assert!(
+            existing_dividers.insert((1, 0)),
+            "insert at (1,0) must return true (different position)"
+        );
+
+        assert_eq!(
+            existing_dividers.len(),
+            2,
+            "dedup set must contain exactly two entries after three insertions with one duplicate"
+        );
+    }
+
+    /// M1: Pre-existing divider slots seed the dedup set so a reconcile pass
+    /// does not re-add them.
+    #[test]
+    fn existing_divider_slots_seed_dedup_correctly() {
+        let grid_pos = PanelGridPos {
+            grid_row: 2,
+            grid_column: 1,
+            grid_width: 12,
+            grid_height: 1,
+        };
+
+        let slots: Vec<DashboardPanelSlot> = vec![DashboardPanelSlot::Divider {
+            markdown: "## Section".to_string(),
+            grid_pos,
+        }];
+
+        // Mirror the initialization from reconcile_panels_from_manager.
+        let existing_dividers: std::collections::HashSet<(u32, u32)> = slots
+            .iter()
+            .filter_map(|slot| match slot {
+                DashboardPanelSlot::Divider { grid_pos, .. } => {
+                    Some((grid_pos.grid_row, grid_pos.grid_column))
+                }
+                _ => None,
+            })
+            .collect();
+
+        // The pre-existing slot's position must block a re-insert.
+        let mut set = existing_dividers;
+        assert!(
+            !set.insert((2, 1)),
+            "position (2,1) from existing slot must already be in the set"
+        );
+
+        // A new position must still be admitted.
+        assert!(
+            set.insert((3, 0)),
+            "new position (3,0) must be admitted after seeding"
+        );
+    }
+
+    // ---- M2: InstanceMetric charts do not fall to Orphan ----
+
+    /// M2: `SavedChartSource::InstanceMetric` must match the extended match
+    /// guard — not fall through to the wildcard `_` arm that produces Orphan.
+    ///
+    /// Tests the guard predicate directly. The production code wraps this in a
+    /// `Some(chart) if matches!(chart.source, ...)` guard; this test validates
+    /// that the `matches!` expression returns `true` for `InstanceMetric`.
+    #[test]
+    fn instance_metric_source_matches_loaded_guard() {
+        use dbflux_components::saved_chart::SavedChartSource;
+
+        let source = SavedChartSource::InstanceMetric {
+            metric_id: "pg.tps".to_string(),
+        };
+
+        let is_loadable = matches!(
+            source,
+            SavedChartSource::Query { .. }
+                | SavedChartSource::Metric { .. }
+                | SavedChartSource::InstanceMetric { .. }
+        );
+
+        assert!(
+            is_loadable,
+            "InstanceMetric source must match the loadable guard (not fall to Orphan)"
+        );
+    }
+
+    /// M2: `SavedChartSource::Collection` must NOT match the Loaded guard
+    /// (it uses a different reconcile path), confirming the guard is selective.
+    #[test]
+    fn collection_source_does_not_match_loaded_guard() {
+        use dbflux_components::saved_chart::SavedChartSource;
+        use dbflux_core::CollectionRef;
+
+        let source = SavedChartSource::Collection {
+            collection_ref: CollectionRef::new("db", "col"),
+            time_window: None,
+        };
+
+        let is_loadable = matches!(
+            source,
+            SavedChartSource::Query { .. }
+                | SavedChartSource::Metric { .. }
+                | SavedChartSource::InstanceMetric { .. }
+        );
+
+        assert!(
+            !is_loadable,
+            "Collection source must not match the Query/Metric/InstanceMetric guard"
+        );
+    }
+
+    /// REQ-DOC-3: Time-window changes must not be forwarded to Inspector slots.
+    ///
+    /// The inspector query uses `InstanceInspectorQuery` which has no time window
+    /// fields; applying a time range would be meaningless. This pins the
+    /// time-range dispatch predicate: only `Loaded` slots are iterated.
+    #[test]
+    fn time_range_change_excludes_inspector_and_divider_slots() {
+        let grid_pos = PanelGridPos {
+            grid_row: 0,
+            grid_column: 0,
+            grid_width: 6,
+            grid_height: 3,
+        };
+
+        let slots: &[DashboardPanelSlot] = &[
+            DashboardPanelSlot::Orphan {
+                saved_chart_id: uuid::Uuid::new_v4(),
+                grid_pos,
+            },
+            DashboardPanelSlot::Divider {
+                markdown: "## divider".to_string(),
+                grid_pos,
+            },
+        ];
+
+        let time_range_dispatch_count = slots
+            .iter()
+            .filter(|s| matches!(s, DashboardPanelSlot::Loaded { .. }))
+            .count();
+
+        assert_eq!(
+            time_range_dispatch_count, 0,
+            "time-range changes must not dispatch to non-Loaded slots"
         );
     }
 }

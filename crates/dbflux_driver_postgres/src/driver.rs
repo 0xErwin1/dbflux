@@ -15,19 +15,20 @@ use dbflux_core::{
     DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DeploymentClass,
     DescribeRequest, DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits,
     DriverMetadata, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation,
-    ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind, FormSection, FormTab,
-    FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection,
-    MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
-    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, ReindexRequest, RelationalConnection, RelationalSchema, RoutineInfo,
-    RoutineKind, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
-    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
-    SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities,
-    TypeDefinition, Value, ViewInfo, WhereOperator, field_password, field_required, field_use_uri,
-    generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
-    generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
-    sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default, with_help,
+    ExecutionSourceContext, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind,
+    FormSection, FormTab, FormValues, FormattedError, Icon, IndexData, IndexInfo, InstanceCatalog,
+    IsolationLevel, KeyValueConnection, MutationCapabilities, OrderByColumn, PaginationStyle,
+    PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalConnection,
+    RelationalSchema, RoutineInfo, RoutineKind, Row, RowDelete, RowInsert, RowPatch,
+    SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest,
+    SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SyntaxInfo,
+    TableInfo, TransactionCapabilities, TypeDefinition, Value, ViewInfo, WhereOperator,
+    field_password, field_required, field_use_uri, generate_create_table, generate_delete_template,
+    generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
+    generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab, when_checked,
+    when_unchecked, with_default, with_help,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -58,7 +59,10 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::RETURNING.bits()
             | DriverCapabilities::TRANSACTIONAL_DDL.bits()
             | DriverCapabilities::ROUTINES.bits()
-            | DriverCapabilities::MULTI_STATEMENT.bits(),
+            | DriverCapabilities::MULTI_STATEMENT.bits()
+            | DriverCapabilities::INSTANCE_METRICS.bits()
+            | DriverCapabilities::INSTANCE_INSPECTOR.bits()
+            | DriverCapabilities::CHART_AUTHORING.bits(),
     ),
     default_port: Some(5432),
     uri_scheme: "postgresql".into(),
@@ -980,7 +984,7 @@ impl PostgresDriver {
             log::info!("[CONNECT] PostgreSQL connection established via URI");
 
             return Ok(Box::new(PostgresConnection {
-                client: Mutex::new(client),
+                client: Arc::new(Mutex::new(client)),
                 ssh_tunnel: None,
                 cancel_token,
                 active_query: RwLock::new(None),
@@ -1009,7 +1013,7 @@ impl PostgresDriver {
         log::info!("[CONNECT] PostgreSQL connection established via URI");
 
         Ok(Box::new(PostgresConnection {
-            client: Mutex::new(client),
+            client: Arc::new(Mutex::new(client)),
             ssh_tunnel: None,
             cancel_token,
             active_query: RwLock::new(None),
@@ -1047,7 +1051,7 @@ impl PostgresDriver {
         log::info!("Successfully connected to {}:{}", host, port);
 
         Ok(Box::new(PostgresConnection {
-            client: Mutex::new(client),
+            client: Arc::new(Mutex::new(client)),
             ssh_tunnel: None,
             cancel_token,
             active_query: RwLock::new(None),
@@ -1125,7 +1129,7 @@ impl PostgresDriver {
         );
 
         Ok(Box::new(PostgresConnection {
-            client: Mutex::new(client),
+            client: Arc::new(Mutex::new(client)),
             ssh_tunnel: Some(tunnel),
             cancel_token,
             active_query: RwLock::new(None),
@@ -1164,7 +1168,7 @@ fn parse_pg_uri_sslmode(uri: &str) -> PgUriSslMode {
 }
 
 pub struct PostgresConnection {
-    client: Mutex<Client>,
+    client: Arc<Mutex<Client>>,
     #[allow(dead_code)]
     ssh_tunnel: Option<SshTunnel>,
     cancel_token: PgCancelToken,
@@ -1434,8 +1438,51 @@ impl Connection for PostgresConnection {
         Ok(())
     }
 
+    fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
+        let pg_signal_backend = self
+            .client
+            .lock()
+            .ok()
+            .map(|mut c| {
+                crate::instance_catalog::PgInstanceCatalog::probe_pg_signal_backend(&mut c)
+            })
+            .unwrap_or(false);
+
+        Some(Box::new(
+            crate::instance_catalog::PgInstanceCatalog::new_probed(
+                Arc::clone(&self.client),
+                pg_signal_backend,
+            ),
+        ))
+    }
+
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
         self.cancelled.store(false, Ordering::SeqCst);
+
+        if let Some(source) = req
+            .execution_context
+            .as_ref()
+            .and_then(|ctx| ctx.source.as_ref())
+        {
+            match source {
+                ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
+                    let mut client = self.client.lock().map_err(|_| {
+                        DbError::QueryFailed("postgres client mutex poisoned".to_string().into())
+                    })?;
+                    return crate::instance_catalog::dispatch_metric_series(&mut client, metric_id);
+                }
+                ExecutionSourceContext::InstanceInspectorQuery { metric_id } => {
+                    let mut client = self.client.lock().map_err(|_| {
+                        DbError::QueryFailed("postgres client mutex poisoned".to_string().into())
+                    })?;
+                    return crate::instance_catalog::dispatch_inspector_snapshot(
+                        &mut client,
+                        metric_id,
+                    );
+                }
+                _ => {}
+            }
+        }
 
         let start = Instant::now();
         let query_id = Uuid::new_v4();
@@ -4659,5 +4706,32 @@ mod tests {
         //   cargo nextest run -p dbflux_driver_postgres --run-ignored
         // Skipped in normal CI.
         let _ = "placeholder for live integration test";
+    }
+
+    #[test]
+    fn postgres_metadata_advertises_chart_authoring() {
+        use super::METADATA;
+        use dbflux_core::DriverCapabilities;
+
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::CHART_AUTHORING),
+            "CHART_AUTHORING must be set: drivers advertising INSTANCE_METRICS also need \
+             CHART_AUTHORING so the sidebar surfaces Dashboards / Saved Charts folders"
+        );
+    }
+
+    #[test]
+    fn postgres_metadata_advertises_instance_metrics() {
+        use super::METADATA;
+        use dbflux_core::DriverCapabilities;
+
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::INSTANCE_METRICS),
+            "INSTANCE_METRICS must remain set on PostgreSQL driver"
+        );
     }
 }

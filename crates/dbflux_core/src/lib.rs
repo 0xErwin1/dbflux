@@ -75,6 +75,11 @@ pub use connection::dashboard_import::{
 
 pub use connection::dashboard_source::{DashboardRef, DashboardSource, RemoteDashboard};
 
+pub use connection::{
+    DefaultDashboardPanel, DefaultInstanceDashboard, InspectorRowAction, InstanceCatalog,
+    InstanceInspectorDef, InstanceMetricDef, InstanceMetricId, InstanceMetricUnit,
+};
+
 pub use core::{
     CancelToken, CodeGenScope, CodeGeneratorInfo, Connection, ConnectionErrorFormatter,
     ConnectionExt, ConnectionOverrides, DbDriver, DbError, DefaultErrorFormatter,

@@ -2623,6 +2623,7 @@ dependencies = [
 name = "dbflux_driver_mongodb"
 version = "0.6.0-dev.10"
 dependencies = [
+ "async-trait",
  "base64 0.22.1",
  "bson",
  "chrono",
@@ -2641,6 +2642,7 @@ dependencies = [
 name = "dbflux_driver_mssql"
 version = "0.6.0-dev.10"
 dependencies = [
+ "async-trait",
  "chrono",
  "dbflux_core",
  "dbflux_ssh",
@@ -2661,6 +2663,7 @@ dependencies = [
 name = "dbflux_driver_mysql"
 version = "0.6.0-dev.10"
 dependencies = [
+ "async-trait",
  "chrono",
  "dbflux_core",
  "dbflux_ssh",
@@ -2677,6 +2680,7 @@ dependencies = [
 name = "dbflux_driver_postgres"
 version = "0.6.0-dev.10"
 dependencies = [
+ "async-trait",
  "chrono",
  "dbflux_core",
  "dbflux_ssh",
@@ -2695,6 +2699,7 @@ dependencies = [
 name = "dbflux_driver_redis"
 version = "0.6.0-dev.10"
 dependencies = [
+ "async-trait",
  "dbflux_core",
  "dbflux_ssh",
  "dbflux_test_support",

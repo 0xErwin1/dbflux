@@ -37,13 +37,39 @@ pub struct Dashboard {
 
 /// Minimal payload for appending a new panel to a dashboard.
 ///
-/// `append_panels` assigns `panel_index`, places the panel on a new row past
-/// every existing panel at `grid_column = 0`, sets `grid_width = 12,
-/// grid_height = 2` (full-width on the canonical 12-column grid), and sets
-/// `title_override = None`.
+/// Layout override carried by a `DashboardPanelDraft`.
+///
+/// When present, `append_panels` uses these values directly instead of
+/// computing a sequential default position. All four fields must be present
+/// to apply the override; a partial set is ignored and the default is used.
 #[derive(Debug, Clone)]
-pub struct DashboardPanelDraft {
-    pub saved_chart_id: Uuid,
+pub struct DraftGridLayout {
+    pub grid_row: u32,
+    pub grid_column: u32,
+    pub grid_width: u32,
+    pub grid_height: u32,
+}
+
+/// Draft descriptor passed to `append_panels`.
+///
+/// When `layout` is `None`, `append_panels` assigns `panel_index`, places
+/// the panel on a new row past every existing panel at `grid_column = 0`,
+/// sets `grid_width = 12, grid_height = 2` (full-width on the canonical
+/// 12-column grid), and sets `title_override = None`.
+///
+/// When `layout` is `Some`, those exact grid values are used instead.
+#[derive(Debug, Clone)]
+pub enum DashboardPanelDraft {
+    /// A chart slot referencing an existing `SavedChart`.
+    Chart {
+        saved_chart_id: Uuid,
+        layout: Option<DraftGridLayout>,
+    },
+    /// An inspector slot driven by an `InstanceInspectorQuery`.
+    Inspector {
+        metric_id: String,
+        layout: Option<DraftGridLayout>,
+    },
 }
 
 /// What a `DashboardPanel` displays.
@@ -59,16 +85,19 @@ pub enum DashboardPanelKind {
     Chart { saved_chart_id: Uuid },
     /// Inline markdown divider rendered as a header strip.
     Divider { markdown: String },
+    /// Live-inspector slot driven by `InstanceInspectorQuery`. No chart
+    /// reference — the inspector is identified by `metric_id` alone.
+    Inspector { metric_id: String },
 }
 
 impl DashboardPanelKind {
     /// Returns the saved-chart id when this panel is a chart slot; `None`
-    /// for dividers. Callers that iterate dashboards looking for chart
-    /// references should use this instead of pattern-matching.
+    /// for dividers and inspectors. Callers that iterate dashboards looking
+    /// for chart references should use this instead of pattern-matching.
     pub fn saved_chart_id(&self) -> Option<Uuid> {
         match self {
             Self::Chart { saved_chart_id } => Some(*saved_chart_id),
-            Self::Divider { .. } => None,
+            Self::Divider { .. } | Self::Inspector { .. } => None,
         }
     }
 
@@ -196,6 +225,12 @@ fn dto_to_panel(dto: DashboardPanelDto) -> Result<DashboardPanel, StorageError> 
         "divider" => DashboardPanelKind::Divider {
             markdown: dto.divider_markdown.unwrap_or_default(),
         },
+        "inspector" => {
+            let metric_id = dto.inspector_metric_id.ok_or_else(|| {
+                StorageError::Data("inspector panel has no inspector_metric_id".to_string())
+            })?;
+            DashboardPanelKind::Inspector { metric_id }
+        }
         other => {
             return Err(StorageError::Data(format!(
                 "unknown dashboard panel_kind: '{other}'"
@@ -216,13 +251,22 @@ fn dto_to_panel(dto: DashboardPanelDto) -> Result<DashboardPanel, StorageError> 
 }
 
 fn panel_to_dto(panel: &DashboardPanel) -> DashboardPanelDto {
-    let (panel_kind, saved_chart_id, divider_markdown) = match &panel.kind {
+    let (panel_kind, saved_chart_id, divider_markdown, inspector_metric_id) = match &panel.kind {
         DashboardPanelKind::Chart { saved_chart_id } => {
-            ("chart".to_string(), saved_chart_id.to_string(), None)
+            ("chart".to_string(), saved_chart_id.to_string(), None, None)
         }
-        DashboardPanelKind::Divider { markdown } => {
-            ("divider".to_string(), String::new(), Some(markdown.clone()))
-        }
+        DashboardPanelKind::Divider { markdown } => (
+            "divider".to_string(),
+            String::new(),
+            Some(markdown.clone()),
+            None,
+        ),
+        DashboardPanelKind::Inspector { metric_id } => (
+            "inspector".to_string(),
+            String::new(),
+            None,
+            Some(metric_id.clone()),
+        ),
     };
 
     DashboardPanelDto {
@@ -231,6 +275,7 @@ fn panel_to_dto(panel: &DashboardPanel) -> DashboardPanelDto {
         panel_kind,
         saved_chart_id,
         divider_markdown,
+        inspector_metric_id,
         title_override: panel.title_override.clone(),
         grid_row: panel.grid_row as i64,
         grid_column: panel.grid_column as i64,
@@ -490,7 +535,7 @@ impl DashboardManager {
             profile_id: Some(profile_id),
             shared_time_range_preset,
             shared_refresh_policy,
-            grid_columns: 2,
+            grid_columns: 12,
             created_at: now,
             updated_at: now,
         };
@@ -670,20 +715,40 @@ impl DashboardManager {
         for (i, draft) in drafts.into_iter().enumerate() {
             let panel_index = base_index + i as u32;
 
+            let (kind, layout_override) = match draft {
+                DashboardPanelDraft::Chart {
+                    saved_chart_id,
+                    layout,
+                } => (DashboardPanelKind::Chart { saved_chart_id }, layout),
+                DashboardPanelDraft::Inspector { metric_id, layout } => {
+                    (DashboardPanelKind::Inspector { metric_id }, layout)
+                }
+            };
+
+            let (grid_row, grid_column, grid_width, grid_height) = if let Some(lo) = layout_override
+            {
+                (lo.grid_row, lo.grid_column, lo.grid_width, lo.grid_height)
+            } else {
+                (
+                    next_row,
+                    0,
+                    DEFAULT_NEW_PANEL_WIDTH,
+                    DEFAULT_NEW_PANEL_HEIGHT,
+                )
+            };
+
             new_panels.push(DashboardPanel {
                 dashboard_id,
                 panel_index,
-                kind: DashboardPanelKind::Chart {
-                    saved_chart_id: draft.saved_chart_id,
-                },
+                kind,
                 title_override: None,
-                grid_row: next_row,
-                grid_column: 0,
-                grid_width: DEFAULT_NEW_PANEL_WIDTH,
-                grid_height: DEFAULT_NEW_PANEL_HEIGHT,
+                grid_row,
+                grid_column,
+                grid_width,
+                grid_height,
             });
 
-            next_row = next_row.saturating_add(DEFAULT_NEW_PANEL_HEIGHT);
+            next_row = next_row.saturating_add(grid_height);
         }
 
         let dtos: Vec<DashboardPanelDto> = new_panels.iter().map(panel_to_dto).collect();
@@ -1108,11 +1173,13 @@ mod tests {
             .unwrap();
 
         let drafts = vec![
-            DashboardPanelDraft {
+            DashboardPanelDraft::Chart {
                 saved_chart_id: Uuid::new_v4(),
+                layout: None,
             },
-            DashboardPanelDraft {
+            DashboardPanelDraft::Chart {
                 saved_chart_id: Uuid::new_v4(),
+                layout: None,
             },
         ];
         mgr.append_panels(dash_id, drafts).unwrap();
@@ -1143,14 +1210,17 @@ mod tests {
         mgr.append_panels(
             dash_id,
             vec![
-                DashboardPanelDraft {
+                DashboardPanelDraft::Chart {
                     saved_chart_id: chart_a,
+                    layout: None,
                 },
-                DashboardPanelDraft {
+                DashboardPanelDraft::Chart {
                     saved_chart_id: chart_b,
+                    layout: None,
                 },
-                DashboardPanelDraft {
+                DashboardPanelDraft::Chart {
                     saved_chart_id: chart_c,
+                    layout: None,
                 },
             ],
         )
@@ -1187,14 +1257,17 @@ mod tests {
         mgr.append_panels(
             dash_id,
             vec![
-                DashboardPanelDraft {
+                DashboardPanelDraft::Chart {
                     saved_chart_id: chart_a,
+                    layout: None,
                 },
-                DashboardPanelDraft {
+                DashboardPanelDraft::Chart {
                     saved_chart_id: chart_b,
+                    layout: None,
                 },
-                DashboardPanelDraft {
+                DashboardPanelDraft::Chart {
                     saved_chart_id: chart_c,
+                    layout: None,
                 },
             ],
         )
@@ -1225,17 +1298,18 @@ mod tests {
 
         mgr.append_panels(
             dash_id,
-            vec![DashboardPanelDraft {
+            vec![DashboardPanelDraft::Chart {
                 saved_chart_id: Uuid::new_v4(),
+                layout: None,
             }],
         )
         .unwrap();
 
-        // grid_columns defaults to 2; requesting width=99, height=99 should be clamped.
+        // grid_columns defaults to 12; requesting width=99, height=99 should be clamped.
         mgr.resize_panel(dash_id, 0, 99, 99).unwrap();
 
         let panel = &mgr.panels_for_dashboard(dash_id)[0];
-        assert_eq!(panel.grid_width, 2); // clamped to grid_columns
+        assert_eq!(panel.grid_width, 12); // clamped to grid_columns
         assert_eq!(panel.grid_height, 4); // clamped to max 4
     }
 
@@ -1255,8 +1329,9 @@ mod tests {
 
         mgr.append_panels(
             dash_id,
-            vec![DashboardPanelDraft {
+            vec![DashboardPanelDraft::Chart {
                 saved_chart_id: Uuid::new_v4(),
+                layout: None,
             }],
         )
         .unwrap();
@@ -1298,11 +1373,13 @@ mod tests {
         mgr.append_panels(
             dash_id,
             vec![
-                DashboardPanelDraft {
+                DashboardPanelDraft::Chart {
                     saved_chart_id: Uuid::new_v4(),
+                    layout: None,
                 },
-                DashboardPanelDraft {
+                DashboardPanelDraft::Chart {
                     saved_chart_id: Uuid::new_v4(),
+                    layout: None,
                 },
             ],
         )
@@ -1322,6 +1399,106 @@ mod tests {
     }
 
     #[test]
+    fn test_append_panels_with_layout_override_preserves_exact_positions() {
+        // P3 regression guard: the save-as-editable flow calls append_panels with
+        // DraftGridLayout on every panel (mirroring the driver's default dashboard
+        // descriptor). If the positions are not preserved verbatim the rendered
+        // dashboard shows visually overlapping panels.
+        let (mut mgr, rt) = make_manager_with_rt();
+        let profile_id = insert_profile(&rt);
+        let dash_id = mgr
+            .create_dashboard(
+                "PG editable copy".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+
+        // Mirror the PG default layout from PgInstanceCatalog::static_default_dashboard():
+        //   panel 0: col=0, row=0, w=6, h=3
+        //   panel 1: col=6, row=0, w=6, h=3
+        //   panel 2: col=0, row=3, w=6, h=3
+        //   panel 3: col=6, row=3, w=6, h=3
+        //   panel 4: col=0, row=6, w=12, h=4  (full-width inspector)
+        let layouts = vec![
+            DraftGridLayout {
+                grid_row: 0,
+                grid_column: 0,
+                grid_width: 6,
+                grid_height: 3,
+            },
+            DraftGridLayout {
+                grid_row: 0,
+                grid_column: 6,
+                grid_width: 6,
+                grid_height: 3,
+            },
+            DraftGridLayout {
+                grid_row: 3,
+                grid_column: 0,
+                grid_width: 6,
+                grid_height: 3,
+            },
+            DraftGridLayout {
+                grid_row: 3,
+                grid_column: 6,
+                grid_width: 6,
+                grid_height: 3,
+            },
+            DraftGridLayout {
+                grid_row: 6,
+                grid_column: 0,
+                grid_width: 12,
+                grid_height: 4,
+            },
+        ];
+
+        let drafts: Vec<DashboardPanelDraft> = layouts
+            .iter()
+            .enumerate()
+            .map(|(i, layout)| {
+                if i == 4 {
+                    DashboardPanelDraft::Inspector {
+                        metric_id: "pg_active_connections".to_string(),
+                        layout: Some(layout.clone()),
+                    }
+                } else {
+                    DashboardPanelDraft::Chart {
+                        saved_chart_id: Uuid::new_v4(),
+                        layout: Some(layout.clone()),
+                    }
+                }
+            })
+            .collect();
+
+        mgr.append_panels(dash_id, drafts).unwrap();
+
+        let panels = mgr.panels_for_dashboard(dash_id);
+        assert_eq!(panels.len(), 5, "all five panels must be persisted");
+
+        for (i, (panel, expected)) in panels.iter().zip(layouts.iter()).enumerate() {
+            assert_eq!(
+                panel.grid_row, expected.grid_row,
+                "panel {i}: grid_row mismatch — panels would overlap"
+            );
+            assert_eq!(
+                panel.grid_column, expected.grid_column,
+                "panel {i}: grid_column mismatch — panels would overlap"
+            );
+            assert_eq!(
+                panel.grid_width, expected.grid_width,
+                "panel {i}: grid_width mismatch — panels would overlap"
+            );
+            assert_eq!(
+                panel.grid_height, expected.grid_height,
+                "panel {i}: grid_height mismatch — panels would overlap"
+            );
+        }
+    }
+
+    #[test]
     fn test_update_panel_position_clamps_and_persists() {
         let (mut mgr, rt) = make_manager_with_rt();
         let profile_id = insert_profile(&rt);
@@ -1337,8 +1514,9 @@ mod tests {
 
         mgr.append_panels(
             dash_id,
-            vec![DashboardPanelDraft {
+            vec![DashboardPanelDraft::Chart {
                 saved_chart_id: Uuid::new_v4(),
+                layout: None,
             }],
         )
         .unwrap();

@@ -2,6 +2,7 @@ pub(crate) mod context;
 pub mod dashboard_import;
 pub mod dashboard_source;
 pub(crate) mod hook;
+pub mod instance_catalog;
 pub(crate) mod item_manager;
 pub mod manager;
 pub mod metric_catalog;
@@ -42,6 +43,10 @@ pub use hook::{
     LuaCapabilities, OutputEvent, OutputReceiver, OutputSender, OutputStreamKind,
     ProcessExecutionError, ProcessExecutor, ScriptLanguage, ScriptSource, detached_process_channel,
     execute_streaming_process, output_channel,
+};
+pub use instance_catalog::{
+    DefaultDashboardPanel, DefaultInstanceDashboard, InspectorRowAction, InstanceCatalog,
+    InstanceInspectorDef, InstanceMetricDef, InstanceMetricId, InstanceMetricUnit,
 };
 pub use item_manager::{AuthProfileManager, Identifiable, ItemManager};
 pub use manager::{

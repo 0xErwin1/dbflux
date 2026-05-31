@@ -553,6 +553,112 @@ bitflags! {
         /// `DASHBOARD_IMPORT` (JSON import). Gating flows exclusively through
         /// this capability — no `driver_id` or `category` comparisons.
         const CHART_AUTHORING = 1 << 53;
+
+        /// Driver can list and serve chartable operational metric series
+        /// (e.g. transactions/s, cache hit ratio, active connections) via the
+        /// `InstanceCatalog` trait accessor on `Connection`. The sidebar renders
+        /// an "Instance Metrics" folder gated exclusively on this bit — no
+        /// driver_id comparisons are needed.
+        const INSTANCE_METRICS = 1 << 54;
+
+        /// Driver can list and serve live tabular inspector snapshots
+        /// (e.g. process lists, top queries, active sessions) via the
+        /// `InstanceCatalog` trait accessor on `Connection`. The sidebar renders
+        /// an "Instance Inspector" folder gated exclusively on this bit.
+        const INSTANCE_INSPECTOR = 1 << 55;
+    }
+}
+
+#[cfg(test)]
+mod capability_bits_tests {
+    use super::*;
+
+    #[test]
+    fn instance_metrics_bit_value() {
+        assert_eq!(DriverCapabilities::INSTANCE_METRICS.bits(), 1u64 << 54);
+    }
+
+    #[test]
+    fn instance_inspector_bit_value() {
+        assert_eq!(DriverCapabilities::INSTANCE_INSPECTOR.bits(), 1u64 << 55);
+    }
+
+    #[test]
+    fn all_named_bits_are_unique() {
+        let named: &[DriverCapabilities] = &[
+            DriverCapabilities::MULTIPLE_DATABASES,
+            DriverCapabilities::SCHEMAS,
+            DriverCapabilities::SSH_TUNNEL,
+            DriverCapabilities::SSL,
+            DriverCapabilities::AUTHENTICATION,
+            DriverCapabilities::QUERY_CANCELLATION,
+            DriverCapabilities::QUERY_TIMEOUT,
+            DriverCapabilities::TRANSACTIONS,
+            DriverCapabilities::PREPARED_STATEMENTS,
+            DriverCapabilities::MULTI_STATEMENT,
+            DriverCapabilities::VIEWS,
+            DriverCapabilities::FOREIGN_KEYS,
+            DriverCapabilities::INDEXES,
+            DriverCapabilities::CHECK_CONSTRAINTS,
+            DriverCapabilities::UNIQUE_CONSTRAINTS,
+            DriverCapabilities::CUSTOM_TYPES,
+            DriverCapabilities::TRIGGERS,
+            DriverCapabilities::STORED_PROCEDURES,
+            DriverCapabilities::SEQUENCES,
+            DriverCapabilities::INSERT,
+            DriverCapabilities::UPDATE,
+            DriverCapabilities::DELETE,
+            DriverCapabilities::RETURNING,
+            DriverCapabilities::PAGINATION,
+            DriverCapabilities::SORTING,
+            DriverCapabilities::FILTERING,
+            DriverCapabilities::EXPORT_CSV,
+            DriverCapabilities::EXPORT_JSON,
+            DriverCapabilities::NESTED_DOCUMENTS,
+            DriverCapabilities::ARRAYS,
+            DriverCapabilities::AGGREGATION,
+            DriverCapabilities::KV_SCAN,
+            DriverCapabilities::KV_GET,
+            DriverCapabilities::KV_SET,
+            DriverCapabilities::KV_DELETE,
+            DriverCapabilities::KV_EXISTS,
+            DriverCapabilities::KV_TTL,
+            DriverCapabilities::KV_KEY_TYPES,
+            DriverCapabilities::KV_VALUE_SIZE,
+            DriverCapabilities::KV_RENAME,
+            DriverCapabilities::KV_BULK_GET,
+            DriverCapabilities::KV_STREAM_RANGE,
+            DriverCapabilities::KV_STREAM_ADD,
+            DriverCapabilities::KV_STREAM_DELETE,
+            DriverCapabilities::PUBSUB,
+            DriverCapabilities::GRAPH_TRAVERSAL,
+            DriverCapabilities::EDGE_PROPERTIES,
+            DriverCapabilities::TRANSACTIONAL_DDL,
+            DriverCapabilities::ROUTINES,
+            DriverCapabilities::METRIC_SERIES,
+            DriverCapabilities::METRIC_CATALOG,
+            DriverCapabilities::DASHBOARD_IMPORT,
+            DriverCapabilities::DASHBOARD_SYNC,
+            DriverCapabilities::CHART_AUTHORING,
+            DriverCapabilities::INSTANCE_METRICS,
+            DriverCapabilities::INSTANCE_INSPECTOR,
+        ];
+
+        let mut seen_bits: u64 = 0;
+        for cap in named {
+            let bits = cap.bits();
+            assert_eq!(
+                bits.count_ones(),
+                1,
+                "expected single-bit flag, got {bits:#x}"
+            );
+            assert_eq!(
+                seen_bits & bits,
+                0,
+                "duplicate bit detected: {bits:#x} already in {seen_bits:#x}"
+            );
+            seen_bits |= bits;
+        }
     }
 }
 

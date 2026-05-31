@@ -107,6 +107,10 @@ impl ChartDocument {
                             namespace,
                             metric_name,
                         } => d.matches_metric_source(*profile_id, namespace, metric_name),
+                        DocumentKey::InstanceMetric {
+                            profile_id,
+                            metric_id,
+                        } => d.matches_instance_metric_chart(*profile_id, metric_id),
                         _ => false,
                     }
                 })

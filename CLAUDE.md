@@ -382,6 +382,7 @@ Key abstractions for UI adaptation:
 9. Register in `AppState::new()` under `#[cfg(feature = "name")]`
 10. **Set `ColumnMeta::kind` on every column** using the `ColumnKind` enum (Timestamp, Float, Integer, Text, Unknown). The chart engine uses `ColumnKind` exclusively — it never inspects `type_name` strings or driver identifiers. Columns with `kind = Unknown` are excluded from chart auto-detection. Use `ColumnKind::Timestamp` for time columns, `ColumnKind::Float`/`Integer` for numeric columns, and `ColumnKind::Text` for string columns.
 11. Optional: implement `DashboardSource` and/or `DashboardImporter` and advertise `DriverCapabilities::DASHBOARD_SYNC` / `DASHBOARD_IMPORT` to let the UI browse/import upstream dashboards (see `docs/DASHBOARDS.md`).
+12. Optional: implement `InstanceCatalog` (`dbflux_core/src/connection/instance_catalog.rs`) and advertise `DriverCapabilities::INSTANCE_METRICS` (time-series) and/or `INSTANCE_INSPECTOR` (tabular snapshots). The catalog exposes metrics, inspectors, a `DefaultInstanceDashboard` descriptor for the read-only Instance Overview, and optional `InspectorRowAction`s gated by per-driver privilege probes. See `docs/DASHBOARDS.md` § Instance metrics and inspectors.
 
 For external RPC-backed drivers, keep discovery/adaptation in `dbflux_app::rpc_services` rather than adding a parallel bootstrap path.
 
@@ -481,11 +482,13 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 
 - Saved charts and dashboards are persisted in SQLite under the `viz_*` table prefix (`viz_dashboards`, `viz_dashboard_panels`, `viz_saved_charts`, `viz_saved_chart_series`, `viz_saved_chart_binding_y`, `viz_saved_chart_source_metric_*`). Repositories live in `crates/dbflux_storage/src/repositories/viz_*.rs`.
 - In-memory managers wrap the repositories: `DashboardManager` (`crates/dbflux_ui_base/src/dashboard_manager.rs`) for `Dashboard` / `DashboardPanel` / `DashboardPanelKind { Chart | Divider }`, and `SavedChartManager` (`crates/dbflux_ui_base/src/saved_chart_manager.rs`) for `SavedChart` + `SavedChartRefreshPolicy`. Writes go to the repo first; caches update only on success.
-- `DashboardDocument` (`crates/dbflux_ui_document/src/dashboard/`) hosts a 12-column grid of chart panels (each a `Loaded`/`Orphan` `ChartDocument`) with a shared `TimeRangePanel`. Dedup key: `DocumentKey::Dashboard { dashboard_id }`.
+- `DashboardDocument` (`crates/dbflux_ui_document/src/dashboard/`) hosts a 12-column grid of chart, divider, and inspector panels with a shared `TimeRangePanel`. Dedup keys: `DocumentKey::Dashboard { dashboard_id }` (persisted) or `DocumentKey::InstanceOverview { profile_id }` (auto-generated read-only Instance Overview).
+- Refresh timers (dashboard, standalone chart, inspector) check `AppState::connections()` before each tick and skip work when the underlying profile is disconnected; the timer itself stays alive so refresh resumes on reconnect without re-arming.
 - Driver seams (UI never branches on driver id):
   - `DashboardSource` (`dbflux_core/src/connection/dashboard_source.rs`) — lists upstream dashboards; gated by `DriverCapabilities::DASHBOARD_SYNC`.
   - `DashboardImporter` (`dbflux_core/src/connection/dashboard_import.rs`) — parses upstream JSON into `WidgetImportSpec`s; gated by `DriverCapabilities::DASHBOARD_IMPORT`.
-  - CloudWatch is the reference implementation (read-only browse + import, never writes back upstream).
+  - `InstanceCatalog` (`dbflux_core/src/connection/instance_catalog.rs`) — exposes per-driver metrics, inspectors, default-dashboard descriptor, and row actions; gated by `DriverCapabilities::INSTANCE_METRICS` / `INSTANCE_INSPECTOR`.
+  - CloudWatch is the reference implementation for `DashboardSource` / `DashboardImporter`. PostgreSQL, MySQL/MariaDB, MongoDB, Redis, and SQL Server are the reference implementations for `InstanceCatalog`.
 - Remote dashboard listings are session-scoped via `RemoteDashboardCache` (`crates/dbflux_app/src/remote_dashboard_cache.rs`); they do not persist across restart.
 
 Full reference: `docs/DASHBOARDS.md`.

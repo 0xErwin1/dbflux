@@ -198,6 +198,35 @@ impl TimeRangePanel {
         }
     }
 
+    /// Returns the short label string for a preset index (e.g. `"15m"`, `"24h"`).
+    ///
+    /// Returns `None` for unknown indices (index >= 6 or Custom = 5).
+    pub fn label_for_index(index: usize) -> Option<&'static str> {
+        match index {
+            0 => Some("15m"),
+            1 => Some("1h"),
+            2 => Some("6h"),
+            3 => Some("24h"),
+            4 => Some("7d"),
+            _ => None,
+        }
+    }
+
+    /// Returns the lookback duration in milliseconds for a preset index.
+    ///
+    /// Returns `None` for `Custom` (index 5) and unknown indices.
+    /// Callers should supply a sensible fallback (e.g. `24 * 60 * 60_000` for 24 h).
+    pub fn lookback_ms_for_index(index: usize) -> Option<i64> {
+        match index {
+            0 => Some(15 * 60_000),
+            1 => Some(60 * 60_000),
+            2 => Some(6 * 60 * 60_000),
+            3 => Some(24 * 60 * 60_000),
+            4 => Some(7 * 24 * 60 * 60_000),
+            _ => None,
+        }
+    }
+
     // ── Hour / minute item generators ────────────────────────────────────────
 
     pub fn hour_items() -> Vec<DropdownItem> {

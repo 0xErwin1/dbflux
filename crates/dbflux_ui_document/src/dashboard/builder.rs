@@ -265,16 +265,37 @@ pub(super) fn dashboard_toolbar(
         .tooltip(mode_tooltip)
         .on_click(move |event, window, app| on_toggle_mode(event, window, app));
 
-    // Group both right-anchored controls in one wrapper with its own gap so
-    // they don't visually collide with each other or the toolbar edge.
-    let right_group = div()
-        .flex_shrink_0()
-        .ml_auto()
-        .flex()
-        .items_center()
-        .gap(Spacing::SM)
-        .child(add_btn)
-        .child(mode_btn);
+    // Group right-anchored controls. Read-only dashboards omit the mutation
+    // affordances ("Add Panel" and the Edit/View toggle) but expose a
+    // "Save as editable" button so the user can clone the overview into a
+    // new persisted, mutable dashboard.
+    let is_read_only = dashboard.is_read_only();
+    let right_group = if is_read_only {
+        let on_save_as = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+            this.request_save_as_editable(cx);
+        });
+        let save_as_btn = ToolbarButton::new("dash-save-as-editable")
+            .label("Save as editable")
+            .variant(ToolbarButtonVariant::Default)
+            .tooltip("Clone this overview into a new editable dashboard")
+            .on_click(move |event, window, app| on_save_as(event, window, app));
+        div()
+            .flex_shrink_0()
+            .ml_auto()
+            .flex()
+            .items_center()
+            .gap(Spacing::SM)
+            .child(save_as_btn)
+    } else {
+        div()
+            .flex_shrink_0()
+            .ml_auto()
+            .flex()
+            .items_center()
+            .gap(Spacing::SM)
+            .child(add_btn)
+            .child(mode_btn)
+    };
 
     // Items pushed in order. When Custom is selected, the picker slots are
     // inserted between the preset dropdown and the refresh control, mirroring
@@ -345,6 +366,7 @@ fn build_custom_time_controls(
 /// When `is_editing_title` is true, an `Input` entity is rendered inline for
 /// title editing; when false, the title is a clickable span that starts inline
 /// edit on single-click, and a drag handle on mouse-down.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn panel_header(
     panel_index: u32,
     title: &str,
@@ -352,6 +374,7 @@ pub(super) fn panel_header(
     _drag_active: bool,
     menu_open: bool,
     edit_mode: bool,
+    has_editable_title: bool,
     cx: &mut Context<DashboardDocument>,
 ) -> impl IntoElement {
     let is_editing = editing_input.is_some();
@@ -480,7 +503,7 @@ pub(super) fn panel_header(
                 .on_click(on_kebab_click);
 
             let menu_panel = if menu_open {
-                Some(panel_kebab_menu(panel_index, cx))
+                Some(panel_kebab_menu(panel_index, has_editable_title, cx))
             } else {
                 None
             };
@@ -520,23 +543,31 @@ pub(super) fn panel_header(
 /// danger color for `Remove panel`). Click handlers stash the chosen action
 /// in `pending_panel_menu_action`; the action is consumed at the start of the
 /// next `render` pass where a real `Window` is available.
-fn panel_kebab_menu(panel_index: u32, cx: &mut Context<DashboardDocument>) -> gpui::AnyElement {
+fn panel_kebab_menu(
+    panel_index: u32,
+    has_editable_title: bool,
+    cx: &mut Context<DashboardDocument>,
+) -> gpui::AnyElement {
     use dbflux_components::composites::{MenuItem, render_menu_items};
     use dbflux_components::icons::AppIcon;
 
-    // Items mirror the sidebar's two-section layout: actions, then a
-    // separator, then the destructive `Remove panel`.
-    let menu_items: Vec<MenuItem> = vec![
-        MenuItem::new("Configure…").icon(AppIcon::Settings),
-        MenuItem::new("Edit title…").icon(AppIcon::Pencil),
-        MenuItem::separator(),
-        MenuItem::new("Remove panel").icon(AppIcon::Delete).danger(),
-    ];
+    // Build the action list. "Edit title…" is omitted for slot types that
+    // carry no user-editable title (Inspector, Divider).
+    let mut menu_items: Vec<MenuItem> = vec![MenuItem::new("Configure…").icon(AppIcon::Settings)];
+    if has_editable_title {
+        menu_items.push(MenuItem::new("Edit title…").icon(AppIcon::Pencil));
+    }
+    menu_items.push(MenuItem::separator());
+    menu_items.push(MenuItem::new("Remove panel").icon(AppIcon::Delete).danger());
 
-    // The visible items list contains a separator, so map visual index back
-    // to the domain `PanelMenuAction` order (Configure=0, EditTitle=1,
-    // RemovePanel=2).
-    let visual_to_action: Vec<Option<usize>> = vec![Some(0), Some(1), None, Some(2)];
+    // Map visual index → domain PanelMenuAction index, skipping the separator
+    // and the conditionally absent "Edit title…" item.
+    let mut visual_to_action: Vec<Option<usize>> = vec![Some(0)]; // Configure
+    if has_editable_title {
+        visual_to_action.push(Some(1)); // EditTitle
+    }
+    visual_to_action.push(None); // separator
+    visual_to_action.push(Some(2)); // RemovePanel
 
     let weak = cx.weak_entity();
     let on_click = move |visual_idx: usize, app: &mut gpui::App| {

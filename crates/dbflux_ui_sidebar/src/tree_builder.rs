@@ -2,8 +2,12 @@ use super::*;
 
 impl Sidebar {
     pub(super) fn build_tree_items_with_overrides(&self, cx: &Context<Self>) -> Vec<TreeItem> {
-        let items =
-            Self::build_tree_items_with_errors(self.app_state.read(cx), &self.metric_fetch_errors);
+        let items = Self::build_tree_items_with_errors(
+            self.app_state.read(cx),
+            &self.metric_fetch_errors,
+            &self.instance_metrics_cache,
+            &self.instance_inspectors_cache,
+        );
         let items = self.apply_expansion_overrides(items);
 
         if self.connections_search_query.trim().is_empty() {
@@ -103,15 +107,23 @@ impl Sidebar {
     }
 
     pub(super) fn build_tree_items(state: &AppStateEntity) -> Vec<TreeItem> {
-        Self::build_tree_items_with_errors(state, &HashMap::new())
+        Self::build_tree_items_with_errors(state, &HashMap::new(), &HashMap::new(), &HashMap::new())
     }
 
     pub(super) fn build_tree_items_with_errors(
         state: &AppStateEntity,
         metric_fetch_errors: &HashMap<String, String>,
+        instance_metrics_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>>,
+        instance_inspectors_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>>,
     ) -> Vec<TreeItem> {
         let root_nodes = state.connection_tree().root_nodes();
-        Self::build_tree_nodes_recursive_with_errors(&root_nodes, state, metric_fetch_errors)
+        Self::build_tree_nodes_recursive_with_errors(
+            &root_nodes,
+            state,
+            metric_fetch_errors,
+            instance_metrics_cache,
+            instance_inspectors_cache,
+        )
     }
 
     /// Build tree items for the Scripts tab from ScriptsDirectory entries.
@@ -158,6 +170,8 @@ impl Sidebar {
         nodes: &[&ConnectionTreeNode],
         state: &AppStateEntity,
         metric_fetch_errors: &HashMap<String, String>,
+        instance_metrics_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>>,
+        instance_inspectors_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>>,
     ) -> Vec<TreeItem> {
         let mut items = Vec::new();
 
@@ -171,6 +185,8 @@ impl Sidebar {
                         &children_refs,
                         state,
                         metric_fetch_errors,
+                        instance_metrics_cache,
+                        instance_inspectors_cache,
                     );
 
                     let folder_item = TreeItem::new(
@@ -191,6 +207,8 @@ impl Sidebar {
                             profile,
                             state,
                             metric_fetch_errors,
+                            instance_metrics_cache,
+                            instance_inspectors_cache,
                         );
                         items.push(profile_item);
                     }
@@ -205,6 +223,8 @@ impl Sidebar {
         profile: &dbflux_core::ConnectionProfile,
         state: &AppStateEntity,
         metric_fetch_errors: &HashMap<String, String>,
+        instance_metrics_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>>,
+        instance_inspectors_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>>,
     ) -> TreeItem {
         let profile_id = profile.id;
         let is_connected = state.connections().contains_key(&profile_id);
@@ -254,6 +274,7 @@ impl Sidebar {
                     metric_fetch_errors,
                 ));
             }
+
             let conn_category = conn_metadata.category;
             let supports_routines = conn_capabilities.contains(DriverCapabilities::ROUTINES);
             let metric_cache = state.metric_catalog_cache().clone();
@@ -272,6 +293,8 @@ impl Sidebar {
                         database_names.push("db0".to_string());
                     }
                 }
+
+                let mut kv_db_items: Vec<TreeItem> = Vec::new();
 
                 for database_name in database_names {
                     let is_pending = state.is_operation_pending(profile_id, Some(&database_name));
@@ -296,7 +319,7 @@ impl Sidebar {
                         database_name.clone()
                     };
 
-                    profile_children.push(
+                    kv_db_items.push(
                         TreeItem::new(
                             SchemaNodeId::Database {
                                 profile_id,
@@ -309,6 +332,8 @@ impl Sidebar {
                         .children(db_children),
                     );
                 }
+
+                profile_children.push(Self::build_databases_folder_item(profile_id, kv_db_items));
             } else if !schema.databases().is_empty() {
                 // See `should_collapse_database_wrapper`: when the connection
                 // exposes a single trivial database (CloudWatch, DynamoDB,
@@ -317,6 +342,7 @@ impl Sidebar {
                 // already embed `database` in their node IDs so routing is
                 // unaffected by the missing intermediate.
                 let collapse_single_db = should_collapse_database_wrapper(schema.databases());
+                let mut named_db_items: Vec<TreeItem> = Vec::new();
                 for db in schema.databases() {
                     let is_pending = state.is_operation_pending(profile_id, Some(&db.name));
                     let is_active_db = connected.active_database.as_deref() == Some(&db.name);
@@ -474,7 +500,7 @@ impl Sidebar {
                             db.is_current || has_per_db_conn
                         };
 
-                        profile_children.push(
+                        named_db_items.push(
                             TreeItem::new(
                                 SchemaNodeId::Database {
                                     profile_id,
@@ -487,6 +513,13 @@ impl Sidebar {
                             .children(db_children),
                         );
                     }
+                }
+
+                if !named_db_items.is_empty() {
+                    profile_children.push(Self::build_databases_folder_item(
+                        profile_id,
+                        named_db_items,
+                    ));
                 }
             } else {
                 // No databases defined - use active_database or first schema as fallback
@@ -509,6 +542,38 @@ impl Sidebar {
                     supports_routines,
                     &connected.dependents_cache,
                 );
+            }
+
+            // Instance overview, metrics, and inspectors — appended after databases.
+            // Sidebar order: Instance Overview, Instance Metrics, Instance Inspectors.
+            // Capability-gated; no driver_id branching.
+            let has_instance_metrics =
+                conn_capabilities.contains(DriverCapabilities::INSTANCE_METRICS);
+            let has_instance_inspector =
+                conn_capabilities.contains(DriverCapabilities::INSTANCE_INSPECTOR);
+
+            if has_instance_metrics || has_instance_inspector {
+                profile_children.push(Self::build_instance_overview_leaf(profile_id));
+            }
+
+            if has_instance_metrics {
+                let metric_children =
+                    Self::build_instance_metric_leaf_children(profile_id, instance_metrics_cache);
+                profile_children.push(Self::build_instance_metrics_folder_item(
+                    profile_id,
+                    metric_children,
+                ));
+            }
+
+            if has_instance_inspector {
+                let inspector_children = Self::build_instance_inspector_leaf_children(
+                    profile_id,
+                    instance_inspectors_cache,
+                );
+                profile_children.push(Self::build_instance_inspectors_folder_item(
+                    profile_id,
+                    inspector_children,
+                ));
             }
 
             profile_item = profile_item.expanded(is_active).children(profile_children);
@@ -632,6 +697,154 @@ impl Sidebar {
         )
         .expanded(false)
         .children(children)
+    }
+
+    /// Build the `DatabasesFolder` tree node for a connected profile.
+    ///
+    /// The folder is expanded by default so databases are immediately visible
+    /// after connecting — matching the behaviour users had before the grouping
+    /// folder was introduced.
+    fn build_databases_folder_item(profile_id: Uuid, children: Vec<TreeItem>) -> TreeItem {
+        TreeItem::new(
+            SchemaNodeId::DatabasesFolder { profile_id }.to_string(),
+            "Databases".to_string(),
+        )
+        .expanded(true)
+        .children(children)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn build_databases_folder_item_for_test(
+        profile_id: Uuid,
+        children: Vec<TreeItem>,
+    ) -> TreeItem {
+        Self::build_databases_folder_item(profile_id, children)
+    }
+
+    /// Build the `InstanceMetricsFolder` folder item for a connected profile.
+    ///
+    /// `children` is populated from the session-scoped `instance_metrics_cache`
+    /// on tree rebuilds after the first expansion. On the first expansion the
+    /// cache is empty, so the folder shows a loading placeholder until
+    /// `spawn_fetch_instance_catalog` completes and calls `rebuild_tree_with_overrides`.
+    pub(crate) fn build_instance_metrics_folder_item(
+        profile_id: Uuid,
+        children: Vec<TreeItem>,
+    ) -> TreeItem {
+        TreeItem::new(
+            SchemaNodeId::InstanceMetricsFolder { profile_id }.to_string(),
+            "Instance Metrics".to_string(),
+        )
+        .expanded(false)
+        .children(children)
+    }
+
+    /// Build the `InstanceInspectorsFolder` folder item for a connected profile.
+    ///
+    /// `children` is populated from the session-scoped `instance_inspectors_cache`
+    /// on tree rebuilds after the first expansion. On the first expansion the
+    /// cache is empty, so the folder shows a loading placeholder until
+    /// `spawn_fetch_instance_catalog` completes and calls `rebuild_tree_with_overrides`.
+    pub(crate) fn build_instance_inspectors_folder_item(
+        profile_id: Uuid,
+        children: Vec<TreeItem>,
+    ) -> TreeItem {
+        TreeItem::new(
+            SchemaNodeId::InstanceInspectorsFolder { profile_id }.to_string(),
+            "Instance Inspectors".to_string(),
+        )
+        .expanded(false)
+        .children(children)
+    }
+
+    /// Build `InstanceMetricLeaf` children for the `InstanceMetricsFolder`.
+    ///
+    /// Returns a loading placeholder when the cache has no entry for `profile_id`
+    /// (fetch not yet complete), the "No metrics available" placeholder when the
+    /// cache entry is present but empty (probe completed, nothing to show), or one
+    /// leaf per cached metric definition once the fetch resolves.
+    pub(crate) fn build_instance_metric_leaf_children(
+        profile_id: Uuid,
+        cache: &HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>>,
+    ) -> Vec<TreeItem> {
+        let Some(metrics) = cache.get(&profile_id) else {
+            return vec![TreeItem::new(
+                format!("instance-metrics-loading:{profile_id}"),
+                "Loading\u{2026}".to_string(),
+            )];
+        };
+
+        if metrics.is_empty() {
+            return vec![TreeItem::new(
+                format!("instance-metrics-empty:{profile_id}"),
+                "No metrics available".to_string(),
+            )];
+        }
+
+        metrics
+            .iter()
+            .map(|m| {
+                TreeItem::new(
+                    SchemaNodeId::InstanceMetricLeaf {
+                        profile_id,
+                        metric_id: m.id.clone(),
+                    }
+                    .to_string(),
+                    m.display_name.clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// Build `InstanceInspectorLeaf` children for the `InstanceInspectorsFolder`.
+    ///
+    /// Returns a loading placeholder when the cache has no entry for `profile_id`
+    /// (fetch not yet complete), the "No inspectors available" placeholder when
+    /// the cache entry is present but empty, or one leaf per cached inspector
+    /// definition once the fetch resolves.
+    pub(crate) fn build_instance_inspector_leaf_children(
+        profile_id: Uuid,
+        cache: &HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>>,
+    ) -> Vec<TreeItem> {
+        let Some(inspectors) = cache.get(&profile_id) else {
+            return vec![TreeItem::new(
+                format!("instance-inspectors-loading:{profile_id}"),
+                "Loading\u{2026}".to_string(),
+            )];
+        };
+
+        if inspectors.is_empty() {
+            return vec![TreeItem::new(
+                format!("instance-inspectors-empty:{profile_id}"),
+                "No inspectors available".to_string(),
+            )];
+        }
+
+        inspectors
+            .iter()
+            .map(|i| {
+                TreeItem::new(
+                    SchemaNodeId::InstanceInspectorLeaf {
+                        profile_id,
+                        metric_id: i.id.clone(),
+                    }
+                    .to_string(),
+                    i.display_name.clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// Build the `InstanceOverviewLeaf` sidebar item for a connected profile.
+    ///
+    /// This is a single non-folder leaf that opens the synthesized read-only
+    /// "Instance Overview" dashboard. It appears above the `InstanceMetricsFolder`
+    /// and `InstanceInspectorsFolder` when the driver advertises either capability.
+    pub(crate) fn build_instance_overview_leaf(profile_id: Uuid) -> TreeItem {
+        TreeItem::new(
+            SchemaNodeId::InstanceOverviewLeaf { profile_id }.to_string(),
+            "Instance Overview".to_string(),
+        )
     }
 
     /// Build the `DashboardItem` children for the `DashboardsFolder`.
@@ -2973,6 +3186,416 @@ mod tests {
         assert!(
             !label.contains("import"),
             "hint must not mention 'import' without DASHBOARD_IMPORT: {label:?}"
+        );
+    }
+
+    // ---- T24: capability-gate tests for InstanceMetricsFolder / InstanceInspectorsFolder ----
+    //
+    // The tests below reference `build_instance_metrics_folder_item` and
+    // `build_instance_inspectors_folder_item` — functions that do not exist yet.
+    // This causes a compile failure (RED) until T25 adds them.
+
+    /// REQ-UI-1, REQ-UI-5: A driver with `INSTANCE_METRICS` must produce an
+    /// `InstanceMetricsFolder` node when `build_instance_metrics_folder_item` is called.
+    ///
+    /// Fails to compile (RED) until T25 adds `build_instance_metrics_folder_item`.
+    #[test]
+    fn instance_metrics_folder_item_produces_correct_node_id() {
+        use dbflux_core::SchemaNodeId;
+
+        let profile_id = Uuid::new_v4();
+        let item = Sidebar::build_instance_metrics_folder_item(profile_id, Vec::new());
+
+        let node_id: SchemaNodeId = item
+            .id
+            .as_ref()
+            .parse()
+            .expect("folder item must have a valid SchemaNodeId");
+
+        assert!(
+            matches!(
+                node_id,
+                SchemaNodeId::InstanceMetricsFolder {
+                    profile_id: pid,
+                } if pid == profile_id
+            ),
+            "folder item must carry InstanceMetricsFolder node ID: {node_id:?}"
+        );
+    }
+
+    /// REQ-UI-1, REQ-UI-5: A driver with `INSTANCE_INSPECTOR` must produce an
+    /// `InstanceInspectorsFolder` node when `build_instance_inspectors_folder_item` is called.
+    ///
+    /// Fails to compile (RED) until T25 adds `build_instance_inspectors_folder_item`.
+    #[test]
+    fn instance_inspectors_folder_item_produces_correct_node_id() {
+        use dbflux_core::SchemaNodeId;
+
+        let profile_id = Uuid::new_v4();
+        let item = Sidebar::build_instance_inspectors_folder_item(profile_id, Vec::new());
+
+        let node_id: SchemaNodeId = item
+            .id
+            .as_ref()
+            .parse()
+            .expect("folder item must have a valid SchemaNodeId");
+
+        assert!(
+            matches!(
+                node_id,
+                SchemaNodeId::InstanceInspectorsFolder {
+                    profile_id: pid,
+                } if pid == profile_id
+            ),
+            "folder item must carry InstanceInspectorsFolder node ID: {node_id:?}"
+        );
+    }
+
+    /// REQ-UI-5: A driver with `INSTANCE_METRICS` capability must include the
+    /// `InstanceMetricsFolder` in the profile's child list. A driver without
+    /// this capability must not include it.
+    ///
+    /// Tests the capability-gate predicate in isolation using a mock that mirrors
+    /// `build_profile_item_with_errors` capability check pattern.
+    #[test]
+    fn capability_gate_controls_instance_metrics_folder_inclusion() {
+        use dbflux_core::DriverCapabilities;
+
+        let caps_with = DriverCapabilities::INSTANCE_METRICS;
+        let caps_without = DriverCapabilities::empty();
+
+        let should_show_with = caps_with.contains(DriverCapabilities::INSTANCE_METRICS);
+        let should_show_without = caps_without.contains(DriverCapabilities::INSTANCE_METRICS);
+
+        assert!(
+            should_show_with,
+            "INSTANCE_METRICS capability must enable the folder"
+        );
+        assert!(
+            !should_show_without,
+            "missing INSTANCE_METRICS capability must suppress the folder"
+        );
+    }
+
+    /// REQ-UI-5: A driver with `INSTANCE_INSPECTOR` capability must include the
+    /// `InstanceInspectorsFolder` in the profile's child list. A driver without
+    /// this capability must not include it.
+    #[test]
+    fn capability_gate_controls_instance_inspectors_folder_inclusion() {
+        use dbflux_core::DriverCapabilities;
+
+        let caps_with = DriverCapabilities::INSTANCE_INSPECTOR;
+        let caps_without = DriverCapabilities::empty();
+
+        let should_show_with = caps_with.contains(DriverCapabilities::INSTANCE_INSPECTOR);
+        let should_show_without = caps_without.contains(DriverCapabilities::INSTANCE_INSPECTOR);
+
+        assert!(
+            should_show_with,
+            "INSTANCE_INSPECTOR capability must enable the folder"
+        );
+        assert!(
+            !should_show_without,
+            "missing INSTANCE_INSPECTOR capability must suppress the folder"
+        );
+    }
+
+    // ---- RF1: expansion wiring — instance catalog leaf population ----
+
+    /// REQ-UI-1 / RF1: when `instance_metrics_cache` is populated for a profile,
+    /// `build_instance_metric_leaf_children` returns one `InstanceMetricLeaf` per
+    /// cached definition and each leaf carries the correct `SchemaNodeId`.
+    #[test]
+    fn build_instance_metric_leaf_children_returns_leaves_from_cache() {
+        use dbflux_core::{InstanceMetricDef, InstanceMetricUnit, SchemaNodeId};
+
+        let profile_id = Uuid::new_v4();
+        let defs = vec![
+            InstanceMetricDef {
+                id: "pg.cache_hit_ratio".to_string(),
+                display_name: "Cache hit ratio".to_string(),
+                group: "Cache".to_string(),
+                unit: InstanceMetricUnit::Percent,
+                description: None,
+                default_refresh_secs: 15,
+            },
+            InstanceMetricDef {
+                id: "pg.tx_commit_rate".to_string(),
+                display_name: "Commits / sec".to_string(),
+                group: "Throughput".to_string(),
+                unit: InstanceMetricUnit::PerSecond,
+                description: None,
+                default_refresh_secs: 10,
+            },
+        ];
+
+        let mut cache = HashMap::new();
+        cache.insert(profile_id, defs.clone());
+
+        let leaves = Sidebar::build_instance_metric_leaf_children(profile_id, &cache);
+
+        assert_eq!(
+            leaves.len(),
+            defs.len(),
+            "must produce one leaf per cached metric definition"
+        );
+
+        for (leaf, def) in leaves.iter().zip(defs.iter()) {
+            let node_id: SchemaNodeId = leaf
+                .id
+                .as_ref()
+                .parse()
+                .expect("leaf must have a valid SchemaNodeId");
+
+            assert!(
+                matches!(
+                    &node_id,
+                    SchemaNodeId::InstanceMetricLeaf { profile_id: pid, metric_id }
+                        if *pid == profile_id && metric_id == &def.id
+                ),
+                "leaf must carry InstanceMetricLeaf node ID with correct profile and metric_id; got {node_id:?}"
+            );
+
+            assert_eq!(
+                leaf.label, def.display_name,
+                "leaf label must equal the metric display_name"
+            );
+        }
+    }
+
+    /// REQ-UI-1: when `instance_metrics_cache` has populated entries for a profile,
+    /// `build_instance_metric_leaf_children` returns one leaf per definition (no placeholders).
+    #[test]
+    fn build_instance_metric_leaf_children_returns_no_placeholder_when_cache_populated() {
+        use dbflux_core::{InstanceMetricDef, InstanceMetricUnit};
+
+        let profile_id = Uuid::new_v4();
+        let defs = vec![InstanceMetricDef {
+            id: "pg.tps".to_string(),
+            display_name: "TPS".to_string(),
+            group: "Throughput".to_string(),
+            unit: InstanceMetricUnit::PerSecond,
+            description: None,
+            default_refresh_secs: 15,
+        }];
+        let mut cache: HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>> = HashMap::new();
+        cache.insert(profile_id, defs);
+
+        let leaves = Sidebar::build_instance_metric_leaf_children(profile_id, &cache);
+
+        assert_eq!(
+            leaves.len(),
+            1,
+            "must return exactly one leaf for one metric"
+        );
+        assert!(
+            !leaves[0].id.to_string().contains("loading"),
+            "populated cache must not produce a loading placeholder"
+        );
+    }
+
+    /// REQ-UI-1 / RF1: when `instance_inspectors_cache` is populated for a profile,
+    /// `build_instance_inspector_leaf_children` returns one `InstanceInspectorLeaf`
+    /// per cached definition with the correct `SchemaNodeId`.
+    #[test]
+    fn build_instance_inspector_leaf_children_returns_leaves_from_cache() {
+        use dbflux_core::{InstanceInspectorDef, SchemaNodeId};
+
+        let profile_id = Uuid::new_v4();
+        let defs = vec![InstanceInspectorDef {
+            id: "pg.activity".to_string(),
+            display_name: "Active queries".to_string(),
+            description: None,
+            default_refresh_secs: 10,
+        }];
+
+        let mut cache = HashMap::new();
+        cache.insert(profile_id, defs.clone());
+
+        let leaves = Sidebar::build_instance_inspector_leaf_children(profile_id, &cache);
+
+        assert_eq!(
+            leaves.len(),
+            1,
+            "must produce one leaf for the single inspector"
+        );
+
+        let node_id: SchemaNodeId = leaves[0]
+            .id
+            .as_ref()
+            .parse()
+            .expect("leaf must have a valid SchemaNodeId");
+
+        assert!(
+            matches!(
+                &node_id,
+                SchemaNodeId::InstanceInspectorLeaf { profile_id: pid, metric_id }
+                    if *pid == profile_id && metric_id == "pg.activity"
+            ),
+            "leaf must carry InstanceInspectorLeaf with correct ids; got {node_id:?}"
+        );
+    }
+
+    // ---- BF1: loading placeholder tests ----
+
+    /// BF1: when `instance_metrics_cache` has no entry for a profile,
+    /// `build_instance_metric_leaf_children` must return a single loading
+    /// placeholder so the parent folder is non-empty and shows a chevron.
+    #[test]
+    fn build_instance_metric_leaf_children_returns_loading_placeholder_on_cache_miss() {
+        let profile_id = Uuid::new_v4();
+        let cache: HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>> = HashMap::new();
+
+        let leaves = Sidebar::build_instance_metric_leaf_children(profile_id, &cache);
+
+        assert_eq!(
+            leaves.len(),
+            1,
+            "must return one loading placeholder when cache has no entry for this profile"
+        );
+        assert!(
+            leaves[0].id.to_string().contains("loading"),
+            "loading placeholder id must contain 'loading'; got {:?}",
+            leaves[0].id
+        );
+    }
+
+    /// BF1: when `instance_inspectors_cache` has no entry for a profile,
+    /// `build_instance_inspector_leaf_children` must return a single loading
+    /// placeholder so the parent folder is non-empty and shows a chevron.
+    #[test]
+    fn build_instance_inspector_leaf_children_returns_loading_placeholder_on_cache_miss() {
+        let profile_id = Uuid::new_v4();
+        let cache: HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>> = HashMap::new();
+
+        let leaves = Sidebar::build_instance_inspector_leaf_children(profile_id, &cache);
+
+        assert_eq!(
+            leaves.len(),
+            1,
+            "must return one loading placeholder when cache has no entry for this profile"
+        );
+        assert!(
+            leaves[0].id.to_string().contains("loading"),
+            "loading placeholder id must contain 'loading'; got {:?}",
+            leaves[0].id
+        );
+    }
+
+    /// BF1: empty Vec in cache (probe completed, nothing returned) must still
+    /// produce the "No metrics available" placeholder, not a loading placeholder.
+    #[test]
+    fn build_instance_metric_leaf_children_empty_cache_entry_shows_not_available() {
+        let profile_id = Uuid::new_v4();
+        let mut cache: HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>> = HashMap::new();
+        cache.insert(profile_id, Vec::new());
+
+        let leaves = Sidebar::build_instance_metric_leaf_children(profile_id, &cache);
+
+        assert_eq!(
+            leaves.len(),
+            1,
+            "must return one placeholder for empty entry"
+        );
+        assert!(
+            leaves[0].label.to_string().contains("No metrics"),
+            "empty-cache placeholder must say 'No metrics available'; got {:?}",
+            leaves[0].label
+        );
+    }
+
+    /// BF1: empty Vec in cache (probe completed, nothing returned) must still
+    /// produce the "No inspectors available" placeholder, not a loading placeholder.
+    #[test]
+    fn build_instance_inspector_leaf_children_empty_cache_entry_shows_not_available() {
+        let profile_id = Uuid::new_v4();
+        let mut cache: HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>> = HashMap::new();
+        cache.insert(profile_id, Vec::new());
+
+        let leaves = Sidebar::build_instance_inspector_leaf_children(profile_id, &cache);
+
+        assert_eq!(
+            leaves.len(),
+            1,
+            "must return one placeholder for empty entry"
+        );
+        assert!(
+            leaves[0].label.to_string().contains("No inspectors"),
+            "empty-cache placeholder must say 'No inspectors available'; got {:?}",
+            leaves[0].label
+        );
+    }
+
+    // ---- UX3: DatabasesFolder tests ----
+
+    /// `build_databases_folder_item` produces a node with `DatabasesFolder` ID and
+    /// expands by default.
+    #[test]
+    fn databases_folder_item_produces_correct_node_id_and_is_expanded() {
+        use dbflux_core::SchemaNodeId;
+        use gpui_component::tree::TreeItem;
+
+        let profile_id = Uuid::new_v4();
+        let child = TreeItem::new(
+            SchemaNodeId::Database {
+                profile_id,
+                name: "mydb".to_string(),
+            }
+            .to_string(),
+            "mydb".to_string(),
+        );
+
+        let item = Sidebar::build_databases_folder_item_for_test(profile_id, vec![child]);
+
+        let node_id: SchemaNodeId = item
+            .id
+            .as_ref()
+            .parse()
+            .expect("DatabasesFolder item must have a valid SchemaNodeId");
+
+        assert!(
+            matches!(
+                node_id,
+                SchemaNodeId::DatabasesFolder {
+                    profile_id: pid,
+                } if pid == profile_id
+            ),
+            "item must carry DatabasesFolder node ID: {node_id:?}"
+        );
+        assert!(
+            item.is_expanded(),
+            "DatabasesFolder must be expanded by default"
+        );
+        assert_eq!(
+            item.children.len(),
+            1,
+            "DatabasesFolder must pass through its children"
+        );
+    }
+
+    // ---- BF7: InstanceOverviewLeaf ----
+
+    /// BF7: `build_instance_overview_leaf` must return a `TreeItem` whose node ID
+    /// parses to `SchemaNodeId::InstanceOverviewLeaf { profile_id }`.
+    #[test]
+    fn build_instance_overview_leaf_carries_correct_node_id() {
+        use dbflux_core::SchemaNodeId;
+
+        let profile_id = Uuid::new_v4();
+        let item = Sidebar::build_instance_overview_leaf(profile_id);
+
+        let node_id: SchemaNodeId = item
+            .id
+            .as_ref()
+            .parse()
+            .expect("leaf must have a valid SchemaNodeId");
+
+        assert!(
+            matches!(
+                &node_id,
+                SchemaNodeId::InstanceOverviewLeaf { profile_id: pid } if *pid == profile_id
+            ),
+            "leaf must carry InstanceOverviewLeaf node ID: {node_id:?}"
         );
     }
 }

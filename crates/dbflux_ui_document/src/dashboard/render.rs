@@ -166,6 +166,15 @@ impl Render for DashboardDocument {
                         .filter(|s| !s.trim().is_empty())
                         .cloned()
                         .unwrap_or_else(|| panel.read(cx).title()),
+                    DashboardPanelSlot::Inspector {
+                        entity,
+                        title_override,
+                        ..
+                    } => title_override
+                        .as_ref()
+                        .filter(|s| !s.trim().is_empty())
+                        .cloned()
+                        .unwrap_or_else(|| entity.read(cx).metric_id().to_string()),
                     DashboardPanelSlot::Orphan { .. } => "Chart not found".to_string(),
                     DashboardPanelSlot::Divider { .. } => String::new(),
                 };
@@ -182,6 +191,10 @@ impl Render for DashboardDocument {
                     .as_ref()
                     .is_some_and(|m| m.panel_index == panel_index);
 
+                // Only Loaded slots carry a user-editable title. Inspector and
+                // Divider slots omit "Edit title…" from the context menu.
+                let has_editable_title = matches!(slot, DashboardPanelSlot::Loaded { .. });
+
                 let header: gpui::AnyElement = builder::panel_header(
                     panel_index,
                     &panel_title,
@@ -189,6 +202,7 @@ impl Render for DashboardDocument {
                     drag_active,
                     menu_open_for_this,
                     edit_mode,
+                    has_editable_title,
                     cx,
                 )
                 .into_any_element();
@@ -289,6 +303,22 @@ impl Render for DashboardDocument {
                             .child(Text::heading(label))
                             .into_any_element()
                     }
+                    DashboardPanelSlot::Inspector { entity, .. } => card_focus_decoration(
+                        surface_card(cx)
+                            .id(("panel-card", panel_index))
+                            .size_full()
+                            .overflow_hidden()
+                            .relative()
+                            .flex()
+                            .flex_col()
+                            .on_mouse_down(gpui::MouseButton::Left, on_card_mouse_down)
+                            .child(header)
+                            .child(div().flex_1().overflow_hidden().child(entity.clone()))
+                            .when_some(resize_right, |el, r| el.child(r))
+                            .when_some(resize_bottom, |el, r| el.child(r))
+                            .when_some(resize_corner, |el, r| el.child(r)),
+                    )
+                    .into_any_element(),
                 };
 
                 // Position the panel absolutely on the 12-column grid.
@@ -500,12 +530,12 @@ impl Render for DashboardDocument {
                             this.start_configure_panel(idx as usize, cx);
                         }
                     }
-                    "f2" => {
+                    "f2" if !this.is_read_only() => {
                         if let Some(idx) = this.focused_panel_index {
                             this.start_panel_title_edit(idx, window, cx);
                         }
                     }
-                    "delete" | "backspace" => {
+                    "delete" | "backspace" if !this.is_read_only() => {
                         if let Some(idx) = this.focused_panel_index {
                             this.remove_panel(idx, cx);
                         }

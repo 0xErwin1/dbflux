@@ -19,15 +19,16 @@ use dbflux_core::{
     DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
     DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection, DocumentDelete,
     DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities, DriverFormDef,
-    DriverLimits, DriverMetadata, FieldInfo, FormFieldDef, FormFieldKind, FormSection, FormTab,
-    FormValues, FormattedError, Icon, IndexData, IndexDirection, KeyValueConnection,
-    LanguageService, MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle,
-    QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle,
-    QueryLanguage, QueryRequest, QueryResult, RelationalConnection, Row, SchemaDropTarget,
-    SchemaLoadingStrategy, SchemaObjectKind, SchemaSnapshot, SemanticFieldRef, SemanticFilter,
-    SemanticPlan, SemanticPlanKind, SemanticRequest, SqlDialect, SshTunnelConfig, TableInfo,
-    TransactionCapabilities, Value, ViewInfo, WhereOperator, field, field_password, field_required,
-    field_use_uri, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
+    DriverLimits, DriverMetadata, ExecutionSourceContext, FieldInfo, FormFieldDef, FormFieldKind,
+    FormSection, FormTab, FormValues, FormattedError, Icon, IndexData, IndexDirection,
+    InstanceCatalog, KeyValueConnection, LanguageService, MutationCapabilities, OrderByColumn,
+    PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter,
+    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RelationalConnection,
+    Row, SchemaDropTarget, SchemaLoadingStrategy, SchemaObjectKind, SchemaSnapshot,
+    SemanticFieldRef, SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticRequest, SqlDialect,
+    SshTunnelConfig, TableInfo, TransactionCapabilities, Value, ViewInfo, WhereOperator, field,
+    field_password, field_required, field_use_uri, sanitize_uri, ssh_tab, when_checked,
+    when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};
@@ -108,7 +109,10 @@ pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
         DriverCapabilities::DOCUMENT_BASE.bits()
             | DriverCapabilities::AGGREGATION.bits()
             | DriverCapabilities::SSH_TUNNEL.bits()
-            | DriverCapabilities::INDEXES.bits(),
+            | DriverCapabilities::INDEXES.bits()
+            | DriverCapabilities::INSTANCE_METRICS.bits()
+            | DriverCapabilities::INSTANCE_INSPECTOR.bits()
+            | DriverCapabilities::CHART_AUTHORING.bits(),
     ),
     default_port: Some(27017),
     uri_scheme: "mongodb".into(),
@@ -612,7 +616,7 @@ impl MongoDriver {
         log::info!("[CONNECT] MongoDB connection established via URI");
 
         Ok(Box::new(MongoConnection {
-            client: Mutex::new(client),
+            client: Arc::new(Mutex::new(client)),
             default_database: database,
             schema_settings,
             ssh_tunnel: None,
@@ -650,7 +654,7 @@ impl MongoDriver {
         log::info!("[CONNECT] MongoDB connection established");
 
         Ok(Box::new(MongoConnection {
-            client: Mutex::new(client),
+            client: Arc::new(Mutex::new(client)),
             default_database: database,
             schema_settings,
             ssh_tunnel: None,
@@ -739,7 +743,7 @@ impl MongoDriver {
         );
 
         Ok(Box::new(MongoConnection {
-            client: Mutex::new(client),
+            client: Arc::new(Mutex::new(client)),
             default_database: database,
             schema_settings,
             ssh_tunnel: Some(tunnel),
@@ -1172,7 +1176,7 @@ fn format_mongo_query_error(e: &mongodb::error::Error) -> DbError {
 }
 
 pub struct MongoConnection {
-    client: Mutex<Client>,
+    client: Arc<Mutex<Client>>,
     default_database: Option<String>,
     schema_settings: MongoSchemaSettings,
     #[allow(dead_code)]
@@ -1675,8 +1679,50 @@ impl Connection for MongoConnection {
         Ok(())
     }
 
+    fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
+        let client_guard = self.client.lock().ok()?;
+        let cluster_monitor =
+            crate::instance_catalog::MongoInstanceCatalog::probe_cluster_monitor(&client_guard);
+        let inprog = crate::instance_catalog::MongoInstanceCatalog::probe_inprog(&client_guard);
+        let killop = crate::instance_catalog::MongoInstanceCatalog::probe_killop(&client_guard);
+
+        Some(Box::new(
+            crate::instance_catalog::MongoInstanceCatalog::new_probed(
+                Arc::clone(&self.client),
+                cluster_monitor,
+                inprog,
+                killop,
+            ),
+        ))
+    }
+
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
         self.cancelled.store(false, Ordering::SeqCst);
+
+        if let Some(source) = req
+            .execution_context
+            .as_ref()
+            .and_then(|ctx| ctx.source.as_ref())
+        {
+            match source {
+                ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
+                    let client = self.client.lock().map_err(|_| {
+                        DbError::QueryFailed("mongo client mutex poisoned".to_string().into())
+                    })?;
+                    return crate::instance_catalog::dispatch_metric_series(&client, metric_id);
+                }
+                ExecutionSourceContext::InstanceInspectorQuery { metric_id } => {
+                    let client = self.client.lock().map_err(|_| {
+                        DbError::QueryFailed("mongo client mutex poisoned".to_string().into())
+                    })?;
+                    return crate::instance_catalog::dispatch_inspector_snapshot(
+                        &client, metric_id,
+                    );
+                }
+                _ => {}
+            }
+        }
+
         let query_id = Uuid::new_v4();
         let _active_query_guard = ActiveQueryGuard::activate(&self.active_query, query_id)?;
 
@@ -4471,6 +4517,27 @@ mod tests {
                 .windows(needle.len())
                 .position(|window| window == needle)
         }
+    }
+
+    #[test]
+    fn mongodb_metadata_advertises_chart_authoring() {
+        assert!(
+            MONGODB_METADATA
+                .capabilities
+                .contains(DriverCapabilities::CHART_AUTHORING),
+            "CHART_AUTHORING must be set: MongoDB advertises INSTANCE_METRICS and needs \
+             CHART_AUTHORING so the sidebar surfaces Dashboards / Saved Charts folders"
+        );
+    }
+
+    #[test]
+    fn mongodb_metadata_advertises_instance_metrics() {
+        assert!(
+            MONGODB_METADATA
+                .capabilities
+                .contains(DriverCapabilities::INSTANCE_METRICS),
+            "INSTANCE_METRICS must remain set on MongoDB driver"
+        );
     }
 
     #[test]

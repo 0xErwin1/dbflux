@@ -950,6 +950,21 @@ impl Workspace {
                 SidebarEvent::RequestDuplicateSavedChart { chart_id } => {
                     this.duplicate_saved_chart(*chart_id, cx);
                 }
+                SidebarEvent::OpenInstanceMetric {
+                    profile_id,
+                    metric_id,
+                } => {
+                    this.open_instance_metric(*profile_id, metric_id.clone(), window, cx);
+                }
+                SidebarEvent::OpenInstanceInspector {
+                    profile_id,
+                    metric_id,
+                } => {
+                    this.open_instance_inspector(*profile_id, metric_id.clone(), window, cx);
+                }
+                SidebarEvent::OpenInstanceOverview { profile_id } => {
+                    this.open_instance_overview(*profile_id, window, cx);
+                }
                 SidebarEvent::RequestTunnelAuth {
                     tunnel_id,
                     tunnel_name,
@@ -1171,6 +1186,17 @@ impl Workspace {
                     }
                     TabManagerEvent::RequestAddPanel { dashboard_id } => {
                         this.open_add_panel_picker(*dashboard_id, window, cx);
+                    }
+                    TabManagerEvent::RequestSaveAsEditable {
+                        source_title,
+                        profile_id,
+                    } => {
+                        this.save_overview_as_editable(
+                            source_title.clone(),
+                            *profile_id,
+                            window,
+                            cx,
+                        );
                     }
                     TabManagerEvent::Opened(_)
                     | TabManagerEvent::Closed(_)

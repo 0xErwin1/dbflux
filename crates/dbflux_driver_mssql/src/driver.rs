@@ -12,19 +12,20 @@ use dbflux_core::{
     ConnectionProfile, ConstraintInfo, ConstraintKind, CrudResult, CustomTypeInfo, CustomTypeKind,
     DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
     DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection, DriverCapabilities,
-    DriverFormDef, DriverLimits, DriverMetadata, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo,
-    FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, IndexData, IndexInfo,
-    IsolationLevel, KeyValueConnection, MutationCapabilities, OrderByColumn, PaginationStyle,
-    PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryHandle,
-    QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalConnection,
-    RelationalSchema, RoutineInfo, RoutineKind, Row, RowDelete, RowInsert, RowPatch,
-    SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexBuilder,
-    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SortDirection, SqlDialect,
-    SqlMutationGenerator, SshTunnelConfig, SyntaxInfo, TableBrowseRequest, TableCountRequest,
-    TableInfo, TransactionCapabilities, Value, ViewInfo, WhereOperator, field, field_password,
-    field_required, field_use_uri, generate_delete_template, generate_drop_table,
-    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
-    render_semantic_filter_sql, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
+    DriverFormDef, DriverLimits, DriverMetadata, ExecutionSourceContext, ExplainRequest,
+    ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind, FormSection, FormTab, FormValues,
+    FormattedError, Icon, IndexData, IndexInfo, InstanceCatalog, IsolationLevel,
+    KeyValueConnection, MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle,
+    QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, RecordIdentity, RelationalConnection, RelationalSchema, RoutineInfo,
+    RoutineKind, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
+    SchemaForeignKeyInfo, SchemaIndexBuilder, SchemaIndexInfo, SchemaLoadingStrategy,
+    SchemaSnapshot, SortDirection, SqlDialect, SqlMutationGenerator, SshTunnelConfig, SyntaxInfo,
+    TableBrowseRequest, TableCountRequest, TableInfo, TransactionCapabilities, Value, ViewInfo,
+    WhereOperator, field, field_password, field_required, field_use_uri, generate_delete_template,
+    generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
+    generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab, when_checked,
+    when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 use tiberius::{AuthMethod, Client, Config, EncryptionLevel, SqlBrowser};
@@ -125,7 +126,10 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
             | DriverCapabilities::TRANSACTIONAL_DDL.bits()
             | DriverCapabilities::ROUTINES.bits()
-            | DriverCapabilities::MULTI_STATEMENT.bits(),
+            | DriverCapabilities::MULTI_STATEMENT.bits()
+            | DriverCapabilities::INSTANCE_METRICS.bits()
+            | DriverCapabilities::INSTANCE_INSPECTOR.bits()
+            | DriverCapabilities::CHART_AUTHORING.bits(),
     ),
     default_port: Some(1433),
     uri_scheme: "sqlserver".into(),
@@ -1100,9 +1104,9 @@ fn build_mssql_connection(
 // MssqlConnection
 // =============================================================================
 
-struct MssqlConnectionInner {
-    client: Option<TiberiusClient>,
-    runtime: Runtime,
+pub(crate) struct MssqlConnectionInner {
+    pub(crate) client: Option<TiberiusClient>,
+    pub(crate) runtime: Runtime,
 }
 
 pub struct MssqlConnection {
@@ -1467,6 +1471,20 @@ impl Connection for MssqlConnection {
         &crate::TSqlLanguageService
     }
 
+    fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
+        let mut inner = self.inner.lock().ok()?;
+        let view_server_state_available =
+            crate::instance_catalog::MssqlInstanceCatalog::probe_view_server_state(&mut inner);
+        drop(inner);
+
+        Some(Box::new(
+            crate::instance_catalog::MssqlInstanceCatalog::new(
+                Arc::clone(&self.inner),
+                view_server_state_available,
+            ),
+        ))
+    }
+
     fn ping(&self) -> Result<(), DbError> {
         self.execute_simple("SELECT 1").map(|_| ())
     }
@@ -1491,6 +1509,30 @@ impl Connection for MssqlConnection {
         // Support explicit database override per query, mirroring postgres/mysql.
         if let Some(database) = req.database.as_deref() {
             self.set_active_database(Some(database))?;
+        }
+
+        if let Some(source) = req
+            .execution_context
+            .as_ref()
+            .and_then(|ctx| ctx.source.as_ref())
+        {
+            match source {
+                ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
+                    let mut inner = self.inner.lock().map_err(|_| {
+                        DbError::QueryFailed("mssql inner mutex poisoned".to_string().into())
+                    })?;
+                    return crate::instance_catalog::dispatch_metric_series(&mut inner, metric_id);
+                }
+                ExecutionSourceContext::InstanceInspectorQuery { metric_id } => {
+                    let mut inner = self.inner.lock().map_err(|_| {
+                        DbError::QueryFailed("mssql inner mutex poisoned".to_string().into())
+                    })?;
+                    return crate::instance_catalog::dispatch_inspector_snapshot(
+                        &mut inner, metric_id,
+                    );
+                }
+                _ => {}
+            }
         }
 
         // Slice by char boundary, not byte index: SQL with multi-byte UTF-8
@@ -4093,6 +4135,27 @@ mod tests {
         assert_eq!(
             names,
             vec!["c".to_string(), "a".to_string(), "b".to_string()]
+        );
+    }
+
+    #[test]
+    fn mssql_metadata_advertises_chart_authoring() {
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::CHART_AUTHORING),
+            "CHART_AUTHORING must be set: MSSQL advertises INSTANCE_METRICS and needs \
+             CHART_AUTHORING so the sidebar surfaces Dashboards / Saved Charts folders"
+        );
+    }
+
+    #[test]
+    fn mssql_metadata_advertises_instance_metrics() {
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::INSTANCE_METRICS),
+            "INSTANCE_METRICS must remain set on MSSQL driver"
         );
     }
 }

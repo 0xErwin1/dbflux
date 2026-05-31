@@ -258,6 +258,15 @@ impl TabManager {
                         dashboard_id: *dashboard_id,
                     });
                 }
+                DocumentEvent::RequestSaveAsEditable {
+                    source_title,
+                    profile_id,
+                } => {
+                    cx.emit(TabManagerEvent::RequestSaveAsEditable {
+                        source_title: source_title.clone(),
+                        profile_id: *profile_id,
+                    });
+                }
                 _ => {}
             });
         });
@@ -632,6 +641,11 @@ pub enum TabManagerEvent {
     /// Dashboard document requested the workspace to open the "Add Panel" picker.
     RequestAddPanel {
         dashboard_id: uuid::Uuid,
+    },
+    /// Read-only dashboard requested the workspace to create an editable copy.
+    RequestSaveAsEditable {
+        source_title: String,
+        profile_id: uuid::Uuid,
     },
 }
 

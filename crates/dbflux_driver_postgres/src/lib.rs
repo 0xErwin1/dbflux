@@ -10,5 +10,6 @@
 )]
 
 pub mod driver;
+pub mod instance_catalog;
 
 pub use driver::{METADATA, POSTGRES_FORM, PostgresDriver};

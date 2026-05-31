@@ -10,6 +10,7 @@
 )]
 
 pub mod driver;
+pub mod instance_catalog;
 pub mod language_service;
 
 pub use driver::{MARIADB_METADATA, MYSQL_FORM, MYSQL_METADATA, MysqlDriver};
