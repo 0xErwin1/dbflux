@@ -6,6 +6,24 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Instance metrics charts and inspectors across drivers (#93)** —
+  PostgreSQL, MySQL/MariaDB, MongoDB, Redis, and SQL Server now expose
+  live server metrics (time series) and tabular inspectors (sessions,
+  processlist, currentOp, CLIENT LIST) through a new `InstanceCatalog`
+  driver seam and two capability flags: `INSTANCE_METRICS` and
+  `INSTANCE_INSPECTOR`. Each catalog publishes a driver-defined
+  **Instance Overview** dashboard that opens read-only and can be
+  cloned via "Save as editable" into a persisted, user-owned dashboard.
+  Dashboards gain a new `Inspector` panel kind alongside `Chart` and
+  `Divider`, persisted via `viz_dashboard_panels.panel_kind`
+  (migration 014). Inspector rows expose driver-supplied row actions
+  (e.g. *Terminate connection* / *Kill session*) gated by per-driver
+  privilege probes (`pg_monitor`, `PROCESS` / `CONNECTION_ADMIN`,
+  MongoDB `killOp`, Redis `CLIENT KILL`). Destructive actions route
+  through `report_error_async` so failures land in the audit log with a
+  correlation id, and every refresh timer (dashboard, chart, inspector)
+  skips its tick when the underlying connection is gone so closing a
+  connection no longer floods the toast layer.
 * **External RPC drivers and auth providers can emit audit events (#157)**
   RPC-backed drivers (driver protocol v1.2, capability `AuditEmit`) and
   auth providers (auth-provider protocol v1.3, hello flag
