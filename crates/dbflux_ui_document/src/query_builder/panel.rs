@@ -462,6 +462,16 @@ impl QueryBuilderPanel {
     /// Replaces the panel's spec entirely (e.g. when the inspector re-opens
     /// and needs to re-hydrate from `DataGridPanel.builder_draft_spec`).
     pub fn set_spec(&mut self, spec: VisualQuerySpec, cx: &mut Context<Self>) {
+        self.set_spec_pure(spec);
+        cx.notify();
+    }
+
+    /// Pure-state variant of `set_spec`: replaces every mutable row vector
+    /// from `spec`, sets the join-rebuild and join-condition-sweep flags so
+    /// the next render reconciles per-row entities and orphaned node-id
+    /// state, and recomputes the SQL preview. Exposed for unit tests; the
+    /// public entry point calls this and then `cx.notify`.
+    pub(crate) fn set_spec_pure(&mut self, spec: VisualQuerySpec) {
         let (projection_mode, projection_rows) = match &spec.projection {
             Projection::All => (ProjectionMode::All, Vec::new()),
             Projection::Explicit(cols) => {
@@ -500,7 +510,7 @@ impl QueryBuilderPanel {
             .map(|s| SortRow {
                 source_alias: s.source_alias.clone(),
                 column: s.column.clone(),
-                direction: s.direction, // SortEntry.direction is VisualSortDirection
+                direction: s.direction,
             })
             .collect();
 
@@ -511,12 +521,15 @@ impl QueryBuilderPanel {
         self.projection_mode = projection_mode;
         self.projection_rows = projection_rows;
         self.join_rows = join_rows;
+        // Both flags are required: the rebuild flag drives the InputState /
+        // Dropdown vec back to the new row count, the sweep flag drops node-id
+        // entries that the previous spec owned.
+        self.pending_join_rebuild = true;
         self.pending_join_condition_sweep = true;
         self.sort_rows = sort_rows;
         self.sql_preview = (self.generate_preview)(&spec);
         self.pending_preview_sync = true;
         self.current_spec = spec;
-        cx.notify();
     }
 
     // -----------------------------------------------------------------------
@@ -1353,9 +1366,16 @@ impl QueryBuilderPanel {
     }
 
     /// Updates the join at `index`.
+    ///
+    /// The replacement `row` may carry a different `on` variant than the
+    /// previous one (e.g. structured `Conditions` swapped for a raw
+    /// expression), which would orphan node-id entries in the join-condition
+    /// HashMaps. The sweep flag is set unconditionally so the next render
+    /// drops any stale entries regardless of the variant transition.
     pub fn update_join(&mut self, index: usize, row: JoinRow, cx: &mut Context<Self>) {
         if index < self.join_rows.len() {
             self.join_rows[index] = row;
+            self.pending_join_condition_sweep = true;
             self.rebuild_spec_and_notify(cx);
         }
     }
@@ -2166,6 +2186,49 @@ mod tests {
         panel.t_add_join("users");
         panel.t_remove_join(0);
         assert!(panel.join_rows.is_empty());
+    }
+
+    #[test]
+    fn set_spec_flags_drive_join_state_rebuild() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.pending_join_rebuild = false;
+        panel.pending_join_condition_sweep = false;
+
+        // A loaded spec with two joins replaces whatever the panel had.
+        let mut spec = make_spec(test_source());
+        spec.joins = vec![
+            JoinStep {
+                kind: JoinKind::Inner,
+                from_alias: "users".to_string(),
+                to_schema: None,
+                to_table: "orders".to_string(),
+                to_alias: "orders".to_string(),
+                on: JoinOn::FkPath {
+                    from_column: "id".to_string(),
+                    to_column: "user_id".to_string(),
+                },
+            },
+            JoinStep {
+                kind: JoinKind::Left,
+                from_alias: "orders".to_string(),
+                to_schema: None,
+                to_table: "items".to_string(),
+                to_alias: "items".to_string(),
+                on: JoinOn::RawExpression("orders.id = items.order_id".to_string()),
+            },
+        ];
+
+        panel.set_spec_pure(spec);
+
+        assert_eq!(panel.join_rows.len(), 2);
+        assert!(
+            panel.pending_join_rebuild,
+            "set_spec must set pending_join_rebuild so the next render aligns join_input_states with the new join_rows length"
+        );
+        assert!(
+            panel.pending_join_condition_sweep,
+            "set_spec must set pending_join_condition_sweep so the next render drops orphaned node-id entries"
+        );
     }
 
     #[test]
