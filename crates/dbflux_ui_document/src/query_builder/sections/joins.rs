@@ -69,7 +69,20 @@ pub fn render_joins(
         let mut row_div = div().flex().flex_row().gap_1().items_center();
 
         if let Some(dropdown) = kind_dropdowns.get(i).cloned() {
-            row_div = row_div.child(div().w(gpui::px(80.0)).flex_shrink_0().child(dropdown));
+            use dbflux_components::tokens::{Heights, Radii};
+            use gpui_component::ActiveTheme;
+            let theme = cx.theme();
+            row_div = row_div.child(
+                div()
+                    .w(gpui::px(80.0))
+                    .h(Heights::BUTTON)
+                    .flex_shrink_0()
+                    .rounded(Radii::SM)
+                    .border_1()
+                    .border_color(theme.input)
+                    .bg(theme.background)
+                    .child(dropdown),
+            );
         } else {
             let kind_label = match row.kind {
                 dbflux_core::JoinKind::Inner => "INNER",

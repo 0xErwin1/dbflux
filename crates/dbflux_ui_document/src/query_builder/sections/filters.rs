@@ -268,7 +268,7 @@ fn render_filter_predicate(
     }
 
     if let Some(dropdown) = comparator_dropdown {
-        row = row.child(div().w(gpui::px(76.0)).flex_shrink_0().child(dropdown));
+        row = row.child(comparator_chip(dropdown, cx));
     } else {
         row = row.child(
             div()
@@ -293,6 +293,28 @@ fn render_filter_predicate(
                 this.remove_filter_node(path_for_rm.clone(), cx);
             })),
     )
+}
+
+/// Wraps a dropdown trigger in a bordered, themed chip so the selected
+/// label and the chevron read as a single discrete control.
+fn comparator_chip(
+    dropdown: Entity<Dropdown>,
+    cx: &mut Context<QueryBuilderPanel>,
+) -> impl IntoElement {
+    use dbflux_components::tokens::{Heights, Radii};
+    use gpui::prelude::*;
+    use gpui_component::ActiveTheme;
+
+    let theme = cx.theme();
+    div()
+        .w(gpui::px(76.0))
+        .h(Heights::BUTTON)
+        .flex_shrink_0()
+        .rounded(Radii::SM)
+        .border_1()
+        .border_color(theme.input)
+        .bg(theme.background)
+        .child(dropdown)
 }
 
 fn path_id(prefix: &str, path: &[usize]) -> ElementId {
