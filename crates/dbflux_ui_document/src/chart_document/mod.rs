@@ -695,6 +695,11 @@ impl ChartDocument {
                         return;
                     };
                     entity.update(cx, |doc, cx| {
+                        if let Some(pid) = doc.profile_id
+                            && !doc.app_state.read(cx).connections().contains_key(&pid)
+                        {
+                            return;
+                        }
                         doc.mark_pending_reexecute(cx);
                     });
                 });

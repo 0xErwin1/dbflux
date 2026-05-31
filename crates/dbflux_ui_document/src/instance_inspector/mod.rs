@@ -313,6 +313,14 @@ impl InspectorPanel {
                         return;
                     };
                     entity.update(cx, |panel, cx| {
+                        if !panel
+                            .app_state
+                            .read(cx)
+                            .connections()
+                            .contains_key(&panel.profile_id)
+                        {
+                            return;
+                        }
                         panel.request_reexec(cx);
                     });
                 });
