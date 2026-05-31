@@ -159,6 +159,12 @@ impl DataDocument {
                 // The refresh dropdown is owned by DataGridPanel itself and
                 // reset internally — no forwarding to ResultPanel needed.
             }
+            DataGridEvent::OpenEditorWithContent { profile_id, sql } => {
+                cx.emit(DocumentEvent::OpenEditorWithContent {
+                    profile_id: *profile_id,
+                    sql: sql.clone(),
+                });
+            }
             _ => {}
         }
     }

@@ -2,7 +2,8 @@ use super::{DataGridPanel, DataSource, GridState, PendingToast, PendingTotalCoun
 use dbflux_components::components::data_table::SortState as TableSortState;
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionRef, OrderByColumn, Pagination,
-    QueryResult, TableBrowseRequest, TableCountRequest, TableRef, TaskKind, TaskTarget,
+    QueryRequest, QueryResult, SelectQuery, TableBrowseRequest, TableCountRequest, TableRef,
+    TaskKind, TaskTarget,
 };
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui::*;
@@ -11,6 +12,10 @@ use uuid::Uuid;
 
 impl DataGridPanel {
     /// Refresh data from source.
+    ///
+    /// When a `visual_select` is present (i.e., the builder panel has produced
+    /// a structured SELECT), the parameterized query takes precedence over the
+    /// normal `TableBrowseRequest` path.
     pub fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match &self.source {
             DataSource::Table {
@@ -21,16 +26,20 @@ impl DataGridPanel {
                 order_by,
                 total_rows,
             } => {
-                self.run_table_query(
-                    *profile_id,
-                    database.clone(),
-                    table.clone(),
-                    pagination.clone(),
-                    order_by.clone(),
-                    *total_rows,
-                    window,
-                    cx,
-                );
+                if let Some(select) = self.visual_select.clone() {
+                    self.run_visual_query(*profile_id, database.clone(), select, window, cx);
+                } else {
+                    self.run_table_query(
+                        *profile_id,
+                        database.clone(),
+                        table.clone(),
+                        pagination.clone(),
+                        order_by.clone(),
+                        *total_rows,
+                        window,
+                        cx,
+                    );
+                }
             }
             DataSource::Collection {
                 profile_id,
@@ -234,6 +243,126 @@ impl DataGridPanel {
         if total_rows.is_none() {
             self.fetch_total_count(profile_id, database, table, filter, cx);
         }
+    }
+
+    /// Executes the parameterized SELECT produced by `QueryBuilderPanel`.
+    ///
+    /// Called by `refresh` when `visual_select` is set. The `SelectQuery` is
+    /// already fully formed (pagination baked in by the builder); we execute it
+    /// as a raw parameterized query and apply the result to the grid.
+    pub(super) fn run_visual_query(
+        &mut self,
+        profile_id: Uuid,
+        database: Option<String>,
+        select: SelectQuery,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let conn = {
+            let state = self.app_state.read(cx);
+            let Some(connected) = state.connections().get(&profile_id) else {
+                Toast::error("Connection not found")
+                    .meta_right(now_hms())
+                    .action(copy_action("Connection not found"))
+                    .push(cx);
+                return;
+            };
+
+            match connected.resolve_connection_for_execution(database.as_deref()) {
+                Ok(connection) => connection,
+                Err(dbflux_core::ConnectionResolutionError::PendingDatabaseConnection {
+                    database,
+                }) => {
+                    let msg = format!(
+                        "No connection to database '{}'. Please expand it in the sidebar first.",
+                        database
+                    );
+                    Toast::error(msg.clone())
+                        .meta_right(now_hms())
+                        .action(copy_action(msg))
+                        .push(cx);
+                    return;
+                }
+            }
+        };
+
+        let task_target = TaskTarget {
+            profile_id,
+            database: database.clone(),
+        };
+
+        let (task_id, cancel_token) = self.runner.start_primary_for_target(
+            TaskKind::Query,
+            select.sql.clone(),
+            Some(task_target),
+            cx,
+        );
+
+        self.state = GridState::Loading;
+        cx.notify();
+
+        let entity = cx.entity().clone();
+        let conn_for_cleanup = conn.clone();
+
+        let mut request = QueryRequest::new(select.sql.clone());
+        request.params = select.params.clone();
+        if let Some(ref db) = database {
+            request.database = Some(db.clone());
+        }
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { conn.execute(&request) });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            if let Err(error) = cx.update(|cx| {
+                if cancel_token.is_cancelled() {
+                    log::info!("Visual query was cancelled, discarding result");
+                    if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
+                        log::warn!("Cleanup after cancel failed: {}", e);
+                    }
+                    return;
+                }
+
+                match &result {
+                    Ok(query_result) => {
+                        info!(
+                            "Visual query returned {} rows in {:?}",
+                            query_result.row_count(),
+                            query_result.execution_time
+                        );
+
+                        entity.update(cx, |panel, cx| {
+                            panel.runner.complete_primary(task_id, cx);
+                            panel.result = query_result.clone();
+                            panel.state = GridState::Ready;
+                            cx.notify();
+                        });
+                    }
+                    Err(e) => {
+                        log::error!("Visual query failed: {}", e);
+
+                        entity.update(cx, |panel, cx| {
+                            panel.runner.fail_primary(task_id, e.to_string(), cx);
+                            panel.state = GridState::Error;
+                            panel.pending_toast = Some(PendingToast {
+                                message: format!("Query failed: {}", e),
+                                is_error: true,
+                            });
+                            cx.notify();
+                        });
+                    }
+                }
+            }) {
+                log::warn!(
+                    "Failed to apply visual query result to UI state: {:?}",
+                    error
+                );
+            }
+        })
+        .detach();
     }
 
     pub(super) fn run_collection_query(

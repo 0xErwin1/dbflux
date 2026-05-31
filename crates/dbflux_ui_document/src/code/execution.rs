@@ -1306,6 +1306,12 @@ impl CodeDocument {
                     // Row actions are only emitted from InspectorPanel grids.
                     // CodeDocument result grids never set a row_action_provider.
                 }
+                DataGridEvent::ApplyVisualQuery(_)
+                | DataGridEvent::ClearVisualQuery
+                | DataGridEvent::OpenEditorWithContent { .. } => {
+                    // Builder events are only emitted from table-browsing grids.
+                    // CodeDocument result grids never have a builder panel.
+                }
             },
         );
 

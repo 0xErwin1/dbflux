@@ -45,4 +45,12 @@ pub enum DocumentEvent {
         source_title: String,
         profile_id: uuid::Uuid,
     },
+    /// The query builder's "Open in Editor" was pressed.
+    ///
+    /// Carries the target connection profile and the fully materialized SQL
+    /// (parameter literals inlined, no placeholders).
+    OpenEditorWithContent {
+        profile_id: uuid::Uuid,
+        sql: String,
+    },
 }

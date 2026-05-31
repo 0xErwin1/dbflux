@@ -54,6 +54,123 @@ pub struct SelectQuery {
     pub params: Vec<crate::Value>,
 }
 
+impl SelectQuery {
+    /// Produces a human-readable SQL string with all parameter placeholders
+    /// replaced by their dialect-quoted literal values.
+    ///
+    /// The result is intended for display in a read-only editor tab ("Open in
+    /// editor"). It is NOT suitable for execution — the literal substitution
+    /// is for readability only. The substitution respects the dialect's
+    /// placeholder style:
+    /// - `?` placeholders (SQLite/MySQL): replaced left-to-right.
+    /// - `$N` placeholders (PostgreSQL): each `$N` is replaced by `params[N-1]`.
+    /// - `@pN` placeholders (SQL Server): each `@pN` is replaced by `params[N-1]`.
+    pub fn materialize_for_editor(&self, dialect: &dyn crate::sql::dialect::SqlDialect) -> String {
+        use crate::sql::dialect::PlaceholderStyle;
+
+        let style = dialect.placeholder_style();
+
+        match style {
+            PlaceholderStyle::QuestionMark | PlaceholderStyle::NamedColon => {
+                let mut result = String::with_capacity(self.sql.len());
+                let mut param_iter = self.params.iter();
+                let chars: Vec<char> = self.sql.chars().collect();
+                let mut i = 0;
+
+                while i < chars.len() {
+                    if chars[i] == '?' {
+                        if let Some(val) = param_iter.next() {
+                            result.push_str(&dialect.value_to_literal(val));
+                        } else {
+                            result.push('?');
+                        }
+                        i += 1;
+                    } else {
+                        result.push(chars[i]);
+                        i += 1;
+                    }
+                }
+
+                result
+            }
+
+            PlaceholderStyle::DollarNumber => {
+                materialize_numbered_placeholders(&self.sql, &self.params, dialect, '$', "")
+            }
+
+            PlaceholderStyle::AtSign => {
+                materialize_numbered_placeholders(&self.sql, &self.params, dialect, '@', "p")
+            }
+        }
+    }
+}
+
+/// Replace `<prefix><number>` placeholders in `sql` with dialect literals.
+///
+/// E.g. `$1` with prefix=`'$'` prefix_str=`""`, or `@p1` with prefix=`'@'`
+/// prefix_str=`"p"`.
+fn materialize_numbered_placeholders(
+    sql: &str,
+    params: &[crate::Value],
+    dialect: &dyn crate::sql::dialect::SqlDialect,
+    prefix_char: char,
+    prefix_str: &str,
+) -> String {
+    let mut result = String::with_capacity(sql.len());
+    let bytes = sql.as_bytes();
+    let prefix_bytes = prefix_str.as_bytes();
+    let prefix_byte = prefix_char as u8;
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i] == prefix_byte {
+            let start = i;
+            i += 1;
+
+            // Consume the optional prefix_str (e.g. "p" for AtSign style).
+            if !prefix_bytes.is_empty() {
+                let end = i + prefix_bytes.len();
+                if end <= bytes.len() && &bytes[i..end] == prefix_bytes {
+                    i = end;
+                } else {
+                    // Emit raw and continue.
+                    result.push_str(&sql[start..i]);
+                    continue;
+                }
+            }
+
+            // Consume digits to form the placeholder index.
+            let digit_start = i;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+
+            if i == digit_start {
+                // No digits — not a placeholder, emit raw.
+                result.push_str(&sql[start..i]);
+                continue;
+            }
+
+            let index_str = &sql[digit_start..i];
+            if let Ok(n) = index_str.parse::<usize>()
+                && n >= 1
+                && n <= params.len()
+            {
+                result.push_str(&dialect.value_to_literal(&params[n - 1]));
+                continue;
+            }
+
+            // Out-of-range or parse error — emit raw.
+            result.push_str(&sql[start..i]);
+        } else {
+            result.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+
+    result
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MutationTemplateOperation {
     Insert,
@@ -152,6 +269,16 @@ pub trait QueryGenerator: Send + Sync {
         _spec: &VisualQuerySpec,
     ) -> Result<Option<SelectQuery>, QueryGenError> {
         Ok(None)
+    }
+
+    /// Replaces parameter placeholders in `query` with dialect-quoted literals,
+    /// producing human-readable SQL suitable for a read-only editor tab.
+    ///
+    /// Default implementation returns the raw parameterized SQL unchanged.
+    /// `SqlMutationGenerator` overrides this to call
+    /// [`SelectQuery::materialize_for_editor`] with the dialect.
+    fn materialize_select_for_editor(&self, query: &SelectQuery) -> String {
+        query.sql.clone()
     }
 }
 
@@ -277,6 +404,10 @@ impl QueryGenerator for SqlMutationGenerator {
     ) -> Result<Option<SelectQuery>, QueryGenError> {
         let sql = SqlSelectBuilder::new(self.dialect).build(spec)?;
         Ok(Some(sql))
+    }
+
+    fn materialize_select_for_editor(&self, query: &SelectQuery) -> String {
+        query.materialize_for_editor(self.dialect)
     }
 }
 
@@ -598,7 +729,8 @@ fn literal_to_value(lit: &crate::query::visual_query::LiteralValue) -> crate::Va
 mod tests {
     use super::{
         GeneratedQuery, MutationCategory, MutationTemplateOperation, MutationTemplateRequest,
-        QueryGenerator, ReadTemplateOperation, ReadTemplateRequest, SqlMutationGenerator,
+        QueryGenerator, ReadTemplateOperation, ReadTemplateRequest, SelectQuery,
+        SqlMutationGenerator,
     };
     use crate::{
         ColumnInfo, DefaultSqlDialect, DocumentFilter, DocumentUpdate, KeySetRequest,
@@ -881,6 +1013,214 @@ mod tests {
             limit: Some(100),
             offset: 0,
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // materialize_for_editor tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn materialize_question_mark_integer() {
+        let q = SelectQuery {
+            sql: "SELECT * FROM t WHERE id = ?".to_string(),
+            params: vec![Value::Int(42)],
+        };
+        assert_eq!(
+            q.materialize_for_editor(&DIALECT),
+            "SELECT * FROM t WHERE id = 42"
+        );
+    }
+
+    #[test]
+    fn materialize_question_mark_string_with_embedded_quote() {
+        let q = SelectQuery {
+            sql: "SELECT * FROM t WHERE name = ?".to_string(),
+            params: vec![Value::Text("O'Brien".to_string())],
+        };
+        assert_eq!(
+            q.materialize_for_editor(&DIALECT),
+            "SELECT * FROM t WHERE name = 'O''Brien'"
+        );
+    }
+
+    #[test]
+    fn materialize_question_mark_null() {
+        let q = SelectQuery {
+            sql: "SELECT * FROM t WHERE x = ?".to_string(),
+            params: vec![Value::Null],
+        };
+        assert_eq!(
+            q.materialize_for_editor(&DIALECT),
+            "SELECT * FROM t WHERE x = NULL"
+        );
+    }
+
+    #[test]
+    fn materialize_question_mark_float() {
+        let q = SelectQuery {
+            sql: "SELECT * FROM t WHERE score > ?".to_string(),
+            params: vec![Value::Float(3.14)],
+        };
+        let result = q.materialize_for_editor(&DIALECT);
+        assert!(
+            result.contains("3.14"),
+            "expected float literal, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn materialize_question_mark_bool() {
+        let q = SelectQuery {
+            sql: "SELECT * FROM t WHERE active = ?".to_string(),
+            params: vec![Value::Bool(true)],
+        };
+        assert_eq!(
+            q.materialize_for_editor(&DIALECT),
+            "SELECT * FROM t WHERE active = TRUE"
+        );
+    }
+
+    #[test]
+    fn materialize_question_mark_multiple_params() {
+        let q = SelectQuery {
+            sql: "SELECT * FROM t WHERE a = ? AND b = ?".to_string(),
+            params: vec![Value::Int(1), Value::Text("hello".to_string())],
+        };
+        assert_eq!(
+            q.materialize_for_editor(&DIALECT),
+            "SELECT * FROM t WHERE a = 1 AND b = 'hello'"
+        );
+    }
+
+    #[test]
+    fn materialize_dollar_number_postgresql() {
+        use crate::sql::dialect::PlaceholderStyle;
+
+        struct PgDialect;
+        impl crate::sql::dialect::SqlDialect for PgDialect {
+            fn quote_identifier(&self, name: &str) -> String {
+                format!("\"{}\"", name.replace('"', "\"\""))
+            }
+            fn qualified_table(&self, schema: Option<&str>, table: &str) -> String {
+                match schema {
+                    Some(s) => format!(
+                        "{}.{}",
+                        self.quote_identifier(s),
+                        self.quote_identifier(table)
+                    ),
+                    None => self.quote_identifier(table),
+                }
+            }
+            fn value_to_literal(&self, value: &Value) -> String {
+                DIALECT.value_to_literal(value)
+            }
+            fn escape_string(&self, s: &str) -> String {
+                s.replace('\'', "''")
+            }
+            fn placeholder_style(&self) -> PlaceholderStyle {
+                PlaceholderStyle::DollarNumber
+            }
+        }
+
+        let q = SelectQuery {
+            sql: "SELECT * FROM t WHERE a = $1 AND b = $2".to_string(),
+            params: vec![Value::Int(5), Value::Text("world".to_string())],
+        };
+        assert_eq!(
+            q.materialize_for_editor(&PgDialect),
+            "SELECT * FROM t WHERE a = 5 AND b = 'world'"
+        );
+    }
+
+    #[test]
+    fn materialize_dollar_number_out_of_order() {
+        use crate::sql::dialect::PlaceholderStyle;
+
+        struct PgDialect;
+        impl crate::sql::dialect::SqlDialect for PgDialect {
+            fn quote_identifier(&self, name: &str) -> String {
+                format!("\"{}\"", name)
+            }
+            fn qualified_table(&self, schema: Option<&str>, table: &str) -> String {
+                match schema {
+                    Some(s) => format!(
+                        "{}.{}",
+                        self.quote_identifier(s),
+                        self.quote_identifier(table)
+                    ),
+                    None => self.quote_identifier(table),
+                }
+            }
+            fn value_to_literal(&self, value: &Value) -> String {
+                DIALECT.value_to_literal(value)
+            }
+            fn escape_string(&self, s: &str) -> String {
+                s.replace('\'', "''")
+            }
+            fn placeholder_style(&self) -> PlaceholderStyle {
+                PlaceholderStyle::DollarNumber
+            }
+        }
+
+        // $2 before $1 is unusual but must work
+        let q = SelectQuery {
+            sql: "SELECT * FROM t WHERE b = $2 AND a = $1".to_string(),
+            params: vec![Value::Int(10), Value::Int(20)],
+        };
+        assert_eq!(
+            q.materialize_for_editor(&PgDialect),
+            "SELECT * FROM t WHERE b = 20 AND a = 10"
+        );
+    }
+
+    #[test]
+    fn materialize_at_sign_sqlserver() {
+        use crate::sql::dialect::PlaceholderStyle;
+
+        struct MssqlDialect;
+        impl crate::sql::dialect::SqlDialect for MssqlDialect {
+            fn quote_identifier(&self, name: &str) -> String {
+                format!("[{}]", name)
+            }
+            fn qualified_table(&self, schema: Option<&str>, table: &str) -> String {
+                match schema {
+                    Some(s) => format!(
+                        "{}.{}",
+                        self.quote_identifier(s),
+                        self.quote_identifier(table)
+                    ),
+                    None => self.quote_identifier(table),
+                }
+            }
+            fn value_to_literal(&self, value: &Value) -> String {
+                DIALECT.value_to_literal(value)
+            }
+            fn escape_string(&self, s: &str) -> String {
+                s.replace('\'', "''")
+            }
+            fn placeholder_style(&self) -> PlaceholderStyle {
+                PlaceholderStyle::AtSign
+            }
+        }
+
+        let q = SelectQuery {
+            sql: "SELECT * FROM t WHERE id = @p1".to_string(),
+            params: vec![Value::Int(7)],
+        };
+        assert_eq!(
+            q.materialize_for_editor(&MssqlDialect),
+            "SELECT * FROM t WHERE id = 7"
+        );
+    }
+
+    #[test]
+    fn materialize_no_params_returns_sql_unchanged() {
+        let q = SelectQuery {
+            sql: "SELECT * FROM t".to_string(),
+            params: vec![],
+        };
+        assert_eq!(q.materialize_for_editor(&DIALECT), "SELECT * FROM t");
     }
 
     #[test]

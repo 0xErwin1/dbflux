@@ -1198,6 +1198,9 @@ impl Workspace {
                             cx,
                         );
                     }
+                    TabManagerEvent::OpenEditorWithContent { sql, .. } => {
+                        this.new_query_tab_with_content(sql.clone(), window, cx);
+                    }
                     TabManagerEvent::Opened(_)
                     | TabManagerEvent::Closed(_)
                     | TabManagerEvent::Reordered => {

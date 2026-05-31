@@ -6,6 +6,7 @@ mod render;
 pub mod row_inspector;
 mod utils;
 
+use super::query_builder::{BuilderEvent, QueryBuilderPanel};
 use super::result_view::{
     ResultViewMode, default_bindings_for_time_series, should_auto_select_chart_for_time_series,
 };
@@ -31,7 +32,7 @@ use dbflux_components::modals::document_preview::{
 };
 use dbflux_core::{
     CollectionRef, DatabaseCategory, OrderByColumn, Pagination, QueryResult, RefreshPolicy,
-    SortDirection, TableRef, Value,
+    SelectQuery, SortDirection, TableRef, Value, VisualQuerySpec,
 };
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::AsyncUpdateResultExt;
@@ -174,6 +175,22 @@ pub enum DataGridEvent {
     /// result arrives, the policy resets to Manual). The container document
     /// should sync the `ResultPanel`'s dropdown to reflect this.
     RefreshPolicyReset(RefreshPolicy),
+
+    /// The `QueryBuilderPanel` produced an updated spec; the grid should store
+    /// it and, on the next Run, re-execute via `generate_select`.
+    ///
+    /// Boxed because `VisualQuerySpec` is large (>256 bytes).
+    ApplyVisualQuery(Box<VisualQuerySpec>),
+
+    /// The builder was reset; restore raw-filter-input chrome and clear the
+    /// stored spec so the next query falls back to `TableBrowseRequest`.
+    ClearVisualQuery,
+
+    /// The user pressed "Open in Editor" from the builder panel.
+    ///
+    /// Carries the profile the query should run against and the fully
+    /// materialized SQL (literals inlined, no placeholders).
+    OpenEditorWithContent { profile_id: Uuid, sql: String },
 }
 
 // Re-export the rail tab enum from the chart module so DataGridPanel's render
@@ -463,6 +480,29 @@ pub struct DataGridPanel {
     /// DataDocument in chart mode. Holds the input state for the name prompt
     /// overlay. On confirm, the chart is upserted via `app_state.saved_charts`.
     pub(super) pending_collection_chart_save: Option<CollectionChartSaveState>,
+
+    // ---- Visual Query Builder state ----
+    /// The spec produced by the `QueryBuilderPanel`, committed here when the
+    /// user presses Run. When `Some`, `run_table_query` delegates to
+    /// `generate_select` instead of `TableBrowseRequest`.
+    pub(crate) visual_query: Option<VisualQuerySpec>,
+
+    /// Pre-computed `SelectQuery` for the current `visual_query`.
+    ///
+    /// Stored so the query path does not need to re-generate every refresh.
+    /// Cleared whenever `visual_query` changes.
+    pub(crate) visual_select: Option<SelectQuery>,
+
+    /// The builder panel entity; kept alive here so inspector close/re-open
+    /// preserves state across sessions.
+    pub(crate) builder_panel: Option<Entity<QueryBuilderPanel>>,
+
+    /// Subscriptions to `QueryBuilderPanel` events.
+    pub(crate) _builder_subscriptions: Vec<Subscription>,
+
+    /// When `true`, the raw filter input row is hidden in the toolbar because
+    /// the builder is open and owns query composition for this panel.
+    pub(crate) filter_input_hidden: bool,
 }
 
 /// State held while the "Save chart" name-prompt overlay is visible for a
@@ -873,6 +913,11 @@ impl DataGridPanel {
             chart_shell: None,
             chart_source_time_range_panel: None,
             pending_collection_chart_save: None,
+            visual_query: None,
+            visual_select: None,
+            builder_panel: None,
+            _builder_subscriptions: Vec::new(),
+            filter_input_hidden: false,
         }
     }
 
@@ -2207,6 +2252,330 @@ impl DataGridPanel {
             })
             .build()
     }
+
+    // ---- Visual Query Builder integration ----
+
+    /// Stores the given spec and re-computes the cached `SelectQuery`.
+    ///
+    /// Called when the user presses Run inside the `QueryBuilderPanel`. Does
+    /// NOT immediately execute the query; sets `pending_refresh = true` so the
+    /// next render tick triggers `run_table_query`, which will find
+    /// `visual_select` ready to use.
+    pub fn apply_visual_query(&mut self, spec: VisualQuerySpec, cx: &mut Context<Self>) {
+        let generator = self.connection_generator(cx);
+
+        let select = generator.and_then(|qgen| qgen.generate_select(&spec).ok().flatten());
+
+        self.visual_query = Some(spec);
+        self.visual_select = select;
+        self.filter_input_hidden = true;
+        self.pending_refresh = true;
+
+        cx.notify();
+    }
+
+    /// Clears the visual spec and restores the raw filter-input chrome.
+    ///
+    /// Called by the builder's Reset action. The next query falls back to
+    /// the `TableBrowseRequest` path.
+    pub fn clear_visual_query(&mut self, cx: &mut Context<Self>) {
+        self.visual_query = None;
+        self.visual_select = None;
+        self.filter_input_hidden = false;
+
+        cx.notify();
+    }
+
+    /// Returns whether the toolbar's "Open in Builder" button should be shown.
+    ///
+    /// True only for `DataSource::Table` sources on connections whose driver
+    /// uses `QueryLanguage::Sql`.
+    pub fn can_open_builder(&self, cx: &App) -> bool {
+        if !matches!(self.source, DataSource::Table { .. }) {
+            return false;
+        }
+
+        let profile_id = match &self.source {
+            DataSource::Table { profile_id, .. } => *profile_id,
+            _ => return false,
+        };
+
+        self.app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|c| c.connection.metadata().query_language == dbflux_core::QueryLanguage::Sql)
+            .unwrap_or(false)
+    }
+
+    /// Opens (or re-opens) the `QueryBuilderPanel` inspector for this grid.
+    ///
+    /// Constructs the panel entity on first open, or re-hydrates it from
+    /// `visual_query` when the inspector is opened again after being closed.
+    pub fn open_query_builder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (profile_id, database, table) = match &self.source {
+            DataSource::Table {
+                profile_id,
+                database,
+                table,
+                ..
+            } => (*profile_id, database.clone(), table.clone()),
+            _ => return,
+        };
+
+        let source = dbflux_core::SourceTable {
+            schema: table.schema.clone(),
+            table: table.name.clone(),
+            alias: table.name.clone(),
+        };
+
+        let initial_spec = self.visual_query.clone();
+
+        let weak_self = cx.entity().downgrade();
+
+        let connection_arc: Option<std::sync::Arc<dyn dbflux_core::Connection>> = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|c| c.connection.clone());
+
+        let generate_preview: Box<dyn Fn(&VisualQuerySpec) -> String + Send + Sync> =
+            if let Some(conn) = connection_arc {
+                Box::new(move |spec: &VisualQuerySpec| {
+                    conn.query_generator()
+                        .and_then(|qgen| qgen.generate_select(spec).ok().flatten())
+                        .map(|q| q.sql)
+                        .unwrap_or_default()
+                })
+            } else {
+                Box::new(|_spec: &VisualQuerySpec| String::new())
+            };
+
+        let _ = (profile_id, database);
+
+        let panel = if let Some(existing) = &self.builder_panel {
+            existing.update(cx, |p, cx| {
+                if let Some(spec) = initial_spec.clone() {
+                    p.set_spec(spec, cx);
+                }
+            });
+            existing.clone()
+        } else {
+            let new_panel = cx.new(|cx| {
+                QueryBuilderPanel::new(
+                    source,
+                    initial_spec,
+                    Some(weak_self.clone()),
+                    generate_preview,
+                    cx,
+                )
+            });
+
+            let run_sub = cx.subscribe_in(
+                &new_panel,
+                window,
+                |this, _panel, event: &BuilderEvent, window, cx| {
+                    this.handle_builder_event(event, window, cx);
+                },
+            );
+
+            self._builder_subscriptions = vec![run_sub];
+            self.builder_panel = Some(new_panel.clone());
+            self.filter_input_hidden = true;
+            new_panel
+        };
+
+        let view: AnyView = AnyView::from(panel);
+        cx.emit(DataGridEvent::OpenInspector {
+            title: "Query Builder".into(),
+            content: view,
+        });
+    }
+
+    /// Handles events emitted by the builder panel.
+    fn handle_builder_event(
+        &mut self,
+        event: &BuilderEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            BuilderEvent::RunRequested => {
+                if let Some(spec) = self.visual_query.clone().or_else(|| {
+                    self.builder_panel
+                        .as_ref()
+                        .map(|p| p.read(cx).current_spec().clone())
+                }) {
+                    self.apply_visual_query(spec, cx);
+                    self.refresh(window, cx);
+                }
+            }
+
+            BuilderEvent::SpecChanged(spec) => {
+                let generator = self.connection_generator(cx);
+                self.visual_select =
+                    generator.and_then(|qgen| qgen.generate_select(spec).ok().flatten());
+                self.visual_query = Some(*spec.clone());
+            }
+
+            BuilderEvent::ResetRequested => {
+                self.clear_visual_query(cx);
+                cx.emit(DataGridEvent::CloseInspector);
+                self.builder_panel = None;
+                self._builder_subscriptions.clear();
+                self.refresh(window, cx);
+            }
+
+            BuilderEvent::OpenInEditorRequested => {
+                self.open_builder_in_editor(cx);
+            }
+
+            BuilderEvent::SaveRequested { name } => {
+                self.save_builder_query(name.clone(), cx);
+            }
+
+            BuilderEvent::SaveAsRequested { name } => {
+                self.save_builder_query(name.clone(), cx);
+            }
+
+            BuilderEvent::ImportRequested { source_id } => {
+                self.import_builder_query(source_id.clone(), cx);
+            }
+        }
+    }
+
+    /// Produces the editor-ready SQL by inlining literals into the parameterized
+    /// query, then opens a new code editor tab with that SQL.
+    fn open_builder_in_editor(&mut self, cx: &mut Context<Self>) {
+        let Some(select) = &self.visual_select else {
+            return;
+        };
+
+        let profile_id = match &self.source {
+            DataSource::Table { profile_id, .. } => *profile_id,
+            _ => return,
+        };
+
+        let generator = self.connection_generator(cx);
+        let sql = generator
+            .map(|qgen| qgen.materialize_select_for_editor(select))
+            .unwrap_or_else(|| select.sql.clone());
+
+        cx.emit(DataGridEvent::OpenEditorWithContent { profile_id, sql });
+    }
+
+    /// Saves the current builder spec under `name` for the panel's profile.
+    fn save_builder_query(&mut self, name: String, cx: &mut Context<Self>) {
+        let Some(spec) = self.visual_query.clone() else {
+            return;
+        };
+
+        let profile_id = match &self.source {
+            DataSource::Table { profile_id, .. } => profile_id.to_string(),
+            _ => return,
+        };
+
+        let result = self.app_state.update(cx, |app, _cx| {
+            app.saved_queries.save(&profile_id, &name, &spec)
+        });
+
+        match result {
+            Ok(summary) => {
+                if let Some(panel) = &self.builder_panel {
+                    panel.update(cx, |p, _| {
+                        p.loaded_id = Some(summary.id);
+                    });
+                }
+                dbflux_ui_base::toast::Toast::success(format!("Saved as \"{}\"", name))
+                    .meta_right(dbflux_ui_base::toast::now_hms())
+                    .push(cx);
+            }
+            Err(e) => {
+                dbflux_ui_base::user_error::report_error(
+                    dbflux_ui_base::user_error::UserFacingError::new(
+                        dbflux_ui_base::user_error::ErrorKind::Storage,
+                        format!("A saved query named \"{}\" already exists", name),
+                    )
+                    .with_cause(e.to_string()),
+                    cx,
+                );
+            }
+        }
+    }
+
+    /// Imports a saved query from another connection into this panel's profile.
+    fn import_builder_query(&mut self, source_id: String, cx: &mut Context<Self>) {
+        use dbflux_ui_base::saved_query_manager::ConnectionTableProbe;
+
+        let profile_id = match &self.source {
+            DataSource::Table { profile_id, .. } => *profile_id,
+            _ => return,
+        };
+
+        let profile_id_str = profile_id.to_string();
+
+        let conn = {
+            let state = self.app_state.read(cx);
+            let Some(connected) = state.connections().get(&profile_id) else {
+                dbflux_ui_base::user_error::report_error(
+                    dbflux_ui_base::user_error::UserFacingError::new(
+                        dbflux_ui_base::user_error::ErrorKind::User,
+                        "Target connection not available",
+                    ),
+                    cx,
+                );
+                return;
+            };
+            connected.connection.clone()
+        };
+
+        let database = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .and_then(|c| c.active_database.clone())
+            .unwrap_or_default();
+
+        let probe = ConnectionTableProbe::new(conn.as_ref(), &database);
+
+        let result = self.app_state.update(cx, |app, _cx| {
+            app.saved_queries
+                .import_to(&source_id, &profile_id_str, &probe)
+        });
+
+        match result {
+            Ok(_summary) => {
+                dbflux_ui_base::toast::Toast::success("Query imported successfully")
+                    .meta_right(dbflux_ui_base::toast::now_hms())
+                    .push(cx);
+            }
+            Err(e) => {
+                dbflux_ui_base::user_error::report_error(
+                    dbflux_ui_base::user_error::UserFacingError::new(
+                        dbflux_ui_base::user_error::ErrorKind::User,
+                        "Import failed: source table not found on target connection",
+                    )
+                    .with_cause(e.to_string()),
+                    cx,
+                );
+            }
+        }
+    }
+
+    /// Returns a reference to the driver's `QueryGenerator`, if connected.
+    fn connection_generator<'a>(&self, cx: &'a App) -> Option<&'a dyn dbflux_core::QueryGenerator> {
+        let profile_id = match &self.source {
+            DataSource::Table { profile_id, .. } => *profile_id,
+            _ => return None,
+        };
+
+        let state = self.app_state.read(cx);
+        let connected = state.connections().get(&profile_id)?;
+
+        connected.connection.query_generator()
+    }
 }
 
 impl EventEmitter<DataGridEvent> for DataGridPanel {}
@@ -2215,7 +2584,10 @@ impl EventEmitter<DataGridEvent> for DataGridPanel {}
 mod tests {
     use super::{DataGridPanel, DataSource};
     use dbflux_components::theme;
-    use dbflux_core::{CollectionRef, ColumnKind, ColumnMeta, Pagination, QueryResult, TableRef};
+    use dbflux_core::{
+        CollectionRef, ColumnKind, ColumnMeta, Pagination, Projection, QueryResult, SelectQuery,
+        SourceTable, TableRef, VisualQuerySpec,
+    };
     use dbflux_storage::bootstrap::StorageRuntime;
     use dbflux_ui_base::AppStateEntity;
     use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
@@ -2710,6 +3082,271 @@ mod tests {
         assert!(
             !in_range,
             "separator index should not be in the action range"
+        );
+    }
+
+    fn make_test_spec() -> VisualQuerySpec {
+        VisualQuerySpec {
+            source: SourceTable {
+                schema: Some("public".to_string()),
+                table: "users".to_string(),
+                alias: "users".to_string(),
+            },
+            projection: Projection::All,
+            joins: vec![],
+            filter: None,
+            sort: vec![],
+            limit: Some(100),
+            offset: 0,
+        }
+    }
+
+    #[gpui::test]
+    fn apply_visual_query_sets_filter_input_hidden(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+
+                DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx)
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        let spec = make_test_spec();
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                assert!(
+                    !panel.filter_input_hidden,
+                    "filter input should be visible before builder opens"
+                );
+                assert!(
+                    panel.visual_query.is_none(),
+                    "visual_query should be None before apply"
+                );
+
+                panel.apply_visual_query(spec.clone(), cx);
+
+                assert!(
+                    panel.filter_input_hidden,
+                    "filter input should be hidden after apply_visual_query"
+                );
+                assert!(
+                    panel.visual_query.is_some(),
+                    "visual_query should be Some after apply"
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn clear_visual_query_restores_filter_input_visible(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+
+                DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx)
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        let spec = make_test_spec();
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.apply_visual_query(spec.clone(), cx);
+
+                assert!(panel.filter_input_hidden, "should be hidden after apply");
+                assert!(panel.visual_query.is_some(), "spec should be stored");
+
+                panel.clear_visual_query(cx);
+
+                assert!(
+                    !panel.filter_input_hidden,
+                    "filter input should be visible again after clear"
+                );
+                assert!(
+                    panel.visual_query.is_none(),
+                    "visual_query should be None after clear"
+                );
+                assert!(
+                    panel.visual_select.is_none(),
+                    "visual_select should be None after clear"
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn apply_visual_query_sets_pending_refresh(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+
+                DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx)
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        let spec = make_test_spec();
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.apply_visual_query(spec.clone(), cx);
+
+                assert!(
+                    panel.pending_refresh,
+                    "apply_visual_query should queue a refresh"
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn can_open_builder_false_for_collection_source(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Collection {
+                    profile_id: Uuid::nil(),
+                    collection: CollectionRef::new("db", "items"),
+                    pagination: Pagination::default(),
+                    total_docs: None,
+                };
+
+                DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx)
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        let result = window.update(|_, app| panel.read(app).can_open_builder(app));
+
+        assert!(
+            !result,
+            "can_open_builder should return false for Collection source"
+        );
+    }
+
+    #[gpui::test]
+    fn visual_select_caches_precomputed_query(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+
+                DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx)
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        let pre_select = SelectQuery {
+            sql: "SELECT * FROM public.users LIMIT 100".to_string(),
+            params: vec![],
+        };
+
+        window.update(|_, app| {
+            panel.update(app, |panel, _cx| {
+                panel.visual_select = Some(pre_select.clone());
+            });
+        });
+
+        let stored = window.update(|_, app| panel.read(app).visual_select.clone());
+
+        assert_eq!(
+            stored,
+            Some(pre_select),
+            "visual_select should cache the query"
         );
     }
 }

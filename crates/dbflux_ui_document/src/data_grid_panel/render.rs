@@ -129,8 +129,13 @@ impl Render for DataGridPanel {
             DataSource::Collection { collection, .. } => collection.qualified_name(),
             DataSource::QueryResult { .. } => String::new(),
         };
-        let (source_query_prefix, filter_keyword) =
+        let (source_query_prefix, raw_filter_keyword) =
             DataGridPanel::filter_labels_for_source(&self.source, &self.app_state, cx);
+        let filter_keyword = if self.filter_input_hidden {
+            String::new()
+        } else {
+            raw_filter_keyword.to_string()
+        };
         let filter_input = self.filter_input.clone();
         let filter_has_value = !self.filter_input.read(cx).value().is_empty();
         let limit_input = self.limit_input.clone();
@@ -216,7 +221,7 @@ impl Render for DataGridPanel {
             .when(show_data_toolbar, |d| {
                 d.child(self.render_toolbar(
                     source_query_prefix,
-                    filter_keyword,
+                    &filter_keyword,
                     &source_name,
                     &filter_input,
                     filter_has_value,
@@ -436,8 +441,13 @@ pub(super) fn render_filter_bar_as_segment(
         return div().into_any();
     }
 
-    let (source_query_prefix, filter_keyword) =
+    let (source_query_prefix, raw_filter_keyword) =
         DataGridPanel::filter_labels_for_source(&g.source, &g.app_state, cx);
+    let filter_keyword = if g.filter_input_hidden {
+        String::new()
+    } else {
+        raw_filter_keyword.to_string()
+    };
 
     let source_name = match &g.source {
         DataSource::Table { table, .. } => table.qualified_name(),
@@ -466,10 +476,13 @@ pub(super) fn render_filter_bar_as_segment(
         "Refresh"
     };
 
+    let can_open_builder = g.can_open_builder(cx);
+
     let grid_for_filter = grid.clone();
     let grid_for_limit = grid.clone();
     let grid_for_clear = grid.clone();
     let grid_for_refresh = grid.clone();
+    let grid_for_builder = grid.clone();
 
     // Pre-clone theme for each section that needs it in a closure.
     let theme_filter = theme.clone();
@@ -661,6 +674,33 @@ pub(super) fn render_filter_bar_as_segment(
                 .child(div().w(px(1.0)).h_full().bg(theme.input)) // guardrail-allow: vertical separator div, not a border-width token
                 .child(div().w(px(28.0)).h_full().child(refresh_dropdown)), // guardrail-allow: dropdown control width, not a height token
         )
+        .when(can_open_builder, move |d| {
+            let theme_btn = theme.clone();
+            d.child(
+                div()
+                    .id("open-builder-btn")
+                    .h(Heights::ROW_COMPACT)
+                    .px(Spacing::SM)
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .rounded(Radii::SM)
+                    .text_color(theme_btn.muted_foreground)
+                    .cursor_pointer()
+                    .hover(move |d| d.bg(theme_btn.secondary).text_color(theme_btn.foreground))
+                    .on_click(move |_, window, cx| {
+                        grid_for_builder.update(cx, |this, cx| {
+                            this.open_query_builder(window, cx);
+                        });
+                    })
+                    .child(
+                        Icon::new(AppIcon::ListFilter)
+                            .small()
+                            .color(theme.muted_foreground),
+                    )
+                    .child(Text::muted("Builder")),
+            )
+        })
         .into_any()
 }
 
@@ -865,6 +905,30 @@ impl DataGridPanel {
                         }))
                         .child(Icon::new(view_icon).small().color(theme.muted_foreground))
                         .child(Text::muted(mode.label())),
+                )
+            })
+            .when(self.can_open_builder(cx), |d| {
+                d.child(
+                    div()
+                        .id("open-builder-btn")
+                        .h_full()
+                        .px(Spacing::SM)
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::XS)
+                        .rounded(Radii::SM)
+                        .text_color(theme.muted_foreground)
+                        .cursor_pointer()
+                        .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_query_builder(window, cx);
+                        }))
+                        .child(
+                            Icon::new(AppIcon::ListFilter)
+                                .small()
+                                .color(theme.muted_foreground),
+                        )
+                        .child(Text::muted("Builder")),
                 )
             })
     }
