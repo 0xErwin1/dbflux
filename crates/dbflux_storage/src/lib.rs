@@ -15,6 +15,7 @@ pub use repositories::audit::{
     AppendAuditEvent, AppendAuditEventExtended, AuditAggregateParams, AuditEventDto,
     AuditGroupColumn, AuditQueryFilter, AuditRepository,
 };
+pub use repositories::qry_saved_queries::{SavedQueryRepo, SavedQuerySummary};
 pub use repositories::state::{
     query_history::QueryHistoryRepository, recent_items::RecentItemsRepository,
     saved_queries::SavedQueriesRepository, sessions::SessionRepository,
