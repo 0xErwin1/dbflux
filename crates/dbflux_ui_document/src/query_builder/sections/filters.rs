@@ -61,7 +61,7 @@ pub fn render_filters(
                             })),
                     )
                     .child(
-                        Button::new("qb-add-first-group", "+ Group")
+                        Button::new("qb-add-first-group", "+ Sub-group")
                             .ghost()
                             .small()
                             .on_click(cx.listener(|this, _event, _window, cx| {
@@ -73,8 +73,15 @@ pub fn render_filters(
 
         Some(root) => {
             let input_states = panel.predicate_input_states.clone();
-            let root_element =
-                render_filter_node(root, vec![], &source_alias_for_group, &input_states, cx);
+            let column_input_states = panel.predicate_column_input_states.clone();
+            let root_element = render_filter_node(
+                root,
+                vec![],
+                &source_alias_for_group,
+                &input_states,
+                &column_input_states,
+                cx,
+            );
             container = container.child(root_element);
         }
     }
@@ -87,20 +94,28 @@ fn render_filter_node(
     path: Vec<usize>,
     source_alias: &str,
     input_states: &std::collections::HashMap<u64, Entity<InputState>>,
+    column_input_states: &std::collections::HashMap<u64, Entity<InputState>>,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> AnyElement {
     use dbflux_core::FilterNode;
     use gpui::prelude::*;
 
     match node {
-        FilterNode::Group { op, children } => {
-            render_filter_group(op, children, path, source_alias, input_states, cx)
-                .into_any_element()
-        }
+        FilterNode::Group { op, children } => render_filter_group(
+            op,
+            children,
+            path,
+            source_alias,
+            input_states,
+            column_input_states,
+            cx,
+        )
+        .into_any_element(),
 
         FilterNode::Predicate(pred) => {
             let input_state = input_states.get(&pred.node_id).cloned();
-            render_filter_predicate(pred, path, input_state, cx).into_any_element()
+            let column_input = column_input_states.get(&pred.node_id).cloned();
+            render_filter_predicate(pred, path, input_state, column_input, cx).into_any_element()
         }
     }
 }
@@ -111,6 +126,7 @@ fn render_filter_group(
     path: Vec<usize>,
     source_alias: &str,
     input_states: &std::collections::HashMap<u64, Entity<InputState>>,
+    column_input_states: &std::collections::HashMap<u64, Entity<InputState>>,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
     use dbflux_components::controls::Button;
@@ -137,7 +153,7 @@ fn render_filter_group(
             .items_center()
             .child(
                 Button::new(path_id("qb-grp-op", &path_for_toggle), op_label)
-                    .ghost()
+                    .dropdown()
                     .small()
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.toggle_group_op(path_for_toggle.clone(), cx);
@@ -158,13 +174,16 @@ fn render_filter_group(
                     })),
             )
             .child(
-                Button::new(path_id("qb-grp-add-grp", &path_for_add_group), "+ Group")
-                    .ghost()
-                    .small()
-                    .disabled(at_depth_cap)
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.add_group(path_for_add_group.clone(), cx);
-                    })),
+                Button::new(
+                    path_id("qb-grp-add-grp", &path_for_add_group),
+                    "+ Sub-group",
+                )
+                .ghost()
+                .small()
+                .disabled(at_depth_cap)
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.add_group(path_for_add_group.clone(), cx);
+                })),
             )
             .when(!path.is_empty(), |this| {
                 this.child(
@@ -181,7 +200,14 @@ fn render_filter_group(
     for (i, child) in children.into_iter().enumerate() {
         let mut child_path = path.clone();
         child_path.push(i);
-        let child_element = render_filter_node(child, child_path, source_alias, input_states, cx);
+        let child_element = render_filter_node(
+            child,
+            child_path,
+            source_alias,
+            input_states,
+            column_input_states,
+            cx,
+        );
         group_div = group_div.child(child_element);
     }
 
@@ -192,6 +218,7 @@ fn render_filter_predicate(
     pred: dbflux_core::Predicate,
     path: Vec<usize>,
     input_state: Option<Entity<InputState>>,
+    column_input_state: Option<Entity<InputState>>,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
     use dbflux_components::controls::{Button, Input};
@@ -199,7 +226,6 @@ fn render_filter_predicate(
     use gpui::prelude::*;
 
     let comparator_label = comparator_label(pred.comparator);
-    let col_label = format!("{}.{}", pred.source_alias, pred.column);
     let path_for_cmp = path.clone();
     let path_for_rm = path.clone();
 
@@ -208,29 +234,36 @@ fn render_filter_predicate(
         dbflux_core::Comparator::IsNull | dbflux_core::Comparator::IsNotNull
     );
 
-    let mut row = div()
-        .flex()
-        .flex_row()
-        .gap_1()
-        .items_center()
-        .child(
+    let mut row = div().flex().flex_row().gap_1().items_center();
+
+    if let Some(col_state) = column_input_state {
+        row = row.child(
+            div()
+                .flex_1()
+                .child(Input::new(&col_state).small().w_full()),
+        );
+    } else {
+        let fallback = format!("{}.{}", pred.source_alias, pred.column);
+        row = row.child(
             div()
                 .flex_shrink_0()
                 .text_sm()
-                .child(SharedString::from(col_label)),
-        )
-        .child(
-            Button::new(path_id("qb-pred-cmp", &path_for_cmp), comparator_label)
-                .ghost()
-                .small()
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.cycle_predicate_comparator(path_for_cmp.clone(), cx);
-                })),
+                .child(SharedString::from(fallback)),
         );
+    }
+
+    row = row.child(
+        Button::new(path_id("qb-pred-cmp", &path_for_cmp), comparator_label)
+            .dropdown()
+            .small()
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                this.cycle_predicate_comparator(path_for_cmp.clone(), cx);
+            })),
+    );
 
     if needs_value {
         if let Some(state) = input_state {
-            row = row.child(Input::new(&state).small().w_full());
+            row = row.child(div().flex_1().child(Input::new(&state).small().w_full()));
         } else {
             row = row.child(div().text_sm().child(SharedString::from("<value>")));
         }

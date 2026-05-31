@@ -235,6 +235,10 @@ pub struct QueryBuilderPanel {
     /// Entries are swept after render to remove stale keys (nodes that were deleted).
     pub(crate) predicate_input_states: HashMap<u64, Entity<InputState>>,
 
+    /// Per-predicate column-reference `InputState` keyed by `Predicate::node_id`.
+    /// Holds the dotted "alias.column" string editable by the user.
+    pub(crate) predicate_column_input_states: HashMap<u64, Entity<InputState>>,
+
     /// Set to `true` after any filter mutation so the render cycle sweeps stale
     /// entries from `predicate_input_states`.
     pub(crate) pending_filter_input_sweep: bool,
@@ -393,6 +397,7 @@ impl QueryBuilderPanel {
             add_sort_input_state: Some(add_sort_input_state),
             next_node_id,
             predicate_input_states: HashMap::new(),
+            predicate_column_input_states: HashMap::new(),
             pending_filter_input_sweep: false,
         }
     }
@@ -731,12 +736,78 @@ impl QueryBuilderPanel {
         self._input_subs.push(sub);
     }
 
+    /// Updates the column reference of the predicate at `path` from a dotted
+    /// "alias.column" string. If the input lacks a dot the whole string is
+    /// treated as the column and the alias is preserved.
+    pub fn set_predicate_column_ref(
+        &mut self,
+        path: Vec<usize>,
+        text: String,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(root) = &mut self.current_spec.filter
+            && let Some(FilterNode::Predicate(pred)) = Self::node_at_path_mut(root, &path)
+        {
+            match text.split_once('.') {
+                Some((alias, column)) => {
+                    pred.source_alias = alias.trim().to_string();
+                    pred.column = column.trim().to_string();
+                }
+                None => {
+                    pred.column = text.trim().to_string();
+                }
+            }
+        }
+
+        self.refresh_preview_and_notify(cx);
+    }
+
+    /// Ensures a column-reference `InputState` exists for the predicate at `node_id`.
+    /// Seeded from the current dotted "alias.column" string; subscribes to
+    /// `InputEvent::Change` to call `set_predicate_column_ref`.
+    pub fn ensure_predicate_column_input(
+        &mut self,
+        node_id: u64,
+        path: Vec<usize>,
+        current_text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.predicate_column_input_states.contains_key(&node_id) {
+            return;
+        }
+
+        let value = current_text.to_string();
+        let state = cx.new(|cx| {
+            let mut s = InputState::new(window, cx).placeholder("alias.column");
+            s.set_value(&value, window, cx);
+            s
+        });
+
+        let sub = cx.subscribe_in(
+            &state,
+            window,
+            move |this, entity, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let text = entity.read(cx).value().to_string();
+                    this.set_predicate_column_ref(path.clone(), text, cx);
+                    let _ = window;
+                }
+            },
+        );
+
+        self.predicate_column_input_states.insert(node_id, state);
+        self._input_subs.push(sub);
+    }
+
     /// Sweeps `predicate_input_states` to remove entries whose `node_id` is no
     /// longer present in the filter tree. Call after any filter mutation that may
     /// have removed predicates.
     pub fn sweep_stale_predicate_inputs(&mut self) {
         let live_ids = self.collect_predicate_node_ids();
         self.predicate_input_states
+            .retain(|id, _| live_ids.contains(id));
+        self.predicate_column_input_states
             .retain(|id, _| live_ids.contains(id));
     }
 
@@ -1257,6 +1328,7 @@ mod tests {
             add_sort_input_state: None,
             next_node_id: 0,
             predicate_input_states: HashMap::new(),
+            predicate_column_input_states: HashMap::new(),
             pending_filter_input_sweep: false,
         }
     }

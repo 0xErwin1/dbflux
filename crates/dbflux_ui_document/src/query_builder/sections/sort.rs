@@ -39,7 +39,7 @@ pub fn render_sort(
             .child(div().flex_1().text_sm().child(SharedString::from(label)))
             .child(
                 Button::new(("qb-sort-dir", i), dir_label)
-                    .ghost()
+                    .dropdown()
                     .small()
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.toggle_sort_direction(i, cx);

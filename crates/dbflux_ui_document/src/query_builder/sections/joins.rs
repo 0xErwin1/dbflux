@@ -77,7 +77,7 @@ pub fn render_joins(
 
         let mut row_div = div().flex().flex_row().gap_1().items_center().child(
             Button::new(("qb-join-kind", i), kind_label)
-                .ghost()
+                .dropdown()
                 .small()
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     let updated = JoinRow {

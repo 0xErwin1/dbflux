@@ -2362,8 +2362,6 @@ impl DataGridPanel {
                 Box::new(|_spec: &VisualQuerySpec| String::new())
             };
 
-        let _ = (profile_id, database);
-
         let panel = if let Some(existing) = &self.builder_panel {
             existing.update(cx, |p, cx| {
                 if let Some(spec) = initial_spec.clone() {
@@ -2397,11 +2395,62 @@ impl DataGridPanel {
             new_panel
         };
 
+        self.spawn_fk_fetch_for_builder(panel.clone(), profile_id, database, table.schema, cx);
+
         let view: AnyView = AnyView::from(panel);
         cx.emit(DataGridEvent::OpenInspector {
             title: "Query Builder".into(),
             content: view,
         });
+    }
+
+    /// Loads foreign-key metadata for the builder's source table on a
+    /// background task, then applies it to the panel. If the connection is
+    /// missing or the driver returns an error, the panel transitions to the
+    /// `Unavailable` state so the raw-expression fallback banner appears.
+    fn spawn_fk_fetch_for_builder(
+        &self,
+        panel: Entity<QueryBuilderPanel>,
+        profile_id: uuid::Uuid,
+        database: Option<String>,
+        schema: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(database) = database else {
+            panel.update(cx, |p, cx| p.mark_fk_unavailable(cx));
+            return;
+        };
+
+        let Some(conn) = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|c| c.connection.clone())
+        else {
+            panel.update(cx, |p, cx| p.mark_fk_unavailable(cx));
+            return;
+        };
+
+        let schema_for_task = schema.clone();
+        let task = cx
+            .background_executor()
+            .spawn(async move { conn.schema_foreign_keys(&database, schema_for_task.as_deref()) });
+
+        let panel_weak = panel.downgrade();
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+            cx.update(|cx| {
+                if let Some(panel) = panel_weak.upgrade() {
+                    panel.update(cx, |p, cx| match result {
+                        Ok(fks) => p.apply_fk_result(fks, cx),
+                        Err(_) => p.mark_fk_unavailable(cx),
+                    });
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Handles events emitted by the builder panel.

@@ -382,7 +382,9 @@ fn ensure_in_node(
                     .collect::<Vec<_>>()
                     .join(", "),
             };
-            panel.ensure_predicate_input(pred.node_id, path, &current_value, window, cx);
+            let column_ref = format!("{}.{}", pred.source_alias, pred.column);
+            panel.ensure_predicate_input(pred.node_id, path.clone(), &current_value, window, cx);
+            panel.ensure_predicate_column_input(pred.node_id, path, &column_ref, window, cx);
         }
         FilterNode::Group { children, .. } => {
             for (i, child) in children.iter().enumerate() {
