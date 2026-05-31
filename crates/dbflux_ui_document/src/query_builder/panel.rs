@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::{
@@ -224,6 +224,20 @@ pub struct QueryBuilderPanel {
 
     /// InputState backing the "add sort (alias.column)" entry field.
     pub(crate) add_sort_input_state: Option<Entity<InputState>>,
+
+    /// Monotonically increasing counter used to mint stable `node_id` values for
+    /// new `Predicate` nodes. The counter only moves forward; no value is reused.
+    pub(crate) next_node_id: u64,
+
+    /// Per-predicate value `InputState` keyed by `Predicate::node_id`.
+    ///
+    /// Created lazily in `render_panel` when a predicate node is first rendered.
+    /// Entries are swept after render to remove stale keys (nodes that were deleted).
+    pub(crate) predicate_input_states: HashMap<u64, Entity<InputState>>,
+
+    /// Set to `true` after any filter mutation so the render cycle sweeps stale
+    /// entries from `predicate_input_states`.
+    pub(crate) pending_filter_input_sweep: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -245,7 +259,8 @@ impl QueryBuilderPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let spec = initial_spec.unwrap_or_else(|| VisualQuerySpec {
+        let mut next_node_id = 0u64;
+        let mut spec = initial_spec.unwrap_or_else(|| VisualQuerySpec {
             source: source.clone(),
             projection: Projection::All,
             joins: vec![],
@@ -254,6 +269,7 @@ impl QueryBuilderPanel {
             limit: Some(DEFAULT_LIMIT),
             offset: 0,
         });
+        spec.reassign_node_ids(&mut next_node_id);
 
         let (projection_mode, projection_rows) = match &spec.projection {
             Projection::All => (ProjectionMode::All, Vec::new()),
@@ -375,6 +391,9 @@ impl QueryBuilderPanel {
             pending_join_rebuild: false,
             add_column_input_state: Some(add_column_input_state),
             add_sort_input_state: Some(add_sort_input_state),
+            next_node_id,
+            predicate_input_states: HashMap::new(),
+            pending_filter_input_sweep: false,
         }
     }
 
@@ -545,11 +564,13 @@ impl QueryBuilderPanel {
         column: &str,
         cx: &mut Context<Self>,
     ) {
+        self.next_node_id += 1;
         let new_pred = FilterNode::Predicate(Predicate {
             source_alias: source_alias.to_string(),
             column: column.to_string(),
             comparator: Comparator::Eq,
             value: PredicateValue::Single(LiteralValue::Text(String::new())),
+            node_id: self.next_node_id,
         });
 
         match &mut self.current_spec.filter {
@@ -564,6 +585,7 @@ impl QueryBuilderPanel {
             }
         }
 
+        self.pending_filter_input_sweep = true;
         self.refresh_preview_and_notify(cx);
     }
 
@@ -586,6 +608,30 @@ impl QueryBuilderPanel {
         self.refresh_preview_and_notify(cx);
     }
 
+    /// Collects the `node_id` of every `Predicate` in the filter tree.
+    ///
+    /// Used by the render cycle to sweep stale entries from `predicate_input_states`.
+    pub fn collect_predicate_node_ids(&self) -> HashSet<u64> {
+        let mut ids = HashSet::new();
+        if let Some(root) = &self.current_spec.filter {
+            Self::collect_ids_in_node(root, &mut ids);
+        }
+        ids
+    }
+
+    fn collect_ids_in_node(node: &FilterNode, ids: &mut HashSet<u64>) {
+        match node {
+            FilterNode::Predicate(pred) => {
+                ids.insert(pred.node_id);
+            }
+            FilterNode::Group { children, .. } => {
+                for child in children {
+                    Self::collect_ids_in_node(child, ids);
+                }
+            }
+        }
+    }
+
     /// Removes the filter node at `path` from its parent group.
     pub fn remove_filter_node(&mut self, path: Vec<usize>, cx: &mut Context<Self>) {
         if path.is_empty() {
@@ -602,6 +648,7 @@ impl QueryBuilderPanel {
             }
         }
 
+        self.pending_filter_input_sweep = true;
         self.refresh_preview_and_notify(cx);
     }
 
@@ -639,6 +686,58 @@ impl QueryBuilderPanel {
         }
 
         self.refresh_preview_and_notify(cx);
+    }
+
+    /// Ensures a value `InputState` exists for the predicate at `node_id`.
+    ///
+    /// Creates a new `Entity<InputState>` seeded from `current_value` and subscribes
+    /// to `InputEvent::Change` to call `set_predicate_value(path, text)` when the
+    /// user types. Idempotent: if an entry already exists for `node_id`, does nothing.
+    ///
+    /// `path` must be the current path to the predicate node (used by the subscription
+    /// to route the value mutation to the correct node in the tree).
+    pub fn ensure_predicate_input(
+        &mut self,
+        node_id: u64,
+        path: Vec<usize>,
+        current_value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.predicate_input_states.contains_key(&node_id) {
+            return;
+        }
+
+        let value = current_value.to_string();
+        let state = cx.new(|cx| {
+            let mut s = InputState::new(window, cx).placeholder("<value>");
+            s.set_value(&value, window, cx);
+            s
+        });
+
+        let sub = cx.subscribe_in(
+            &state,
+            window,
+            move |this, entity, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let text = entity.read(cx).value().to_string();
+                    this.set_predicate_value(path.clone(), text, cx);
+                    let _ = window;
+                }
+            },
+        );
+
+        self.predicate_input_states.insert(node_id, state);
+        self._input_subs.push(sub);
+    }
+
+    /// Sweeps `predicate_input_states` to remove entries whose `node_id` is no
+    /// longer present in the filter tree. Call after any filter mutation that may
+    /// have removed predicates.
+    pub fn sweep_stale_predicate_inputs(&mut self) {
+        let live_ids = self.collect_predicate_node_ids();
+        self.predicate_input_states
+            .retain(|id, _| live_ids.contains(id));
     }
 
     /// Rebuilds `join_input_states` and its subscriptions from the current `join_rows`.
@@ -1156,6 +1255,9 @@ mod tests {
             pending_join_rebuild: false,
             add_column_input_state: None,
             add_sort_input_state: None,
+            next_node_id: 0,
+            predicate_input_states: HashMap::new(),
+            pending_filter_input_sweep: false,
         }
     }
 
@@ -1691,5 +1793,135 @@ mod tests {
     fn rebuilt_spec_has_no_order_by_when_no_sorts() {
         let panel = make_panel(make_spec(test_source()));
         assert!(panel.current_spec.sort.is_empty());
+    }
+
+    // ---- Slice 7: node_id + predicate value inputs --------------------------
+
+    fn t_add_predicate(panel: &mut QueryBuilderPanel, parent_path: Vec<usize>, column: &str) {
+        panel.next_node_id += 1;
+        let new_pred = FilterNode::Predicate(Predicate {
+            source_alias: "users".to_string(),
+            column: column.to_string(),
+            comparator: Comparator::Eq,
+            value: PredicateValue::Single(LiteralValue::Text(String::new())),
+            node_id: panel.next_node_id,
+        });
+        match &mut panel.current_spec.filter {
+            None => {
+                panel.current_spec.filter = Some(FilterNode::Group {
+                    op: BoolOp::And,
+                    children: vec![new_pred],
+                });
+            }
+            Some(root) => {
+                QueryBuilderPanel::insert_at_path(root, &parent_path, new_pred);
+            }
+        }
+        panel.pending_filter_input_sweep = true;
+        panel.rebuild_spec_pure();
+    }
+
+    #[test]
+    fn add_predicate_assigns_nonzero_node_id() {
+        let mut panel = make_panel(make_spec(test_source()));
+        t_add_predicate(&mut panel, vec![], "email");
+
+        if let Some(FilterNode::Group { children, .. }) = &panel.current_spec.filter {
+            if let FilterNode::Predicate(pred) = &children[0] {
+                assert_ne!(pred.node_id, 0, "node_id must be non-zero");
+            } else {
+                panic!("expected predicate");
+            }
+        } else {
+            panic!("expected group at root");
+        }
+    }
+
+    #[test]
+    fn set_predicate_value_updates_correct_node_in_nested_tree() {
+        let mut panel = make_panel(make_spec(test_source()));
+        t_add_predicate(&mut panel, vec![], "email");
+        t_add_predicate(&mut panel, vec![], "name");
+
+        // Update value at path [0] (email predicate).
+        if let Some(root) = &mut panel.current_spec.filter {
+            if let Some(FilterNode::Predicate(pred)) =
+                QueryBuilderPanel::node_at_path_mut(root, &[0])
+            {
+                pred.value = PredicateValue::Single(LiteralValue::Text("%foo%".to_string()));
+            }
+        }
+        panel.rebuild_spec_pure();
+
+        // Verify email predicate has the new value.
+        if let Some(FilterNode::Group { children, .. }) = &panel.current_spec.filter {
+            if let FilterNode::Predicate(pred) = &children[0] {
+                assert_eq!(
+                    pred.value,
+                    PredicateValue::Single(LiteralValue::Text("%foo%".to_string()))
+                );
+            } else {
+                panic!("expected predicate at [0]");
+            }
+
+            if let FilterNode::Predicate(pred) = &children[1] {
+                assert_eq!(
+                    pred.value,
+                    PredicateValue::Single(LiteralValue::Text(String::new())),
+                    "name predicate must be unchanged"
+                );
+            } else {
+                panic!("expected predicate at [1]");
+            }
+        } else {
+            panic!("expected AND group at root");
+        }
+    }
+
+    #[test]
+    fn collect_predicate_node_ids_returns_all_leaf_ids() {
+        let mut panel = make_panel(make_spec(test_source()));
+        t_add_predicate(&mut panel, vec![], "email");
+        t_add_predicate(&mut panel, vec![], "name");
+
+        let ids = panel.collect_predicate_node_ids();
+        assert_eq!(ids.len(), 2);
+        for id in &ids {
+            assert_ne!(*id, 0);
+        }
+    }
+
+    #[test]
+    fn collect_predicate_node_ids_returns_empty_when_no_filter() {
+        let panel = make_panel(make_spec(test_source()));
+        let ids = panel.collect_predicate_node_ids();
+        assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn collect_predicate_node_ids_after_remove_excludes_deleted_node() {
+        let mut panel = make_panel(make_spec(test_source()));
+        t_add_predicate(&mut panel, vec![], "email");
+        t_add_predicate(&mut panel, vec![], "name");
+
+        let before_ids = panel.collect_predicate_node_ids();
+        assert_eq!(before_ids.len(), 2);
+
+        // Remove the first predicate (index 0).
+        if let Some(root) = &mut panel.current_spec.filter {
+            QueryBuilderPanel::remove_at_path(root, &[0]);
+        }
+        panel.rebuild_spec_pure();
+
+        let after_ids = panel.collect_predicate_node_ids();
+        assert_eq!(after_ids.len(), 1, "only one predicate should remain");
+
+        // The removed id must not be in the live set.
+        for removed in before_ids.difference(&after_ids) {
+            assert!(
+                !after_ids.contains(removed),
+                "removed node id should not be in live set"
+            );
+        }
     }
 }

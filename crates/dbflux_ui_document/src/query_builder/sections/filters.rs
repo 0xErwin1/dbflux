@@ -1,6 +1,7 @@
-use gpui::{AnyElement, Context, ElementId, IntoElement, SharedString, div};
+use gpui::{AnyElement, Context, ElementId, Entity, IntoElement, SharedString, div};
 
 use crate::query_builder::panel::{FILTER_DEPTH_CAP, QueryBuilderPanel};
+use dbflux_components::controls::InputState;
 
 /// Renders the Filters section of the Query Builder.
 ///
@@ -72,7 +73,9 @@ pub fn render_filters(
         }
 
         Some(root) => {
-            let root_element = render_filter_node(root, vec![], &source_alias_for_group, cx);
+            let input_states = panel.predicate_input_states.clone();
+            let root_element =
+                render_filter_node(root, vec![], &source_alias_for_group, &input_states, cx);
             container = container.child(root_element);
         }
     }
@@ -84,6 +87,7 @@ fn render_filter_node(
     node: dbflux_core::FilterNode,
     path: Vec<usize>,
     source_alias: &str,
+    input_states: &std::collections::HashMap<u64, Entity<InputState>>,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> AnyElement {
     use dbflux_core::FilterNode;
@@ -91,10 +95,14 @@ fn render_filter_node(
 
     match node {
         FilterNode::Group { op, children } => {
-            render_filter_group(op, children, path, source_alias, cx).into_any_element()
+            render_filter_group(op, children, path, source_alias, input_states, cx)
+                .into_any_element()
         }
 
-        FilterNode::Predicate(pred) => render_filter_predicate(pred, path, cx).into_any_element(),
+        FilterNode::Predicate(pred) => {
+            let input_state = input_states.get(&pred.node_id).cloned();
+            render_filter_predicate(pred, path, input_state, cx).into_any_element()
+        }
     }
 }
 
@@ -103,6 +111,7 @@ fn render_filter_group(
     children: Vec<dbflux_core::FilterNode>,
     path: Vec<usize>,
     source_alias: &str,
+    input_states: &std::collections::HashMap<u64, Entity<InputState>>,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
     use dbflux_components::controls::Button;
@@ -173,7 +182,7 @@ fn render_filter_group(
     for (i, child) in children.into_iter().enumerate() {
         let mut child_path = path.clone();
         child_path.push(i);
-        let child_element = render_filter_node(child, child_path, source_alias, cx);
+        let child_element = render_filter_node(child, child_path, source_alias, input_states, cx);
         group_div = group_div.child(child_element);
     }
 
@@ -183,35 +192,31 @@ fn render_filter_group(
 fn render_filter_predicate(
     pred: dbflux_core::Predicate,
     path: Vec<usize>,
+    input_state: Option<Entity<InputState>>,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
-    use dbflux_components::controls::Button;
+    use dbflux_components::controls::{Button, Input};
     use gpui::SharedString;
     use gpui::prelude::*;
 
     let comparator_label = comparator_label(pred.comparator);
-    let value_text = match &pred.value {
-        dbflux_core::PredicateValue::None => String::new(),
-        dbflux_core::PredicateValue::Single(v) => literal_to_string(v),
-        dbflux_core::PredicateValue::List(vs) => vs
-            .iter()
-            .map(literal_to_string)
-            .collect::<Vec<_>>()
-            .join(", "),
-    };
-
     let col_label = format!("{}.{}", pred.source_alias, pred.column);
     let path_for_cmp = path.clone();
     let path_for_rm = path.clone();
 
-    div()
+    let needs_value = !matches!(
+        pred.comparator,
+        dbflux_core::Comparator::IsNull | dbflux_core::Comparator::IsNotNull
+    );
+
+    let mut row = div()
         .flex()
         .flex_row()
         .gap_1()
         .items_center()
         .child(
             div()
-                .flex_1()
+                .flex_shrink_0()
                 .text_sm()
                 .child(SharedString::from(col_label)),
         )
@@ -222,24 +227,24 @@ fn render_filter_predicate(
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     this.cycle_predicate_comparator(path_for_cmp.clone(), cx);
                 })),
-        )
-        .child(
-            div()
-                .text_sm()
-                .child(SharedString::from(if value_text.is_empty() {
-                    "<value>".to_string()
-                } else {
-                    value_text
-                })),
-        )
-        .child(
-            Button::new(path_id("qb-pred-rm", &path_for_rm), "✕")
-                .ghost()
-                .small()
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.remove_filter_node(path_for_rm.clone(), cx);
-                })),
-        )
+        );
+
+    if needs_value {
+        if let Some(state) = input_state {
+            row = row.child(Input::new(&state).small().w_full());
+        } else {
+            row = row.child(div().text_sm().child(SharedString::from("<value>")));
+        }
+    }
+
+    row.child(
+        Button::new(path_id("qb-pred-rm", &path_for_rm), "✕")
+            .ghost()
+            .small()
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                this.remove_filter_node(path_for_rm.clone(), cx);
+            })),
+    )
 }
 
 fn path_id(prefix: &str, path: &[usize]) -> ElementId {
@@ -264,17 +269,5 @@ fn comparator_label(cmp: dbflux_core::Comparator) -> &'static str {
         Comparator::In => "IN",
         Comparator::IsNull => "IS NULL",
         Comparator::IsNotNull => "IS NOT NULL",
-    }
-}
-
-fn literal_to_string(v: &dbflux_core::LiteralValue) -> String {
-    use dbflux_core::LiteralValue;
-    match v {
-        LiteralValue::Text(s) => s.clone(),
-        LiteralValue::Integer(n) => n.to_string(),
-        LiteralValue::Float(f) => f.to_string(),
-        LiteralValue::Bool(b) => b.to_string(),
-        LiteralValue::Timestamp(t) => t.clone(),
-        LiteralValue::Null => "NULL".to_string(),
     }
 }

@@ -784,6 +784,7 @@ mod tests {
                     column: "status".to_string(),
                     comparator: Comparator::Eq,
                     value: PredicateValue::Single(LiteralValue::Text("active".to_string())),
+                    node_id: 0,
                 }),
                 FilterNode::Group {
                     op: BoolOp::Or,
@@ -793,12 +794,14 @@ mod tests {
                             column: "age".to_string(),
                             comparator: Comparator::Gt,
                             value: PredicateValue::Single(LiteralValue::Integer(18)),
+                            node_id: 0,
                         }),
                         FilterNode::Predicate(Predicate {
                             source_alias: "users".to_string(),
                             column: "vip".to_string(),
                             comparator: Comparator::IsNotNull,
                             value: PredicateValue::None,
+                            node_id: 0,
                         }),
                     ],
                 },

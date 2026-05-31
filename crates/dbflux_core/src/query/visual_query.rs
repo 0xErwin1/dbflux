@@ -24,6 +24,31 @@ impl VisualQuerySpec {
         Ok(())
     }
 
+    /// Walks the filter tree and assigns fresh monotonically increasing `node_id`
+    /// values to every `Predicate` node, starting from `next_id`.
+    ///
+    /// Call this after deserialising a spec so that predicate node IDs are valid
+    /// before the UI constructs `InputState` entities.
+    pub fn reassign_node_ids(&mut self, next_id: &mut u64) {
+        if let Some(root) = &mut self.filter {
+            Self::assign_ids_in_node(root, next_id);
+        }
+    }
+
+    fn assign_ids_in_node(node: &mut FilterNode, next_id: &mut u64) {
+        match node {
+            FilterNode::Predicate(pred) => {
+                *next_id += 1;
+                pred.node_id = *next_id;
+            }
+            FilterNode::Group { children, .. } => {
+                for child in children.iter_mut() {
+                    Self::assign_ids_in_node(child, next_id);
+                }
+            }
+        }
+    }
+
     /// Returns a map from alias string to its origin in this spec.
     pub fn referenced_aliases(&self) -> BTreeMap<String, AliasOrigin> {
         let mut map = BTreeMap::new();
@@ -120,12 +145,23 @@ pub enum BoolOp {
     Or,
 }
 
+/// A single filter condition in the filter tree.
+///
+/// `node_id` is a stable identifier used by the UI to keep `Entity<InputState>`
+/// lifecycle aligned with predicate nodes. It is not persisted — the field is
+/// skipped during serialisation and regenerated from a monotonic counter when a
+/// spec is loaded or when a new predicate is added. The SQL generator ignores it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Predicate {
     pub source_alias: String,
     pub column: String,
     pub comparator: Comparator,
     pub value: PredicateValue,
+
+    /// Stable per-node identifier for UI `InputState` lifecycle management.
+    /// Not persisted; regenerated on load. Zero is the sentinel "unassigned" value.
+    #[serde(skip, default)]
+    pub node_id: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -197,6 +233,7 @@ mod tests {
             column: col.to_string(),
             comparator: Comparator::Eq,
             value: PredicateValue::Single(LiteralValue::Integer(1)),
+            node_id: 0,
         })
     }
 
@@ -343,6 +380,7 @@ mod tests {
                         column: "status".to_string(),
                         comparator: Comparator::Eq,
                         value: PredicateValue::Single(LiteralValue::Text("active".to_string())),
+                        node_id: 0,
                     }),
                     FilterNode::Group {
                         op: BoolOp::Or,
@@ -352,12 +390,14 @@ mod tests {
                                 column: "total".to_string(),
                                 comparator: Comparator::Gt,
                                 value: PredicateValue::Single(LiteralValue::Float(100.0)),
+                                node_id: 0,
                             }),
                             FilterNode::Predicate(Predicate {
                                 source_alias: "u".to_string(),
                                 column: "vip".to_string(),
                                 comparator: Comparator::Eq,
                                 value: PredicateValue::Single(LiteralValue::Bool(true)),
+                                node_id: 0,
                             }),
                         ],
                     },
@@ -415,5 +455,110 @@ mod tests {
         assert_eq!(aliases.get("o"), Some(&AliasOrigin::Source));
         assert_eq!(aliases.get("u"), Some(&AliasOrigin::Join));
         assert_eq!(aliases.len(), 2);
+    }
+
+    // --- reassign_node_ids ---
+
+    fn base_spec() -> VisualQuerySpec {
+        VisualQuerySpec {
+            source: SourceTable {
+                schema: None,
+                table: "users".to_string(),
+                alias: "users".to_string(),
+            },
+            projection: Projection::All,
+            joins: vec![],
+            filter: None,
+            sort: vec![],
+            limit: Some(100),
+            offset: 0,
+        }
+    }
+
+    #[test]
+    fn reassign_node_ids_assigns_nonzero_ids_to_all_predicates() {
+        let mut spec = base_spec();
+        spec.filter = Some(FilterNode::Group {
+            op: BoolOp::And,
+            children: vec![
+                make_predicate("users", "email"),
+                make_predicate("users", "name"),
+            ],
+        });
+
+        let mut counter = 0u64;
+        spec.reassign_node_ids(&mut counter);
+
+        if let Some(FilterNode::Group { children, .. }) = &spec.filter {
+            for child in children {
+                if let FilterNode::Predicate(pred) = child {
+                    assert_ne!(pred.node_id, 0, "node_id must be non-zero after assignment");
+                }
+            }
+        } else {
+            panic!("filter must be a group");
+        }
+    }
+
+    #[test]
+    fn reassign_node_ids_assigns_distinct_ids() {
+        let mut spec = base_spec();
+        spec.filter = Some(FilterNode::Group {
+            op: BoolOp::And,
+            children: vec![
+                make_predicate("users", "email"),
+                FilterNode::Group {
+                    op: BoolOp::Or,
+                    children: vec![
+                        make_predicate("users", "name"),
+                        make_predicate("users", "age"),
+                    ],
+                },
+            ],
+        });
+
+        let mut counter = 0u64;
+        spec.reassign_node_ids(&mut counter);
+
+        let mut ids = Vec::new();
+        fn collect_ids(node: &FilterNode, ids: &mut Vec<u64>) {
+            match node {
+                FilterNode::Predicate(pred) => ids.push(pred.node_id),
+                FilterNode::Group { children, .. } => {
+                    for child in children {
+                        collect_ids(child, ids);
+                    }
+                }
+            }
+        }
+        collect_ids(spec.filter.as_ref().unwrap(), &mut ids);
+
+        assert_eq!(ids.len(), 3);
+        let mut sorted = ids.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), 3, "all node_ids must be distinct");
+    }
+
+    #[test]
+    fn node_id_is_skipped_in_serde() {
+        let mut pred = Predicate {
+            source_alias: "t".to_string(),
+            column: "id".to_string(),
+            comparator: Comparator::Eq,
+            value: PredicateValue::None,
+            node_id: 42,
+        };
+
+        let json = serde_json::to_string(&pred).expect("serialise");
+        assert!(!json.contains("node_id"), "node_id must not appear in JSON");
+
+        let roundtripped: Predicate = serde_json::from_str(&json).expect("deserialise");
+        assert_eq!(
+            roundtripped.node_id, 0,
+            "node_id must reset to 0 after deserialise"
+        );
+        pred.node_id = 0;
+        assert_eq!(pred, roundtripped);
     }
 }

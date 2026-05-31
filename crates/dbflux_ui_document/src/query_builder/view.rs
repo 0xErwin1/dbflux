@@ -33,6 +33,13 @@ pub fn render_panel(
         panel.rebuild_join_input_states(window, cx);
     }
 
+    if panel.pending_filter_input_sweep {
+        panel.pending_filter_input_sweep = false;
+        panel.sweep_stale_predicate_inputs();
+    }
+
+    ensure_predicate_inputs(panel, window, cx);
+
     let container = div().flex().flex_col().size_full();
 
     let container = match &panel.focus_handle {
@@ -51,21 +58,112 @@ pub fn render_panel(
         .child(render_footer(panel, window, cx))
 }
 
+/// Walks the current filter tree and ensures every `Predicate` node has a
+/// corresponding `Entity<InputState>` in `panel.predicate_input_states`.
+///
+/// This must run every render cycle (not only on mutations) so that predicates
+/// loaded from a saved query also get their input state created on first render.
+fn ensure_predicate_inputs(
+    panel: &mut QueryBuilderPanel,
+    window: &mut Window,
+    cx: &mut Context<QueryBuilderPanel>,
+) {
+    use dbflux_core::FilterNode;
+
+    let filter = panel.current_spec.filter.clone();
+    if let Some(root) = filter {
+        ensure_in_node(panel, &root, vec![], window, cx);
+    }
+}
+
+fn ensure_in_node(
+    panel: &mut QueryBuilderPanel,
+    node: &dbflux_core::FilterNode,
+    path: Vec<usize>,
+    window: &mut Window,
+    cx: &mut Context<QueryBuilderPanel>,
+) {
+    use dbflux_core::FilterNode;
+
+    match node {
+        FilterNode::Predicate(pred) => {
+            let current_value = match &pred.value {
+                dbflux_core::PredicateValue::None => String::new(),
+                dbflux_core::PredicateValue::Single(v) => literal_to_display_string(v),
+                dbflux_core::PredicateValue::List(vs) => vs
+                    .iter()
+                    .map(literal_to_display_string)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            };
+            panel.ensure_predicate_input(pred.node_id, path, &current_value, window, cx);
+        }
+        FilterNode::Group { children, .. } => {
+            for (i, child) in children.iter().enumerate() {
+                let mut child_path = path.clone();
+                child_path.push(i);
+                ensure_in_node(panel, child, child_path, window, cx);
+            }
+        }
+    }
+}
+
+fn literal_to_display_string(v: &dbflux_core::LiteralValue) -> String {
+    use dbflux_core::LiteralValue;
+    match v {
+        LiteralValue::Text(s) => s.clone(),
+        LiteralValue::Integer(n) => n.to_string(),
+        LiteralValue::Float(f) => f.to_string(),
+        LiteralValue::Bool(b) => b.to_string(),
+        LiteralValue::Timestamp(t) => t.clone(),
+        LiteralValue::Null => "NULL".to_string(),
+    }
+}
+
 fn render_header(
     panel: &mut QueryBuilderPanel,
     _window: &mut Window,
-    _cx: &mut Context<QueryBuilderPanel>,
+    cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
+    use dbflux_components::controls::Button;
     use gpui::SharedString;
     use gpui::prelude::*;
 
-    div().flex().flex_row().p_2().gap_2().child(
-        div().flex_1().child(
+    div()
+        .flex()
+        .flex_row()
+        .p_2()
+        .gap_2()
+        .items_center()
+        .child(
             div()
+                .flex_1()
                 .text_sm()
                 .child(SharedString::from(panel.current_spec.source.table.clone())),
-        ),
-    )
+        )
+        .child(
+            Button::new("qb-hdr-save", "Save")
+                .ghost()
+                .small()
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    use crate::query_builder::events::BuilderEvent;
+                    let name = this
+                        .loaded_id
+                        .as_deref()
+                        .unwrap_or("Untitled query")
+                        .to_string();
+                    cx.emit(BuilderEvent::SaveRequested { name });
+                })),
+        )
+        .child(
+            Button::new("qb-hdr-reset", "Reset")
+                .ghost()
+                .small()
+                .on_click(cx.listener(|_this, _event, _window, cx| {
+                    use crate::query_builder::events::BuilderEvent;
+                    cx.emit(BuilderEvent::ResetRequested);
+                })),
+        )
 }
 
 fn render_columns_section(

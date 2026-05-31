@@ -1298,6 +1298,7 @@ mod tests {
             column: "status".to_string(),
             comparator: Comparator::Eq,
             value: PredicateValue::Single(LiteralValue::Text("active".to_string())),
+            node_id: 0,
         }));
 
         let q = generator
@@ -1326,6 +1327,7 @@ mod tests {
                     column: "active".to_string(),
                     comparator: Comparator::Eq,
                     value: PredicateValue::Single(LiteralValue::Bool(true)),
+                    node_id: 0,
                 }),
                 FilterNode::Group {
                     op: BoolOp::Or,
@@ -1335,6 +1337,7 @@ mod tests {
                             column: "role".to_string(),
                             comparator: Comparator::Eq,
                             value: PredicateValue::Single(LiteralValue::Text("admin".to_string())),
+                            node_id: 0,
                         }),
                         FilterNode::Predicate(Predicate {
                             source_alias: "users".to_string(),
@@ -1343,6 +1346,7 @@ mod tests {
                             value: PredicateValue::Single(LiteralValue::Text(
                                 "superuser".to_string(),
                             )),
+                            node_id: 0,
                         }),
                     ],
                 },
@@ -1614,6 +1618,7 @@ mod tests {
             column: "id".to_string(),
             comparator: Comparator::Eq,
             value: PredicateValue::Single(LiteralValue::Integer(1)),
+            node_id: 0,
         }));
 
         let q = generator
@@ -1636,6 +1641,7 @@ mod tests {
             column: "id".to_string(),
             comparator: Comparator::Eq,
             value: PredicateValue::Single(LiteralValue::Integer(1)),
+            node_id: 0,
         }));
 
         let q = generator
@@ -1710,6 +1716,7 @@ mod tests {
             column: "deleted_at".to_string(),
             comparator: Comparator::IsNull,
             value: PredicateValue::None,
+            node_id: 0,
         }));
 
         let q = generator
@@ -1737,6 +1744,7 @@ mod tests {
                 LiteralValue::Integer(2),
                 LiteralValue::Integer(3),
             ]),
+            node_id: 0,
         }));
 
         let q = generator
