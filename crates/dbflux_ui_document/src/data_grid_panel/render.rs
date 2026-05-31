@@ -516,78 +516,6 @@ pub(super) fn render_filter_bar_as_segment(
                 .child(Text::caption(source_query_prefix).primary())
                 .child(Text::label(source_name)),
         )
-        // Filter input: hidden for drivers that don't support collection filtering.
-        .when(!filter_keyword.is_empty(), move |d| {
-            let grid_for_filter_event = grid_for_filter.clone();
-            let grid_for_clear_event = grid_for_clear.clone();
-            let theme_inner = theme_filter.clone();
-            let theme_clear = theme_filter.clone();
-            d.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .child(Text::caption(filter_keyword).primary())
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .w(px(420.0))
-                            .h(Heights::ROW_COMPACT)
-                            .rounded(Radii::SM)
-                            .when(
-                                show_toolbar_focus && toolbar_focus == ToolbarFocus::Filter,
-                                move |d| d.border_1().border_color(theme_inner.ring),
-                            )
-                            .on_mouse_down(MouseButton::Left, {
-                                let grid = grid_for_filter_event.clone();
-                                move |_, _, cx| {
-                                    grid.update(cx, |this, cx| {
-                                        this.switching_input = true;
-                                        this.focus_mode = GridFocusMode::Toolbar;
-                                        this.toolbar_focus = ToolbarFocus::Filter;
-                                        this.edit_state = EditState::Editing;
-                                        cx.notify();
-                                    });
-                                }
-                            })
-                            .child(div().flex_1().child(Input::new(&filter_input).small()))
-                            .when(filter_has_value, move |d| {
-                                let grid = grid_for_clear_event.clone();
-                                let theme_hover = theme_clear.clone();
-                                d.child(
-                                    div()
-                                        .id("clear-filter")
-                                        .w(px(20.0))
-                                        .h(px(20.0))
-                                        .mr(Spacing::XS)
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded(Radii::SM)
-                                        .text_size(FontSizes::SM)
-                                        .text_color(theme_clear.muted_foreground)
-                                        .cursor_pointer()
-                                        .hover(move |d| {
-                                            d.bg(theme_hover.secondary)
-                                                .text_color(theme_hover.foreground)
-                                        })
-                                        .on_click(move |_, window, cx| {
-                                            let filter_input_clone =
-                                                grid.read(cx).filter_input.clone();
-                                            filter_input_clone.update(cx, |input, cx| {
-                                                input.set_value("", window, cx);
-                                            });
-                                            grid.update(cx, |this, cx| {
-                                                this.refresh(window, cx);
-                                            });
-                                        })
-                                        .child("\u{00d7}"),
-                                )
-                            }),
-                    ),
-            )
-        })
         .child(
             div()
                 .flex()
@@ -674,6 +602,80 @@ pub(super) fn render_filter_bar_as_segment(
                 .child(div().w(px(1.0)).h_full().bg(theme.input)) // guardrail-allow: vertical separator div, not a border-width token
                 .child(div().w(px(28.0)).h_full().child(refresh_dropdown)), // guardrail-allow: dropdown control width, not a height token
         )
+        // Filter input: positioned after LIMIT and Refresh, expands to fill remaining space.
+        // Hidden for drivers that don't support collection filtering.
+        .when(!filter_keyword.is_empty(), move |d| {
+            let grid_for_filter_event = grid_for_filter.clone();
+            let grid_for_clear_event = grid_for_clear.clone();
+            let theme_inner = theme_filter.clone();
+            let theme_clear = theme_filter.clone();
+            d.child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .child(Text::caption(filter_keyword).primary())
+                    .child(
+                        div()
+                            .flex()
+                            .flex_1()
+                            .items_center()
+                            .h(Heights::ROW_COMPACT)
+                            .rounded(Radii::SM)
+                            .when(
+                                show_toolbar_focus && toolbar_focus == ToolbarFocus::Filter,
+                                move |d| d.border_1().border_color(theme_inner.ring),
+                            )
+                            .on_mouse_down(MouseButton::Left, {
+                                let grid = grid_for_filter_event.clone();
+                                move |_, _, cx| {
+                                    grid.update(cx, |this, cx| {
+                                        this.switching_input = true;
+                                        this.focus_mode = GridFocusMode::Toolbar;
+                                        this.toolbar_focus = ToolbarFocus::Filter;
+                                        this.edit_state = EditState::Editing;
+                                        cx.notify();
+                                    });
+                                }
+                            })
+                            .child(div().flex_1().child(Input::new(&filter_input).small()))
+                            .when(filter_has_value, move |d| {
+                                let grid = grid_for_clear_event.clone();
+                                let theme_hover = theme_clear.clone();
+                                d.child(
+                                    div()
+                                        .id("clear-filter")
+                                        .w(px(20.0))
+                                        .h(px(20.0))
+                                        .mr(Spacing::XS)
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded(Radii::SM)
+                                        .text_size(FontSizes::SM)
+                                        .text_color(theme_clear.muted_foreground)
+                                        .cursor_pointer()
+                                        .hover(move |d| {
+                                            d.bg(theme_hover.secondary)
+                                                .text_color(theme_hover.foreground)
+                                        })
+                                        .on_click(move |_, window, cx| {
+                                            let filter_input_clone =
+                                                grid.read(cx).filter_input.clone();
+                                            filter_input_clone.update(cx, |input, cx| {
+                                                input.set_value("", window, cx);
+                                            });
+                                            grid.update(cx, |this, cx| {
+                                                this.refresh(window, cx);
+                                            });
+                                        })
+                                        .child("\u{00d7}"),
+                                )
+                            }),
+                    ),
+            )
+        })
         .when(can_open_builder, move |d| {
             let theme_btn = theme.clone();
             d.child(
@@ -734,65 +736,6 @@ impl DataGridPanel {
                     .child(Text::caption(source_query_prefix.to_string()).primary())
                     .child(Text::label(source_name.to_string())),
             )
-            // Filter input: hidden for drivers that don't support collection filtering
-            // (e.g. TimeSeries/InfluxDB where browse_collection ignores the filter).
-            .when(!filter_keyword.is_empty(), |d| {
-                d.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::XS)
-                        .child(Text::caption(filter_keyword.to_string()).primary())
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .w(px(420.0))
-                                .rounded(Radii::SM)
-                                .when(
-                                    show_toolbar_focus && toolbar_focus == ToolbarFocus::Filter,
-                                    |d| d.border_1().border_color(theme.ring),
-                                )
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, _, cx| {
-                                        this.switching_input = true;
-                                        this.focus_mode = GridFocusMode::Toolbar;
-                                        this.toolbar_focus = ToolbarFocus::Filter;
-                                        this.edit_state = EditState::Editing;
-                                        cx.notify();
-                                    }),
-                                )
-                                .child(div().flex_1().child(Input::new(filter_input).small()))
-                                .when(filter_has_value, |d| {
-                                    d.child(
-                                        div()
-                                            .id("clear-filter")
-                                            .w(px(20.0))
-                                            .h(px(20.0))
-                                            .mr(Spacing::XS)
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .rounded(Radii::SM)
-                                            .text_size(FontSizes::SM)
-                                            .text_color(theme.muted_foreground)
-                                            .cursor_pointer()
-                                            .hover(|d| {
-                                                d.bg(theme.secondary).text_color(theme.foreground)
-                                            })
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.filter_input.update(cx, |input, cx| {
-                                                    input.set_value("", window, cx);
-                                                });
-                                                this.refresh(window, cx);
-                                            }))
-                                            .child("\u{00d7}"),
-                                    )
-                                }),
-                        ),
-                )
-            })
             .child(
                 div()
                     .flex()
@@ -877,6 +820,66 @@ impl DataGridPanel {
                             .child(self.refresh_dropdown.clone()),
                     ),
             )
+            // Filter input: positioned after LIMIT and Refresh, expands to fill remaining space.
+            // Hidden for drivers that don't support collection filtering (e.g. TimeSeries/InfluxDB).
+            .when(!filter_keyword.is_empty(), |d| {
+                d.child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .items_center()
+                        .gap(Spacing::XS)
+                        .child(Text::caption(filter_keyword.to_string()).primary())
+                        .child(
+                            div()
+                                .flex()
+                                .flex_1()
+                                .items_center()
+                                .rounded(Radii::SM)
+                                .when(
+                                    show_toolbar_focus && toolbar_focus == ToolbarFocus::Filter,
+                                    |d| d.border_1().border_color(theme.ring),
+                                )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _, cx| {
+                                        this.switching_input = true;
+                                        this.focus_mode = GridFocusMode::Toolbar;
+                                        this.toolbar_focus = ToolbarFocus::Filter;
+                                        this.edit_state = EditState::Editing;
+                                        cx.notify();
+                                    }),
+                                )
+                                .child(div().flex_1().child(Input::new(filter_input).small()))
+                                .when(filter_has_value, |d| {
+                                    d.child(
+                                        div()
+                                            .id("clear-filter")
+                                            .w(px(20.0))
+                                            .h(px(20.0))
+                                            .mr(Spacing::XS)
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded(Radii::SM)
+                                            .text_size(FontSizes::SM)
+                                            .text_color(theme.muted_foreground)
+                                            .cursor_pointer()
+                                            .hover(|d| {
+                                                d.bg(theme.secondary).text_color(theme.foreground)
+                                            })
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.filter_input.update(cx, |input, cx| {
+                                                    input.set_value("", window, cx);
+                                                });
+                                                this.refresh(window, cx);
+                                            }))
+                                            .child("\u{00d7}"),
+                                    )
+                                }),
+                        ),
+                )
+            })
             .when(self.can_toggle_view(), |d| {
                 let mode = self.view_config.mode;
                 let view_icon: AppIcon = match mode {

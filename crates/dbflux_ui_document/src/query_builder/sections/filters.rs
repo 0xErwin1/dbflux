@@ -1,66 +1,280 @@
-use gpui::{Context, IntoElement, div};
+use gpui::{AnyElement, Context, ElementId, IntoElement, SharedString, div};
 
 use crate::query_builder::panel::{FILTER_DEPTH_CAP, QueryBuilderPanel};
 
 /// Renders the Filters section of the Query Builder.
 ///
-/// Displays the recursive AND/OR group tree. The root group is rendered at
-/// depth 1. Nesting is blocked when depth reaches `FILTER_DEPTH_CAP` (6).
+/// Displays a recursive AND/OR group tree. Each group node shows:
+/// - an AND/OR toggle button
+/// - "+Filter" and "+Group" buttons (disabled at the depth cap)
+/// - each child predicate with a comparator cycle button, a value input, and a
+///   remove button
+/// - each child sub-group rendered recursively
+///
+/// The root container exposes the same controls so the user can add predicates
+/// to the top-level when no filter exists yet.
 pub fn render_filters(
     panel: &mut QueryBuilderPanel,
-    _cx: &mut Context<QueryBuilderPanel>,
+    cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
+    use dbflux_components::controls::Button;
     use gpui::SharedString;
     use gpui::prelude::*;
 
     let filter_depth = panel.current_spec.filter.as_ref().map_or(0, |f| f.depth());
 
-    div()
+    let source_alias = panel.current_spec.source.alias.clone();
+    let source_alias_for_group = source_alias.clone();
+
+    let mut container = div()
         .flex()
         .flex_col()
         .p_2()
+        .gap_1()
         .child(div().text_sm().child(SharedString::from("Filters")))
         .when(filter_depth >= FILTER_DEPTH_CAP, |this| {
             this.child(div().text_sm().child(SharedString::from(
                 "Maximum filter nesting depth reached (6 levels)",
             )))
-        })
-        .child(match &panel.current_spec.filter {
-            None => div().child(div().text_sm().child(SharedString::from("No filters"))),
-            Some(node) => render_filter_node_preview(node),
-        })
+        });
+
+    match panel.current_spec.filter.clone() {
+        None => {
+            container = container.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_1()
+                    .items_center()
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_sm()
+                            .child(SharedString::from("No filters")),
+                    )
+                    .child(
+                        Button::new("qb-add-first-pred", "+ Filter")
+                            .ghost()
+                            .small()
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.add_predicate(vec![], &source_alias.clone(), "column", cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("qb-add-first-group", "+ Group")
+                            .ghost()
+                            .small()
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.add_group(vec![], cx);
+                            })),
+                    ),
+            );
+        }
+
+        Some(root) => {
+            let root_element = render_filter_node(root, vec![], &source_alias_for_group, cx);
+            container = container.child(root_element);
+        }
+    }
+
+    container
 }
 
-fn render_filter_node_preview(node: &dbflux_core::FilterNode) -> gpui::Div {
+fn render_filter_node(
+    node: dbflux_core::FilterNode,
+    path: Vec<usize>,
+    source_alias: &str,
+    cx: &mut Context<QueryBuilderPanel>,
+) -> AnyElement {
     use dbflux_core::FilterNode;
-    use gpui::SharedString;
     use gpui::prelude::*;
 
     match node {
         FilterNode::Group { op, children } => {
-            let label = match op {
-                dbflux_core::BoolOp::And => "AND",
-                dbflux_core::BoolOp::Or => "OR",
-            };
-            div()
-                .flex()
-                .flex_col()
-                .child(div().text_sm().child(SharedString::from(label)))
-                .children(
-                    children
-                        .iter()
-                        .map(render_filter_node_preview)
-                        .collect::<Vec<_>>(),
+            render_filter_group(op, children, path, source_alias, cx).into_any_element()
+        }
+
+        FilterNode::Predicate(pred) => render_filter_predicate(pred, path, cx).into_any_element(),
+    }
+}
+
+fn render_filter_group(
+    op: dbflux_core::BoolOp,
+    children: Vec<dbflux_core::FilterNode>,
+    path: Vec<usize>,
+    source_alias: &str,
+    cx: &mut Context<QueryBuilderPanel>,
+) -> impl IntoElement {
+    use dbflux_components::controls::Button;
+    use gpui::SharedString;
+    use gpui::prelude::*;
+
+    let op_label = match op {
+        dbflux_core::BoolOp::And => "AND",
+        dbflux_core::BoolOp::Or => "OR",
+    };
+
+    let at_depth_cap = path.len() >= FILTER_DEPTH_CAP;
+    let path_for_toggle = path.clone();
+    let path_for_add_pred = path.clone();
+    let path_for_add_group = path.clone();
+    let path_for_remove = path.clone();
+    let source_alias_for_pred = source_alias.to_string();
+
+    let mut group_div = div().flex().flex_col().gap_1().pl_2().child(
+        div()
+            .flex()
+            .flex_row()
+            .gap_1()
+            .items_center()
+            .child(
+                Button::new(path_id("qb-grp-op", &path_for_toggle), op_label)
+                    .ghost()
+                    .small()
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.toggle_group_op(path_for_toggle.clone(), cx);
+                    })),
+            )
+            .child(
+                Button::new(path_id("qb-grp-add-pred", &path_for_add_pred), "+ Filter")
+                    .ghost()
+                    .small()
+                    .disabled(at_depth_cap)
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.add_predicate(
+                            path_for_add_pred.clone(),
+                            &source_alias_for_pred.clone(),
+                            "column",
+                            cx,
+                        );
+                    })),
+            )
+            .child(
+                Button::new(path_id("qb-grp-add-grp", &path_for_add_group), "+ Group")
+                    .ghost()
+                    .small()
+                    .disabled(at_depth_cap)
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.add_group(path_for_add_group.clone(), cx);
+                    })),
+            )
+            .when(!path.is_empty(), |this| {
+                this.child(
+                    Button::new(path_id("qb-grp-rm", &path_for_remove), "✕")
+                        .ghost()
+                        .small()
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.remove_filter_node(path_for_remove.clone(), cx);
+                        })),
                 )
-        }
-        FilterNode::Predicate(p) => {
+            }),
+    );
+
+    for (i, child) in children.into_iter().enumerate() {
+        let mut child_path = path.clone();
+        child_path.push(i);
+        let child_element = render_filter_node(child, child_path, source_alias, cx);
+        group_div = group_div.child(child_element);
+    }
+
+    group_div
+}
+
+fn render_filter_predicate(
+    pred: dbflux_core::Predicate,
+    path: Vec<usize>,
+    cx: &mut Context<QueryBuilderPanel>,
+) -> impl IntoElement {
+    use dbflux_components::controls::Button;
+    use gpui::SharedString;
+    use gpui::prelude::*;
+
+    let comparator_label = comparator_label(pred.comparator);
+    let value_text = match &pred.value {
+        dbflux_core::PredicateValue::None => String::new(),
+        dbflux_core::PredicateValue::Single(v) => literal_to_string(v),
+        dbflux_core::PredicateValue::List(vs) => vs
+            .iter()
+            .map(literal_to_string)
+            .collect::<Vec<_>>()
+            .join(", "),
+    };
+
+    let col_label = format!("{}.{}", pred.source_alias, pred.column);
+    let path_for_cmp = path.clone();
+    let path_for_rm = path.clone();
+
+    div()
+        .flex()
+        .flex_row()
+        .gap_1()
+        .items_center()
+        .child(
             div()
-                .flex()
-                .flex_row()
-                .child(div().text_sm().child(SharedString::from(format!(
-                    "{}.{} {:?}",
-                    p.source_alias, p.column, p.comparator
-                ))))
-        }
+                .flex_1()
+                .text_sm()
+                .child(SharedString::from(col_label)),
+        )
+        .child(
+            Button::new(path_id("qb-pred-cmp", &path_for_cmp), comparator_label)
+                .ghost()
+                .small()
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.cycle_predicate_comparator(path_for_cmp.clone(), cx);
+                })),
+        )
+        .child(
+            div()
+                .text_sm()
+                .child(SharedString::from(if value_text.is_empty() {
+                    "<value>".to_string()
+                } else {
+                    value_text
+                })),
+        )
+        .child(
+            Button::new(path_id("qb-pred-rm", &path_for_rm), "✕")
+                .ghost()
+                .small()
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.remove_filter_node(path_for_rm.clone(), cx);
+                })),
+        )
+}
+
+fn path_id(prefix: &str, path: &[usize]) -> ElementId {
+    let key: String = std::iter::once(prefix.to_string())
+        .chain(path.iter().map(|i| i.to_string()))
+        .collect::<Vec<_>>()
+        .join("-");
+    ElementId::Name(SharedString::from(key))
+}
+
+fn comparator_label(cmp: dbflux_core::Comparator) -> &'static str {
+    use dbflux_core::Comparator;
+    match cmp {
+        Comparator::Eq => "=",
+        Comparator::Neq => "≠",
+        Comparator::Gt => ">",
+        Comparator::Lt => "<",
+        Comparator::Gte => "≥",
+        Comparator::Lte => "≤",
+        Comparator::Like => "LIKE",
+        Comparator::ILike => "ILIKE",
+        Comparator::In => "IN",
+        Comparator::IsNull => "IS NULL",
+        Comparator::IsNotNull => "IS NOT NULL",
+    }
+}
+
+fn literal_to_string(v: &dbflux_core::LiteralValue) -> String {
+    use dbflux_core::LiteralValue;
+    match v {
+        LiteralValue::Text(s) => s.clone(),
+        LiteralValue::Integer(n) => n.to_string(),
+        LiteralValue::Float(f) => f.to_string(),
+        LiteralValue::Bool(b) => b.to_string(),
+        LiteralValue::Timestamp(t) => t.clone(),
+        LiteralValue::Null => "NULL".to_string(),
     }
 }

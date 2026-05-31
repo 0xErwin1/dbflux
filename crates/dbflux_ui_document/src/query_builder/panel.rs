@@ -1,9 +1,15 @@
+use std::collections::HashMap;
+
+use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::{
-    BoolOp, ColumnKind, Comparator, FilterNode, JoinKind, JoinOn, JoinStep, Predicate,
-    PredicateValue, ProjectedColumn, Projection, SchemaForeignKeyInfo, SelectQuery, SortEntry,
-    SourceTable, VisualQuerySpec, VisualSortDirection,
+    BoolOp, ColumnKind, Comparator, FilterNode, JoinKind, JoinOn, JoinStep, LiteralValue,
+    Predicate, PredicateValue, ProjectedColumn, Projection, SchemaForeignKeyInfo, SelectQuery,
+    SortEntry, SourceTable, VisualQuerySpec, VisualSortDirection,
 };
-use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Render, WeakEntity, Window};
+use gpui::{
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Render, Subscription, WeakEntity,
+    Window,
+};
 use uuid::Uuid;
 
 use crate::data_grid_panel::DataGridPanel;
@@ -127,7 +133,7 @@ pub enum ProjectionMode {
 
 /// Visual Query Builder panel — GPUI entity.
 ///
-/// Owns a `VisualQuerySpec` that starts as a copy of `DataGridPanel.visual_query`
+/// Owns a `VisualQuerySpec` that starts as a copy of `DataGridPanel.builder_draft_spec`
 /// (or a fresh default spec) and accumulates user edits. Emits `BuilderEvent`
 /// on every user action that changes the spec or triggers a command.
 ///
@@ -179,6 +185,45 @@ pub struct QueryBuilderPanel {
     /// The closure calls `QueryGenerator::generate_select` on the driver's
     /// generator and materialises the SQL text for display.
     generate_preview: Box<dyn Fn(&VisualQuerySpec) -> String + Send + Sync>,
+
+    /// Read-only code editor state backing the SQL preview widget.
+    ///
+    /// The editor uses SQL syntax highlighting and is disabled (no user edits).
+    /// Synced from `sql_preview` during render via the `pending_preview_sync` flag.
+    /// `None` only in unit tests that bypass the GPUI runtime via `make_panel`.
+    pub(crate) sql_preview_state: Option<Entity<InputState>>,
+
+    /// Set to `true` whenever `sql_preview` text changes, so the render cycle
+    /// can flush the new text into `sql_preview_state` while `Window` is available.
+    pub(crate) pending_preview_sync: bool,
+
+    /// InputState backing the Limit field. Subscribed to `InputEvent::Change`.
+    pub(crate) limit_input_state: Option<Entity<InputState>>,
+
+    /// InputState backing the Offset field. Subscribed to `InputEvent::Change`.
+    pub(crate) offset_input_state: Option<Entity<InputState>>,
+
+    /// Per-join-row InputState pair: (to_table_input, on_expr_input).
+    ///
+    /// Length always matches `join_rows`. Rebuilt (with subscriptions) whenever
+    /// the join row count changes.
+    pub(crate) join_input_states: Vec<(Entity<InputState>, Entity<InputState>)>,
+
+    /// All input subscriptions (limit, offset, join rows, filter predicates).
+    ///
+    /// Held here so they are cancelled when the panel is dropped. Join and filter
+    /// subscriptions are rebuilt whenever the corresponding row counts change.
+    pub(crate) _input_subs: Vec<Subscription>,
+
+    /// Set to `true` when `join_rows` count changes, so the render cycle
+    /// rebuilds `join_input_states` while `Window` is available.
+    pub(crate) pending_join_rebuild: bool,
+
+    /// InputState backing the "add column (alias.column)" entry field.
+    pub(crate) add_column_input_state: Option<Entity<InputState>>,
+
+    /// InputState backing the "add sort (alias.column)" entry field.
+    pub(crate) add_sort_input_state: Option<Entity<InputState>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -188,7 +233,7 @@ pub struct QueryBuilderPanel {
 impl QueryBuilderPanel {
     /// Creates a new panel for the given source table.
     ///
-    /// `initial_spec` should be `DataGridPanel.visual_query` if the user had
+    /// `initial_spec` should be `DataGridPanel.builder_draft_spec` if the user had
     /// previously run the builder; `None` produces the default spec.
     /// `generate_preview` is a closure that calls the driver's
     /// `QueryGenerator::generate_select` and returns the SQL text.
@@ -197,6 +242,7 @@ impl QueryBuilderPanel {
         initial_spec: Option<VisualQuerySpec>,
         data_grid: Option<WeakEntity<DataGridPanel>>,
         generate_preview: Box<dyn Fn(&VisualQuerySpec) -> String + Send + Sync>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let spec = initial_spec.unwrap_or_else(|| VisualQuerySpec {
@@ -259,6 +305,52 @@ impl QueryBuilderPanel {
         let sql_preview = generate_preview(&spec);
         let focus_handle = Some(cx.focus_handle());
 
+        let sql_preview_state = cx.new(|cx| InputState::new(window, cx).code_editor("sql"));
+
+        let limit_val = limit_text.clone();
+        let limit_input_state = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder("100");
+            state.set_value(&limit_val, window, cx);
+            state
+        });
+
+        let offset_val = offset_text.clone();
+        let offset_input_state = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder("0");
+            state.set_value(&offset_val, window, cx);
+            state
+        });
+
+        let add_column_input_state =
+            cx.new(|cx| InputState::new(window, cx).placeholder("alias.column"));
+
+        let add_sort_input_state =
+            cx.new(|cx| InputState::new(window, cx).placeholder("alias.column"));
+
+        let limit_sub = cx.subscribe_in(
+            &limit_input_state,
+            window,
+            |this, entity, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let text = entity.read(cx).value().to_string();
+                    this.set_limit_text(&text.clone(), cx);
+                    let _ = (window, text);
+                }
+            },
+        );
+
+        let offset_sub = cx.subscribe_in(
+            &offset_input_state,
+            window,
+            |this, entity, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let text = entity.read(cx).value().to_string();
+                    this.set_offset_text(&text.clone(), cx);
+                    let _ = (window, text);
+                }
+            },
+        );
+
         Self {
             current_spec: spec,
             projection_mode,
@@ -274,6 +366,15 @@ impl QueryBuilderPanel {
             focus_handle,
             sql_preview,
             generate_preview,
+            sql_preview_state: Some(sql_preview_state),
+            pending_preview_sync: true,
+            limit_input_state: Some(limit_input_state),
+            offset_input_state: Some(offset_input_state),
+            join_input_states: Vec::new(),
+            _input_subs: vec![limit_sub, offset_sub],
+            pending_join_rebuild: false,
+            add_column_input_state: Some(add_column_input_state),
+            add_sort_input_state: Some(add_sort_input_state),
         }
     }
 
@@ -294,7 +395,7 @@ impl QueryBuilderPanel {
     }
 
     /// Replaces the panel's spec entirely (e.g. when the inspector re-opens
-    /// and needs to re-hydrate from `DataGridPanel.visual_query`).
+    /// and needs to re-hydrate from `DataGridPanel.builder_draft_spec`).
     pub fn set_spec(&mut self, spec: VisualQuerySpec, cx: &mut Context<Self>) {
         let (projection_mode, projection_rows) = match &spec.projection {
             Projection::All => (ProjectionMode::All, Vec::new()),
@@ -347,6 +448,7 @@ impl QueryBuilderPanel {
         self.join_rows = join_rows;
         self.sort_rows = sort_rows;
         self.sql_preview = (self.generate_preview)(&spec);
+        self.pending_preview_sync = true;
         self.current_spec = spec;
         cx.notify();
     }
@@ -431,6 +533,265 @@ impl QueryBuilderPanel {
         current_depth >= FILTER_DEPTH_CAP
     }
 
+    /// Adds a new empty predicate to the filter tree.
+    ///
+    /// If there is no root filter, creates a root `AND` group with one empty predicate.
+    /// Otherwise, appends to the root group (shallow append; for nested groups the
+    /// path-based variant would be used when the UI needs it).
+    pub fn add_predicate(
+        &mut self,
+        parent_path: Vec<usize>,
+        source_alias: &str,
+        column: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let new_pred = FilterNode::Predicate(Predicate {
+            source_alias: source_alias.to_string(),
+            column: column.to_string(),
+            comparator: Comparator::Eq,
+            value: PredicateValue::Single(LiteralValue::Text(String::new())),
+        });
+
+        match &mut self.current_spec.filter {
+            None => {
+                self.current_spec.filter = Some(FilterNode::Group {
+                    op: BoolOp::And,
+                    children: vec![new_pred],
+                });
+            }
+            Some(root) => {
+                Self::insert_at_path(root, &parent_path, new_pred);
+            }
+        }
+
+        self.refresh_preview_and_notify(cx);
+    }
+
+    /// Adds a new empty sub-group to the filter tree at `parent_path`.
+    pub fn add_group(&mut self, parent_path: Vec<usize>, cx: &mut Context<Self>) {
+        let new_group = FilterNode::Group {
+            op: BoolOp::And,
+            children: Vec::new(),
+        };
+
+        match &mut self.current_spec.filter {
+            None => {
+                self.current_spec.filter = Some(new_group);
+            }
+            Some(root) => {
+                Self::insert_at_path(root, &parent_path, new_group);
+            }
+        }
+
+        self.refresh_preview_and_notify(cx);
+    }
+
+    /// Removes the filter node at `path` from its parent group.
+    pub fn remove_filter_node(&mut self, path: Vec<usize>, cx: &mut Context<Self>) {
+        if path.is_empty() {
+            self.current_spec.filter = None;
+        } else {
+            if let Some(root) = &mut self.current_spec.filter {
+                Self::remove_at_path(root, &path);
+            }
+
+            if let Some(FilterNode::Group { children, .. }) = &self.current_spec.filter
+                && children.is_empty()
+            {
+                self.current_spec.filter = None;
+            }
+        }
+
+        self.refresh_preview_and_notify(cx);
+    }
+
+    /// Toggles the boolean operator (AND ↔ OR) of the group at `path`.
+    pub fn toggle_group_op(&mut self, path: Vec<usize>, cx: &mut Context<Self>) {
+        if let Some(root) = &mut self.current_spec.filter
+            && let Some(FilterNode::Group { op, .. }) = Self::node_at_path_mut(root, &path)
+        {
+            *op = match *op {
+                BoolOp::And => BoolOp::Or,
+                BoolOp::Or => BoolOp::And,
+            };
+        }
+
+        self.refresh_preview_and_notify(cx);
+    }
+
+    /// Cycles the comparator of the predicate at `path` through the operator list.
+    pub fn cycle_predicate_comparator(&mut self, path: Vec<usize>, cx: &mut Context<Self>) {
+        if let Some(root) = &mut self.current_spec.filter
+            && let Some(FilterNode::Predicate(pred)) = Self::node_at_path_mut(root, &path)
+        {
+            pred.comparator = Self::next_comparator(pred.comparator);
+        }
+
+        self.refresh_preview_and_notify(cx);
+    }
+
+    /// Updates the text value of the predicate at `path`.
+    pub fn set_predicate_value(&mut self, path: Vec<usize>, text: String, cx: &mut Context<Self>) {
+        if let Some(root) = &mut self.current_spec.filter
+            && let Some(FilterNode::Predicate(pred)) = Self::node_at_path_mut(root, &path)
+        {
+            pred.value = PredicateValue::Single(LiteralValue::Text(text));
+        }
+
+        self.refresh_preview_and_notify(cx);
+    }
+
+    /// Rebuilds `join_input_states` and its subscriptions from the current `join_rows`.
+    ///
+    /// Call after any operation that adds or removes join rows so the InputState
+    /// count matches the row count.
+    pub fn rebuild_join_input_states(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let target_len = self.join_rows.len();
+        let current_len = self.join_input_states.len();
+
+        if current_len == target_len {
+            return;
+        }
+
+        if target_len > current_len {
+            for i in current_len..target_len {
+                let to_table_val = self.join_rows[i].to_table.clone();
+                let on_expr_val = match &self.join_rows[i].on {
+                    JoinOn::RawExpression(expr) => expr.clone(),
+                    JoinOn::FkPath {
+                        from_column,
+                        to_column,
+                    } => {
+                        format!(
+                            "{}.{} = {}.{}",
+                            self.join_rows[i].from_alias,
+                            from_column,
+                            self.join_rows[i].to_alias,
+                            to_column
+                        )
+                    }
+                };
+
+                let to_table_state = cx.new(|cx| {
+                    let mut state = InputState::new(window, cx).placeholder("table");
+                    state.set_value(&to_table_val, window, cx);
+                    state
+                });
+
+                let on_expr_state = cx.new(|cx| {
+                    let mut state = InputState::new(window, cx).placeholder("a.id = b.a_id");
+                    state.set_value(&on_expr_val, window, cx);
+                    state
+                });
+
+                let idx = i;
+                let to_table_sub = cx.subscribe_in(
+                    &to_table_state,
+                    window,
+                    move |this, entity, event: &InputEvent, window, cx| {
+                        if matches!(event, InputEvent::Change) {
+                            let text = entity.read(cx).value().to_string();
+                            if let Some(row) = this.join_rows.get(idx).cloned() {
+                                let updated = JoinRow {
+                                    to_table: text,
+                                    to_alias: row.to_alias.clone(),
+                                    ..row
+                                };
+                                this.update_join(idx, updated, cx);
+                            }
+                            let _ = window;
+                        }
+                    },
+                );
+
+                let on_expr_sub = cx.subscribe_in(
+                    &on_expr_state,
+                    window,
+                    move |this, entity, event: &InputEvent, window, cx| {
+                        if matches!(event, InputEvent::Change) {
+                            let text = entity.read(cx).value().to_string();
+                            if let Some(row) = this.join_rows.get(idx).cloned() {
+                                let updated = JoinRow {
+                                    on: JoinOn::RawExpression(text),
+                                    ..row
+                                };
+                                this.update_join(idx, updated, cx);
+                            }
+                            let _ = window;
+                        }
+                    },
+                );
+
+                self.join_input_states.push((to_table_state, on_expr_state));
+                self._input_subs.push(to_table_sub);
+                self._input_subs.push(on_expr_sub);
+            }
+        } else {
+            self.join_input_states.truncate(target_len);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Private filter tree helpers
+    // -----------------------------------------------------------------------
+
+    fn insert_at_path(root: &mut FilterNode, path: &[usize], node: FilterNode) {
+        if path.is_empty() {
+            if let FilterNode::Group { children, .. } = root {
+                children.push(node);
+            }
+        } else if let FilterNode::Group { children, .. } = root
+            && let Some(child) = children.get_mut(path[0])
+        {
+            Self::insert_at_path(child, &path[1..], node);
+        }
+    }
+
+    fn remove_at_path(root: &mut FilterNode, path: &[usize]) {
+        if path.len() == 1 {
+            if let FilterNode::Group { children, .. } = root
+                && path[0] < children.len()
+            {
+                children.remove(path[0]);
+            }
+        } else if let FilterNode::Group { children, .. } = root
+            && let Some(child) = children.get_mut(path[0])
+        {
+            Self::remove_at_path(child, &path[1..]);
+        }
+    }
+
+    fn node_at_path_mut<'a>(
+        root: &'a mut FilterNode,
+        path: &[usize],
+    ) -> Option<&'a mut FilterNode> {
+        if path.is_empty() {
+            return Some(root);
+        }
+        if let FilterNode::Group { children, .. } = root
+            && let Some(child) = children.get_mut(path[0])
+        {
+            return Self::node_at_path_mut(child, &path[1..]);
+        }
+        None
+    }
+
+    fn next_comparator(current: Comparator) -> Comparator {
+        match current {
+            Comparator::Eq => Comparator::Neq,
+            Comparator::Neq => Comparator::Lt,
+            Comparator::Lt => Comparator::Lte,
+            Comparator::Lte => Comparator::Gt,
+            Comparator::Gt => Comparator::Gte,
+            Comparator::Gte => Comparator::Like,
+            Comparator::Like => Comparator::ILike,
+            Comparator::ILike => Comparator::In,
+            Comparator::In => Comparator::IsNull,
+            Comparator::IsNull => Comparator::IsNotNull,
+            Comparator::IsNotNull => Comparator::Eq,
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Join mutations
     // -----------------------------------------------------------------------
@@ -446,6 +807,7 @@ impl QueryBuilderPanel {
             to_alias: String::new(),
             on: JoinOn::RawExpression(String::new()),
         });
+        self.pending_join_rebuild = true;
         self.rebuild_spec_and_notify(cx);
     }
 
@@ -453,6 +815,7 @@ impl QueryBuilderPanel {
     pub fn remove_join(&mut self, index: usize, cx: &mut Context<Self>) {
         if index < self.join_rows.len() {
             self.join_rows.remove(index);
+            self.pending_join_rebuild = true;
             self.rebuild_spec_and_notify(cx);
         }
     }
@@ -631,6 +994,7 @@ impl QueryBuilderPanel {
 
         let spec = self.current_spec.clone();
         self.sql_preview = (self.generate_preview)(&spec);
+        self.pending_preview_sync = true;
     }
 
     /// Rebuilds `current_spec` from the panel's mutable row data, then updates
@@ -647,6 +1011,7 @@ impl QueryBuilderPanel {
     fn refresh_preview_and_notify(&mut self, cx: &mut Context<Self>) {
         let spec = self.current_spec.clone();
         self.sql_preview = (self.generate_preview)(&spec);
+        self.pending_preview_sync = true;
         cx.emit(BuilderEvent::SpecChanged(Box::new(
             self.current_spec.clone(),
         )));
@@ -782,6 +1147,15 @@ mod tests {
             focus_handle: None,
             sql_preview,
             generate_preview: Box::new(no_op_preview),
+            sql_preview_state: None,
+            pending_preview_sync: false,
+            limit_input_state: None,
+            offset_input_state: None,
+            join_input_states: Vec::new(),
+            _input_subs: Vec::new(),
+            pending_join_rebuild: false,
+            add_column_input_state: None,
+            add_sort_input_state: None,
         }
     }
 
