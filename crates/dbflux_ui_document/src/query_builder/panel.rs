@@ -17,6 +17,10 @@ use uuid::Uuid;
 
 use crate::data_grid_panel::DataGridPanel;
 use crate::query_builder::events::BuilderEvent;
+use crate::query_builder::tree_ops::{
+    collect_filter_predicate_ids, collect_join_predicate_ids, filter_node_at_path_mut,
+    insert_filter_at_path, join_node_at_path_mut, remove_filter_at_path, set_join_predicate_field,
+};
 
 /// Default page limit applied when the builder opens without a prior spec.
 const DEFAULT_LIMIT: u64 = 100;
@@ -265,6 +269,12 @@ pub struct QueryBuilderPanel {
     /// Set to `true` after any filter mutation so the render cycle sweeps stale
     /// entries from `predicate_input_states`.
     pub(crate) pending_filter_input_sweep: bool,
+
+    /// Set to `true` after any mutation that can orphan join-condition node ids
+    /// (remove a join row, remove a node from a join tree, or load a spec that
+    /// replaces `join_rows`) so the render cycle sweeps stale entries from the
+    /// join-condition HashMaps.
+    pub(crate) pending_join_condition_sweep: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -429,6 +439,7 @@ impl QueryBuilderPanel {
             join_cond_op_dropdowns: HashMap::new(),
             available_columns,
             pending_filter_input_sweep: false,
+            pending_join_condition_sweep: false,
         }
     }
 
@@ -500,6 +511,7 @@ impl QueryBuilderPanel {
         self.projection_mode = projection_mode;
         self.projection_rows = projection_rows;
         self.join_rows = join_rows;
+        self.pending_join_condition_sweep = true;
         self.sort_rows = sort_rows;
         self.sql_preview = (self.generate_preview)(&spec);
         self.pending_preview_sync = true;
@@ -616,7 +628,7 @@ impl QueryBuilderPanel {
                 });
             }
             Some(root) => {
-                Self::insert_at_path(root, &parent_path, new_pred);
+                insert_filter_at_path(root, &parent_path, new_pred);
             }
         }
 
@@ -636,7 +648,7 @@ impl QueryBuilderPanel {
                 self.current_spec.filter = Some(new_group);
             }
             Some(root) => {
-                Self::insert_at_path(root, &parent_path, new_group);
+                insert_filter_at_path(root, &parent_path, new_group);
             }
         }
 
@@ -649,22 +661,9 @@ impl QueryBuilderPanel {
     pub fn collect_predicate_node_ids(&self) -> HashSet<u64> {
         let mut ids = HashSet::new();
         if let Some(root) = &self.current_spec.filter {
-            Self::collect_ids_in_node(root, &mut ids);
+            collect_filter_predicate_ids(root, &mut ids);
         }
         ids
-    }
-
-    fn collect_ids_in_node(node: &FilterNode, ids: &mut HashSet<u64>) {
-        match node {
-            FilterNode::Predicate(pred) => {
-                ids.insert(pred.node_id);
-            }
-            FilterNode::Group { children, .. } => {
-                for child in children {
-                    Self::collect_ids_in_node(child, ids);
-                }
-            }
-        }
     }
 
     /// Removes the filter node at `path` from its parent group.
@@ -673,7 +672,7 @@ impl QueryBuilderPanel {
             self.current_spec.filter = None;
         } else {
             if let Some(root) = &mut self.current_spec.filter {
-                Self::remove_at_path(root, &path);
+                remove_filter_at_path(root, &path);
             }
 
             if let Some(FilterNode::Group { children, .. }) = &self.current_spec.filter
@@ -690,7 +689,7 @@ impl QueryBuilderPanel {
     /// Toggles the boolean operator (AND ↔ OR) of the group at `path`.
     pub fn toggle_group_op(&mut self, path: Vec<usize>, cx: &mut Context<Self>) {
         if let Some(root) = &mut self.current_spec.filter
-            && let Some(FilterNode::Group { op, .. }) = Self::node_at_path_mut(root, &path)
+            && let Some(FilterNode::Group { op, .. }) = filter_node_at_path_mut(root, &path)
         {
             *op = match *op {
                 BoolOp::And => BoolOp::Or,
@@ -704,7 +703,7 @@ impl QueryBuilderPanel {
     /// Cycles the comparator of the predicate at `path` through the operator list.
     pub fn cycle_predicate_comparator(&mut self, path: Vec<usize>, cx: &mut Context<Self>) {
         if let Some(root) = &mut self.current_spec.filter
-            && let Some(FilterNode::Predicate(pred)) = Self::node_at_path_mut(root, &path)
+            && let Some(FilterNode::Predicate(pred)) = filter_node_at_path_mut(root, &path)
         {
             pred.comparator = Self::next_comparator(pred.comparator);
         }
@@ -715,7 +714,7 @@ impl QueryBuilderPanel {
     /// Updates the text value of the predicate at `path`.
     pub fn set_predicate_value(&mut self, path: Vec<usize>, text: String, cx: &mut Context<Self>) {
         if let Some(root) = &mut self.current_spec.filter
-            && let Some(FilterNode::Predicate(pred)) = Self::node_at_path_mut(root, &path)
+            && let Some(FilterNode::Predicate(pred)) = filter_node_at_path_mut(root, &path)
         {
             pred.value = PredicateValue::Single(LiteralValue::Text(text));
         }
@@ -797,7 +796,7 @@ impl QueryBuilderPanel {
         cx: &mut Context<Self>,
     ) {
         if let Some(root) = &mut self.current_spec.filter
-            && let Some(FilterNode::Predicate(pred)) = Self::node_at_path_mut(root, &path)
+            && let Some(FilterNode::Predicate(pred)) = filter_node_at_path_mut(root, &path)
         {
             match text.split_once('.') {
                 Some((alias, column)) => {
@@ -859,7 +858,7 @@ impl QueryBuilderPanel {
         cx: &mut Context<Self>,
     ) {
         if let Some(root) = &mut self.current_spec.filter
-            && let Some(FilterNode::Predicate(pred)) = Self::node_at_path_mut(root, &path)
+            && let Some(FilterNode::Predicate(pred)) = filter_node_at_path_mut(root, &path)
         {
             pred.comparator = comparator;
         }
@@ -1053,51 +1052,6 @@ impl QueryBuilderPanel {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Private filter tree helpers
-    // -----------------------------------------------------------------------
-
-    fn insert_at_path(root: &mut FilterNode, path: &[usize], node: FilterNode) {
-        if path.is_empty() {
-            if let FilterNode::Group { children, .. } = root {
-                children.push(node);
-            }
-        } else if let FilterNode::Group { children, .. } = root
-            && let Some(child) = children.get_mut(path[0])
-        {
-            Self::insert_at_path(child, &path[1..], node);
-        }
-    }
-
-    fn remove_at_path(root: &mut FilterNode, path: &[usize]) {
-        if path.len() == 1 {
-            if let FilterNode::Group { children, .. } = root
-                && path[0] < children.len()
-            {
-                children.remove(path[0]);
-            }
-        } else if let FilterNode::Group { children, .. } = root
-            && let Some(child) = children.get_mut(path[0])
-        {
-            Self::remove_at_path(child, &path[1..]);
-        }
-    }
-
-    fn node_at_path_mut<'a>(
-        root: &'a mut FilterNode,
-        path: &[usize],
-    ) -> Option<&'a mut FilterNode> {
-        if path.is_empty() {
-            return Some(root);
-        }
-        if let FilterNode::Group { children, .. } = root
-            && let Some(child) = children.get_mut(path[0])
-        {
-            return Self::node_at_path_mut(child, &path[1..]);
-        }
-        None
-    }
-
     fn next_comparator(current: Comparator) -> Comparator {
         match current {
             Comparator::Eq => Comparator::Neq,
@@ -1165,8 +1119,7 @@ impl QueryBuilderPanel {
         });
         if let Some(row) = self.join_rows.get_mut(join_idx)
             && let JoinOn::Conditions(root) = &mut row.on
-            && let Some(JoinFilterNode::Group { children, .. }) =
-                Self::join_node_at_path_mut(root, &path)
+            && let Some(JoinFilterNode::Group { children, .. }) = join_node_at_path_mut(root, &path)
         {
             children.push(new_pred);
         }
@@ -1193,8 +1146,7 @@ impl QueryBuilderPanel {
         };
         if let Some(row) = self.join_rows.get_mut(join_idx)
             && let JoinOn::Conditions(root) = &mut row.on
-            && let Some(JoinFilterNode::Group { children, .. }) =
-                Self::join_node_at_path_mut(root, &path)
+            && let Some(JoinFilterNode::Group { children, .. }) = join_node_at_path_mut(root, &path)
         {
             children.push(new_group);
         }
@@ -1210,7 +1162,7 @@ impl QueryBuilderPanel {
     ) {
         if let Some(row) = self.join_rows.get_mut(join_idx)
             && let JoinOn::Conditions(root) = &mut row.on
-            && let Some(JoinFilterNode::Group { op, .. }) = Self::join_node_at_path_mut(root, &path)
+            && let Some(JoinFilterNode::Group { op, .. }) = join_node_at_path_mut(root, &path)
         {
             *op = match op {
                 BoolOp::And => BoolOp::Or,
@@ -1231,11 +1183,12 @@ impl QueryBuilderPanel {
         if let Some(row) = self.join_rows.get_mut(join_idx)
             && let JoinOn::Conditions(root) = &mut row.on
             && let Some(JoinFilterNode::Group { children, .. }) =
-                Self::join_node_at_path_mut(root, parent_path)
+                join_node_at_path_mut(root, parent_path)
             && last < children.len()
         {
             children.remove(last);
         }
+        self.pending_join_condition_sweep = true;
         self.rebuild_spec_and_notify(cx);
     }
 
@@ -1246,7 +1199,7 @@ impl QueryBuilderPanel {
         let mut setter = |p: &mut JoinPredicate| p.left = text.clone();
         for row in self.join_rows.iter_mut() {
             if let JoinOn::Conditions(root) = &mut row.on
-                && Self::set_join_predicate_field(root, node_id, &mut setter)
+                && set_join_predicate_field(root, node_id, &mut setter)
             {
                 applied = true;
                 break;
@@ -1263,7 +1216,7 @@ impl QueryBuilderPanel {
         let mut setter = |p: &mut JoinPredicate| p.right = text.clone();
         for row in self.join_rows.iter_mut() {
             if let JoinOn::Conditions(root) = &mut row.on
-                && Self::set_join_predicate_field(root, node_id, &mut setter)
+                && set_join_predicate_field(root, node_id, &mut setter)
             {
                 applied = true;
                 break;
@@ -1280,7 +1233,7 @@ impl QueryBuilderPanel {
         let mut setter = |p: &mut JoinPredicate| p.op = op;
         for row in self.join_rows.iter_mut() {
             if let JoinOn::Conditions(root) = &mut row.on
-                && Self::set_join_predicate_field(root, node_id, &mut setter)
+                && set_join_predicate_field(root, node_id, &mut setter)
             {
                 applied = true;
                 break;
@@ -1288,44 +1241,6 @@ impl QueryBuilderPanel {
         }
         if applied {
             self.refresh_preview_and_notify(cx);
-        }
-    }
-
-    fn join_node_at_path_mut<'a>(
-        root: &'a mut JoinFilterNode,
-        path: &[usize],
-    ) -> Option<&'a mut JoinFilterNode> {
-        let mut cur = root;
-        for &ix in path {
-            match cur {
-                JoinFilterNode::Group { children, .. } => {
-                    cur = children.get_mut(ix)?;
-                }
-                _ => return None,
-            }
-        }
-        Some(cur)
-    }
-
-    fn set_join_predicate_field(
-        node: &mut JoinFilterNode,
-        target: u64,
-        f: &mut dyn FnMut(&mut JoinPredicate),
-    ) -> bool {
-        match node {
-            JoinFilterNode::Predicate(p) if p.node_id == target => {
-                f(p);
-                true
-            }
-            JoinFilterNode::Group { children, .. } => {
-                for child in children.iter_mut() {
-                    if Self::set_join_predicate_field(child, target, f) {
-                        return true;
-                    }
-                }
-                false
-            }
-            _ => false,
         }
     }
 
@@ -1417,7 +1332,7 @@ impl QueryBuilderPanel {
         let mut live: HashSet<u64> = HashSet::new();
         for row in &self.join_rows {
             if let JoinOn::Conditions(root) = &row.on {
-                Self::collect_join_predicate_ids(root, &mut live);
+                collect_join_predicate_ids(root, &mut live);
             }
         }
         self.join_cond_left_inputs.retain(|id, _| live.contains(id));
@@ -1427,24 +1342,12 @@ impl QueryBuilderPanel {
             .retain(|id, _| live.contains(id));
     }
 
-    fn collect_join_predicate_ids(node: &JoinFilterNode, acc: &mut HashSet<u64>) {
-        match node {
-            JoinFilterNode::Predicate(p) => {
-                acc.insert(p.node_id);
-            }
-            JoinFilterNode::Group { children, .. } => {
-                for child in children {
-                    Self::collect_join_predicate_ids(child, acc);
-                }
-            }
-        }
-    }
-
     /// Removes a join row by its index.
     pub fn remove_join(&mut self, index: usize, cx: &mut Context<Self>) {
         if index < self.join_rows.len() {
             self.join_rows.remove(index);
             self.pending_join_rebuild = true;
+            self.pending_join_condition_sweep = true;
             self.rebuild_spec_and_notify(cx);
         }
     }
@@ -1864,6 +1767,7 @@ mod tests {
             join_cond_op_dropdowns: HashMap::new(),
             available_columns: Vec::new(),
             pending_filter_input_sweep: false,
+            pending_join_condition_sweep: false,
         }
     }
 
@@ -2420,7 +2324,7 @@ mod tests {
                 });
             }
             Some(root) => {
-                QueryBuilderPanel::insert_at_path(root, &parent_path, new_pred);
+                insert_filter_at_path(root, &parent_path, new_pred);
             }
         }
         panel.pending_filter_input_sweep = true;
@@ -2451,9 +2355,7 @@ mod tests {
 
         // Update value at path [0] (email predicate).
         if let Some(root) = &mut panel.current_spec.filter {
-            if let Some(FilterNode::Predicate(pred)) =
-                QueryBuilderPanel::node_at_path_mut(root, &[0])
-            {
+            if let Some(FilterNode::Predicate(pred)) = filter_node_at_path_mut(root, &[0]) {
                 pred.value = PredicateValue::Single(LiteralValue::Text("%foo%".to_string()));
             }
         }
@@ -2515,7 +2417,7 @@ mod tests {
 
         // Remove the first predicate (index 0).
         if let Some(root) = &mut panel.current_spec.filter {
-            QueryBuilderPanel::remove_at_path(root, &[0]);
+            remove_filter_at_path(root, &[0]);
         }
         panel.rebuild_spec_pure();
 

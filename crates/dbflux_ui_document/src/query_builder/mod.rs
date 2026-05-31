@@ -1,6 +1,7 @@
 mod events;
 mod panel;
 mod sections;
+mod tree_ops;
 mod view;
 
 pub use events::BuilderEvent;

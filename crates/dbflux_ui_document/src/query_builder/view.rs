@@ -42,7 +42,11 @@ pub fn render_panel(
 
     ensure_predicate_inputs(panel, window, cx);
     ensure_join_condition_inputs(panel, window, cx);
-    panel.sweep_stale_join_condition_state();
+
+    if panel.pending_join_condition_sweep {
+        panel.pending_join_condition_sweep = false;
+        panel.sweep_stale_join_condition_state();
+    }
 
     let theme = cx.theme().clone();
 

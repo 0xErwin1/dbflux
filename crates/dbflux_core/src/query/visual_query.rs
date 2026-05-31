@@ -135,6 +135,16 @@ pub enum JoinOn {
         to_column: String,
     },
     /// Free-text expression (FK metadata unavailable or user typed raw).
+    ///
+    /// Trust boundary: the string is emitted verbatim into generated SQL —
+    /// the generator does not quote, escape, or validate it. The field exists
+    /// so power users can express joins involving function calls, casts, or
+    /// vendor-specific operators the structured `Conditions` variant cannot
+    /// model. Any non-interactive code path that forwards a `VisualQuerySpec`
+    /// to execution must treat this variant as user-controlled SQL and either
+    /// reject specs that contain it or validate it against the caller's
+    /// trust model. The interactive builder is safe because the generated
+    /// SQL lands in the editor for the user to review before running.
     RawExpression(String),
     /// Structured tree of conditions with AND/OR groups and nested sub-groups.
     /// The root is always a `JoinFilterNode::Group`; leaves are `JoinPredicate`s.
