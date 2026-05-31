@@ -419,6 +419,19 @@ struct SqlSelectBuilder<'a> {
     dialect: &'a dyn SqlDialect,
 }
 
+/// Walks a `JoinFilterNode` tree and returns `true` if at least one leaf
+/// `JoinPredicate` has non-empty `left` and `right` sides. Used by the
+/// generator to skip joins whose ON clause would render empty.
+fn join_node_has_complete_predicate(node: &crate::query::visual_query::JoinFilterNode) -> bool {
+    use crate::query::visual_query::JoinFilterNode;
+    match node {
+        JoinFilterNode::Predicate(p) => !p.left.trim().is_empty() && !p.right.trim().is_empty(),
+        JoinFilterNode::Group { children, .. } => {
+            children.iter().any(join_node_has_complete_predicate)
+        }
+    }
+}
+
 impl<'a> SqlSelectBuilder<'a> {
     fn new(dialect: &'a dyn SqlDialect) -> Self {
         Self { dialect }
@@ -516,9 +529,7 @@ impl<'a> SqlSelectBuilder<'a> {
                 // For structured Conditions, require at least one fully
                 // populated predicate so we never emit `ON ` with nothing.
                 match &j.on {
-                    JoinOn::Conditions { predicates, .. } => predicates
-                        .iter()
-                        .any(|p| !p.left.trim().is_empty() && !p.right.trim().is_empty()),
+                    JoinOn::Conditions(root) => join_node_has_complete_predicate(root),
                     JoinOn::RawExpression(expr) => !expr.trim().is_empty(),
                     JoinOn::FkPath { .. } => true,
                 }
@@ -548,9 +559,7 @@ impl<'a> SqlSelectBuilder<'a> {
                         self.dialect.quote_identifier(to_column),
                     ),
                     JoinOn::RawExpression(expr) => expr.clone(),
-                    JoinOn::Conditions { op, predicates } => {
-                        self.render_join_conditions(*op, predicates)
-                    }
+                    JoinOn::Conditions(root) => self.render_join_filter_node(root, true),
                 };
 
                 format!("{} {} AS {} ON {}", kind_sql, table_ref, alias, on_expr)
@@ -567,17 +576,25 @@ impl<'a> SqlSelectBuilder<'a> {
     /// of identifiers is intentionally skipped because each side may contain
     /// function calls, casts, or constants, and the dialect-quoting helper
     /// only handles bare identifiers.
-    fn render_join_conditions(
+    /// Recursively renders a `JoinFilterNode` tree as SQL.
+    ///
+    /// Groups emit their children joined by AND / OR. Non-root groups are
+    /// always parenthesised so precedence stays explicit; the root only
+    /// gets parens when it would otherwise leak its operator into the
+    /// surrounding clause. Incomplete predicates (missing left or right)
+    /// are skipped so partially-edited rows do not break the preview.
+    fn render_join_filter_node(
         &self,
-        op: crate::query::visual_query::BoolOp,
-        preds: &[crate::query::visual_query::JoinPredicate],
+        node: &crate::query::visual_query::JoinFilterNode,
+        is_root: bool,
     ) -> String {
-        use crate::query::visual_query::{BoolOp, Comparator};
+        use crate::query::visual_query::{BoolOp, Comparator, JoinFilterNode};
 
-        let parts: Vec<String> = preds
-            .iter()
-            .filter(|p| !p.left.trim().is_empty() && !p.right.trim().is_empty())
-            .map(|p| {
+        match node {
+            JoinFilterNode::Predicate(p) => {
+                if p.left.trim().is_empty() || p.right.trim().is_empty() {
+                    return String::new();
+                }
                 let cmp = match p.op {
                     Comparator::Eq => "=",
                     Comparator::Neq => "<>",
@@ -592,20 +609,35 @@ impl<'a> SqlSelectBuilder<'a> {
                     Comparator::IsNotNull => "IS NOT NULL",
                 };
                 format!("{} {} {}", p.left.trim(), cmp, p.right.trim())
-            })
-            .collect();
+            }
+            JoinFilterNode::Group { op, children, .. } => {
+                let parts: Vec<String> = children
+                    .iter()
+                    .map(|c| self.render_join_filter_node(c, false))
+                    .filter(|s| !s.is_empty())
+                    .collect();
 
-        let sep = match op {
-            BoolOp::And => " AND ",
-            BoolOp::Or => " OR ",
-        };
+                if parts.is_empty() {
+                    return String::new();
+                }
+                if parts.len() == 1 {
+                    return parts.into_iter().next().unwrap();
+                }
 
-        // Parenthesise OR groups so the connector binds correctly when
-        // multiple joins are emitted in the same FROM clause.
-        if parts.len() > 1 && matches!(op, BoolOp::Or) {
-            format!("({})", parts.join(sep))
-        } else {
-            parts.join(sep)
+                let sep = match op {
+                    BoolOp::And => " AND ",
+                    BoolOp::Or => " OR ",
+                };
+                let joined = parts.join(sep);
+
+                if is_root && matches!(op, BoolOp::And) {
+                    // Top-level AND can live unparenthesised since the
+                    // surrounding ON expects the same conjunction.
+                    joined
+                } else {
+                    format!("({joined})")
+                }
+            }
         }
     }
 

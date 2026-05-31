@@ -411,28 +411,37 @@ fn ensure_in_node(
     }
 }
 
-/// Walks `panel.current_spec.joins` and ensures inputs/dropdowns exist for
-/// every `JoinOn::Conditions` entry.
+/// Walks every join's condition tree and ensures inputs/dropdowns exist for
+/// each `JoinPredicate` leaf, regardless of nesting depth.
 fn ensure_join_condition_inputs(
     panel: &mut QueryBuilderPanel,
     window: &mut Window,
     cx: &mut Context<QueryBuilderPanel>,
 ) {
-    use dbflux_core::JoinOn;
+    use dbflux_core::{JoinFilterNode, JoinOn};
 
-    let snapshot: Vec<(u64, String, String, dbflux_core::Comparator)> = panel
-        .current_spec
-        .joins
-        .iter()
-        .flat_map(|j| match &j.on {
-            JoinOn::Conditions { predicates, .. } => predicates
-                .iter()
-                .map(|p| (p.node_id, p.left.clone(), p.right.clone(), p.op))
-                .collect::<Vec<_>>()
-                .into_iter(),
-            _ => Vec::new().into_iter(),
-        })
-        .collect();
+    fn collect(
+        node: &JoinFilterNode,
+        acc: &mut Vec<(u64, String, String, dbflux_core::Comparator)>,
+    ) {
+        match node {
+            JoinFilterNode::Predicate(p) => {
+                acc.push((p.node_id, p.left.clone(), p.right.clone(), p.op));
+            }
+            JoinFilterNode::Group { children, .. } => {
+                for child in children {
+                    collect(child, acc);
+                }
+            }
+        }
+    }
+
+    let mut snapshot = Vec::new();
+    for join in &panel.current_spec.joins {
+        if let JoinOn::Conditions(root) = &join.on {
+            collect(root, &mut snapshot);
+        }
+    }
 
     for (node_id, left, right, op) in snapshot {
         panel.ensure_join_condition_state(node_id, &left, &right, op, window, cx);

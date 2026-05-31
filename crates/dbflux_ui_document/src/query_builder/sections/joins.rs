@@ -1,6 +1,9 @@
-use gpui::{Context, IntoElement, div};
+use std::collections::HashMap;
+
+use gpui::{AnyElement, Context, Entity, IntoElement, SharedString, div};
 
 use crate::query_builder::panel::{FkLoadState, QueryBuilderPanel};
+use dbflux_components::controls::{Dropdown, InputState};
 
 /// Renders the Joins section of the Query Builder.
 ///
@@ -123,117 +126,18 @@ pub fn render_joins(
 
         // ON body — switches on JoinOn variant.
         match &row.on {
-            JoinOn::Conditions { op, predicates } => {
-                let connector_label = match op {
-                    dbflux_core::BoolOp::And => "AND",
-                    dbflux_core::BoolOp::Or => "OR",
-                };
-                let row_idx_for_toggle = i;
-                // Toggle pill that swaps AND ↔ OR for the whole conditions block.
-                join_block = join_block.child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap_1()
-                        .pl_2()
-                        .child(
-                            Button::new(("qb-join-cond-op-toggle", i), connector_label)
-                                .ghost()
-                                .small()
-                                .on_click(cx.listener(move |this, _event, _window, cx| {
-                                    this.toggle_join_conditions_op(row_idx_for_toggle, cx);
-                                })),
-                        )
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(SharedString::from(match op {
-                                    dbflux_core::BoolOp::And => "all conditions match",
-                                    dbflux_core::BoolOp::Or => "any condition matches",
-                                })),
-                        ),
+            JoinOn::Conditions(root) => {
+                let tree = render_join_tree(
+                    i,
+                    root,
+                    vec![],
+                    true,
+                    &cond_lefts,
+                    &cond_rights,
+                    &cond_ops,
+                    cx,
                 );
-
-                for (cond_ix, pred) in predicates.iter().enumerate() {
-                    let id = pred.node_id;
-                    let left = cond_lefts.get(&id).cloned();
-                    let right = cond_rights.get(&id).cloned();
-                    let op_dd = cond_ops.get(&id).cloned();
-
-                    let prefix = if cond_ix == 0 { "ON" } else { connector_label };
-                    let mut cond_row = div().flex().flex_row().gap_1().items_center().pl_2().child(
-                        div()
-                            .w(gpui::px(32.0))
-                            .flex_shrink_0()
-                            .text_sm()
-                            .child(SharedString::from(prefix)),
-                    );
-
-                    if let Some(state) = left {
-                        cond_row = cond_row.child(
-                            div().flex_1().min_w(gpui::px(0.0)).child(
-                                Input::new(&state)
-                                    .small()
-                                    .w_full()
-                                    .placeholder("alias.column"),
-                            ),
-                        );
-                    }
-
-                    if let Some(dd) = op_dd {
-                        use dbflux_components::tokens::{Heights, Radii};
-                        use gpui_component::ActiveTheme;
-                        let theme = cx.theme();
-                        cond_row = cond_row.child(
-                            div()
-                                .w(gpui::px(76.0))
-                                .h(Heights::BUTTON)
-                                .flex_shrink_0()
-                                .rounded(Radii::SM)
-                                .border_1()
-                                .border_color(theme.input)
-                                .bg(theme.background)
-                                .child(dd),
-                        );
-                    }
-
-                    if let Some(state) = right {
-                        cond_row = cond_row.child(
-                            div().flex_1().min_w(gpui::px(0.0)).child(
-                                Input::new(&state)
-                                    .small()
-                                    .w_full()
-                                    .placeholder("alias.column"),
-                            ),
-                        );
-                    }
-
-                    let node_id_for_rm = id;
-                    cond_row = cond_row.child(
-                        Button::new(("qb-rm-cond", id as usize), "✕")
-                            .ghost()
-                            .small()
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.remove_join_condition(node_id_for_rm, cx);
-                            })),
-                    );
-
-                    join_block = join_block.child(cond_row);
-                }
-
-                let row_idx = i;
-                join_block = join_block.child(
-                    div().flex().flex_row().pl_2().child(
-                        Button::new(("qb-add-cond", i), "+ Condition")
-                            .ghost()
-                            .small()
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.add_join_condition(row_idx, cx);
-                            })),
-                    ),
-                );
+                join_block = join_block.child(tree);
             }
 
             JoinOn::FkPath {
@@ -289,4 +193,177 @@ pub fn render_joins(
     );
 
     container
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_join_tree(
+    join_idx: usize,
+    node: &dbflux_core::JoinFilterNode,
+    path: Vec<usize>,
+    is_root: bool,
+    cond_lefts: &HashMap<u64, Entity<InputState>>,
+    cond_rights: &HashMap<u64, Entity<InputState>>,
+    cond_ops: &HashMap<u64, Entity<Dropdown>>,
+    cx: &mut Context<QueryBuilderPanel>,
+) -> AnyElement {
+    use dbflux_components::controls::{Button, Input};
+    use dbflux_components::tokens::{Heights, Radii};
+    use dbflux_core::{BoolOp, JoinFilterNode};
+    use gpui::prelude::*;
+    use gpui_component::ActiveTheme;
+
+    match node {
+        JoinFilterNode::Predicate(pred) => {
+            let id = pred.node_id;
+            let left = cond_lefts.get(&id).cloned();
+            let right = cond_rights.get(&id).cloned();
+            let op_dd = cond_ops.get(&id).cloned();
+            let path_for_rm = path.clone();
+
+            let mut row = div().flex().flex_row().gap_1().items_center().pl_2();
+
+            if let Some(state) = left {
+                row = row.child(
+                    div().flex_1().min_w(gpui::px(0.0)).child(
+                        Input::new(&state)
+                            .small()
+                            .w_full()
+                            .placeholder("alias.column"),
+                    ),
+                );
+            }
+
+            if let Some(dd) = op_dd {
+                let theme = cx.theme();
+                row = row.child(
+                    div()
+                        .w(gpui::px(76.0))
+                        .h(Heights::BUTTON)
+                        .flex_shrink_0()
+                        .rounded(Radii::SM)
+                        .border_1()
+                        .border_color(theme.input)
+                        .bg(theme.background)
+                        .child(dd),
+                );
+            }
+
+            if let Some(state) = right {
+                row = row.child(
+                    div().flex_1().min_w(gpui::px(0.0)).child(
+                        Input::new(&state)
+                            .small()
+                            .w_full()
+                            .placeholder("alias.column"),
+                    ),
+                );
+            }
+
+            row.child(
+                Button::new(("qb-rm-join-node", id as usize), "✕")
+                    .ghost()
+                    .small()
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.remove_join_node(join_idx, path_for_rm.clone(), cx);
+                    })),
+            )
+            .into_any_element()
+        }
+
+        JoinFilterNode::Group { op, children, .. } => {
+            let op_label = match op {
+                BoolOp::And => "AND",
+                BoolOp::Or => "OR",
+            };
+
+            let path_for_toggle = path.clone();
+            let path_for_add_pred = path.clone();
+            let path_for_add_grp = path.clone();
+            let path_for_rm = path.clone();
+
+            let mut group = div().flex().flex_col().gap_1().when(!is_root, |this| {
+                this.pl_2().border_l_1().border_color(cx.theme().input)
+            });
+
+            // Header row: AND/OR toggle + add buttons + (× when not root).
+            let mut header = div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .child(
+                    Button::new(
+                        node_id_seed("qb-join-grp-op", join_idx, &path_for_toggle),
+                        op_label,
+                    )
+                    .ghost()
+                    .small()
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.toggle_join_group_op(join_idx, path_for_toggle.clone(), cx);
+                    })),
+                )
+                .child(
+                    Button::new(
+                        node_id_seed("qb-join-grp-add-cond", join_idx, &path_for_add_pred),
+                        "+ Condition",
+                    )
+                    .ghost()
+                    .small()
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.add_join_condition(join_idx, path_for_add_pred.clone(), cx);
+                    })),
+                )
+                .child(
+                    Button::new(
+                        node_id_seed("qb-join-grp-add-grp", join_idx, &path_for_add_grp),
+                        "+ Sub-group",
+                    )
+                    .ghost()
+                    .small()
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.add_join_subgroup(join_idx, path_for_add_grp.clone(), cx);
+                    })),
+                );
+
+            if !is_root {
+                header = header.child(
+                    Button::new(node_id_seed("qb-join-grp-rm", join_idx, &path_for_rm), "✕")
+                        .ghost()
+                        .small()
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.remove_join_node(join_idx, path_for_rm.clone(), cx);
+                        })),
+                );
+            }
+
+            group = group.child(header);
+
+            for (ix, child) in children.iter().enumerate() {
+                let mut child_path = path.clone();
+                child_path.push(ix);
+                let child_el = render_join_tree(
+                    join_idx,
+                    child,
+                    child_path,
+                    false,
+                    cond_lefts,
+                    cond_rights,
+                    cond_ops,
+                    cx,
+                );
+                group = group.child(child_el);
+            }
+
+            group.into_any_element()
+        }
+    }
+}
+
+fn node_id_seed(prefix: &str, join_idx: usize, path: &[usize]) -> gpui::ElementId {
+    let key: String = std::iter::once(prefix.to_string())
+        .chain(std::iter::once(join_idx.to_string()))
+        .chain(path.iter().map(|i| i.to_string()))
+        .collect::<Vec<_>>()
+        .join("-");
+    gpui::ElementId::Name(SharedString::from(key))
 }

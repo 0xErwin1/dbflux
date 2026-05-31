@@ -38,7 +38,7 @@ pub use types::{
 };
 pub use visual_query::SortDirection as VisualSortDirection;
 pub use visual_query::{
-    AliasOrigin, BoolOp, Comparator, FilterNode, JoinKind, JoinOn, JoinPredicate, JoinStep,
-    LiteralValue, Predicate, PredicateValue, ProjectedColumn, Projection, SortEntry, SourceTable,
-    SpecError, VisualQuerySpec,
+    AliasOrigin, BoolOp, Comparator, FilterNode, JoinFilterNode, JoinKind, JoinOn, JoinPredicate,
+    JoinStep, LiteralValue, Predicate, PredicateValue, ProjectedColumn, Projection, SortEntry,
+    SourceTable, SpecError, VisualQuerySpec,
 };

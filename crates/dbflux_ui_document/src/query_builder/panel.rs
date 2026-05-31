@@ -4,9 +4,10 @@ use dbflux_components::controls::{
     Dropdown, DropdownItem, DropdownSelectionChanged, InputEvent, InputState,
 };
 use dbflux_core::{
-    BoolOp, ColumnKind, Comparator, FilterNode, JoinKind, JoinOn, JoinPredicate, JoinStep,
-    LiteralValue, Predicate, PredicateValue, ProjectedColumn, Projection, SchemaForeignKeyInfo,
-    SelectQuery, SortEntry, SourceTable, VisualQuerySpec, VisualSortDirection,
+    BoolOp, ColumnKind, Comparator, FilterNode, JoinFilterNode, JoinKind, JoinOn, JoinPredicate,
+    JoinStep, LiteralValue, Predicate, PredicateValue, ProjectedColumn, Projection,
+    SchemaForeignKeyInfo, SelectQuery, SortEntry, SourceTable, VisualQuerySpec,
+    VisualSortDirection,
 };
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Render, Subscription, WeakEntity,
@@ -321,7 +322,7 @@ impl QueryBuilderPanel {
                 from_alias: j.from_alias.clone(),
                 from_column: match &j.on {
                     JoinOn::FkPath { from_column, .. } => from_column.clone(),
-                    JoinOn::RawExpression(_) | JoinOn::Conditions { .. } => String::new(),
+                    JoinOn::RawExpression(_) | JoinOn::Conditions(_) => String::new(),
                 },
                 to_schema: j.to_schema.clone(),
                 to_table: j.to_table.clone(),
@@ -473,7 +474,7 @@ impl QueryBuilderPanel {
                 from_alias: j.from_alias.clone(),
                 from_column: match &j.on {
                     JoinOn::FkPath { from_column, .. } => from_column.clone(),
-                    JoinOn::RawExpression(_) | JoinOn::Conditions { .. } => String::new(),
+                    JoinOn::RawExpression(_) | JoinOn::Conditions(_) => String::new(),
                 },
                 to_schema: j.to_schema.clone(),
                 to_table: j.to_table.clone(),
@@ -952,7 +953,7 @@ impl QueryBuilderPanel {
                     // Conditions are edited via dedicated per-predicate inputs
                     // rather than a single raw textbox, so the raw input is
                     // initialised empty when the row uses structured mode.
-                    JoinOn::Conditions { .. } => String::new(),
+                    JoinOn::Conditions(_) => String::new(),
                 };
 
                 let to_table_state = cx.new(|cx| {
@@ -1109,10 +1110,12 @@ impl QueryBuilderPanel {
     // Join mutations
     // -----------------------------------------------------------------------
 
-    /// Appends a new join row defaulting to a single empty structured condition.
+    /// Appends a new join row defaulting to a single empty condition under an AND root.
     pub fn add_join(&mut self, from_alias: &str, cx: &mut Context<Self>) {
         self.next_node_id += 1;
-        let first_cond = JoinPredicate {
+        let root_id = self.next_node_id;
+        self.next_node_id += 1;
+        let first_pred = JoinPredicate {
             node_id: self.next_node_id,
             left: String::new(),
             op: Comparator::Eq,
@@ -1125,42 +1128,81 @@ impl QueryBuilderPanel {
             to_schema: None,
             to_table: String::new(),
             to_alias: String::new(),
-            on: JoinOn::Conditions {
+            on: JoinOn::Conditions(JoinFilterNode::Group {
+                node_id: root_id,
                 op: BoolOp::And,
-                predicates: vec![first_cond],
-            },
+                children: vec![JoinFilterNode::Predicate(first_pred)],
+            }),
         });
         self.pending_join_rebuild = true;
         self.rebuild_spec_and_notify(cx);
     }
 
-    /// Appends a new empty condition to the join at `join_idx`.
-    pub fn add_join_condition(&mut self, join_idx: usize, cx: &mut Context<Self>) {
-        if let Some(row) = self.join_rows.get_mut(join_idx) {
+    /// Appends a new empty `JoinPredicate` at `path` inside the join tree at `join_idx`.
+    pub fn add_join_condition(
+        &mut self,
+        join_idx: usize,
+        path: Vec<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        let new_id = {
             self.next_node_id += 1;
-            let new_pred = JoinPredicate {
-                node_id: self.next_node_id,
+            self.next_node_id
+        };
+        let new_pred = JoinFilterNode::Predicate(JoinPredicate {
+            node_id: new_id,
+            left: String::new(),
+            op: Comparator::Eq,
+            right: String::new(),
+        });
+        if let Some(row) = self.join_rows.get_mut(join_idx)
+            && let JoinOn::Conditions(root) = &mut row.on
+            && let Some(JoinFilterNode::Group { children, .. }) =
+                Self::join_node_at_path_mut(root, &path)
+        {
+            children.push(new_pred);
+        }
+        self.rebuild_spec_and_notify(cx);
+    }
+
+    /// Appends a new empty AND sub-group at `path` inside the join tree at `join_idx`.
+    pub fn add_join_subgroup(&mut self, join_idx: usize, path: Vec<usize>, cx: &mut Context<Self>) {
+        let (group_id, pred_id) = {
+            self.next_node_id += 1;
+            let g = self.next_node_id;
+            self.next_node_id += 1;
+            (g, self.next_node_id)
+        };
+        let new_group = JoinFilterNode::Group {
+            node_id: group_id,
+            op: BoolOp::Or,
+            children: vec![JoinFilterNode::Predicate(JoinPredicate {
+                node_id: pred_id,
                 left: String::new(),
                 op: Comparator::Eq,
                 right: String::new(),
-            };
-            match &mut row.on {
-                JoinOn::Conditions { predicates, .. } => predicates.push(new_pred),
-                _ => {
-                    row.on = JoinOn::Conditions {
-                        op: BoolOp::And,
-                        predicates: vec![new_pred],
-                    }
-                }
-            }
-            self.rebuild_spec_and_notify(cx);
+            })],
+        };
+        if let Some(row) = self.join_rows.get_mut(join_idx)
+            && let JoinOn::Conditions(root) = &mut row.on
+            && let Some(JoinFilterNode::Group { children, .. }) =
+                Self::join_node_at_path_mut(root, &path)
+        {
+            children.push(new_group);
         }
+        self.rebuild_spec_and_notify(cx);
     }
 
-    /// Toggles AND ↔ OR for the join at `join_idx`.
-    pub fn toggle_join_conditions_op(&mut self, join_idx: usize, cx: &mut Context<Self>) {
+    /// Toggles AND ↔ OR for the group at `path` inside join `join_idx`.
+    pub fn toggle_join_group_op(
+        &mut self,
+        join_idx: usize,
+        path: Vec<usize>,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(row) = self.join_rows.get_mut(join_idx)
-            && let JoinOn::Conditions { op, .. } = &mut row.on
+            && let JoinOn::Conditions(root) = &mut row.on
+            && let Some(JoinFilterNode::Group { op, .. }) = Self::join_node_at_path_mut(root, &path)
         {
             *op = match op {
                 BoolOp::And => BoolOp::Or,
@@ -1170,52 +1212,112 @@ impl QueryBuilderPanel {
         }
     }
 
-    /// Removes the condition with `node_id` from any join.
-    pub fn remove_join_condition(&mut self, node_id: u64, cx: &mut Context<Self>) {
-        for row in self.join_rows.iter_mut() {
-            if let JoinOn::Conditions { predicates, .. } = &mut row.on {
-                predicates.retain(|p| p.node_id != node_id);
-            }
+    /// Removes the node at `path` from join `join_idx`. Root is never removed
+    /// (the join still owns a Conditions root); call `remove_join` to drop the
+    /// whole row.
+    pub fn remove_join_node(&mut self, join_idx: usize, path: Vec<usize>, cx: &mut Context<Self>) {
+        if path.is_empty() {
+            return;
+        }
+        let (parent_path, last) = (&path[..path.len() - 1], path[path.len() - 1]);
+        if let Some(row) = self.join_rows.get_mut(join_idx)
+            && let JoinOn::Conditions(root) = &mut row.on
+            && let Some(JoinFilterNode::Group { children, .. }) =
+                Self::join_node_at_path_mut(root, parent_path)
+            && last < children.len()
+        {
+            children.remove(last);
         }
         self.rebuild_spec_and_notify(cx);
     }
 
-    /// Updates the left side of the condition identified by `node_id`.
+    /// Updates the left side of the predicate identified by `node_id` anywhere
+    /// in any join tree.
     pub fn set_join_condition_left(&mut self, node_id: u64, text: String, cx: &mut Context<Self>) {
+        let mut applied = false;
+        let mut setter = |p: &mut JoinPredicate| p.left = text.clone();
         for row in self.join_rows.iter_mut() {
-            if let JoinOn::Conditions { predicates, .. } = &mut row.on
-                && let Some(p) = predicates.iter_mut().find(|p| p.node_id == node_id)
+            if let JoinOn::Conditions(root) = &mut row.on
+                && Self::set_join_predicate_field(root, node_id, &mut setter)
             {
-                p.left = text;
-                self.refresh_preview_and_notify(cx);
-                return;
+                applied = true;
+                break;
             }
+        }
+        if applied {
+            self.refresh_preview_and_notify(cx);
         }
     }
 
-    /// Updates the right side of the condition identified by `node_id`.
+    /// Updates the right side of the predicate identified by `node_id`.
     pub fn set_join_condition_right(&mut self, node_id: u64, text: String, cx: &mut Context<Self>) {
+        let mut applied = false;
+        let mut setter = |p: &mut JoinPredicate| p.right = text.clone();
         for row in self.join_rows.iter_mut() {
-            if let JoinOn::Conditions { predicates, .. } = &mut row.on
-                && let Some(p) = predicates.iter_mut().find(|p| p.node_id == node_id)
+            if let JoinOn::Conditions(root) = &mut row.on
+                && Self::set_join_predicate_field(root, node_id, &mut setter)
             {
-                p.right = text;
-                self.refresh_preview_and_notify(cx);
-                return;
+                applied = true;
+                break;
             }
+        }
+        if applied {
+            self.refresh_preview_and_notify(cx);
         }
     }
 
-    /// Updates the comparator of the condition identified by `node_id`.
+    /// Updates the comparator of the predicate identified by `node_id`.
     pub fn set_join_condition_op(&mut self, node_id: u64, op: Comparator, cx: &mut Context<Self>) {
+        let mut applied = false;
+        let mut setter = |p: &mut JoinPredicate| p.op = op;
         for row in self.join_rows.iter_mut() {
-            if let JoinOn::Conditions { predicates, .. } = &mut row.on
-                && let Some(p) = predicates.iter_mut().find(|p| p.node_id == node_id)
+            if let JoinOn::Conditions(root) = &mut row.on
+                && Self::set_join_predicate_field(root, node_id, &mut setter)
             {
-                p.op = op;
-                self.refresh_preview_and_notify(cx);
-                return;
+                applied = true;
+                break;
             }
+        }
+        if applied {
+            self.refresh_preview_and_notify(cx);
+        }
+    }
+
+    fn join_node_at_path_mut<'a>(
+        root: &'a mut JoinFilterNode,
+        path: &[usize],
+    ) -> Option<&'a mut JoinFilterNode> {
+        let mut cur = root;
+        for &ix in path {
+            match cur {
+                JoinFilterNode::Group { children, .. } => {
+                    cur = children.get_mut(ix)?;
+                }
+                _ => return None,
+            }
+        }
+        Some(cur)
+    }
+
+    fn set_join_predicate_field(
+        node: &mut JoinFilterNode,
+        target: u64,
+        f: &mut dyn FnMut(&mut JoinPredicate),
+    ) -> bool {
+        match node {
+            JoinFilterNode::Predicate(p) if p.node_id == target => {
+                f(p);
+                true
+            }
+            JoinFilterNode::Group { children, .. } => {
+                for child in children.iter_mut() {
+                    if Self::set_join_predicate_field(child, target, f) {
+                        return true;
+                    }
+                }
+                false
+            }
+            _ => false,
         }
     }
 
@@ -1302,25 +1404,32 @@ impl QueryBuilderPanel {
         }
     }
 
-    /// Sweeps stale join-condition state when conditions are removed.
+    /// Sweeps stale join-condition state when nodes are removed from any tree.
     pub fn sweep_stale_join_condition_state(&mut self) {
-        let live: HashSet<u64> = self
-            .join_rows
-            .iter()
-            .flat_map(|row| match &row.on {
-                JoinOn::Conditions { predicates, .. } => predicates
-                    .iter()
-                    .map(|p| p.node_id)
-                    .collect::<Vec<_>>()
-                    .into_iter(),
-                _ => Vec::new().into_iter(),
-            })
-            .collect();
+        let mut live: HashSet<u64> = HashSet::new();
+        for row in &self.join_rows {
+            if let JoinOn::Conditions(root) = &row.on {
+                Self::collect_join_predicate_ids(root, &mut live);
+            }
+        }
         self.join_cond_left_inputs.retain(|id, _| live.contains(id));
         self.join_cond_right_inputs
             .retain(|id, _| live.contains(id));
         self.join_cond_op_dropdowns
             .retain(|id, _| live.contains(id));
+    }
+
+    fn collect_join_predicate_ids(node: &JoinFilterNode, acc: &mut HashSet<u64>) {
+        match node {
+            JoinFilterNode::Predicate(p) => {
+                acc.insert(p.node_id);
+            }
+            JoinFilterNode::Group { children, .. } => {
+                for child in children {
+                    Self::collect_join_predicate_ids(child, acc);
+                }
+            }
+        }
     }
 
     /// Removes a join row by its index.
@@ -1688,7 +1797,7 @@ mod tests {
                 from_alias: j.from_alias.clone(),
                 from_column: match &j.on {
                     JoinOn::FkPath { from_column, .. } => from_column.clone(),
-                    JoinOn::RawExpression(_) | JoinOn::Conditions { .. } => String::new(),
+                    JoinOn::RawExpression(_) | JoinOn::Conditions(_) => String::new(),
                 },
                 to_schema: j.to_schema.clone(),
                 to_table: j.to_table.clone(),

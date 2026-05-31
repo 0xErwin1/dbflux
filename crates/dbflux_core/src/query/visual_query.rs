@@ -35,10 +35,25 @@ impl VisualQuerySpec {
         }
 
         for join in &mut self.joins {
-            if let JoinOn::Conditions { predicates, .. } = &mut join.on {
-                for pred in predicates.iter_mut() {
-                    *next_id += 1;
-                    pred.node_id = *next_id;
+            if let JoinOn::Conditions(root) = &mut join.on {
+                Self::assign_ids_in_join_node(root, next_id);
+            }
+        }
+    }
+
+    fn assign_ids_in_join_node(node: &mut JoinFilterNode, next_id: &mut u64) {
+        match node {
+            JoinFilterNode::Predicate(pred) => {
+                *next_id += 1;
+                pred.node_id = *next_id;
+            }
+            JoinFilterNode::Group {
+                node_id, children, ..
+            } => {
+                *next_id += 1;
+                *node_id = *next_id;
+                for child in children.iter_mut() {
+                    Self::assign_ids_in_join_node(child, next_id);
                 }
             }
         }
@@ -121,16 +136,48 @@ pub enum JoinOn {
     },
     /// Free-text expression (FK metadata unavailable or user typed raw).
     RawExpression(String),
-    /// Structured list of conditions joined with `op` (AND or OR).
-    Conditions {
-        #[serde(default = "default_join_op")]
-        op: BoolOp,
-        predicates: Vec<JoinPredicate>,
-    },
+    /// Structured tree of conditions with AND/OR groups and nested sub-groups.
+    /// The root is always a `JoinFilterNode::Group`; leaves are `JoinPredicate`s.
+    Conditions(JoinFilterNode),
 }
 
-fn default_join_op() -> BoolOp {
-    BoolOp::And
+/// Recursive tree mirroring the WHERE-filter shape, scoped to join ON clauses.
+/// Each `Group` holds a boolean operator and a list of child nodes; leaves
+/// are `JoinPredicate`s.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum JoinFilterNode {
+    Group {
+        /// Stable identifier so the UI can target the node by id.
+        #[serde(skip)]
+        node_id: u64,
+        op: BoolOp,
+        children: Vec<JoinFilterNode>,
+    },
+    Predicate(JoinPredicate),
+}
+
+impl JoinFilterNode {
+    pub fn new_root_and() -> Self {
+        JoinFilterNode::Group {
+            node_id: 0,
+            op: BoolOp::And,
+            children: Vec::new(),
+        }
+    }
+
+    /// Nesting depth of the deepest `Group` in this subtree (root = 1).
+    pub fn depth(&self) -> usize {
+        match self {
+            JoinFilterNode::Predicate(_) => 0,
+            JoinFilterNode::Group { children, .. } => {
+                1 + children
+                    .iter()
+                    .map(JoinFilterNode::depth)
+                    .max()
+                    .unwrap_or(0)
+            }
+        }
+    }
 }
 
 /// Structured ON-clause predicate: `left <op> right`. Both sides are dotted
