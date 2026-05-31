@@ -484,9 +484,12 @@ fn fetch_global_status_value(
     var_name: &str,
     display_name: &str,
 ) -> Result<QueryResult, DbError> {
-    let row: Option<(String, String)> = conn
-        .exec_first("SHOW GLOBAL STATUS LIKE ?", (var_name,))
-        .map_err(mysql_error)?;
+    // MariaDB / older MySQL versions do not accept parameter placeholders in
+    // `SHOW GLOBAL STATUS LIKE ?` via the prepared-statement protocol. The
+    // var_name comes from a static, hard-coded list (`PIVOTED_COUNTERS`) and
+    // is never user input, so inlining is safe.
+    let sql = format!("SHOW GLOBAL STATUS LIKE '{}'", var_name);
+    let row: Option<(String, String)> = conn.query_first(sql).map_err(mysql_error)?;
 
     let value = match row {
         Some((_, v)) => v.parse::<f64>().unwrap_or(0.0),

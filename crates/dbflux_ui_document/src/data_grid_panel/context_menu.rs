@@ -2387,7 +2387,23 @@ impl DataGridPanel {
                             });
                             cx.notify();
                         }))
-                        .pl(px(20.0))
+                        .child(
+                            Icon::new(if is_danger {
+                                AppIcon::Power
+                            } else {
+                                AppIcon::Zap
+                            })
+                            .small()
+                            .color(if is_selected {
+                                if is_danger {
+                                    theme.danger
+                                } else {
+                                    theme.accent_foreground
+                                }
+                            } else {
+                                label_color
+                            }),
+                        )
                         .child(Text::caption(action.label.clone()).color(if is_selected {
                             if is_danger {
                                 theme.danger
