@@ -1365,14 +1365,21 @@ impl DataGridPanel {
         self.is_active_tab = active;
 
         if active {
-            // Re-mount the inspector rail with a fresh snapshot of the
-            // remembered row so it follows the active tab without rendering
-            // stale data from a previous result set.
-            if let Some((row, col)) = self.inspector_row {
+            // Re-mount the inspector rail with whichever per-tab content was
+            // previously open. Builder takes precedence over the row inspector
+            // because both share the same rail and the builder is the more
+            // recent intentional surface for the user.
+            if let Some(panel) = self.builder_panel.clone() {
+                let view: AnyView = AnyView::from(panel);
+                cx.emit(DataGridEvent::OpenInspector {
+                    title: "Query Builder".into(),
+                    content: view,
+                });
+            } else if let Some((row, col)) = self.inspector_row {
                 self.open_row_inspector(row, col, cx);
             }
-        } else if self.inspector_row.is_some() {
-            // Hide the rail (without dropping our cached state) so the next
+        } else if self.builder_panel.is_some() || self.inspector_row.is_some() {
+            // Hide the rail (without dropping cached state) so the next
             // active tab can take it over.
             cx.emit(DataGridEvent::CloseInspector);
         }
