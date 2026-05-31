@@ -1924,6 +1924,18 @@ impl DashboardDocument {
             })
             .collect();
 
+        // Track existing divider slots by (grid_row, grid_column) for dedup.
+        let mut existing_dividers: std::collections::HashSet<(u32, u32)> = self
+            .panel_slots
+            .iter()
+            .filter_map(|slot| match slot {
+                DashboardPanelSlot::Divider { grid_pos, .. } => {
+                    Some((grid_pos.grid_row, grid_pos.grid_column))
+                }
+                _ => None,
+            })
+            .collect();
+
         // Track existing inspector slots by (metric_id, grid_pos) for dedup.
         let mut existing_inspectors: std::collections::HashSet<(String, u32)> = self
             .panel_slots
@@ -1945,8 +1957,11 @@ impl DashboardDocument {
                 grid_height: panel.grid_height,
             };
 
-            // Divider slots have no SavedChart to dedup on; insert as-is.
             if let dbflux_ui_base::DashboardPanelKind::Divider { markdown } = &panel.kind {
+                let key = (grid_pos.grid_row, grid_pos.grid_column);
+                if !existing_dividers.insert(key) {
+                    continue;
+                }
                 self.panel_slots.push(DashboardPanelSlot::Divider {
                     markdown: markdown.clone(),
                     grid_pos,
@@ -2020,15 +2035,18 @@ impl DashboardDocument {
                 Some(chart)
                     if matches!(
                         chart.source,
-                        SavedChartSource::Query { .. } | SavedChartSource::Metric { .. }
+                        SavedChartSource::Query { .. }
+                            | SavedChartSource::Metric { .. }
+                            | SavedChartSource::InstanceMetric { .. }
                     ) =>
                 {
                     let app_state_inner = self.app_state.clone();
                     let title_override = panel.title_override.clone();
                     let panel_entity = cx.new(|cx| {
                         let mut doc =
-                            ChartDocument::from_saved(&chart, app_state_inner, window, cx)
-                                .expect("Query/Metric source validated by match guard");
+                            ChartDocument::from_saved(&chart, app_state_inner, window, cx).expect(
+                                "Query/Metric/InstanceMetric source validated by match guard",
+                            );
                         doc.set_embedded(true, cx);
                         doc
                     });
@@ -3163,6 +3181,138 @@ mod tests {
         assert_eq!(
             dispatch_count, 0,
             "Orphan and Divider slots must not be dispatched by refresh_all_loaded_panels"
+        );
+    }
+
+    // ---- M1: Divider dedup in reconcile_panels_from_manager ----
+
+    /// M1: The divider dedup set prevents duplicate slots when the same
+    /// (grid_row, grid_column) key appears more than once in a candidate list.
+    ///
+    /// Simulates the `existing_dividers` HashSet logic from
+    /// `reconcile_panels_from_manager` without requiring a live GPUI entity.
+    #[test]
+    fn divider_dedup_set_blocks_duplicate_grid_position() {
+        let mut existing_dividers: std::collections::HashSet<(u32, u32)> =
+            std::collections::HashSet::new();
+
+        // First insertion at (0, 0) — new, must succeed.
+        assert!(
+            existing_dividers.insert((0, 0)),
+            "first insert at (0,0) must return true (new)"
+        );
+
+        // Same position again (simulating a second AppStateChanged reconcile).
+        assert!(
+            !existing_dividers.insert((0, 0)),
+            "second insert at (0,0) must return false (duplicate)"
+        );
+
+        // A different position must still be accepted.
+        assert!(
+            existing_dividers.insert((1, 0)),
+            "insert at (1,0) must return true (different position)"
+        );
+
+        assert_eq!(
+            existing_dividers.len(),
+            2,
+            "dedup set must contain exactly two entries after three insertions with one duplicate"
+        );
+    }
+
+    /// M1: Pre-existing divider slots seed the dedup set so a reconcile pass
+    /// does not re-add them.
+    #[test]
+    fn existing_divider_slots_seed_dedup_correctly() {
+        let grid_pos = PanelGridPos {
+            grid_row: 2,
+            grid_column: 1,
+            grid_width: 12,
+            grid_height: 1,
+        };
+
+        let slots: Vec<DashboardPanelSlot> = vec![DashboardPanelSlot::Divider {
+            markdown: "## Section".to_string(),
+            grid_pos,
+        }];
+
+        // Mirror the initialization from reconcile_panels_from_manager.
+        let existing_dividers: std::collections::HashSet<(u32, u32)> = slots
+            .iter()
+            .filter_map(|slot| match slot {
+                DashboardPanelSlot::Divider { grid_pos, .. } => {
+                    Some((grid_pos.grid_row, grid_pos.grid_column))
+                }
+                _ => None,
+            })
+            .collect();
+
+        // The pre-existing slot's position must block a re-insert.
+        let mut set = existing_dividers;
+        assert!(
+            !set.insert((2, 1)),
+            "position (2,1) from existing slot must already be in the set"
+        );
+
+        // A new position must still be admitted.
+        assert!(
+            set.insert((3, 0)),
+            "new position (3,0) must be admitted after seeding"
+        );
+    }
+
+    // ---- M2: InstanceMetric charts do not fall to Orphan ----
+
+    /// M2: `SavedChartSource::InstanceMetric` must match the extended match
+    /// guard — not fall through to the wildcard `_` arm that produces Orphan.
+    ///
+    /// Tests the guard predicate directly. The production code wraps this in a
+    /// `Some(chart) if matches!(chart.source, ...)` guard; this test validates
+    /// that the `matches!` expression returns `true` for `InstanceMetric`.
+    #[test]
+    fn instance_metric_source_matches_loaded_guard() {
+        use dbflux_components::saved_chart::SavedChartSource;
+
+        let source = SavedChartSource::InstanceMetric {
+            metric_id: "pg.tps".to_string(),
+        };
+
+        let is_loadable = matches!(
+            source,
+            SavedChartSource::Query { .. }
+                | SavedChartSource::Metric { .. }
+                | SavedChartSource::InstanceMetric { .. }
+        );
+
+        assert!(
+            is_loadable,
+            "InstanceMetric source must match the loadable guard (not fall to Orphan)"
+        );
+    }
+
+    /// M2: `SavedChartSource::Collection` must NOT match the Loaded guard
+    /// (it uses a different reconcile path), confirming the guard is selective.
+    #[test]
+    fn collection_source_does_not_match_loaded_guard() {
+        use dbflux_components::saved_chart::SavedChartSource;
+        use dbflux_core::CollectionRef;
+
+        let source = SavedChartSource::Collection {
+            collection_ref: CollectionRef::new("db", "col"),
+            time_window: None,
+        };
+
+        let is_loadable = matches!(
+            source,
+            SavedChartSource::Query { .. }
+                | SavedChartSource::Metric { .. }
+                | SavedChartSource::InstanceMetric { .. }
+        );
+
+        assert!(
+            !is_loadable,
+            "Collection source must not match the Query/Metric/InstanceMetric guard"
         );
     }
 
