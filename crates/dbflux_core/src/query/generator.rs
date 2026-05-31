@@ -507,9 +507,21 @@ impl<'a> SqlSelectBuilder<'a> {
                 // with empty `to_table` / `to_alias` / `from_alias` cannot
                 // produce valid SQL and would trip identifier-quoting asserts
                 // in dialect drivers (e.g. PostgreSQL).
-                !j.to_table.trim().is_empty()
+                let header_ok = !j.to_table.trim().is_empty()
                     && !j.to_alias.trim().is_empty()
-                    && !j.from_alias.trim().is_empty()
+                    && !j.from_alias.trim().is_empty();
+                if !header_ok {
+                    return false;
+                }
+                // For structured Conditions, require at least one fully
+                // populated predicate so we never emit `ON ` with nothing.
+                match &j.on {
+                    JoinOn::Conditions(preds) => preds
+                        .iter()
+                        .any(|p| !p.left.trim().is_empty() && !p.right.trim().is_empty()),
+                    JoinOn::RawExpression(expr) => !expr.trim().is_empty(),
+                    JoinOn::FkPath { .. } => true,
+                }
             })
             .map(|j| {
                 let kind_sql = match j.kind {
@@ -536,11 +548,51 @@ impl<'a> SqlSelectBuilder<'a> {
                         self.dialect.quote_identifier(to_column),
                     ),
                     JoinOn::RawExpression(expr) => expr.clone(),
+                    JoinOn::Conditions(preds) => self.render_join_conditions(preds),
                 };
 
                 format!("{} {} AS {} ON {}", kind_sql, table_ref, alias, on_expr)
             })
             .collect()
+    }
+
+    /// Renders structured ON conditions as `lhs <op> rhs AND ...`.
+    ///
+    /// Partial predicates (missing left or right reference) are skipped so
+    /// the user can author a join incrementally without breaking the SQL
+    /// preview. Both sides are treated as raw SQL expressions: the caller
+    /// is responsible for typing dotted identifiers like `users.id`. Quoting
+    /// of identifiers is intentionally skipped because each side may contain
+    /// function calls, casts, or constants, and the dialect-quoting helper
+    /// only handles bare identifiers.
+    fn render_join_conditions(
+        &self,
+        preds: &[crate::query::visual_query::JoinPredicate],
+    ) -> String {
+        use crate::query::visual_query::Comparator;
+
+        let parts: Vec<String> = preds
+            .iter()
+            .filter(|p| !p.left.trim().is_empty() && !p.right.trim().is_empty())
+            .map(|p| {
+                let op = match p.op {
+                    Comparator::Eq => "=",
+                    Comparator::Neq => "<>",
+                    Comparator::Gt => ">",
+                    Comparator::Lt => "<",
+                    Comparator::Gte => ">=",
+                    Comparator::Lte => "<=",
+                    Comparator::Like => "LIKE",
+                    Comparator::ILike => "ILIKE",
+                    Comparator::In => "IN",
+                    Comparator::IsNull => "IS NULL",
+                    Comparator::IsNotNull => "IS NOT NULL",
+                };
+                format!("{} {} {}", p.left.trim(), op, p.right.trim())
+            })
+            .collect();
+
+        parts.join(" AND ")
     }
 
     fn build_where(

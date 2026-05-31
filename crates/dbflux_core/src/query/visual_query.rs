@@ -33,6 +33,15 @@ impl VisualQuerySpec {
         if let Some(root) = &mut self.filter {
             Self::assign_ids_in_node(root, next_id);
         }
+
+        for join in &mut self.joins {
+            if let JoinOn::Conditions(conds) = &mut join.on {
+                for pred in conds.iter_mut() {
+                    *next_id += 1;
+                    pred.node_id = *next_id;
+                }
+            }
+        }
     }
 
     fn assign_ids_in_node(node: &mut FilterNode, next_id: &mut u64) {
@@ -112,6 +121,20 @@ pub enum JoinOn {
     },
     /// Free-text expression (FK metadata unavailable or user typed raw).
     RawExpression(String),
+    /// Structured list of conditions, AND-joined.
+    Conditions(Vec<JoinPredicate>),
+}
+
+/// Structured ON-clause predicate: `left <op> right`. Both sides are dotted
+/// column references (e.g. `users.id`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JoinPredicate {
+    /// Stable per-predicate identifier; regenerated on load.
+    #[serde(skip)]
+    pub node_id: u64,
+    pub left: String,
+    pub op: Comparator,
+    pub right: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

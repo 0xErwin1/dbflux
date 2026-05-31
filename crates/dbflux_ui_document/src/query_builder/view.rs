@@ -41,6 +41,8 @@ pub fn render_panel(
     }
 
     ensure_predicate_inputs(panel, window, cx);
+    ensure_join_condition_inputs(panel, window, cx);
+    panel.sweep_stale_join_condition_state();
 
     let theme = cx.theme().clone();
 
@@ -404,6 +406,34 @@ fn ensure_in_node(
                 ensure_in_node(panel, child, child_path, window, cx);
             }
         }
+    }
+}
+
+/// Walks `panel.current_spec.joins` and ensures inputs/dropdowns exist for
+/// every `JoinOn::Conditions` entry.
+fn ensure_join_condition_inputs(
+    panel: &mut QueryBuilderPanel,
+    window: &mut Window,
+    cx: &mut Context<QueryBuilderPanel>,
+) {
+    use dbflux_core::JoinOn;
+
+    let snapshot: Vec<(u64, String, String, dbflux_core::Comparator)> = panel
+        .current_spec
+        .joins
+        .iter()
+        .flat_map(|j| match &j.on {
+            JoinOn::Conditions(preds) => preds
+                .iter()
+                .map(|p| (p.node_id, p.left.clone(), p.right.clone(), p.op))
+                .collect::<Vec<_>>()
+                .into_iter(),
+            _ => Vec::new().into_iter(),
+        })
+        .collect();
+
+    for (node_id, left, right, op) in snapshot {
+        panel.ensure_join_condition_state(node_id, &left, &right, op, window, cx);
     }
 }
 

@@ -4,9 +4,9 @@ use dbflux_components::controls::{
     Dropdown, DropdownItem, DropdownSelectionChanged, InputEvent, InputState,
 };
 use dbflux_core::{
-    BoolOp, ColumnKind, Comparator, FilterNode, JoinKind, JoinOn, JoinStep, LiteralValue,
-    Predicate, PredicateValue, ProjectedColumn, Projection, SchemaForeignKeyInfo, SelectQuery,
-    SortEntry, SourceTable, VisualQuerySpec, VisualSortDirection,
+    BoolOp, ColumnKind, Comparator, FilterNode, JoinKind, JoinOn, JoinPredicate, JoinStep,
+    LiteralValue, Predicate, PredicateValue, ProjectedColumn, Projection, SchemaForeignKeyInfo,
+    SelectQuery, SortEntry, SourceTable, VisualQuerySpec, VisualSortDirection,
 };
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Render, Subscription, WeakEntity,
@@ -250,6 +250,12 @@ pub struct QueryBuilderPanel {
     /// the join row count changes, mirroring `join_input_states`.
     pub(crate) join_kind_dropdowns: Vec<Entity<Dropdown>>,
 
+    /// Per-join-condition input/dropdown state keyed by `JoinPredicate::node_id`.
+    /// Holds the left/right `alias.column` inputs and the comparator dropdown.
+    pub(crate) join_cond_left_inputs: HashMap<u64, Entity<InputState>>,
+    pub(crate) join_cond_right_inputs: HashMap<u64, Entity<InputState>>,
+    pub(crate) join_cond_op_dropdowns: HashMap<u64, Entity<Dropdown>>,
+
     /// Names of columns available on the source table, used to render the
     /// per-column checklist when projection is not "All columns". Populated
     /// once at panel construction from the data grid's current result.
@@ -315,7 +321,7 @@ impl QueryBuilderPanel {
                 from_alias: j.from_alias.clone(),
                 from_column: match &j.on {
                     JoinOn::FkPath { from_column, .. } => from_column.clone(),
-                    JoinOn::RawExpression(_) => String::new(),
+                    JoinOn::RawExpression(_) | JoinOn::Conditions(_) => String::new(),
                 },
                 to_schema: j.to_schema.clone(),
                 to_table: j.to_table.clone(),
@@ -417,6 +423,9 @@ impl QueryBuilderPanel {
             predicate_column_input_states: HashMap::new(),
             predicate_comparator_dropdowns: HashMap::new(),
             join_kind_dropdowns: Vec::new(),
+            join_cond_left_inputs: HashMap::new(),
+            join_cond_right_inputs: HashMap::new(),
+            join_cond_op_dropdowns: HashMap::new(),
             available_columns,
             pending_filter_input_sweep: false,
         }
@@ -464,7 +473,7 @@ impl QueryBuilderPanel {
                 from_alias: j.from_alias.clone(),
                 from_column: match &j.on {
                     JoinOn::FkPath { from_column, .. } => from_column.clone(),
-                    JoinOn::RawExpression(_) => String::new(),
+                    JoinOn::RawExpression(_) | JoinOn::Conditions(_) => String::new(),
                 },
                 to_schema: j.to_schema.clone(),
                 to_table: j.to_table.clone(),
@@ -933,15 +942,17 @@ impl QueryBuilderPanel {
                     JoinOn::FkPath {
                         from_column,
                         to_column,
-                    } => {
-                        format!(
-                            "{}.{} = {}.{}",
-                            self.join_rows[i].from_alias,
-                            from_column,
-                            self.join_rows[i].to_alias,
-                            to_column
-                        )
-                    }
+                    } => format!(
+                        "{}.{} = {}.{}",
+                        self.join_rows[i].from_alias,
+                        from_column,
+                        self.join_rows[i].to_alias,
+                        to_column
+                    ),
+                    // Conditions are edited via dedicated per-predicate inputs
+                    // rather than a single raw textbox, so the raw input is
+                    // initialised empty when the row uses structured mode.
+                    JoinOn::Conditions(_) => String::new(),
                 };
 
                 let to_table_state = cx.new(|cx| {
@@ -1098,8 +1109,15 @@ impl QueryBuilderPanel {
     // Join mutations
     // -----------------------------------------------------------------------
 
-    /// Appends a new join row with default raw-expression mode.
+    /// Appends a new join row defaulting to a single empty structured condition.
     pub fn add_join(&mut self, from_alias: &str, cx: &mut Context<Self>) {
+        self.next_node_id += 1;
+        let first_cond = JoinPredicate {
+            node_id: self.next_node_id,
+            left: String::new(),
+            op: Comparator::Eq,
+            right: String::new(),
+        };
         self.join_rows.push(JoinRow {
             kind: JoinKind::Inner,
             from_alias: from_alias.to_string(),
@@ -1107,10 +1125,181 @@ impl QueryBuilderPanel {
             to_schema: None,
             to_table: String::new(),
             to_alias: String::new(),
-            on: JoinOn::RawExpression(String::new()),
+            on: JoinOn::Conditions(vec![first_cond]),
         });
         self.pending_join_rebuild = true;
         self.rebuild_spec_and_notify(cx);
+    }
+
+    /// Appends a new empty condition to the join at `join_idx`.
+    pub fn add_join_condition(&mut self, join_idx: usize, cx: &mut Context<Self>) {
+        if let Some(row) = self.join_rows.get_mut(join_idx) {
+            self.next_node_id += 1;
+            let new_pred = JoinPredicate {
+                node_id: self.next_node_id,
+                left: String::new(),
+                op: Comparator::Eq,
+                right: String::new(),
+            };
+            match &mut row.on {
+                JoinOn::Conditions(list) => list.push(new_pred),
+                _ => row.on = JoinOn::Conditions(vec![new_pred]),
+            }
+            self.rebuild_spec_and_notify(cx);
+        }
+    }
+
+    /// Removes the condition with `node_id` from any join.
+    pub fn remove_join_condition(&mut self, node_id: u64, cx: &mut Context<Self>) {
+        for row in self.join_rows.iter_mut() {
+            if let JoinOn::Conditions(list) = &mut row.on {
+                list.retain(|p| p.node_id != node_id);
+            }
+        }
+        self.rebuild_spec_and_notify(cx);
+    }
+
+    /// Updates the left side of the condition identified by `node_id`.
+    pub fn set_join_condition_left(&mut self, node_id: u64, text: String, cx: &mut Context<Self>) {
+        for row in self.join_rows.iter_mut() {
+            if let JoinOn::Conditions(list) = &mut row.on
+                && let Some(p) = list.iter_mut().find(|p| p.node_id == node_id)
+            {
+                p.left = text;
+                self.refresh_preview_and_notify(cx);
+                return;
+            }
+        }
+    }
+
+    /// Updates the right side of the condition identified by `node_id`.
+    pub fn set_join_condition_right(&mut self, node_id: u64, text: String, cx: &mut Context<Self>) {
+        for row in self.join_rows.iter_mut() {
+            if let JoinOn::Conditions(list) = &mut row.on
+                && let Some(p) = list.iter_mut().find(|p| p.node_id == node_id)
+            {
+                p.right = text;
+                self.refresh_preview_and_notify(cx);
+                return;
+            }
+        }
+    }
+
+    /// Updates the comparator of the condition identified by `node_id`.
+    pub fn set_join_condition_op(&mut self, node_id: u64, op: Comparator, cx: &mut Context<Self>) {
+        for row in self.join_rows.iter_mut() {
+            if let JoinOn::Conditions(list) = &mut row.on
+                && let Some(p) = list.iter_mut().find(|p| p.node_id == node_id)
+            {
+                p.op = op;
+                self.refresh_preview_and_notify(cx);
+                return;
+            }
+        }
+    }
+
+    /// Ensures input states + comparator dropdown exist for the condition.
+    #[allow(clippy::map_entry)]
+    pub fn ensure_join_condition_state(
+        &mut self,
+        node_id: u64,
+        left: &str,
+        right: &str,
+        op: Comparator,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.join_cond_left_inputs.contains_key(&node_id) {
+            let left_owned = left.to_string();
+            let state = cx.new(|cx| {
+                let mut s = InputState::new(window, cx).placeholder("alias.column");
+                s.set_value(&left_owned, window, cx);
+                s
+            });
+            let id_for_sub = node_id;
+            let sub = cx.subscribe_in(
+                &state,
+                window,
+                move |this, entity, event: &InputEvent, window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        let text = entity.read(cx).value().to_string();
+                        this.set_join_condition_left(id_for_sub, text, cx);
+                        let _ = window;
+                    }
+                },
+            );
+            self.join_cond_left_inputs.insert(node_id, state);
+            self._input_subs.push(sub);
+        }
+
+        if !self.join_cond_right_inputs.contains_key(&node_id) {
+            let right_owned = right.to_string();
+            let state = cx.new(|cx| {
+                let mut s = InputState::new(window, cx).placeholder("alias.column");
+                s.set_value(&right_owned, window, cx);
+                s
+            });
+            let id_for_sub = node_id;
+            let sub = cx.subscribe_in(
+                &state,
+                window,
+                move |this, entity, event: &InputEvent, window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        let text = entity.read(cx).value().to_string();
+                        this.set_join_condition_right(id_for_sub, text, cx);
+                        let _ = window;
+                    }
+                },
+            );
+            self.join_cond_right_inputs.insert(node_id, state);
+            self._input_subs.push(sub);
+        }
+
+        if !self.join_cond_op_dropdowns.contains_key(&node_id) {
+            let items: Vec<DropdownItem> = COMPARATOR_ORDER
+                .iter()
+                .map(|c| DropdownItem::with_value(comparator_label(*c), comparator_value(*c)))
+                .collect();
+            let selected = COMPARATOR_ORDER.iter().position(|c| *c == op);
+            let dropdown = cx.new(|_cx| {
+                Dropdown::new(("qb-join-cond-op", node_id))
+                    .items(items)
+                    .selected_index(selected)
+                    .toolbar_style(true)
+            });
+            let id_for_sub = node_id;
+            let sub = cx.subscribe(
+                &dropdown,
+                move |this, _entity, event: &DropdownSelectionChanged, cx| {
+                    if let Some(op) = COMPARATOR_ORDER.get(event.index).copied() {
+                        this.set_join_condition_op(id_for_sub, op, cx);
+                    }
+                },
+            );
+            self.join_cond_op_dropdowns.insert(node_id, dropdown);
+            self._input_subs.push(sub);
+        }
+    }
+
+    /// Sweeps stale join-condition state when conditions are removed.
+    pub fn sweep_stale_join_condition_state(&mut self) {
+        let live: HashSet<u64> = self
+            .join_rows
+            .iter()
+            .flat_map(|row| match &row.on {
+                JoinOn::Conditions(list) => list
+                    .iter()
+                    .map(|p| p.node_id)
+                    .collect::<Vec<_>>()
+                    .into_iter(),
+                _ => Vec::new().into_iter(),
+            })
+            .collect();
+        self.join_cond_left_inputs.retain(|id, _| live.contains(id));
+        self.join_cond_right_inputs
+            .retain(|id, _| live.contains(id));
+        self.join_cond_op_dropdowns
+            .retain(|id, _| live.contains(id));
     }
 
     /// Removes a join row by its index.
@@ -1478,7 +1667,7 @@ mod tests {
                 from_alias: j.from_alias.clone(),
                 from_column: match &j.on {
                     JoinOn::FkPath { from_column, .. } => from_column.clone(),
-                    JoinOn::RawExpression(_) => String::new(),
+                    JoinOn::RawExpression(_) | JoinOn::Conditions(_) => String::new(),
                 },
                 to_schema: j.to_schema.clone(),
                 to_table: j.to_table.clone(),
@@ -1532,6 +1721,9 @@ mod tests {
             predicate_column_input_states: HashMap::new(),
             predicate_comparator_dropdowns: HashMap::new(),
             join_kind_dropdowns: Vec::new(),
+            join_cond_left_inputs: HashMap::new(),
+            join_cond_right_inputs: HashMap::new(),
+            join_cond_op_dropdowns: HashMap::new(),
             available_columns: Vec::new(),
             pending_filter_input_sweep: false,
         }

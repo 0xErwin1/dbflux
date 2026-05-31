@@ -1,15 +1,15 @@
 use gpui::{Context, IntoElement, div};
 
-use crate::query_builder::panel::{FkLoadState, JoinRow, QueryBuilderPanel};
+use crate::query_builder::panel::{FkLoadState, QueryBuilderPanel};
 
 /// Renders the Joins section of the Query Builder.
 ///
-/// Each join row shows the join kind toggle (INNER/LEFT), a to-table input,
-/// an ON expression input (or FK info when available), and a remove button.
-/// A "+Join" button appends a new row.
+/// Each join row shows the join kind dropdown (INNER/LEFT/RIGHT/FULL), the
+/// target table input, and a remove button. The ON clause uses structured
+/// conditions by default (a list of `left <op> right` rows joined with AND),
+/// or shows raw FK / free-text when the row is in a non-structured mode.
 ///
-/// A banner appears when FK metadata is unavailable. While loading, a spinner
-/// label is shown next to existing rows.
+/// A banner appears when FK metadata is unavailable.
 pub fn render_joins(
     panel: &mut QueryBuilderPanel,
     cx: &mut Context<QueryBuilderPanel>,
@@ -27,6 +27,9 @@ pub fn render_joins(
     let join_rows = panel.join_rows.clone();
     let join_states = panel.join_input_states.clone();
     let kind_dropdowns = panel.join_kind_dropdowns.clone();
+    let cond_lefts = panel.join_cond_left_inputs.clone();
+    let cond_rights = panel.join_cond_right_inputs.clone();
+    let cond_ops = panel.join_cond_op_dropdowns.clone();
 
     let mut container = div().flex().flex_col().gap_1();
 
@@ -66,13 +69,16 @@ pub fn render_joins(
     }
 
     for (i, row) in join_rows.iter().enumerate() {
-        let mut row_div = div().flex().flex_row().gap_1().items_center();
+        let mut join_block = div().flex().flex_col().gap_1();
+
+        // Header row: kind dropdown + to_table input + × remove.
+        let mut header = div().flex().flex_row().gap_1().items_center();
 
         if let Some(dropdown) = kind_dropdowns.get(i).cloned() {
             use dbflux_components::tokens::{Heights, Radii};
             use gpui_component::ActiveTheme;
             let theme = cx.theme();
-            row_div = row_div.child(
+            header = header.child(
                 div()
                     .w(gpui::px(80.0))
                     .h(Heights::BUTTON)
@@ -83,84 +89,27 @@ pub fn render_joins(
                     .bg(theme.background)
                     .child(dropdown),
             );
-        } else {
-            let kind_label = match row.kind {
-                dbflux_core::JoinKind::Inner => "INNER",
-                dbflux_core::JoinKind::Left => "LEFT",
-                dbflux_core::JoinKind::Right => "RIGHT",
-                dbflux_core::JoinKind::Full => "FULL",
-            };
-            row_div = row_div.child(div().text_sm().child(SharedString::from(kind_label)));
         }
 
-        if let Some((to_table_state, on_expr_state)) = join_states.get(i) {
-            let on_expr_is_fk = matches!(row.on, JoinOn::FkPath { .. });
-
-            row_div = row_div
-                .child(
-                    div().flex_1().min_w(gpui::px(0.0)).child(
-                        Input::new(to_table_state)
-                            .small()
-                            .w_full()
-                            .placeholder("table"),
-                    ),
-                )
-                .child(if on_expr_is_fk {
-                    let on_text = match &row.on {
-                        JoinOn::FkPath {
-                            from_column,
-                            to_column,
-                        } => format!(
-                            "{}.{} = {}.{}",
-                            row.from_alias, from_column, row.to_alias, to_column
-                        ),
-                        JoinOn::RawExpression(expr) => expr.clone(),
-                    };
-                    div()
-                        .flex_1()
-                        .min_w(gpui::px(0.0))
-                        .text_sm()
-                        .child(SharedString::from(on_text))
-                        .into_any_element()
-                } else {
-                    div()
-                        .flex_1()
-                        .min_w(gpui::px(0.0))
-                        .child(
-                            Input::new(on_expr_state)
-                                .small()
-                                .w_full()
-                                .placeholder("a.id = b.a_id"),
-                        )
-                        .into_any_element()
-                });
-        } else {
-            let on_text = match &row.on {
-                JoinOn::FkPath {
-                    from_column,
-                    to_column,
-                } => format!(
-                    "{}.{} = {}.{}",
-                    row.from_alias, from_column, row.to_alias, to_column
+        if let Some((to_table_state, _on_expr_state)) = join_states.get(i) {
+            header = header.child(
+                div().flex_1().min_w(gpui::px(0.0)).child(
+                    Input::new(to_table_state)
+                        .small()
+                        .w_full()
+                        .placeholder("table"),
                 ),
-                JoinOn::RawExpression(expr) => {
-                    if expr.is_empty() {
-                        "ON <expression>".to_string()
-                    } else {
-                        expr.clone()
-                    }
-                }
-            };
-            row_div = row_div
-                .child(
-                    div()
-                        .text_sm()
-                        .child(SharedString::from(row.to_table.clone())),
-                )
-                .child(div().text_sm().child(SharedString::from(on_text)));
+            );
+        } else {
+            header = header.child(
+                div()
+                    .flex_1()
+                    .text_sm()
+                    .child(SharedString::from(row.to_table.clone())),
+            );
         }
 
-        row_div = row_div.child(
+        header = header.child(
             Button::new(("qb-rm-join", i), "✕")
                 .ghost()
                 .small()
@@ -169,7 +118,132 @@ pub fn render_joins(
                 })),
         );
 
-        container = container.child(row_div);
+        join_block = join_block.child(header);
+
+        // ON body — switches on JoinOn variant.
+        match &row.on {
+            JoinOn::Conditions(preds) => {
+                for (cond_ix, pred) in preds.iter().enumerate() {
+                    let id = pred.node_id;
+                    let left = cond_lefts.get(&id).cloned();
+                    let right = cond_rights.get(&id).cloned();
+                    let op_dd = cond_ops.get(&id).cloned();
+
+                    let prefix = if cond_ix == 0 { "ON" } else { "AND" };
+                    let mut cond_row = div().flex().flex_row().gap_1().items_center().pl_2().child(
+                        div()
+                            .w(gpui::px(32.0))
+                            .flex_shrink_0()
+                            .text_sm()
+                            .child(SharedString::from(prefix)),
+                    );
+
+                    if let Some(state) = left {
+                        cond_row = cond_row.child(
+                            div().flex_1().min_w(gpui::px(0.0)).child(
+                                Input::new(&state)
+                                    .small()
+                                    .w_full()
+                                    .placeholder("alias.column"),
+                            ),
+                        );
+                    }
+
+                    if let Some(dd) = op_dd {
+                        use dbflux_components::tokens::{Heights, Radii};
+                        use gpui_component::ActiveTheme;
+                        let theme = cx.theme();
+                        cond_row = cond_row.child(
+                            div()
+                                .w(gpui::px(76.0))
+                                .h(Heights::BUTTON)
+                                .flex_shrink_0()
+                                .rounded(Radii::SM)
+                                .border_1()
+                                .border_color(theme.input)
+                                .bg(theme.background)
+                                .child(dd),
+                        );
+                    }
+
+                    if let Some(state) = right {
+                        cond_row = cond_row.child(
+                            div().flex_1().min_w(gpui::px(0.0)).child(
+                                Input::new(&state)
+                                    .small()
+                                    .w_full()
+                                    .placeholder("alias.column"),
+                            ),
+                        );
+                    }
+
+                    let node_id_for_rm = id;
+                    cond_row = cond_row.child(
+                        Button::new(("qb-rm-cond", id as usize), "✕")
+                            .ghost()
+                            .small()
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.remove_join_condition(node_id_for_rm, cx);
+                            })),
+                    );
+
+                    join_block = join_block.child(cond_row);
+                }
+
+                let row_idx = i;
+                join_block = join_block.child(
+                    div().flex().flex_row().pl_2().child(
+                        Button::new(("qb-add-cond", i), "+ Condition")
+                            .ghost()
+                            .small()
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.add_join_condition(row_idx, cx);
+                            })),
+                    ),
+                );
+            }
+
+            JoinOn::FkPath {
+                from_column,
+                to_column,
+            } => {
+                let on_text = format!(
+                    "{}.{} = {}.{}",
+                    row.from_alias, from_column, row.to_alias, to_column
+                );
+                join_block = join_block.child(
+                    div()
+                        .pl_2()
+                        .text_sm()
+                        .child(SharedString::from(format!("ON {on_text}"))),
+                );
+            }
+
+            JoinOn::RawExpression(expr) => {
+                if let Some((_to_table_state, on_expr_state)) = join_states.get(i) {
+                    let mut raw_row = div().flex().flex_row().gap_1().items_center().pl_2();
+                    raw_row = raw_row.child(
+                        div()
+                            .w(gpui::px(32.0))
+                            .flex_shrink_0()
+                            .text_sm()
+                            .child(SharedString::from("ON")),
+                    );
+                    raw_row = raw_row.child(
+                        div().flex_1().min_w(gpui::px(0.0)).child(
+                            Input::new(on_expr_state)
+                                .small()
+                                .w_full()
+                                .placeholder("a.id = b.a_id"),
+                        ),
+                    );
+                    join_block = join_block.child(raw_row);
+                    let _ = expr;
+                }
+            }
+        }
+
+        container = container.child(join_block);
     }
 
     container = container.child(

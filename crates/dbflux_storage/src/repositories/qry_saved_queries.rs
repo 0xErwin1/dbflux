@@ -332,6 +332,7 @@ fn write_children_from_spec(
             JoinKind::Right => "right",
             JoinKind::Full => "full",
         };
+        let conditions_json: Option<String>;
         let (on_mode, from_column, to_column, raw_expression) = match &join.on {
             JoinOn::FkPath {
                 from_column,
@@ -343,6 +344,13 @@ fn write_children_from_spec(
                 None,
             ),
             JoinOn::RawExpression(expr) => ("raw", None, None, Some(expr.as_str())),
+            JoinOn::Conditions(preds) => {
+                conditions_json =
+                    Some(serde_json::to_string(preds).map_err(|e| {
+                        StorageError::Data(format!("serialize join conditions: {e}"))
+                    })?);
+                ("conditions", None, None, conditions_json.as_deref())
+            }
         };
         tx.execute(
             "INSERT INTO qry_saved_query_joins
@@ -523,13 +531,18 @@ fn load_joins(conn: &Connection, id: &str) -> Result<Vec<JoinStep>, StorageError
             };
 
             let on_mode: String = row.get(5)?;
-            let on = if on_mode == "fk_path" {
-                JoinOn::FkPath {
+            let on = match on_mode.as_str() {
+                "fk_path" => JoinOn::FkPath {
                     from_column: row.get::<_, String>(6)?,
                     to_column: row.get::<_, String>(7)?,
+                },
+                "conditions" => {
+                    let raw: String = row.get(8)?;
+                    serde_json::from_str(&raw)
+                        .map(JoinOn::Conditions)
+                        .unwrap_or_else(|_| JoinOn::RawExpression(raw))
                 }
-            } else {
-                JoinOn::RawExpression(row.get::<_, String>(8)?)
+                _ => JoinOn::RawExpression(row.get::<_, String>(8)?),
             };
 
             Ok(JoinStep {
