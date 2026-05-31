@@ -343,6 +343,38 @@ fn mysql_error(e: mysql::Error) -> DbError {
     DbError::QueryFailed(e.to_string().into())
 }
 
+/// Parses the connection id from a row value for the processlist kill action.
+///
+/// Accepts `Int` or `Text` variants. Rejects zero and negative values because
+/// MySQL connection ids start at 1; a zero id would silently wrap to u64::MAX
+/// and KILL an unintended connection.
+fn parse_kill_id(value: &dbflux_core::Value) -> Result<u64, DbError> {
+    match value {
+        dbflux_core::Value::Int(n) if *n > 0 => Ok(*n as u64),
+        dbflux_core::Value::Int(n) => Err(DbError::QueryFailed(
+            format!("mysql.processlist kill: id {n} is not a positive integer").into(),
+        )),
+        dbflux_core::Value::Text(s) => {
+            let parsed: u64 = s.trim().parse().map_err(|_| {
+                DbError::QueryFailed(
+                    format!("mysql.processlist kill: id '{s}' is not a valid integer").into(),
+                )
+            })?;
+            if parsed == 0 {
+                return Err(DbError::QueryFailed(
+                    format!("mysql.processlist kill: id '{s}' is not a positive integer").into(),
+                ));
+            }
+            Ok(parsed)
+        }
+        _ => Err(DbError::QueryFailed(
+            "mysql.processlist kill: could not read id from row"
+                .to_string()
+                .into(),
+        )),
+    }
+}
+
 #[async_trait]
 impl InstanceCatalog for MysqlInstanceCatalog {
     async fn list_metrics(&self) -> Result<Vec<InstanceMetricDef>, DbError> {
@@ -391,19 +423,9 @@ impl InstanceCatalog for MysqlInstanceCatalog {
         row_values: &[dbflux_core::Value],
     ) -> Result<(), DbError> {
         if metric_id == "mysql.processlist" && action_id == "kill" {
-            let id: u64 = match row_values.first() {
-                Some(dbflux_core::Value::Int(n)) if *n > 0 => *n as u64,
-                Some(dbflux_core::Value::Int(n)) => {
-                    return Err(DbError::QueryFailed(
-                        format!("mysql.processlist kill: id {n} is not a positive integer").into(),
-                    ));
-                }
-                Some(dbflux_core::Value::Text(s)) => s.trim().parse().map_err(|_| {
-                    DbError::QueryFailed(
-                        format!("mysql.processlist kill: id '{s}' is not a valid integer").into(),
-                    )
-                })?,
-                _ => {
+            let id = match row_values.first() {
+                Some(value) => parse_kill_id(value)?,
+                None => {
                     return Err(DbError::QueryFailed(
                         "mysql.processlist kill: could not read id from row"
                             .to_string()
@@ -688,6 +710,27 @@ mod tests {
     fn mysql_row_actions_unknown_returns_empty() {
         let actions = MysqlInstanceCatalog::static_row_actions("unknown");
         assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn kill_text_zero_is_rejected() {
+        let result = parse_kill_id(&dbflux_core::Value::Text("0".to_string()));
+        assert!(
+            result.is_err(),
+            "Value::Text(\"0\") must be rejected, same as Value::Int(0)"
+        );
+    }
+
+    #[test]
+    fn kill_int_zero_is_rejected() {
+        let result = parse_kill_id(&dbflux_core::Value::Int(0));
+        assert!(result.is_err(), "Value::Int(0) must be rejected");
+    }
+
+    #[test]
+    fn kill_text_valid_id_is_accepted() {
+        let result = parse_kill_id(&dbflux_core::Value::Text("42".to_string()));
+        assert_eq!(result.unwrap(), 42u64);
     }
 
     /// BF7: MysqlInstanceCatalog must return a non-None default dashboard with

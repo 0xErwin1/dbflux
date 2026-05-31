@@ -1936,14 +1936,18 @@ impl DashboardDocument {
             })
             .collect();
 
-        // Track existing inspector slots by (metric_id, grid_pos) for dedup.
-        let mut existing_inspectors: std::collections::HashSet<(String, u32)> = self
+        // Track existing inspector slots by (metric_id, grid_row, grid_column) for dedup.
+        let mut existing_inspectors: std::collections::HashSet<(String, u32, u32)> = self
             .panel_slots
             .iter()
             .filter_map(|slot| match slot {
                 DashboardPanelSlot::Inspector {
                     entity, grid_pos, ..
-                } => Some((entity.read(cx).metric_id().to_string(), grid_pos.grid_row)),
+                } => Some((
+                    entity.read(cx).metric_id().to_string(),
+                    grid_pos.grid_row,
+                    grid_pos.grid_column,
+                )),
                 _ => None,
             })
             .collect();
@@ -1972,7 +1976,7 @@ impl DashboardDocument {
 
             // Inspector slots are identified by metric_id + row (no SavedChart).
             if let dbflux_ui_base::DashboardPanelKind::Inspector { metric_id } = &panel.kind {
-                let dedup_key = (metric_id.clone(), grid_pos.grid_row);
+                let dedup_key = (metric_id.clone(), grid_pos.grid_row, grid_pos.grid_column);
                 if !existing_inspectors.insert(dedup_key) {
                     continue;
                 }
@@ -2005,6 +2009,10 @@ impl DashboardDocument {
                         title_override,
                     });
                     appended += 1;
+                } else {
+                    log::warn!(
+                        "[dashboard reconcile] inspector panel '{metric_id}' skipped: dashboard has no profile_id"
+                    );
                 }
                 continue;
             }

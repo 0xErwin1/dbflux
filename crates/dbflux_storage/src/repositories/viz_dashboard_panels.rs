@@ -215,7 +215,7 @@ impl DashboardPanelsRepository {
                 "SELECT COUNT(*)
                  FROM viz_dashboard_panels p
                  LEFT JOIN viz_saved_charts c ON p.saved_chart_id = c.id
-                 WHERE c.id IS NULL",
+                 WHERE p.panel_kind = 'chart' AND c.id IS NULL",
                 [],
                 |row| row.get(0),
             )
@@ -443,6 +443,74 @@ mod tests {
         assert_eq!(
             loaded[0].inspector_metric_id.as_deref(),
             Some("pg.activity")
+        );
+    }
+
+    #[test]
+    fn test_count_orphans_excludes_inspector_and_divider_panels() {
+        let path = temp_db("count_orphans_kinds");
+        let conn = open_database(&path).expect("open");
+        MigrationRegistry::new().run_all(&conn).expect("migrate");
+
+        let profile_id = insert_profile(&conn);
+        let dashboard_id = insert_dashboard(&conn, Some(profile_id));
+        let ghost_chart_id = Uuid::new_v4();
+
+        let conn = Arc::new(Mutex::new(conn));
+        let repo = DashboardPanelsRepository::new(Arc::clone(&conn));
+
+        let inspector_panel = DashboardPanelDto {
+            dashboard_id: dashboard_id.to_string(),
+            panel_index: 0,
+            panel_kind: "inspector".to_string(),
+            saved_chart_id: String::new(),
+            divider_markdown: None,
+            inspector_metric_id: Some("mysql.processlist".to_string()),
+            title_override: None,
+            grid_row: 0,
+            grid_column: 0,
+            grid_width: 12,
+            grid_height: 4,
+        };
+
+        let divider_panel = DashboardPanelDto {
+            dashboard_id: dashboard_id.to_string(),
+            panel_index: 1,
+            panel_kind: "divider".to_string(),
+            saved_chart_id: String::new(),
+            divider_markdown: Some("## Section".to_string()),
+            inspector_metric_id: None,
+            title_override: None,
+            grid_row: 1,
+            grid_column: 0,
+            grid_width: 12,
+            grid_height: 1,
+        };
+
+        let orphan_chart_panel = DashboardPanelDto {
+            dashboard_id: dashboard_id.to_string(),
+            panel_index: 2,
+            panel_kind: "chart".to_string(),
+            saved_chart_id: ghost_chart_id.to_string(),
+            divider_markdown: None,
+            inspector_metric_id: None,
+            title_override: None,
+            grid_row: 2,
+            grid_column: 0,
+            grid_width: 6,
+            grid_height: 3,
+        };
+
+        repo.replace_panels_for_dashboard(
+            dashboard_id,
+            &[inspector_panel, divider_panel, orphan_chart_panel],
+        )
+        .expect("replace");
+
+        let orphans = repo.count_orphans().expect("count");
+        assert_eq!(
+            orphans, 1,
+            "only the chart panel with missing saved_chart_id must be counted as orphan"
         );
     }
 
