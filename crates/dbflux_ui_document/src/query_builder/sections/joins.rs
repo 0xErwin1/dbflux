@@ -27,12 +27,7 @@ pub fn render_joins(
     let join_rows = panel.join_rows.clone();
     let join_states = panel.join_input_states.clone();
 
-    let mut container = div()
-        .flex()
-        .flex_col()
-        .p_2()
-        .gap_1()
-        .child(div().text_sm().child(SharedString::from("Joins")));
+    let mut container = div().flex().flex_col().gap_1();
 
     if show_banner {
         container = container.child(

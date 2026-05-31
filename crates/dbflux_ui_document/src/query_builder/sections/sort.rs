@@ -19,12 +19,7 @@ pub fn render_sort(
     let sort_count = panel.sort_rows.len();
     let sort_rows = panel.sort_rows.clone();
 
-    let mut container = div()
-        .flex()
-        .flex_col()
-        .p_2()
-        .gap_1()
-        .child(div().text_sm().child(SharedString::from("Sort")));
+    let mut container = div().flex().flex_col().gap_1();
 
     for (i, row) in sort_rows.iter().enumerate() {
         let dir_label = match row.direction {

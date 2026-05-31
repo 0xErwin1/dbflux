@@ -1,23 +1,25 @@
-use gpui::{Context, IntoElement, Window, div};
+use dbflux_components::controls::{Button, ButtonVariant, Input, ReadonlyTextView};
+use dbflux_components::icons::AppIcon;
+use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use gpui::prelude::*;
+use gpui::{AnyElement, Context, IntoElement, SharedString, Window, div, px};
+use gpui_component::ActiveTheme;
+use gpui_component::scroll::ScrollableElement;
+use gpui_component::theme::Theme;
 
 use super::panel::QueryBuilderPanel;
 
 /// Top-level render function for `QueryBuilderPanel`.
 ///
-/// Builds the panel UI from five sections: Columns, Filters, Joins, Sort,
-/// and Limit/Offset, plus a header, SQL preview, and footer.
-/// Each section delegates to its own render helper for clarity.
-///
-/// Also flushes pending state syncs here, while `Window` is available:
-/// - `pending_preview_sync` → pushes the latest SQL text into the read-only editor
-/// - `pending_join_rebuild` → creates InputState entities for newly added join rows
+/// Renders a sticky header (source + Save/Reset), a scrollable middle pane
+/// containing the section cards, and a sticky footer with Run / Open in
+/// Editor. State syncs that need `Window` are flushed at the top.
 pub fn render_panel(
     panel: &mut QueryBuilderPanel,
     window: &mut Window,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
-    use gpui::prelude::*;
-
     if panel.pending_preview_sync {
         panel.pending_preview_sync = false;
         if let Some(state) = panel.sql_preview_state.clone() {
@@ -40,7 +42,9 @@ pub fn render_panel(
 
     ensure_predicate_inputs(panel, window, cx);
 
-    let container = div().flex().flex_col().size_full();
+    let theme = cx.theme().clone();
+
+    let container = div().flex().flex_col().size_full().bg(theme.background);
 
     let container = match &panel.focus_handle {
         Some(handle) => container.track_focus(handle),
@@ -48,28 +52,310 @@ pub fn render_panel(
     };
 
     container
-        .child(render_header(panel, window, cx))
-        .child(render_columns_section(panel, window, cx))
-        .child(render_filters_section(panel, window, cx))
-        .child(render_joins_section(panel, window, cx))
-        .child(render_sort_section(panel, window, cx))
-        .child(render_limit_offset(panel, window, cx))
-        .child(render_preview(panel, window, cx))
-        .child(render_footer(panel, window, cx))
+        .child(render_header(panel, &theme, cx))
+        .child(render_body(panel, &theme, cx))
+        .child(render_footer(panel, &theme, cx))
 }
+
+// ---------------------------------------------------------------------------
+// Header
+// ---------------------------------------------------------------------------
+
+fn render_header(
+    panel: &mut QueryBuilderPanel,
+    theme: &Theme,
+    cx: &mut Context<QueryBuilderPanel>,
+) -> impl IntoElement {
+    let source_table = panel.current_spec.source.table.clone();
+    let source_schema = panel.current_spec.source.schema.clone();
+
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(Spacing::SM)
+        .px(Spacing::MD)
+        .h(Heights::HEADER)
+        .border_b_1()
+        .border_color(theme.border)
+        .bg(theme.background)
+        .child(
+            Icon::new(AppIcon::Table)
+                .small()
+                .color(theme.muted_foreground),
+        )
+        .child(Text::label(SharedString::from(source_table)).color(theme.foreground))
+        .when_some(source_schema, |row, schema| {
+            row.child(
+                div()
+                    .px(Spacing::XS)
+                    .rounded(Radii::SM)
+                    .bg(theme.secondary)
+                    .child(Text::caption(SharedString::from(schema)).color(theme.muted_foreground)),
+            )
+        })
+        .child(div().flex_1())
+        .child(
+            Button::new("qb-hdr-save", "Save")
+                .icon(AppIcon::Save)
+                .ghost()
+                .small()
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    use crate::query_builder::events::BuilderEvent;
+                    let name = this
+                        .loaded_id
+                        .as_deref()
+                        .unwrap_or("Untitled query")
+                        .to_string();
+                    cx.emit(BuilderEvent::SaveRequested { name });
+                })),
+        )
+        .child(
+            Button::new("qb-hdr-reset", "Reset")
+                .icon(AppIcon::RotateCcw)
+                .ghost()
+                .small()
+                .on_click(cx.listener(|_this, _event, _window, cx| {
+                    use crate::query_builder::events::BuilderEvent;
+                    cx.emit(BuilderEvent::ResetRequested);
+                })),
+        )
+}
+
+// ---------------------------------------------------------------------------
+// Scrollable body with section cards
+// ---------------------------------------------------------------------------
+
+fn render_body(
+    panel: &mut QueryBuilderPanel,
+    theme: &Theme,
+    cx: &mut Context<QueryBuilderPanel>,
+) -> impl IntoElement {
+    use super::sections::{columns, filters, joins, sort};
+
+    let columns_body = columns::render_columns(panel, cx).into_any_element();
+    let filters_body = filters::render_filters(panel, cx).into_any_element();
+    let joins_body = joins::render_joins(panel, cx).into_any_element();
+    let sort_body = sort::render_sort(panel, cx).into_any_element();
+    let limit_body = render_limit_offset_body(panel).into_any_element();
+    let preview_body = render_preview_body(panel, theme).into_any_element();
+
+    div()
+        .flex_1()
+        .min_h(px(0.0))
+        .overflow_y_scrollbar()
+        .child(section_card(
+            "COLUMNS",
+            AppIcon::Columns,
+            theme,
+            columns_body,
+        ))
+        .child(section_card(
+            "FILTERS",
+            AppIcon::ListFilter,
+            theme,
+            filters_body,
+        ))
+        .child(section_card("JOINS", AppIcon::Layers, theme, joins_body))
+        .child(section_card("SORT", AppIcon::ArrowUpDown, theme, sort_body))
+        .child(section_card(
+            "LIMIT & OFFSET",
+            AppIcon::Hash,
+            theme,
+            limit_body,
+        ))
+        .child(section_card(
+            "SQL PREVIEW",
+            AppIcon::Code,
+            theme,
+            preview_body,
+        ))
+}
+
+/// Renders a section as a bordered card with an uppercase header bar and
+/// a padded body. Used for every section in the builder panel so the
+/// hierarchy stays consistent.
+fn section_card(
+    title: &'static str,
+    icon: AppIcon,
+    theme: &Theme,
+    body: AnyElement,
+) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .border_b_1()
+        .border_color(theme.border)
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(Spacing::XS)
+                .h(Heights::TOOLBAR)
+                .px(Spacing::MD)
+                .bg(theme.secondary)
+                .child(Icon::new(icon).small().color(theme.muted_foreground))
+                .child(
+                    div()
+                        .text_size(FontSizes::XS)
+                        .text_color(theme.muted_foreground)
+                        .child(SharedString::from(title)),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(Spacing::XS)
+                .px(Spacing::MD)
+                .py(Spacing::SM)
+                .child(body),
+        )
+}
+
+// ---------------------------------------------------------------------------
+// Limit & Offset (small enough to keep inline)
+// ---------------------------------------------------------------------------
+
+fn render_limit_offset_body(panel: &mut QueryBuilderPanel) -> impl IntoElement {
+    let row = div().flex().flex_row().gap(Spacing::MD).items_center();
+
+    let row = if let Some(limit_state) = panel.limit_input_state.as_ref() {
+        row.child(
+            div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .gap(Spacing::XXS)
+                .child(Text::caption(SharedString::from("Limit")))
+                .child(Input::new(limit_state).small().w_full()),
+        )
+    } else {
+        row.child(
+            div()
+                .flex_1()
+                .child(Text::caption(SharedString::from("Limit"))),
+        )
+    };
+
+    if let Some(offset_state) = panel.offset_input_state.as_ref() {
+        row.child(
+            div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .gap(Spacing::XXS)
+                .child(Text::caption(SharedString::from("Offset")))
+                .child(Input::new(offset_state).small().w_full()),
+        )
+    } else {
+        row.child(
+            div()
+                .flex_1()
+                .child(Text::caption(SharedString::from("Offset"))),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SQL Preview
+// ---------------------------------------------------------------------------
+
+fn render_preview_body(panel: &mut QueryBuilderPanel, theme: &Theme) -> impl IntoElement {
+    let line_count = panel.sql_preview.lines().count().max(1);
+    let line_label = if line_count == 1 { "line" } else { "lines" };
+    let status_text = format!("valid · {line_count} {line_label}");
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(Spacing::XS)
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(Spacing::XS)
+                .child(
+                    Icon::new(AppIcon::CircleCheck)
+                        .small()
+                        .color(theme.muted_foreground),
+                )
+                .child(
+                    Text::caption(SharedString::from(status_text)).color(theme.muted_foreground),
+                ),
+        )
+        .when_some(panel.sql_preview_state.as_ref(), |container, state| {
+            container.child(
+                div()
+                    .rounded(Radii::SM)
+                    .border_1()
+                    .border_color(theme.border)
+                    .child(ReadonlyTextView::new(state).w_full().h(px(140.0))),
+            )
+        })
+}
+
+// ---------------------------------------------------------------------------
+// Footer
+// ---------------------------------------------------------------------------
+
+fn render_footer(
+    panel: &mut QueryBuilderPanel,
+    theme: &Theme,
+    cx: &mut Context<QueryBuilderPanel>,
+) -> impl IntoElement {
+    let is_runnable = panel.is_runnable();
+
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(Spacing::SM)
+        .px(Spacing::MD)
+        .h(Heights::HEADER)
+        .border_t_1()
+        .border_color(theme.border)
+        .bg(theme.background)
+        .child(
+            Button::new("qb-run", "Run")
+                .icon(AppIcon::Play)
+                .primary()
+                .small()
+                .disabled(!is_runnable)
+                .on_click(cx.listener(|_this, _event, _window, cx| {
+                    use crate::query_builder::events::BuilderEvent;
+                    cx.emit(BuilderEvent::RunRequested);
+                })),
+        )
+        .child(
+            Button::new("qb-open-editor", "Open in Editor")
+                .icon(AppIcon::ExternalLink)
+                .variant(ButtonVariant::Ghost)
+                .small()
+                .on_click(cx.listener(|_this, _event, _window, cx| {
+                    use crate::query_builder::events::BuilderEvent;
+                    cx.emit(BuilderEvent::OpenInEditorRequested);
+                })),
+        )
+        .child(div().flex_1())
+}
+
+// ---------------------------------------------------------------------------
+// Predicate input lifecycle
+// ---------------------------------------------------------------------------
 
 /// Walks the current filter tree and ensures every `Predicate` node has a
 /// corresponding `Entity<InputState>` in `panel.predicate_input_states`.
 ///
-/// This must run every render cycle (not only on mutations) so that predicates
-/// loaded from a saved query also get their input state created on first render.
+/// Runs every render cycle so predicates loaded from a saved query also get
+/// their input state created on first render.
 fn ensure_predicate_inputs(
     panel: &mut QueryBuilderPanel,
     window: &mut Window,
     cx: &mut Context<QueryBuilderPanel>,
 ) {
-    use dbflux_core::FilterNode;
-
     let filter = panel.current_spec.filter.clone();
     if let Some(root) = filter {
         ensure_in_node(panel, &root, vec![], window, cx);
@@ -118,183 +404,4 @@ fn literal_to_display_string(v: &dbflux_core::LiteralValue) -> String {
         LiteralValue::Timestamp(t) => t.clone(),
         LiteralValue::Null => "NULL".to_string(),
     }
-}
-
-fn render_header(
-    panel: &mut QueryBuilderPanel,
-    _window: &mut Window,
-    cx: &mut Context<QueryBuilderPanel>,
-) -> impl IntoElement {
-    use dbflux_components::controls::Button;
-    use gpui::SharedString;
-    use gpui::prelude::*;
-
-    div()
-        .flex()
-        .flex_row()
-        .p_2()
-        .gap_2()
-        .items_center()
-        .child(
-            div()
-                .flex_1()
-                .text_sm()
-                .child(SharedString::from(panel.current_spec.source.table.clone())),
-        )
-        .child(
-            Button::new("qb-hdr-save", "Save")
-                .ghost()
-                .small()
-                .on_click(cx.listener(|this, _event, _window, cx| {
-                    use crate::query_builder::events::BuilderEvent;
-                    let name = this
-                        .loaded_id
-                        .as_deref()
-                        .unwrap_or("Untitled query")
-                        .to_string();
-                    cx.emit(BuilderEvent::SaveRequested { name });
-                })),
-        )
-        .child(
-            Button::new("qb-hdr-reset", "Reset")
-                .ghost()
-                .small()
-                .on_click(cx.listener(|_this, _event, _window, cx| {
-                    use crate::query_builder::events::BuilderEvent;
-                    cx.emit(BuilderEvent::ResetRequested);
-                })),
-        )
-}
-
-fn render_columns_section(
-    panel: &mut QueryBuilderPanel,
-    _window: &mut Window,
-    cx: &mut Context<QueryBuilderPanel>,
-) -> impl IntoElement {
-    use super::sections::columns::render_columns;
-    render_columns(panel, cx)
-}
-
-fn render_filters_section(
-    panel: &mut QueryBuilderPanel,
-    _window: &mut Window,
-    cx: &mut Context<QueryBuilderPanel>,
-) -> impl IntoElement {
-    use super::sections::filters::render_filters;
-    render_filters(panel, cx)
-}
-
-fn render_joins_section(
-    panel: &mut QueryBuilderPanel,
-    _window: &mut Window,
-    cx: &mut Context<QueryBuilderPanel>,
-) -> impl IntoElement {
-    use super::sections::joins::render_joins;
-    render_joins(panel, cx)
-}
-
-fn render_sort_section(
-    panel: &mut QueryBuilderPanel,
-    _window: &mut Window,
-    cx: &mut Context<QueryBuilderPanel>,
-) -> impl IntoElement {
-    use super::sections::sort::render_sort;
-    render_sort(panel, cx)
-}
-
-fn render_limit_offset(
-    panel: &mut QueryBuilderPanel,
-    _window: &mut Window,
-    cx: &mut Context<QueryBuilderPanel>,
-) -> impl IntoElement {
-    use dbflux_components::controls::Input;
-    use gpui::SharedString;
-    use gpui::prelude::*;
-
-    let mut row = div().flex().flex_row().p_2().gap_2();
-
-    if let Some(limit_state) = panel.limit_input_state.as_ref() {
-        row = row.child(
-            div()
-                .flex()
-                .flex_row()
-                .gap_1()
-                .items_center()
-                .child(div().text_sm().child(SharedString::from("Limit")))
-                .child(Input::new(limit_state).small().w_full()),
-        );
-    } else {
-        row = row.child(div().text_sm().child(SharedString::from("Limit")));
-    }
-
-    if let Some(offset_state) = panel.offset_input_state.as_ref() {
-        row = row.child(
-            div()
-                .flex()
-                .flex_row()
-                .gap_1()
-                .items_center()
-                .child(div().text_sm().child(SharedString::from("Offset")))
-                .child(Input::new(offset_state).small().w_full()),
-        );
-    } else {
-        row = row.child(div().text_sm().child(SharedString::from("Offset")));
-    }
-
-    let _ = cx;
-    row
-}
-
-fn render_preview(
-    panel: &mut QueryBuilderPanel,
-    _window: &mut Window,
-    _cx: &mut Context<QueryBuilderPanel>,
-) -> impl IntoElement {
-    use dbflux_components::controls::ReadonlyTextView;
-    use gpui::SharedString;
-    use gpui::prelude::*;
-    use gpui::px;
-
-    div()
-        .flex()
-        .flex_col()
-        .p_2()
-        .child(div().text_sm().child(SharedString::from("SQL Preview")))
-        .when_some(panel.sql_preview_state.as_ref(), |container, state| {
-            container.child(ReadonlyTextView::new(state).w_full().h(px(120.0)))
-        })
-}
-
-fn render_footer(
-    panel: &mut QueryBuilderPanel,
-    _window: &mut Window,
-    cx: &mut Context<QueryBuilderPanel>,
-) -> impl IntoElement {
-    use dbflux_components::controls::{Button, ButtonVariant};
-    use gpui::prelude::*;
-
-    let is_runnable = panel.is_runnable();
-
-    div()
-        .flex()
-        .flex_row()
-        .p_2()
-        .gap_2()
-        .child(
-            Button::new("qb-run", "Run")
-                .primary()
-                .disabled(!is_runnable)
-                .on_click(cx.listener(|_this, _event, _window, cx| {
-                    use crate::query_builder::events::BuilderEvent;
-                    cx.emit(BuilderEvent::RunRequested);
-                })),
-        )
-        .child(
-            Button::new("qb-open-editor", "Open in Editor")
-                .variant(ButtonVariant::Ghost)
-                .on_click(cx.listener(|_this, _event, _window, cx| {
-                    use crate::query_builder::events::BuilderEvent;
-                    cx.emit(BuilderEvent::OpenInEditorRequested);
-                })),
-        )
 }

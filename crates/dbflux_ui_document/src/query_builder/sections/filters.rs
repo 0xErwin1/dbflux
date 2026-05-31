@@ -27,17 +27,16 @@ pub fn render_filters(
     let source_alias = panel.current_spec.source.alias.clone();
     let source_alias_for_group = source_alias.clone();
 
-    let mut container = div()
-        .flex()
-        .flex_col()
-        .p_2()
-        .gap_1()
-        .child(div().text_sm().child(SharedString::from("Filters")))
-        .when(filter_depth >= FILTER_DEPTH_CAP, |this| {
-            this.child(div().text_sm().child(SharedString::from(
-                "Maximum filter nesting depth reached (6 levels)",
-            )))
-        });
+    let mut container =
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .when(filter_depth >= FILTER_DEPTH_CAP, |this| {
+                this.child(div().text_sm().child(SharedString::from(
+                    "Maximum filter nesting depth reached (6 levels)",
+                )))
+            });
 
     match panel.current_spec.filter.clone() {
         None => {

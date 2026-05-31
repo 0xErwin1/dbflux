@@ -16,20 +16,14 @@ pub fn render_columns(
 
     let all_active = panel.projection_mode == ProjectionMode::All;
 
-    let mut container = div()
-        .flex()
-        .flex_col()
-        .p_2()
-        .gap_1()
-        .child(div().text_sm().child(SharedString::from("Columns")))
-        .child(
-            Checkbox::new("qb-all-columns")
-                .checked(all_active)
-                .label("All columns (*)")
-                .on_click(cx.listener(|this, checked, _window, cx| {
-                    this.set_all_columns(*checked, cx);
-                })),
-        );
+    let mut container = div().flex().flex_col().gap_1().child(
+        Checkbox::new("qb-all-columns")
+            .checked(all_active)
+            .label("All columns (*)")
+            .on_click(cx.listener(|this, checked, _window, cx| {
+                this.set_all_columns(*checked, cx);
+            })),
+    );
 
     if !all_active {
         let projection_rows = panel.projection_rows.clone();
