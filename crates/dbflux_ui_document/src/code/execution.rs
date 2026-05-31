@@ -1302,6 +1302,10 @@ impl CodeDocument {
                     // reset; the outer CodeDocument toolbar owns the refresh
                     // controls). Ignored.
                 }
+                DataGridEvent::RowActionRequested { .. } => {
+                    // Row actions are only emitted from InspectorPanel grids.
+                    // CodeDocument result grids never set a row_action_provider.
+                }
             },
         );
 

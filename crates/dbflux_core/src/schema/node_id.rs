@@ -19,6 +19,11 @@ pub enum SchemaNodeId {
     Profile {
         profile_id: Uuid,
     },
+    /// Top-level grouping folder that contains all `Database` children under a
+    /// connected profile. Expanded by default on first profile expansion.
+    DatabasesFolder {
+        profile_id: Uuid,
+    },
     Database {
         profile_id: Uuid,
         name: String,
@@ -304,6 +309,34 @@ pub enum SchemaNodeId {
     ScriptFile {
         path: String,
     },
+
+    // Instance metrics sidebar nodes (gated on DriverCapabilities::INSTANCE_METRICS)
+    /// Root folder for per-server chartable metric series.
+    InstanceMetricsFolder {
+        profile_id: Uuid,
+    },
+    /// Clickable leaf for a single instance metric series.
+    InstanceMetricLeaf {
+        profile_id: Uuid,
+        metric_id: String,
+    },
+
+    // Instance inspector sidebar nodes (gated on DriverCapabilities::INSTANCE_INSPECTOR)
+    /// Root folder for per-server tabular inspector entries.
+    InstanceInspectorsFolder {
+        profile_id: Uuid,
+    },
+    /// Clickable leaf for a single instance inspector view.
+    InstanceInspectorLeaf {
+        profile_id: Uuid,
+        metric_id: String,
+    },
+
+    // Instance overview sidebar node (gated on INSTANCE_METRICS | INSTANCE_INSPECTOR)
+    /// Clickable leaf that opens the synthesized read-only "Instance Overview" dashboard.
+    InstanceOverviewLeaf {
+        profile_id: Uuid,
+    },
 }
 
 /// Simple kind enum for cheap matching without data.
@@ -311,6 +344,7 @@ pub enum SchemaNodeId {
 pub enum SchemaNodeKind {
     ConnectionFolder,
     Profile,
+    DatabasesFolder,
     Database,
     Loading,
     Schema,
@@ -363,6 +397,11 @@ pub enum SchemaNodeKind {
     DependentItem,
     ScriptsFolder,
     ScriptFile,
+    InstanceMetricsFolder,
+    InstanceMetricLeaf,
+    InstanceInspectorsFolder,
+    InstanceInspectorLeaf,
+    InstanceOverviewLeaf,
 }
 
 impl SchemaNodeId {
@@ -370,6 +409,7 @@ impl SchemaNodeId {
         match self {
             Self::ConnectionFolder { .. } => SchemaNodeKind::ConnectionFolder,
             Self::Profile { .. } => SchemaNodeKind::Profile,
+            Self::DatabasesFolder { .. } => SchemaNodeKind::DatabasesFolder,
             Self::Database { .. } => SchemaNodeKind::Database,
             Self::Loading { .. } => SchemaNodeKind::Loading,
             Self::Schema { .. } => SchemaNodeKind::Schema,
@@ -424,6 +464,11 @@ impl SchemaNodeId {
             Self::DependentItem { .. } => SchemaNodeKind::DependentItem,
             Self::ScriptsFolder { .. } => SchemaNodeKind::ScriptsFolder,
             Self::ScriptFile { .. } => SchemaNodeKind::ScriptFile,
+            Self::InstanceMetricsFolder { .. } => SchemaNodeKind::InstanceMetricsFolder,
+            Self::InstanceMetricLeaf { .. } => SchemaNodeKind::InstanceMetricLeaf,
+            Self::InstanceInspectorsFolder { .. } => SchemaNodeKind::InstanceInspectorsFolder,
+            Self::InstanceInspectorLeaf { .. } => SchemaNodeKind::InstanceInspectorLeaf,
+            Self::InstanceOverviewLeaf { .. } => SchemaNodeKind::InstanceOverviewLeaf,
         }
     }
 
@@ -433,6 +478,7 @@ impl SchemaNodeId {
             | Self::ScriptsFolder { .. }
             | Self::ScriptFile { .. } => None,
             Self::Profile { profile_id, .. }
+            | Self::DatabasesFolder { profile_id, .. }
             | Self::Database { profile_id, .. }
             | Self::Loading { profile_id, .. }
             | Self::Schema { profile_id, .. }
@@ -482,7 +528,12 @@ impl SchemaNodeId {
             | Self::RemoteDashboardsFolder { profile_id, .. }
             | Self::RemoteDashboardItem { profile_id, .. }
             | Self::SavedChartsFolder { profile_id, .. }
-            | Self::SavedChartItem { profile_id, .. } => Some(*profile_id),
+            | Self::SavedChartItem { profile_id, .. }
+            | Self::InstanceMetricsFolder { profile_id, .. }
+            | Self::InstanceMetricLeaf { profile_id, .. }
+            | Self::InstanceInspectorsFolder { profile_id, .. }
+            | Self::InstanceInspectorLeaf { profile_id, .. }
+            | Self::InstanceOverviewLeaf { profile_id, .. } => Some(*profile_id),
         }
     }
 }
@@ -491,6 +542,7 @@ impl SchemaNodeId {
 // Keep them short to minimize string allocation overhead.
 const P_CONN_FOLDER: &str = "CF";
 const P_PROFILE: &str = "P";
+const P_DATABASES_FOLDER: &str = "DBSF";
 const P_DATABASE: &str = "DB";
 const P_LOADING: &str = "LD";
 const P_SCHEMA: &str = "S";
@@ -538,6 +590,12 @@ const P_ROUTINE: &str = "RT";
 const P_METRICS_FOLDER: &str = "MF";
 const P_METRIC_NS_FOLDER: &str = "MNF";
 const P_METRIC_LEAF: &str = "ML";
+// Instance metrics and inspector sidebar node prefixes.
+const P_INST_METRICS_FOLDER: &str = "IMF";
+const P_INST_METRIC_LEAF: &str = "IML";
+const P_INST_INSPECTORS_FOLDER: &str = "IIF";
+const P_INST_INSPECTOR_LEAF: &str = "IIL";
+const P_INST_OVERVIEW_LEAF: &str = "IOL";
 // Dashboard and saved-chart sidebar node prefixes.
 // Note: P_SCRIPTS_FOLDER already uses "SCF", so we use distinct tags here.
 const P_DASHBOARDS_FOLDER: &str = "DBF";
@@ -555,6 +613,9 @@ impl fmt::Display for SchemaNodeId {
             }
             Self::Profile { profile_id } => {
                 write!(f, "{}|{}", P_PROFILE, profile_id)
+            }
+            Self::DatabasesFolder { profile_id } => {
+                write!(f, "{}|{}", P_DATABASES_FOLDER, profile_id)
             }
             Self::Database { profile_id, name } => {
                 write!(f, "{}|{}|{}", P_DATABASE, profile_id, name)
@@ -968,6 +1029,27 @@ impl fmt::Display for SchemaNodeId {
             } => {
                 write!(f, "{}|{}|{}", P_SAVED_CHART_ITEM, profile_id, chart_id)
             }
+            Self::InstanceMetricsFolder { profile_id } => {
+                write!(f, "{}|{}", P_INST_METRICS_FOLDER, profile_id)
+            }
+            Self::InstanceMetricLeaf {
+                profile_id,
+                metric_id,
+            } => {
+                write!(f, "{}|{}|{}", P_INST_METRIC_LEAF, profile_id, metric_id)
+            }
+            Self::InstanceInspectorsFolder { profile_id } => {
+                write!(f, "{}|{}", P_INST_INSPECTORS_FOLDER, profile_id)
+            }
+            Self::InstanceInspectorLeaf {
+                profile_id,
+                metric_id,
+            } => {
+                write!(f, "{}|{}|{}", P_INST_INSPECTOR_LEAF, profile_id, metric_id)
+            }
+            Self::InstanceOverviewLeaf { profile_id } => {
+                write!(f, "{}|{}", P_INST_OVERVIEW_LEAF, profile_id)
+            }
         }
     }
 }
@@ -1026,6 +1108,12 @@ impl FromStr for SchemaNodeId {
                 let profile_id =
                     Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
                 Ok(Self::Profile { profile_id })
+            }
+
+            P_DATABASES_FOLDER => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                Ok(Self::DatabasesFolder { profile_id })
             }
 
             P_DATABASE => {
@@ -1600,6 +1688,44 @@ impl FromStr for SchemaNodeId {
                 })
             }
 
+            P_INST_METRICS_FOLDER => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                Ok(Self::InstanceMetricsFolder { profile_id })
+            }
+
+            P_INST_METRIC_LEAF => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                let metric_id = parts.get(2).ok_or_else(err)?.to_string();
+                Ok(Self::InstanceMetricLeaf {
+                    profile_id,
+                    metric_id,
+                })
+            }
+
+            P_INST_INSPECTORS_FOLDER => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                Ok(Self::InstanceInspectorsFolder { profile_id })
+            }
+
+            P_INST_INSPECTOR_LEAF => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                let metric_id = parts.get(2).ok_or_else(err)?.to_string();
+                Ok(Self::InstanceInspectorLeaf {
+                    profile_id,
+                    metric_id,
+                })
+            }
+
+            P_INST_OVERVIEW_LEAF => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                Ok(Self::InstanceOverviewLeaf { profile_id })
+            }
+
             _ => Err(err()),
         }
     }
@@ -1610,6 +1736,7 @@ impl SchemaNodeKind {
         matches!(
             self,
             Self::Profile
+                | Self::DatabasesFolder
                 | Self::Database
                 | Self::Table
                 | Self::View
@@ -1644,6 +1771,11 @@ impl SchemaNodeKind {
                 | Self::RemoteDashboardItem
                 | Self::SavedChartsFolder
                 | Self::SavedChartItem
+                | Self::InstanceMetricsFolder
+                | Self::InstanceMetricLeaf
+                | Self::InstanceInspectorsFolder
+                | Self::InstanceInspectorLeaf
+                | Self::InstanceOverviewLeaf
         )
     }
 
@@ -1651,6 +1783,7 @@ impl SchemaNodeKind {
         matches!(
             self,
             Self::ConnectionFolder
+                | Self::DatabasesFolder
                 | Self::Schema
                 | Self::TablesFolder
                 | Self::ViewsFolder
@@ -1673,6 +1806,8 @@ impl SchemaNodeKind {
                 | Self::DashboardsFolder
                 | Self::RemoteDashboardsFolder
                 | Self::SavedChartsFolder
+                | Self::InstanceMetricsFolder
+                | Self::InstanceInspectorsFolder
         )
     }
 
@@ -1690,6 +1825,9 @@ impl SchemaNodeKind {
                 | Self::DashboardItem
                 | Self::RemoteDashboardItem
                 | Self::SavedChartItem
+                | Self::InstanceMetricLeaf
+                | Self::InstanceInspectorLeaf
+                | Self::InstanceOverviewLeaf
         )
     }
 }
@@ -1712,6 +1850,7 @@ mod tests {
 
         roundtrip(SchemaNodeId::ConnectionFolder { node_id: uuid });
         roundtrip(SchemaNodeId::Profile { profile_id: uuid });
+        roundtrip(SchemaNodeId::DatabasesFolder { profile_id: uuid });
         roundtrip(SchemaNodeId::Database {
             profile_id: uuid,
             name: "mydb".into(),
@@ -2195,5 +2334,64 @@ mod tests {
             id.to_string(),
             "SCRI|12345678-1234-1234-1234-123456789abc|aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         );
+    }
+
+    #[test]
+    fn instance_metrics_nodes_round_trip_via_display_and_from_str() {
+        let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+
+        roundtrip(SchemaNodeId::InstanceMetricsFolder { profile_id: uuid });
+        roundtrip(SchemaNodeId::InstanceMetricLeaf {
+            profile_id: uuid,
+            metric_id: "pg.tx_commit_rate".into(),
+        });
+        roundtrip(SchemaNodeId::InstanceInspectorsFolder { profile_id: uuid });
+        roundtrip(SchemaNodeId::InstanceInspectorLeaf {
+            profile_id: uuid,
+            metric_id: "pg.activity".into(),
+        });
+        roundtrip(SchemaNodeId::InstanceOverviewLeaf { profile_id: uuid });
+    }
+
+    #[test]
+    fn instance_metric_leaf_equality() {
+        let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+
+        let a = SchemaNodeId::InstanceMetricLeaf {
+            profile_id: uuid,
+            metric_id: "pg.cache_hit_ratio".to_string(),
+        };
+        let b = SchemaNodeId::InstanceMetricLeaf {
+            profile_id: uuid,
+            metric_id: "pg.cache_hit_ratio".to_string(),
+        };
+        let c = SchemaNodeId::InstanceMetricLeaf {
+            profile_id: uuid,
+            metric_id: "pg.active_connections".to_string(),
+        };
+
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn instance_inspector_leaf_equality() {
+        let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+
+        let a = SchemaNodeId::InstanceInspectorLeaf {
+            profile_id: uuid,
+            metric_id: "pg.activity".to_string(),
+        };
+        let b = SchemaNodeId::InstanceInspectorLeaf {
+            profile_id: uuid,
+            metric_id: "pg.activity".to_string(),
+        };
+        let c = SchemaNodeId::InstanceInspectorLeaf {
+            profile_id: uuid,
+            metric_id: "pg.top_statements".to_string(),
+        };
+
+        assert_eq!(a, b);
+        assert_ne!(a, c);
     }
 }

@@ -2426,4 +2426,20 @@ mod tests {
             "SELECT \"customer_id\", AVG(\"amount\") AS \"avg_amount\" FROM \"orders\" GROUP BY \"customer_id\" HAVING \"avg_amount\" > 10"
         );
     }
+
+    #[test]
+    fn sqlite_does_not_advertise_instance_metrics_or_inspector() {
+        use super::METADATA;
+        use dbflux_core::DriverCapabilities;
+
+        let caps = METADATA.capabilities;
+        assert!(
+            !caps.contains(DriverCapabilities::INSTANCE_METRICS),
+            "SQLite must not advertise INSTANCE_METRICS"
+        );
+        assert!(
+            !caps.contains(DriverCapabilities::INSTANCE_INSPECTOR),
+            "SQLite must not advertise INSTANCE_INSPECTOR"
+        );
+    }
 }

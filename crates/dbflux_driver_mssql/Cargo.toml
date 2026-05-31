@@ -13,6 +13,7 @@ license.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+async-trait = "0.1"
 dbflux_core = { path = "../dbflux_core" }
 dbflux_ssh = { path = "../dbflux_ssh" }
 chrono = "0.4"

@@ -86,9 +86,14 @@ impl Render for ChartDocument {
         // -- Lazily create the TimeRangePanel on first render.
         // Panel creation requires a Window reference (for DatePickerState), so
         // it must be deferred here rather than done in the constructor.
-        // Index 3 = Last24Hours — same default as CodeDocument's source panel.
+        //
+        // The initial preset index comes from `self.initial_time_range_index`:
+        //   Index 0 = Last15min   (InstanceMetric sources)
+        //   Index 3 = Last24Hours (all other sources — default)
         if self.time_range_panel.is_none() {
-            let panel = cx.new(|cx| TimeRangePanel::new("24h", Some(3), window, cx));
+            let preset_index = self.initial_time_range_index;
+            let label = TimeRangePanel::label_for_index(preset_index).unwrap_or("24h");
+            let panel = cx.new(|cx| TimeRangePanel::new(label, Some(preset_index), window, cx));
 
             let time_range_sub = cx.subscribe(
                 &panel,
@@ -119,16 +124,13 @@ impl Render for ChartDocument {
             // current render pass. Sources that require a window (MetricSource,
             // CollectionSource) would otherwise call build_plan(None) → WindowRequired
             // toast on the very first auto-run triggered by pending_run_on_first_render.
-            //
-            // Index 3 = Last24Hours. Mirror the logic from
-            // TimeRangePanel::resolved_window_for_preset: fill end = now when start
-            // is Some so the window is always closed (required by MetricQuery).
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as i64)
                 .unwrap_or(0);
-            let start_ms = now_ms - 24 * 60 * 60_000; // 24h lookback
-            self.pending_time_window = Some((start_ms, now_ms));
+            let lookback_ms =
+                TimeRangePanel::lookback_ms_for_index(preset_index).unwrap_or(24 * 60 * 60_000);
+            self.pending_time_window = Some((now_ms - lookback_ms, now_ms));
             // Seed selected_time_range to match the initial panel preset.
             self.selected_time_range = panel.read(cx).selected_time_range;
 

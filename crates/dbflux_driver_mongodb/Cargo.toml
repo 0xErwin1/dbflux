@@ -13,6 +13,7 @@ license.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+async-trait = "0.1"
 dbflux_core.workspace = true
 dbflux_ssh.workspace = true
 mongodb = { version = "3", default-features = false, features = ["sync", "rustls-tls", "bson-2", "compat-3-3-0", "dns-resolver"] }

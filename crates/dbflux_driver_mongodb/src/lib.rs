@@ -10,6 +10,7 @@
 )]
 
 pub mod driver;
+pub mod instance_catalog;
 pub mod language_service;
 pub mod query_generator;
 pub mod query_parser;

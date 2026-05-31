@@ -72,6 +72,10 @@ pub enum SavedChartSource {
     /// via `MetricSource` (which holds the same list) and the driver issues a
     /// single GetMetricData request batching every series.
     Metric { series: Vec<MetricSeries> },
+    /// A per-driver instance metric source. Identified by a driver-defined
+    /// `metric_id` string (e.g. `"pg.cache_hit_ratio"`). The chart opens a
+    /// time-bounded query via `InstanceMetricQuery`.
+    InstanceMetric { metric_id: String },
 }
 
 impl Default for SavedChartSource {
@@ -236,7 +240,9 @@ impl SavedChart {
     pub fn query(&self) -> Option<&str> {
         match &self.source {
             SavedChartSource::Query { query } => Some(query.as_str()),
-            SavedChartSource::Collection { .. } | SavedChartSource::Metric { .. } => None,
+            SavedChartSource::Collection { .. }
+            | SavedChartSource::Metric { .. }
+            | SavedChartSource::InstanceMetric { .. } => None,
         }
     }
 

@@ -1021,6 +1021,18 @@ pub trait Connection: Send + Sync {
     /// Drivers that implement `DashboardSource` override this and return `Some(&self.source)`.
     /// Drivers without dashboard sync support inherit this default and return `None`.
     /// These drivers MUST NOT advertise `DriverCapabilities::DASHBOARD_SYNC`.
+    /// Return a boxed `InstanceCatalog` for this connection, if supported.
+    ///
+    /// Drivers that implement `InstanceCatalog` override this and return `Some(catalog)`.
+    /// Drivers without instance-metrics support inherit this default and return `None`.
+    /// These drivers MUST NOT advertise `DriverCapabilities::INSTANCE_METRICS` or
+    /// `DriverCapabilities::INSTANCE_INSPECTOR`.
+    fn instance_catalog(
+        &self,
+    ) -> Option<Box<dyn crate::connection::instance_catalog::InstanceCatalog>> {
+        None
+    }
+
     fn dashboard_source(
         &self,
     ) -> Option<&dyn crate::connection::dashboard_source::DashboardSource> {

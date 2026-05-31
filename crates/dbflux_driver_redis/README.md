@@ -23,9 +23,42 @@ Redis key-value driver for DBFlux, built on the [`redis`](https://crates.io/crat
 - Mutations: insert, update, delete, batch operations, and bulk delete. The `RedisCommandGenerator` emits Redis commands for set/delete, hash set/delete, list push/set/remove, set add/remove, sorted-set add/remove, and stream add/delete, for use in previews and copy-as-command.
 - JSON export of results (`EXPORT_JSON`).
 
+### Instance Metrics
+
+Exposes a curated set of live server metrics sourced from the `INFO` command output:
+
+- `redis.connected_clients` — currently connected clients
+- `redis.blocked_clients` — clients waiting on a blocking command
+- `redis.used_memory` — bytes allocated by Redis allocator
+- `redis.used_memory_rss` — bytes allocated by the OS (resident set size)
+- `redis.total_commands_processed` — cumulative commands processed
+- `redis.total_connections_received` — cumulative connections accepted
+- `redis.instantaneous_ops_per_sec` — commands processed per second (server-side rate)
+- `redis.keyspace_hits` — cache hits against key lookups
+- `redis.keyspace_misses` — cache misses against key lookups
+- `redis.evicted_keys` — keys evicted due to `maxmemory` policy
+- `redis.expired_keys` — keys expired by TTL
+- `redis.rdb_changes_since_last_save` — changes since last RDB snapshot
+- `redis.connected_slaves` — attached replica count
+
+Each metric is returned as a single `(timestamp_ms, value)` row for live charting.
+
+### Instance Inspector
+
+Exposes tabular snapshots of running server state:
+
+- `redis.client_list` — active clients from `CLIENT LIST` (id, cmd, age, idle, flags, db, sub, multi)
+
+Sensitive fields (`addr`, `laddr`, `name`) are redacted to `[redacted]` to avoid exposing client IP addresses and hostnames.
+
 ## Limitations
 
 - SQL is not supported; queries must be written as Redis commands.
+
+- Instance metrics return a single data point per call (current snapshot from `INFO`), not a historical time series. Cumulative counters (e.g. `redis.total_commands_processed`) grow monotonically — interpret them as deltas between samples rather than absolute rates.
+
+- The `CLIENT LIST` inspector redacts the `addr`, `laddr`, and `name` fields in every row to avoid exposing client IP addresses and user-supplied names to the UI.
+
 - Query cancellation is not supported (`QUERY_CANCELLATION` is not set); long-running commands cannot be aborted from the UI.
 - No upsert (`supports_upsert: false`), no `RETURNING`, and no bulk update (`supports_bulk_update: false`).
 - DDL capabilities are all disabled (no tables, views, indexes, schemas) — this is a key-value store, not relational.

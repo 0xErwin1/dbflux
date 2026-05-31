@@ -12,19 +12,19 @@ use dbflux_core::{
     DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
     DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection, DriverCapabilities,
     DriverFormDef, DriverLimits, DriverMetadata, DropForeignKeyRequest, DropIndexRequest,
-    ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind, FormSection, FormTab,
-    FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection,
-    MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
-    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, RecordIdentity, RelationalConnection, RelationalSchema, RoutineInfo,
-    RoutineKind, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
-    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
-    SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities, Value,
-    ViewInfo, WhereOperator, field, field_password, field_required, field_use_uri,
-    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
-    generate_truncate, generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab,
-    when_checked, when_unchecked, with_default,
+    ExecutionSourceContext, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind,
+    FormSection, FormTab, FormValues, FormattedError, Icon, IndexData, IndexInfo, InstanceCatalog,
+    IsolationLevel, KeyValueConnection, MutationCapabilities, OrderByColumn, PaginationStyle,
+    PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalConnection,
+    RelationalSchema, RoutineInfo, RoutineKind, Row, RowDelete, RowInsert, RowPatch,
+    SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest,
+    SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SyntaxInfo,
+    TableInfo, TransactionCapabilities, Value, ViewInfo, WhereOperator, field, field_password,
+    field_required, field_use_uri, generate_delete_template, generate_drop_table,
+    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
+    render_semantic_filter_sql, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
@@ -47,7 +47,9 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
             | DriverCapabilities::CHECK_CONSTRAINTS.bits()
             | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
             | DriverCapabilities::ROUTINES.bits()
-            | DriverCapabilities::MULTI_STATEMENT.bits(),
+            | DriverCapabilities::MULTI_STATEMENT.bits()
+            | DriverCapabilities::INSTANCE_METRICS.bits()
+            | DriverCapabilities::INSTANCE_INSPECTOR.bits(),
     ),
     default_port: Some(3306),
     uri_scheme: "mysql".into(),
@@ -198,7 +200,9 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
             | DriverCapabilities::CHECK_CONSTRAINTS.bits()
             | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
             | DriverCapabilities::ROUTINES.bits()
-            | DriverCapabilities::MULTI_STATEMENT.bits(),
+            | DriverCapabilities::MULTI_STATEMENT.bits()
+            | DriverCapabilities::INSTANCE_METRICS.bits()
+            | DriverCapabilities::INSTANCE_INSPECTOR.bits(),
     ),
     default_port: Some(3306),
     uri_scheme: "mariadb".into(),
@@ -1091,7 +1095,7 @@ impl MysqlDriver {
         );
 
         Ok(Box::new(MysqlConnection {
-            catalog_conn: Mutex::new(catalog_conn),
+            catalog_conn: Arc::new(Mutex::new(catalog_conn)),
             query_conn: Mutex::new(QueryConnState {
                 conn: query_conn,
                 current_database: None,
@@ -1167,7 +1171,7 @@ impl MysqlDriver {
         );
 
         Ok(Box::new(MysqlConnection {
-            catalog_conn: Mutex::new(catalog_conn),
+            catalog_conn: Arc::new(Mutex::new(catalog_conn)),
             query_conn: Mutex::new(QueryConnState {
                 conn: query_conn,
                 current_database: None,
@@ -1298,7 +1302,7 @@ impl MysqlDriver {
         );
 
         Ok(Box::new(MysqlConnection {
-            catalog_conn: Mutex::new(catalog_conn),
+            catalog_conn: Arc::new(Mutex::new(catalog_conn)),
             query_conn: Mutex::new(QueryConnState {
                 conn: query_conn,
                 current_database: None,
@@ -1472,7 +1476,7 @@ struct QueryConnState {
 
 pub struct MysqlConnection {
     /// Connection for catalog/schema operations (schema browsing, table details).
-    catalog_conn: Mutex<Conn>,
+    catalog_conn: Arc<Mutex<Conn>>,
 
     /// Connection for query execution (editor queries, table browser).
     query_conn: Mutex<QueryConnState>,
@@ -1731,8 +1735,55 @@ impl Connection for MysqlConnection {
         Ok(())
     }
 
+    fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
+        let mut conn = self.catalog_conn.lock().ok()?;
+        let ps_available =
+            crate::instance_catalog::MysqlInstanceCatalog::probe_performance_schema(&mut conn);
+        let process_privilege =
+            crate::instance_catalog::MysqlInstanceCatalog::probe_process_privilege(&mut conn);
+        let connection_admin =
+            crate::instance_catalog::MysqlInstanceCatalog::probe_connection_admin(&mut conn);
+
+        Some(Box::new(
+            crate::instance_catalog::MysqlInstanceCatalog::new_probed(
+                Arc::clone(&self.catalog_conn),
+                ps_available,
+                process_privilege,
+                connection_admin,
+            ),
+        ))
+    }
+
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
         self.cancelled.store(false, Ordering::SeqCst);
+
+        if let Some(source) = req
+            .execution_context
+            .as_ref()
+            .and_then(|ctx| ctx.source.as_ref())
+        {
+            match source {
+                ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
+                    let mut conn = self.query_conn.lock().map_err(|_| {
+                        DbError::QueryFailed("mysql conn mutex poisoned".to_string().into())
+                    })?;
+                    return crate::instance_catalog::dispatch_metric_series(
+                        &mut conn.conn,
+                        metric_id,
+                    );
+                }
+                ExecutionSourceContext::InstanceInspectorQuery { metric_id } => {
+                    let mut conn = self.query_conn.lock().map_err(|_| {
+                        DbError::QueryFailed("mysql conn mutex poisoned".to_string().into())
+                    })?;
+                    return crate::instance_catalog::dispatch_inspector_snapshot(
+                        &mut conn.conn,
+                        metric_id,
+                    );
+                }
+                _ => {}
+            }
+        }
 
         let start = Instant::now();
 

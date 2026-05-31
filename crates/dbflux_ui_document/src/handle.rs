@@ -39,4 +39,10 @@ pub enum DocumentEvent {
     RequestAddPanel {
         dashboard_id: uuid::Uuid,
     },
+    /// Read-only dashboard requests the workspace to save a copy as a new
+    /// editable dashboard for the same profile, then open it.
+    RequestSaveAsEditable {
+        source_title: String,
+        profile_id: uuid::Uuid,
+    },
 }

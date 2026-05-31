@@ -189,6 +189,29 @@ pub enum SidebarEvent {
         chart_id: Uuid,
     },
 
+    /// Open or focus an instance metric chart for the given profile and metric.
+    ///
+    /// Emitted when the user clicks an `InstanceMetricLeaf` node in the sidebar.
+    OpenInstanceMetric {
+        profile_id: Uuid,
+        metric_id: String,
+    },
+
+    /// Open or focus an instance inspector panel for the given profile and metric.
+    ///
+    /// Emitted when the user clicks an `InstanceInspectorLeaf` node in the sidebar.
+    OpenInstanceInspector {
+        profile_id: Uuid,
+        metric_id: String,
+    },
+
+    /// Open or focus the synthesized read-only "Instance Overview" dashboard.
+    ///
+    /// Emitted when the user clicks the `InstanceOverviewLeaf` node in the sidebar.
+    OpenInstanceOverview {
+        profile_id: Uuid,
+    },
+
     /// Request to prompt the user for an SSH tunnel passphrase.
     ///
     /// Emitted when a connection attempt fails with a passphrase-required error
@@ -372,6 +395,11 @@ pub enum ContextMenuAction {
     RenameSavedChart,
     DeleteSavedChart,
     DuplicateSavedChart,
+    // Instance catalog actions
+    /// Invalidate the cached instance catalog for a profile and re-fetch it.
+    RefreshInstanceCatalog,
+    /// Copy the string ID of the selected node to the clipboard.
+    CopyItemId,
 }
 
 #[derive(Clone)]
@@ -454,6 +482,9 @@ impl ContextMenuAction {
             Self::RenameSavedChart => Some(AppIcon::Pencil),
             Self::DeleteSavedChart => Some(AppIcon::Delete),
             Self::DuplicateSavedChart => Some(AppIcon::Copy),
+            // Instance catalog actions
+            Self::RefreshInstanceCatalog => Some(AppIcon::RefreshCcw),
+            Self::CopyItemId => Some(AppIcon::Copy),
         }
     }
 }
@@ -805,6 +836,17 @@ pub struct Sidebar {
     ///
     /// Key is the parent node id string (MetricsFolder or MetricNamespaceFolder).
     metric_fetch_errors: HashMap<String, String>,
+    /// Session-scoped cache for `InstanceCatalog::list_metrics()` results.
+    /// Populated on first expansion of `InstanceMetricsFolder`, keyed by profile_id.
+    instance_metrics_cache: HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>>,
+    /// Session-scoped cache for `InstanceCatalog::list_inspectors()` results.
+    /// Populated on first expansion of `InstanceInspectorsFolder`, keyed by profile_id.
+    instance_inspectors_cache: HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>>,
+    /// In-flight `instance_catalog` fetch tasks, keyed by profile_id.
+    ///
+    /// A single fetch populates both `instance_metrics_cache` and
+    /// `instance_inspectors_cache` because the catalog returns both in one round-trip.
+    pending_instance_catalog_fetches: HashMap<Uuid, Task<()>>,
 }
 
 use dbflux_ui_base::toast::PendingToast;
@@ -1024,6 +1066,9 @@ impl Sidebar {
             pending_metric_fetches: HashMap::new(),
             pending_remote_dashboard_fetches: HashMap::new(),
             metric_fetch_errors: HashMap::new(),
+            instance_metrics_cache: HashMap::new(),
+            instance_inspectors_cache: HashMap::new(),
+            pending_instance_catalog_fetches: HashMap::new(),
         }
     }
 
@@ -1265,6 +1310,27 @@ impl Sidebar {
                     namespace,
                     metric_name,
                 });
+            }
+            SchemaNodeId::InstanceMetricLeaf {
+                profile_id,
+                metric_id,
+            } => {
+                cx.emit(SidebarEvent::OpenInstanceMetric {
+                    profile_id,
+                    metric_id,
+                });
+            }
+            SchemaNodeId::InstanceInspectorLeaf {
+                profile_id,
+                metric_id,
+            } => {
+                cx.emit(SidebarEvent::OpenInstanceInspector {
+                    profile_id,
+                    metric_id,
+                });
+            }
+            SchemaNodeId::InstanceOverviewLeaf { profile_id } => {
+                cx.emit(SidebarEvent::OpenInstanceOverview { profile_id });
             }
             SchemaNodeId::Database { .. } => {
                 self.handle_database_click(item_id, cx);

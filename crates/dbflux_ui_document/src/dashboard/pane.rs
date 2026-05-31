@@ -22,6 +22,7 @@ impl DashboardDocument {
         let doc = entity.read(cx);
         let id = doc.id();
         let dashboard_id = doc.dashboard_id();
+        let is_read_only = doc.read_only;
 
         PaneHandle::new_chart(
             id,
@@ -96,11 +97,20 @@ impl DashboardDocument {
                 let e = entity.clone();
                 Box::new(move |policy, cx| e.update(cx, |d, cx| d.set_refresh_policy(policy, cx)))
             },
-            // matches_dedup_key — deduplicated by `dashboard_id`
+            // matches_dedup_key — deduplicated by `dashboard_id` for normal dashboards,
+            // or by the `InstanceOverview` key for read-only catalog-synthesized dashboards.
             {
                 let e = entity.clone();
                 Box::new(move |key, cx| {
-                    let _ = e.read(cx);
+                    let d = e.read(cx);
+                    if is_read_only {
+                        // Read-only overview: deduplicate by profile_id embedded in
+                        // the connection_id() (which is the profile this catalog belongs to).
+                        if let DocumentKey::InstanceOverview { profile_id } = key {
+                            return d.connection_id() == Some(*profile_id);
+                        }
+                        return false;
+                    }
                     matches!(
                         key,
                         DocumentKey::Dashboard { dashboard_id: kid } if *kid == dashboard_id

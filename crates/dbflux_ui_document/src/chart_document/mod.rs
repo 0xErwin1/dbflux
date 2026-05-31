@@ -118,6 +118,18 @@ pub struct ChartDocument {
     // refines dimensions/period/statistic via the Apply button.
     initial_metric_identity: Option<(String, String)>,
 
+    /// Stable identity for instance metric charts opened from the
+    /// `InstanceMetricsFolder` sidebar node. Used by `matches_instance_metric_chart`
+    /// for `DocumentKey::InstanceMetric` dedup.
+    initial_instance_metric_id: Option<String>,
+
+    /// Initial preset index passed to `TimeRangePanel::new` on first render.
+    ///
+    /// Index 3 = Last24Hours (default for most sources).
+    /// Index 0 = Last15min (set by `open_instance_metric` for InstanceMetric sources).
+    /// The value is consumed once — after the panel is created it has no further effect.
+    initial_time_range_index: usize,
+
     // Save flow
     saved_chart_id: Option<Uuid>,
     name_prompt: Option<NamePromptState>,
@@ -140,6 +152,14 @@ pub struct ChartDocument {
     pub(super) embedded: bool,
 
     _subscriptions: Vec<Subscription>,
+
+    /// Sample accumulation buffer for `InstanceMetric` sources.
+    ///
+    /// Populated on first successful fetch when `data_source.is_accumulating()`
+    /// is true. Each subsequent fetch appends to the buffer and the chart shell
+    /// receives the full accumulated series rather than the single-point result.
+    /// Cleared when the data source changes or the document closes.
+    instance_metric_buffer: Option<InstantSeriesBuffer>,
 }
 
 impl ChartDocument {
@@ -253,6 +273,8 @@ impl ChartDocument {
             pending_chart_reexecute: false,
             pending_data_source: None,
             initial_metric_identity: None,
+            initial_instance_metric_id: None,
+            initial_time_range_index: 3,
             saved_chart_id: None,
             name_prompt: None,
             pending_toast: None,
@@ -261,6 +283,7 @@ impl ChartDocument {
             result_panel: None,
             embedded: false,
             _subscriptions: vec![metric_apply_sub, app_state_disconnect_sub],
+            instance_metric_buffer: None,
         }
     }
 
@@ -276,7 +299,7 @@ impl ChartDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<Self, String> {
-        use dbflux_components::chart::MetricSource;
+        use dbflux_components::chart::{InstanceMetricSource, MetricSource};
 
         match &saved.source {
             // Collection sources are not routed through ChartDocument in W0.
@@ -304,6 +327,46 @@ impl ChartDocument {
                     cx,
                 );
                 doc.saved_chart_id = Some(saved.id);
+                return Ok(doc);
+            }
+
+            // Instance metric sources follow the same self-executing pattern as Metric.
+            SavedChartSource::InstanceMetric { metric_id } => {
+                let source = InstanceMetricSource {
+                    metric_id: metric_id.clone(),
+                };
+
+                let mut doc = Self::new_with_source(
+                    Some(saved.profile_id),
+                    saved.name.clone(),
+                    Box::new(source),
+                    app_state,
+                    window,
+                    cx,
+                );
+                doc.saved_chart_id = Some(saved.id);
+
+                // Establish the instance-metric identity so DocumentKey::InstanceMetric
+                // deduplication works when the tab is re-opened.
+                doc.set_instance_metric_identity(metric_id.clone());
+
+                // Restore the 15-min rolling window default (preset index 0) so
+                // re-loading a saved chart behaves identically to a fresh open.
+                doc.set_initial_time_range_preset(0);
+
+                // Default to 30-second auto-refresh so the series stays current.
+                // The floor in `clamp_refresh_secs` ensures this is never below 10s.
+                let policy = RefreshPolicy::Interval { every_secs: 30 };
+                doc.refresh_policy = policy;
+                doc.update_refresh_timer(cx);
+
+                // Sync the toolbar refresh-policy dropdown to reflect the loaded
+                // policy so it does not display "Manual" while the timer runs.
+                let policy_index = policy.index();
+                doc.refresh_dropdown.update(cx, |dropdown, cx| {
+                    dropdown.set_selected_index(Some(policy_index), cx);
+                });
+
                 return Ok(doc);
             }
 
@@ -436,6 +499,8 @@ impl ChartDocument {
             pending_chart_reexecute: false,
             pending_data_source: None,
             initial_metric_identity,
+            initial_instance_metric_id: None,
+            initial_time_range_index: 3,
             saved_chart_id: None,
             name_prompt: None,
             pending_toast: None,
@@ -444,6 +509,7 @@ impl ChartDocument {
             focus_handle: cx.focus_handle(),
             focus_mode: ChartDocFocus::default(),
             _subscriptions: vec![metric_apply_sub, app_state_disconnect_sub],
+            instance_metric_buffer: None,
         }
     }
 
@@ -479,7 +545,9 @@ impl ChartDocument {
     /// Call this before allocating an entity to avoid panicking inside `cx.new`.
     pub fn validate_saved_source(saved: &SavedChart) -> Result<(), String> {
         match &saved.source {
-            SavedChartSource::Query { .. } | SavedChartSource::Metric { .. } => Ok(()),
+            SavedChartSource::Query { .. }
+            | SavedChartSource::Metric { .. }
+            | SavedChartSource::InstanceMetric { .. } => Ok(()),
             SavedChartSource::Collection { .. } => Err(
                 "Collection source not supported in ChartDocument; open via DataDocument"
                     .to_string(),
@@ -535,6 +603,39 @@ impl ChartDocument {
             .is_some_and(|(ns, mn)| ns == namespace && mn == metric_name)
     }
 
+    /// Set the stable instance-metric identity for this document.
+    ///
+    /// Called after construction when the chart is opened from the sidebar's
+    /// `InstanceMetricsFolder`. Enables `DocumentKey::InstanceMetric` dedup.
+    pub fn set_instance_metric_identity(&mut self, metric_id: String) {
+        self.initial_instance_metric_id = Some(metric_id);
+    }
+
+    /// Override the initial `TimeRangePanel` preset index used on first render.
+    ///
+    /// Index 0 = Last15min. Index 3 = Last24Hours (default). The value is
+    /// consumed once at the moment the panel is lazily created; changing it
+    /// after the first render has no effect because the panel already exists.
+    pub fn set_initial_time_range_preset(&mut self, index: usize) {
+        self.initial_time_range_index = index;
+    }
+
+    /// Returns the initial `TimeRangePanel` preset index set for this document.
+    pub fn initial_time_range_index(&self) -> usize {
+        self.initial_time_range_index
+    }
+
+    /// Returns `true` when this document was opened for the given
+    /// `(profile_id, metric_id)` via the instance-metrics sidebar folder.
+    pub fn matches_instance_metric_chart(&self, profile_id: Uuid, metric_id: &str) -> bool {
+        if self.profile_id != Some(profile_id) {
+            return false;
+        }
+        self.initial_instance_metric_id
+            .as_deref()
+            .is_some_and(|id| id == metric_id)
+    }
+
     pub fn refresh_policy(&self) -> RefreshPolicy {
         self.refresh_policy
     }
@@ -556,8 +657,49 @@ impl ChartDocument {
         false
     }
 
-    pub fn set_refresh_policy(&mut self, policy: RefreshPolicy, _cx: &mut Context<Self>) {
+    pub fn set_refresh_policy(&mut self, policy: RefreshPolicy, cx: &mut Context<Self>) {
+        let was_interval = matches!(self.refresh_policy, RefreshPolicy::Interval { .. });
+        let now_manual = matches!(policy, RefreshPolicy::Manual);
+
+        if was_interval && now_manual && self.instance_metric_buffer.is_some() {
+            self.instance_metric_buffer = None;
+        }
+
         self.refresh_policy = policy;
+        self.update_refresh_timer(cx);
+    }
+
+    /// Cancel any running timer and start a new one at the clamped interval, or
+    /// leave `_refresh_timer = None` when the policy is `Manual`.
+    ///
+    /// Dropping the old `Task<()>` value cancels the spawned future, which is
+    /// the cancellation mechanism for the timer loop.
+    ///
+    /// Callers that change the refresh policy (not merely restart the timer)
+    /// MUST go through `set_refresh_policy`, which handles `instance_metric_buffer`
+    /// invalidation on Interval→Manual transitions. Calling this method directly
+    /// bypasses that invariant.
+    fn update_refresh_timer(&mut self, cx: &mut Context<Self>) {
+        self._refresh_timer = None;
+
+        let Some(duration) = refresh_timer_duration(self.refresh_policy) else {
+            return;
+        };
+
+        self._refresh_timer = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(duration).await;
+
+                let _ = cx.update(|cx| {
+                    let Some(entity) = this.upgrade() else {
+                        return;
+                    };
+                    entity.update(cx, |doc, cx| {
+                        doc.mark_pending_reexecute(cx);
+                    });
+                });
+            }
+        }));
     }
 
     pub fn set_active_tab(&mut self, _active: bool) {}
@@ -627,6 +769,10 @@ impl ChartDocument {
 
         self.data_source = source;
         self.pending_chart_reexecute = true;
+
+        // Drop the accumulation buffer when the source changes so stale
+        // samples from the previous metric do not bleed into the new series.
+        self.instance_metric_buffer = None;
 
         cx.emit(DocumentEvent::DataSourceChanged);
         cx.emit(DocumentEvent::MetaChanged);
@@ -756,6 +902,11 @@ impl ChartDocument {
     }
 
     /// Apply a completed query result to the chart shell.
+    ///
+    /// For accumulating sources (`is_accumulating() == true`) the raw
+    /// single-sample result is appended to `instance_metric_buffer` and the
+    /// shell receives the full accumulated series. For all other sources the
+    /// raw result is forwarded directly.
     fn apply_result(&mut self, pending: PendingResult, cx: &mut Context<Self>) {
         self.runner.complete_primary(pending.task_id, cx);
 
@@ -765,14 +916,23 @@ impl ChartDocument {
                 self.state = DocumentState::Clean;
 
                 let was_chart_mode = self.last_result.is_some();
-                let arc = Arc::new(result);
 
-                let arc_clone = arc.clone();
+                let display_result = if self.data_source.is_accumulating() {
+                    let buffer = self.instance_metric_buffer.get_or_insert_with(|| {
+                        InstantSeriesBuffer::new(result.columns.clone(), 120)
+                    });
+                    buffer.push_result(&result);
+                    Arc::new(buffer.to_query_result())
+                } else {
+                    Arc::new(result)
+                };
+
+                let display_clone = display_result.clone();
                 self.chart_shell.update(cx, |shell, cx| {
-                    shell.set_result(&arc_clone, was_chart_mode, cx);
+                    shell.set_result(&display_clone, was_chart_mode, cx);
                 });
 
-                self.last_result = Some(arc);
+                self.last_result = Some(display_result);
             }
             Err(err) => {
                 self.exec_state = ExecState::Error;
@@ -784,6 +944,7 @@ impl ChartDocument {
             }
         }
 
+        cx.emit(DocumentEvent::ExecutionFinished);
         cx.notify();
     }
 
@@ -1296,12 +1457,131 @@ impl ChartHost for ChartDocument {
     }
 }
 
+// ---------------------------------------------------------------------------
+// InstantSeriesBuffer
+// ---------------------------------------------------------------------------
+
+/// In-memory accumulator for instance-metric single-sample poll results.
+///
+/// Each `fetch_metric_series` call returns exactly one row (the current gauge
+/// value plus a timestamp). `ChartDocument` uses this buffer to stitch those
+/// samples into a visible time series: each successful fetch appends a new
+/// row, and the buffer is pruned to at most `max_samples` entries so memory
+/// stays bounded.
+///
+/// The buffer is owned by `ChartDocument` only when the active source returns
+/// `is_accumulating() == true`. For all other sources the field is `None`
+/// and accumulation is never invoked.
+pub(super) struct InstantSeriesBuffer {
+    columns: Vec<dbflux_core::ColumnMeta>,
+    rows: Vec<dbflux_core::Row>,
+    max_samples: usize,
+}
+
+impl InstantSeriesBuffer {
+    /// Create an empty buffer with the given column schema and retention cap.
+    pub(super) fn new(columns: Vec<dbflux_core::ColumnMeta>, max_samples: usize) -> Self {
+        Self {
+            columns,
+            rows: Vec::new(),
+            max_samples,
+        }
+    }
+
+    /// Returns `true` when `incoming` columns are structurally incompatible with
+    /// the buffer's current schema — differing count, names, or `ColumnKind`s.
+    fn schema_changed(&self, incoming: &[dbflux_core::ColumnMeta]) -> bool {
+        if incoming.len() != self.columns.len() {
+            return true;
+        }
+        incoming
+            .iter()
+            .zip(self.columns.iter())
+            .any(|(a, b)| a.name != b.name || a.kind != b.kind)
+    }
+
+    /// Append rows from a single-sample fetch result and prune to retention cap.
+    ///
+    /// If the incoming result's column schema (count, names, or kinds) differs
+    /// from the buffer's schema the buffer is reset: accumulated rows are
+    /// discarded and the column schema is replaced with the new result's schema.
+    /// This prevents silently appending rows with structurally mismatched columns,
+    /// which would produce an unrenderable `QueryResult`.
+    pub(super) fn push_result(&mut self, result: &dbflux_core::QueryResult) {
+        if self.schema_changed(&result.columns) {
+            self.rows.clear();
+            self.columns = result.columns.clone();
+        }
+
+        for row in &result.rows {
+            self.rows.push(row.clone());
+        }
+
+        if self.rows.len() > self.max_samples {
+            let overflow = self.rows.len() - self.max_samples;
+            self.rows.drain(..overflow);
+        }
+    }
+
+    /// Number of accumulated samples.
+    #[cfg(test)]
+    pub(super) fn sample_count(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// Build a `QueryResult` whose rows contain all accumulated samples.
+    ///
+    /// The schema (columns) is identical to the first fetch result so the
+    /// chart engine's column detection produces the same X/Y mapping as it
+    /// would for a native time-series result.
+    pub(super) fn to_query_result(&self) -> dbflux_core::QueryResult {
+        dbflux_core::QueryResult {
+            shape: dbflux_core::QueryResultShape::Table,
+            columns: self.columns.clone(),
+            rows: self.rows.clone(),
+            affected_rows: None,
+            execution_time: std::time::Duration::ZERO,
+            text_body: None,
+            raw_bytes: None,
+            next_page_token: None,
+            resolved_window: None,
+            metadata_extra: None,
+            additional_results: Vec::new(),
+        }
+    }
+}
+
 /// Returns `true` when `ChartDocument` should render the Stats rail.
 ///
 /// The render branch in `render_chart_content` delegates to this predicate so
 /// tests can pin the gating logic without a GPUI runtime.
 fn should_render_stats_rail(rail_open: bool, rail_tab: crate::chart::ChartRailTab) -> bool {
     rail_open && rail_tab == crate::chart::ChartRailTab::Stats
+}
+
+/// Clamp `every_secs` to the 10-second minimum refresh floor defined in
+/// `crate::refresh::MIN_REFRESH_FLOOR_SECS`.
+///
+/// Values at or above the floor are returned unchanged. Values below (e.g. the
+/// legacy 1s/2s/5s options in `RefreshPolicy::ALL`) are raised to the floor so
+/// the UI never schedules sub-10-second polling.
+fn clamp_refresh_secs(every_secs: u32) -> u32 {
+    use crate::refresh::MIN_REFRESH_FLOOR_SECS;
+    every_secs.max(MIN_REFRESH_FLOOR_SECS as u32)
+}
+
+/// Return the `Duration` the auto-refresh timer should use for `policy`, or
+/// `None` if `policy` is `Manual` (no timer should be started).
+///
+/// The interval is clamped through `clamp_refresh_secs` so the effective
+/// minimum is always 10 seconds.
+fn refresh_timer_duration(policy: RefreshPolicy) -> Option<std::time::Duration> {
+    match policy {
+        RefreshPolicy::Manual => None,
+        RefreshPolicy::Interval { every_secs } => Some(std::time::Duration::from_secs(
+            clamp_refresh_secs(every_secs) as u64,
+        )),
+    }
 }
 
 /// Returns the new `(open, tab)` state after the Stats toolbar button is clicked.
@@ -1864,6 +2144,98 @@ mod tests {
         );
     }
 
+    // ---- T18: refresh timer behaviour ----
+
+    /// REQ-DOC-2: `clamp_refresh_secs` must return the input unchanged when it
+    /// is at or above the 10-second floor.
+    ///
+    /// This test will fail to compile until `clamp_refresh_secs` is added in T19.
+    #[test]
+    fn refresh_secs_at_or_above_floor_passes_through_unchanged() {
+        assert_eq!(
+            super::clamp_refresh_secs(10),
+            10,
+            "10s is exactly at the floor and must not be raised"
+        );
+        assert_eq!(
+            super::clamp_refresh_secs(30),
+            30,
+            "30s is above the floor and must not be altered"
+        );
+        assert_eq!(
+            super::clamp_refresh_secs(60),
+            60,
+            "60s is above the floor and must not be altered"
+        );
+    }
+
+    /// REQ-DOC-2: any interval below 10s must be clamped up to 10s.
+    ///
+    /// This test will fail to compile until `clamp_refresh_secs` is added in T19.
+    #[test]
+    fn refresh_secs_below_floor_is_clamped_to_10() {
+        assert_eq!(
+            super::clamp_refresh_secs(1),
+            10,
+            "1s must be clamped to the 10s floor"
+        );
+        assert_eq!(
+            super::clamp_refresh_secs(5),
+            10,
+            "5s must be clamped to the 10s floor"
+        );
+        assert_eq!(
+            super::clamp_refresh_secs(9),
+            10,
+            "9s must be clamped to the 10s floor"
+        );
+    }
+
+    /// REQ-DOC-2: `Manual` policy produces `None` from `refresh_timer_duration`,
+    /// which means `update_refresh_timer` must leave `_refresh_timer` as `None`.
+    ///
+    /// This test will fail to compile until `refresh_timer_duration` is added in T19.
+    #[test]
+    fn manual_policy_produces_no_timer_duration() {
+        let duration = super::refresh_timer_duration(RefreshPolicy::Manual);
+        assert!(
+            duration.is_none(),
+            "Manual policy must return None — no timer scheduled"
+        );
+    }
+
+    /// REQ-DOC-2: `Interval { every_secs: 5 }` (below floor) must produce a
+    /// duration of exactly 10 seconds after clamping.
+    ///
+    /// This test will fail to compile until `refresh_timer_duration` is added in T19.
+    #[test]
+    fn interval_below_floor_produces_10s_duration() {
+        use std::time::Duration;
+
+        let duration = super::refresh_timer_duration(RefreshPolicy::Interval { every_secs: 5 });
+        assert_eq!(
+            duration,
+            Some(Duration::from_secs(10)),
+            "5s interval must be clamped to 10s duration"
+        );
+    }
+
+    /// REQ-DOC-2: `Interval { every_secs: 30 }` (above floor) must produce a
+    /// duration of exactly 30 seconds.
+    ///
+    /// This test will fail to compile until `refresh_timer_duration` is added in T19.
+    #[test]
+    fn interval_above_floor_produces_exact_duration() {
+        use std::time::Duration;
+
+        let duration = super::refresh_timer_duration(RefreshPolicy::Interval { every_secs: 30 });
+        assert_eq!(
+            duration,
+            Some(Duration::from_secs(30)),
+            "30s interval must produce a 30s duration unchanged"
+        );
+    }
+
     // ---- helpers ----
 
     fn compute_pending_run_flag(query: &str) -> bool {
@@ -1894,5 +2266,399 @@ mod tests {
             pending_chart_reexecute,
             pending_time_window,
         }
+    }
+
+    // ---- REQ-DOC-2: runtime drop-cancel test ----
+
+    fn init_test_runtime(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_cx| dbflux_ui_base::toast::ToastHost::new());
+            cx.set_global(dbflux_ui_base::toast::ToastGlobal { host });
+        });
+    }
+
+    fn isolated_test_app_state(cx: &mut gpui::TestAppContext) -> gpui::Entity<AppStateEntity> {
+        cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+            })
+        })
+    }
+
+    /// Thin harness entity that optionally holds a `ChartDocument`.
+    ///
+    /// Used by `refresh_timer_is_cancelled_on_entity_drop` so the
+    /// `ChartDocument` is not rooted directly as the window view (which
+    /// would keep a strong reference alive in the window's view hierarchy).
+    struct ChartDocHarness {
+        doc: Option<Entity<ChartDocument>>,
+    }
+
+    impl Render for ChartDocHarness {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div()
+        }
+    }
+
+    /// REQ-DOC-2 — runtime evidence that dropping a `ChartDocument` entity cancels
+    /// its `_refresh_timer` loop.
+    ///
+    /// The test installs a `cx.observe` counter on the entity, sets an interval
+    /// refresh policy, advances the fake clock past one tick to confirm the timer
+    /// fires, then drops the entity (by releasing both the test-side holder and the
+    /// harness's `Option`). A second clock advance confirms the count is frozen —
+    /// the `Task<()>` was cancelled when `ChartDocument` was freed, stopping the loop.
+    ///
+    /// This is the spec gate against timer leaks. `Task<()>` stored in a struct field
+    /// is cancelled when that struct is freed; the test makes this property observable
+    /// at runtime.
+    #[gpui::test]
+    fn refresh_timer_is_cancelled_on_entity_drop(cx: &mut gpui::TestAppContext) {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        use std::time::Duration;
+
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+
+        let notify_count = Rc::new(Cell::new(0u32));
+        let doc_holder: Rc<std::cell::RefCell<Option<Entity<ChartDocument>>>> =
+            Rc::new(std::cell::RefCell::new(None));
+        let harness_holder: Rc<std::cell::RefCell<Option<Entity<ChartDocHarness>>>> =
+            Rc::new(std::cell::RefCell::new(None));
+
+        cx.add_window_view({
+            let app_state = app_state.clone();
+            let doc_holder = doc_holder.clone();
+            let harness_holder = harness_holder.clone();
+            move |window, cx| {
+                let doc =
+                    cx.new(|cx| ChartDocument::new(None, String::new(), app_state, window, cx));
+                doc_holder.replace(Some(doc.clone()));
+
+                let harness = cx.new(|_cx| ChartDocHarness { doc: Some(doc) });
+                harness_holder.replace(Some(harness.clone()));
+                gpui_component::Root::new(harness, window, cx)
+            }
+        });
+
+        let doc = doc_holder.borrow().clone().expect("entity created");
+
+        cx.update(|cx| {
+            doc.update(cx, |d, cx| {
+                d.set_refresh_policy(RefreshPolicy::Interval { every_secs: 10 }, cx);
+            });
+        });
+
+        let counter = notify_count.clone();
+        let _observe_sub = cx.update(|cx| {
+            cx.observe(&doc, move |_, _| {
+                counter.set(counter.get() + 1);
+            })
+        });
+
+        cx.executor().advance_clock(Duration::from_secs(15));
+        cx.run_until_parked();
+
+        let count_after_first_tick = notify_count.get();
+        assert!(
+            count_after_first_tick >= 1,
+            "timer must have fired at least once after 15 s; count = {count_after_first_tick}"
+        );
+
+        // Release all strong references so the ChartDocument entity is freed,
+        // which drops _refresh_timer and cancels the timer task.
+        doc_holder.borrow_mut().take();
+        if let Some(harness) = harness_holder.borrow().clone() {
+            cx.update(|cx| {
+                harness.update(cx, |h, _| h.doc = None);
+            });
+        }
+        harness_holder.borrow_mut().take();
+        drop(doc);
+
+        cx.executor().advance_clock(Duration::from_secs(60));
+        cx.run_until_parked();
+
+        let count_after_drop = notify_count.get();
+        assert_eq!(
+            count_after_drop, count_after_first_tick,
+            "notify count must not increase after entity drop — timer loop must be cancelled"
+        );
+    }
+
+    // ---- BF5: InstantSeriesBuffer accumulation ----
+
+    fn make_single_point_result(timestamp_ms: i64, value: f64) -> QueryResult {
+        use dbflux_core::{ColumnKind, ColumnMeta, QueryResultShape, Value};
+        use std::time::Duration;
+
+        QueryResult {
+            shape: QueryResultShape::Table,
+            columns: vec![
+                ColumnMeta {
+                    name: "timestamp_ms".to_string(),
+                    type_name: "int8".to_string(),
+                    kind: ColumnKind::Timestamp,
+                    nullable: false,
+                    is_primary_key: false,
+                },
+                ColumnMeta {
+                    name: "value".to_string(),
+                    type_name: "float8".to_string(),
+                    kind: ColumnKind::Float,
+                    nullable: false,
+                    is_primary_key: false,
+                },
+            ],
+            rows: vec![vec![Value::Int(timestamp_ms), Value::Float(value)]],
+            affected_rows: None,
+            execution_time: Duration::ZERO,
+            text_body: None,
+            raw_bytes: None,
+            next_page_token: None,
+            resolved_window: None,
+            metadata_extra: None,
+            additional_results: Vec::new(),
+        }
+    }
+
+    /// BF5: three sequential push_result calls must accumulate 3 samples.
+    #[test]
+    fn instant_series_buffer_accumulates_samples() {
+        use dbflux_core::ColumnKind;
+
+        let result1 = make_single_point_result(1_000, 10.0);
+        let mut buffer = InstantSeriesBuffer::new(result1.columns.clone(), 120);
+
+        buffer.push_result(&result1);
+        buffer.push_result(&make_single_point_result(2_000, 20.0));
+        buffer.push_result(&make_single_point_result(3_000, 30.0));
+
+        assert_eq!(
+            buffer.sample_count(),
+            3,
+            "three push_result calls must yield 3 accumulated samples"
+        );
+
+        let merged = buffer.to_query_result();
+        assert_eq!(merged.rows.len(), 3, "merged result must have 3 rows");
+        assert_eq!(
+            merged.columns.len(),
+            2,
+            "merged result must preserve 2 columns"
+        );
+        assert_eq!(
+            merged.columns[0].kind,
+            ColumnKind::Timestamp,
+            "first column kind must be Timestamp"
+        );
+        assert_eq!(
+            merged.columns[1].kind,
+            ColumnKind::Float,
+            "second column kind must be Float"
+        );
+    }
+
+    /// BF5: once sample_count exceeds max_samples, oldest entries are pruned.
+    #[test]
+    fn instant_series_buffer_prunes_oldest_beyond_max() {
+        use dbflux_core::Value;
+
+        let max = 3usize;
+        let first = make_single_point_result(1_000, 1.0);
+        let mut buffer = InstantSeriesBuffer::new(first.columns.clone(), max);
+
+        for i in 0..5u64 {
+            buffer.push_result(&make_single_point_result(i as i64 * 1_000, i as f64));
+        }
+
+        assert_eq!(
+            buffer.sample_count(),
+            max,
+            "buffer must not exceed max_samples after overflow"
+        );
+
+        let merged = buffer.to_query_result();
+
+        // The oldest two samples (timestamps 0, 1000) must have been dropped;
+        // only timestamps 2000, 3000, 4000 remain.
+        let timestamps: Vec<i64> = merged
+            .rows
+            .iter()
+            .map(|row| match &row[0] {
+                Value::Int(v) => *v,
+                _ => panic!("expected Int for timestamp column"),
+            })
+            .collect();
+
+        assert_eq!(
+            timestamps,
+            vec![2_000, 3_000, 4_000],
+            "oldest samples must be pruned when max_samples is exceeded"
+        );
+    }
+
+    /// BF5: InstanceMetricSource must return is_accumulating() == true.
+    #[test]
+    fn instance_metric_source_is_accumulating() {
+        let src = dbflux_components::chart::InstanceMetricSource {
+            metric_id: "pg.tps".to_string(),
+        };
+        assert!(
+            src.is_accumulating(),
+            "InstanceMetricSource must report is_accumulating() == true"
+        );
+    }
+
+    /// BF5: non-InstanceMetric sources must return is_accumulating() == false.
+    #[test]
+    fn query_source_is_not_accumulating() {
+        use dbflux_components::chart::resolve_source;
+        use dbflux_components::saved_chart::SavedChartSource;
+
+        let src = resolve_source(&SavedChartSource::Query {
+            query: "SELECT 1".to_string(),
+        });
+        assert!(
+            !src.is_accumulating(),
+            "QuerySource must report is_accumulating() == false"
+        );
+    }
+
+    // ---- BF6: InstanceMetric default time range and refresh policy ----
+
+    /// BF6: after `set_initial_time_range_preset(0)`, the chart must report
+    /// `initial_time_range_index() == 0` (preset index 0 = Last15min).
+    #[gpui::test]
+    fn instance_metric_chart_has_15min_initial_preset(cx: &mut gpui::TestAppContext) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<ChartDocument>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+
+        cx.add_window_view({
+            let app_state = app_state.clone();
+            let doc_holder = doc_holder.clone();
+            move |window, cx| {
+                let source = dbflux_components::chart::InstanceMetricSource {
+                    metric_id: "pg.tps".to_string(),
+                };
+                let doc = cx.new(|cx| {
+                    let mut chart = ChartDocument::new_with_source(
+                        None,
+                        "pg.tps".to_string(),
+                        Box::new(source),
+                        app_state,
+                        window,
+                        cx,
+                    );
+                    chart.set_initial_time_range_preset(0);
+                    chart
+                });
+                doc_holder.replace(Some(doc.clone()));
+                gpui_component::Root::new(doc, window, cx)
+            }
+        });
+
+        let doc = doc_holder.borrow().clone().expect("entity created");
+        cx.update(|cx| {
+            let chart = doc.read(cx);
+            assert_eq!(
+                chart.initial_time_range_index(),
+                0,
+                "InstanceMetric chart must have initial preset index 0 (15min)"
+            );
+        });
+    }
+
+    /// BF6: a chart whose `set_refresh_policy` is called with `Interval{10}` must
+    /// report that policy from `refresh_policy()`.
+    #[gpui::test]
+    fn instance_metric_chart_has_10s_refresh_policy(cx: &mut gpui::TestAppContext) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<ChartDocument>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+
+        cx.add_window_view({
+            let app_state = app_state.clone();
+            let doc_holder = doc_holder.clone();
+            move |window, cx| {
+                let source = dbflux_components::chart::InstanceMetricSource {
+                    metric_id: "pg.tps".to_string(),
+                };
+                let doc = cx.new(|cx| {
+                    ChartDocument::new_with_source(
+                        None,
+                        "pg.tps".to_string(),
+                        Box::new(source),
+                        app_state,
+                        window,
+                        cx,
+                    )
+                });
+                doc.update(cx, |chart, cx| {
+                    chart.set_refresh_policy(RefreshPolicy::Interval { every_secs: 10 }, cx);
+                });
+                doc_holder.replace(Some(doc.clone()));
+                gpui_component::Root::new(doc, window, cx)
+            }
+        });
+
+        let doc = doc_holder.borrow().clone().expect("entity created");
+        cx.update(|cx| {
+            let chart = doc.read(cx);
+            assert_eq!(
+                chart.refresh_policy(),
+                RefreshPolicy::Interval { every_secs: 10 },
+                "chart must report the 10s interval policy after set_refresh_policy"
+            );
+        });
+    }
+
+    /// BF6 control: a Query-source chart must keep the default preset index
+    /// (3 = Last24Hours) and Manual refresh policy without any overrides.
+    #[gpui::test]
+    fn query_source_chart_keeps_default_24h_manual_refresh(cx: &mut gpui::TestAppContext) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<ChartDocument>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+
+        cx.add_window_view({
+            let app_state = app_state.clone();
+            let doc_holder = doc_holder.clone();
+            move |window, cx| {
+                let doc = cx.new(|cx| {
+                    ChartDocument::new(None, "SELECT 1".to_string(), app_state, window, cx)
+                });
+                doc_holder.replace(Some(doc.clone()));
+                gpui_component::Root::new(doc, window, cx)
+            }
+        });
+
+        let doc = doc_holder.borrow().clone().expect("entity created");
+        cx.update(|cx| {
+            let chart = doc.read(cx);
+            assert_eq!(
+                chart.initial_time_range_index(),
+                3,
+                "Query-source chart must keep default preset index 3 (Last24Hours)"
+            );
+            assert_eq!(
+                chart.refresh_policy(),
+                RefreshPolicy::Manual,
+                "Query-source chart must keep Manual refresh policy"
+            );
+        });
     }
 }

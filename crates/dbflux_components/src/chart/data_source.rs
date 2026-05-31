@@ -218,6 +218,18 @@ pub trait ChartDataSource: Send + 'static {
     fn is_self_executing(&self) -> bool {
         false
     }
+
+    /// Returns `true` when this source produces a single instantaneous sample
+    /// per fetch and requires the chart host to accumulate samples into a time
+    /// series rather than replacing the display on each fetch.
+    ///
+    /// `InstanceMetricSource` returns `true` — drivers return one row per poll
+    /// (the current gauge value). All other sources return full series natively
+    /// and must return `false` (the default) so that `ChartDocument` does not
+    /// accidentally buffer their already-complete results.
+    fn is_accumulating(&self) -> bool {
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -458,6 +470,57 @@ impl ChartDataSource for MetricSource {
 }
 
 // ---------------------------------------------------------------------------
+// InstanceMetricSource
+// ---------------------------------------------------------------------------
+
+/// A per-driver instance metric source resolved from `SavedChartSource::InstanceMetric`.
+///
+/// Builds a `ChartDataPlan::Driver` request carrying `InstanceMetricQuery`.
+/// A time window is required; returns `ChartSourceError::WindowRequired` when
+/// no window is supplied.
+#[derive(Debug, Clone)]
+pub struct InstanceMetricSource {
+    pub metric_id: String,
+}
+
+impl ChartDataSource for InstanceMetricSource {
+    fn clone_box(&self) -> Box<dyn ChartDataSource> {
+        Box::new(self.clone())
+    }
+
+    fn describe(&self) -> ChartSourceDescription {
+        ChartSourceDescription {
+            title: Some(self.metric_id.clone()),
+        }
+    }
+
+    fn is_self_executing(&self) -> bool {
+        true
+    }
+
+    fn is_accumulating(&self) -> bool {
+        true
+    }
+
+    fn build_plan(&self, window: Option<TimeWindow>) -> Result<ChartDataPlan, ChartSourceError> {
+        let w = window.ok_or(ChartSourceError::WindowRequired)?;
+
+        let exec_ctx = ExecutionContext {
+            source: Some(ExecutionSourceContext::InstanceMetricQuery {
+                metric_id: self.metric_id.clone(),
+                start_ms: w.start_ms,
+                end_ms: w.end_ms,
+            }),
+            ..ExecutionContext::default()
+        };
+
+        let request = QueryRequest::new(String::new()).with_execution_context(Some(exec_ctx));
+
+        Ok(ChartDataPlan::Driver(request))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // AuditSource
 // ---------------------------------------------------------------------------
 
@@ -529,6 +592,9 @@ pub fn resolve_source(source: &SavedChartSource) -> Box<dyn ChartDataSource> {
         }),
         SavedChartSource::Metric { series } => Box::new(MetricSource {
             series: series.clone(),
+        }),
+        SavedChartSource::InstanceMetric { metric_id } => Box::new(InstanceMetricSource {
+            metric_id: metric_id.clone(),
         }),
     }
 }
