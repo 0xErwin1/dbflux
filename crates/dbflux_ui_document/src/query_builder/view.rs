@@ -425,7 +425,7 @@ fn ensure_join_condition_inputs(
         .joins
         .iter()
         .flat_map(|j| match &j.on {
-            JoinOn::Conditions(preds) => preds
+            JoinOn::Conditions { predicates, .. } => predicates
                 .iter()
                 .map(|p| (p.node_id, p.left.clone(), p.right.clone(), p.op))
                 .collect::<Vec<_>>()

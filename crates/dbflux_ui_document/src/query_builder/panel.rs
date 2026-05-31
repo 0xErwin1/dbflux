@@ -321,7 +321,7 @@ impl QueryBuilderPanel {
                 from_alias: j.from_alias.clone(),
                 from_column: match &j.on {
                     JoinOn::FkPath { from_column, .. } => from_column.clone(),
-                    JoinOn::RawExpression(_) | JoinOn::Conditions(_) => String::new(),
+                    JoinOn::RawExpression(_) | JoinOn::Conditions { .. } => String::new(),
                 },
                 to_schema: j.to_schema.clone(),
                 to_table: j.to_table.clone(),
@@ -473,7 +473,7 @@ impl QueryBuilderPanel {
                 from_alias: j.from_alias.clone(),
                 from_column: match &j.on {
                     JoinOn::FkPath { from_column, .. } => from_column.clone(),
-                    JoinOn::RawExpression(_) | JoinOn::Conditions(_) => String::new(),
+                    JoinOn::RawExpression(_) | JoinOn::Conditions { .. } => String::new(),
                 },
                 to_schema: j.to_schema.clone(),
                 to_table: j.to_table.clone(),
@@ -952,7 +952,7 @@ impl QueryBuilderPanel {
                     // Conditions are edited via dedicated per-predicate inputs
                     // rather than a single raw textbox, so the raw input is
                     // initialised empty when the row uses structured mode.
-                    JoinOn::Conditions(_) => String::new(),
+                    JoinOn::Conditions { .. } => String::new(),
                 };
 
                 let to_table_state = cx.new(|cx| {
@@ -1125,7 +1125,10 @@ impl QueryBuilderPanel {
             to_schema: None,
             to_table: String::new(),
             to_alias: String::new(),
-            on: JoinOn::Conditions(vec![first_cond]),
+            on: JoinOn::Conditions {
+                op: BoolOp::And,
+                predicates: vec![first_cond],
+            },
         });
         self.pending_join_rebuild = true;
         self.rebuild_spec_and_notify(cx);
@@ -1142,18 +1145,36 @@ impl QueryBuilderPanel {
                 right: String::new(),
             };
             match &mut row.on {
-                JoinOn::Conditions(list) => list.push(new_pred),
-                _ => row.on = JoinOn::Conditions(vec![new_pred]),
+                JoinOn::Conditions { predicates, .. } => predicates.push(new_pred),
+                _ => {
+                    row.on = JoinOn::Conditions {
+                        op: BoolOp::And,
+                        predicates: vec![new_pred],
+                    }
+                }
             }
             self.rebuild_spec_and_notify(cx);
+        }
+    }
+
+    /// Toggles AND ↔ OR for the join at `join_idx`.
+    pub fn toggle_join_conditions_op(&mut self, join_idx: usize, cx: &mut Context<Self>) {
+        if let Some(row) = self.join_rows.get_mut(join_idx)
+            && let JoinOn::Conditions { op, .. } = &mut row.on
+        {
+            *op = match op {
+                BoolOp::And => BoolOp::Or,
+                BoolOp::Or => BoolOp::And,
+            };
+            self.refresh_preview_and_notify(cx);
         }
     }
 
     /// Removes the condition with `node_id` from any join.
     pub fn remove_join_condition(&mut self, node_id: u64, cx: &mut Context<Self>) {
         for row in self.join_rows.iter_mut() {
-            if let JoinOn::Conditions(list) = &mut row.on {
-                list.retain(|p| p.node_id != node_id);
+            if let JoinOn::Conditions { predicates, .. } = &mut row.on {
+                predicates.retain(|p| p.node_id != node_id);
             }
         }
         self.rebuild_spec_and_notify(cx);
@@ -1162,8 +1183,8 @@ impl QueryBuilderPanel {
     /// Updates the left side of the condition identified by `node_id`.
     pub fn set_join_condition_left(&mut self, node_id: u64, text: String, cx: &mut Context<Self>) {
         for row in self.join_rows.iter_mut() {
-            if let JoinOn::Conditions(list) = &mut row.on
-                && let Some(p) = list.iter_mut().find(|p| p.node_id == node_id)
+            if let JoinOn::Conditions { predicates, .. } = &mut row.on
+                && let Some(p) = predicates.iter_mut().find(|p| p.node_id == node_id)
             {
                 p.left = text;
                 self.refresh_preview_and_notify(cx);
@@ -1175,8 +1196,8 @@ impl QueryBuilderPanel {
     /// Updates the right side of the condition identified by `node_id`.
     pub fn set_join_condition_right(&mut self, node_id: u64, text: String, cx: &mut Context<Self>) {
         for row in self.join_rows.iter_mut() {
-            if let JoinOn::Conditions(list) = &mut row.on
-                && let Some(p) = list.iter_mut().find(|p| p.node_id == node_id)
+            if let JoinOn::Conditions { predicates, .. } = &mut row.on
+                && let Some(p) = predicates.iter_mut().find(|p| p.node_id == node_id)
             {
                 p.right = text;
                 self.refresh_preview_and_notify(cx);
@@ -1188,8 +1209,8 @@ impl QueryBuilderPanel {
     /// Updates the comparator of the condition identified by `node_id`.
     pub fn set_join_condition_op(&mut self, node_id: u64, op: Comparator, cx: &mut Context<Self>) {
         for row in self.join_rows.iter_mut() {
-            if let JoinOn::Conditions(list) = &mut row.on
-                && let Some(p) = list.iter_mut().find(|p| p.node_id == node_id)
+            if let JoinOn::Conditions { predicates, .. } = &mut row.on
+                && let Some(p) = predicates.iter_mut().find(|p| p.node_id == node_id)
             {
                 p.op = op;
                 self.refresh_preview_and_notify(cx);
@@ -1287,7 +1308,7 @@ impl QueryBuilderPanel {
             .join_rows
             .iter()
             .flat_map(|row| match &row.on {
-                JoinOn::Conditions(list) => list
+                JoinOn::Conditions { predicates, .. } => predicates
                     .iter()
                     .map(|p| p.node_id)
                     .collect::<Vec<_>>()
@@ -1667,7 +1688,7 @@ mod tests {
                 from_alias: j.from_alias.clone(),
                 from_column: match &j.on {
                     JoinOn::FkPath { from_column, .. } => from_column.clone(),
-                    JoinOn::RawExpression(_) | JoinOn::Conditions(_) => String::new(),
+                    JoinOn::RawExpression(_) | JoinOn::Conditions { .. } => String::new(),
                 },
                 to_schema: j.to_schema.clone(),
                 to_table: j.to_table.clone(),

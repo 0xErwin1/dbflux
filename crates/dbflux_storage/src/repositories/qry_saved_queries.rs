@@ -17,9 +17,33 @@ use rusqlite::Connection;
 use uuid::Uuid;
 
 use dbflux_core::{
-    FilterNode, JoinKind, JoinOn, JoinStep, ProjectedColumn, Projection, SortEntry, SourceTable,
-    VisualQuerySpec, VisualSortDirection,
+    BoolOp, FilterNode, JoinKind, JoinOn, JoinPredicate, JoinStep, ProjectedColumn, Projection,
+    SortEntry, SourceTable, VisualQuerySpec, VisualSortDirection,
 };
+
+/// Parses the JSON envelope that wraps a `JoinOn::Conditions` payload.
+///
+/// The envelope shape (`{ "op": "and|or", "predicates": [...] }`) preserves
+/// the boolean operator across save/load. A bare predicate list with no
+/// envelope is treated as legacy AND for backwards compatibility.
+fn parse_conditions_envelope(raw: &str) -> Option<JoinOn> {
+    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    if let Some(arr) = value.as_array() {
+        let predicates: Vec<JoinPredicate> = serde_json::from_value(value.clone()).ok()?;
+        let _ = arr;
+        return Some(JoinOn::Conditions {
+            op: BoolOp::And,
+            predicates,
+        });
+    }
+    let op = match value.get("op").and_then(|v| v.as_str()) {
+        Some("or") => BoolOp::Or,
+        _ => BoolOp::And,
+    };
+    let preds_value = value.get("predicates")?.clone();
+    let predicates: Vec<JoinPredicate> = serde_json::from_value(preds_value).ok()?;
+    Some(JoinOn::Conditions { op, predicates })
+}
 
 use crate::error::StorageError;
 
@@ -344,11 +368,15 @@ fn write_children_from_spec(
                 None,
             ),
             JoinOn::RawExpression(expr) => ("raw", None, None, Some(expr.as_str())),
-            JoinOn::Conditions(preds) => {
-                conditions_json =
-                    Some(serde_json::to_string(preds).map_err(|e| {
-                        StorageError::Data(format!("serialize join conditions: {e}"))
-                    })?);
+            JoinOn::Conditions { op, predicates } => {
+                let envelope = serde_json::json!({
+                    "op": match op {
+                        dbflux_core::BoolOp::And => "and",
+                        dbflux_core::BoolOp::Or => "or",
+                    },
+                    "predicates": predicates,
+                });
+                conditions_json = Some(envelope.to_string());
                 ("conditions", None, None, conditions_json.as_deref())
             }
         };
@@ -538,9 +566,10 @@ fn load_joins(conn: &Connection, id: &str) -> Result<Vec<JoinStep>, StorageError
                 },
                 "conditions" => {
                     let raw: String = row.get(8)?;
-                    serde_json::from_str(&raw)
-                        .map(JoinOn::Conditions)
-                        .unwrap_or_else(|_| JoinOn::RawExpression(raw))
+                    match parse_conditions_envelope(&raw) {
+                        Some(parsed) => parsed,
+                        None => JoinOn::RawExpression(raw),
+                    }
                 }
                 _ => JoinOn::RawExpression(row.get::<_, String>(8)?),
             };

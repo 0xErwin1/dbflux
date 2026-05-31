@@ -516,7 +516,7 @@ impl<'a> SqlSelectBuilder<'a> {
                 // For structured Conditions, require at least one fully
                 // populated predicate so we never emit `ON ` with nothing.
                 match &j.on {
-                    JoinOn::Conditions(preds) => preds
+                    JoinOn::Conditions { predicates, .. } => predicates
                         .iter()
                         .any(|p| !p.left.trim().is_empty() && !p.right.trim().is_empty()),
                     JoinOn::RawExpression(expr) => !expr.trim().is_empty(),
@@ -548,7 +548,9 @@ impl<'a> SqlSelectBuilder<'a> {
                         self.dialect.quote_identifier(to_column),
                     ),
                     JoinOn::RawExpression(expr) => expr.clone(),
-                    JoinOn::Conditions(preds) => self.render_join_conditions(preds),
+                    JoinOn::Conditions { op, predicates } => {
+                        self.render_join_conditions(*op, predicates)
+                    }
                 };
 
                 format!("{} {} AS {} ON {}", kind_sql, table_ref, alias, on_expr)
@@ -567,15 +569,16 @@ impl<'a> SqlSelectBuilder<'a> {
     /// only handles bare identifiers.
     fn render_join_conditions(
         &self,
+        op: crate::query::visual_query::BoolOp,
         preds: &[crate::query::visual_query::JoinPredicate],
     ) -> String {
-        use crate::query::visual_query::Comparator;
+        use crate::query::visual_query::{BoolOp, Comparator};
 
         let parts: Vec<String> = preds
             .iter()
             .filter(|p| !p.left.trim().is_empty() && !p.right.trim().is_empty())
             .map(|p| {
-                let op = match p.op {
+                let cmp = match p.op {
                     Comparator::Eq => "=",
                     Comparator::Neq => "<>",
                     Comparator::Gt => ">",
@@ -588,11 +591,22 @@ impl<'a> SqlSelectBuilder<'a> {
                     Comparator::IsNull => "IS NULL",
                     Comparator::IsNotNull => "IS NOT NULL",
                 };
-                format!("{} {} {}", p.left.trim(), op, p.right.trim())
+                format!("{} {} {}", p.left.trim(), cmp, p.right.trim())
             })
             .collect();
 
-        parts.join(" AND ")
+        let sep = match op {
+            BoolOp::And => " AND ",
+            BoolOp::Or => " OR ",
+        };
+
+        // Parenthesise OR groups so the connector binds correctly when
+        // multiple joins are emitted in the same FROM clause.
+        if parts.len() > 1 && matches!(op, BoolOp::Or) {
+            format!("({})", parts.join(sep))
+        } else {
+            parts.join(sep)
+        }
     }
 
     fn build_where(

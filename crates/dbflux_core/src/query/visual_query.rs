@@ -35,8 +35,8 @@ impl VisualQuerySpec {
         }
 
         for join in &mut self.joins {
-            if let JoinOn::Conditions(conds) = &mut join.on {
-                for pred in conds.iter_mut() {
+            if let JoinOn::Conditions { predicates, .. } = &mut join.on {
+                for pred in predicates.iter_mut() {
                     *next_id += 1;
                     pred.node_id = *next_id;
                 }
@@ -121,8 +121,16 @@ pub enum JoinOn {
     },
     /// Free-text expression (FK metadata unavailable or user typed raw).
     RawExpression(String),
-    /// Structured list of conditions, AND-joined.
-    Conditions(Vec<JoinPredicate>),
+    /// Structured list of conditions joined with `op` (AND or OR).
+    Conditions {
+        #[serde(default = "default_join_op")]
+        op: BoolOp,
+        predicates: Vec<JoinPredicate>,
+    },
+}
+
+fn default_join_op() -> BoolOp {
+    BoolOp::And
 }
 
 /// Structured ON-clause predicate: `left <op> right`. Both sides are dotted

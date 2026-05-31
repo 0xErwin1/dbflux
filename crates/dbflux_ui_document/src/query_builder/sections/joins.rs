@@ -18,6 +18,7 @@ pub fn render_joins(
     use dbflux_core::JoinOn;
     use gpui::SharedString;
     use gpui::prelude::*;
+    use gpui_component::ActiveTheme;
 
     let show_banner =
         matches!(panel.fk_state, FkLoadState::Unavailable) && !panel.fk_banner_dismissed;
@@ -122,14 +123,46 @@ pub fn render_joins(
 
         // ON body — switches on JoinOn variant.
         match &row.on {
-            JoinOn::Conditions(preds) => {
-                for (cond_ix, pred) in preds.iter().enumerate() {
+            JoinOn::Conditions { op, predicates } => {
+                let connector_label = match op {
+                    dbflux_core::BoolOp::And => "AND",
+                    dbflux_core::BoolOp::Or => "OR",
+                };
+                let row_idx_for_toggle = i;
+                // Toggle pill that swaps AND ↔ OR for the whole conditions block.
+                join_block = join_block.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_1()
+                        .pl_2()
+                        .child(
+                            Button::new(("qb-join-cond-op-toggle", i), connector_label)
+                                .ghost()
+                                .small()
+                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                    this.toggle_join_conditions_op(row_idx_for_toggle, cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(SharedString::from(match op {
+                                    dbflux_core::BoolOp::And => "all conditions match",
+                                    dbflux_core::BoolOp::Or => "any condition matches",
+                                })),
+                        ),
+                );
+
+                for (cond_ix, pred) in predicates.iter().enumerate() {
                     let id = pred.node_id;
                     let left = cond_lefts.get(&id).cloned();
                     let right = cond_rights.get(&id).cloned();
                     let op_dd = cond_ops.get(&id).cloned();
 
-                    let prefix = if cond_ix == 0 { "ON" } else { "AND" };
+                    let prefix = if cond_ix == 0 { "ON" } else { connector_label };
                     let mut cond_row = div().flex().flex_row().gap_1().items_center().pl_2().child(
                         div()
                             .w(gpui::px(32.0))
