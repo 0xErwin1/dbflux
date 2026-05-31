@@ -1,7 +1,7 @@
 use gpui::{AnyElement, Context, ElementId, Entity, IntoElement, SharedString, div};
 
 use crate::query_builder::panel::{FILTER_DEPTH_CAP, QueryBuilderPanel};
-use dbflux_components::controls::InputState;
+use dbflux_components::controls::{Dropdown, InputState};
 
 /// Renders the Filters section of the Query Builder.
 ///
@@ -74,12 +74,14 @@ pub fn render_filters(
         Some(root) => {
             let input_states = panel.predicate_input_states.clone();
             let column_input_states = panel.predicate_column_input_states.clone();
+            let comparator_dropdowns = panel.predicate_comparator_dropdowns.clone();
             let root_element = render_filter_node(
                 root,
                 vec![],
                 &source_alias_for_group,
                 &input_states,
                 &column_input_states,
+                &comparator_dropdowns,
                 cx,
             );
             container = container.child(root_element);
@@ -95,6 +97,7 @@ fn render_filter_node(
     source_alias: &str,
     input_states: &std::collections::HashMap<u64, Entity<InputState>>,
     column_input_states: &std::collections::HashMap<u64, Entity<InputState>>,
+    comparator_dropdowns: &std::collections::HashMap<u64, Entity<Dropdown>>,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> AnyElement {
     use dbflux_core::FilterNode;
@@ -108,6 +111,7 @@ fn render_filter_node(
             source_alias,
             input_states,
             column_input_states,
+            comparator_dropdowns,
             cx,
         )
         .into_any_element(),
@@ -115,11 +119,21 @@ fn render_filter_node(
         FilterNode::Predicate(pred) => {
             let input_state = input_states.get(&pred.node_id).cloned();
             let column_input = column_input_states.get(&pred.node_id).cloned();
-            render_filter_predicate(pred, path, input_state, column_input, cx).into_any_element()
+            let comparator_dropdown = comparator_dropdowns.get(&pred.node_id).cloned();
+            render_filter_predicate(
+                pred,
+                path,
+                input_state,
+                column_input,
+                comparator_dropdown,
+                cx,
+            )
+            .into_any_element()
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_filter_group(
     op: dbflux_core::BoolOp,
     children: Vec<dbflux_core::FilterNode>,
@@ -127,6 +141,7 @@ fn render_filter_group(
     source_alias: &str,
     input_states: &std::collections::HashMap<u64, Entity<InputState>>,
     column_input_states: &std::collections::HashMap<u64, Entity<InputState>>,
+    comparator_dropdowns: &std::collections::HashMap<u64, Entity<Dropdown>>,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
     use dbflux_components::controls::Button;
@@ -206,6 +221,7 @@ fn render_filter_group(
             source_alias,
             input_states,
             column_input_states,
+            comparator_dropdowns,
             cx,
         );
         group_div = group_div.child(child_element);
@@ -219,14 +235,13 @@ fn render_filter_predicate(
     path: Vec<usize>,
     input_state: Option<Entity<InputState>>,
     column_input_state: Option<Entity<InputState>>,
+    comparator_dropdown: Option<Entity<Dropdown>>,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
     use dbflux_components::controls::{Button, Input};
     use gpui::SharedString;
     use gpui::prelude::*;
 
-    let comparator_label = comparator_label(pred.comparator);
-    let path_for_cmp = path.clone();
     let path_for_rm = path.clone();
 
     let needs_value = !matches!(
@@ -252,14 +267,15 @@ fn render_filter_predicate(
         );
     }
 
-    row = row.child(
-        Button::new(path_id("qb-pred-cmp", &path_for_cmp), comparator_label)
-            .dropdown()
-            .small()
-            .on_click(cx.listener(move |this, _event, _window, cx| {
-                this.cycle_predicate_comparator(path_for_cmp.clone(), cx);
-            })),
-    );
+    if let Some(dropdown) = comparator_dropdown {
+        row = row.child(dropdown);
+    } else {
+        row = row.child(
+            div()
+                .text_sm()
+                .child(SharedString::from(comparator_label(pred.comparator))),
+        );
+    }
 
     if needs_value {
         if let Some(state) = input_state {

@@ -384,7 +384,14 @@ fn ensure_in_node(
             };
             let column_ref = format!("{}.{}", pred.source_alias, pred.column);
             panel.ensure_predicate_input(pred.node_id, path.clone(), &current_value, window, cx);
-            panel.ensure_predicate_column_input(pred.node_id, path, &column_ref, window, cx);
+            panel.ensure_predicate_column_input(
+                pred.node_id,
+                path.clone(),
+                &column_ref,
+                window,
+                cx,
+            );
+            panel.ensure_predicate_comparator_dropdown(pred.node_id, path, pred.comparator, cx);
         }
         FilterNode::Group { children, .. } => {
             for (i, child) in children.iter().enumerate() {

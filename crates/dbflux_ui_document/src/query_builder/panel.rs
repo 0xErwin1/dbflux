@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use dbflux_components::controls::{InputEvent, InputState};
+use dbflux_components::controls::{
+    Dropdown, DropdownItem, DropdownSelectionChanged, InputEvent, InputState,
+};
 use dbflux_core::{
     BoolOp, ColumnKind, Comparator, FilterNode, JoinKind, JoinOn, JoinStep, LiteralValue,
     Predicate, PredicateValue, ProjectedColumn, Projection, SchemaForeignKeyInfo, SelectQuery,
@@ -239,6 +241,15 @@ pub struct QueryBuilderPanel {
     /// Holds the dotted "alias.column" string editable by the user.
     pub(crate) predicate_column_input_states: HashMap<u64, Entity<InputState>>,
 
+    /// Per-predicate comparator `Dropdown` keyed by `Predicate::node_id`. The
+    /// dropdown carries one item per `Comparator` variant; the subscription
+    /// applies the selected variant to the predicate.
+    pub(crate) predicate_comparator_dropdowns: HashMap<u64, Entity<Dropdown>>,
+
+    /// Per-join-row kind `Dropdown` (parallel to `join_rows`). Rebuilt whenever
+    /// the join row count changes, mirroring `join_input_states`.
+    pub(crate) join_kind_dropdowns: Vec<Entity<Dropdown>>,
+
     /// Names of columns available on the source table, used to render the
     /// per-column checklist when projection is not "All columns". Populated
     /// once at panel construction from the data grid's current result.
@@ -404,6 +415,8 @@ impl QueryBuilderPanel {
             next_node_id,
             predicate_input_states: HashMap::new(),
             predicate_column_input_states: HashMap::new(),
+            predicate_comparator_dropdowns: HashMap::new(),
+            join_kind_dropdowns: Vec::new(),
             available_columns,
             pending_filter_input_sweep: false,
         }
@@ -828,6 +841,65 @@ impl QueryBuilderPanel {
         self._input_subs.push(sub);
     }
 
+    /// Sets the comparator of the predicate at `path`.
+    pub fn set_predicate_comparator(
+        &mut self,
+        path: Vec<usize>,
+        comparator: Comparator,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(root) = &mut self.current_spec.filter
+            && let Some(FilterNode::Predicate(pred)) = Self::node_at_path_mut(root, &path)
+        {
+            pred.comparator = comparator;
+        }
+
+        self.refresh_preview_and_notify(cx);
+    }
+
+    /// Ensures a `Dropdown` entity exists for the predicate at `node_id` with
+    /// one item per `Comparator` variant. Subscribes to `DropdownSelectionChanged`
+    /// to apply the selection.
+    pub fn ensure_predicate_comparator_dropdown(
+        &mut self,
+        node_id: u64,
+        path: Vec<usize>,
+        current: Comparator,
+        cx: &mut Context<Self>,
+    ) {
+        if self.predicate_comparator_dropdowns.contains_key(&node_id) {
+            return;
+        }
+
+        let items: Vec<DropdownItem> = COMPARATOR_ORDER
+            .iter()
+            .map(|c| DropdownItem::with_value(comparator_label(*c), comparator_value(*c)))
+            .collect();
+
+        let selected = COMPARATOR_ORDER.iter().position(|c| *c == current);
+
+        let dropdown = cx.new(|_cx| {
+            Dropdown::new(("qb-pred-cmp-dd", node_id))
+                .items(items)
+                .selected_index(selected)
+                .compact_trigger(true)
+        });
+
+        let path_for_sub = path;
+        let sub = cx.subscribe(
+            &dropdown,
+            move |this, _entity, event: &DropdownSelectionChanged, cx| {
+                if let Some(comparator) = COMPARATOR_ORDER.get(event.index).copied() {
+                    this.set_predicate_comparator(path_for_sub.clone(), comparator, cx);
+                }
+            },
+        );
+
+        self.predicate_comparator_dropdowns
+            .insert(node_id, dropdown);
+        self._input_subs.push(sub);
+    }
+
     /// Sweeps `predicate_input_states` to remove entries whose `node_id` is no
     /// longer present in the filter tree. Call after any filter mutation that may
     /// have removed predicates.
@@ -836,6 +908,8 @@ impl QueryBuilderPanel {
         self.predicate_input_states
             .retain(|id, _| live_ids.contains(id));
         self.predicate_column_input_states
+            .retain(|id, _| live_ids.contains(id));
+        self.predicate_comparator_dropdowns
             .retain(|id, _| live_ids.contains(id));
     }
 
@@ -923,9 +997,39 @@ impl QueryBuilderPanel {
                 self.join_input_states.push((to_table_state, on_expr_state));
                 self._input_subs.push(to_table_sub);
                 self._input_subs.push(on_expr_sub);
+
+                let kind_items: Vec<DropdownItem> = JOIN_KIND_ORDER
+                    .iter()
+                    .map(|k| DropdownItem::with_value(join_kind_label(*k), join_kind_label(*k)))
+                    .collect();
+                let kind_selected = JOIN_KIND_ORDER
+                    .iter()
+                    .position(|k| *k == self.join_rows[i].kind);
+                let kind_dropdown = cx.new(|_cx| {
+                    Dropdown::new(("qb-join-kind-dd", i))
+                        .items(kind_items)
+                        .selected_index(kind_selected)
+                        .compact_trigger(true)
+                });
+
+                let idx_for_kind = i;
+                let kind_sub = cx.subscribe(
+                    &kind_dropdown,
+                    move |this, _entity, event: &DropdownSelectionChanged, cx| {
+                        if let Some(kind) = JOIN_KIND_ORDER.get(event.index).copied()
+                            && let Some(row) = this.join_rows.get(idx_for_kind).cloned()
+                        {
+                            this.update_join(idx_for_kind, JoinRow { kind, ..row }, cx);
+                        }
+                    },
+                );
+
+                self.join_kind_dropdowns.push(kind_dropdown);
+                self._input_subs.push(kind_sub);
             }
         } else {
             self.join_input_states.truncate(target_len);
+            self.join_kind_dropdowns.truncate(target_len);
         }
     }
 
@@ -1241,6 +1345,75 @@ impl QueryBuilderPanel {
 }
 
 // ---------------------------------------------------------------------------
+// Dropdown helpers
+// ---------------------------------------------------------------------------
+
+const COMPARATOR_ORDER: &[Comparator] = &[
+    Comparator::Eq,
+    Comparator::Neq,
+    Comparator::Gt,
+    Comparator::Lt,
+    Comparator::Gte,
+    Comparator::Lte,
+    Comparator::Like,
+    Comparator::ILike,
+    Comparator::In,
+    Comparator::IsNull,
+    Comparator::IsNotNull,
+];
+
+const JOIN_KIND_ORDER: &[JoinKind] = &[
+    JoinKind::Inner,
+    JoinKind::Left,
+    JoinKind::Right,
+    JoinKind::Full,
+];
+
+fn comparator_label(c: Comparator) -> &'static str {
+    match c {
+        Comparator::Eq => "=",
+        Comparator::Neq => "≠",
+        Comparator::Gt => ">",
+        Comparator::Lt => "<",
+        Comparator::Gte => "≥",
+        Comparator::Lte => "≤",
+        Comparator::Like => "LIKE",
+        Comparator::ILike => "ILIKE",
+        Comparator::In => "IN",
+        Comparator::IsNull => "IS NULL",
+        Comparator::IsNotNull => "IS NOT NULL",
+    }
+}
+
+fn comparator_value(c: Comparator) -> &'static str {
+    // Stable identifier per variant; matches the label except for spaces in
+    // multi-word operators, which would otherwise be ambiguous with other UI
+    // strings if items were ever compared by label.
+    match c {
+        Comparator::Eq => "eq",
+        Comparator::Neq => "neq",
+        Comparator::Gt => "gt",
+        Comparator::Lt => "lt",
+        Comparator::Gte => "gte",
+        Comparator::Lte => "lte",
+        Comparator::Like => "like",
+        Comparator::ILike => "ilike",
+        Comparator::In => "in",
+        Comparator::IsNull => "is_null",
+        Comparator::IsNotNull => "is_not_null",
+    }
+}
+
+fn join_kind_label(k: JoinKind) -> &'static str {
+    match k {
+        JoinKind::Inner => "INNER",
+        JoinKind::Left => "LEFT",
+        JoinKind::Right => "RIGHT",
+        JoinKind::Full => "FULL",
+    }
+}
+
+// ---------------------------------------------------------------------------
 // GPUI integration
 // ---------------------------------------------------------------------------
 
@@ -1357,6 +1530,8 @@ mod tests {
             next_node_id: 0,
             predicate_input_states: HashMap::new(),
             predicate_column_input_states: HashMap::new(),
+            predicate_comparator_dropdowns: HashMap::new(),
+            join_kind_dropdowns: Vec::new(),
             available_columns: Vec::new(),
             pending_filter_input_sweep: false,
         }

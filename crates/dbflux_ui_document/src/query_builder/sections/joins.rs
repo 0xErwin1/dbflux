@@ -15,7 +15,7 @@ pub fn render_joins(
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
     use dbflux_components::controls::{Button, Input};
-    use dbflux_core::{JoinKind, JoinOn};
+    use dbflux_core::JoinOn;
     use gpui::SharedString;
     use gpui::prelude::*;
 
@@ -26,6 +26,7 @@ pub fn render_joins(
     let source_alias = panel.current_spec.source.alias.clone();
     let join_rows = panel.join_rows.clone();
     let join_states = panel.join_input_states.clone();
+    let kind_dropdowns = panel.join_kind_dropdowns.clone();
 
     let mut container = div().flex().flex_col().gap_1();
 
@@ -59,34 +60,19 @@ pub fn render_joins(
     }
 
     for (i, row) in join_rows.iter().enumerate() {
-        let kind_label = match row.kind {
-            JoinKind::Inner => "INNER",
-            JoinKind::Left => "LEFT",
-            JoinKind::Right => "RIGHT",
-            JoinKind::Full => "FULL",
-        };
+        let mut row_div = div().flex().flex_row().gap_1().items_center();
 
-        let next_kind = match row.kind {
-            JoinKind::Inner => JoinKind::Left,
-            JoinKind::Left => JoinKind::Right,
-            JoinKind::Right => JoinKind::Full,
-            JoinKind::Full => JoinKind::Inner,
-        };
-
-        let row_clone = row.clone();
-
-        let mut row_div = div().flex().flex_row().gap_1().items_center().child(
-            Button::new(("qb-join-kind", i), kind_label)
-                .dropdown()
-                .small()
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    let updated = JoinRow {
-                        kind: next_kind,
-                        ..row_clone.clone()
-                    };
-                    this.update_join(i, updated, cx);
-                })),
-        );
+        if let Some(dropdown) = kind_dropdowns.get(i).cloned() {
+            row_div = row_div.child(dropdown);
+        } else {
+            let kind_label = match row.kind {
+                dbflux_core::JoinKind::Inner => "INNER",
+                dbflux_core::JoinKind::Left => "LEFT",
+                dbflux_core::JoinKind::Right => "RIGHT",
+                dbflux_core::JoinKind::Full => "FULL",
+            };
+            row_div = row_div.child(div().text_sm().child(SharedString::from(kind_label)));
+        }
 
         if let Some((to_table_state, on_expr_state)) = join_states.get(i) {
             let on_expr_is_fk = matches!(row.on, JoinOn::FkPath { .. });
