@@ -502,6 +502,15 @@ impl<'a> SqlSelectBuilder<'a> {
 
         joins
             .iter()
+            .filter(|j| {
+                // Skip joins that are still being authored in the UI: a row
+                // with empty `to_table` / `to_alias` / `from_alias` cannot
+                // produce valid SQL and would trip identifier-quoting asserts
+                // in dialect drivers (e.g. PostgreSQL).
+                !j.to_table.trim().is_empty()
+                    && !j.to_alias.trim().is_empty()
+                    && !j.from_alias.trim().is_empty()
+            })
             .map(|j| {
                 let kind_sql = match j.kind {
                     JoinKind::Inner => "INNER JOIN",
@@ -1366,6 +1375,30 @@ mod tests {
         );
         assert!(q.sql.contains("AND"), "expected AND, got: {}", q.sql);
         assert_eq!(q.params.len(), 3);
+    }
+
+    #[test]
+    fn incomplete_join_is_skipped() {
+        let generator = SqlMutationGenerator::new(&DIALECT);
+        let mut spec = users_spec();
+        spec.joins = vec![JoinStep {
+            kind: JoinKind::Inner,
+            from_alias: "users".to_string(),
+            to_schema: None,
+            to_table: String::new(),
+            to_alias: String::new(),
+            on: JoinOn::RawExpression(String::new()),
+        }];
+
+        let q = generator
+            .generate_select(&spec)
+            .expect("must succeed")
+            .expect("must be Some");
+        assert!(
+            !q.sql.contains("JOIN"),
+            "expected no JOIN keyword when row is incomplete, got: {}",
+            q.sql
+        );
     }
 
     #[test]
