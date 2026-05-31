@@ -49,7 +49,8 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
             | DriverCapabilities::ROUTINES.bits()
             | DriverCapabilities::MULTI_STATEMENT.bits()
             | DriverCapabilities::INSTANCE_METRICS.bits()
-            | DriverCapabilities::INSTANCE_INSPECTOR.bits(),
+            | DriverCapabilities::INSTANCE_INSPECTOR.bits()
+            | DriverCapabilities::CHART_AUTHORING.bits(),
     ),
     default_port: Some(3306),
     uri_scheme: "mysql".into(),
@@ -3894,6 +3895,33 @@ mod tests {
         assert_eq!(
             mysql_routine_type_to_kind("UNKNOWN"),
             RoutineKind::Procedure
+        );
+    }
+
+    #[test]
+    fn mysql_metadata_advertises_chart_authoring() {
+        use super::MYSQL_METADATA;
+        use dbflux_core::DriverCapabilities;
+
+        assert!(
+            MYSQL_METADATA
+                .capabilities
+                .contains(DriverCapabilities::CHART_AUTHORING),
+            "CHART_AUTHORING must be set: MySQL advertises INSTANCE_METRICS and needs \
+             CHART_AUTHORING so the sidebar surfaces Dashboards / Saved Charts folders"
+        );
+    }
+
+    #[test]
+    fn mysql_metadata_advertises_instance_metrics() {
+        use super::MYSQL_METADATA;
+        use dbflux_core::DriverCapabilities;
+
+        assert!(
+            MYSQL_METADATA
+                .capabilities
+                .contains(DriverCapabilities::INSTANCE_METRICS),
+            "INSTANCE_METRICS must remain set on MySQL driver"
         );
     }
 }

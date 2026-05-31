@@ -136,7 +136,8 @@ pub static REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
             | DriverCapabilities::SSH_TUNNEL.bits()
             | DriverCapabilities::SSL.bits()
             | DriverCapabilities::INSTANCE_METRICS.bits()
-            | DriverCapabilities::INSTANCE_INSPECTOR.bits(),
+            | DriverCapabilities::INSTANCE_INSPECTOR.bits()
+            | DriverCapabilities::CHART_AUTHORING.bits(),
     ),
     default_port: Some(6379),
     uri_scheme: "redis".into(),
@@ -2853,5 +2854,26 @@ mod tests {
 
         assert!(matches!(error, DbError::NotSupported(_)));
         assert!(error.to_string().contains("explain or describe"));
+    }
+
+    #[test]
+    fn redis_metadata_advertises_chart_authoring() {
+        assert!(
+            REDIS_METADATA
+                .capabilities
+                .contains(DriverCapabilities::CHART_AUTHORING),
+            "CHART_AUTHORING must be set: Redis advertises INSTANCE_METRICS and needs \
+             CHART_AUTHORING so the sidebar surfaces Dashboards / Saved Charts folders"
+        );
+    }
+
+    #[test]
+    fn redis_metadata_advertises_instance_metrics() {
+        assert!(
+            REDIS_METADATA
+                .capabilities
+                .contains(DriverCapabilities::INSTANCE_METRICS),
+            "INSTANCE_METRICS must remain set on Redis driver"
+        );
     }
 }

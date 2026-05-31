@@ -128,7 +128,8 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::ROUTINES.bits()
             | DriverCapabilities::MULTI_STATEMENT.bits()
             | DriverCapabilities::INSTANCE_METRICS.bits()
-            | DriverCapabilities::INSTANCE_INSPECTOR.bits(),
+            | DriverCapabilities::INSTANCE_INSPECTOR.bits()
+            | DriverCapabilities::CHART_AUTHORING.bits(),
     ),
     default_port: Some(1433),
     uri_scheme: "sqlserver".into(),
@@ -4134,6 +4135,27 @@ mod tests {
         assert_eq!(
             names,
             vec!["c".to_string(), "a".to_string(), "b".to_string()]
+        );
+    }
+
+    #[test]
+    fn mssql_metadata_advertises_chart_authoring() {
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::CHART_AUTHORING),
+            "CHART_AUTHORING must be set: MSSQL advertises INSTANCE_METRICS and needs \
+             CHART_AUTHORING so the sidebar surfaces Dashboards / Saved Charts folders"
+        );
+    }
+
+    #[test]
+    fn mssql_metadata_advertises_instance_metrics() {
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::INSTANCE_METRICS),
+            "INSTANCE_METRICS must remain set on MSSQL driver"
         );
     }
 }

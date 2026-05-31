@@ -1399,6 +1399,106 @@ mod tests {
     }
 
     #[test]
+    fn test_append_panels_with_layout_override_preserves_exact_positions() {
+        // P3 regression guard: the save-as-editable flow calls append_panels with
+        // DraftGridLayout on every panel (mirroring the driver's default dashboard
+        // descriptor). If the positions are not preserved verbatim the rendered
+        // dashboard shows visually overlapping panels.
+        let (mut mgr, rt) = make_manager_with_rt();
+        let profile_id = insert_profile(&rt);
+        let dash_id = mgr
+            .create_dashboard(
+                "PG editable copy".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+
+        // Mirror the PG default layout from PgInstanceCatalog::static_default_dashboard():
+        //   panel 0: col=0, row=0, w=6, h=3
+        //   panel 1: col=6, row=0, w=6, h=3
+        //   panel 2: col=0, row=3, w=6, h=3
+        //   panel 3: col=6, row=3, w=6, h=3
+        //   panel 4: col=0, row=6, w=12, h=4  (full-width inspector)
+        let layouts = vec![
+            DraftGridLayout {
+                grid_row: 0,
+                grid_column: 0,
+                grid_width: 6,
+                grid_height: 3,
+            },
+            DraftGridLayout {
+                grid_row: 0,
+                grid_column: 6,
+                grid_width: 6,
+                grid_height: 3,
+            },
+            DraftGridLayout {
+                grid_row: 3,
+                grid_column: 0,
+                grid_width: 6,
+                grid_height: 3,
+            },
+            DraftGridLayout {
+                grid_row: 3,
+                grid_column: 6,
+                grid_width: 6,
+                grid_height: 3,
+            },
+            DraftGridLayout {
+                grid_row: 6,
+                grid_column: 0,
+                grid_width: 12,
+                grid_height: 4,
+            },
+        ];
+
+        let drafts: Vec<DashboardPanelDraft> = layouts
+            .iter()
+            .enumerate()
+            .map(|(i, layout)| {
+                if i == 4 {
+                    DashboardPanelDraft::Inspector {
+                        metric_id: "pg_active_connections".to_string(),
+                        layout: Some(layout.clone()),
+                    }
+                } else {
+                    DashboardPanelDraft::Chart {
+                        saved_chart_id: Uuid::new_v4(),
+                        layout: Some(layout.clone()),
+                    }
+                }
+            })
+            .collect();
+
+        mgr.append_panels(dash_id, drafts).unwrap();
+
+        let panels = mgr.panels_for_dashboard(dash_id);
+        assert_eq!(panels.len(), 5, "all five panels must be persisted");
+
+        for (i, (panel, expected)) in panels.iter().zip(layouts.iter()).enumerate() {
+            assert_eq!(
+                panel.grid_row, expected.grid_row,
+                "panel {i}: grid_row mismatch — panels would overlap"
+            );
+            assert_eq!(
+                panel.grid_column, expected.grid_column,
+                "panel {i}: grid_column mismatch — panels would overlap"
+            );
+            assert_eq!(
+                panel.grid_width, expected.grid_width,
+                "panel {i}: grid_width mismatch — panels would overlap"
+            );
+            assert_eq!(
+                panel.grid_height, expected.grid_height,
+                "panel {i}: grid_height mismatch — panels would overlap"
+            );
+        }
+    }
+
+    #[test]
     fn test_update_panel_position_clamps_and_persists() {
         let (mut mgr, rt) = make_manager_with_rt();
         let profile_id = insert_profile(&rt);

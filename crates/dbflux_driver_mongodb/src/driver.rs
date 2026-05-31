@@ -111,7 +111,8 @@ pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
             | DriverCapabilities::SSH_TUNNEL.bits()
             | DriverCapabilities::INDEXES.bits()
             | DriverCapabilities::INSTANCE_METRICS.bits()
-            | DriverCapabilities::INSTANCE_INSPECTOR.bits(),
+            | DriverCapabilities::INSTANCE_INSPECTOR.bits()
+            | DriverCapabilities::CHART_AUTHORING.bits(),
     ),
     default_port: Some(27017),
     uri_scheme: "mongodb".into(),
@@ -4516,6 +4517,27 @@ mod tests {
                 .windows(needle.len())
                 .position(|window| window == needle)
         }
+    }
+
+    #[test]
+    fn mongodb_metadata_advertises_chart_authoring() {
+        assert!(
+            MONGODB_METADATA
+                .capabilities
+                .contains(DriverCapabilities::CHART_AUTHORING),
+            "CHART_AUTHORING must be set: MongoDB advertises INSTANCE_METRICS and needs \
+             CHART_AUTHORING so the sidebar surfaces Dashboards / Saved Charts folders"
+        );
+    }
+
+    #[test]
+    fn mongodb_metadata_advertises_instance_metrics() {
+        assert!(
+            MONGODB_METADATA
+                .capabilities
+                .contains(DriverCapabilities::INSTANCE_METRICS),
+            "INSTANCE_METRICS must remain set on MongoDB driver"
+        );
     }
 
     #[test]

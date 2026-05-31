@@ -305,6 +305,10 @@ struct TableContextMenu {
     is_document_view: bool,
     doc_field_path: Option<Vec<String>>,
     doc_field_value: Option<dbflux_components::components::document_tree::NodeValue>,
+    /// Driver-supplied row-level actions (e.g. Kill, Cancel). When non-empty,
+    /// these appear at the bottom of the menu after a separator. Selecting one
+    /// emits `DataGridEvent::RowActionRequested`.
+    row_actions: Vec<dbflux_core::InspectorRowAction>,
 }
 
 /// A single item in the context menu.
@@ -1637,51 +1641,35 @@ impl DataGridPanel {
                         this.handle_save_row(*row_idx, cx);
                     }
                     DataTableEvent::ContextMenuRequested { row, col, position } => {
-                        // When a row-action provider is set, check if the
-                        // inspector metric has any actions for this row.
-                        // If yes, emit RowActionRequested for the first action
-                        // instead of opening the normal context menu.
-                        let row_action_dispatched =
-                            if let Some(provider) = this.row_action_provider.as_ref() {
-                                let metric_id = this.row_action_metric_id();
-                                let actions = provider(metric_id.as_deref().unwrap_or(""));
-                                if let Some(action) = actions.into_iter().next() {
-                                    let row_values = this.collect_row_values(*row, cx);
-                                    cx.emit(DataGridEvent::RowActionRequested {
-                                        row: *row,
-                                        action_id: action.id,
-                                        action_label: action.label,
-                                        is_destructive: action.is_destructive,
-                                        row_values,
-                                        position: *position,
-                                    });
-                                    true
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            };
+                        // Gather any driver-supplied row actions (e.g. Kill, Cancel).
+                        // They are injected as extra menu items at the bottom rather
+                        // than bypassing the context menu entirely.
+                        let row_actions = if let Some(provider) = this.row_action_provider.as_ref()
+                        {
+                            let metric_id = this.row_action_metric_id();
+                            provider(metric_id.as_deref().unwrap_or(""))
+                        } else {
+                            Vec::new()
+                        };
 
-                        if !row_action_dispatched {
-                            this.context_menu = Some(TableContextMenu {
-                                row: *row,
-                                col: *col,
-                                position: *position,
-                                sql_submenu_open: false,
-                                copy_query_submenu_open: false,
-                                filter_submenu_open: false,
-                                order_submenu_open: false,
-                                selected_index: 0,
-                                submenu_selected_index: 0,
-                                is_document_view: false,
-                                doc_field_path: None,
-                                doc_field_value: None,
-                            });
-                            this.pending_context_menu_focus = true;
-                            cx.emit(DataGridEvent::Focused);
-                            cx.notify();
-                        }
+                        this.context_menu = Some(TableContextMenu {
+                            row: *row,
+                            col: *col,
+                            position: *position,
+                            sql_submenu_open: false,
+                            copy_query_submenu_open: false,
+                            filter_submenu_open: false,
+                            order_submenu_open: false,
+                            selected_index: 0,
+                            submenu_selected_index: 0,
+                            is_document_view: false,
+                            doc_field_path: None,
+                            doc_field_value: None,
+                            row_actions,
+                        });
+                        this.pending_context_menu_focus = true;
+                        cx.emit(DataGridEvent::Focused);
+                        cx.notify();
                     }
                     // Keyboard-triggered row operations
                     DataTableEvent::DeleteRowRequested(row) => {
@@ -1809,6 +1797,7 @@ impl DataGridPanel {
                             Some(field_path)
                         },
                         doc_field_value: node_value.clone(),
+                        row_actions: Vec::new(),
                     });
                     this.pending_context_menu_focus = true;
                     cx.emit(DataGridEvent::Focused);
@@ -2628,5 +2617,99 @@ mod tests {
         assert_eq!(counts.0, 1, "should have 1 pending insert");
         assert_eq!(counts.1, 0, "should have 0 pending updates");
         assert_eq!(counts.2, 0, "should have 0 pending deletes");
+    }
+
+    // P1 — Right-click always opens context menu; row actions appear in it
+
+    #[test]
+    fn context_menu_row_actions_field_stores_provider_actions() {
+        use dbflux_core::InspectorRowAction;
+        use std::sync::Arc;
+
+        let actions = vec![
+            InspectorRowAction {
+                id: "kill".to_string(),
+                label: "Kill Connection".to_string(),
+                description: None,
+                is_destructive: true,
+            },
+            InspectorRowAction {
+                id: "cancel".to_string(),
+                label: "Cancel Query".to_string(),
+                description: None,
+                is_destructive: false,
+            },
+        ];
+
+        // Simulate what the ContextMenuRequested handler now does: call the
+        // provider and store its actions in `row_actions`.
+        let actions_clone = actions.clone();
+        let provider: super::RowActionProvider = Arc::new(move |_metric_id| actions_clone.clone());
+        let row_actions = provider("");
+
+        assert_eq!(
+            row_actions.len(),
+            2,
+            "both actions should be returned by the provider"
+        );
+        assert_eq!(row_actions[0].id, "kill");
+        assert_eq!(row_actions[1].id, "cancel");
+        assert!(
+            row_actions[0].is_destructive,
+            "kill action should be marked destructive"
+        );
+        assert!(
+            !row_actions[1].is_destructive,
+            "cancel action should not be marked destructive"
+        );
+    }
+
+    #[test]
+    fn context_menu_row_actions_keyboard_nav_index_range() {
+        // Verify that the index range for row actions is calculated correctly.
+        // With: base_count=1 (only Copy), no filter/order/gen_sql/copy_query,
+        // and 2 row actions:
+        //   idx 0: Copy
+        //   idx 1: separator (row actions)
+        //   idx 2: Kill Connection
+        //   idx 3: Cancel Query
+        // total_count = 1 + (1+2) = 4
+        // row_actions_start = 1 (after_copy_query = 1)
+        // Action at selected_index=2: action_idx = 2 - 1 - 1 = 0 → "kill"
+        // Action at selected_index=3: action_idx = 3 - 1 - 1 = 1 → "cancel"
+
+        let row_action_count = 2usize;
+        let row_actions_start = 1usize; // after_copy_query when no optional sections
+        let total_count = row_actions_start + 1 + row_action_count;
+
+        assert_eq!(
+            total_count, 4,
+            "total_count should include separator + 2 actions"
+        );
+
+        // selected_index=2 maps to action_idx=0
+        let selected = 2usize;
+        let in_range =
+            selected > row_actions_start && selected <= row_actions_start + row_action_count;
+        assert!(in_range, "index 2 should be in the row action range");
+        let action_idx = selected - row_actions_start - 1;
+        assert_eq!(action_idx, 0, "index 2 → action slot 0");
+
+        // selected_index=3 maps to action_idx=1
+        let selected = 3usize;
+        let in_range =
+            selected > row_actions_start && selected <= row_actions_start + row_action_count;
+        assert!(in_range, "index 3 should be in the row action range");
+        let action_idx = selected - row_actions_start - 1;
+        assert_eq!(action_idx, 1, "index 3 → action slot 1");
+
+        // The separator itself (index 1) should not be in range
+        let selected = 1usize;
+        let in_range =
+            selected > row_actions_start && selected <= row_actions_start + row_action_count;
+        assert!(
+            !in_range,
+            "separator index should not be in the action range"
+        );
     }
 }

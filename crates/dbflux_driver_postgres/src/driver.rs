@@ -61,7 +61,8 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::ROUTINES.bits()
             | DriverCapabilities::MULTI_STATEMENT.bits()
             | DriverCapabilities::INSTANCE_METRICS.bits()
-            | DriverCapabilities::INSTANCE_INSPECTOR.bits(),
+            | DriverCapabilities::INSTANCE_INSPECTOR.bits()
+            | DriverCapabilities::CHART_AUTHORING.bits(),
     ),
     default_port: Some(5432),
     uri_scheme: "postgresql".into(),
@@ -4705,5 +4706,32 @@ mod tests {
         //   cargo nextest run -p dbflux_driver_postgres --run-ignored
         // Skipped in normal CI.
         let _ = "placeholder for live integration test";
+    }
+
+    #[test]
+    fn postgres_metadata_advertises_chart_authoring() {
+        use super::METADATA;
+        use dbflux_core::DriverCapabilities;
+
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::CHART_AUTHORING),
+            "CHART_AUTHORING must be set: drivers advertising INSTANCE_METRICS also need \
+             CHART_AUTHORING so the sidebar surfaces Dashboards / Saved Charts folders"
+        );
+    }
+
+    #[test]
+    fn postgres_metadata_advertises_instance_metrics() {
+        use super::METADATA;
+        use dbflux_core::DriverCapabilities;
+
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::INSTANCE_METRICS),
+            "INSTANCE_METRICS must remain set on PostgreSQL driver"
+        );
     }
 }
