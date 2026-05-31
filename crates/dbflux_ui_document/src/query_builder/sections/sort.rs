@@ -39,7 +39,7 @@ pub fn render_sort(
             .child(div().flex_1().text_sm().child(SharedString::from(label)))
             .child(
                 Button::new(("qb-sort-dir", i), dir_label)
-                    .dropdown()
+                    .ghost()
                     .small()
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.toggle_sort_direction(i, cx);
@@ -95,11 +95,18 @@ pub fn render_sort(
                         .small()
                         .on_click(cx.listener(|this, _event, _window, cx| {
                             if let Some(state) = this.add_sort_input_state.clone() {
-                                let text = state.read(cx).value().to_string();
-                                let parts: Vec<&str> = text.splitn(2, '.').collect();
-                                if parts.len() == 2 {
-                                    this.add_sort(parts[0], parts[1], cx);
+                                let text = state.read(cx).value().trim().to_string();
+                                if text.is_empty() {
+                                    return;
                                 }
+                                let (alias, column) = match text.split_once('.') {
+                                    Some((a, c)) => (a.trim().to_string(), c.trim().to_string()),
+                                    None => (this.current_spec.source.alias.clone(), text.clone()),
+                                };
+                                this.add_sort(&alias, &column, cx);
+                                state.update(cx, |s, cx| {
+                                    s.set_value("", _window, cx);
+                                });
                             }
                         })),
                 ),

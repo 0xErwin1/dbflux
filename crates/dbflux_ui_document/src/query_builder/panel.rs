@@ -239,6 +239,11 @@ pub struct QueryBuilderPanel {
     /// Holds the dotted "alias.column" string editable by the user.
     pub(crate) predicate_column_input_states: HashMap<u64, Entity<InputState>>,
 
+    /// Names of columns available on the source table, used to render the
+    /// per-column checklist when projection is not "All columns". Populated
+    /// once at panel construction from the data grid's current result.
+    pub(crate) available_columns: Vec<String>,
+
     /// Set to `true` after any filter mutation so the render cycle sweeps stale
     /// entries from `predicate_input_states`.
     pub(crate) pending_filter_input_sweep: bool,
@@ -259,6 +264,7 @@ impl QueryBuilderPanel {
         source: SourceTable,
         initial_spec: Option<VisualQuerySpec>,
         data_grid: Option<WeakEntity<DataGridPanel>>,
+        available_columns: Vec<String>,
         generate_preview: Box<dyn Fn(&VisualQuerySpec) -> String + Send + Sync>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -398,6 +404,7 @@ impl QueryBuilderPanel {
             next_node_id,
             predicate_input_states: HashMap::new(),
             predicate_column_input_states: HashMap::new(),
+            available_columns,
             pending_filter_input_sweep: false,
         }
     }
@@ -734,6 +741,27 @@ impl QueryBuilderPanel {
 
         self.predicate_input_states.insert(node_id, state);
         self._input_subs.push(sub);
+    }
+
+    /// Returns true when an explicit projection entry exists matching the
+    /// given `(alias, column)` pair.
+    pub fn is_column_selected(&self, alias: &str, column: &str) -> bool {
+        self.projection_rows
+            .iter()
+            .any(|r| r.source_alias == alias && r.column == column)
+    }
+
+    /// Adds or removes a column from the explicit projection. Used by the
+    /// per-column checklist so the user can toggle without typing.
+    pub fn toggle_column(&mut self, alias: &str, column: &str, cx: &mut Context<Self>) {
+        match self
+            .projection_rows
+            .iter()
+            .position(|r| r.source_alias == alias && r.column == column)
+        {
+            Some(idx) => self.remove_column(idx, cx),
+            None => self.add_column(alias, column, cx),
+        }
     }
 
     /// Updates the column reference of the predicate at `path` from a dotted
@@ -1329,6 +1357,7 @@ mod tests {
             next_node_id: 0,
             predicate_input_states: HashMap::new(),
             predicate_column_input_states: HashMap::new(),
+            available_columns: Vec::new(),
             pending_filter_input_sweep: false,
         }
     }

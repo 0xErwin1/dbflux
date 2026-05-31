@@ -153,7 +153,7 @@ fn render_filter_group(
             .items_center()
             .child(
                 Button::new(path_id("qb-grp-op", &path_for_toggle), op_label)
-                    .dropdown()
+                    .ghost()
                     .small()
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.toggle_group_op(path_for_toggle.clone(), cx);

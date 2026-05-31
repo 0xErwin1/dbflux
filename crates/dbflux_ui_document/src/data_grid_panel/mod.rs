@@ -2362,11 +2362,15 @@ impl DataGridPanel {
                 Box::new(|_spec: &VisualQuerySpec| String::new())
             };
 
+        let available_columns: Vec<String> =
+            self.result.columns.iter().map(|c| c.name.clone()).collect();
+
         let panel = if let Some(existing) = &self.builder_panel {
             existing.update(cx, |p, cx| {
                 if let Some(spec) = initial_spec.clone() {
                     p.set_spec(spec, cx);
                 }
+                p.available_columns = available_columns.clone();
             });
             existing.clone()
         } else {
@@ -2375,6 +2379,7 @@ impl DataGridPanel {
                     source,
                     initial_spec,
                     Some(weak_self.clone()),
+                    available_columns,
                     generate_preview,
                     window,
                     cx,

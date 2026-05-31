@@ -4,8 +4,10 @@ use crate::query_builder::panel::{ProjectionMode, QueryBuilderPanel};
 
 /// Renders the Columns section of the Query Builder.
 ///
-/// Shows an "All columns (*)" checkbox and, when in Explicit mode, a list of
-/// selected columns each with a remove button, plus an "add column" input.
+/// Shows an "All columns (*)" checkbox; when unchecked, lists each available
+/// source-table column with its own checkbox so the user can toggle individual
+/// projections. A free-text "alias.column" + Add row remains below for
+/// columns from joined tables that are not in the source's column list.
 pub fn render_columns(
     panel: &mut QueryBuilderPanel,
     cx: &mut Context<QueryBuilderPanel>,
@@ -15,6 +17,14 @@ pub fn render_columns(
     use gpui::prelude::*;
 
     let all_active = panel.projection_mode == ProjectionMode::All;
+    let source_alias = panel.current_spec.source.alias.clone();
+    let available_columns = panel.available_columns.clone();
+    let selected_extras: Vec<(String, String)> = panel
+        .projection_rows
+        .iter()
+        .filter(|r| !(r.source_alias == source_alias && available_columns.contains(&r.column)))
+        .map(|r| (r.source_alias.clone(), r.column.clone()))
+        .collect();
 
     let mut container = div().flex().flex_col().gap_1().child(
         Checkbox::new("qb-all-columns")
@@ -25,55 +35,81 @@ pub fn render_columns(
             })),
     );
 
-    if !all_active {
-        let projection_rows = panel.projection_rows.clone();
+    if all_active {
+        return container;
+    }
 
-        for (i, row) in projection_rows.iter().enumerate() {
-            let label = format!("{}.{}", row.source_alias, row.column);
-            let row_div =
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap_1()
-                    .items_center()
-                    .child(div().flex_1().text_sm().child(SharedString::from(label)))
-                    .child(Button::new(("qb-rm-col", i), "✕").ghost().small().on_click(
-                        cx.listener(move |this, _event, _window, cx| {
-                            this.remove_column(i, cx);
-                        }),
-                    ));
+    for (i, col_name) in available_columns.iter().enumerate() {
+        let alias_for_listener = source_alias.clone();
+        let column_for_listener = col_name.clone();
+        let checked = panel.is_column_selected(&source_alias, col_name);
 
-            container = container.child(row_div);
-        }
+        container = container.child(
+            Checkbox::new(("qb-col-toggle", i))
+                .checked(checked)
+                .label(col_name.clone())
+                .on_click(cx.listener(move |this, _checked, _window, cx| {
+                    this.toggle_column(&alias_for_listener, &column_for_listener, cx);
+                })),
+        );
+    }
 
-        if let Some(add_state) = panel.add_column_input_state.as_ref() {
-            container = container.child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap_1()
-                    .items_center()
-                    .child(
-                        Input::new(add_state)
-                            .small()
-                            .w_full()
-                            .placeholder("alias.column"),
-                    )
-                    .child(
-                        Button::new("qb-add-col", "Add")
-                            .small()
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                if let Some(state) = this.add_column_input_state.clone() {
-                                    let text = state.read(cx).value().to_string();
-                                    let parts: Vec<&str> = text.splitn(2, '.').collect();
-                                    if parts.len() == 2 {
-                                        this.add_column(parts[0], parts[1], cx);
-                                    }
+    for (i, (alias, column)) in selected_extras.iter().enumerate() {
+        let label = format!("{}.{}", alias, column);
+        let alias_for_listener = alias.clone();
+        let column_for_listener = column.clone();
+        container = container.child(
+            div()
+                .flex()
+                .flex_row()
+                .gap_1()
+                .items_center()
+                .child(div().flex_1().text_sm().child(SharedString::from(label)))
+                .child(
+                    Button::new(("qb-rm-extra-col", i), "✕")
+                        .ghost()
+                        .small()
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.toggle_column(&alias_for_listener, &column_for_listener, cx);
+                        })),
+                ),
+        );
+    }
+
+    if let Some(add_state) = panel.add_column_input_state.as_ref() {
+        container = container.child(
+            div()
+                .flex()
+                .flex_row()
+                .gap_1()
+                .items_center()
+                .child(
+                    Input::new(add_state)
+                        .small()
+                        .w_full()
+                        .placeholder("alias.column"),
+                )
+                .child(
+                    Button::new("qb-add-col", "Add")
+                        .small()
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            if let Some(state) = this.add_column_input_state.clone() {
+                                let text = state.read(cx).value().trim().to_string();
+                                if text.is_empty() {
+                                    return;
                                 }
-                            })),
-                    ),
-            );
-        }
+                                let (alias, column) = match text.split_once('.') {
+                                    Some((a, c)) => (a.trim().to_string(), c.trim().to_string()),
+                                    None => (this.current_spec.source.alias.clone(), text.clone()),
+                                };
+                                this.add_column(&alias, &column, cx);
+                                state.update(cx, |s, cx| {
+                                    s.set_value("", _window, cx);
+                                });
+                            }
+                        })),
+                ),
+        );
     }
 
     container
