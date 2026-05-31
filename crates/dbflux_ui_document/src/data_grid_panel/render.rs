@@ -516,94 +516,7 @@ pub(super) fn render_filter_bar_as_segment(
                 .child(Text::caption(source_query_prefix).primary())
                 .child(Text::label(source_name)),
         )
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(Spacing::XS)
-                .child(Text::caption("LIMIT").primary())
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .w(px(60.0))
-                        .h(Heights::ROW_COMPACT)
-                        .rounded(Radii::SM)
-                        .when(
-                            show_toolbar_focus && toolbar_focus == ToolbarFocus::Limit,
-                            move |d| d.border_1().border_color(theme_limit.ring),
-                        )
-                        .on_mouse_down(MouseButton::Left, {
-                            let grid = grid_for_limit.clone();
-                            move |_, _, cx| {
-                                grid.update(cx, |this, cx| {
-                                    this.switching_input = true;
-                                    this.focus_mode = GridFocusMode::Toolbar;
-                                    this.toolbar_focus = ToolbarFocus::Limit;
-                                    this.edit_state = EditState::Editing;
-                                    cx.notify();
-                                });
-                            }
-                        })
-                        .child(Input::new(&limit_input).small()),
-                ),
-        )
-        .child(
-            div()
-                .id("refresh-action-btn")
-                .h(Heights::ROW_COMPACT)
-                .flex()
-                .items_center()
-                .gap_0()
-                .rounded(Radii::SM)
-                .bg(theme_refresh.background)
-                .border_1()
-                .border_color(
-                    if show_toolbar_focus && toolbar_focus == ToolbarFocus::Refresh {
-                        theme_refresh.ring
-                    } else {
-                        theme_refresh.input
-                    },
-                )
-                .child(
-                    div()
-                        .id("refresh-action")
-                        .h_full()
-                        .px(Spacing::SM)
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .cursor_pointer()
-                        .hover(move |d| d.bg(theme_refresh.accent.opacity(0.08)))
-                        .on_click(move |_, window, cx| {
-                            grid_for_refresh.update(cx, |this, cx| {
-                                if this.runner.is_primary_active() {
-                                    this.runner.cancel_primary(cx);
-                                    cx.notify();
-                                } else {
-                                    this.refresh(window, cx);
-                                    this.focus_table(window, cx);
-                                }
-                            });
-                        })
-                        .child(
-                            Icon::new(if is_runner_active {
-                                AppIcon::Loader
-                            } else if refresh_policy.is_auto() {
-                                AppIcon::Clock
-                            } else {
-                                AppIcon::RefreshCcw
-                            })
-                            .small()
-                            .color(theme.foreground),
-                        )
-                        .child(Text::body(refresh_label)),
-                )
-                .child(div().w(px(1.0)).h_full().bg(theme.input)) // guardrail-allow: vertical separator div, not a border-width token
-                .child(div().w(px(28.0)).h_full().child(refresh_dropdown)), // guardrail-allow: dropdown control width, not a height token
-        )
-        // Filter input: positioned after LIMIT and Refresh, expands to fill remaining space.
-        // Hidden for drivers that don't support collection filtering.
+        // Toolbar order: WHERE filter (flex_1) | LIMIT | Builder | Refresh.
         .when(!filter_keyword.is_empty(), move |d| {
             let grid_for_filter_event = grid_for_filter.clone();
             let grid_for_clear_event = grid_for_clear.clone();
@@ -676,33 +589,118 @@ pub(super) fn render_filter_bar_as_segment(
                     ),
             )
         })
-        .when(can_open_builder, move |d| {
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(Spacing::XS)
+                .child(Text::caption("LIMIT").primary())
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .w(px(60.0))
+                        .h(Heights::ROW_COMPACT)
+                        .rounded(Radii::SM)
+                        .when(
+                            show_toolbar_focus && toolbar_focus == ToolbarFocus::Limit,
+                            move |d| d.border_1().border_color(theme_limit.ring),
+                        )
+                        .on_mouse_down(MouseButton::Left, {
+                            let grid = grid_for_limit.clone();
+                            move |_, _, cx| {
+                                grid.update(cx, |this, cx| {
+                                    this.switching_input = true;
+                                    this.focus_mode = GridFocusMode::Toolbar;
+                                    this.toolbar_focus = ToolbarFocus::Limit;
+                                    this.edit_state = EditState::Editing;
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .child(Input::new(&limit_input).small()),
+                ),
+        )
+        .when(can_open_builder, {
             let theme_btn = theme.clone();
-            d.child(
-                div()
-                    .id("open-builder-btn")
-                    .h(Heights::ROW_COMPACT)
-                    .px(Spacing::SM)
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .rounded(Radii::SM)
-                    .text_color(theme_btn.muted_foreground)
-                    .cursor_pointer()
-                    .hover(move |d| d.bg(theme_btn.secondary).text_color(theme_btn.foreground))
-                    .on_click(move |_, window, cx| {
-                        grid_for_builder.update(cx, |this, cx| {
-                            this.open_query_builder(window, cx);
-                        });
-                    })
-                    .child(
-                        Icon::new(AppIcon::ListFilter)
-                            .small()
-                            .color(theme.muted_foreground),
-                    )
-                    .child(Text::muted("Builder")),
-            )
+            let icon_color = theme.muted_foreground;
+            move |d| {
+                d.child(
+                    div()
+                        .id("open-builder-btn")
+                        .h(Heights::ROW_COMPACT)
+                        .px(Spacing::SM)
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::XS)
+                        .rounded(Radii::SM)
+                        .text_color(theme_btn.muted_foreground)
+                        .cursor_pointer()
+                        .hover(move |d| d.bg(theme_btn.secondary).text_color(theme_btn.foreground))
+                        .on_click(move |_, window, cx| {
+                            grid_for_builder.update(cx, |this, cx| {
+                                this.open_query_builder(window, cx);
+                            });
+                        })
+                        .child(Icon::new(AppIcon::ListFilter).small().color(icon_color))
+                        .child(Text::muted("Builder")),
+                )
+            }
         })
+        .child(
+            div()
+                .id("refresh-action-btn")
+                .h(Heights::ROW_COMPACT)
+                .flex()
+                .items_center()
+                .gap_0()
+                .rounded(Radii::SM)
+                .bg(theme_refresh.background)
+                .border_1()
+                .border_color(
+                    if show_toolbar_focus && toolbar_focus == ToolbarFocus::Refresh {
+                        theme_refresh.ring
+                    } else {
+                        theme_refresh.input
+                    },
+                )
+                .child(
+                    div()
+                        .id("refresh-action")
+                        .h_full()
+                        .px(Spacing::SM)
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .cursor_pointer()
+                        .hover(move |d| d.bg(theme_refresh.accent.opacity(0.08)))
+                        .on_click(move |_, window, cx| {
+                            grid_for_refresh.update(cx, |this, cx| {
+                                if this.runner.is_primary_active() {
+                                    this.runner.cancel_primary(cx);
+                                    cx.notify();
+                                } else {
+                                    this.refresh(window, cx);
+                                    this.focus_table(window, cx);
+                                }
+                            });
+                        })
+                        .child(
+                            Icon::new(if is_runner_active {
+                                AppIcon::Loader
+                            } else if refresh_policy.is_auto() {
+                                AppIcon::Clock
+                            } else {
+                                AppIcon::RefreshCcw
+                            })
+                            .small()
+                            .color(theme.foreground),
+                        )
+                        .child(Text::body(refresh_label)),
+                )
+                .child(div().w(px(1.0)).h_full().bg(theme.input)) // guardrail-allow: vertical separator div, not a border-width token
+                .child(div().w(px(28.0)).h_full().child(refresh_dropdown)), // guardrail-allow: dropdown control width, not a height token
+        )
         .into_any()
 }
 
@@ -736,92 +734,7 @@ impl DataGridPanel {
                     .child(Text::caption(source_query_prefix.to_string()).primary())
                     .child(Text::label(source_name.to_string())),
             )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .child(Text::caption("LIMIT").primary())
-                    .child(
-                        div()
-                            .w(px(60.0))
-                            .rounded(Radii::SM)
-                            .when(
-                                show_toolbar_focus && toolbar_focus == ToolbarFocus::Limit,
-                                |d| d.border_1().border_color(theme.ring),
-                            )
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    this.switching_input = true;
-                                    this.focus_mode = GridFocusMode::Toolbar;
-                                    this.toolbar_focus = ToolbarFocus::Limit;
-                                    this.edit_state = EditState::Editing;
-                                    cx.notify();
-                                }),
-                            )
-                            .child(Input::new(limit_input).small()),
-                    ),
-            )
-            .child(
-                div()
-                    .id("refresh-action-btn")
-                    .h(Heights::CONTROL)
-                    .flex()
-                    .items_center()
-                    .gap_0()
-                    .rounded(Radii::SM)
-                    .bg(theme.background)
-                    .border_1()
-                    .border_color(
-                        if show_toolbar_focus && toolbar_focus == ToolbarFocus::Refresh {
-                            theme.ring
-                        } else {
-                            theme.input
-                        },
-                    )
-                    .child(
-                        div()
-                            .id("refresh-action")
-                            .h_full()
-                            .px(Spacing::SM)
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .cursor_pointer()
-                            .hover(|d| d.bg(theme.accent.opacity(0.08)))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                if this.runner.is_primary_active() {
-                                    this.runner.cancel_primary(cx);
-                                    cx.notify();
-                                } else {
-                                    this.refresh(window, cx);
-                                    this.focus_table(window, cx);
-                                }
-                            }))
-                            .child(
-                                Icon::new(if self.runner.is_primary_active() {
-                                    AppIcon::Loader
-                                } else if self.refresh_policy.is_auto() {
-                                    AppIcon::Clock
-                                } else {
-                                    AppIcon::RefreshCcw
-                                })
-                                .small()
-                                .color(theme.foreground),
-                            )
-                            .child(Text::body(refresh_label)),
-                    )
-                    .child(div().w(px(1.0)).h_full().bg(theme.input)) // guardrail-allow: vertical separator div, not a border-width token
-                    .child(
-                        div()
-                            .w(px(28.0)) // guardrail-allow: dropdown control width, not a height token
-                            .h_full()
-                            .child(self.refresh_dropdown.clone()),
-                    ),
-            )
-            // Filter input: positioned after LIMIT and Refresh, expands to fill remaining space.
-            // Hidden for drivers that don't support collection filtering (e.g. TimeSeries/InfluxDB).
+            // Toolbar order: WHERE filter (flex_1) | LIMIT | view toggle | Builder | Refresh.
             .when(!filter_keyword.is_empty(), |d| {
                 d.child(
                     div()
@@ -880,6 +793,33 @@ impl DataGridPanel {
                         ),
                 )
             })
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .child(Text::caption("LIMIT").primary())
+                    .child(
+                        div()
+                            .w(px(60.0))
+                            .rounded(Radii::SM)
+                            .when(
+                                show_toolbar_focus && toolbar_focus == ToolbarFocus::Limit,
+                                |d| d.border_1().border_color(theme.ring),
+                            )
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.switching_input = true;
+                                    this.focus_mode = GridFocusMode::Toolbar;
+                                    this.toolbar_focus = ToolbarFocus::Limit;
+                                    this.edit_state = EditState::Editing;
+                                    cx.notify();
+                                }),
+                            )
+                            .child(Input::new(limit_input).small()),
+                    ),
+            )
             .when(self.can_toggle_view(), |d| {
                 let mode = self.view_config.mode;
                 let view_icon: AppIcon = match mode {
@@ -934,6 +874,63 @@ impl DataGridPanel {
                         .child(Text::muted("Builder")),
                 )
             })
+            .child(
+                div()
+                    .id("refresh-action-btn")
+                    .h(Heights::CONTROL)
+                    .flex()
+                    .items_center()
+                    .gap_0()
+                    .rounded(Radii::SM)
+                    .bg(theme.background)
+                    .border_1()
+                    .border_color(
+                        if show_toolbar_focus && toolbar_focus == ToolbarFocus::Refresh {
+                            theme.ring
+                        } else {
+                            theme.input
+                        },
+                    )
+                    .child(
+                        div()
+                            .id("refresh-action")
+                            .h_full()
+                            .px(Spacing::SM)
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .cursor_pointer()
+                            .hover(|d| d.bg(theme.accent.opacity(0.08)))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                if this.runner.is_primary_active() {
+                                    this.runner.cancel_primary(cx);
+                                    cx.notify();
+                                } else {
+                                    this.refresh(window, cx);
+                                    this.focus_table(window, cx);
+                                }
+                            }))
+                            .child(
+                                Icon::new(if self.runner.is_primary_active() {
+                                    AppIcon::Loader
+                                } else if self.refresh_policy.is_auto() {
+                                    AppIcon::Clock
+                                } else {
+                                    AppIcon::RefreshCcw
+                                })
+                                .small()
+                                .color(theme.foreground),
+                            )
+                            .child(Text::body(refresh_label)),
+                    )
+                    .child(div().w(px(1.0)).h_full().bg(theme.input)) // guardrail-allow: vertical separator div, not a border-width token
+                    .child(
+                        div()
+                            .w(px(28.0)) // guardrail-allow: dropdown control width, not a height token
+                            .h_full()
+                            .child(self.refresh_dropdown.clone()),
+                    ),
+            )
     }
 
     pub(super) fn render_edit_toolbar(
