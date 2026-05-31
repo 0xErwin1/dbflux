@@ -535,7 +535,7 @@ impl DashboardManager {
             profile_id: Some(profile_id),
             shared_time_range_preset,
             shared_refresh_policy,
-            grid_columns: 2,
+            grid_columns: 12,
             created_at: now,
             updated_at: now,
         };
@@ -1305,11 +1305,11 @@ mod tests {
         )
         .unwrap();
 
-        // grid_columns defaults to 2; requesting width=99, height=99 should be clamped.
+        // grid_columns defaults to 12; requesting width=99, height=99 should be clamped.
         mgr.resize_panel(dash_id, 0, 99, 99).unwrap();
 
         let panel = &mgr.panels_for_dashboard(dash_id)[0];
-        assert_eq!(panel.grid_width, 2); // clamped to grid_columns
+        assert_eq!(panel.grid_width, 12); // clamped to grid_columns
         assert_eq!(panel.grid_height, 4); // clamped to max 4
     }
 
