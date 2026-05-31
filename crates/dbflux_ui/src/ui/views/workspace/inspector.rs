@@ -34,7 +34,7 @@ use gpui_component::ActiveTheme;
 
 pub const INSPECTOR_MIN_WIDTH: Pixels = px(240.0);
 pub const INSPECTOR_MAX_WIDTH: Pixels = px(1280.0);
-pub const INSPECTOR_DEFAULT_WIDTH: Pixels = px(440.0);
+pub const INSPECTOR_DEFAULT_WIDTH: Pixels = px(520.0);
 pub const INSPECTOR_GRIP_WIDTH: Pixels = px(6.0);
 
 // ---------------------------------------------------------------------------

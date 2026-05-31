@@ -56,6 +56,7 @@ pub fn render_panel(
     container
         .child(render_header(panel, &theme, cx))
         .child(render_body(panel, &theme, cx))
+        .child(render_preview_pane(panel, &theme))
         .child(render_footer(panel, &theme, cx))
 }
 
@@ -140,7 +141,6 @@ fn render_body(
     let joins_body = joins::render_joins(panel, cx).into_any_element();
     let sort_body = sort::render_sort(panel, cx).into_any_element();
     let limit_body = render_limit_offset_body(panel).into_any_element();
-    let preview_body = render_preview_body(panel, theme).into_any_element();
 
     div()
         .flex_1()
@@ -166,12 +166,14 @@ fn render_body(
             theme,
             limit_body,
         ))
-        .child(section_card(
-            "SQL PREVIEW",
-            AppIcon::Code,
-            theme,
-            preview_body,
-        ))
+}
+
+/// Renders the SQL Preview as a fixed pane between the scrollable body and
+/// the action footer, so it stays visible regardless of how many sections
+/// the user has scrolled past.
+fn render_preview_pane(panel: &mut QueryBuilderPanel, theme: &Theme) -> impl IntoElement {
+    let body = render_preview_body(panel, theme).into_any_element();
+    section_card("SQL PREVIEW", AppIcon::Code, theme, body)
 }
 
 /// Renders a section as a bordered card with an uppercase header bar and
