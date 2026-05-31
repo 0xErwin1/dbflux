@@ -268,7 +268,7 @@ fn render_filter_predicate(
     }
 
     if let Some(dropdown) = comparator_dropdown {
-        row = row.child(dropdown);
+        row = row.child(div().w(gpui::px(96.0)).flex_shrink_0().child(dropdown));
     } else {
         row = row.child(
             div()

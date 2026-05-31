@@ -39,20 +39,35 @@ pub fn render_columns(
         return container;
     }
 
-    for (i, col_name) in available_columns.iter().enumerate() {
-        let alias_for_listener = source_alias.clone();
-        let column_for_listener = col_name.clone();
-        let checked = panel.is_column_selected(&source_alias, col_name);
+    let columns_grid = available_columns.chunks(2).enumerate().fold(
+        div().flex().flex_col().gap_1(),
+        |grid, (chunk_ix, chunk)| {
+            let mut row = div().flex().flex_row().gap_2();
+            for (within_ix, col_name) in chunk.iter().enumerate() {
+                let i = chunk_ix * 2 + within_ix;
+                let alias_for_listener = source_alias.clone();
+                let column_for_listener = col_name.clone();
+                let checked = panel.is_column_selected(&source_alias, col_name);
 
-        container = container.child(
-            Checkbox::new(("qb-col-toggle", i))
-                .checked(checked)
-                .label(col_name.clone())
-                .on_click(cx.listener(move |this, _checked, _window, cx| {
-                    this.toggle_column(&alias_for_listener, &column_for_listener, cx);
-                })),
-        );
-    }
+                row = row.child(
+                    div().flex_1().min_w(gpui::px(0.0)).child(
+                        Checkbox::new(("qb-col-toggle", i))
+                            .checked(checked)
+                            .label(col_name.clone())
+                            .on_click(cx.listener(move |this, _checked, _window, cx| {
+                                this.toggle_column(&alias_for_listener, &column_for_listener, cx);
+                            })),
+                    ),
+                );
+            }
+            // Pad single-item row so layout stays balanced.
+            if chunk.len() == 1 {
+                row = row.child(div().flex_1());
+            }
+            grid.child(row)
+        },
+    );
+    container = container.child(columns_grid);
 
     for (i, (alias, column)) in selected_extras.iter().enumerate() {
         let label = format!("{}.{}", alias, column);

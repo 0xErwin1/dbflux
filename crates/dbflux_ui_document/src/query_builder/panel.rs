@@ -882,7 +882,7 @@ impl QueryBuilderPanel {
             Dropdown::new(("qb-pred-cmp-dd", node_id))
                 .items(items)
                 .selected_index(selected)
-                .compact_trigger(true)
+                .toolbar_style(true)
         });
 
         let path_for_sub = path;
@@ -1009,7 +1009,7 @@ impl QueryBuilderPanel {
                     Dropdown::new(("qb-join-kind-dd", i))
                         .items(kind_items)
                         .selected_index(kind_selected)
-                        .compact_trigger(true)
+                        .toolbar_style(true)
                 });
 
                 let idx_for_kind = i;
