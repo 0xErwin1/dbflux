@@ -1,3 +1,4 @@
+pub(crate) mod column_kind;
 pub(crate) mod generator;
 pub(crate) mod language_service;
 pub(crate) mod safety;
@@ -5,11 +6,13 @@ pub(crate) mod semantic;
 pub(crate) mod table_browser;
 pub(crate) mod time_macros;
 pub(crate) mod types;
+pub(crate) mod visual_query;
 
+pub use column_kind::infer_column_kind;
 pub use generator::{
     CollectionTemplateRequest, GeneratedQuery, MutationCategory, MutationTemplateOperation,
-    MutationTemplateRequest, QueryGenerator, ReadTemplateOperation, ReadTemplateRequest,
-    SqlMutationGenerator,
+    MutationTemplateRequest, QueryGenError, QueryGenerator, ReadTemplateOperation,
+    ReadTemplateRequest, SelectQuery, SqlMutationGenerator,
 };
 pub use language_service::{
     DangerousQueryKind, Diagnostic, DiagnosticSeverity, EditorDiagnostic, LanguageService,
@@ -32,4 +35,10 @@ pub use time_macros::{contains_time_macros, substitute_time_macros};
 pub use types::{
     ColumnKind, ColumnMeta, QueryHandle, QueryRequest, QueryResult, QueryResultShape,
     ResolvedWindow, Row,
+};
+pub use visual_query::SortDirection as VisualSortDirection;
+pub use visual_query::{
+    AliasOrigin, BoolOp, Comparator, FilterNode, JoinKind, JoinOn, JoinStep, LiteralValue,
+    Predicate, PredicateValue, ProjectedColumn, Projection, SortEntry, SourceTable, SpecError,
+    VisualQuerySpec,
 };
