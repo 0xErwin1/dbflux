@@ -18,6 +18,7 @@ use dbflux_core::{
     SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore, ServiceConfig, SessionFacade,
     ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
+use dbflux_storage::SavedQueryRepo;
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_storage::repositories::viz_dashboard_panels::DashboardPanelsRepository;
 use dbflux_storage::repositories::viz_dashboards::DashboardsRepository;
@@ -145,6 +146,8 @@ pub struct AppState {
     pub dashboards_repo: Arc<DashboardsRepository>,
     /// Repository for `viz_dashboard_panels` child rows.
     pub dashboard_panels_repo: Arc<DashboardPanelsRepository>,
+    /// Repository for `qry_saved_queries` and its child tables.
+    pub saved_query_repo: Arc<SavedQueryRepo>,
 }
 
 impl AppState {
@@ -300,6 +303,7 @@ impl AppState {
             Arc::new(SavedChartBindingYRepository::new(Arc::clone(&viz_conn)));
         let dashboards_repo = Arc::new(DashboardsRepository::new(Arc::clone(&viz_conn)));
         let dashboard_panels_repo = Arc::new(DashboardPanelsRepository::new(Arc::clone(&viz_conn)));
+        let saved_query_repo = Arc::new(SavedQueryRepo::new(Arc::clone(&viz_conn)));
 
         let mut state = Self {
             facade,
@@ -327,6 +331,7 @@ impl AppState {
             saved_chart_binding_y_repo,
             dashboards_repo,
             dashboard_panels_repo,
+            saved_query_repo,
         };
 
         #[cfg(feature = "mcp")]

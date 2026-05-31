@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use crate::dashboard_manager::DashboardManager;
 use crate::saved_chart_manager::SavedChartManager;
+use crate::saved_query_manager::SavedQueryManager;
 
 // ============================================================================
 // GPUI-coupled event types
@@ -85,6 +86,10 @@ pub struct AppStateEntity {
     /// and `replace_panels`.
     pub dashboards: DashboardManager,
 
+    /// Saved visual query manager — loaded from SQLite on startup; mutated via
+    /// `save`, `rename`, `fork`, `delete`, and `import_to`.
+    pub saved_queries: SavedQueryManager,
+
     /// Set by the Connection Manager after editing a profile that is currently
     /// connected. The sidebar consumes this on the next `AppStateChanged` to
     /// surface a "Reconnect now / Later" prompt — the edit itself is already
@@ -116,12 +121,14 @@ impl AppStateEntity {
             Arc::clone(&inner.dashboards_repo),
             Arc::clone(&inner.dashboard_panels_repo),
         );
+        let saved_queries = SavedQueryManager::new(Arc::clone(&inner.saved_query_repo));
 
         Self {
             inner,
             settings_window: None,
             saved_charts,
             dashboards,
+            saved_queries,
             pending_edit_reconnect_prompt: None,
             pending_reconnect_request: None,
             unread_error_count: 0,
@@ -141,12 +148,14 @@ impl AppStateEntity {
             Arc::clone(&inner.dashboards_repo),
             Arc::clone(&inner.dashboard_panels_repo),
         );
+        let saved_queries = SavedQueryManager::new(Arc::clone(&inner.saved_query_repo));
 
         Self {
             inner,
             settings_window: None,
             saved_charts,
             dashboards,
+            saved_queries,
             pending_edit_reconnect_prompt: None,
             pending_reconnect_request: None,
             unread_error_count: 0,
