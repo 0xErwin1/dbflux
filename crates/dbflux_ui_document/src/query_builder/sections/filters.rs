@@ -57,7 +57,7 @@ pub fn render_filters(
                             .ghost()
                             .small()
                             .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.add_predicate(vec![], &source_alias.clone(), "column", cx);
+                                this.add_predicate(vec![], &source_alias.clone(), "", cx);
                             })),
                     )
                     .child(
@@ -183,7 +183,7 @@ fn render_filter_group(
                         this.add_predicate(
                             path_for_add_pred.clone(),
                             &source_alias_for_pred.clone(),
-                            "column",
+                            "",
                             cx,
                         );
                     })),
@@ -268,7 +268,7 @@ fn render_filter_predicate(
     }
 
     if let Some(dropdown) = comparator_dropdown {
-        row = row.child(div().w(gpui::px(96.0)).flex_shrink_0().child(dropdown));
+        row = row.child(div().w(gpui::px(76.0)).flex_shrink_0().child(dropdown));
     } else {
         row = row.child(
             div()

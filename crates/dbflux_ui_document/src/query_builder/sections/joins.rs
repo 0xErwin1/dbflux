@@ -63,7 +63,7 @@ pub fn render_joins(
         let mut row_div = div().flex().flex_row().gap_1().items_center();
 
         if let Some(dropdown) = kind_dropdowns.get(i).cloned() {
-            row_div = row_div.child(div().w(gpui::px(96.0)).flex_shrink_0().child(dropdown));
+            row_div = row_div.child(div().w(gpui::px(80.0)).flex_shrink_0().child(dropdown));
         } else {
             let kind_label = match row.kind {
                 dbflux_core::JoinKind::Inner => "INNER",
@@ -78,7 +78,14 @@ pub fn render_joins(
             let on_expr_is_fk = matches!(row.on, JoinOn::FkPath { .. });
 
             row_div = row_div
-                .child(Input::new(to_table_state).small().placeholder("table"))
+                .child(
+                    div().flex_1().min_w(gpui::px(0.0)).child(
+                        Input::new(to_table_state)
+                            .small()
+                            .w_full()
+                            .placeholder("table"),
+                    ),
+                )
                 .child(if on_expr_is_fk {
                     let on_text = match &row.on {
                         JoinOn::FkPath {
@@ -91,14 +98,21 @@ pub fn render_joins(
                         JoinOn::RawExpression(expr) => expr.clone(),
                     };
                     div()
+                        .flex_1()
+                        .min_w(gpui::px(0.0))
                         .text_sm()
                         .child(SharedString::from(on_text))
                         .into_any_element()
                 } else {
-                    Input::new(on_expr_state)
-                        .small()
-                        .w_full()
-                        .placeholder("a.id = b.a_id")
+                    div()
+                        .flex_1()
+                        .min_w(gpui::px(0.0))
+                        .child(
+                            Input::new(on_expr_state)
+                                .small()
+                                .w_full()
+                                .placeholder("a.id = b.a_id"),
+                        )
                         .into_any_element()
                 });
         } else {

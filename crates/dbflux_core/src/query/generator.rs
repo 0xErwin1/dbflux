@@ -571,7 +571,15 @@ impl<'a> SqlSelectBuilder<'a> {
         use crate::query::visual_query::{BoolOp, FilterNode};
 
         match node {
-            FilterNode::Predicate(pred) => self.render_predicate(pred, params, param_index),
+            FilterNode::Predicate(pred) => {
+                // Skip predicates the user is still authoring: an empty column
+                // reference would trip identifier-quoting asserts in dialect
+                // drivers (PostgreSQL's pg_quote_ident is debug-asserted).
+                if pred.column.trim().is_empty() || pred.source_alias.trim().is_empty() {
+                    return Ok(String::new());
+                }
+                self.render_predicate(pred, params, param_index)
+            }
             FilterNode::Group { op, children } => {
                 if children.is_empty() {
                     return Ok(String::new());

@@ -382,7 +382,11 @@ fn ensure_in_node(
                     .collect::<Vec<_>>()
                     .join(", "),
             };
-            let column_ref = format!("{}.{}", pred.source_alias, pred.column);
+            let column_ref = if pred.column.is_empty() {
+                String::new()
+            } else {
+                format!("{}.{}", pred.source_alias, pred.column)
+            };
             panel.ensure_predicate_input(pred.node_id, path.clone(), &current_value, window, cx);
             panel.ensure_predicate_column_input(
                 pred.node_id,
