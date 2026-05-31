@@ -181,6 +181,15 @@ pub(super) fn render_tree_item(
         None
     };
 
+    let leaf_marker: Option<&'static str> = if chevron_icon.is_none() {
+        match node_kind {
+            SchemaNodeKind::InstanceOverviewLeaf => Some("•"),
+            _ => None,
+        }
+    } else {
+        None
+    };
+
     let (node_icon, unicode_icon, icon_color) = resolve_node_icon(
         node_kind,
         &parsed_id,
@@ -342,6 +351,13 @@ pub(super) fn render_tree_item(
                                     });
                                 })
                                 .child(Icon::new(icon).size(px(14.0)).muted())
+                        })
+                        .when_some(leaf_marker, |el, marker| {
+                            el.child(
+                                Text::body(marker)
+                                    .font_size(FontSizes::SM)
+                                    .color(theme.muted_foreground),
+                            )
                         }),
                 )
                 .child(
