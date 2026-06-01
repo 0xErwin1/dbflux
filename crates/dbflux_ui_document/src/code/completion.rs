@@ -1020,7 +1020,6 @@ fn redis_argument_options(command: &str, argument_index: usize) -> Option<&'stat
     }
 }
 
-
 fn scan_redis_token_start(source: &str, end: usize) -> usize {
     let bytes = source.as_bytes();
     let mut start = end;

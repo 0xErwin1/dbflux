@@ -2,12 +2,12 @@
 #![allow(unused_imports)]
 
 mod add_member_modal;
-pub(crate) mod completion_support;
 mod audit;
 pub mod chart;
 pub mod chart_document;
 mod chrome;
 mod code;
+pub(crate) mod completion_support;
 pub mod dashboard;
 mod data_document;
 mod data_grid_panel;
