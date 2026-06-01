@@ -6,6 +6,19 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Relational filters in the DataView filter bar (#162)** — The filter
+  bar now accepts ORM-style dotted paths like
+  `created_by.email LIKE '%@acme.com'` or
+  `created_by.organization.name = 'Acme'`. Paths are resolved against
+  foreign-key metadata cached on the data grid; the resolver lowers the
+  expression into a `VisualQuerySpec` with `JoinOn::FkPath` joins and
+  routes it through the same builder pipeline that ships with the
+  visual SELECT builder (#146), so there is no second SQL generation
+  path. Ambiguous segments surface an inline chip with an "Open in
+  builder" action seeded with the joins resolved so far. The feature is
+  driver-agnostic and gated on `QueryLanguage::Sql`; non-dotted input
+  keeps today's raw-WHERE behavior.
+
 * **Instance metrics charts and inspectors across drivers (#93)** —
   PostgreSQL, MySQL/MariaDB, MongoDB, Redis, and SQL Server now expose
   live server metrics (time series) and tabular inspectors (sessions,
