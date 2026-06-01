@@ -1093,8 +1093,7 @@ impl QueryBuilderPanel {
                         let conn = state.connections().get(&self.schema_profile_id)?;
                         let schema = conn.schema.as_ref()?;
                         if let dbflux_core::DataStructure::Relational(rel) = &schema.structure {
-                            let default = conn.active_database.clone().unwrap_or_default();
-                            let schema_name = conn
+                            let default_schema = conn
                                 .active_database
                                 .clone()
                                 .or_else(|| rel.schemas.first().map(|s| s.name.clone()))
@@ -1103,7 +1102,7 @@ impl QueryBuilderPanel {
                                 .schemas
                                 .iter()
                                 .flat_map(|s| {
-                                    let default_schema = schema_name.clone();
+                                    let default_schema = default_schema.clone();
                                     s.tables.iter().map(move |t| {
                                         if s.name == default_schema {
                                             t.name.clone()
@@ -1114,7 +1113,6 @@ impl QueryBuilderPanel {
                                 })
                                 .chain(rel.tables.iter().map(|t| t.name.clone()))
                                 .collect();
-                            let _ = default;
                             Some(names)
                         } else {
                             None
