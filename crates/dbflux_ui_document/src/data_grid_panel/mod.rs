@@ -3969,7 +3969,10 @@ mod tests {
         window.update(|_, app| {
             panel.update(app, |panel, _cx| {
                 assert!(
-                    matches!(panel.relational_filter_state, RelationalFilterState::Inactive),
+                    matches!(
+                        panel.relational_filter_state,
+                        RelationalFilterState::Inactive
+                    ),
                     "Collection source should start Inactive"
                 );
 
@@ -4029,7 +4032,10 @@ mod tests {
                 // Even with Unavailable cache, relational_filter_state should remain
                 // Inactive — no error shown for missing FK data (S-11)
                 assert!(
-                    matches!(panel.relational_filter_state, RelationalFilterState::Inactive),
+                    matches!(
+                        panel.relational_filter_state,
+                        RelationalFilterState::Inactive
+                    ),
                     "relational_filter_state must stay Inactive when FK cache is Unavailable"
                 );
             });
@@ -4115,7 +4121,10 @@ mod tests {
 
                 // And the panel state should still be Inactive (parse error never modifies state)
                 assert!(
-                    matches!(panel.relational_filter_state, RelationalFilterState::Inactive),
+                    matches!(
+                        panel.relational_filter_state,
+                        RelationalFilterState::Inactive
+                    ),
                     "relational_filter_state must remain Inactive after parse error"
                 );
             });

@@ -11,13 +11,13 @@
 mod tests {
     use rusqlite::Connection;
 
+    use crate::Value;
     use crate::query::relational_filter::{
-        count::count_query_from_spec, parse_and_resolve, RelationalFilterError,
+        RelationalFilterError, count::count_query_from_spec, parse_and_resolve,
     };
     use crate::query::visual_query::SourceTable;
     use crate::schema::types::SchemaForeignKeyInfo;
     use crate::sql::dialect::DefaultSqlDialect;
-    use crate::Value;
 
     fn make_fk(
         from_table: &str,
@@ -45,7 +45,11 @@ mod tests {
         }
     }
 
-    fn execute_query(conn: &Connection, sql: &str, params: &[Value]) -> Vec<Vec<rusqlite::types::Value>> {
+    fn execute_query(
+        conn: &Connection,
+        sql: &str,
+        params: &[Value],
+    ) -> Vec<Vec<rusqlite::types::Value>> {
         let mapped: Vec<Box<dyn rusqlite::types::ToSql>> = params
             .iter()
             .map(|v| -> Box<dyn rusqlite::types::ToSql> {
@@ -67,7 +71,10 @@ mod tests {
         stmt.query_map(refs.as_slice(), |row| {
             let mut cols = Vec::with_capacity(column_count);
             for i in 0..column_count {
-                cols.push(row.get::<_, rusqlite::types::Value>(i).unwrap_or(rusqlite::types::Value::Null));
+                cols.push(
+                    row.get::<_, rusqlite::types::Value>(i)
+                        .unwrap_or(rusqlite::types::Value::Null),
+                );
             }
             Ok(cols)
         })
@@ -103,8 +110,9 @@ mod tests {
         assert_eq!(lowering.spec.joins.len(), 1);
         assert_eq!(lowering.diagnostics.join_count, 1);
 
-        let select = crate::query::generator::build_select_query(&lowering.spec, &DefaultSqlDialect)
-            .expect("build SQL");
+        let select =
+            crate::query::generator::build_select_query(&lowering.spec, &DefaultSqlDialect)
+                .expect("build SQL");
 
         let rows = execute_query(&conn, &select.sql, &select.params);
 
@@ -142,12 +150,18 @@ mod tests {
 
         assert_eq!(lowering.spec.joins.len(), 2);
 
-        let select = crate::query::generator::build_select_query(&lowering.spec, &DefaultSqlDialect)
-            .expect("build SQL");
+        let select =
+            crate::query::generator::build_select_query(&lowering.spec, &DefaultSqlDialect)
+                .expect("build SQL");
 
         let rows = execute_query(&conn, &select.sql, &select.params);
 
-        assert_eq!(rows.len(), 1, "only alice's post is from Acme: {}", select.sql);
+        assert_eq!(
+            rows.len(),
+            1,
+            "only alice's post is from Acme: {}",
+            select.sql
+        );
     }
 
     // S-12: self-join produces distinct aliases
@@ -180,12 +194,18 @@ mod tests {
             join.from_alias, join.to_alias
         );
 
-        let select = crate::query::generator::build_select_query(&lowering.spec, &DefaultSqlDialect)
-            .expect("build SQL");
+        let select =
+            crate::query::generator::build_select_query(&lowering.spec, &DefaultSqlDialect)
+                .expect("build SQL");
 
         let rows = execute_query(&conn, &select.sql, &select.params);
 
-        assert_eq!(rows.len(), 2, "two child categories of Root: {}", select.sql);
+        assert_eq!(
+            rows.len(),
+            2,
+            "two child categories of Root: {}",
+            select.sql
+        );
     }
 
     // S-06: ambiguous FK returns AmbiguousPath error, not rows
@@ -214,7 +234,8 @@ mod tests {
     fn sqlite_count_parity() {
         let conn = Connection::open_in_memory().unwrap();
 
-        conn.execute_batch("
+        conn.execute_batch(
+            "
             CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT);
             CREATE TABLE posts (id INTEGER PRIMARY KEY, created_by_id INTEGER REFERENCES users(id));
             INSERT INTO users VALUES (1, 'alice@example.com');
@@ -222,7 +243,9 @@ mod tests {
             INSERT INTO posts VALUES (10, 1);
             INSERT INTO posts VALUES (11, 2);
             INSERT INTO posts VALUES (12, 1);
-        ").unwrap();
+        ",
+        )
+        .unwrap();
 
         let fks = [make_fk("posts", "created_by_id", "users", "id")];
         let lowering = parse_and_resolve(
@@ -233,8 +256,9 @@ mod tests {
         )
         .expect("should resolve");
 
-        let select = crate::query::generator::build_select_query(&lowering.spec, &DefaultSqlDialect)
-            .expect("build data SQL");
+        let select =
+            crate::query::generator::build_select_query(&lowering.spec, &DefaultSqlDialect)
+                .expect("build data SQL");
         let count = count_query_from_spec(&lowering.spec, &DefaultSqlDialect);
 
         let data_rows = execute_query(&conn, &select.sql, &select.params);

@@ -7,7 +7,7 @@ use dbflux_core::{
     TableRef, TaskKind, TaskTarget,
 };
 use dbflux_core::{
-    parse_and_resolve, count_query_from_spec, RelationalFilterError, RelationalResolveError,
+    RelationalFilterError, RelationalResolveError, count_query_from_spec, parse_and_resolve,
 };
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui::*;
@@ -816,9 +816,7 @@ impl DataGridPanel {
             .read(cx)
             .connections()
             .get(&profile_id)
-            .map(|c| {
-                c.connection.metadata().query_language == dbflux_core::QueryLanguage::Sql
-            })
+            .map(|c| c.connection.metadata().query_language == dbflux_core::QueryLanguage::Sql)
             .unwrap_or(false);
 
         if !is_sql {
@@ -875,7 +873,13 @@ impl DataGridPanel {
                 let profile_id_for_run = profile_id;
                 let db_for_run = database.clone();
                 if let Some(select) = self.visual_select.clone() {
-                    self.run_visual_query(profile_id_for_run, db_for_run.clone(), select.clone(), window, cx);
+                    self.run_visual_query(
+                        profile_id_for_run,
+                        db_for_run.clone(),
+                        select.clone(),
+                        window,
+                        cx,
+                    );
 
                     // Relational count path (T23 / FR-COUNT-1)
                     if let Some(spec) = &self.builder_draft_spec {
@@ -888,16 +892,19 @@ impl DataGridPanel {
 
             Err(RelationalFilterError::Parse(_)) => {
                 // FR-PARSE-7: parse errors silently fall back to raw filter
-                if !matches!(self.relational_filter_state, RelationalFilterState::Inactive) {
+                if !matches!(
+                    self.relational_filter_state,
+                    RelationalFilterState::Inactive
+                ) {
                     self.relational_filter_state = RelationalFilterState::Inactive;
                     cx.notify();
                 }
                 false
             }
 
-            Err(RelationalFilterError::Resolve(resolve_err)) => {
+            Err(RelationalFilterError::Resolve(boxed_err)) => {
                 // FR-ERR-1 / FR-ERR-2: resolve errors surface inline
-                let (message, partial_spec) = match resolve_err {
+                let (message, partial_spec) = match *boxed_err {
                     RelationalResolveError::Ambiguous {
                         segment,
                         from_table,
@@ -926,7 +933,7 @@ impl DataGridPanel {
 
                 self.relational_filter_state = RelationalFilterState::Error {
                     message,
-                    partial_spec,
+                    partial_spec: Box::new(partial_spec),
                 };
                 cx.notify();
 
@@ -981,18 +988,17 @@ impl DataGridPanel {
             let result = task.await;
 
             if let Err(e) = cx.update(|cx| {
-                if let Ok(query_result) = result {
-                    if let Some(row) = query_result.rows.first() {
-                        if let Some(dbflux_core::Value::Int(count)) = row.first() {
-                            entity.update(cx, |panel, cx| {
-                                panel.pending_total_count = Some(PendingTotalCount {
-                                    source_qualified: table_name,
-                                    total: *count as u64,
-                                });
-                                cx.notify();
-                            });
-                        }
-                    }
+                if let Ok(query_result) = result
+                    && let Some(row) = query_result.rows.first()
+                    && let Some(dbflux_core::Value::Int(count)) = row.first()
+                {
+                    entity.update(cx, |panel, cx| {
+                        panel.pending_total_count = Some(PendingTotalCount {
+                            source_qualified: table_name,
+                            total: *count as u64,
+                        });
+                        cx.notify();
+                    });
                 }
             }) {
                 log::warn!("Failed to apply relational count result: {:?}", e);

@@ -1,11 +1,11 @@
 use super::{
     ChartRailTab, DataGridPanel, DataSource, EditState, GridFocusMode, GridState, ToolbarFocus,
 };
+use crate::chrome::compact_top_bar;
 use crate::data_grid_panel::filter_bar::{
     filter_input_has_error, render_relational_chip, render_relational_error,
     render_resolving_indicator,
 };
-use crate::chrome::compact_top_bar;
 use crate::data_view::DataViewMode;
 use crate::result_view::ResultViewMode;
 use dbflux_components::chart::legend::legend_element;
@@ -524,10 +524,11 @@ pub(super) fn render_filter_bar_as_segment(
             move |_, window, cx| {
                 grid.update(cx, |this, cx| {
                     let partial_spec = if let super::filter_bar::RelationalFilterState::Error {
-                        partial_spec, ..
+                        partial_spec,
+                        ..
                     } = &this.relational_filter_state
                     {
-                        Some(partial_spec.clone())
+                        Some(*partial_spec.clone())
                     } else {
                         None
                     };
@@ -589,7 +590,9 @@ pub(super) fn render_filter_bar_as_segment(
                             .h(Heights::ROW_COMPACT)
                             .rounded(Radii::SM)
                             .when(
-                                show_toolbar_focus && toolbar_focus == ToolbarFocus::Filter && !has_filter_error,
+                                show_toolbar_focus
+                                    && toolbar_focus == ToolbarFocus::Filter
+                                    && !has_filter_error,
                                 move |d| d.border_1().border_color(theme_inner.ring),
                             )
                             .when(has_filter_error, move |d| {
@@ -802,10 +805,11 @@ impl DataGridPanel {
             cx,
             Box::new(cx.listener(|this, _, window, cx| {
                 let partial_spec = if let super::filter_bar::RelationalFilterState::Error {
-                    partial_spec, ..
+                    partial_spec,
+                    ..
                 } = &this.relational_filter_state
                 {
-                    Some(partial_spec.clone())
+                    Some(*partial_spec.clone())
                 } else {
                     None
                 };

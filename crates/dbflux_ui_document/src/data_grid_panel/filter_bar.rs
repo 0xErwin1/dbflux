@@ -6,11 +6,16 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 
+/// Boxed mouse-down handler used by filter-bar render helpers.
+pub(crate) type FilterBarClickHandler =
+    Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App) + 'static>;
+
 /// Tracks the current relational-filter state for the filter-bar chip and
 /// inline error affordance.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) enum RelationalFilterState {
     /// Raw filter (or empty input) — chip hidden, no inline error.
+    #[default]
     Inactive,
     /// FK cache is loading; a subtle spinner is shown in the chip area.
     Resolving,
@@ -22,14 +27,8 @@ pub(crate) enum RelationalFilterState {
     /// Resolve or depth error; inline diagnostic + "Open in builder" link.
     Error {
         message: String,
-        partial_spec: VisualQuerySpec,
+        partial_spec: Box<VisualQuerySpec>,
     },
-}
-
-impl Default for RelationalFilterState {
-    fn default() -> Self {
-        Self::Inactive
-    }
 }
 
 /// Output of the cheap pre-check before invoking the full parser.
@@ -106,7 +105,7 @@ pub(crate) fn classify_filter_input(text: &str) -> FilterMode {
 pub(crate) fn render_relational_chip(
     state: &RelationalFilterState,
     cx: &App,
-    on_click: Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App) + 'static>,
+    on_click: FilterBarClickHandler,
 ) -> Option<AnyElement> {
     let RelationalFilterState::Active {
         join_count,
@@ -117,7 +116,11 @@ pub(crate) fn render_relational_chip(
     };
 
     let theme = cx.theme().clone();
-    let label = format!("relational \u{00b7} {} join{}", join_count, if *join_count == 1 { "" } else { "s" });
+    let label = format!(
+        "relational \u{00b7} {} join{}",
+        join_count,
+        if *join_count == 1 { "" } else { "s" }
+    );
 
     let theme_hover = theme.clone();
     let chip = div()
@@ -132,7 +135,11 @@ pub(crate) fn render_relational_chip(
         .cursor_pointer()
         .hover(move |d| d.bg(theme_hover.secondary.opacity(0.7)))
         .on_mouse_down(MouseButton::Left, on_click)
-        .child(Icon::new(AppIcon::Link2).small().color(theme.muted_foreground))
+        .child(
+            Icon::new(AppIcon::Link2)
+                .small()
+                .color(theme.muted_foreground),
+        )
         .child(Text::caption(label).color(theme.muted_foreground));
 
     Some(chip.into_any_element())
@@ -158,7 +165,11 @@ pub(crate) fn render_resolving_indicator(
         .gap(Spacing::XS)
         .h(Heights::ROW_COMPACT)
         .px(Spacing::XS)
-        .child(Icon::new(AppIcon::Loader).small().color(theme.muted_foreground));
+        .child(
+            Icon::new(AppIcon::Loader)
+                .small()
+                .color(theme.muted_foreground),
+        );
 
     Some(indicator.into_any_element())
 }
@@ -172,7 +183,7 @@ pub(crate) fn render_resolving_indicator(
 pub(crate) fn render_relational_error(
     state: &RelationalFilterState,
     cx: &App,
-    on_open_builder: Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App) + 'static>,
+    on_open_builder: FilterBarClickHandler,
 ) -> Option<AnyElement> {
     let RelationalFilterState::Error { message, .. } = state else {
         return None;
@@ -219,7 +230,7 @@ pub(crate) fn filter_input_has_error(state: &RelationalFilterState) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_filter_input, FilterMode};
+    use super::{FilterMode, classify_filter_input};
 
     // T21: classify_filter_input
 
@@ -231,14 +242,26 @@ mod tests {
 
     #[test]
     fn classify_dot_only_inside_string_literal_is_raw() {
-        assert_eq!(classify_filter_input("email = 'a.b@x.com'"), FilterMode::Raw);
-        assert_eq!(classify_filter_input("email = \"a.b@x.com\""), FilterMode::Raw);
+        assert_eq!(
+            classify_filter_input("email = 'a.b@x.com'"),
+            FilterMode::Raw
+        );
+        assert_eq!(
+            classify_filter_input("email = \"a.b@x.com\""),
+            FilterMode::Raw
+        );
     }
 
     #[test]
     fn classify_unquoted_dot_is_relational() {
-        assert_eq!(classify_filter_input("user.email = 'x'"), FilterMode::Relational);
-        assert_eq!(classify_filter_input("created_by.organization.name = 'Acme'"), FilterMode::Relational);
+        assert_eq!(
+            classify_filter_input("user.email = 'x'"),
+            FilterMode::Relational
+        );
+        assert_eq!(
+            classify_filter_input("created_by.organization.name = 'Acme'"),
+            FilterMode::Relational
+        );
     }
 
     #[test]
@@ -259,17 +282,11 @@ mod tests {
     #[test]
     fn classify_single_quote_escape_does_not_terminate_early() {
         // 'it''s fine' should be treated as a single string literal
-        assert_eq!(
-            classify_filter_input("col = 'it''s fine'"),
-            FilterMode::Raw
-        );
+        assert_eq!(classify_filter_input("col = 'it''s fine'"), FilterMode::Raw);
     }
 
     #[test]
     fn classify_double_quote_escape_does_not_terminate_early() {
-        assert_eq!(
-            classify_filter_input("col = \"a\"\"b\""),
-            FilterMode::Raw
-        );
+        assert_eq!(classify_filter_input("col = \"a\"\"b\""), FilterMode::Raw);
     }
 }

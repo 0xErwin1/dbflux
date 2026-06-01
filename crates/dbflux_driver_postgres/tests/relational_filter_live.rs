@@ -9,16 +9,12 @@
     clippy::indexing_slicing
 )]
 
-use dbflux_core::{
-    ConnectionProfile, DbConfig, DbDriver, DbError, QueryRequest, Value,
-};
+use dbflux_core::{ConnectionProfile, DbConfig, DbDriver, DbError, QueryRequest, Value};
 use dbflux_driver_postgres::PostgresDriver;
 use dbflux_test_support::containers;
 use std::time::Duration;
 
-fn connect_postgres(
-    uri: String,
-) -> Result<Box<dyn dbflux_core::Connection>, DbError> {
+fn connect_postgres(uri: String) -> Result<Box<dyn dbflux_core::Connection>, DbError> {
     let driver = PostgresDriver::new();
     let profile = ConnectionProfile::new(
         "relational-filter-live",
@@ -49,12 +45,8 @@ fn connect_postgres(
 }
 
 fn setup_schema(connection: &dyn dbflux_core::Connection) -> Result<(), DbError> {
-    connection.execute(&QueryRequest::new(
-        "DROP TABLE IF EXISTS rf_posts CASCADE",
-    ))?;
-    connection.execute(&QueryRequest::new(
-        "DROP TABLE IF EXISTS rf_users CASCADE",
-    ))?;
+    connection.execute(&QueryRequest::new("DROP TABLE IF EXISTS rf_posts CASCADE"))?;
+    connection.execute(&QueryRequest::new("DROP TABLE IF EXISTS rf_users CASCADE"))?;
     connection.execute(&QueryRequest::new(
         "DROP TABLE IF EXISTS rf_organizations CASCADE",
     ))?;
@@ -127,8 +119,8 @@ fn pg_relational_filter_single_hop() -> Result<(), DbError> {
 
         assert_eq!(lowering.spec.joins.len(), 1);
 
-        let select = dbflux_core::select_query_from_spec(&lowering.spec, dialect)
-            .expect("build SQL");
+        let select =
+            dbflux_core::select_query_from_spec(&lowering.spec, dialect).expect("build SQL");
 
         let mut request = QueryRequest::new(select.sql.clone());
         request.params = select.params.clone();
@@ -172,15 +164,20 @@ fn pg_relational_filter_multi_hop() -> Result<(), DbError> {
 
         assert_eq!(lowering.spec.joins.len(), 2);
 
-        let select = dbflux_core::select_query_from_spec(&lowering.spec, dialect)
-            .expect("build SQL");
+        let select =
+            dbflux_core::select_query_from_spec(&lowering.spec, dialect).expect("build SQL");
 
         let mut request = QueryRequest::new(select.sql.clone());
         request.params = select.params.clone();
 
         let result = connection.execute(&request)?;
 
-        assert_eq!(result.rows.len(), 2, "alice and only alice are in Acme, 2 posts: {}", select.sql);
+        assert_eq!(
+            result.rows.len(),
+            2,
+            "alice and only alice are in Acme, 2 posts: {}",
+            select.sql
+        );
 
         Ok(())
     })
@@ -215,8 +212,8 @@ fn pg_count_parity() -> Result<(), DbError> {
         )
         .expect("should resolve");
 
-        let select = dbflux_core::select_query_from_spec(&lowering.spec, dialect)
-            .expect("build data SQL");
+        let select =
+            dbflux_core::select_query_from_spec(&lowering.spec, dialect).expect("build data SQL");
         let count = dbflux_core::count_query_from_spec(&lowering.spec, dialect);
 
         let mut data_request = QueryRequest::new(select.sql.clone());
@@ -275,15 +272,20 @@ fn pg_relational_filter_ilike() -> Result<(), DbError> {
         )
         .expect("should resolve ILIKE");
 
-        let select = dbflux_core::select_query_from_spec(&lowering.spec, dialect)
-            .expect("build SQL");
+        let select =
+            dbflux_core::select_query_from_spec(&lowering.spec, dialect).expect("build SQL");
 
         let mut request = QueryRequest::new(select.sql.clone());
         request.params = select.params.clone();
 
         let result = connection.execute(&request)?;
 
-        assert_eq!(result.rows.len(), 2, "ILIKE must match alice case-insensitively: {}", select.sql);
+        assert_eq!(
+            result.rows.len(),
+            2,
+            "ILIKE must match alice case-insensitively: {}",
+            select.sql
+        );
 
         Ok(())
     })

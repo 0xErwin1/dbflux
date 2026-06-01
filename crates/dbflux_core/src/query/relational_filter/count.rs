@@ -10,8 +10,8 @@ use crate::sql::dialect::SqlDialect;
 /// All dialects supported by DBFlux accept `SELECT COUNT(*) FROM (<select>) AS x`
 /// syntax, so no dialect-specific branching is needed here.
 pub fn count_query_from_spec(spec: &VisualQuerySpec, dialect: &dyn SqlDialect) -> SelectQuery {
-    let inner = build_select_query(spec, dialect)
-        .expect("spec must be valid when entering count path");
+    let inner =
+        build_select_query(spec, dialect).expect("spec must be valid when entering count path");
 
     SelectQuery {
         sql: format!("SELECT COUNT(*) FROM ({}) AS dbflux_count_subq", inner.sql),
@@ -23,7 +23,7 @@ pub fn count_query_from_spec(spec: &VisualQuerySpec, dialect: &dyn SqlDialect) -
 mod tests {
     use super::*;
     use crate::query::visual_query::{
-        FilterNode, JoinKind, JoinOn, JoinStep, LiteralValue, Predicate, Comparator,
+        Comparator, FilterNode, JoinKind, JoinOn, JoinStep, LiteralValue, Predicate,
         PredicateValue, Projection, SourceTable, VisualQuerySpec,
     };
     use crate::sql::dialect::{DefaultSqlDialect, PlaceholderStyle, SqlDialect};
@@ -83,11 +83,7 @@ mod tests {
             "must end with subquery alias, got: {}",
             result.sql
         );
-        assert_eq!(
-            result.params.len(),
-            1,
-            "params must be forwarded unchanged"
-        );
+        assert_eq!(result.params.len(), 1, "params must be forwarded unchanged");
     }
 
     #[test]

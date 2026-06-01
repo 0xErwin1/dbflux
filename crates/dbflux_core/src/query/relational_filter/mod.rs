@@ -18,7 +18,7 @@ pub enum RelationalFilterError {
     #[error("parse error: {0}")]
     Parse(#[from] ParseError),
     #[error("resolve error: {0}")]
-    Resolve(#[from] ResolveError),
+    Resolve(#[from] Box<ResolveError>),
 }
 
 /// Parse `input` and resolve all dotted-path predicates against `fks`.
@@ -34,16 +34,16 @@ pub fn parse_and_resolve(
 ) -> Result<RelationalLowering, RelationalFilterError> {
     let ast = parser::parse(input).map_err(RelationalFilterError::Parse)?;
     let lowering = resolver::resolve(ast, source, fks, dialect)
-        .map_err(RelationalFilterError::Resolve)?;
+        .map_err(|e| RelationalFilterError::Resolve(Box::new(e)))?;
     Ok(lowering)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::types::SchemaForeignKeyInfo;
-    use crate::sql::dialect::{DefaultSqlDialect, SqlDialect, PlaceholderStyle};
     use crate::query::visual_query::SourceTable;
+    use crate::schema::types::SchemaForeignKeyInfo;
+    use crate::sql::dialect::{DefaultSqlDialect, PlaceholderStyle, SqlDialect};
 
     fn make_source(table: &str) -> SourceTable {
         SourceTable {
@@ -90,12 +90,7 @@ mod tests {
 
     #[test]
     fn parse_and_resolve_parse_error_propagated() {
-        let result = parse_and_resolve(
-            "status",
-            make_source("posts"),
-            &[],
-            &DefaultSqlDialect,
-        );
+        let result = parse_and_resolve("status", make_source("posts"), &[], &DefaultSqlDialect);
         assert!(
             matches!(result, Err(RelationalFilterError::Parse(_))),
             "bare identifier with no comparator should be a parse error"
@@ -121,11 +116,21 @@ mod tests {
         // Smoke: the public function is callable from the module path.
         struct NopDialect;
         impl SqlDialect for NopDialect {
-            fn quote_identifier(&self, name: &str) -> String { format!("\"{}\"", name) }
-            fn qualified_table(&self, _schema: Option<&str>, table: &str) -> String { table.to_string() }
-            fn value_to_literal(&self, _v: &crate::Value) -> String { "?".to_string() }
-            fn escape_string(&self, s: &str) -> String { s.to_string() }
-            fn placeholder_style(&self) -> PlaceholderStyle { PlaceholderStyle::QuestionMark }
+            fn quote_identifier(&self, name: &str) -> String {
+                format!("\"{}\"", name)
+            }
+            fn qualified_table(&self, _schema: Option<&str>, table: &str) -> String {
+                table.to_string()
+            }
+            fn value_to_literal(&self, _v: &crate::Value) -> String {
+                "?".to_string()
+            }
+            fn escape_string(&self, s: &str) -> String {
+                s.to_string()
+            }
+            fn placeholder_style(&self) -> PlaceholderStyle {
+                PlaceholderStyle::QuestionMark
+            }
         }
 
         let source = SourceTable {
