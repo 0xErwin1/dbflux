@@ -7,6 +7,9 @@ mod render;
 pub mod row_inspector;
 mod utils;
 
+use super::query_builder::completion::{
+    AliasBinding, CompletionMode, SchemaCache, SchemaCompletionProvider,
+};
 use super::query_builder::{BuilderEvent, FkLoadState, QueryBuilderPanel};
 use super::result_view::{
     ResultViewMode, default_bindings_for_time_series, should_auto_select_chart_for_time_series,
@@ -23,6 +26,7 @@ use dbflux_components::components::data_table::{
 use dbflux_components::components::document_tree::{
     DocumentTree, DocumentTreeEvent, DocumentTreeState,
 };
+use dbflux_components::controls::CompletionProvider;
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_components::modals::cell_editor::{
@@ -40,6 +44,9 @@ use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_ui_base::toast::PendingToast;
 use gpui::*;
 use gpui_component::Sizable;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -714,6 +721,61 @@ impl DataGridPanel {
         let filter_placeholder = Self::filter_placeholder_for_source(&source, &app_state, cx);
 
         let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder(filter_placeholder));
+
+        if let DataSource::Table {
+            profile_id,
+            table,
+            database,
+            ..
+        } = &source
+        {
+            let source_columns: Vec<dbflux_core::ColumnInfo> = {
+                let state = app_state.read(cx);
+                state
+                    .connections()
+                    .get(profile_id)
+                    .and_then(|conn| {
+                        let db = database
+                            .as_deref()
+                            .or(conn.active_database.as_deref())
+                            .unwrap_or("default");
+                        conn.table_details
+                            .get(&(db.to_string(), table.name.clone()))
+                            .and_then(|info| info.columns.clone())
+                    })
+                    .unwrap_or_default()
+            };
+
+            let table_alias = table.name.clone();
+            let source_schema = table.schema.clone();
+
+            let filter_cache = Rc::new(RefCell::new(SchemaCache {
+                source_table: table_alias.clone(),
+                source_columns,
+                joined_columns: HashMap::new(),
+                fetching: HashSet::new(),
+                failed: HashSet::new(),
+            }));
+
+            let filter_provider: Rc<dyn CompletionProvider> =
+                Rc::new(SchemaCompletionProvider::new(
+                    app_state.downgrade(),
+                    *profile_id,
+                    CompletionMode::FilterExpression {
+                        aliases: vec![AliasBinding {
+                            alias: table_alias,
+                            schema: source_schema,
+                            table: table.name.clone(),
+                            is_source: true,
+                        }],
+                    },
+                    filter_cache,
+                ));
+
+            filter_input.update(cx, |state, _| {
+                state.lsp.completion_provider = Some(filter_provider);
+            });
+        }
 
         let limit_input = cx.new(|cx| {
             let mut state = InputState::new(window, cx).placeholder("100");
