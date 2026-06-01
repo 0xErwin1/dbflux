@@ -44,6 +44,7 @@ tracing-bridge = [
 [dev-dependencies]
 dbflux_test_support.workspace = true
 tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = ["sync-secret-service"] }

@@ -2,6 +2,9 @@ pub mod count;
 pub mod parser;
 pub mod resolver;
 
+#[cfg(test)]
+mod integration_sqlite;
+
 pub use parser::ParseError;
 pub use resolver::{RelationalLowering, ResolveError};
 
