@@ -337,8 +337,7 @@ impl<'a> ResolveCtx<'a> {
     ///
     /// Used as the `partial_spec` payload in error variants so the user can
     /// open the builder pre-seeded with the hops that did resolve.
-    fn build_partial_spec_so_far(&self, current_alias: &str) -> VisualQuerySpec {
-        let _ = current_alias;
+    fn build_partial_spec_so_far(&self, _current_alias: &str) -> VisualQuerySpec {
         VisualQuerySpec {
             source: SourceTable {
                 schema: self.source_schema.clone(),

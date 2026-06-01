@@ -482,19 +482,16 @@ impl Parser {
 
     /// Parse the full expression (entry point).
     fn parse_expr(&mut self) -> Result<FilterExpr, ParseError> {
-        let span = self.peek_span();
         if matches!(self.peek(), Token::Eof) {
             return Err(ParseError::EmptyInput);
         }
         let expr = self.parse_or()?;
 
-        // Reject trailing tokens.
         if !matches!(self.peek(), Token::Eof) {
             return Err(ParseError::UnexpectedToken {
                 span: self.peek_span(),
             });
         }
-        let _ = span;
         Ok(expr)
     }
 

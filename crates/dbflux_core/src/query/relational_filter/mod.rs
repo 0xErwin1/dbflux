@@ -139,6 +139,10 @@ mod tests {
             alias: "t".to_string(),
         };
 
-        let _ = parse_and_resolve("a = 1", source, &[], &NopDialect);
+        let result = parse_and_resolve("a = 1", source, &[], &NopDialect);
+        assert!(
+            result.is_ok(),
+            "bare column filter must resolve: {result:?}"
+        );
     }
 }
