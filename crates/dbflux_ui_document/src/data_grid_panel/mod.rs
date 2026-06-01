@@ -6,7 +6,7 @@ mod render;
 pub mod row_inspector;
 mod utils;
 
-use super::query_builder::{BuilderEvent, QueryBuilderPanel};
+use super::query_builder::{BuilderEvent, FkLoadState, QueryBuilderPanel};
 use super::result_view::{
     ResultViewMode, default_bindings_for_time_series, should_auto_select_chart_for_time_series,
 };
@@ -482,6 +482,13 @@ pub struct DataGridPanel {
     pub(super) pending_collection_chart_save: Option<CollectionChartSaveState>,
 
     // ---- Visual Query Builder state ----
+    /// FK metadata for the current (connection, database, schema).
+    ///
+    /// Loaded lazily: triggered on first dotted filter input or when the data
+    /// grid opens for a SQL+Table source. Shared with `QueryBuilderPanel` so
+    /// both surfaces draw from a single fetch.
+    pub(crate) fk_cache: FkLoadState,
+
     /// The spec currently being edited in the `QueryBuilderPanel`.
     ///
     /// Updated on every `SpecChanged` event (i.e. every builder edit). When
@@ -916,6 +923,7 @@ impl DataGridPanel {
             chart_shell: None,
             chart_source_time_range_panel: None,
             pending_collection_chart_save: None,
+            fk_cache: FkLoadState::Loading,
             builder_draft_spec: None,
             visual_select: None,
             builder_panel: None,
@@ -2409,10 +2417,29 @@ impl DataGridPanel {
         });
     }
 
+    /// Applies a successful FK fetch result to the panel's `fk_cache`.
+    pub(crate) fn apply_fk_result(
+        &mut self,
+        foreign_keys: Vec<dbflux_core::SchemaForeignKeyInfo>,
+        cx: &mut Context<Self>,
+    ) {
+        self.fk_cache = if foreign_keys.is_empty() {
+            FkLoadState::Unavailable
+        } else {
+            FkLoadState::Ready(foreign_keys)
+        };
+        cx.notify();
+    }
+
+    /// Transitions the panel's `fk_cache` to `Unavailable`.
+    pub(crate) fn mark_fk_unavailable(&mut self, cx: &mut Context<Self>) {
+        self.fk_cache = FkLoadState::Unavailable;
+        cx.notify();
+    }
+
     /// Loads foreign-key metadata for the builder's source table on a
-    /// background task, then applies it to the panel. If the connection is
-    /// missing or the driver returns an error, the panel transitions to the
-    /// `Unavailable` state so the raw-expression fallback banner appears.
+    /// background task, then applies it to both the `DataGridPanel`'s `fk_cache`
+    /// and the given `QueryBuilderPanel`.
     fn spawn_fk_fetch_for_builder(
         &self,
         panel: Entity<QueryBuilderPanel>,
@@ -2443,15 +2470,21 @@ impl DataGridPanel {
             .spawn(async move { conn.schema_foreign_keys(&database, schema_for_task.as_deref()) });
 
         let panel_weak = panel.downgrade();
-        cx.spawn(async move |_this, cx| {
+        cx.spawn(async move |this, cx| {
             let result = task.await;
             cx.update(|cx| {
                 if let Some(panel) = panel_weak.upgrade() {
-                    panel.update(cx, |p, cx| match result {
-                        Ok(fks) => p.apply_fk_result(fks, cx),
+                    panel.update(cx, |p, cx| match &result {
+                        Ok(fks) => p.apply_fk_result(fks.clone(), cx),
                         Err(_) => p.mark_fk_unavailable(cx),
                     });
                 }
+
+                this.update(cx, |grid, cx| match result {
+                    Ok(fks) => grid.apply_fk_result(fks, cx),
+                    Err(_) => grid.mark_fk_unavailable(cx),
+                })
+                .ok();
             })
             .ok();
         })
@@ -3563,5 +3596,74 @@ mod tests {
             Some(pre_select),
             "visual_select should cache the query"
         );
+    }
+
+    // T03: FK cache lives on DataGridPanel
+    #[gpui::test]
+    fn fk_cache_lives_on_data_grid_panel(cx: &mut TestAppContext) {
+        use super::FkLoadState;
+
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+
+                DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx)
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                assert!(
+                    matches!(panel.fk_cache, FkLoadState::Loading),
+                    "initial fk_cache should be Loading"
+                );
+
+                let fk = dbflux_core::SchemaForeignKeyInfo {
+                    name: "fk_test".to_string(),
+                    table_name: "users".to_string(),
+                    columns: vec!["org_id".to_string()],
+                    referenced_schema: None,
+                    referenced_table: "organizations".to_string(),
+                    referenced_columns: vec!["id".to_string()],
+                    on_delete: None,
+                    on_update: None,
+                };
+
+                panel.apply_fk_result(vec![fk], cx);
+
+                assert!(
+                    matches!(panel.fk_cache, FkLoadState::Ready(_)),
+                    "fk_cache should be Ready after apply_fk_result"
+                );
+
+                panel.mark_fk_unavailable(cx);
+
+                assert!(
+                    matches!(panel.fk_cache, FkLoadState::Unavailable),
+                    "fk_cache should be Unavailable after mark_fk_unavailable"
+                );
+            });
+        });
     }
 }

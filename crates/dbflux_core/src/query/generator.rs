@@ -415,7 +415,21 @@ impl QueryGenerator for SqlMutationGenerator {
 // SQL SELECT builder for VisualQuerySpec
 // =============================================================================
 
-struct SqlSelectBuilder<'a> {
+/// Build a parameterized SELECT query from `spec` using `dialect`.
+///
+/// Exposed as `pub(crate)` so the relational-filter count wrapper can call it
+/// without going through `SqlMutationGenerator` (which requires a `&'static`
+/// dialect reference).
+pub(crate) fn build_select_query(
+    spec: &VisualQuerySpec,
+    dialect: &dyn SqlDialect,
+) -> Result<SelectQuery, QueryGenError> {
+    SqlSelectBuilder::new(dialect).build(spec)
+}
+
+/// Re-exported for the relational_filter crate module so it can access the
+/// builder without re-implementing projection/join/filter rendering.
+pub(crate) struct SqlSelectBuilder<'a> {
     dialect: &'a dyn SqlDialect,
 }
 
