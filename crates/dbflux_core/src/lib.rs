@@ -135,6 +135,12 @@ pub use query::{
     strip_leading_comments, substitute_time_macros,
 };
 
+pub use query::relational_filter::{
+    RelationalFilterError, ResolveError as RelationalResolveError, parse_and_resolve,
+};
+
+pub use query::relational_filter::count::count_query_from_spec;
+
 pub use schema::node_id as schema_node_id;
 pub use schema::{
     CollectionChildInfo, CollectionChildrenCache, CollectionChildrenPage,

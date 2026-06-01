@@ -2,8 +2,8 @@ pub mod count;
 pub mod parser;
 pub mod resolver;
 
-pub use parser::{ParseError, RelationalFilterAst};
-pub use resolver::{FkSummary, LoweringDiagnostics, RelationalLowering, ResolveError};
+pub use parser::ParseError;
+pub use resolver::{RelationalLowering, ResolveError};
 
 use crate::query::visual_query::SourceTable;
 use crate::schema::types::SchemaForeignKeyInfo;

@@ -1,4 +1,5 @@
 mod context_menu;
+pub(crate) mod filter_bar;
 mod mutations;
 mod navigation;
 mod query;
@@ -489,6 +490,9 @@ pub struct DataGridPanel {
     /// both surfaces draw from a single fetch.
     pub(crate) fk_cache: FkLoadState,
 
+    /// Current state of the relational filter bar chip and inline error area.
+    pub(crate) relational_filter_state: filter_bar::RelationalFilterState,
+
     /// The spec currently being edited in the `QueryBuilderPanel`.
     ///
     /// Updated on every `SpecChanged` event (i.e. every builder edit). When
@@ -924,6 +928,7 @@ impl DataGridPanel {
             chart_source_time_range_panel: None,
             pending_collection_chart_save: None,
             fk_cache: FkLoadState::Loading,
+            relational_filter_state: filter_bar::RelationalFilterState::Inactive,
             builder_draft_spec: None,
             visual_select: None,
             builder_panel: None,
