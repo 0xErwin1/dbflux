@@ -2,7 +2,8 @@ pub mod count;
 pub mod parser;
 pub mod resolver;
 
-/// Placeholder entry point. Replaced by the full implementation in T19.
+/// Placeholder entry point — replaced by the full implementation in T19.
+#[allow(dead_code)]
 pub fn parse_and_resolve(_input: &str) {}
 
 #[cfg(test)]

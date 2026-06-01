@@ -1,7 +1,7 @@
-pub mod relational_filter;
 pub(crate) mod column_kind;
 pub(crate) mod generator;
 pub(crate) mod language_service;
+pub mod relational_filter;
 pub(crate) mod safety;
 pub(crate) mod semantic;
 pub(crate) mod table_browser;

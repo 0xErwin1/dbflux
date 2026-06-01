@@ -250,7 +250,10 @@ mod tests {
     #[test]
     fn normalize_default_lowercases() {
         let dialect = NopDialect;
-        assert_eq!(dialect.normalize_identifier("Created_By_Id"), "created_by_id");
+        assert_eq!(
+            dialect.normalize_identifier("Created_By_Id"),
+            "created_by_id"
+        );
     }
 
     #[test]
