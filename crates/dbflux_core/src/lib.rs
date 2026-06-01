@@ -135,6 +135,24 @@ pub use query::{
     strip_leading_comments, substitute_time_macros,
 };
 
+pub use query::relational_filter::{
+    RelationalFilterError, ResolveError as RelationalResolveError, parse_and_resolve,
+};
+
+pub use query::relational_filter::count::count_query_from_spec;
+
+/// Build a parameterized SELECT from a `VisualQuerySpec` using the given dialect.
+///
+/// Exposed for external callers that have resolved a spec via `parse_and_resolve`
+/// and need to execute the resulting SQL directly (e.g., integration tests or
+/// custom query runners that bypass the `DataGridPanel` rendering path).
+pub fn select_query_from_spec(
+    spec: &VisualQuerySpec,
+    dialect: &dyn sql::dialect::SqlDialect,
+) -> Result<SelectQuery, QueryGenError> {
+    query::generator::build_select_query(spec, dialect)
+}
+
 pub use schema::node_id as schema_node_id;
 pub use schema::{
     CollectionChildInfo, CollectionChildrenCache, CollectionChildrenPage,

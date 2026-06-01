@@ -2,6 +2,10 @@ use super::{
     ChartRailTab, DataGridPanel, DataSource, EditState, GridFocusMode, GridState, ToolbarFocus,
 };
 use crate::chrome::compact_top_bar;
+use crate::data_grid_panel::filter_bar::{
+    filter_input_has_error, render_relational_chip, render_relational_error,
+    render_resolving_indicator,
+};
 use crate::data_view::DataViewMode;
 use crate::result_view::ResultViewMode;
 use dbflux_components::chart::legend::legend_element;
@@ -477,17 +481,65 @@ pub(super) fn render_filter_bar_as_segment(
     };
 
     let can_open_builder = g.can_open_builder(cx);
+    let relational_filter_state = g.relational_filter_state.clone();
+    let has_filter_error = filter_input_has_error(&relational_filter_state);
 
     let grid_for_filter = grid.clone();
     let grid_for_limit = grid.clone();
     let grid_for_clear = grid.clone();
     let grid_for_refresh = grid.clone();
     let grid_for_builder = grid.clone();
+    let grid_for_chip = grid.clone();
+    let grid_for_error = grid.clone();
 
     // Pre-clone theme for each section that needs it in a closure.
     let theme_filter = theme.clone();
     let theme_limit = theme.clone();
     let theme_refresh = theme.clone();
+
+    let chip_element: Option<AnyElement> = render_relational_chip(
+        &relational_filter_state,
+        cx,
+        Box::new({
+            let grid = grid_for_chip.clone();
+            move |_, window, cx| {
+                grid.update(cx, |this, cx| {
+                    if let Some(spec) = this.builder_draft_spec.clone() {
+                        this.apply_builder_draft_spec(spec, cx);
+                    }
+                    this.open_query_builder(window, cx);
+                });
+            }
+        }),
+    );
+
+    let resolving_element: Option<AnyElement> =
+        render_resolving_indicator(&relational_filter_state, cx);
+
+    let error_element: Option<AnyElement> = render_relational_error(
+        &relational_filter_state,
+        cx,
+        Box::new({
+            let grid = grid_for_error.clone();
+            move |_, window, cx| {
+                grid.update(cx, |this, cx| {
+                    let partial_spec = if let super::filter_bar::RelationalFilterState::Error {
+                        partial_spec,
+                        ..
+                    } = &this.relational_filter_state
+                    {
+                        Some(*partial_spec.clone())
+                    } else {
+                        None
+                    };
+                    if let Some(spec) = partial_spec {
+                        this.apply_builder_draft_spec(spec, cx);
+                    }
+                    this.open_query_builder(window, cx);
+                });
+            }
+        }),
+    );
 
     // NOTE: do not use `.h_full()` here. The segment is hosted inside
     // `ResultPanel`'s chrome row which has `min_h(Heights::TOOLBAR)`. If the
@@ -522,6 +574,7 @@ pub(super) fn render_filter_bar_as_segment(
             let grid_for_clear_event = grid_for_clear.clone();
             let theme_inner = theme_filter.clone();
             let theme_clear = theme_filter.clone();
+            let theme_error_border = theme_filter.clone();
             d.child(
                 div()
                     .flex()
@@ -537,9 +590,14 @@ pub(super) fn render_filter_bar_as_segment(
                             .h(Heights::ROW_COMPACT)
                             .rounded(Radii::SM)
                             .when(
-                                show_toolbar_focus && toolbar_focus == ToolbarFocus::Filter,
+                                show_toolbar_focus
+                                    && toolbar_focus == ToolbarFocus::Filter
+                                    && !has_filter_error,
                                 move |d| d.border_1().border_color(theme_inner.ring),
                             )
+                            .when(has_filter_error, move |d| {
+                                d.border_1().border_color(theme_error_border.danger)
+                            })
                             .on_mouse_down(MouseButton::Left, {
                                 let grid = grid_for_filter_event.clone();
                                 move |_, _, cx| {
@@ -585,8 +643,11 @@ pub(super) fn render_filter_bar_as_segment(
                                         })
                                         .child("\u{00d7}"),
                                 )
-                            }),
-                    ),
+                            })
+                            .when_some(chip_element, |d, chip| d.child(chip))
+                            .when_some(resolving_element, |d, indicator| d.child(indicator)),
+                    )
+                    .when_some(error_element, |d, err| d.child(err)),
             )
         })
         .child(
@@ -725,6 +786,40 @@ impl DataGridPanel {
             "Refresh"
         };
 
+        let toolbar_has_filter_error = filter_input_has_error(&self.relational_filter_state);
+        let toolbar_chip = render_relational_chip(
+            &self.relational_filter_state,
+            cx,
+            Box::new(cx.listener(|this, _, window, cx| {
+                if let Some(spec) = this.builder_draft_spec.clone() {
+                    this.apply_builder_draft_spec(spec, cx);
+                }
+                this.open_query_builder(window, cx);
+            })),
+        );
+
+        let toolbar_resolving = render_resolving_indicator(&self.relational_filter_state, cx);
+
+        let toolbar_error = render_relational_error(
+            &self.relational_filter_state,
+            cx,
+            Box::new(cx.listener(|this, _, window, cx| {
+                let partial_spec = if let super::filter_bar::RelationalFilterState::Error {
+                    partial_spec,
+                    ..
+                } = &this.relational_filter_state
+                {
+                    Some(*partial_spec.clone())
+                } else {
+                    None
+                };
+                if let Some(spec) = partial_spec {
+                    this.apply_builder_draft_spec(spec, cx);
+                }
+                this.open_query_builder(window, cx);
+            })),
+        );
+
         compact_top_bar(theme, std::iter::empty::<AnyElement>())
             .child(
                 div()
@@ -750,9 +845,14 @@ impl DataGridPanel {
                                 .items_center()
                                 .rounded(Radii::SM)
                                 .when(
-                                    show_toolbar_focus && toolbar_focus == ToolbarFocus::Filter,
+                                    show_toolbar_focus
+                                        && toolbar_focus == ToolbarFocus::Filter
+                                        && !toolbar_has_filter_error,
                                     |d| d.border_1().border_color(theme.ring),
                                 )
+                                .when(toolbar_has_filter_error, |d| {
+                                    d.border_1().border_color(theme.danger)
+                                })
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(|this, _, _, cx| {
@@ -789,8 +889,11 @@ impl DataGridPanel {
                                             }))
                                             .child("\u{00d7}"),
                                     )
-                                }),
-                        ),
+                                })
+                                .when_some(toolbar_chip, |d, chip| d.child(chip))
+                                .when_some(toolbar_resolving, |d, ind| d.child(ind)),
+                        )
+                        .when_some(toolbar_error, |d, err| d.child(err)),
                 )
             })
             .child(

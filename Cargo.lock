@@ -2525,6 +2525,7 @@ dependencies = [
  "futures",
  "keyring",
  "log",
+ "rusqlite",
  "secrecy",
  "serde",
  "serde_json",

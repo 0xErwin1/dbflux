@@ -1,9 +1,13 @@
+use super::filter_bar::{FilterMode, RelationalFilterState, classify_filter_input};
 use super::{DataGridPanel, DataSource, GridState, PendingToast, PendingTotalCount};
 use dbflux_components::components::data_table::SortState as TableSortState;
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionRef, OrderByColumn, Pagination,
-    QueryRequest, QueryResult, SelectQuery, TableBrowseRequest, TableCountRequest, TableRef,
-    TaskKind, TaskTarget,
+    QueryRequest, QueryResult, SelectQuery, SourceTable, TableBrowseRequest, TableCountRequest,
+    TableRef, TaskKind, TaskTarget,
+};
+use dbflux_core::{
+    RelationalFilterError, RelationalResolveError, count_query_from_spec, parse_and_resolve,
 };
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui::*;
@@ -100,6 +104,46 @@ impl DataGridPanel {
             }
             Err(_) => pagination,
         };
+
+        // --- Relational filter gate (FR-GATE-1 to FR-GATE-3) ---
+        //
+        // Only attempt FK resolution when: the input has an unquoted `.`,
+        // the driver is SQL, the source is a Table, and the FK cache is Ready
+        // with at least one FK. All other cases fall through to the raw path.
+        if let Some(filter_text) = &filter {
+            if classify_filter_input(filter_text) == FilterMode::Relational {
+                if self.try_relational_filter(
+                    profile_id,
+                    database.clone(),
+                    table.clone(),
+                    pagination.clone(),
+                    order_by.clone(),
+                    filter_text.clone(),
+                    _window,
+                    cx,
+                ) {
+                    return;
+                }
+            } else {
+                // FR-GATE-3: no unquoted dot → clear any stale relational state
+                if !matches!(
+                    self.relational_filter_state,
+                    RelationalFilterState::Inactive
+                ) {
+                    self.relational_filter_state = RelationalFilterState::Inactive;
+                    cx.notify();
+                }
+            }
+        } else {
+            if !matches!(
+                self.relational_filter_state,
+                RelationalFilterState::Inactive
+            ) {
+                self.relational_filter_state = RelationalFilterState::Inactive;
+                cx.notify();
+            }
+        }
+        // --- end relational filter gate ---
 
         let mut request = TableBrowseRequest::new(table.clone())
             .with_pagination(pagination.clone())
@@ -739,6 +783,225 @@ impl DataGridPanel {
                     "Failed to apply collection count result to UI state: {:?}",
                     error
                 );
+            }
+        })
+        .detach();
+    }
+
+    /// Attempt relational lowering for the given filter text.
+    ///
+    /// Returns `true` if lowering succeeded and query execution was dispatched;
+    /// returns `false` on any gate failure or parse error, signalling the caller
+    /// to fall through to the raw-filter path.
+    ///
+    /// Gate conditions (FR-GATE-1):
+    /// 1. `metadata.query_language == Sql`
+    /// 2. `data_source == Table`
+    /// 3. `fk_cache` is `Ready` with at least one FK
+    #[allow(clippy::too_many_arguments)]
+    fn try_relational_filter(
+        &mut self,
+        profile_id: Uuid,
+        database: Option<String>,
+        table: TableRef,
+        _pagination: Pagination,
+        _order_by: Vec<OrderByColumn>,
+        filter_text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        // Gate 1: SQL driver only (FR-GATE-5 — no driver-id branching)
+        let is_sql = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|c| c.connection.metadata().query_language == dbflux_core::QueryLanguage::Sql)
+            .unwrap_or(false);
+
+        if !is_sql {
+            return false;
+        }
+
+        // Gate 2: Table source (already guaranteed by run_table_query call path)
+        // Gate 3: FK cache ready with at least one FK
+        let fks = match &self.fk_cache {
+            super::FkLoadState::Ready(fks) if !fks.is_empty() => fks.clone(),
+            super::FkLoadState::Loading => {
+                // FK fetch in flight — show Resolving state, fall through to raw
+                self.relational_filter_state = RelationalFilterState::Resolving;
+                cx.notify();
+                return false;
+            }
+            _ => {
+                // Unavailable or empty — silently fall through (FR-ERR-6)
+                return false;
+            }
+        };
+
+        // Build source descriptor for the resolver
+        let source = SourceTable {
+            schema: table.schema.clone(),
+            table: table.name.clone(),
+            alias: table.name.clone(),
+        };
+
+        // Resolve using the driver's dialect for identifier case-folding
+        let resolve_result = {
+            let state = self.app_state.read(cx);
+            let Some(connected) = state.connections().get(&profile_id) else {
+                return false;
+            };
+            let dialect = connected.connection.dialect();
+            parse_and_resolve(&filter_text, source, &fks, dialect)
+        };
+
+        match resolve_result {
+            Ok(lowering) => {
+                let join_count = lowering.diagnostics.join_count;
+                let predicate_count = lowering.diagnostics.relational_predicate_count;
+
+                self.apply_builder_draft_spec(lowering.spec.clone(), cx);
+
+                self.relational_filter_state = RelationalFilterState::Active {
+                    join_count,
+                    predicate_count,
+                };
+                cx.notify();
+
+                // Execute via the visual query path
+                let profile_id_for_run = profile_id;
+                let db_for_run = database.clone();
+                if let Some(select) = self.visual_select.clone() {
+                    self.run_visual_query(
+                        profile_id_for_run,
+                        db_for_run.clone(),
+                        select.clone(),
+                        window,
+                        cx,
+                    );
+
+                    // Relational count path (T23 / FR-COUNT-1)
+                    if let Some(spec) = &self.builder_draft_spec {
+                        self.fetch_relational_count(profile_id, database, spec.clone(), cx);
+                    }
+                }
+
+                true
+            }
+
+            Err(RelationalFilterError::Parse(_)) => {
+                // FR-PARSE-7: parse errors silently fall back to raw filter
+                if !matches!(
+                    self.relational_filter_state,
+                    RelationalFilterState::Inactive
+                ) {
+                    self.relational_filter_state = RelationalFilterState::Inactive;
+                    cx.notify();
+                }
+                false
+            }
+
+            Err(RelationalFilterError::Resolve(boxed_err)) => {
+                // FR-ERR-1 / FR-ERR-2: resolve errors surface inline
+                let (message, partial_spec) = match *boxed_err {
+                    RelationalResolveError::Ambiguous {
+                        segment,
+                        from_table,
+                        partial_spec,
+                        ..
+                    } => (
+                        format!(
+                            "Ambiguous relation `{}` from `{}`. Multiple FKs match — open in builder to resolve.",
+                            segment, from_table
+                        ),
+                        partial_spec,
+                    ),
+                    RelationalResolveError::Unknown {
+                        segment,
+                        from_table,
+                        partial_spec,
+                        ..
+                    } => (
+                        format!(
+                            "Unknown relation `{}` from `{}`. Open in builder to select a join manually.",
+                            segment, from_table
+                        ),
+                        partial_spec,
+                    ),
+                };
+
+                self.relational_filter_state = RelationalFilterState::Error {
+                    message,
+                    partial_spec: Box::new(partial_spec),
+                };
+                cx.notify();
+
+                // Do NOT execute a query for the error state — let the user act
+                false
+            }
+        }
+    }
+
+    /// Execute the count subquery for an active relational filter.
+    ///
+    /// Uses `SELECT COUNT(*) FROM (<inner SELECT>) AS dbflux_count_subq` instead
+    /// of `TableCountRequest`, satisfying FR-COUNT-1 / FR-COUNT-2.
+    fn fetch_relational_count(
+        &mut self,
+        profile_id: Uuid,
+        database: Option<String>,
+        spec: dbflux_core::VisualQuerySpec,
+        cx: &mut Context<Self>,
+    ) {
+        let (conn, count_query) = {
+            let state = self.app_state.read(cx);
+            let Some(connected) = state.connections().get(&profile_id) else {
+                return;
+            };
+
+            let conn = match connected.resolve_connection_for_execution(database.as_deref()) {
+                Ok(c) => c,
+                Err(_) => return,
+            };
+
+            let dialect = connected.connection.dialect();
+            let count_query = count_query_from_spec(&spec, dialect);
+
+            (conn, count_query)
+        };
+
+        let table_name = spec.source.table.clone();
+        let entity = cx.entity().clone();
+
+        let mut request = dbflux_core::QueryRequest::new(count_query.sql.clone());
+        request.params = count_query.params.clone();
+        if let Some(ref db) = database {
+            request.database = Some(db.clone());
+        }
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { conn.execute(&request) });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            if let Err(e) = cx.update(|cx| {
+                if let Ok(query_result) = result
+                    && let Some(row) = query_result.rows.first()
+                    && let Some(dbflux_core::Value::Int(count)) = row.first()
+                {
+                    entity.update(cx, |panel, cx| {
+                        panel.pending_total_count = Some(PendingTotalCount {
+                            source_qualified: table_name,
+                            total: *count as u64,
+                        });
+                        cx.notify();
+                    });
+                }
+            }) {
+                log::warn!("Failed to apply relational count result: {:?}", e);
             }
         })
         .detach();
