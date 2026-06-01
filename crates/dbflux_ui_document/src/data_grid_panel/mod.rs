@@ -724,13 +724,21 @@ impl DataGridPanel {
         cx.subscribe_in(
             &filter_input,
             window,
-            |this, _, event: &InputEvent, window, cx| match event {
+            |this, input, event: &InputEvent, window, cx| match event {
                 InputEvent::PressEnter { secondary: false } => {
                     this.refresh(window, cx);
                     this.focus_table(window, cx);
                 }
                 InputEvent::Blur => {
                     this.exit_edit_mode(window, cx);
+                }
+                InputEvent::Change => {
+                    let text = input.read(cx).value().to_string();
+                    if filter_bar::classify_filter_input(&text)
+                        == filter_bar::FilterMode::Relational
+                    {
+                        this.ensure_fk_cache_loaded(cx);
+                    }
                 }
                 _ => {}
             },
@@ -2423,6 +2431,10 @@ impl DataGridPanel {
     }
 
     /// Applies a successful FK fetch result to the panel's `fk_cache`.
+    ///
+    /// When the filter bar was waiting for FK metadata (`Resolving` state),
+    /// sets `pending_refresh` so the render cycle re-evaluates the relational
+    /// filter now that the cache is populated.
     pub(crate) fn apply_fk_result(
         &mut self,
         foreign_keys: Vec<dbflux_core::SchemaForeignKeyInfo>,
@@ -2433,6 +2445,14 @@ impl DataGridPanel {
         } else {
             FkLoadState::Ready(foreign_keys)
         };
+
+        if matches!(
+            self.relational_filter_state,
+            filter_bar::RelationalFilterState::Resolving
+        ) {
+            self.pending_refresh = true;
+        }
+
         cx.notify();
     }
 
@@ -2440,6 +2460,62 @@ impl DataGridPanel {
     pub(crate) fn mark_fk_unavailable(&mut self, cx: &mut Context<Self>) {
         self.fk_cache = FkLoadState::Unavailable;
         cx.notify();
+    }
+
+    /// Trigger a FK metadata fetch if the cache has not yet been populated.
+    ///
+    /// Only fires when `fk_cache == Loading`. All other states (`Ready`,
+    /// `Unavailable`) are treated as terminal and this method is a no-op.
+    /// Must be called from a `DataSource::Table` context; non-Table sources
+    /// return immediately.
+    pub(crate) fn ensure_fk_cache_loaded(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.fk_cache, FkLoadState::Loading) {
+            return;
+        }
+
+        let (profile_id, database, schema) = match &self.source {
+            DataSource::Table {
+                profile_id,
+                database,
+                table,
+                ..
+            } => (*profile_id, database.clone(), table.schema.clone()),
+            _ => return,
+        };
+
+        let Some(database) = database else {
+            self.mark_fk_unavailable(cx);
+            return;
+        };
+
+        let Some(conn) = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|c| c.connection.clone())
+        else {
+            self.mark_fk_unavailable(cx);
+            return;
+        };
+
+        let schema_for_task = schema;
+        let task = cx
+            .background_executor()
+            .spawn(async move { conn.schema_foreign_keys(&database, schema_for_task.as_deref()) });
+
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            cx.update(|cx| {
+                this.update(cx, |grid, cx| match result {
+                    Ok(fks) => grid.apply_fk_result(fks, cx),
+                    Err(_) => grid.mark_fk_unavailable(cx),
+                })
+                .ok();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Loads foreign-key metadata for the builder's source table on a
@@ -3667,6 +3743,192 @@ mod tests {
                 assert!(
                     matches!(panel.fk_cache, FkLoadState::Unavailable),
                     "fk_cache should be Unavailable after mark_fk_unavailable"
+                );
+            });
+        });
+    }
+
+    // T27: ensure_fk_cache_loaded is a no-op when cache is already Ready or Unavailable
+    #[gpui::test]
+    fn ensure_fk_cache_loaded_noop_when_ready(cx: &mut TestAppContext) {
+        use super::FkLoadState;
+
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+
+                DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx)
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                let fk = dbflux_core::SchemaForeignKeyInfo {
+                    name: "fk_test".to_string(),
+                    table_name: "users".to_string(),
+                    columns: vec!["org_id".to_string()],
+                    referenced_schema: None,
+                    referenced_table: "organizations".to_string(),
+                    referenced_columns: vec!["id".to_string()],
+                    on_delete: None,
+                    on_update: None,
+                };
+
+                panel.apply_fk_result(vec![fk], cx);
+
+                assert!(
+                    matches!(panel.fk_cache, FkLoadState::Ready(_)),
+                    "cache should be Ready before no-op test"
+                );
+
+                // Second call should not change the state back to Loading
+                panel.ensure_fk_cache_loaded(cx);
+
+                assert!(
+                    matches!(panel.fk_cache, FkLoadState::Ready(_)),
+                    "ensure_fk_cache_loaded should be a no-op when cache is Ready"
+                );
+            });
+        });
+    }
+
+    // T27: ensure_fk_cache_loaded is a no-op when cache is Unavailable
+    #[gpui::test]
+    fn ensure_fk_cache_loaded_noop_when_unavailable(cx: &mut TestAppContext) {
+        use super::FkLoadState;
+
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+
+                DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx)
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.mark_fk_unavailable(cx);
+
+                assert!(
+                    matches!(panel.fk_cache, FkLoadState::Unavailable),
+                    "cache should be Unavailable before no-op test"
+                );
+
+                panel.ensure_fk_cache_loaded(cx);
+
+                assert!(
+                    matches!(panel.fk_cache, FkLoadState::Unavailable),
+                    "ensure_fk_cache_loaded should be a no-op when cache is Unavailable"
+                );
+            });
+        });
+    }
+
+    // T28: apply_fk_result triggers pending_refresh when state was Resolving
+    #[gpui::test]
+    fn fk_result_triggers_requery_when_resolving(cx: &mut TestAppContext) {
+        use super::{FkLoadState, filter_bar::RelationalFilterState};
+
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+
+                DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx)
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.relational_filter_state = RelationalFilterState::Resolving;
+
+                assert!(
+                    !panel.pending_refresh,
+                    "pending_refresh should be false before FK result arrives"
+                );
+
+                let fk = dbflux_core::SchemaForeignKeyInfo {
+                    name: "fk_test".to_string(),
+                    table_name: "users".to_string(),
+                    columns: vec!["org_id".to_string()],
+                    referenced_schema: None,
+                    referenced_table: "organizations".to_string(),
+                    referenced_columns: vec!["id".to_string()],
+                    on_delete: None,
+                    on_update: None,
+                };
+
+                panel.apply_fk_result(vec![fk], cx);
+
+                assert!(
+                    matches!(panel.fk_cache, FkLoadState::Ready(_)),
+                    "fk_cache should be Ready after apply_fk_result"
+                );
+                assert!(
+                    panel.pending_refresh,
+                    "pending_refresh should be set when FK result arrives while Resolving"
                 );
             });
         });
