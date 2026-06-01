@@ -1,4 +1,10 @@
+use dbflux_components::icons::AppIcon;
+use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::tokens::{Heights, Radii, Spacing};
 use dbflux_core::VisualQuerySpec;
+use gpui::prelude::*;
+use gpui::*;
+use gpui_component::ActiveTheme;
 
 /// Tracks the current relational-filter state for the filter-bar chip and
 /// inline error affordance.
@@ -92,9 +98,128 @@ pub(crate) fn classify_filter_input(text: &str) -> FilterMode {
     FilterMode::Raw
 }
 
+/// Render the relational filter chip (T24 / FR-UPGRADE-1 to FR-UPGRADE-3).
+///
+/// Returns `None` when the state is not `Active` — the caller skips the child
+/// in that case. When `Active`, returns a clickable pill element. The click
+/// handler opens the query builder pre-seeded with the resolved spec.
+pub(crate) fn render_relational_chip(
+    state: &RelationalFilterState,
+    cx: &App,
+    on_click: Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App) + 'static>,
+) -> Option<AnyElement> {
+    let RelationalFilterState::Active {
+        join_count,
+        predicate_count: _,
+    } = state
+    else {
+        return None;
+    };
+
+    let theme = cx.theme().clone();
+    let label = format!("relational \u{00b7} {} join{}", join_count, if *join_count == 1 { "" } else { "s" });
+
+    let theme_hover = theme.clone();
+    let chip = div()
+        .id("relational-filter-chip")
+        .flex()
+        .items_center()
+        .gap(Spacing::XS)
+        .h(Heights::ROW_COMPACT)
+        .px(Spacing::SM)
+        .rounded_full()
+        .bg(theme.secondary)
+        .cursor_pointer()
+        .hover(move |d| d.bg(theme_hover.secondary.opacity(0.7)))
+        .on_mouse_down(MouseButton::Left, on_click)
+        .child(Icon::new(AppIcon::Link2).small().color(theme.muted_foreground))
+        .child(Text::caption(label).color(theme.muted_foreground));
+
+    Some(chip.into_any_element())
+}
+
+/// Render the Resolving state indicator (T27 / FR-GATE-4).
+///
+/// A subtle inline spinner shown while FK metadata is still loading. Returns
+/// `None` for all states except `Resolving`.
+pub(crate) fn render_resolving_indicator(
+    state: &RelationalFilterState,
+    cx: &App,
+) -> Option<AnyElement> {
+    if !matches!(state, RelationalFilterState::Resolving) {
+        return None;
+    }
+
+    let theme = cx.theme().clone();
+
+    let indicator = div()
+        .flex()
+        .items_center()
+        .gap(Spacing::XS)
+        .h(Heights::ROW_COMPACT)
+        .px(Spacing::XS)
+        .child(Icon::new(AppIcon::Loader).small().color(theme.muted_foreground));
+
+    Some(indicator.into_any_element())
+}
+
+/// Render the inline error affordance (T26 / FR-ERR-1 to FR-ERR-2).
+///
+/// Returns `None` for non-Error states. When `Error`, returns a one-line div
+/// with the error message and an "Open in builder" link.
+///
+/// `on_open_builder` is called when the user clicks "Open in builder".
+pub(crate) fn render_relational_error(
+    state: &RelationalFilterState,
+    cx: &App,
+    on_open_builder: Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App) + 'static>,
+) -> Option<AnyElement> {
+    let RelationalFilterState::Error { message, .. } = state else {
+        return None;
+    };
+
+    let theme = cx.theme().clone();
+    let message = message.clone();
+
+    let theme_hover = theme.clone();
+    let theme_ring = theme.ring;
+    let row = div()
+        .flex()
+        .items_center()
+        .gap(Spacing::XS)
+        .h(Heights::ROW_COMPACT)
+        .px(Spacing::SM)
+        .child(Icon::new(AppIcon::CircleAlert).small().color(theme.danger))
+        .child(Text::caption(message).color(theme.danger))
+        .child(
+            div()
+                .id("open-builder-from-error")
+                .flex()
+                .items_center()
+                .gap(Spacing::XS)
+                .cursor_pointer()
+                .rounded(Radii::SM)
+                .px(Spacing::XS)
+                .hover(move |d| d.bg(theme_hover.secondary))
+                .on_mouse_down(MouseButton::Left, on_open_builder)
+                .child(Text::caption("Open in builder").color(theme_ring))
+                .child(Icon::new(AppIcon::ExternalLink).small().color(theme_ring)),
+        );
+
+    Some(row.into_any_element())
+}
+
+/// Whether the filter input border should show an error ring (T26).
+///
+/// Used by the caller to apply a red border to the filter input container
+/// when a resolve error is active.
+pub(crate) fn filter_input_has_error(state: &RelationalFilterState) -> bool {
+    matches!(state, RelationalFilterState::Error { .. })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{classify_filter_input, FilterMode};
 
     // T21: classify_filter_input
 
