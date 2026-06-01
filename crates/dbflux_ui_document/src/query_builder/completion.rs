@@ -18,7 +18,6 @@ use dbflux_ui_base::AppStateEntity;
 
 /// A single alias-to-table binding in the visual query builder.
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub(crate) struct AliasBinding {
     /// The alias as it appears in the query (e.g. `u`, `orders`).
     pub alias: String,
@@ -36,9 +35,9 @@ pub(crate) struct AliasBinding {
 /// background fetches (joined tables). Shared between the panel and all
 /// completion providers via `Rc<RefCell<SchemaCache>>`.
 #[derive(Default)]
-#[allow(dead_code)]
 pub(crate) struct SchemaCache {
     /// Columns for the source (primary) table, keyed by the table name.
+    #[allow(dead_code)]
     pub source_table: String,
     pub source_columns: Vec<ColumnInfo>,
 
@@ -55,7 +54,6 @@ pub(crate) struct SchemaCache {
 
 /// Which input site the provider is attached to.
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub(crate) enum CompletionMode {
     /// Join `to_table` input: suggest table names.
     Tables {
@@ -83,17 +81,17 @@ pub(crate) enum CompletionMode {
 }
 
 /// Schema-aware completion provider for single-line builder inputs.
-#[allow(dead_code)]
 pub(crate) struct SchemaCompletionProvider {
+    /// Retained for future use (e.g., refreshing the table list on demand).
     #[allow(dead_code)]
     app_state: WeakEntity<AppStateEntity>,
+    /// Retained for future use alongside `app_state`.
     #[allow(dead_code)]
     profile_id: Uuid,
     mode: CompletionMode,
     schema_cache: Rc<RefCell<SchemaCache>>,
 }
 
-#[allow(dead_code)]
 impl SchemaCompletionProvider {
     pub(crate) fn new(
         app_state: WeakEntity<AppStateEntity>,
@@ -114,7 +112,6 @@ impl SchemaCompletionProvider {
 ///
 /// For input like `users.em` with `prefix_start` pointing at `em`, this
 /// returns `Some("users")`. Returns `None` when no dot-qualifier is present.
-#[allow(dead_code)]
 pub(crate) fn compute_qualifier(source: &str, prefix_start: usize) -> Option<String> {
     if prefix_start == 0 {
         return None;
@@ -139,7 +136,6 @@ pub(crate) fn compute_qualifier(source: &str, prefix_start: usize) -> Option<Str
 /// `mode` determines which data sources to draw from. `cache` is borrowed
 /// read-only at the call site. `prefix` and `qualifier` are derived from the
 /// cursor position in the current input text.
-#[allow(dead_code)]
 pub(crate) fn compute_suggestions(
     mode: &CompletionMode,
     cache: &SchemaCache,

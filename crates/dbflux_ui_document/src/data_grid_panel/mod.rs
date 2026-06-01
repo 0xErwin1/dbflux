@@ -2401,6 +2401,8 @@ impl DataGridPanel {
                     initial_spec,
                     Some(weak_self.clone()),
                     available_columns,
+                    self.app_state.clone(),
+                    profile_id,
                     generate_preview,
                     window,
                     cx,

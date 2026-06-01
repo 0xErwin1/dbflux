@@ -1,11 +1,13 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use dbflux_components::controls::{
-    Dropdown, DropdownItem, DropdownSelectionChanged, InputEvent, InputState,
+    CompletionProvider, Dropdown, DropdownItem, DropdownSelectionChanged, InputEvent, InputState,
 };
 use dbflux_core::{
-    BoolOp, ColumnKind, Comparator, FilterNode, JoinFilterNode, JoinKind, JoinOn, JoinPredicate,
-    JoinStep, LiteralValue, Predicate, PredicateValue, ProjectedColumn, Projection,
+    BoolOp, ColumnInfo, ColumnKind, Comparator, FilterNode, JoinFilterNode, JoinKind, JoinOn,
+    JoinPredicate, JoinStep, LiteralValue, Predicate, PredicateValue, ProjectedColumn, Projection,
     SchemaForeignKeyInfo, SelectQuery, SortEntry, SourceTable, VisualQuerySpec,
     VisualSortDirection,
 };
@@ -15,7 +17,12 @@ use gpui::{
 };
 use uuid::Uuid;
 
+use dbflux_ui_base::AppStateEntity;
+
 use crate::data_grid_panel::DataGridPanel;
+use crate::query_builder::completion::{
+    AliasBinding, CompletionMode, SchemaCache, SchemaCompletionProvider,
+};
 use crate::query_builder::events::BuilderEvent;
 use crate::query_builder::tree_ops::{
     collect_filter_predicate_ids, collect_join_predicate_ids, filter_node_at_path_mut,
@@ -266,6 +273,22 @@ pub struct QueryBuilderPanel {
     /// once at panel construction from the data grid's current result.
     pub(crate) available_columns: Vec<String>,
 
+    /// Shared schema cache for completion providers.
+    ///
+    /// `source_columns` is populated at panel construction. `joined_columns`
+    /// is populated lazily via `ensure_joined_columns`. The cache is shared
+    /// via `Rc<RefCell<…>>` between the panel (writer) and all attached
+    /// `SchemaCompletionProvider` instances (readers). Everything runs on the
+    /// foreground thread, so `RefCell` is sufficient.
+    pub(crate) schema_cache: Rc<RefCell<SchemaCache>>,
+
+    /// Weak handle to `AppStateEntity`, used inside `ensure_joined_columns`
+    /// to reach the active connection without capturing a strong reference.
+    pub(crate) app_state_weak: WeakEntity<AppStateEntity>,
+
+    /// Profile ID for this builder panel, used to look up the connection.
+    pub(crate) schema_profile_id: Uuid,
+
     /// Set to `true` after any filter mutation so the render cycle sweeps stale
     /// entries from `predicate_input_states`.
     pub(crate) pending_filter_input_sweep: bool,
@@ -288,11 +311,14 @@ impl QueryBuilderPanel {
     /// previously run the builder; `None` produces the default spec.
     /// `generate_preview` is a closure that calls the driver's
     /// `QueryGenerator::generate_select` and returns the SQL text.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         source: SourceTable,
         initial_spec: Option<VisualQuerySpec>,
         data_grid: Option<WeakEntity<DataGridPanel>>,
         available_columns: Vec<String>,
+        app_state: Entity<AppStateEntity>,
+        profile_id: Uuid,
         generate_preview: Box<dyn Fn(&VisualQuerySpec) -> String + Send + Sync>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -375,11 +401,68 @@ impl QueryBuilderPanel {
             state
         });
 
+        let source_columns: Vec<ColumnInfo> = {
+            let state = app_state.read(cx);
+            let source_table_name = &spec.source.table;
+            let source_schema = spec.source.schema.as_deref();
+
+            state
+                .connections()
+                .get(&profile_id)
+                .and_then(|conn| {
+                    let db_name = conn.active_database.clone().unwrap_or_default();
+                    let table_key = if let Some(schema) = source_schema {
+                        format!("{}.{}", schema, source_table_name)
+                    } else {
+                        source_table_name.clone()
+                    };
+                    conn.table_details
+                        .get(&(db_name, table_key))
+                        .and_then(|info| info.columns.clone())
+                })
+                .unwrap_or_default()
+        };
+
+        let schema_cache = Rc::new(RefCell::new(SchemaCache {
+            source_table: spec.source.table.clone(),
+            source_columns,
+            joined_columns: HashMap::new(),
+            fetching: HashSet::new(),
+            failed: HashSet::new(),
+        }));
+
+        let source_alias_binding = AliasBinding {
+            alias: spec.source.alias.clone(),
+            schema: spec.source.schema.clone(),
+            table: spec.source.table.clone(),
+            is_source: true,
+        };
+
+        let app_state_weak = app_state.downgrade();
+
         let add_column_input_state =
             cx.new(|cx| InputState::new(window, cx).placeholder("alias.column"));
 
         let add_sort_input_state =
             cx.new(|cx| InputState::new(window, cx).placeholder("alias.column"));
+
+        let alias_or_column_provider: Rc<dyn CompletionProvider> =
+            Rc::new(SchemaCompletionProvider::new(
+                app_state_weak.clone(),
+                profile_id,
+                CompletionMode::AliasOrColumn {
+                    aliases: vec![source_alias_binding.clone()],
+                },
+                schema_cache.clone(),
+            ));
+
+        add_column_input_state.update(cx, |state, _| {
+            state.lsp.completion_provider = Some(alias_or_column_provider.clone());
+        });
+
+        add_sort_input_state.update(cx, |state, _| {
+            state.lsp.completion_provider = Some(alias_or_column_provider.clone());
+        });
 
         let limit_sub = cx.subscribe_in(
             &limit_input_state,
@@ -438,6 +521,9 @@ impl QueryBuilderPanel {
             join_cond_right_inputs: HashMap::new(),
             join_cond_op_dropdowns: HashMap::new(),
             available_columns,
+            schema_cache,
+            app_state_weak,
+            schema_profile_id: profile_id,
             pending_filter_input_sweep: false,
             pending_join_condition_sweep: false,
         }
@@ -847,6 +933,19 @@ impl QueryBuilderPanel {
             s
         });
 
+        let predicate_col_provider: Rc<dyn CompletionProvider> =
+            Rc::new(SchemaCompletionProvider::new(
+                self.app_state_weak.clone(),
+                self.schema_profile_id,
+                CompletionMode::AliasOrColumn {
+                    aliases: self.make_alias_bindings(),
+                },
+                self.schema_cache.clone(),
+            ));
+        state.update(cx, |s, _| {
+            s.lsp.completion_provider = Some(predicate_col_provider);
+        });
+
         let sub = cx.subscribe_in(
             &state,
             window,
@@ -985,6 +1084,64 @@ impl QueryBuilderPanel {
                     state
                 });
 
+                let table_names = self
+                    .app_state_weak
+                    .upgrade()
+                    .as_ref()
+                    .and_then(|app| {
+                        let state = app.read(cx);
+                        let conn = state.connections().get(&self.schema_profile_id)?;
+                        let schema = conn.schema.as_ref()?;
+                        if let dbflux_core::DataStructure::Relational(rel) = &schema.structure {
+                            let default = conn.active_database.clone().unwrap_or_default();
+                            let schema_name = conn
+                                .active_database
+                                .clone()
+                                .or_else(|| rel.schemas.first().map(|s| s.name.clone()))
+                                .unwrap_or_default();
+                            let names: Vec<String> = rel
+                                .schemas
+                                .iter()
+                                .flat_map(|s| {
+                                    let default_schema = schema_name.clone();
+                                    s.tables.iter().map(move |t| {
+                                        if s.name == default_schema {
+                                            t.name.clone()
+                                        } else {
+                                            format!("{}.{}", s.name, t.name)
+                                        }
+                                    })
+                                })
+                                .chain(rel.tables.iter().map(|t| t.name.clone()))
+                                .collect();
+                            let _ = default;
+                            Some(names)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_default();
+
+                let tables_provider: Rc<dyn CompletionProvider> =
+                    Rc::new(SchemaCompletionProvider::new(
+                        self.app_state_weak.clone(),
+                        self.schema_profile_id,
+                        CompletionMode::Tables {
+                            table_names,
+                            default_schema: None,
+                        },
+                        self.schema_cache.clone(),
+                    ));
+
+                to_table_state.update(cx, |state, _| {
+                    state.lsp.completion_provider = Some(tables_provider);
+                });
+
+                if !to_table_val.is_empty() {
+                    let row = &self.join_rows[i];
+                    self.ensure_joined_columns(row.to_schema.as_deref(), &to_table_val, cx);
+                }
+
                 let on_expr_state = cx.new(|cx| {
                     let mut state = InputState::new(window, cx).placeholder("a.id = b.a_id");
                     state.set_value(&on_expr_val, window, cx);
@@ -1062,6 +1219,27 @@ impl QueryBuilderPanel {
                 self.join_kind_dropdowns.push(kind_dropdown);
                 self._input_subs.push(kind_sub);
             }
+        }
+
+        let refreshed_aliases = self.make_alias_bindings();
+        let refreshed_provider: Rc<dyn CompletionProvider> =
+            Rc::new(SchemaCompletionProvider::new(
+                self.app_state_weak.clone(),
+                self.schema_profile_id,
+                CompletionMode::AliasOrColumn {
+                    aliases: refreshed_aliases,
+                },
+                self.schema_cache.clone(),
+            ));
+
+        if let Some(col_input) = &self.add_column_input_state {
+            let p = refreshed_provider.clone();
+            col_input.update(cx, |s, _| s.lsp.completion_provider = Some(p));
+        }
+
+        if let Some(sort_input) = &self.add_sort_input_state {
+            let p = refreshed_provider.clone();
+            sort_input.update(cx, |s, _| s.lsp.completion_provider = Some(p));
         }
     }
 
@@ -1275,6 +1453,19 @@ impl QueryBuilderPanel {
                 s.set_value(&left_owned, window, cx);
                 s
             });
+
+            let left_provider: Rc<dyn CompletionProvider> = Rc::new(SchemaCompletionProvider::new(
+                self.app_state_weak.clone(),
+                self.schema_profile_id,
+                CompletionMode::AliasOrColumn {
+                    aliases: self.make_alias_bindings(),
+                },
+                self.schema_cache.clone(),
+            ));
+            state.update(cx, |s, _| {
+                s.lsp.completion_provider = Some(left_provider);
+            });
+
             let id_for_sub = node_id;
             let sub = cx.subscribe_in(
                 &state,
@@ -1298,6 +1489,20 @@ impl QueryBuilderPanel {
                 s.set_value(&right_owned, window, cx);
                 s
             });
+
+            let right_provider: Rc<dyn CompletionProvider> =
+                Rc::new(SchemaCompletionProvider::new(
+                    self.app_state_weak.clone(),
+                    self.schema_profile_id,
+                    CompletionMode::JoinConditionRight {
+                        aliases: self.make_alias_bindings(),
+                    },
+                    self.schema_cache.clone(),
+                ));
+            state.update(cx, |s, _| {
+                s.lsp.completion_provider = Some(right_provider);
+            });
+
             let id_for_sub = node_id;
             let sub = cx.subscribe_in(
                 &state,
@@ -1592,6 +1797,126 @@ impl QueryBuilderPanel {
     pub fn data_grid(&self) -> Option<&WeakEntity<DataGridPanel>> {
         self.data_grid.as_ref()
     }
+
+    // -----------------------------------------------------------------------
+    // Completion support
+    // -----------------------------------------------------------------------
+
+    /// Builds the alias binding list from the current spec's source and join rows.
+    ///
+    /// Used when re-attaching providers after the join list changes.
+    pub(crate) fn make_alias_bindings(&self) -> Vec<AliasBinding> {
+        let mut bindings = vec![AliasBinding {
+            alias: self.current_spec.source.alias.clone(),
+            schema: self.current_spec.source.schema.clone(),
+            table: self.current_spec.source.table.clone(),
+            is_source: true,
+        }];
+
+        for row in &self.join_rows {
+            if !row.to_table.is_empty() {
+                bindings.push(AliasBinding {
+                    alias: row.to_alias.clone(),
+                    schema: row.to_schema.clone(),
+                    table: row.to_table.clone(),
+                    is_source: false,
+                });
+            }
+        }
+
+        bindings
+    }
+
+    /// Fetches column metadata for a joined table in the background and stores
+    /// it in `self.schema_cache`.
+    ///
+    /// Idempotent: returns immediately if the columns are already cached, a
+    /// fetch is in flight, or the fetch previously failed. Fetch failures are
+    /// silent (the popover shows aliases only for that join) and stored in the
+    /// `failed` set to prevent retries.
+    pub(crate) fn ensure_joined_columns(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::completion_support::normalize_identifier;
+
+        let key = (
+            schema.map(normalize_identifier),
+            normalize_identifier(table),
+        );
+
+        {
+            let cache = self.schema_cache.borrow();
+            if cache.joined_columns.contains_key(&key)
+                || cache.fetching.contains(&key)
+                || cache.failed.contains(&key)
+            {
+                return;
+            }
+        }
+
+        self.schema_cache.borrow_mut().fetching.insert(key.clone());
+
+        let Some(conn) = self.app_state_weak.upgrade().as_ref().and_then(|app| {
+            app.read(cx)
+                .connections()
+                .get(&self.schema_profile_id)
+                .map(|c| c.connection.clone())
+        }) else {
+            self.schema_cache.borrow_mut().fetching.remove(&key);
+            self.schema_cache.borrow_mut().failed.insert(key);
+            return;
+        };
+
+        let db_name = self
+            .app_state_weak
+            .upgrade()
+            .as_ref()
+            .and_then(|app| {
+                app.read(cx)
+                    .connections()
+                    .get(&self.schema_profile_id)
+                    .and_then(|c| c.active_database.clone())
+            })
+            .unwrap_or_default();
+
+        let schema_owned = schema.map(|s| s.to_string());
+        let table_owned = table.to_string();
+        let key_for_task = key.clone();
+
+        let task = cx.background_executor().spawn(async move {
+            conn.table_details(&db_name, schema_owned.as_deref(), &table_owned)
+        });
+
+        let schema_cache = self.schema_cache.clone();
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+            cx.update(|cx| {
+                {
+                    let mut cache = schema_cache.borrow_mut();
+                    cache.fetching.remove(&key_for_task);
+                    match result {
+                        Ok(table_info) => {
+                            let cols = table_info.columns.unwrap_or_default();
+                            cache.joined_columns.insert(key_for_task, cols);
+                        }
+                        Err(err) => {
+                            log::debug!(
+                                "schema autocomplete: column fetch failed, suppressed: {}",
+                                err
+                            );
+                            cache.failed.insert(key_for_task);
+                        }
+                    }
+                }
+                _this.update(cx, |_panel, cx| cx.notify()).ok();
+            })
+            .ok();
+        })
+        .detach();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1753,6 +2078,10 @@ mod tests {
         let offset_text = spec.offset.to_string();
         let sql_preview = no_op_preview(&spec);
 
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        use uuid::Uuid;
+
         QueryBuilderPanel {
             current_spec: spec,
             projection_mode: ProjectionMode::All,
@@ -1786,6 +2115,9 @@ mod tests {
             join_cond_right_inputs: HashMap::new(),
             join_cond_op_dropdowns: HashMap::new(),
             available_columns: Vec::new(),
+            schema_cache: Rc::new(RefCell::new(SchemaCache::default())),
+            app_state_weak: WeakEntity::new_invalid(),
+            schema_profile_id: Uuid::nil(),
             pending_filter_input_sweep: false,
             pending_join_condition_sweep: false,
         }
