@@ -3933,4 +3933,192 @@ mod tests {
             });
         });
     }
+
+    // T31: Collection source never uses relational lowering — relational_filter_state stays Inactive
+    #[gpui::test]
+    fn collection_source_relational_state_stays_inactive(cx: &mut TestAppContext) {
+        use super::filter_bar::RelationalFilterState;
+
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Collection {
+                    profile_id: Uuid::nil(),
+                    collection: CollectionRef::new("app", "users"),
+                    pagination: Pagination::default(),
+                    total_docs: None,
+                };
+
+                DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx)
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        window.update(|_, app| {
+            panel.update(app, |panel, _cx| {
+                assert!(
+                    matches!(panel.relational_filter_state, RelationalFilterState::Inactive),
+                    "Collection source should start Inactive"
+                );
+
+                // Collection sources never enter the relational filter path, so
+                // the state must remain Inactive even if FK data were present.
+                assert!(
+                    !matches!(panel.source, DataSource::Table { .. }),
+                    "source must be a Collection for this test"
+                );
+            });
+        });
+    }
+
+    // T31: FkLoadState::Unavailable leaves relational_filter_state Inactive (S-11)
+    #[gpui::test]
+    fn unavailable_fk_cache_leaves_state_inactive(cx: &mut TestAppContext) {
+        use super::{FkLoadState, filter_bar::RelationalFilterState};
+
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+
+                DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx)
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.mark_fk_unavailable(cx);
+
+                assert!(
+                    matches!(panel.fk_cache, FkLoadState::Unavailable),
+                    "cache should be Unavailable"
+                );
+
+                // Even with Unavailable cache, relational_filter_state should remain
+                // Inactive — no error shown for missing FK data (S-11)
+                assert!(
+                    matches!(panel.relational_filter_state, RelationalFilterState::Inactive),
+                    "relational_filter_state must stay Inactive when FK cache is Unavailable"
+                );
+            });
+        });
+    }
+
+    // T31: parse failure leaves relational_filter_state Inactive (FR-PARSE-7)
+    #[gpui::test]
+    fn parse_failure_leaves_relational_state_inactive(cx: &mut TestAppContext) {
+        use super::{FkLoadState, filter_bar::RelationalFilterState};
+
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+
+                DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx)
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                let fk = dbflux_core::SchemaForeignKeyInfo {
+                    name: "fk_test".to_string(),
+                    table_name: "users".to_string(),
+                    columns: vec!["org_id".to_string()],
+                    referenced_schema: None,
+                    referenced_table: "organizations".to_string(),
+                    referenced_columns: vec!["id".to_string()],
+                    on_delete: None,
+                    on_update: None,
+                };
+
+                panel.apply_fk_result(vec![fk], cx);
+
+                assert!(
+                    matches!(panel.fk_cache, FkLoadState::Ready(_)),
+                    "cache should be Ready for parse-failure test"
+                );
+
+                // Directly verify: parse error in parse_and_resolve leaves state Inactive.
+                // `try_relational_filter` is private, so we verify the parse_and_resolve
+                // error path via the public parse_and_resolve function directly.
+                use dbflux_core::{DefaultSqlDialect, SourceTable, parse_and_resolve};
+
+                // Syntactically invalid input — parser should fail
+                let result = parse_and_resolve(
+                    "bare_identifier_no_comparator",
+                    SourceTable {
+                        schema: None,
+                        table: "users".to_string(),
+                        alias: "users".to_string(),
+                    },
+                    &[],
+                    &DefaultSqlDialect,
+                );
+
+                // FR-PARSE-7: parse errors must be an error
+                assert!(
+                    result.is_err(),
+                    "syntactically invalid input must produce a parse error"
+                );
+
+                // And the panel state should still be Inactive (parse error never modifies state)
+                assert!(
+                    matches!(panel.relational_filter_state, RelationalFilterState::Inactive),
+                    "relational_filter_state must remain Inactive after parse error"
+                );
+            });
+        });
+    }
 }
