@@ -6,6 +6,22 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Schema-aware autocomplete for the visual query builder and DataView
+  filter (#165)** — Inline suggestion popovers now appear on the
+  builder rail's single-line inputs (filter / sort / projected columns,
+  join target table, join `ON` left and right sides) and on the
+  DataView toolbar's WHERE filter input. Suggestions are sourced from
+  the live schema and the builder's own spec — source-table columns,
+  declared join aliases (`alias.column`), and joined-table columns
+  fetched lazily through the existing background metadata pattern.
+  After typing `<alias>.`, results are scoped to that alias's columns
+  only. Arrow keys navigate, `Tab` / `Enter` commits, `Esc` and focus
+  loss dismiss. Prefix-only filtering for now (substring and SQL
+  keyword completion are deliberately deferred). Driver-agnostic by
+  construction: suggestions consume `dbflux_core` metadata types
+  without branching on driver id, so every relational driver picks the
+  feature up automatically.
+
 * **Relational filters in the DataView filter bar (#162)** — The filter
   bar now accepts ORM-style dotted paths like
   `created_by.email LIKE '%@acme.com'` or
