@@ -72,6 +72,16 @@ pub trait SqlDialect: Send + Sync {
         format!("{} {} {}", col_name, op, literal)
     }
 
+    /// Normalise an identifier for case-insensitive comparison.
+    ///
+    /// The default lowercases the name, matching the behaviour of PostgreSQL
+    /// and SQLite for unquoted identifiers. Dialects where comparison is
+    /// case-preserving (e.g. SQL Server with a case-sensitive collation) may
+    /// override this to return the name unchanged.
+    fn normalize_identifier<'a>(&self, name: &'a str) -> std::borrow::Cow<'a, str> {
+        std::borrow::Cow::Owned(name.to_lowercase())
+    }
+
     /// Build an UPSERT statement for this dialect.
     fn build_upsert_statement(
         &self,
@@ -206,5 +216,46 @@ impl SqlDialect for DefaultSqlDialect {
             "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO UPDATE SET {}",
             table, columns, values, conflict_columns, update_clause
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct NopDialect;
+
+    impl SqlDialect for NopDialect {
+        fn quote_identifier(&self, name: &str) -> String {
+            format!("\"{}\"", name)
+        }
+
+        fn qualified_table(&self, _schema: Option<&str>, table: &str) -> String {
+            table.to_string()
+        }
+
+        fn value_to_literal(&self, _value: &crate::Value) -> String {
+            "?".to_string()
+        }
+
+        fn escape_string(&self, s: &str) -> String {
+            s.to_string()
+        }
+
+        fn placeholder_style(&self) -> PlaceholderStyle {
+            PlaceholderStyle::QuestionMark
+        }
+    }
+
+    #[test]
+    fn normalize_default_lowercases() {
+        let dialect = NopDialect;
+        assert_eq!(dialect.normalize_identifier("Created_By_Id"), "created_by_id");
+    }
+
+    #[test]
+    fn normalize_default_preserves_already_lowercase() {
+        let dialect = NopDialect;
+        assert_eq!(dialect.normalize_identifier("email"), "email");
     }
 }

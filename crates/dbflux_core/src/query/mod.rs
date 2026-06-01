@@ -1,3 +1,4 @@
+pub mod relational_filter;
 pub(crate) mod column_kind;
 pub(crate) mod generator;
 pub(crate) mod language_service;
