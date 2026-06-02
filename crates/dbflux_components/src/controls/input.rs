@@ -1,5 +1,7 @@
 use gpui::prelude::*;
-use gpui::{App, Div, Entity, FontWeight, IntoElement, KeyBinding, Window, div};
+use gpui::{
+    App, Div, Entity, EntityInputHandler, FontWeight, IntoElement, KeyBinding, Window, actions, div,
+};
 use gpui_component::Sizable;
 
 use crate::tokens::FontSizes;
@@ -11,6 +13,15 @@ pub use gpui_component::input::{
     MoveDown as InputMoveDown, MoveUp as InputMoveUp, OutdentInline as InputOutdentInline,
     Position as InputPosition, Rope,
 };
+
+actions!(
+    dbflux_input,
+    [
+        /// Manually open the completion popover for the focused single-line
+        /// input. Bound to `ctrl-space` by default.
+        TriggerCompletion
+    ]
+);
 
 /// Key context for `gpui-component`'s `InputState` element.
 const INPUT_CONTEXT: &str = "Input";
@@ -28,6 +39,7 @@ pub fn register_input_overrides(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("ctrl-j", InputMoveDown, Some(INPUT_CONTEXT)),
         KeyBinding::new("ctrl-k", InputMoveUp, Some(INPUT_CONTEXT)),
+        KeyBinding::new("ctrl-space", TriggerCompletion, Some(INPUT_CONTEXT)),
     ]);
 }
 
@@ -49,8 +61,17 @@ pub fn completion_input_keys_wrapper(state: &Entity<InputState>) -> Div {
     let state_down = state.clone();
     let state_tab = state.clone();
     let state_shift_tab = state.clone();
+    let state_trigger = state.clone();
 
     div()
+        .on_action(
+            move |_: &TriggerCompletion, window: &mut Window, cx: &mut App| {
+                state_trigger.update(cx, |s, cx| {
+                    s.replace_text_in_range(None, "", window, cx);
+                });
+                cx.stop_propagation();
+            },
+        )
         .on_action(move |_: &InputMoveUp, window: &mut Window, cx: &mut App| {
             let handled = state_up.update(cx, |s, cx| {
                 s.handle_action_for_context_menu(Box::new(InputMoveUp), window, cx)

@@ -410,6 +410,14 @@ impl CompletionProvider for SchemaCompletionProvider {
         new_text: &str,
         _cx: &mut Context<InputState>,
     ) -> bool {
+        // Empty `new_text` covers both backspace (deleted text) and the
+        // manual Ctrl+Space trigger (replace_text_in_range(None, "", ...)).
+        // In both cases the popover should re-evaluate against the current
+        // text and cursor.
+        if new_text.is_empty() {
+            return true;
+        }
+
         if new_text.len() != 1 {
             return false;
         }
