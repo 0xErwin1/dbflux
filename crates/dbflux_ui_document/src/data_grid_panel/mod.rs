@@ -569,6 +569,9 @@ impl DataGridPanel {
             panel.fetch_table_details_for_pk(profile_id, &table, cx);
         }
 
+        panel.ensure_filter_source_columns_loaded(cx);
+        panel.ensure_fk_cache_loaded(cx);
+
         panel
     }
 
@@ -799,6 +802,7 @@ impl DataGridPanel {
                     {
                         this.ensure_fk_cache_loaded(cx);
                     }
+                    this.ensure_filter_source_columns_loaded(cx);
                     this.ensure_filter_fk_columns_loaded(&text, cx);
                 }
                 _ => {}
@@ -2659,6 +2663,119 @@ impl DataGridPanel {
                 }
                 Err(_) => {
                     cache.failed.insert(key_for_finish);
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// If the filter cache has no source columns yet, kick off a background
+    /// fetch of `table_details` for the source table. The result is written
+    /// into the cache so subsequent completion calls have data, and is also
+    /// pushed into `AppState` so other panels benefit.
+    fn ensure_filter_source_columns_loaded(&mut self, cx: &mut Context<Self>) {
+        let Some(cache_rc) = self.filter_completion_cache.clone() else {
+            return;
+        };
+
+        let (profile_id, table, database) = match &self.source {
+            DataSource::Table {
+                profile_id,
+                table,
+                database,
+                ..
+            } => (*profile_id, table.clone(), database.clone()),
+            _ => return,
+        };
+
+        let key: (Option<String>, String) = (
+            table.schema.as_ref().map(|s| s.to_lowercase()),
+            table.name.to_lowercase(),
+        );
+
+        {
+            let cache = cache_rc.borrow();
+            if !cache.source_columns.is_empty()
+                || cache.fetching.contains(&key)
+                || cache.failed.contains(&key)
+            {
+                return;
+            }
+        }
+
+        let database = database.or_else(|| {
+            self.app_state
+                .read(cx)
+                .connections()
+                .get(&profile_id)
+                .and_then(|c| c.active_database.clone())
+        });
+
+        let Some(database) = database else {
+            return;
+        };
+
+        let Some(conn) = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|c| c.connection.clone())
+        else {
+            return;
+        };
+
+        cache_rc.borrow_mut().fetching.insert(key.clone());
+
+        let table_for_task = table.clone();
+        let database_for_task = database.clone();
+
+        let task = cx.background_executor().spawn(async move {
+            conn.table_details(
+                &database_for_task,
+                table_for_task.schema.as_deref(),
+                &table_for_task.name,
+            )
+        });
+
+        let key_for_finish = key.clone();
+        let cache_for_finish = cache_rc.clone();
+        let app_state_weak = self.app_state.downgrade();
+        let database_for_finish = database;
+        let table_for_finish = table.clone();
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            cache_for_finish
+                .borrow_mut()
+                .fetching
+                .remove(&key_for_finish);
+
+            match result {
+                Ok(details) => {
+                    if let Some(cols) = details.columns.clone() {
+                        cache_for_finish.borrow_mut().source_columns = cols;
+
+                        if let Some(app) = app_state_weak.upgrade() {
+                            cx.update(|cx| {
+                                app.update(cx, |state, _| {
+                                    state.set_table_details(
+                                        profile_id,
+                                        database_for_finish.clone(),
+                                        table_for_finish.name.clone(),
+                                        details,
+                                    );
+                                });
+                            })
+                            .ok();
+                        }
+                    } else {
+                        cache_for_finish.borrow_mut().failed.insert(key_for_finish);
+                    }
+                }
+                Err(_) => {
+                    cache_for_finish.borrow_mut().failed.insert(key_for_finish);
                 }
             }
         })
