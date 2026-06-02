@@ -403,21 +403,20 @@ impl QueryBuilderPanel {
 
         let source_columns: Vec<ColumnInfo> = {
             let state = app_state.read(cx);
-            let source_table_name = &spec.source.table;
-            let source_schema = spec.source.schema.as_deref();
+            let source_table_name = spec.source.table.clone();
+            let source_schema = spec.source.schema.clone();
 
             state
                 .connections()
                 .get(&profile_id)
                 .and_then(|conn| {
-                    let db_name = conn.active_database.clone().unwrap_or_default();
-                    let table_key = if let Some(schema) = source_schema {
-                        format!("{}.{}", schema, source_table_name)
-                    } else {
-                        source_table_name.clone()
-                    };
+                    let db_name = conn
+                        .active_database
+                        .clone()
+                        .or(source_schema)
+                        .unwrap_or_else(|| "default".to_string());
                     conn.table_details
-                        .get(&(db_name, table_key))
+                        .get(&(db_name, source_table_name))
                         .and_then(|info| info.columns.clone())
                 })
                 .unwrap_or_default()
@@ -431,6 +430,17 @@ impl QueryBuilderPanel {
             fetching: HashSet::new(),
             failed: HashSet::new(),
         }));
+
+        if schema_cache.borrow().source_columns.is_empty() {
+            Self::spawn_source_columns_fetch(
+                schema_cache.clone(),
+                app_state.downgrade(),
+                profile_id,
+                spec.source.schema.clone(),
+                spec.source.table.clone(),
+                cx,
+            );
+        }
 
         let source_alias_binding = AliasBinding {
             alias: spec.source.alias.clone(),
@@ -1833,6 +1843,93 @@ impl QueryBuilderPanel {
     /// fetch is in flight, or the fetch previously failed. Fetch failures are
     /// silent (the popover shows aliases only for that join) and stored in the
     /// `failed` set to prevent retries.
+    /// Background-fetch column metadata for the builder's source table.
+    ///
+    /// Called from the panel constructor when the source-table columns are
+    /// not yet cached in `AppState`. Writes the fetched columns into the
+    /// shared `SchemaCache` so attached completion providers see them as
+    /// soon as the fetch resolves; failures are silent (autocomplete is not
+    /// a user-facing operation).
+    fn spawn_source_columns_fetch(
+        schema_cache: Rc<RefCell<SchemaCache>>,
+        app_state_weak: gpui::WeakEntity<AppStateEntity>,
+        profile_id: uuid::Uuid,
+        source_schema: Option<String>,
+        source_table: String,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::completion_support::normalize_identifier;
+
+        let key = (
+            source_schema.as_ref().map(|s| normalize_identifier(s)),
+            normalize_identifier(&source_table),
+        );
+
+        {
+            let cache = schema_cache.borrow();
+            if cache.fetching.contains(&key) || cache.failed.contains(&key) {
+                return;
+            }
+        }
+
+        let Some(app) = app_state_weak.upgrade() else {
+            return;
+        };
+
+        let db_name = app
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .and_then(|c| c.active_database.clone())
+            .or_else(|| source_schema.clone())
+            .unwrap_or_else(|| "default".to_string());
+
+        let Some(conn) = app
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|c| c.connection_for_database(&db_name))
+        else {
+            return;
+        };
+
+        schema_cache.borrow_mut().fetching.insert(key.clone());
+
+        let schema_owned = source_schema;
+        let table_owned = source_table;
+        let db_for_task = db_name;
+        let key_for_task = key.clone();
+
+        let task = cx.background_executor().spawn(async move {
+            conn.table_details(&db_for_task, schema_owned.as_deref(), &table_owned)
+        });
+
+        let schema_cache_for_finish = schema_cache.clone();
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+            let _ = cx.update(|cx| {
+                {
+                    let mut cache = schema_cache_for_finish.borrow_mut();
+                    cache.fetching.remove(&key_for_task);
+                    match result {
+                        Ok(info) => {
+                            if let Some(cols) = info.columns {
+                                cache.source_columns = cols;
+                            } else {
+                                cache.failed.insert(key_for_task);
+                            }
+                        }
+                        Err(_) => {
+                            cache.failed.insert(key_for_task);
+                        }
+                    }
+                }
+                _this.update(cx, |_panel, cx| cx.notify()).ok();
+            });
+        })
+        .detach();
+    }
+
     pub(crate) fn ensure_joined_columns(
         &self,
         schema: Option<&str>,
@@ -1858,17 +1955,6 @@ impl QueryBuilderPanel {
 
         self.schema_cache.borrow_mut().fetching.insert(key.clone());
 
-        let Some(conn) = self.app_state_weak.upgrade().as_ref().and_then(|app| {
-            app.read(cx)
-                .connections()
-                .get(&self.schema_profile_id)
-                .map(|c| c.connection.clone())
-        }) else {
-            self.schema_cache.borrow_mut().fetching.remove(&key);
-            self.schema_cache.borrow_mut().failed.insert(key);
-            return;
-        };
-
         let db_name = self
             .app_state_weak
             .upgrade()
@@ -1879,7 +1965,19 @@ impl QueryBuilderPanel {
                     .get(&self.schema_profile_id)
                     .and_then(|c| c.active_database.clone())
             })
-            .unwrap_or_default();
+            .or_else(|| schema.map(|s| s.to_string()))
+            .unwrap_or_else(|| "default".to_string());
+
+        let Some(conn) = self.app_state_weak.upgrade().as_ref().and_then(|app| {
+            app.read(cx)
+                .connections()
+                .get(&self.schema_profile_id)
+                .map(|c| c.connection_for_database(&db_name))
+        }) else {
+            self.schema_cache.borrow_mut().fetching.remove(&key);
+            self.schema_cache.borrow_mut().failed.insert(key);
+            return;
+        };
 
         let schema_owned = schema.map(|s| s.to_string());
         let table_owned = table.to_string();

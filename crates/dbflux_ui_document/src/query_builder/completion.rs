@@ -389,18 +389,6 @@ impl CompletionProvider for SchemaCompletionProvider {
             replace_range,
         );
 
-        log::info!(
-            "[autocomplete] completions: mode={:?} prefix={:?} qualifier={:?} \
-             source_cols={} fk_links={} joined_keys={} -> {} items",
-            std::mem::discriminant(&self.mode),
-            prefix,
-            qualifier,
-            cache.source_columns.len(),
-            cache.fk_links.len(),
-            cache.joined_columns.len(),
-            items.len(),
-        );
-
         Task::ready(Ok(CompletionResponse::Array(items)))
     }
 
