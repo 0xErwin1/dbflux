@@ -2657,7 +2657,7 @@ impl DataGridPanel {
             .read(cx)
             .connections()
             .get(&profile_id)
-            .map(|c| c.connection.clone())
+            .map(|c| c.connection_for_database(&database))
         else {
             return;
         };
@@ -2765,7 +2765,7 @@ impl DataGridPanel {
             .read(cx)
             .connections()
             .get(&profile_id)
-            .map(|c| c.connection.clone())
+            .map(|c| c.connection_for_database(&database))
         else {
             log::warn!(
                 "[autocomplete] ensure_filter_source_columns_loaded: no live connection for \
