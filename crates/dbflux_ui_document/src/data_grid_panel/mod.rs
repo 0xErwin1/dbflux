@@ -752,6 +752,13 @@ impl DataGridPanel {
                     .unwrap_or_default()
             };
 
+            log::info!(
+                "[autocomplete] new_internal: building filter cache for table={} \
+                 initial_source_columns={}",
+                table.name,
+                source_columns.len()
+            );
+
             let filter_cache = Rc::new(RefCell::new(SchemaCache {
                 source_table: table.name.clone(),
                 source_columns,
@@ -2533,6 +2540,7 @@ impl DataGridPanel {
     /// would require recursive FK metadata and is deferred.
     fn refresh_filter_fk_links(&mut self) {
         let Some(cache) = self.filter_completion_cache.as_ref() else {
+            log::info!("[autocomplete] refresh_filter_fk_links: no filter cache");
             return;
         };
 
@@ -2542,7 +2550,13 @@ impl DataGridPanel {
 
         let fks = match &self.fk_cache {
             FkLoadState::Ready(fks) => fks,
-            _ => return,
+            _ => {
+                log::info!(
+                    "[autocomplete] refresh_filter_fk_links: fk_cache not Ready (state={:?})",
+                    std::mem::discriminant(&self.fk_cache)
+                );
+                return;
+            }
         };
 
         let source_table_lower = table.name.to_lowercase();
@@ -2565,6 +2579,13 @@ impl DataGridPanel {
                 },
             );
         }
+
+        log::info!(
+            "[autocomplete] refresh_filter_fk_links: table={} fks_total={} links_built={}",
+            table.name,
+            fks.len(),
+            links.len()
+        );
 
         cache.borrow_mut().fk_links = links;
     }
@@ -2675,6 +2696,9 @@ impl DataGridPanel {
     /// pushed into `AppState` so other panels benefit.
     fn ensure_filter_source_columns_loaded(&mut self, cx: &mut Context<Self>) {
         let Some(cache_rc) = self.filter_completion_cache.clone() else {
+            log::info!(
+                "[autocomplete] ensure_filter_source_columns_loaded: no cache (non-table source)"
+            );
             return;
         };
 
@@ -2685,7 +2709,10 @@ impl DataGridPanel {
                 database,
                 ..
             } => (*profile_id, table.clone(), database.clone()),
-            _ => return,
+            _ => {
+                log::info!("[autocomplete] ensure_filter_source_columns_loaded: non-Table source");
+                return;
+            }
         };
 
         let key: (Option<String>, String) = (
@@ -2695,6 +2722,16 @@ impl DataGridPanel {
 
         {
             let cache = cache_rc.borrow();
+            log::info!(
+                "[autocomplete] ensure_filter_source_columns_loaded: table={} key={:?} \
+                 source_columns_len={} fetching={} failed={}",
+                table.qualified_name(),
+                key,
+                cache.source_columns.len(),
+                cache.fetching.contains(&key),
+                cache.failed.contains(&key),
+            );
+
             if !cache.source_columns.is_empty()
                 || cache.fetching.contains(&key)
                 || cache.failed.contains(&key)
@@ -2712,6 +2749,10 @@ impl DataGridPanel {
         });
 
         let Some(database) = database else {
+            log::warn!(
+                "[autocomplete] ensure_filter_source_columns_loaded: no database for table {}",
+                table.qualified_name()
+            );
             return;
         };
 
@@ -2722,8 +2763,21 @@ impl DataGridPanel {
             .get(&profile_id)
             .map(|c| c.connection.clone())
         else {
+            log::warn!(
+                "[autocomplete] ensure_filter_source_columns_loaded: no live connection for \
+                 profile_id={}",
+                profile_id
+            );
             return;
         };
+
+        log::info!(
+            "[autocomplete] ensure_filter_source_columns_loaded: spawning fetch db={} \
+             schema={:?} table={}",
+            database,
+            table.schema,
+            table.name
+        );
 
         cache_rc.borrow_mut().fetching.insert(key.clone());
 
@@ -2754,6 +2808,13 @@ impl DataGridPanel {
 
             match result {
                 Ok(details) => {
+                    let column_count = details.columns.as_ref().map(|c| c.len()).unwrap_or(0);
+                    log::info!(
+                        "[autocomplete] source_columns fetch OK: table={} columns={}",
+                        table_for_finish.qualified_name(),
+                        column_count
+                    );
+
                     if let Some(cols) = details.columns.clone() {
                         cache_for_finish.borrow_mut().source_columns = cols;
 
@@ -2771,10 +2832,20 @@ impl DataGridPanel {
                             .ok();
                         }
                     } else {
+                        log::warn!(
+                            "[autocomplete] source_columns fetch returned details but \
+                             columns=None for table={}",
+                            table_for_finish.qualified_name()
+                        );
                         cache_for_finish.borrow_mut().failed.insert(key_for_finish);
                     }
                 }
-                Err(_) => {
+                Err(e) => {
+                    log::warn!(
+                        "[autocomplete] source_columns fetch FAILED: table={} err={}",
+                        table_for_finish.qualified_name(),
+                        e
+                    );
                     cache_for_finish.borrow_mut().failed.insert(key_for_finish);
                 }
             }
