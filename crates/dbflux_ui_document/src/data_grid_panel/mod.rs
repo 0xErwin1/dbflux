@@ -742,11 +742,12 @@ impl DataGridPanel {
                     .get(profile_id)
                     .and_then(|conn| {
                         let db = database
-                            .as_deref()
-                            .or(conn.active_database.as_deref())
-                            .unwrap_or("default");
+                            .clone()
+                            .or_else(|| conn.active_database.clone())
+                            .or_else(|| table.schema.clone())
+                            .unwrap_or_else(|| "default".to_string());
                         conn.table_details
-                            .get(&(db.to_string(), table.name.clone()))
+                            .get(&(db, table.name.clone()))
                             .and_then(|info| info.columns.clone())
                     })
                     .unwrap_or_default()
@@ -2630,18 +2631,26 @@ impl DataGridPanel {
             }
         }
 
-        let (profile_id, database) = match &self.source {
+        let (profile_id, database, source_table_schema) = match &self.source {
             DataSource::Table {
                 profile_id,
                 database,
+                table,
                 ..
-            } => (*profile_id, database.clone()),
+            } => (*profile_id, database.clone(), table.schema.clone()),
             _ => return,
         };
 
-        let Some(database) = database else {
-            return;
-        };
+        let database = database
+            .or_else(|| {
+                self.app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .and_then(|c| c.active_database.clone())
+            })
+            .or(source_table_schema)
+            .unwrap_or_else(|| "default".to_string());
 
         let Some(conn) = self
             .app_state
@@ -2740,21 +2749,16 @@ impl DataGridPanel {
             }
         }
 
-        let database = database.or_else(|| {
-            self.app_state
-                .read(cx)
-                .connections()
-                .get(&profile_id)
-                .and_then(|c| c.active_database.clone())
-        });
-
-        let Some(database) = database else {
-            log::warn!(
-                "[autocomplete] ensure_filter_source_columns_loaded: no database for table {}",
-                table.qualified_name()
-            );
-            return;
-        };
+        let database = database
+            .or_else(|| {
+                self.app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .and_then(|c| c.active_database.clone())
+            })
+            .or_else(|| table.schema.clone())
+            .unwrap_or_else(|| "default".to_string());
 
         let Some(conn) = self
             .app_state
