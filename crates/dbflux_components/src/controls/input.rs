@@ -1,13 +1,52 @@
 use gpui::prelude::*;
-use gpui::{App, Entity, FontWeight, IntoElement, Window};
+use gpui::{App, Div, Entity, FontWeight, IntoElement, Window, div};
 use gpui_component::Sizable;
 
 use crate::tokens::FontSizes;
 use crate::typography::AppFonts;
 
 pub use gpui_component::input::{
-    CompletionProvider, Input as GpuiInput, InputEvent, InputState, Position as InputPosition, Rope,
+    CompletionProvider, Enter as InputEnter, Escape as InputEscape, Input as GpuiInput, InputEvent,
+    InputState, MoveDown as InputMoveDown, MoveUp as InputMoveUp, Position as InputPosition, Rope,
 };
+
+/// Build a focus-region wrapper that routes `MoveUp` / `MoveDown` actions to
+/// the input's completion popover.
+///
+/// Why this exists: `gpui-component` only attaches `MoveUp` / `MoveDown`
+/// listeners to `InputState` when `state.mode.is_multi_line()` is true.
+/// Single-line inputs that opt into a `CompletionProvider` therefore see
+/// arrow keys bubble past the input to whatever parent context owns them
+/// (e.g. the data table), so the completion popover never receives them.
+///
+/// Wrap any single-line input that uses a `CompletionProvider` with this
+/// helper to forward arrow keys to `handle_action_for_context_menu`. When
+/// the popover is closed the listeners do not call `stop_propagation`, so
+/// arrows continue to behave normally for the surrounding UI.
+pub fn completion_input_keys_wrapper(state: &Entity<InputState>) -> Div {
+    let state_up = state.clone();
+    let state_down = state.clone();
+
+    div()
+        .on_action(move |_: &InputMoveUp, window: &mut Window, cx: &mut App| {
+            let handled = state_up.update(cx, |s, cx| {
+                s.handle_action_for_context_menu(Box::new(InputMoveUp), window, cx)
+            });
+            if handled {
+                cx.stop_propagation();
+            }
+        })
+        .on_action(
+            move |_: &InputMoveDown, window: &mut Window, cx: &mut App| {
+                let handled = state_down.update(cx, |s, cx| {
+                    s.handle_action_for_context_menu(Box::new(InputMoveDown), window, cx)
+                });
+                if handled {
+                    cx.stop_propagation();
+                }
+            },
+        )
+}
 
 /// Thin wrapper around `gpui_component::input::Input` that pre-applies
 /// DBFlux design token defaults (height, size).

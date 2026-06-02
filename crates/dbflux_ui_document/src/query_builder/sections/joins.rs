@@ -17,7 +17,7 @@ pub fn render_joins(
     panel: &mut QueryBuilderPanel,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
-    use dbflux_components::controls::{Button, Input};
+    use dbflux_components::controls::{Button, Input, completion_input_keys_wrapper};
     use dbflux_core::JoinOn;
     use gpui::SharedString;
     use gpui::prelude::*;
@@ -97,12 +97,15 @@ pub fn render_joins(
 
         if let Some((to_table_state, _on_expr_state)) = join_states.get(i) {
             header = header.child(
-                div().flex_1().min_w(gpui::px(0.0)).child(
-                    Input::new(to_table_state)
-                        .small()
-                        .w_full()
-                        .placeholder("table"),
-                ),
+                completion_input_keys_wrapper(to_table_state)
+                    .flex_1()
+                    .min_w(gpui::px(0.0))
+                    .child(
+                        Input::new(to_table_state)
+                            .small()
+                            .w_full()
+                            .placeholder("table"),
+                    ),
             );
         } else {
             header = header.child(
@@ -205,7 +208,7 @@ fn render_join_tree(
     cond_ops: &HashMap<u64, Entity<Dropdown>>,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> AnyElement {
-    use dbflux_components::controls::{Button, Input};
+    use dbflux_components::controls::{Button, Input, completion_input_keys_wrapper};
     use dbflux_components::tokens::{Heights, Radii};
     use dbflux_core::{BoolOp, JoinFilterNode};
     use gpui::prelude::*;
@@ -223,12 +226,15 @@ fn render_join_tree(
 
             if let Some(state) = left {
                 row = row.child(
-                    div().flex_1().min_w(gpui::px(0.0)).child(
-                        Input::new(&state)
-                            .small()
-                            .w_full()
-                            .placeholder("alias.column"),
-                    ),
+                    completion_input_keys_wrapper(&state)
+                        .flex_1()
+                        .min_w(gpui::px(0.0))
+                        .child(
+                            Input::new(&state)
+                                .small()
+                                .w_full()
+                                .placeholder("alias.column"),
+                        ),
                 );
             }
 
@@ -249,12 +255,15 @@ fn render_join_tree(
 
             if let Some(state) = right {
                 row = row.child(
-                    div().flex_1().min_w(gpui::px(0.0)).child(
-                        Input::new(&state)
-                            .small()
-                            .w_full()
-                            .placeholder("alias.column"),
-                    ),
+                    completion_input_keys_wrapper(&state)
+                        .flex_1()
+                        .min_w(gpui::px(0.0))
+                        .child(
+                            Input::new(&state)
+                                .small()
+                                .w_full()
+                                .placeholder("alias.column"),
+                        ),
                 );
             }
 
