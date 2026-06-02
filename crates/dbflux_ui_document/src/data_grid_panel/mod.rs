@@ -2658,6 +2658,8 @@ impl DataGridPanel {
         let key_for_finish = key.clone();
         let cache_for_finish = cache_rc.clone();
 
+        let ref_table_for_log = ref_table.clone();
+        let database_for_log = database.clone();
         cx.spawn(async move |_this, _cx| {
             let result = task.await;
             let mut cache = cache_for_finish.borrow_mut();
@@ -2667,10 +2669,22 @@ impl DataGridPanel {
                     if let Some(cols) = details.columns {
                         cache.joined_columns.insert(key_for_finish, cols);
                     } else {
+                        log::warn!(
+                            "autocomplete: FK-target table_details returned no columns for \
+                             {}.{}",
+                            database_for_log,
+                            ref_table_for_log
+                        );
                         cache.failed.insert(key_for_finish);
                     }
                 }
-                Err(_) => {
+                Err(err) => {
+                    log::warn!(
+                        "autocomplete: failed to fetch FK-target columns for {}.{}: {}",
+                        database_for_log,
+                        ref_table_for_log,
+                        err
+                    );
                     cache.failed.insert(key_for_finish);
                 }
             }
@@ -2779,10 +2793,21 @@ impl DataGridPanel {
                             .ok();
                         }
                     } else {
+                        log::warn!(
+                            "autocomplete: table_details returned no columns for {}.{}",
+                            database_for_finish,
+                            table_for_finish.qualified_name()
+                        );
                         cache_for_finish.borrow_mut().failed.insert(key_for_finish);
                     }
                 }
-                Err(_) => {
+                Err(err) => {
+                    log::warn!(
+                        "autocomplete: failed to fetch columns for {}.{}: {}",
+                        database_for_finish,
+                        table_for_finish.qualified_name(),
+                        err
+                    );
                     cache_for_finish.borrow_mut().failed.insert(key_for_finish);
                 }
             }

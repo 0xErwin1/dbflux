@@ -1899,6 +1899,8 @@ impl QueryBuilderPanel {
         let table_owned = source_table;
         let db_for_task = db_name;
         let key_for_task = key.clone();
+        let db_for_log = db_for_task.clone();
+        let table_for_log = table_owned.clone();
 
         let task = cx.background_executor().spawn(async move {
             conn.table_details(&db_for_task, schema_owned.as_deref(), &table_owned)
@@ -1916,10 +1918,23 @@ impl QueryBuilderPanel {
                             if let Some(cols) = info.columns {
                                 cache.source_columns = cols;
                             } else {
+                                log::warn!(
+                                    "autocomplete: builder source table_details returned no \
+                                     columns for {}.{}",
+                                    db_for_log,
+                                    table_for_log
+                                );
                                 cache.failed.insert(key_for_task);
                             }
                         }
-                        Err(_) => {
+                        Err(err) => {
+                            log::warn!(
+                                "autocomplete: failed to fetch builder source columns for \
+                                 {}.{}: {}",
+                                db_for_log,
+                                table_for_log,
+                                err
+                            );
                             cache.failed.insert(key_for_task);
                         }
                     }
@@ -1982,6 +1997,8 @@ impl QueryBuilderPanel {
         let schema_owned = schema.map(|s| s.to_string());
         let table_owned = table.to_string();
         let key_for_task = key.clone();
+        let db_for_log = db_name.clone();
+        let table_for_log = table_owned.clone();
 
         let task = cx.background_executor().spawn(async move {
             conn.table_details(&db_name, schema_owned.as_deref(), &table_owned)
@@ -2000,8 +2017,11 @@ impl QueryBuilderPanel {
                             cache.joined_columns.insert(key_for_task, cols);
                         }
                         Err(err) => {
-                            log::debug!(
-                                "schema autocomplete: column fetch failed, suppressed: {}",
+                            log::warn!(
+                                "autocomplete: failed to fetch joined-table columns for \
+                                 {}.{}: {}",
+                                db_for_log,
+                                table_for_log,
                                 err
                             );
                             cache.failed.insert(key_for_task);
