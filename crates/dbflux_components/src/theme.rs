@@ -16,6 +16,7 @@ pub fn ghost_border_color() -> Hsla {
 
 pub fn init(cx: &mut App) {
     gpui_component::init(cx);
+    crate::controls::register_input_overrides(cx);
     load_bundled_fonts(cx);
     apply_theme(ThemeSetting::Dark, AppStyle::Default, None, cx);
 }

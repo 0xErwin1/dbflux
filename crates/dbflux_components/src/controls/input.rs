@@ -1,14 +1,35 @@
 use gpui::prelude::*;
-use gpui::{App, Div, Entity, FontWeight, IntoElement, Window, div};
+use gpui::{App, Div, Entity, FontWeight, IntoElement, KeyBinding, Window, div};
 use gpui_component::Sizable;
 
 use crate::tokens::FontSizes;
 use crate::typography::AppFonts;
 
 pub use gpui_component::input::{
-    CompletionProvider, Enter as InputEnter, Escape as InputEscape, Input as GpuiInput, InputEvent,
-    InputState, MoveDown as InputMoveDown, MoveUp as InputMoveUp, Position as InputPosition, Rope,
+    CompletionProvider, Enter as InputEnter, Escape as InputEscape,
+    IndentInline as InputIndentInline, Input as GpuiInput, InputEvent, InputState,
+    MoveDown as InputMoveDown, MoveUp as InputMoveUp, OutdentInline as InputOutdentInline,
+    Position as InputPosition, Rope,
 };
+
+/// Key context for `gpui-component`'s `InputState` element.
+const INPUT_CONTEXT: &str = "Input";
+
+/// Register DBFlux-specific keybindings that complement the defaults from
+/// `gpui_component::init`. Call this once at app startup, after
+/// `gpui_component::init`.
+///
+/// Adds vim-style `ctrl-j` / `ctrl-k` chords as aliases for `MoveDown` /
+/// `MoveUp` inside any focused input. These dispatch the same actions
+/// `gpui-component` already routes to the completion popover (via
+/// `handle_action_for_context_menu`), so single-line inputs wrapped with
+/// [`completion_input_keys_wrapper`] navigate suggestions with the chord too.
+pub fn register_input_overrides(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("ctrl-j", InputMoveDown, Some(INPUT_CONTEXT)),
+        KeyBinding::new("ctrl-k", InputMoveUp, Some(INPUT_CONTEXT)),
+    ]);
+}
 
 /// Build a focus-region wrapper that routes `MoveUp` / `MoveDown` actions to
 /// the input's completion popover.
@@ -26,6 +47,8 @@ pub use gpui_component::input::{
 pub fn completion_input_keys_wrapper(state: &Entity<InputState>) -> Div {
     let state_up = state.clone();
     let state_down = state.clone();
+    let state_tab = state.clone();
+    let state_shift_tab = state.clone();
 
     div()
         .on_action(move |_: &InputMoveUp, window: &mut Window, cx: &mut App| {
@@ -40,6 +63,30 @@ pub fn completion_input_keys_wrapper(state: &Entity<InputState>) -> Div {
             move |_: &InputMoveDown, window: &mut Window, cx: &mut App| {
                 let handled = state_down.update(cx, |s, cx| {
                     s.handle_action_for_context_menu(Box::new(InputMoveDown), window, cx)
+                });
+                if handled {
+                    cx.stop_propagation();
+                }
+            },
+        )
+        .on_action(
+            move |_: &InputIndentInline, window: &mut Window, cx: &mut App| {
+                let handled = state_tab.update(cx, |s, cx| {
+                    s.handle_action_for_context_menu(
+                        Box::new(InputEnter { secondary: false }),
+                        window,
+                        cx,
+                    )
+                });
+                if handled {
+                    cx.stop_propagation();
+                }
+            },
+        )
+        .on_action(
+            move |_: &InputOutdentInline, window: &mut Window, cx: &mut App| {
+                let handled = state_shift_tab.update(cx, |s, cx| {
+                    s.handle_action_for_context_menu(Box::new(InputEscape), window, cx)
                 });
                 if handled {
                     cx.stop_propagation();
