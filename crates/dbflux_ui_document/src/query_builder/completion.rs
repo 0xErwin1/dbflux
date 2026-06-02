@@ -29,6 +29,18 @@ pub(crate) struct AliasBinding {
     pub is_source: bool,
 }
 
+/// Resolved foreign-key edge originating in the source table.
+///
+/// Lets the filter-bar provider follow ORM-style dotted paths
+/// (`created_by.email`) without re-parsing FK metadata at suggest time.
+#[derive(Clone, Debug)]
+pub(crate) struct FkLink {
+    /// Schema of the referenced table, if known.
+    pub referenced_schema: Option<String>,
+    /// Bare name of the referenced table.
+    pub referenced_table: String,
+}
+
 /// In-memory cache of column metadata for the current builder panel.
 ///
 /// Populated at panel construction (source table) and incrementally via
@@ -44,6 +56,11 @@ pub(crate) struct SchemaCache {
     /// Lazily fetched columns for joined tables.
     /// Key: (schema, table) where both are normalized (lowercase, unquoted).
     pub joined_columns: HashMap<(Option<String>, String), Vec<ColumnInfo>>,
+
+    /// Foreign-key edges from the source table.
+    /// Key: normalized source column name. Used by `FilterExpression` to
+    /// suggest dotted paths like `created_by.email`.
+    pub fk_links: HashMap<String, FkLink>,
 
     /// Keys for which a background fetch is in flight (dedup guard).
     pub fetching: HashSet<(Option<String>, String)>,
@@ -76,8 +93,11 @@ pub(crate) enum CompletionMode {
 
     /// DataView WHERE filter bar: multi-token free-form input.
     ///
-    /// Uses the same alias/column logic but seeded with only the source table.
-    FilterExpression { aliases: Vec<AliasBinding> },
+    /// Suggests bare columns of the source table directly (no alias prefix),
+    /// and follows FK paths declared in `SchemaCache::fk_links` when the user
+    /// types `<fk_column>.`. Driver-agnostic: the FK metadata is supplied by
+    /// the panel from `fk_cache`, never inspected by mode-specific code.
+    FilterExpression,
 }
 
 /// Schema-aware completion provider for single-line builder inputs.
@@ -181,8 +201,7 @@ pub(crate) fn compute_suggestions(
         }
 
         CompletionMode::AliasOrColumn { aliases }
-        | CompletionMode::JoinConditionRight { aliases }
-        | CompletionMode::FilterExpression { aliases } => {
+        | CompletionMode::JoinConditionRight { aliases } => {
             let mut seen = HashSet::new();
             let mut items = Vec::new();
 
@@ -273,6 +292,76 @@ pub(crate) fn compute_suggestions(
 
             items
         }
+
+        CompletionMode::FilterExpression => {
+            let mut seen = HashSet::new();
+            let mut items = Vec::new();
+
+            if let Some(qualifier_str) = qualifier {
+                let qualifier_norm = normalize_identifier(qualifier_str);
+
+                if let Some(link) = cache.fk_links.get(&qualifier_norm) {
+                    let key = (
+                        link.referenced_schema
+                            .as_ref()
+                            .map(|s| normalize_identifier(s)),
+                        normalize_identifier(&link.referenced_table),
+                    );
+
+                    if let Some(cols) = cache.joined_columns.get(&key) {
+                        for col in cols {
+                            if !prefix_upper.is_empty()
+                                && !col.name.to_uppercase().starts_with(&prefix_upper)
+                            {
+                                continue;
+                            }
+
+                            push_completion_item(
+                                &mut items,
+                                &mut seen,
+                                &col.name,
+                                CompletionItemKind::FIELD,
+                                prefix,
+                                replace_range,
+                            );
+                        }
+                    }
+                }
+
+                return items;
+            }
+
+            for col in &cache.source_columns {
+                if !prefix_upper.is_empty() && !col.name.to_uppercase().starts_with(&prefix_upper) {
+                    continue;
+                }
+
+                let normalized = normalize_identifier(&col.name);
+                let detail = cache
+                    .fk_links
+                    .get(&normalized)
+                    .map(|link| format!("→ {}", link.referenced_table));
+
+                let label = col.name.clone();
+                let upper_key = label.to_uppercase();
+                if seen.insert(upper_key) {
+                    items.push(CompletionItem {
+                        label: label.clone(),
+                        kind: Some(CompletionItemKind::FIELD),
+                        detail,
+                        insert_text_format: Some(InsertTextFormat::PLAIN_TEXT),
+                        filter_text: Some(prefix.to_string()),
+                        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                            range: replace_range,
+                            new_text: label,
+                        })),
+                        ..CompletionItem::default()
+                    });
+                }
+            }
+
+            items
+        }
     }
 }
 
@@ -358,6 +447,7 @@ mod tests {
             source_table: "users".to_string(),
             source_columns: columns,
             joined_columns: HashMap::new(),
+            fk_links: HashMap::new(),
             fetching: HashSet::new(),
             failed: HashSet::new(),
         }
@@ -591,22 +681,124 @@ mod tests {
 
     // --- FilterExpression mode ---
 
-    #[test]
-    fn filter_expression_mode_uses_source_alias_only() {
-        let mode = CompletionMode::FilterExpression {
-            aliases: vec![AliasBinding {
-                alias: "users".to_string(),
-                schema: None,
-                table: "users".to_string(),
-                is_source: true,
-            }],
-        };
-        let cache = make_source_cache(vec![make_column("email", "varchar")]);
+    fn make_filter_mode() -> CompletionMode {
+        CompletionMode::FilterExpression
+    }
 
-        let items = compute_suggestions(&mode, &cache, "em", Some("users"), empty_replace_range());
+    #[test]
+    fn filter_expression_no_qualifier_suggests_source_columns_only() {
+        let mode = make_filter_mode();
+        let cache = make_source_cache(vec![
+            make_column("email", "varchar"),
+            make_column("name", "varchar"),
+        ]);
+
+        let items = compute_suggestions(&mode, &cache, "", None, empty_replace_range());
+        let labels = label_set(&items);
+
+        assert_eq!(labels, vec!["email", "name"]);
+        assert!(
+            !labels.iter().any(|l| l == "users"),
+            "source table name must not appear as a suggestion"
+        );
+    }
+
+    #[test]
+    fn filter_expression_prefix_filters_source_columns() {
+        let mode = make_filter_mode();
+        let cache = make_source_cache(vec![
+            make_column("email", "varchar"),
+            make_column("name", "varchar"),
+        ]);
+
+        let items = compute_suggestions(&mode, &cache, "em", None, empty_replace_range());
         let labels = label_set(&items);
 
         assert_eq!(labels, vec!["email"]);
+    }
+
+    #[test]
+    fn filter_expression_marks_fk_columns_with_arrow_detail() {
+        let mode = make_filter_mode();
+        let mut cache = make_source_cache(vec![
+            make_column("created_by", "uuid"),
+            make_column("email", "varchar"),
+        ]);
+        cache.fk_links.insert(
+            "created_by".to_string(),
+            FkLink {
+                referenced_schema: None,
+                referenced_table: "users".to_string(),
+            },
+        );
+
+        let items = compute_suggestions(&mode, &cache, "", None, empty_replace_range());
+
+        let fk_item = items
+            .iter()
+            .find(|i| i.label == "created_by")
+            .expect("created_by must be present");
+        assert_eq!(fk_item.detail.as_deref(), Some("→ users"));
+
+        let plain_item = items
+            .iter()
+            .find(|i| i.label == "email")
+            .expect("email must be present");
+        assert!(plain_item.detail.is_none());
+    }
+
+    #[test]
+    fn filter_expression_with_fk_qualifier_suggests_referenced_columns() {
+        let mode = make_filter_mode();
+        let mut cache = make_source_cache(vec![make_column("created_by", "uuid")]);
+        cache.fk_links.insert(
+            "created_by".to_string(),
+            FkLink {
+                referenced_schema: None,
+                referenced_table: "users".to_string(),
+            },
+        );
+        cache.joined_columns.insert(
+            (None, "users".to_string()),
+            vec![make_column("id", "uuid"), make_column("email", "varchar")],
+        );
+
+        let items =
+            compute_suggestions(&mode, &cache, "", Some("created_by"), empty_replace_range());
+        let labels = label_set(&items);
+
+        assert_eq!(labels, vec!["email", "id"]);
+    }
+
+    #[test]
+    fn filter_expression_unknown_qualifier_returns_empty() {
+        let mode = make_filter_mode();
+        let cache = make_source_cache(vec![make_column("email", "varchar")]);
+
+        let items = compute_suggestions(&mode, &cache, "", Some("nope"), empty_replace_range());
+
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn filter_expression_with_fk_qualifier_before_fetch_returns_empty() {
+        let mode = make_filter_mode();
+        let mut cache = make_source_cache(vec![make_column("created_by", "uuid")]);
+        cache.fk_links.insert(
+            "created_by".to_string(),
+            FkLink {
+                referenced_schema: None,
+                referenced_table: "users".to_string(),
+            },
+        );
+
+        let items =
+            compute_suggestions(&mode, &cache, "", Some("created_by"), empty_replace_range());
+
+        assert!(
+            items.is_empty(),
+            "no joined_columns entry yet must yield empty (pending fetch)"
+        );
     }
 
     // --- JoinConditionRight mode ---

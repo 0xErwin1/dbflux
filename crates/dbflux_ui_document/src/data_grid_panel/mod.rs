@@ -8,7 +8,7 @@ pub mod row_inspector;
 mod utils;
 
 use super::query_builder::completion::{
-    AliasBinding, CompletionMode, SchemaCache, SchemaCompletionProvider,
+    CompletionMode, FkLink, SchemaCache, SchemaCompletionProvider,
 };
 use super::query_builder::{BuilderEvent, FkLoadState, QueryBuilderPanel};
 use super::result_view::{
@@ -371,6 +371,9 @@ pub struct DataGridPanel {
 
     // Filter & limit inputs
     filter_input: Entity<InputState>,
+    /// Schema cache backing the WHERE filter's autocomplete. `Some` only when
+    /// `source` is `DataSource::Table` and a completion provider was wired.
+    filter_completion_cache: Option<Rc<RefCell<SchemaCache>>>,
     limit_input: Entity<InputState>,
 
     // In-memory sort state (for QueryResult source)
@@ -722,7 +725,7 @@ impl DataGridPanel {
 
         let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder(filter_placeholder));
 
-        if let DataSource::Table {
+        let filter_completion_cache: Option<Rc<RefCell<SchemaCache>>> = if let DataSource::Table {
             profile_id,
             table,
             database,
@@ -746,13 +749,11 @@ impl DataGridPanel {
                     .unwrap_or_default()
             };
 
-            let table_alias = table.name.clone();
-            let source_schema = table.schema.clone();
-
             let filter_cache = Rc::new(RefCell::new(SchemaCache {
-                source_table: table_alias.clone(),
+                source_table: table.name.clone(),
                 source_columns,
                 joined_columns: HashMap::new(),
+                fk_links: HashMap::new(),
                 fetching: HashSet::new(),
                 failed: HashSet::new(),
             }));
@@ -761,21 +762,18 @@ impl DataGridPanel {
                 Rc::new(SchemaCompletionProvider::new(
                     app_state.downgrade(),
                     *profile_id,
-                    CompletionMode::FilterExpression {
-                        aliases: vec![AliasBinding {
-                            alias: table_alias,
-                            schema: source_schema,
-                            table: table.name.clone(),
-                            is_source: true,
-                        }],
-                    },
-                    filter_cache,
+                    CompletionMode::FilterExpression,
+                    filter_cache.clone(),
                 ));
 
             filter_input.update(cx, |state, _| {
                 state.lsp.completion_provider = Some(filter_provider);
             });
-        }
+
+            Some(filter_cache)
+        } else {
+            None
+        };
 
         let limit_input = cx.new(|cx| {
             let mut state = InputState::new(window, cx).placeholder("100");
@@ -801,6 +799,7 @@ impl DataGridPanel {
                     {
                         this.ensure_fk_cache_loaded(cx);
                     }
+                    this.ensure_filter_fk_columns_loaded(&text, cx);
                 }
                 _ => {}
             },
@@ -949,6 +948,7 @@ impl DataGridPanel {
             table_state: None,
             table_subscription: None,
             filter_input,
+            filter_completion_cache,
             limit_input,
             local_sort_state: None,
             original_row_order: None,
@@ -2510,6 +2510,8 @@ impl DataGridPanel {
             FkLoadState::Ready(foreign_keys)
         };
 
+        self.refresh_filter_fk_links();
+
         if matches!(
             self.relational_filter_state,
             filter_bar::RelationalFilterState::Resolving
@@ -2518,6 +2520,181 @@ impl DataGridPanel {
         }
 
         cx.notify();
+    }
+
+    /// Rebuild `filter_completion_cache.fk_links` from `fk_cache`.
+    ///
+    /// Single-hop only: maps each FK column on the source table to its
+    /// referenced table. Multi-hop traversal (e.g. `created_by.organization.name`)
+    /// would require recursive FK metadata and is deferred.
+    fn refresh_filter_fk_links(&mut self) {
+        let Some(cache) = self.filter_completion_cache.as_ref() else {
+            return;
+        };
+
+        let DataSource::Table { table, .. } = &self.source else {
+            return;
+        };
+
+        let fks = match &self.fk_cache {
+            FkLoadState::Ready(fks) => fks,
+            _ => return,
+        };
+
+        let source_table_lower = table.name.to_lowercase();
+        let mut links: HashMap<String, FkLink> = HashMap::new();
+
+        for fk in fks {
+            if fk.table_name.to_lowercase() != source_table_lower {
+                continue;
+            }
+
+            let Some(col) = fk.columns.first() else {
+                continue;
+            };
+
+            links.insert(
+                col.to_lowercase(),
+                FkLink {
+                    referenced_schema: fk.referenced_schema.clone(),
+                    referenced_table: fk.referenced_table.clone(),
+                },
+            );
+        }
+
+        cache.borrow_mut().fk_links = links;
+    }
+
+    /// If the filter text contains a `<col>.` qualifier whose left side is an
+    /// FK column on the source table, kick off a background fetch of the
+    /// referenced table's columns so dotted-path completion has data to show.
+    fn ensure_filter_fk_columns_loaded(&mut self, text: &str, cx: &mut Context<Self>) {
+        let Some(cache_rc) = self.filter_completion_cache.clone() else {
+            return;
+        };
+
+        let qualifier = match Self::extract_filter_qualifier(text) {
+            Some(q) => q,
+            None => return,
+        };
+
+        let qualifier_lower = qualifier.to_lowercase();
+        let (ref_schema, ref_table) = {
+            let cache = cache_rc.borrow();
+            match cache.fk_links.get(&qualifier_lower) {
+                Some(link) => (
+                    link.referenced_schema.clone(),
+                    link.referenced_table.clone(),
+                ),
+                None => return,
+            }
+        };
+
+        let key = (
+            ref_schema.as_ref().map(|s| s.to_lowercase()),
+            ref_table.to_lowercase(),
+        );
+
+        {
+            let cache = cache_rc.borrow();
+            if cache.joined_columns.contains_key(&key)
+                || cache.fetching.contains(&key)
+                || cache.failed.contains(&key)
+            {
+                return;
+            }
+        }
+
+        let (profile_id, database) = match &self.source {
+            DataSource::Table {
+                profile_id,
+                database,
+                ..
+            } => (*profile_id, database.clone()),
+            _ => return,
+        };
+
+        let Some(database) = database else {
+            return;
+        };
+
+        let Some(conn) = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|c| c.connection.clone())
+        else {
+            return;
+        };
+
+        cache_rc.borrow_mut().fetching.insert(key.clone());
+
+        let ref_table_for_task = ref_table.clone();
+        let ref_schema_for_task = ref_schema.clone();
+        let database_for_task = database.clone();
+
+        let task = cx.background_executor().spawn(async move {
+            conn.table_details(
+                &database_for_task,
+                ref_schema_for_task.as_deref(),
+                &ref_table_for_task,
+            )
+        });
+
+        let key_for_finish = key.clone();
+        let cache_for_finish = cache_rc.clone();
+
+        cx.spawn(async move |_this, _cx| {
+            let result = task.await;
+            let mut cache = cache_for_finish.borrow_mut();
+            cache.fetching.remove(&key_for_finish);
+            match result {
+                Ok(details) => {
+                    if let Some(cols) = details.columns {
+                        cache.joined_columns.insert(key_for_finish, cols);
+                    } else {
+                        cache.failed.insert(key_for_finish);
+                    }
+                }
+                Err(_) => {
+                    cache.failed.insert(key_for_finish);
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Extract the identifier just before a trailing `.` (or the dot before
+    /// the active prefix at end-of-string) from filter text.
+    ///
+    /// Returns `Some("created_by")` for inputs like `created_by.`,
+    /// `created_by.ema`, or `name = 'x' AND created_by.`. Returns `None`
+    /// when there is no dot-qualified identifier at the current cursor
+    /// position (end of string for autocomplete typing).
+    fn extract_filter_qualifier(text: &str) -> Option<String> {
+        let bytes = text.as_bytes();
+        let mut i = bytes.len();
+
+        while i > 0 && (bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_') {
+            i -= 1;
+        }
+
+        if i == 0 || bytes[i - 1] != b'.' {
+            return None;
+        }
+
+        let dot_pos = i - 1;
+        let mut start = dot_pos;
+        while start > 0 && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_') {
+            start -= 1;
+        }
+
+        if start == dot_pos {
+            return None;
+        }
+
+        Some(text[start..dot_pos].to_string())
     }
 
     /// Transitions the panel's `fk_cache` to `Unavailable`.

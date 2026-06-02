@@ -427,6 +427,7 @@ impl QueryBuilderPanel {
             source_table: spec.source.table.clone(),
             source_columns,
             joined_columns: HashMap::new(),
+            fk_links: HashMap::new(),
             fetching: HashSet::new(),
             failed: HashSet::new(),
         }));
