@@ -3339,22 +3339,18 @@ impl DataGridPanel {
         }
 
         // Fetch sample rows synchronously on background thread (2s deadline).
-        let table_name = spec.from.name.clone();
-        let schema_name = spec.from.schema.clone();
-        let filter = spec.filter.clone();
-
         let (sample_columns, sample_rows) =
-            crate::data_grid_panel::mutation_confirm::fetch_sample_rows(
-                connection,
-                &table_name,
-                &filter,
-                schema_name.as_deref(),
-            );
+            crate::data_grid_panel::mutation_confirm::fetch_sample_rows(connection, &spec);
 
         let sample_rows_opt = if sample_rows.is_empty() {
             None
         } else {
             Some(sample_rows)
+        };
+
+        let pk_col_refs: Vec<&str> = match &self.source {
+            DataSource::Table { .. } => self.pk_columns.iter().map(|s| s.as_str()).collect(),
+            _ => vec![],
         };
 
         let modal = crate::data_grid_panel::mutation_confirm::build_pending_modal(
@@ -3363,6 +3359,7 @@ impl DataGridPanel {
             None,
             sample_columns,
             sample_rows_opt,
+            &pk_col_refs,
         );
 
         self.pending_mutation_exec = Some(PendingMutationExec {
@@ -3512,7 +3509,88 @@ impl DataGridPanel {
                         })
                         .ok();
                     }
-                    Ok(_) => {}
+                    Ok(MutationOutcome::Cancelled { rows_affected }) => {
+                        cx.update(|cx| {
+                            dbflux_ui_base::toast::Toast::info(format!(
+                                "Mutation cancelled after {} row{} processed",
+                                rows_affected,
+                                if rows_affected == 1 { "" } else { "s" }
+                            ))
+                            .push(cx);
+                        })
+                        .ok();
+                    }
+                    Ok(MutationOutcome::Failed { error }) => {
+                        report_error_async(
+                            UserFacingError::new(
+                                ErrorKind::Driver,
+                                format!("Chunked mutation on '{}' failed: {}", table_name, error),
+                            ),
+                            cx,
+                        );
+                    }
+                }
+            })
+            .detach();
+        } else if matches!(
+            opts.mode,
+            crate::data_grid_panel::mutation_executor::ExecutionMode::DirectAutocommit
+        ) {
+            cx.spawn(async move |_this, cx| {
+                use crate::data_grid_panel::mutation_executor::{
+                    MutationExecutor, MutationOutcome,
+                };
+                use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
+
+                let result = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let executor = MutationExecutor::new(spec, opts, deps);
+                        executor.run_direct()
+                    })
+                    .await;
+
+                match result {
+                    Err(e) => {
+                        report_error_async(
+                            UserFacingError::new(
+                                ErrorKind::Driver,
+                                format!("Mutation on '{}' failed: {}", table_name, e),
+                            ),
+                            cx,
+                        );
+                    }
+                    Ok(MutationOutcome::Success { rows_affected }) => {
+                        cx.update(|cx| {
+                            dbflux_ui_base::toast::Toast::success(format!(
+                                "Mutation completed: {} row{} affected",
+                                rows_affected,
+                                if rows_affected == 1 { "" } else { "s" }
+                            ))
+                            .push(cx);
+                        })
+                        .ok();
+                    }
+                    Ok(MutationOutcome::Cancelled { rows_affected }) => {
+                        cx.update(|cx| {
+                            dbflux_ui_base::toast::Toast::info(format!(
+                                "Mutation cancelled after {} row{} processed",
+                                rows_affected,
+                                if rows_affected == 1 { "" } else { "s" }
+                            ))
+                            .push(cx);
+                        })
+                        .ok();
+                    }
+                    Ok(MutationOutcome::Failed { error }) => {
+                        report_error_async(
+                            UserFacingError::new(
+                                ErrorKind::Driver,
+                                format!("Mutation on '{}' failed: {}", table_name, error),
+                            ),
+                            cx,
+                        );
+                    }
                 }
             })
             .detach();
@@ -3552,7 +3630,26 @@ impl DataGridPanel {
                         })
                         .ok();
                     }
-                    Ok(_) => {}
+                    Ok(MutationOutcome::Cancelled { rows_affected }) => {
+                        cx.update(|cx| {
+                            dbflux_ui_base::toast::Toast::info(format!(
+                                "Mutation cancelled after {} row{} processed",
+                                rows_affected,
+                                if rows_affected == 1 { "" } else { "s" }
+                            ))
+                            .push(cx);
+                        })
+                        .ok();
+                    }
+                    Ok(MutationOutcome::Failed { error }) => {
+                        report_error_async(
+                            UserFacingError::new(
+                                ErrorKind::Driver,
+                                format!("Mutation on '{}' failed: {}", table_name, error),
+                            ),
+                            cx,
+                        );
+                    }
                 }
             })
             .detach();
