@@ -1,3 +1,4 @@
+pub(crate) mod completion;
 mod events;
 mod panel;
 mod sections;

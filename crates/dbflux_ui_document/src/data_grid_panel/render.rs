@@ -16,7 +16,7 @@ use dbflux_components::chart::{
 use dbflux_components::chart::{SourceRowRef, point_inspector_element};
 use dbflux_components::common::time_range::view::TimeRangePanel;
 use dbflux_components::components::data_table::SortState as TableSortState;
-use dbflux_components::controls::{Checkbox, Input, InputState};
+use dbflux_components::controls::{Checkbox, Input, InputState, completion_input_keys_wrapper};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon, Text, surface_raised};
 use dbflux_components::semantic::ChartColors;
@@ -610,7 +610,11 @@ pub(super) fn render_filter_bar_as_segment(
                                     });
                                 }
                             })
-                            .child(div().flex_1().child(Input::new(&filter_input).small()))
+                            .child(
+                                completion_input_keys_wrapper(&filter_input)
+                                    .flex_1()
+                                    .child(Input::new(&filter_input).small()),
+                            )
                             .when(filter_has_value, move |d| {
                                 let grid = grid_for_clear_event.clone();
                                 let theme_hover = theme_clear.clone();
@@ -863,7 +867,11 @@ impl DataGridPanel {
                                         cx.notify();
                                     }),
                                 )
-                                .child(div().flex_1().child(Input::new(filter_input).small()))
+                                .child(
+                                    completion_input_keys_wrapper(filter_input)
+                                        .flex_1()
+                                        .child(Input::new(filter_input).small()),
+                                )
                                 .when(filter_has_value, |d| {
                                     d.child(
                                         div()

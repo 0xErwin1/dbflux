@@ -238,7 +238,7 @@ fn render_filter_predicate(
     comparator_dropdown: Option<Entity<Dropdown>>,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
-    use dbflux_components::controls::{Button, Input};
+    use dbflux_components::controls::{Button, Input, completion_input_keys_wrapper};
     use gpui::SharedString;
     use gpui::prelude::*;
 
@@ -253,7 +253,7 @@ fn render_filter_predicate(
 
     if let Some(col_state) = column_input_state {
         row = row.child(
-            div()
+            completion_input_keys_wrapper(&col_state)
                 .flex_1()
                 .child(Input::new(&col_state).small().w_full()),
         );

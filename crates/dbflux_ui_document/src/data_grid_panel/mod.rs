@@ -7,6 +7,9 @@ mod render;
 pub mod row_inspector;
 mod utils;
 
+use super::query_builder::completion::{
+    CompletionMode, FkLink, SchemaCache, SchemaCompletionProvider,
+};
 use super::query_builder::{BuilderEvent, FkLoadState, QueryBuilderPanel};
 use super::result_view::{
     ResultViewMode, default_bindings_for_time_series, should_auto_select_chart_for_time_series,
@@ -23,6 +26,7 @@ use dbflux_components::components::data_table::{
 use dbflux_components::components::document_tree::{
     DocumentTree, DocumentTreeEvent, DocumentTreeState,
 };
+use dbflux_components::controls::CompletionProvider;
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_components::modals::cell_editor::{
@@ -40,6 +44,9 @@ use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_ui_base::toast::PendingToast;
 use gpui::*;
 use gpui_component::Sizable;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -364,6 +371,9 @@ pub struct DataGridPanel {
 
     // Filter & limit inputs
     filter_input: Entity<InputState>,
+    /// Schema cache backing the WHERE filter's autocomplete. `Some` only when
+    /// `source` is `DataSource::Table` and a completion provider was wired.
+    filter_completion_cache: Option<Rc<RefCell<SchemaCache>>>,
     limit_input: Entity<InputState>,
 
     // In-memory sort state (for QueryResult source)
@@ -559,6 +569,9 @@ impl DataGridPanel {
             panel.fetch_table_details_for_pk(profile_id, &table, cx);
         }
 
+        panel.ensure_filter_source_columns_loaded(cx);
+        panel.ensure_fk_cache_loaded(cx);
+
         panel
     }
 
@@ -715,6 +728,57 @@ impl DataGridPanel {
 
         let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder(filter_placeholder));
 
+        let filter_completion_cache: Option<Rc<RefCell<SchemaCache>>> = if let DataSource::Table {
+            profile_id,
+            table,
+            database,
+            ..
+        } = &source
+        {
+            let source_columns: Vec<dbflux_core::ColumnInfo> = {
+                let state = app_state.read(cx);
+                state
+                    .connections()
+                    .get(profile_id)
+                    .and_then(|conn| {
+                        let db = database
+                            .clone()
+                            .or_else(|| conn.active_database.clone())
+                            .or_else(|| table.schema.clone())
+                            .unwrap_or_else(|| "default".to_string());
+                        conn.table_details
+                            .get(&(db, table.name.clone()))
+                            .and_then(|info| info.columns.clone())
+                    })
+                    .unwrap_or_default()
+            };
+
+            let filter_cache = Rc::new(RefCell::new(SchemaCache {
+                source_table: table.name.clone(),
+                source_columns,
+                joined_columns: HashMap::new(),
+                fk_links: HashMap::new(),
+                fetching: HashSet::new(),
+                failed: HashSet::new(),
+            }));
+
+            let filter_provider: Rc<dyn CompletionProvider> =
+                Rc::new(SchemaCompletionProvider::new(
+                    app_state.downgrade(),
+                    *profile_id,
+                    CompletionMode::FilterExpression,
+                    filter_cache.clone(),
+                ));
+
+            filter_input.update(cx, |state, _| {
+                state.lsp.completion_provider = Some(filter_provider);
+            });
+
+            Some(filter_cache)
+        } else {
+            None
+        };
+
         let limit_input = cx.new(|cx| {
             let mut state = InputState::new(window, cx).placeholder("100");
             state.set_value("100", window, cx);
@@ -739,6 +803,8 @@ impl DataGridPanel {
                     {
                         this.ensure_fk_cache_loaded(cx);
                     }
+                    this.ensure_filter_source_columns_loaded(cx);
+                    this.ensure_filter_fk_columns_loaded(&text, cx);
                 }
                 _ => {}
             },
@@ -887,6 +953,7 @@ impl DataGridPanel {
             table_state: None,
             table_subscription: None,
             filter_input,
+            filter_completion_cache,
             limit_input,
             local_sort_state: None,
             original_row_order: None,
@@ -2401,6 +2468,8 @@ impl DataGridPanel {
                     initial_spec,
                     Some(weak_self.clone()),
                     available_columns,
+                    self.app_state.clone(),
+                    profile_id,
                     generate_preview,
                     window,
                     cx,
@@ -2446,6 +2515,8 @@ impl DataGridPanel {
             FkLoadState::Ready(foreign_keys)
         };
 
+        self.refresh_filter_fk_links();
+
         if matches!(
             self.relational_filter_state,
             filter_bar::RelationalFilterState::Resolving
@@ -2454,6 +2525,326 @@ impl DataGridPanel {
         }
 
         cx.notify();
+    }
+
+    /// Rebuild `filter_completion_cache.fk_links` from `fk_cache`.
+    ///
+    /// Single-hop only: maps each FK column on the source table to its
+    /// referenced table. Multi-hop traversal (e.g. `created_by.organization.name`)
+    /// would require recursive FK metadata and is deferred.
+    fn refresh_filter_fk_links(&mut self) {
+        let Some(cache) = self.filter_completion_cache.as_ref() else {
+            return;
+        };
+
+        let DataSource::Table { table, .. } = &self.source else {
+            return;
+        };
+
+        let fks = match &self.fk_cache {
+            FkLoadState::Ready(fks) => fks,
+            _ => return,
+        };
+
+        let source_table_lower = table.name.to_lowercase();
+        let mut links: HashMap<String, FkLink> = HashMap::new();
+
+        for fk in fks {
+            if fk.table_name.to_lowercase() != source_table_lower {
+                continue;
+            }
+
+            let Some(col) = fk.columns.first() else {
+                continue;
+            };
+
+            links.insert(
+                col.to_lowercase(),
+                FkLink {
+                    referenced_schema: fk.referenced_schema.clone(),
+                    referenced_table: fk.referenced_table.clone(),
+                },
+            );
+        }
+
+        cache.borrow_mut().fk_links = links;
+    }
+
+    /// If the filter text contains a `<col>.` qualifier whose left side is an
+    /// FK column on the source table, kick off a background fetch of the
+    /// referenced table's columns so dotted-path completion has data to show.
+    fn ensure_filter_fk_columns_loaded(&mut self, text: &str, cx: &mut Context<Self>) {
+        let Some(cache_rc) = self.filter_completion_cache.clone() else {
+            return;
+        };
+
+        let qualifier = match Self::extract_filter_qualifier(text) {
+            Some(q) => q,
+            None => return,
+        };
+
+        let qualifier_lower = qualifier.to_lowercase();
+        let (ref_schema, ref_table) = {
+            let cache = cache_rc.borrow();
+            match cache.fk_links.get(&qualifier_lower) {
+                Some(link) => (
+                    link.referenced_schema.clone(),
+                    link.referenced_table.clone(),
+                ),
+                None => return,
+            }
+        };
+
+        let key = (
+            ref_schema.as_ref().map(|s| s.to_lowercase()),
+            ref_table.to_lowercase(),
+        );
+
+        {
+            let cache = cache_rc.borrow();
+            if cache.joined_columns.contains_key(&key)
+                || cache.fetching.contains(&key)
+                || cache.failed.contains(&key)
+            {
+                return;
+            }
+        }
+
+        let (profile_id, database, source_table_schema) = match &self.source {
+            DataSource::Table {
+                profile_id,
+                database,
+                table,
+                ..
+            } => (*profile_id, database.clone(), table.schema.clone()),
+            _ => return,
+        };
+
+        let database = database
+            .or_else(|| {
+                self.app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .and_then(|c| c.active_database.clone())
+            })
+            .or(source_table_schema)
+            .unwrap_or_else(|| "default".to_string());
+
+        let Some(conn) = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|c| c.connection_for_database(&database))
+        else {
+            return;
+        };
+
+        cache_rc.borrow_mut().fetching.insert(key.clone());
+
+        let ref_table_for_task = ref_table.clone();
+        let ref_schema_for_task = ref_schema.clone();
+        let database_for_task = database.clone();
+
+        let task = cx.background_executor().spawn(async move {
+            conn.table_details(
+                &database_for_task,
+                ref_schema_for_task.as_deref(),
+                &ref_table_for_task,
+            )
+        });
+
+        let key_for_finish = key.clone();
+        let cache_for_finish = cache_rc.clone();
+
+        let ref_table_for_log = ref_table.clone();
+        let database_for_log = database.clone();
+        cx.spawn(async move |_this, _cx| {
+            let result = task.await;
+            let mut cache = cache_for_finish.borrow_mut();
+            cache.fetching.remove(&key_for_finish);
+            match result {
+                Ok(details) => {
+                    if let Some(cols) = details.columns {
+                        cache.joined_columns.insert(key_for_finish, cols);
+                    } else {
+                        log::warn!(
+                            "autocomplete: FK-target table_details returned no columns for \
+                             {}.{}",
+                            database_for_log,
+                            ref_table_for_log
+                        );
+                        cache.failed.insert(key_for_finish);
+                    }
+                }
+                Err(err) => {
+                    log::warn!(
+                        "autocomplete: failed to fetch FK-target columns for {}.{}: {}",
+                        database_for_log,
+                        ref_table_for_log,
+                        err
+                    );
+                    cache.failed.insert(key_for_finish);
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// If the filter cache has no source columns yet, kick off a background
+    /// fetch of `table_details` for the source table. The result is written
+    /// into the cache so subsequent completion calls have data, and is also
+    /// pushed into `AppState` so other panels benefit.
+    fn ensure_filter_source_columns_loaded(&mut self, cx: &mut Context<Self>) {
+        let Some(cache_rc) = self.filter_completion_cache.clone() else {
+            return;
+        };
+
+        let (profile_id, table, database) = match &self.source {
+            DataSource::Table {
+                profile_id,
+                table,
+                database,
+                ..
+            } => (*profile_id, table.clone(), database.clone()),
+            _ => return,
+        };
+
+        let key: (Option<String>, String) = (
+            table.schema.as_ref().map(|s| s.to_lowercase()),
+            table.name.to_lowercase(),
+        );
+
+        {
+            let cache = cache_rc.borrow();
+            if !cache.source_columns.is_empty()
+                || cache.fetching.contains(&key)
+                || cache.failed.contains(&key)
+            {
+                return;
+            }
+        }
+
+        let database = database
+            .or_else(|| {
+                self.app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .and_then(|c| c.active_database.clone())
+            })
+            .or_else(|| table.schema.clone())
+            .unwrap_or_else(|| "default".to_string());
+
+        let Some(conn) = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|c| c.connection_for_database(&database))
+        else {
+            return;
+        };
+
+        cache_rc.borrow_mut().fetching.insert(key.clone());
+
+        let table_for_task = table.clone();
+        let database_for_task = database.clone();
+
+        let task = cx.background_executor().spawn(async move {
+            conn.table_details(
+                &database_for_task,
+                table_for_task.schema.as_deref(),
+                &table_for_task.name,
+            )
+        });
+
+        let key_for_finish = key.clone();
+        let cache_for_finish = cache_rc.clone();
+        let app_state_weak = self.app_state.downgrade();
+        let database_for_finish = database;
+        let table_for_finish = table.clone();
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            cache_for_finish
+                .borrow_mut()
+                .fetching
+                .remove(&key_for_finish);
+
+            match result {
+                Ok(details) => {
+                    if let Some(cols) = details.columns.clone() {
+                        cache_for_finish.borrow_mut().source_columns = cols;
+
+                        if let Some(app) = app_state_weak.upgrade() {
+                            cx.update(|cx| {
+                                app.update(cx, |state, _| {
+                                    state.set_table_details(
+                                        profile_id,
+                                        database_for_finish.clone(),
+                                        table_for_finish.name.clone(),
+                                        details,
+                                    );
+                                });
+                            })
+                            .ok();
+                        }
+                    } else {
+                        log::warn!(
+                            "autocomplete: table_details returned no columns for {}.{}",
+                            database_for_finish,
+                            table_for_finish.qualified_name()
+                        );
+                        cache_for_finish.borrow_mut().failed.insert(key_for_finish);
+                    }
+                }
+                Err(err) => {
+                    log::warn!(
+                        "autocomplete: failed to fetch columns for {}.{}: {}",
+                        database_for_finish,
+                        table_for_finish.qualified_name(),
+                        err
+                    );
+                    cache_for_finish.borrow_mut().failed.insert(key_for_finish);
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Extract the identifier just before a trailing `.` (or the dot before
+    /// the active prefix at end-of-string) from filter text.
+    ///
+    /// Returns `Some("created_by")` for inputs like `created_by.`,
+    /// `created_by.ema`, or `name = 'x' AND created_by.`. Returns `None`
+    /// when there is no dot-qualified identifier at the current cursor
+    /// position (end of string for autocomplete typing).
+    fn extract_filter_qualifier(text: &str) -> Option<String> {
+        let bytes = text.as_bytes();
+        let mut i = bytes.len();
+
+        while i > 0 && (bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_') {
+            i -= 1;
+        }
+
+        if i == 0 || bytes[i - 1] != b'.' {
+            return None;
+        }
+
+        let dot_pos = i - 1;
+        let mut start = dot_pos;
+        while start > 0 && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_') {
+            start -= 1;
+        }
+
+        if start == dot_pos {
+            return None;
+        }
+
+        Some(text[start..dot_pos].to_string())
     }
 
     /// Transitions the panel's `fk_cache` to `Unavailable`.

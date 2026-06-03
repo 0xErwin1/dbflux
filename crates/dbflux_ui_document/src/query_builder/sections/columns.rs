@@ -12,7 +12,7 @@ pub fn render_columns(
     panel: &mut QueryBuilderPanel,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
-    use dbflux_components::controls::{Button, Checkbox, Input};
+    use dbflux_components::controls::{Button, Checkbox, Input, completion_input_keys_wrapper};
     use gpui::SharedString;
     use gpui::prelude::*;
 
@@ -99,10 +99,12 @@ pub fn render_columns(
                 .gap_1()
                 .items_center()
                 .child(
-                    Input::new(add_state)
-                        .small()
-                        .w_full()
-                        .placeholder("alias.column"),
+                    completion_input_keys_wrapper(add_state).flex_1().child(
+                        Input::new(add_state)
+                            .small()
+                            .w_full()
+                            .placeholder("alias.column"),
+                    ),
                 )
                 .child(
                     Button::new("qb-add-col", "Add")

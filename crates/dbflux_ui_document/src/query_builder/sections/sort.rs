@@ -11,7 +11,7 @@ pub fn render_sort(
     panel: &mut QueryBuilderPanel,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
-    use dbflux_components::controls::{Button, Input};
+    use dbflux_components::controls::{Button, Input, completion_input_keys_wrapper};
     use dbflux_core::VisualSortDirection;
     use gpui::SharedString;
     use gpui::prelude::*;
@@ -85,10 +85,12 @@ pub fn render_sort(
                 .gap_1()
                 .items_center()
                 .child(
-                    Input::new(add_state)
-                        .small()
-                        .w_full()
-                        .placeholder("alias.column"),
+                    completion_input_keys_wrapper(add_state).flex_1().child(
+                        Input::new(add_state)
+                            .small()
+                            .w_full()
+                            .placeholder("alias.column"),
+                    ),
                 )
                 .child(
                     Button::new("qb-add-sort", "Add")

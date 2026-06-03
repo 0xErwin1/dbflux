@@ -1,13 +1,120 @@
 use gpui::prelude::*;
-use gpui::{App, Entity, FontWeight, IntoElement, Window};
+use gpui::{
+    App, Div, Entity, EntityInputHandler, FontWeight, IntoElement, KeyBinding, Window, actions, div,
+};
 use gpui_component::Sizable;
 
 use crate::tokens::FontSizes;
 use crate::typography::AppFonts;
 
 pub use gpui_component::input::{
-    CompletionProvider, Input as GpuiInput, InputEvent, InputState, Position as InputPosition, Rope,
+    CompletionProvider, Enter as InputEnter, Escape as InputEscape,
+    IndentInline as InputIndentInline, Input as GpuiInput, InputEvent, InputState,
+    MoveDown as InputMoveDown, MoveUp as InputMoveUp, OutdentInline as InputOutdentInline,
+    Position as InputPosition, Rope,
 };
+
+actions!(
+    dbflux_input,
+    [
+        /// Manually open the completion popover for the focused single-line
+        /// input. Bound to `ctrl-space` by default.
+        TriggerCompletion
+    ]
+);
+
+/// Key context for `gpui-component`'s `InputState` element.
+const INPUT_CONTEXT: &str = "Input";
+
+/// Register DBFlux-specific keybindings that complement the defaults from
+/// `gpui_component::init`. Call this once at app startup, after
+/// `gpui_component::init`.
+///
+/// Adds vim-style `ctrl-j` / `ctrl-k` chords as aliases for `MoveDown` /
+/// `MoveUp` inside any focused input. These dispatch the same actions
+/// `gpui-component` already routes to the completion popover (via
+/// `handle_action_for_context_menu`), so single-line inputs wrapped with
+/// [`completion_input_keys_wrapper`] navigate suggestions with the chord too.
+pub fn register_input_overrides(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("ctrl-j", InputMoveDown, Some(INPUT_CONTEXT)),
+        KeyBinding::new("ctrl-k", InputMoveUp, Some(INPUT_CONTEXT)),
+        KeyBinding::new("ctrl-space", TriggerCompletion, Some(INPUT_CONTEXT)),
+    ]);
+}
+
+/// Build a focus-region wrapper that routes `MoveUp` / `MoveDown` actions to
+/// the input's completion popover.
+///
+/// Why this exists: `gpui-component` only attaches `MoveUp` / `MoveDown`
+/// listeners to `InputState` when `state.mode.is_multi_line()` is true.
+/// Single-line inputs that opt into a `CompletionProvider` therefore see
+/// arrow keys bubble past the input to whatever parent context owns them
+/// (e.g. the data table), so the completion popover never receives them.
+///
+/// Wrap any single-line input that uses a `CompletionProvider` with this
+/// helper to forward arrow keys to `handle_action_for_context_menu`. When
+/// the popover is closed the listeners do not call `stop_propagation`, so
+/// arrows continue to behave normally for the surrounding UI.
+pub fn completion_input_keys_wrapper(state: &Entity<InputState>) -> Div {
+    let state_up = state.clone();
+    let state_down = state.clone();
+    let state_tab = state.clone();
+    let state_shift_tab = state.clone();
+    let state_trigger = state.clone();
+
+    div()
+        .on_action(
+            move |_: &TriggerCompletion, window: &mut Window, cx: &mut App| {
+                state_trigger.update(cx, |s, cx| {
+                    s.replace_text_in_range(None, "", window, cx);
+                });
+                cx.stop_propagation();
+            },
+        )
+        .on_action(move |_: &InputMoveUp, window: &mut Window, cx: &mut App| {
+            let handled = state_up.update(cx, |s, cx| {
+                s.handle_action_for_context_menu(Box::new(InputMoveUp), window, cx)
+            });
+            if handled {
+                cx.stop_propagation();
+            }
+        })
+        .on_action(
+            move |_: &InputMoveDown, window: &mut Window, cx: &mut App| {
+                let handled = state_down.update(cx, |s, cx| {
+                    s.handle_action_for_context_menu(Box::new(InputMoveDown), window, cx)
+                });
+                if handled {
+                    cx.stop_propagation();
+                }
+            },
+        )
+        .on_action(
+            move |_: &InputIndentInline, window: &mut Window, cx: &mut App| {
+                let handled = state_tab.update(cx, |s, cx| {
+                    s.handle_action_for_context_menu(
+                        Box::new(InputEnter { secondary: false }),
+                        window,
+                        cx,
+                    )
+                });
+                if handled {
+                    cx.stop_propagation();
+                }
+            },
+        )
+        .on_action(
+            move |_: &InputOutdentInline, window: &mut Window, cx: &mut App| {
+                let handled = state_shift_tab.update(cx, |s, cx| {
+                    s.handle_action_for_context_menu(Box::new(InputEscape), window, cx)
+                });
+                if handled {
+                    cx.stop_propagation();
+                }
+            },
+        )
+}
 
 /// Thin wrapper around `gpui_component::input::Input` that pre-applies
 /// DBFlux design token defaults (height, size).

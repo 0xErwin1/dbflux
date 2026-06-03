@@ -7,6 +7,7 @@ pub mod chart;
 pub mod chart_document;
 mod chrome;
 mod code;
+pub(crate) mod completion_support;
 pub mod dashboard;
 mod data_document;
 mod data_grid_panel;
