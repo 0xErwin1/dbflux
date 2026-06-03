@@ -809,8 +809,12 @@ impl QueryBuilderPanel {
         self.sort_rows = sort_rows;
         self.sql_preview = (self.generate_preview)(&spec);
         self.pending_preview_sync = true;
+        self.pre_group_projection = if spec.is_grouped() {
+            Some(Projection::All)
+        } else {
+            None
+        };
         self.current_spec = spec;
-        self.pre_group_projection = None;
         self.sort_validation_error = None;
         self.incomplete_aggregate_row_count = 0;
     }
@@ -4292,6 +4296,41 @@ mod tests {
         assert_eq!(panel.aggregate_rows.len(), 1);
         assert_eq!(panel.aggregate_rows[0].alias, "total");
         assert!(panel.current_spec.having.is_some());
+    }
+
+    #[test]
+    fn set_spec_pure_grouped_then_remove_all_restores_all_projection() {
+        use dbflux_core::{AggFn as CoreAggFn, GroupByEntry, VisualAggregateSpec};
+
+        let mut spec = make_spec(test_source());
+        spec.group_by = vec![GroupByEntry {
+            source_alias: "users".to_string(),
+            column: "country".to_string(),
+        }];
+        spec.aggregates = vec![VisualAggregateSpec {
+            function: CoreAggFn::Sum,
+            source_alias: Some("users".to_string()),
+            column: Some("amount".to_string()),
+            alias: "total".to_string(),
+        }];
+
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.set_spec_pure(spec);
+
+        assert!(
+            panel.pre_group_projection.is_some(),
+            "set_spec_pure of a grouped spec must seed pre_group_projection"
+        );
+
+        panel.t_remove_aggregate_row(0);
+        panel.t_remove_group_by_row(0);
+
+        assert!(!panel.is_grouped());
+        assert_eq!(
+            panel.current_spec.projection,
+            Projection::All,
+            "removing all aggregates and group-by rows must restore Projection::All"
+        );
     }
 
     // ---- Slice 2: alias auto-generation ------------------------------------
