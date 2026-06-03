@@ -17,35 +17,44 @@ pub struct TransactionVocab {
 }
 
 impl TransactionVocab {
-    /// Returns the transaction vocabulary for a given database kind.
+    /// Returns the transaction vocabulary for a given SQL database kind.
+    ///
+    /// Returns `None` for driver kinds that do not speak SQL (MongoDB, Redis,
+    /// DynamoDB, CloudWatchLogs, InfluxDB). The mutation gate upstream already
+    /// blocks non-SQL drivers; this provides typed defense-in-depth.
     ///
     /// Callers should retrieve this once per execution run and cache it.
-    pub fn for_kind(kind: DbKind) -> Self {
+    pub fn for_kind(kind: DbKind) -> Option<Self> {
         match kind {
-            DbKind::Postgres => Self {
+            DbKind::Postgres => Some(Self {
                 begin: "BEGIN",
                 commit: "COMMIT",
                 rollback: "ROLLBACK",
                 lock_timeout_template: Some("SET LOCAL lock_timeout = '{ms}ms'"),
-            },
-            DbKind::MySQL => Self {
+            }),
+            DbKind::MySQL | DbKind::MariaDB => Some(Self {
                 begin: "START TRANSACTION",
                 commit: "COMMIT",
                 rollback: "ROLLBACK",
                 lock_timeout_template: Some("SET innodb_lock_wait_timeout = {seconds}"),
-            },
-            DbKind::SQLite => Self {
+            }),
+            DbKind::SQLite => Some(Self {
                 begin: "BEGIN IMMEDIATE",
                 commit: "COMMIT",
                 rollback: "ROLLBACK",
                 lock_timeout_template: None,
-            },
-            _ => Self {
+            }),
+            DbKind::SqlServer => Some(Self {
                 begin: "BEGIN TRANSACTION",
                 commit: "COMMIT",
                 rollback: "ROLLBACK",
                 lock_timeout_template: Some("SET LOCK_TIMEOUT {ms}"),
-            },
+            }),
+            DbKind::MongoDB
+            | DbKind::Redis
+            | DbKind::DynamoDB
+            | DbKind::CloudWatchLogs
+            | DbKind::InfluxDB => None,
         }
     }
 
@@ -69,7 +78,7 @@ mod tests {
 
     #[test]
     fn postgres_uses_begin_commit_rollback() {
-        let vocab = TransactionVocab::for_kind(DbKind::Postgres);
+        let vocab = TransactionVocab::for_kind(DbKind::Postgres).unwrap();
         assert_eq!(vocab.begin, "BEGIN");
         assert_eq!(vocab.commit, "COMMIT");
         assert_eq!(vocab.rollback, "ROLLBACK");
@@ -77,27 +86,36 @@ mod tests {
 
     #[test]
     fn sqlite_uses_begin_immediate() {
-        let vocab = TransactionVocab::for_kind(DbKind::SQLite);
+        let vocab = TransactionVocab::for_kind(DbKind::SQLite).unwrap();
         assert_eq!(vocab.begin, "BEGIN IMMEDIATE");
     }
 
     #[test]
     fn mysql_uses_start_transaction() {
-        let vocab = TransactionVocab::for_kind(DbKind::MySQL);
+        let vocab = TransactionVocab::for_kind(DbKind::MySQL).unwrap();
         assert_eq!(vocab.begin, "START TRANSACTION");
     }
 
     #[test]
     fn sqlite_has_no_lock_timeout() {
-        let vocab = TransactionVocab::for_kind(DbKind::SQLite);
+        let vocab = TransactionVocab::for_kind(DbKind::SQLite).unwrap();
         assert!(vocab.lock_timeout_template.is_none());
         assert!(vocab.lock_timeout_sql(5000).is_none());
     }
 
     #[test]
     fn postgres_lock_timeout_sql_formats_ms() {
-        let vocab = TransactionVocab::for_kind(DbKind::Postgres);
+        let vocab = TransactionVocab::for_kind(DbKind::Postgres).unwrap();
         let sql = vocab.lock_timeout_sql(2000).unwrap();
         assert!(sql.contains("2000"), "expected ms value in sql: {}", sql);
+    }
+
+    #[test]
+    fn non_sql_kinds_return_none() {
+        assert!(TransactionVocab::for_kind(DbKind::MongoDB).is_none());
+        assert!(TransactionVocab::for_kind(DbKind::Redis).is_none());
+        assert!(TransactionVocab::for_kind(DbKind::DynamoDB).is_none());
+        assert!(TransactionVocab::for_kind(DbKind::CloudWatchLogs).is_none());
+        assert!(TransactionVocab::for_kind(DbKind::InfluxDB).is_none());
     }
 }
