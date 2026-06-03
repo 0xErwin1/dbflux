@@ -471,7 +471,7 @@ impl<'a> SqlSelectBuilder<'a> {
         }
 
         if let Some(w) = where_clause {
-            parts.push(format!("WHERE {}", w));
+            parts.push(w);
         }
 
         if let Some(o) = order_by {
@@ -661,6 +661,25 @@ impl<'a> SqlSelectBuilder<'a> {
         params: &mut Vec<crate::Value>,
         param_index: &mut usize,
     ) -> Result<Option<String>, QueryGenError> {
+        self.render_predicate_clause("WHERE", filter, params, param_index)
+    }
+
+    fn build_having(
+        &self,
+        having: Option<&crate::query::visual_query::FilterNode>,
+        params: &mut Vec<crate::Value>,
+        param_index: &mut usize,
+    ) -> Result<Option<String>, QueryGenError> {
+        self.render_predicate_clause("HAVING", having, params, param_index)
+    }
+
+    fn render_predicate_clause(
+        &self,
+        keyword: &str,
+        filter: Option<&crate::query::visual_query::FilterNode>,
+        params: &mut Vec<crate::Value>,
+        param_index: &mut usize,
+    ) -> Result<Option<String>, QueryGenError> {
         match filter {
             None => Ok(None),
             Some(node) => {
@@ -668,7 +687,7 @@ impl<'a> SqlSelectBuilder<'a> {
                 if expr.is_empty() {
                     Ok(None)
                 } else {
-                    Ok(Some(expr))
+                    Ok(Some(format!("{} {}", keyword, expr)))
                 }
             }
         }
