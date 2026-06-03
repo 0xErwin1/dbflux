@@ -11,9 +11,16 @@ pub struct TransactionVocab {
     pub begin: &'static str,
     pub commit: &'static str,
     pub rollback: &'static str,
-    /// SQL fragment to set a lock timeout, emitted inside the transaction before
-    /// the DML statement. `None` when the driver does not support lock timeouts.
+    /// SQL fragment to set a lock timeout. `None` when the driver does not support
+    /// lock timeouts.
     pub lock_timeout_template: Option<&'static str>,
+    /// When `true`, the lock timeout statement must be emitted BEFORE `BEGIN`.
+    ///
+    /// MySQL's `SET SESSION innodb_lock_wait_timeout` must be set outside a
+    /// transaction to take effect reliably across MySQL 5.7 and 8.0. PostgreSQL's
+    /// `SET LOCAL lock_timeout` and MSSQL's `SET LOCK_TIMEOUT` are effective inside
+    /// the transaction and must be emitted after BEGIN.
+    pub lock_timeout_before_begin: bool,
 }
 
 impl TransactionVocab {
@@ -31,24 +38,30 @@ impl TransactionVocab {
                 commit: "COMMIT",
                 rollback: "ROLLBACK",
                 lock_timeout_template: Some("SET LOCAL lock_timeout = '{ms}ms'"),
+                lock_timeout_before_begin: false,
             }),
             DbKind::MySQL | DbKind::MariaDB => Some(Self {
                 begin: "START TRANSACTION",
                 commit: "COMMIT",
                 rollback: "ROLLBACK",
-                lock_timeout_template: Some("SET innodb_lock_wait_timeout = {seconds}"),
+                // Must use SESSION scope; applies to connections, not transactions.
+                // Emitted BEFORE BEGIN so it takes effect before any lock acquisition.
+                lock_timeout_template: Some("SET SESSION innodb_lock_wait_timeout = {seconds}"),
+                lock_timeout_before_begin: true,
             }),
             DbKind::SQLite => Some(Self {
                 begin: "BEGIN IMMEDIATE",
                 commit: "COMMIT",
                 rollback: "ROLLBACK",
                 lock_timeout_template: None,
+                lock_timeout_before_begin: false,
             }),
             DbKind::SqlServer => Some(Self {
                 begin: "BEGIN TRANSACTION",
                 commit: "COMMIT",
                 rollback: "ROLLBACK",
                 lock_timeout_template: Some("SET LOCK_TIMEOUT {ms}"),
+                lock_timeout_before_begin: false,
             }),
             DbKind::MongoDB
             | DbKind::Redis
@@ -117,5 +130,46 @@ mod tests {
         assert!(TransactionVocab::for_kind(DbKind::DynamoDB).is_none());
         assert!(TransactionVocab::for_kind(DbKind::CloudWatchLogs).is_none());
         assert!(TransactionVocab::for_kind(DbKind::InfluxDB).is_none());
+    }
+
+    // F-R2-5: MySQL lock_timeout must be marked as before-begin so the executor emits it
+    // before START TRANSACTION, not inside the transaction body.
+    #[test]
+    fn mysql_lock_timeout_before_begin_is_true() {
+        let vocab = TransactionVocab::for_kind(DbKind::MySQL).unwrap();
+        assert!(
+            vocab.lock_timeout_before_begin,
+            "MySQL lock_timeout must be emitted before BEGIN"
+        );
+        let sql = vocab.lock_timeout_sql(5000).unwrap();
+        assert!(
+            sql.contains("SESSION"),
+            "MySQL lock_timeout must use SESSION scope; got: {}",
+            sql
+        );
+    }
+
+    #[test]
+    fn mariadb_lock_timeout_before_begin_is_true() {
+        let vocab = TransactionVocab::for_kind(DbKind::MariaDB).unwrap();
+        assert!(vocab.lock_timeout_before_begin);
+    }
+
+    #[test]
+    fn postgres_lock_timeout_before_begin_is_false() {
+        let vocab = TransactionVocab::for_kind(DbKind::Postgres).unwrap();
+        assert!(
+            !vocab.lock_timeout_before_begin,
+            "Postgres lock_timeout must be emitted INSIDE the transaction"
+        );
+    }
+
+    #[test]
+    fn sqlserver_lock_timeout_before_begin_is_false() {
+        let vocab = TransactionVocab::for_kind(DbKind::SqlServer).unwrap();
+        assert!(
+            !vocab.lock_timeout_before_begin,
+            "MSSQL lock_timeout must be emitted INSIDE the transaction"
+        );
     }
 }
