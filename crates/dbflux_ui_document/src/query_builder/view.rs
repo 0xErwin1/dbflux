@@ -399,39 +399,95 @@ fn render_footer(
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
     let is_runnable = panel.is_runnable();
+    let sort_error = panel.sort_validation_error.clone();
+    let incomplete_count = panel.incomplete_aggregate_row_count;
+    let is_grouped = panel.is_grouped();
 
     div()
         .flex()
-        .flex_row()
-        .items_center()
-        .gap(Spacing::SM)
-        .px(Spacing::MD)
-        .h(Heights::HEADER)
+        .flex_col()
         .border_t_1()
         .border_color(theme.border)
         .bg(theme.background)
+        .when_some(sort_error, |d, error_msg| {
+            d.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::SM)
+                    .px(Spacing::MD)
+                    .py(Spacing::XS)
+                    .bg(theme.danger.opacity(0.08))
+                    .border_b_1()
+                    .border_color(theme.danger.opacity(0.3))
+                    .child(
+                        Icon::new(AppIcon::TriangleAlert)
+                            .small()
+                            .color(theme.danger),
+                    )
+                    .child(Text::caption(SharedString::from(error_msg)).color(theme.danger)),
+            )
+        })
+        .when(is_grouped && incomplete_count > 0, |d| {
+            let label = if incomplete_count == 1 {
+                SharedString::from(
+                    "1 aggregate row is incomplete and will be excluded from the query",
+                )
+            } else {
+                SharedString::from(format!(
+                    "{} aggregate rows are incomplete and will be excluded from the query",
+                    incomplete_count
+                ))
+            };
+            d.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::SM)
+                    .px(Spacing::MD)
+                    .py(Spacing::XS)
+                    .bg(theme.warning.opacity(0.08))
+                    .border_b_1()
+                    .border_color(theme.warning.opacity(0.3))
+                    .child(
+                        Icon::new(AppIcon::TriangleAlert)
+                            .small()
+                            .color(theme.warning),
+                    )
+                    .child(Text::caption(label).color(theme.warning)),
+            )
+        })
         .child(
-            Button::new("qb-run", "Run")
-                .icon(AppIcon::Play)
-                .primary()
-                .small()
-                .disabled(!is_runnable)
-                .on_click(cx.listener(|_this, _event, _window, cx| {
-                    use crate::query_builder::events::BuilderEvent;
-                    cx.emit(BuilderEvent::RunRequested);
-                })),
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(Spacing::SM)
+                .px(Spacing::MD)
+                .h(Heights::HEADER)
+                .child(
+                    Button::new("qb-run", "Run")
+                        .icon(AppIcon::Play)
+                        .primary()
+                        .small()
+                        .disabled(!is_runnable)
+                        .on_click(cx.listener(|_this, _event, _window, cx| {
+                            use crate::query_builder::events::BuilderEvent;
+                            cx.emit(BuilderEvent::RunRequested);
+                        })),
+                )
+                .child(
+                    Button::new("qb-open-editor", "Open in Editor")
+                        .icon(AppIcon::ExternalLink)
+                        .variant(ButtonVariant::Ghost)
+                        .small()
+                        .on_click(cx.listener(|_this, _event, _window, cx| {
+                            use crate::query_builder::events::BuilderEvent;
+                            cx.emit(BuilderEvent::OpenInEditorRequested);
+                        })),
+                )
+                .child(div().flex_1()),
         )
-        .child(
-            Button::new("qb-open-editor", "Open in Editor")
-                .icon(AppIcon::ExternalLink)
-                .variant(ButtonVariant::Ghost)
-                .small()
-                .on_click(cx.listener(|_this, _event, _window, cx| {
-                    use crate::query_builder::events::BuilderEvent;
-                    cx.emit(BuilderEvent::OpenInEditorRequested);
-                })),
-        )
-        .child(div().flex_1())
 }
 
 // ---------------------------------------------------------------------------

@@ -401,6 +401,17 @@ pub struct QueryBuilderPanel {
     /// are removed. If `None`, no snapshot was taken (either the spec was
     /// loaded already grouped, or the user started with `Explicit`).
     pub(crate) pre_group_projection: Option<Projection>,
+
+    /// Non-empty when a sort entry was rejected because the column is not in
+    /// the current group-by / aggregate alias set.
+    ///
+    /// Cleared when the sort input loses focus or the user adds a valid entry.
+    pub(crate) sort_validation_error: Option<String>,
+
+    /// Count of aggregate rows that are present in the UI but excluded from
+    /// `spec.aggregates` because they are incomplete (empty column for
+    /// non-CountStar functions). Surfaced as a footer warning.
+    pub(crate) incomplete_aggregate_row_count: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -675,6 +686,8 @@ impl QueryBuilderPanel {
             having_predicate_comparator_dropdowns: HashMap::new(),
             pending_having_input_sweep: false,
             pre_group_projection: None,
+            sort_validation_error: None,
+            incomplete_aggregate_row_count: 0,
         }
     }
 
@@ -797,9 +810,9 @@ impl QueryBuilderPanel {
         self.sql_preview = (self.generate_preview)(&spec);
         self.pending_preview_sync = true;
         self.current_spec = spec;
-        // A loaded spec starts without a pre-group snapshot; the transition
-        // logic only applies to interactive editing.
         self.pre_group_projection = None;
+        self.sort_validation_error = None;
+        self.incomplete_aggregate_row_count = 0;
     }
 
     // -----------------------------------------------------------------------
@@ -1977,7 +1990,31 @@ impl QueryBuilderPanel {
     // -----------------------------------------------------------------------
 
     /// Appends a sort row.
+    ///
+    /// When the spec is grouped, the column must be either a group-by column or
+    /// an aggregate alias. If the column is not in the valid set, the entry is
+    /// rejected and `sort_validation_error` is set for the view to display.
     pub fn add_sort(&mut self, source_alias: &str, column: &str, cx: &mut Context<Self>) {
+        if self.current_spec.is_grouped() {
+            let valid: HashSet<String> = self
+                .group_by_rows
+                .iter()
+                .map(|g| g.column.clone())
+                .chain(self.aggregate_rows.iter().map(|a| a.alias.clone()))
+                .collect();
+
+            if !valid.contains(column) {
+                self.sort_validation_error = Some(format!(
+                    "\"{}\" is not in the GROUP BY columns or aggregate aliases",
+                    column
+                ));
+                cx.notify();
+                return;
+            }
+        }
+
+        self.sort_validation_error = None;
+
         self.sort_rows.push(SortRow {
             source_alias: source_alias.to_string(),
             column: column.to_string(),
@@ -2647,6 +2684,15 @@ impl QueryBuilderPanel {
         self.current_spec.sort = sort;
         self.current_spec.group_by = group_by;
         self.current_spec.aggregates = aggregates;
+
+        let incomplete_count = self
+            .aggregate_rows
+            .iter()
+            .filter(|r| {
+                !r.alias.is_empty() && r.function != AggFn::CountStar && r.column.is_empty()
+            })
+            .count();
+        self.incomplete_aggregate_row_count = incomplete_count;
 
         let spec = self.current_spec.clone();
         self.sql_preview = (self.generate_preview)(&spec);
@@ -3328,6 +3374,8 @@ mod tests {
             having_predicate_comparator_dropdowns: HashMap::new(),
             pending_having_input_sweep: false,
             pre_group_projection: None,
+            sort_validation_error: None,
+            incomplete_aggregate_row_count: 0,
         }
     }
 
@@ -3378,6 +3426,33 @@ mod tests {
         }
 
         fn t_add_sort(&mut self, source_alias: &str, column: &str) {
+            self.sort_rows.push(SortRow {
+                source_alias: source_alias.to_string(),
+                column: column.to_string(),
+                direction: VisualSortDirection::Asc,
+            });
+            self.rebuild_spec_pure();
+        }
+
+        fn add_sort_pure(&mut self, source_alias: &str, column: &str) {
+            if self.current_spec.is_grouped() {
+                let valid: HashSet<String> = self
+                    .group_by_rows
+                    .iter()
+                    .map(|g| g.column.clone())
+                    .chain(self.aggregate_rows.iter().map(|a| a.alias.clone()))
+                    .collect();
+
+                if !valid.contains(column) {
+                    self.sort_validation_error = Some(format!(
+                        "\"{}\" is not in the GROUP BY columns or aggregate aliases",
+                        column
+                    ));
+                    return;
+                }
+            }
+
+            self.sort_validation_error = None;
             self.sort_rows.push(SortRow {
                 source_alias: source_alias.to_string(),
                 column: column.to_string(),
@@ -4543,5 +4618,106 @@ mod tests {
         panel.t_set_aggregate_alias(0, "grand_total");
 
         assert_eq!(panel.current_spec.aggregates[0].alias, "grand_total");
+    }
+
+    // ---- Slice 3: sort restriction when grouped ----------------------------
+
+    #[test]
+    fn add_sort_accepts_group_by_column_when_grouped() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+
+        panel.add_sort_pure("users", "country");
+
+        assert_eq!(
+            panel.sort_rows.len(),
+            1,
+            "valid group-by column must be accepted"
+        );
+        assert!(
+            panel.sort_validation_error.is_none(),
+            "no error for valid column"
+        );
+    }
+
+    #[test]
+    fn add_sort_accepts_aggregate_alias_when_grouped() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+
+        panel.add_sort_pure("users", "sum_amount");
+
+        assert_eq!(panel.sort_rows.len(), 1, "aggregate alias must be accepted");
+        assert!(panel.sort_validation_error.is_none());
+    }
+
+    #[test]
+    fn add_sort_rejects_invalid_column_when_grouped_and_sets_error() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+
+        panel.add_sort_pure("users", "city");
+
+        assert_eq!(panel.sort_rows.len(), 0, "invalid column must be rejected");
+        assert!(
+            panel.sort_validation_error.is_some(),
+            "sort_validation_error must be set for invalid column"
+        );
+    }
+
+    #[test]
+    fn add_sort_allows_any_column_when_ungrouped() {
+        let mut panel = make_panel(make_spec(test_source()));
+
+        panel.add_sort_pure("users", "any_column");
+
+        assert_eq!(
+            panel.sort_rows.len(),
+            1,
+            "any column must be accepted when ungrouped"
+        );
+        assert!(panel.sort_validation_error.is_none());
+    }
+
+    // ---- Slice 3: incomplete aggregate count --------------------------------
+
+    #[test]
+    fn incomplete_aggregate_count_zero_when_no_aggregates() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        assert_eq!(panel.incomplete_aggregate_row_count, 0);
+    }
+
+    #[test]
+    fn incomplete_aggregate_count_zero_when_all_complete() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+        assert_eq!(panel.incomplete_aggregate_row_count, 0);
+    }
+
+    #[test]
+    fn incomplete_aggregate_count_zero_for_count_star_without_column() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        panel.t_add_aggregate(AggFn::CountStar);
+        assert_eq!(
+            panel.incomplete_aggregate_row_count, 0,
+            "CountStar without column is NOT incomplete"
+        );
+    }
+
+    #[test]
+    fn incomplete_aggregate_count_one_for_sum_without_column() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        panel.t_add_aggregate(AggFn::Sum);
+        assert_eq!(
+            panel.incomplete_aggregate_row_count, 1,
+            "Sum without column IS incomplete"
+        );
     }
 }
