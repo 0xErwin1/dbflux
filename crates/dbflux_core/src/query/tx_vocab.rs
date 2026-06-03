@@ -31,6 +31,21 @@ pub struct TransactionVocab {
     /// timeout. `None` when the driver's timeout scope is transaction-local
     /// (Postgres, SQL Server) and resets automatically.
     pub lock_timeout_reset_sql: Option<&'static str>,
+
+    /// SQL template for setting lock_timeout when running OUTSIDE any transaction
+    /// (DirectAutocommit mode). Uses the same `{ms}` / `{seconds}` placeholders as
+    /// `lock_timeout_template`. `None` when the driver cannot configure a lock timeout
+    /// in autocommit mode (SQLite).
+    ///
+    /// This differs from `lock_timeout_template` for Postgres: `SET LOCAL lock_timeout`
+    /// is transaction-scoped and has no effect outside a transaction, so autocommit mode
+    /// must use `SET lock_timeout` (session-scoped) instead.
+    pub autocommit_lock_timeout_template: Option<&'static str>,
+
+    /// SQL to reset the autocommit lock timeout after the run completes.
+    ///
+    /// `None` when `autocommit_lock_timeout_template` is `None` (no SET was issued).
+    pub autocommit_lock_timeout_reset_sql: Option<&'static str>,
 }
 
 impl TransactionVocab {
@@ -51,6 +66,9 @@ impl TransactionVocab {
                 lock_timeout_before_begin: false,
                 // Postgres uses SET LOCAL — resets automatically at transaction end.
                 lock_timeout_reset_sql: None,
+                // Outside a transaction, SET LOCAL has no effect. Use session-scoped SET instead.
+                autocommit_lock_timeout_template: Some("SET lock_timeout = '{ms}ms'"),
+                autocommit_lock_timeout_reset_sql: Some("SET lock_timeout = DEFAULT"),
             }),
             DbKind::MySQL | DbKind::MariaDB => Some(Self {
                 begin: "START TRANSACTION",
@@ -62,6 +80,13 @@ impl TransactionVocab {
                 lock_timeout_before_begin: true,
                 // SESSION scope persists on pooled connections; reset to default after run.
                 lock_timeout_reset_sql: Some("SET SESSION innodb_lock_wait_timeout = DEFAULT"),
+                // Same SESSION-scoped statement works in autocommit mode.
+                autocommit_lock_timeout_template: Some(
+                    "SET SESSION innodb_lock_wait_timeout = {seconds}",
+                ),
+                autocommit_lock_timeout_reset_sql: Some(
+                    "SET SESSION innodb_lock_wait_timeout = DEFAULT",
+                ),
             }),
             DbKind::SQLite => Some(Self {
                 begin: "BEGIN IMMEDIATE",
@@ -70,6 +95,8 @@ impl TransactionVocab {
                 lock_timeout_template: None,
                 lock_timeout_before_begin: false,
                 lock_timeout_reset_sql: None,
+                autocommit_lock_timeout_template: None,
+                autocommit_lock_timeout_reset_sql: None,
             }),
             DbKind::SqlServer => Some(Self {
                 begin: "BEGIN TRANSACTION",
@@ -80,6 +107,9 @@ impl TransactionVocab {
                 // SQL Server's SET LOCK_TIMEOUT is connection-scoped; reset it so pooled
                 // connections don't silently inherit the timeout from a previous mutation.
                 lock_timeout_reset_sql: Some("SET LOCK_TIMEOUT -1"),
+                // Connection-scoped — same statement works in autocommit mode.
+                autocommit_lock_timeout_template: Some("SET LOCK_TIMEOUT {ms}"),
+                autocommit_lock_timeout_reset_sql: Some("SET LOCK_TIMEOUT -1"),
             }),
             DbKind::MongoDB
             | DbKind::Redis
@@ -95,6 +125,19 @@ impl TransactionVocab {
     /// converts to whole seconds; values below 1000ms round up to 1s).
     pub fn lock_timeout_sql(&self, timeout_ms: u64) -> Option<String> {
         self.lock_timeout_template.map(|template| {
+            let seconds = timeout_ms.div_ceil(1000).max(1);
+            template
+                .replace("{ms}", &timeout_ms.to_string())
+                .replace("{seconds}", &seconds.to_string())
+        })
+    }
+
+    /// Formats the autocommit lock timeout SQL for a given millisecond value.
+    ///
+    /// Use this in `DirectAutocommit` mode instead of `lock_timeout_sql`. Returns `None`
+    /// when the driver cannot configure a lock timeout outside a transaction (SQLite).
+    pub fn autocommit_lock_timeout_sql(&self, timeout_ms: u64) -> Option<String> {
+        self.autocommit_lock_timeout_template.map(|template| {
             let seconds = timeout_ms.div_ceil(1000).max(1);
             template
                 .replace("{ms}", &timeout_ms.to_string())

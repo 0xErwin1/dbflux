@@ -331,10 +331,10 @@ impl MutationExecutor {
 
     /// Execute the mutation as a single BEGIN / DML / COMMIT sequence.
     ///
-    /// Cancellation is checked at three points: before lock_timeout SET / before
-    /// BEGIN, after BEGIN before DML, and is not checked mid-DML (the current
-    /// operation runs to natural completion). When cancel is detected before BEGIN
-    /// no transaction is started. When detected after BEGIN, a ROLLBACK is issued.
+    /// Cancellation is checked at four points: (a) before lock_timeout SET, (b) after
+    /// before-BEGIN lock_timeout SET but before BEGIN, (c) after BEGIN before DML,
+    /// and (d) after DML success before COMMIT. DML itself is never interrupted mid-query.
+    /// Sites (a) and (b) return without starting a transaction; sites (c) and (d) ROLLBACK.
     ///
     /// Emits a parent audit event with `Pending` at start, then finalizes with
     /// `Success`, `Failed`, or `Cancelled` depending on outcome.
@@ -400,6 +400,14 @@ impl MutationExecutor {
             }
         }
 
+        // Site (b): cancel check after before-BEGIN lock_timeout SET, before BEGIN.
+        // The SET ran but no transaction was opened, so no ROLLBACK is needed.
+        if cancel.is_cancelled() {
+            self.emit_cancelled_event(&run_id, op_kind, &table_name, 0);
+            self.reset_lock_timeout_if_needed(&vocab);
+            return Ok(MutationOutcome::Cancelled { rows_affected: 0 });
+        }
+
         let begin_req = QueryRequest::new(vocab.begin);
         if let Err(e) = self.deps.connection.execute(&begin_req) {
             let err_msg = e.to_string();
@@ -408,6 +416,7 @@ impl MutationExecutor {
             return Err(ExecutorError::Transaction(err_msg));
         }
 
+        // Site (c): cancel check after BEGIN, before DML (existing).
         if cancel.is_cancelled() {
             let rollback_req = QueryRequest::new(vocab.rollback);
             if let Err(rb_err) = self.deps.connection.execute(&rollback_req) {
@@ -455,6 +464,18 @@ impl MutationExecutor {
             }
             Ok(result) => {
                 let rows_affected = result.affected_rows.unwrap_or(0);
+
+                // Site (d): cancel check after DML success, before COMMIT.
+                // DML has mutated rows but we haven't committed. ROLLBACK discards the changes.
+                if cancel.is_cancelled() {
+                    let rollback_req = QueryRequest::new(vocab.rollback);
+                    if let Err(rb_err) = self.deps.connection.execute(&rollback_req) {
+                        log::warn!("ROLLBACK failed during cancellation after DML: {}", rb_err);
+                    }
+                    self.emit_cancelled_event(&run_id, op_kind, &table_name, 0);
+                    self.reset_lock_timeout_if_needed(&vocab);
+                    return Ok(MutationOutcome::Cancelled { rows_affected: 0 });
+                }
 
                 let commit_req = QueryRequest::new(vocab.commit);
                 if let Err(e) = self.deps.connection.execute(&commit_req) {
@@ -537,18 +558,25 @@ impl MutationExecutor {
 
         let vocab = TransactionVocab::for_kind(self.deps.connection.kind());
 
-        if let Some(v) = &vocab
+        // Use the autocommit-specific lock_timeout variant. For Postgres, `SET LOCAL` is
+        // transaction-scoped and silently does nothing outside a transaction; the autocommit
+        // template uses session-scoped `SET lock_timeout` instead. MySQL and MSSQL reuse the
+        // same session/connection-scoped statement in both modes.
+        let lock_timeout_set = if let Some(v) = &vocab
             && let Some(ms) = self.opts.lock_timeout_ms
-            && let Some(lock_sql) = v.lock_timeout_sql(ms)
+            && let Some(lock_sql) = v.autocommit_lock_timeout_sql(ms)
         {
             let lock_req = QueryRequest::new(lock_sql);
             if let Err(e) = self.deps.connection.execute(&lock_req) {
                 let err_msg = e.to_string();
                 self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
-                self.reset_lock_timeout_if_needed(v);
+                self.reset_autocommit_lock_timeout_if_needed(v);
                 return Err(ExecutorError::Transaction(err_msg));
             }
-        }
+            true
+        } else {
+            false
+        };
 
         let mut dml_req = QueryRequest::new(generated.sql.clone());
         dml_req.params = generated.params.clone();
@@ -557,8 +585,8 @@ impl MutationExecutor {
             Err(e) => {
                 let err_msg = e.to_string();
                 self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
-                if let Some(v) = &vocab {
-                    self.reset_lock_timeout_if_needed(v);
+                if lock_timeout_set && let Some(v) = &vocab {
+                    self.reset_autocommit_lock_timeout_if_needed(v);
                 }
                 Err(ExecutorError::Transaction(err_msg))
             }
@@ -579,8 +607,8 @@ impl MutationExecutor {
                 .with_correlation_id(run_id);
 
                 self.emit_event(success_event);
-                if let Some(v) = &vocab {
-                    self.reset_lock_timeout_if_needed(v);
+                if lock_timeout_set && let Some(v) = &vocab {
+                    self.reset_autocommit_lock_timeout_if_needed(v);
                 }
                 Ok(MutationOutcome::Success { rows_affected })
             }
@@ -593,9 +621,10 @@ impl MutationExecutor {
     /// The user filter and PK keyset are merged into a single WHERE clause by the generator —
     /// the executor never post-concatenates SQL.
     ///
-    /// Cancellation is checked between chunks; the current chunk always runs to completion.
-    /// When cancel is pressed, the current in-flight DML is not interrupted — it runs to its
-    /// natural end (commit or rollback), and the loop exits before starting the next chunk.
+    /// Cancellation is checked at five sites: at the top of each loop iteration (between
+    /// chunks), between the before-BEGIN lock_timeout SET and BEGIN within a chunk, after
+    /// BEGIN before DML (top of loop), between DML success and COMMIT within a chunk.
+    /// Each chunk's DML always runs to natural completion — DML is never interrupted mid-query.
     ///
     /// # PK SELECT consistency note
     ///
@@ -821,6 +850,29 @@ impl MutationExecutor {
                 }
             }
 
+            // Cancel site (b): between before-BEGIN lock_timeout SET and BEGIN.
+            // No transaction is open yet, so no ROLLBACK is needed.
+            if cancel.is_cancelled() {
+                self.emit_event(
+                    EventRecord::new(
+                        Self::now_ms(),
+                        EventSeverity::Info,
+                        EventCategory::Query,
+                        EventOutcome::Cancelled,
+                    )
+                    .with_action("mutation.run")
+                    .with_summary(format!(
+                        "{} {} cancelled after {} chunks ({} rows)",
+                        op_kind, table_name, chunks_committed, rows_affected_total
+                    ))
+                    .with_correlation_id(run_id.clone()),
+                );
+                self.reset_lock_timeout_if_needed(&vocab);
+                return Ok(MutationOutcome::Cancelled {
+                    rows_affected: rows_affected_total,
+                });
+            }
+
             let begin_req = QueryRequest::new(vocab.begin);
             if let Err(e) = self.deps.connection.execute(&begin_req) {
                 let err_msg = e.to_string();
@@ -879,6 +931,36 @@ impl MutationExecutor {
                 }
                 Ok(result) => {
                     let chunk_rows = result.affected_rows.unwrap_or(pk_rows.len() as u64);
+
+                    // Cancel site (d): between DML success and COMMIT.
+                    // DML mutated rows but they're uncommitted — ROLLBACK discards them.
+                    if cancel.is_cancelled() {
+                        let rollback_req = QueryRequest::new(vocab.rollback);
+                        if let Err(rb_err) = self.deps.connection.execute(&rollback_req) {
+                            log::warn!(
+                                "ROLLBACK failed during cancellation after chunk DML: {}",
+                                rb_err
+                            );
+                        }
+                        self.emit_event(
+                            EventRecord::new(
+                                Self::now_ms(),
+                                EventSeverity::Info,
+                                EventCategory::Query,
+                                EventOutcome::Cancelled,
+                            )
+                            .with_action("mutation.run")
+                            .with_summary(format!(
+                                "{} {} cancelled after {} chunks ({} rows, last chunk rolled back)",
+                                op_kind, table_name, chunks_committed, rows_affected_total
+                            ))
+                            .with_correlation_id(run_id.clone()),
+                        );
+                        self.reset_lock_timeout_if_needed(&vocab);
+                        return Ok(MutationOutcome::Cancelled {
+                            rows_affected: rows_affected_total,
+                        });
+                    }
 
                     let commit_req = QueryRequest::new(vocab.commit);
                     if let Err(e) = self.deps.connection.execute(&commit_req) {
@@ -948,6 +1030,25 @@ impl MutationExecutor {
             if let Err(e) = self.deps.connection.execute(&reset_req) {
                 log::warn!(
                     "lock_timeout reset failed (connection may retain previous timeout): {}",
+                    e
+                );
+            }
+        }
+    }
+
+    /// Emit the autocommit lock timeout reset SQL after a `run_direct` call.
+    ///
+    /// `run_direct` uses the autocommit-specific SET variant (e.g. session-scoped `SET
+    /// lock_timeout` for Postgres) which persists beyond the statement. This cleans up
+    /// the session state so subsequent autocommit operations don't inherit the timeout.
+    fn reset_autocommit_lock_timeout_if_needed(&self, vocab: &TransactionVocab) {
+        if self.opts.lock_timeout_ms.is_some()
+            && let Some(reset_sql) = vocab.autocommit_lock_timeout_reset_sql
+        {
+            let reset_req = dbflux_core::QueryRequest::new(reset_sql);
+            if let Err(e) = self.deps.connection.execute(&reset_req) {
+                log::warn!(
+                    "autocommit lock_timeout reset failed (connection may retain previous timeout): {}",
                     e
                 );
             }
@@ -1306,7 +1407,7 @@ mod tests {
             let deps = make_deps(conn, Some(sink));
             let executor = MutationExecutor::new(spec, opts, deps);
 
-            let _ = executor.run_single_tx(&no_cancel());
+            let _outcome = executor.run_single_tx(&no_cancel());
 
             // All events must have been received by the fake sink — not empty.
             assert!(
@@ -1338,7 +1439,7 @@ mod tests {
             };
             let executor = MutationExecutor::new(spec, opts, deps);
 
-            let _ = executor.run_single_tx(&no_cancel());
+            let _outcome = executor.run_single_tx(&no_cancel());
 
             let calls = conn_ref.recorded_calls();
             assert_eq!(
@@ -1516,7 +1617,7 @@ mod tests {
             let deps = make_deps(conn, None);
             let executor = MutationExecutor::new(spec, opts, deps);
 
-            let _ = executor.run_single_tx(&no_cancel());
+            let _outcome = executor.run_single_tx(&no_cancel());
 
             let calls = conn_ref.recorded_calls();
             let has_reset = calls.iter().any(|c| {
@@ -1655,6 +1756,269 @@ mod tests {
             assert!(
                 calls.iter().any(|c| c.eq_ignore_ascii_case("ROLLBACK")),
                 "ROLLBACK must be issued when cancelled after BEGIN; calls: {:?}",
+                calls
+            );
+        }
+
+        // F-R5-1: single-tx cancel after lock_timeout SET but before BEGIN (MySQL path).
+        //
+        // MySQL emits `SET SESSION innodb_lock_wait_timeout` BEFORE `START TRANSACTION`.
+        // If the user cancels between the SET and the BEGIN, no transaction was opened so no
+        // ROLLBACK is needed. The session timeout must still be reset.
+        #[test]
+        fn single_tx_cancel_after_lock_timeout_set_returns_cancelled_without_begin() {
+            struct CancelOnSetConnection {
+                meta: dbflux_core::DriverMetadata,
+                calls: Mutex<Vec<String>>,
+                cancel: crate::task_runner::MutationCancelHandle,
+            }
+
+            impl CancelOnSetConnection {
+                fn new(cancel: crate::task_runner::MutationCancelHandle) -> Arc<Self> {
+                    let meta = DriverMetadataBuilder::new(
+                        "test",
+                        "Test",
+                        DatabaseCategory::Relational,
+                        QueryLanguage::Sql,
+                    )
+                    .capabilities(DriverCapabilities::TRANSACTIONS)
+                    .build();
+                    Arc::new(Self {
+                        meta,
+                        calls: Mutex::new(Vec::new()),
+                        cancel,
+                    })
+                }
+            }
+
+            impl dbflux_core::Connection for CancelOnSetConnection {
+                fn metadata(&self) -> &dbflux_core::DriverMetadata {
+                    &self.meta
+                }
+                fn ping(&self) -> Result<(), dbflux_core::DbError> {
+                    Ok(())
+                }
+                fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+                    Ok(())
+                }
+                fn execute(
+                    &self,
+                    req: &dbflux_core::QueryRequest,
+                ) -> Result<QueryResult, dbflux_core::DbError> {
+                    let sql_upper = req.sql.to_ascii_uppercase();
+                    self.calls.lock().unwrap().push(req.sql.clone());
+                    // Trigger cancel when the lock_timeout SET is executed.
+                    if sql_upper.contains("INNODB_LOCK_WAIT_TIMEOUT")
+                        && !sql_upper.contains("DEFAULT")
+                    {
+                        self.cancel.cancel();
+                    }
+                    Ok(QueryResult::empty())
+                }
+                fn cancel(
+                    &self,
+                    _handle: &dbflux_core::QueryHandle,
+                ) -> Result<(), dbflux_core::DbError> {
+                    Ok(())
+                }
+                fn schema(&self) -> Result<SchemaSnapshot, dbflux_core::DbError> {
+                    Err(dbflux_core::DbError::NotSupported("stub".to_string()))
+                }
+                fn kind(&self) -> DbKind {
+                    DbKind::MySQL
+                }
+                fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+                    SchemaLoadingStrategy::SingleDatabase
+                }
+                fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+                    &DefaultSqlDialect
+                }
+                fn query_generator(&self) -> Option<&dyn QueryGenerator> {
+                    static GENERATOR: SimpleDeleteGenerator = SimpleDeleteGenerator;
+                    Some(&GENERATOR)
+                }
+            }
+
+            let cancel = crate::task_runner::MutationCancelHandle::new();
+            let conn = CancelOnSetConnection::new(cancel.clone());
+            let conn_calls = Arc::clone(&conn);
+            let spec = make_delete_spec("orders");
+            let opts = MutationExecOptions::new(
+                ExecutionMode::SingleTransaction,
+                5_000,
+                Some(2_000),
+                3_000,
+            );
+            let deps = MutationDeps {
+                connection: conn as Arc<dyn dbflux_core::Connection>,
+                event_sink: None,
+                policy: MutationPolicy::Allowed,
+            };
+            let executor = MutationExecutor::new(spec, opts, deps);
+
+            let result = executor.run_single_tx(&cancel);
+            assert!(
+                matches!(result, Ok(MutationOutcome::Cancelled { rows_affected: 0 })),
+                "expected Cancelled{{0}}, got: {:?}",
+                result
+            );
+
+            let calls = conn_calls.calls.lock().unwrap().clone();
+
+            // SET must have fired but no BEGIN.
+            assert!(
+                calls
+                    .iter()
+                    .any(|c| c.to_ascii_uppercase().contains("INNODB_LOCK_WAIT_TIMEOUT")),
+                "SET SESSION lock_timeout must be in call log; calls: {:?}",
+                calls
+            );
+            assert!(
+                !calls.iter().any(|c| {
+                    let u = c.to_ascii_uppercase();
+                    u == "START TRANSACTION" || u == "BEGIN"
+                }),
+                "no BEGIN must be issued when cancelled after SET but before BEGIN; calls: {:?}",
+                calls
+            );
+            // The lock_timeout reset must still fire (SESSION scope persists).
+            assert!(
+                calls
+                    .iter()
+                    .any(|c| c.to_ascii_uppercase().contains("DEFAULT")),
+                "lock_timeout reset (DEFAULT) must be emitted even when cancelled; calls: {:?}",
+                calls
+            );
+        }
+
+        // F-R5-1: single-tx cancel after DML success but before COMMIT — ROLLBACK must be issued.
+        //
+        // The DML may have mutated rows. If the user cancels in the window between DML completion
+        // and COMMIT, we must ROLLBACK to discard those changes and return Cancelled.
+        #[test]
+        fn single_tx_cancel_after_dml_rolls_back() {
+            struct CancelOnDmlConnection {
+                meta: dbflux_core::DriverMetadata,
+                calls: Mutex<Vec<String>>,
+                cancel: crate::task_runner::MutationCancelHandle,
+            }
+
+            impl CancelOnDmlConnection {
+                fn new(cancel: crate::task_runner::MutationCancelHandle) -> Arc<Self> {
+                    let meta = DriverMetadataBuilder::new(
+                        "test",
+                        "Test",
+                        DatabaseCategory::Relational,
+                        QueryLanguage::Sql,
+                    )
+                    .capabilities(DriverCapabilities::TRANSACTIONS)
+                    .build();
+                    Arc::new(Self {
+                        meta,
+                        calls: Mutex::new(Vec::new()),
+                        cancel,
+                    })
+                }
+            }
+
+            impl dbflux_core::Connection for CancelOnDmlConnection {
+                fn metadata(&self) -> &dbflux_core::DriverMetadata {
+                    &self.meta
+                }
+                fn ping(&self) -> Result<(), dbflux_core::DbError> {
+                    Ok(())
+                }
+                fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+                    Ok(())
+                }
+                fn execute(
+                    &self,
+                    req: &dbflux_core::QueryRequest,
+                ) -> Result<QueryResult, dbflux_core::DbError> {
+                    let sql_upper = req.sql.to_ascii_uppercase();
+                    self.calls.lock().unwrap().push(req.sql.clone());
+                    // Trigger cancel when DML executes (after BEGIN).
+                    if sql_upper.starts_with("DELETE") || sql_upper.starts_with("UPDATE") {
+                        self.cancel.cancel();
+                    }
+                    Ok(QueryResult::empty())
+                }
+                fn cancel(
+                    &self,
+                    _handle: &dbflux_core::QueryHandle,
+                ) -> Result<(), dbflux_core::DbError> {
+                    Ok(())
+                }
+                fn schema(&self) -> Result<SchemaSnapshot, dbflux_core::DbError> {
+                    Err(dbflux_core::DbError::NotSupported("stub".to_string()))
+                }
+                fn kind(&self) -> DbKind {
+                    DbKind::Postgres
+                }
+                fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+                    SchemaLoadingStrategy::SingleDatabase
+                }
+                fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+                    &DefaultSqlDialect
+                }
+                fn query_generator(&self) -> Option<&dyn QueryGenerator> {
+                    static GENERATOR: SimpleDeleteGenerator = SimpleDeleteGenerator;
+                    Some(&GENERATOR)
+                }
+            }
+
+            let cancel = crate::task_runner::MutationCancelHandle::new();
+            let conn = CancelOnDmlConnection::new(cancel.clone());
+            let conn_calls = Arc::clone(&conn);
+            let spec = make_delete_spec("orders");
+            let opts = MutationExecOptions::single_transaction();
+            let deps = MutationDeps {
+                connection: conn as Arc<dyn dbflux_core::Connection>,
+                event_sink: None,
+                policy: MutationPolicy::Allowed,
+            };
+            let executor = MutationExecutor::new(spec, opts, deps);
+
+            let result = executor.run_single_tx(&cancel);
+            assert!(
+                matches!(result, Ok(MutationOutcome::Cancelled { rows_affected: 0 })),
+                "expected Cancelled{{0}}, got: {:?}",
+                result
+            );
+
+            let calls = conn_calls.calls.lock().unwrap().clone();
+
+            // DML must have fired.
+            assert!(
+                calls.iter().any(|c| {
+                    let u = c.to_ascii_uppercase();
+                    u.starts_with("DELETE") || u.starts_with("UPDATE")
+                }),
+                "DML must be in call log; calls: {:?}",
+                calls
+            );
+            // ROLLBACK must follow the DML.
+            let dml_pos = calls.iter().position(|c| {
+                let u = c.to_ascii_uppercase();
+                u.starts_with("DELETE") || u.starts_with("UPDATE")
+            });
+            let rollback_pos = calls
+                .iter()
+                .position(|c| c.to_ascii_uppercase() == "ROLLBACK");
+            assert!(
+                rollback_pos.is_some(),
+                "ROLLBACK must be issued after DML cancel; calls: {:?}",
+                calls
+            );
+            assert!(
+                dml_pos.unwrap() < rollback_pos.unwrap(),
+                "ROLLBACK must come AFTER DML; calls: {:?}",
+                calls
+            );
+            // COMMIT must NOT appear.
+            assert!(
+                !calls.iter().any(|c| c.to_ascii_uppercase() == "COMMIT"),
+                "COMMIT must NOT be issued when cancelled after DML; calls: {:?}",
                 calls
             );
         }
@@ -2221,7 +2585,7 @@ mod tests {
             let deps = make_deps(conn, Some(sink));
             let executor = MutationExecutor::new(spec, opts, deps);
 
-            let _ = executor.run_chunked_tx(&["id"], &no_cancel());
+            let _outcome = executor.run_chunked_tx(&["id"], &no_cancel());
 
             let chunk_events: Vec<_> = sink_ref
                 .recorded()
@@ -2302,7 +2666,7 @@ mod tests {
             let deps = make_deps(conn, None);
             let executor = MutationExecutor::new(spec, opts, deps);
 
-            let _ = executor.run_chunked_tx(&["id"], &no_cancel());
+            let _outcome = executor.run_chunked_tx(&["id"], &no_cancel());
 
             let calls = conn_ref.recorded_calls();
             let select_sql = calls
@@ -2332,7 +2696,7 @@ mod tests {
             let deps = make_deps(conn, None);
             let executor = MutationExecutor::new(spec, opts, deps);
 
-            let _ = executor.run_chunked_tx(&["id", "tenant"], &no_cancel());
+            let _outcome = executor.run_chunked_tx(&["id", "tenant"], &no_cancel());
 
             let calls = conn_ref.recorded_calls();
             let select_sql = calls
@@ -2430,7 +2794,7 @@ mod tests {
             let deps = make_deps(conn, None);
             let executor = MutationExecutor::new(spec, opts, deps);
 
-            let _ = executor.run_chunked_tx(&["id"], &no_cancel());
+            let _outcome = executor.run_chunked_tx(&["id"], &no_cancel());
 
             let calls = conn_ref.recorded_calls();
             let select_sql = calls
@@ -2479,7 +2843,7 @@ mod tests {
             let deps = make_deps(conn, None);
             let executor = MutationExecutor::new(spec, opts, deps);
 
-            let _ = executor.run_chunked_tx(&["id"], &no_cancel());
+            let _outcome = executor.run_chunked_tx(&["id"], &no_cancel());
 
             let calls = conn_ref.recorded_calls();
             let select_sql = calls
@@ -3267,7 +3631,7 @@ mod tests {
                 policy: MutationPolicy::Allowed,
             };
             let executor = MutationExecutor::new(spec, opts, deps);
-            let _ = executor.run_single_tx(&no_cancel());
+            let _outcome = executor.run_single_tx(&no_cancel());
 
             let timestamps = sink_ref.collected();
             assert!(
@@ -3376,6 +3740,194 @@ mod tests {
             assert!(
                 !has_lock_timeout,
                 "no lock_timeout SQL expected when lock_timeout_ms is None; calls: {:?}",
+                calls
+            );
+        }
+
+        // F-R5-2: Postgres run_direct must emit session-scoped SET (not SET LOCAL) and reset.
+        //
+        // `SET LOCAL lock_timeout` is transaction-scoped and has no effect outside a transaction.
+        // In DirectAutocommit mode, `SET lock_timeout = '...ms'` (session-scoped) must be used
+        // instead, and `SET lock_timeout = DEFAULT` must follow to clean up the session state.
+        #[test]
+        fn direct_postgres_emits_session_lock_timeout_and_reset() {
+            use super::executor_tests::RecordingConnection;
+
+            let conn = RecordingConnection::new(DbKind::Postgres, 3);
+            let conn_ref = Arc::clone(&conn);
+            let spec = make_delete_spec("orders");
+            let opts = MutationExecOptions::new(
+                ExecutionMode::DirectAutocommit,
+                1_000,
+                Some(5_000),
+                3_000,
+            );
+            let deps = make_deps_no_sink(conn);
+            let executor = MutationExecutor::new(spec, opts, deps);
+
+            let result = executor.run_direct(&no_cancel());
+            assert!(result.is_ok(), "expected ok: {:?}", result);
+
+            let calls = conn_ref.recorded_calls();
+            assert!(
+                calls.len() >= 3,
+                "expected SET + DML + RESET; calls: {:?}",
+                calls
+            );
+
+            // Must contain a session-scoped SET (not SET LOCAL).
+            let set_call = calls.iter().find(|c| {
+                let u = c.to_ascii_uppercase();
+                u.contains("LOCK_TIMEOUT") && !u.contains("DEFAULT")
+            });
+            assert!(
+                set_call.is_some(),
+                "SET lock_timeout must be emitted; calls: {:?}",
+                calls
+            );
+            let set_sql = set_call.unwrap();
+            assert!(
+                !set_sql.to_ascii_uppercase().contains("LOCAL"),
+                "Postgres autocommit must use session-scoped SET (no LOCAL); got: {}",
+                set_sql
+            );
+            assert!(
+                set_sql.contains("5000"),
+                "SET must encode the requested ms value; got: {}",
+                set_sql
+            );
+
+            // Must contain a reset.
+            let reset_call = calls
+                .iter()
+                .rfind(|c| c.to_ascii_uppercase().contains("DEFAULT"));
+            assert!(
+                reset_call.is_some(),
+                "SET lock_timeout = DEFAULT reset must be emitted; calls: {:?}",
+                calls
+            );
+        }
+
+        // F-R5-2: MySQL run_direct emits session lock_timeout + DEFAULT reset (unchanged behaviour).
+        #[test]
+        fn direct_mysql_emits_session_lock_timeout_and_reset() {
+            use super::executor_tests::RecordingConnection;
+
+            let conn = RecordingConnection::new(DbKind::MySQL, 3);
+            let conn_ref = Arc::clone(&conn);
+            let spec = make_delete_spec("orders");
+            let opts = MutationExecOptions::new(
+                ExecutionMode::DirectAutocommit,
+                1_000,
+                Some(5_000),
+                3_000,
+            );
+            let deps = make_deps_no_sink(conn);
+            let executor = MutationExecutor::new(spec, opts, deps);
+
+            let result = executor.run_direct(&no_cancel());
+            assert!(result.is_ok(), "expected ok: {:?}", result);
+
+            let calls = conn_ref.recorded_calls();
+
+            let set_pos = calls.iter().position(|c| {
+                c.to_ascii_uppercase().contains("INNODB_LOCK_WAIT_TIMEOUT")
+                    && !c.to_ascii_uppercase().contains("DEFAULT")
+            });
+            let reset_pos = calls
+                .iter()
+                .rposition(|c| c.to_ascii_uppercase().contains("DEFAULT"));
+            assert!(
+                set_pos.is_some(),
+                "MySQL SET must be emitted; calls: {:?}",
+                calls
+            );
+            assert!(
+                reset_pos.is_some(),
+                "MySQL DEFAULT reset must be emitted; calls: {:?}",
+                calls
+            );
+            assert!(
+                set_pos.unwrap() < reset_pos.unwrap(),
+                "SET must come before DEFAULT reset; calls: {:?}",
+                calls
+            );
+        }
+
+        // F-R5-2: MSSQL run_direct emits connection-scoped SET LOCK_TIMEOUT + reset.
+        #[test]
+        fn direct_mssql_emits_lock_timeout_and_reset() {
+            use super::executor_tests::RecordingConnection;
+
+            let conn = RecordingConnection::new(DbKind::SqlServer, 3);
+            let conn_ref = Arc::clone(&conn);
+            let spec = make_delete_spec("orders");
+            let opts = MutationExecOptions::new(
+                ExecutionMode::DirectAutocommit,
+                1_000,
+                Some(5_000),
+                3_000,
+            );
+            let deps = make_deps_no_sink(conn);
+            let executor = MutationExecutor::new(spec, opts, deps);
+
+            let result = executor.run_direct(&no_cancel());
+            assert!(result.is_ok(), "expected ok: {:?}", result);
+
+            let calls = conn_ref.recorded_calls();
+
+            let set_pos = calls.iter().position(|c| {
+                let u = c.to_ascii_uppercase();
+                u.contains("LOCK_TIMEOUT") && !u.contains("-1")
+            });
+            let reset_pos = calls
+                .iter()
+                .rposition(|c| c.to_ascii_uppercase().contains("LOCK_TIMEOUT -1"));
+            assert!(
+                set_pos.is_some(),
+                "MSSQL SET LOCK_TIMEOUT must be emitted; calls: {:?}",
+                calls
+            );
+            assert!(
+                reset_pos.is_some(),
+                "MSSQL SET LOCK_TIMEOUT -1 reset must be emitted; calls: {:?}",
+                calls
+            );
+            assert!(
+                set_pos.unwrap() < reset_pos.unwrap(),
+                "SET must come before reset; calls: {:?}",
+                calls
+            );
+        }
+
+        // F-R5-2: SQLite run_direct skips lock_timeout entirely (no template).
+        #[test]
+        fn direct_sqlite_skips_lock_timeout() {
+            use super::executor_tests::RecordingConnection;
+
+            let conn = RecordingConnection::new(DbKind::SQLite, 3);
+            let conn_ref = Arc::clone(&conn);
+            let spec = make_delete_spec("orders");
+            let opts = MutationExecOptions::new(
+                ExecutionMode::DirectAutocommit,
+                1_000,
+                Some(5_000),
+                3_000,
+            );
+            let deps = make_deps_no_sink(conn);
+            let executor = MutationExecutor::new(spec, opts, deps);
+
+            let result = executor.run_direct(&no_cancel());
+            assert!(result.is_ok(), "expected ok: {:?}", result);
+
+            let calls = conn_ref.recorded_calls();
+            let has_lock_timeout = calls.iter().any(|c| {
+                let u = c.to_ascii_uppercase();
+                u.contains("LOCK_TIMEOUT") || u.contains("INNODB")
+            });
+            assert!(
+                !has_lock_timeout,
+                "SQLite has no lock_timeout; no SET must be emitted; calls: {:?}",
                 calls
             );
         }
