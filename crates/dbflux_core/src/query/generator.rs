@@ -427,6 +427,14 @@ pub(crate) fn build_select_query(
     SqlSelectBuilder::new(dialect).build(spec)
 }
 
+/// Builds the grouped total-count subquery for external callers (e.g. lib.rs public API).
+pub(crate) fn build_grouped_count_query(
+    spec: &VisualQuerySpec,
+    dialect: &dyn SqlDialect,
+) -> Result<SelectQuery, QueryGenError> {
+    SqlSelectBuilder::new(dialect).build_count_of_grouped(spec)
+}
+
 /// Re-exported for the relational_filter crate module so it can access the
 /// builder without re-implementing projection/join/filter rendering.
 pub(crate) struct SqlSelectBuilder<'a> {
@@ -452,6 +460,14 @@ impl<'a> SqlSelectBuilder<'a> {
     }
 
     fn build(&self, spec: &VisualQuerySpec) -> Result<SelectQuery, QueryGenError> {
+        if spec.is_grouped() {
+            self.build_grouped(spec)
+        } else {
+            self.build_ungrouped(spec)
+        }
+    }
+
+    fn build_ungrouped(&self, spec: &VisualQuerySpec) -> Result<SelectQuery, QueryGenError> {
         let mut params: Vec<crate::Value> = Vec::new();
         let mut param_index: usize = 1;
 
@@ -486,6 +502,216 @@ impl<'a> SqlSelectBuilder<'a> {
             sql: parts.join("\n"),
             params,
         })
+    }
+
+    fn build_grouped(&self, spec: &VisualQuerySpec) -> Result<SelectQuery, QueryGenError> {
+        use crate::query::visual_query::{AggFn, AggregateSpec};
+
+        let mut params: Vec<crate::Value> = Vec::new();
+        let mut param_index: usize = 1;
+
+        let projection = self.build_projection_grouped(&spec.group_by, &spec.aggregates)?;
+        let from_clause = self.build_from(&spec.source);
+        let joins = self.build_joins(&spec.joins);
+        let where_clause = self.build_where(spec.filter.as_ref(), &mut params, &mut param_index)?;
+        let group_by_clause = self.build_group_by(&spec.group_by);
+        let having_clause =
+            self.build_having(spec.having.as_ref(), &mut params, &mut param_index)?;
+        let order_by = self.build_order_by_grouped(&spec.sort, &spec.group_by, &spec.aggregates);
+        let limit_offset = self.build_limit_offset(spec.limit, spec.offset);
+
+        let mut parts: Vec<String> = Vec::new();
+        parts.push(format!("SELECT {}", projection));
+        parts.push(format!("FROM {}", from_clause));
+
+        for join in joins {
+            parts.push(join);
+        }
+
+        if let Some(w) = where_clause {
+            parts.push(w);
+        }
+
+        if let Some(g) = group_by_clause {
+            parts.push(g);
+        }
+
+        if let Some(h) = having_clause {
+            parts.push(h);
+        }
+
+        if let Some(o) = order_by {
+            parts.push(o);
+        }
+
+        if let Some(lo) = limit_offset {
+            parts.push(lo);
+        }
+
+        Ok(SelectQuery {
+            sql: parts.join("\n"),
+            params,
+        })
+    }
+
+    /// Builds a `SELECT COUNT(*) FROM (<grouped query without LIMIT/OFFSET>) AS _dbflux_count_subq`.
+    ///
+    /// The inner query is built by cloning the spec and zeroing the pagination fields.
+    /// This is the correct way to count the number of result rows for a grouped query.
+    pub(crate) fn build_count_of_grouped(
+        &self,
+        spec: &VisualQuerySpec,
+    ) -> Result<SelectQuery, QueryGenError> {
+        let mut inner_spec = spec.clone();
+        inner_spec.limit = None;
+        inner_spec.offset = 0;
+
+        let inner = self.build(&inner_spec)?;
+
+        Ok(SelectQuery {
+            sql: format!("SELECT COUNT(*) FROM ({}) AS _dbflux_count_subq", inner.sql),
+            params: inner.params,
+        })
+    }
+
+    fn build_projection_grouped(
+        &self,
+        group_by: &[crate::query::visual_query::GroupByEntry],
+        aggregates: &[crate::query::visual_query::AggregateSpec],
+    ) -> Result<String, QueryGenError> {
+        use crate::query::visual_query::AggFn;
+
+        let mut parts: Vec<String> = Vec::new();
+
+        for entry in group_by {
+            parts.push(format!(
+                "{}.{}",
+                self.dialect.quote_identifier(&entry.source_alias),
+                self.dialect.quote_identifier(&entry.column)
+            ));
+        }
+
+        for agg in aggregates {
+            let alias = self.dialect.quote_identifier(&agg.alias);
+            let expr = match agg.function {
+                AggFn::CountStar => format!("COUNT(*) AS {}", alias),
+                AggFn::CountDistinct => {
+                    let source = agg.source_alias.as_deref().ok_or_else(|| {
+                        QueryGenError::InvalidSpec(
+                            "CountDistinct requires source_alias".to_string(),
+                        )
+                    })?;
+                    let col = agg.column.as_deref().ok_or_else(|| {
+                        QueryGenError::InvalidSpec(
+                            "CountDistinct requires column".to_string(),
+                        )
+                    })?;
+                    format!(
+                        "COUNT(DISTINCT {}.{}) AS {}",
+                        self.dialect.quote_identifier(source),
+                        self.dialect.quote_identifier(col),
+                        alias
+                    )
+                }
+                fn_name => {
+                    let source = agg.source_alias.as_deref().ok_or_else(|| {
+                        QueryGenError::InvalidSpec(format!(
+                            "{:?} requires source_alias",
+                            fn_name
+                        ))
+                    })?;
+                    let col = agg.column.as_deref().ok_or_else(|| {
+                        QueryGenError::InvalidSpec(format!(
+                            "{:?} requires column",
+                            fn_name
+                        ))
+                    })?;
+                    let sql_fn = match fn_name {
+                        AggFn::Count => "COUNT",
+                        AggFn::Sum => "SUM",
+                        AggFn::Avg => "AVG",
+                        AggFn::Min => "MIN",
+                        AggFn::Max => "MAX",
+                        _ => unreachable!("handled above"),
+                    };
+                    format!(
+                        "{}({}.{}) AS {}",
+                        sql_fn,
+                        self.dialect.quote_identifier(source),
+                        self.dialect.quote_identifier(col),
+                        alias
+                    )
+                }
+            };
+            parts.push(expr);
+        }
+
+        if parts.is_empty() {
+            return Err(QueryGenError::InvalidSpec(
+                "grouped query must have at least one group-by column or aggregate".to_string(),
+            ));
+        }
+
+        Ok(parts.join(", "))
+    }
+
+    fn build_group_by(
+        &self,
+        group_by: &[crate::query::visual_query::GroupByEntry],
+    ) -> Option<String> {
+        if group_by.is_empty() {
+            return None;
+        }
+
+        let cols: Vec<String> = group_by
+            .iter()
+            .map(|g| {
+                format!(
+                    "{}.{}",
+                    self.dialect.quote_identifier(&g.source_alias),
+                    self.dialect.quote_identifier(&g.column)
+                )
+            })
+            .collect();
+
+        Some(format!("GROUP BY {}", cols.join(", ")))
+    }
+
+    fn build_order_by_grouped(
+        &self,
+        sort: &[crate::query::visual_query::SortEntry],
+        group_by: &[crate::query::visual_query::GroupByEntry],
+        aggregates: &[crate::query::visual_query::AggregateSpec],
+    ) -> Option<String> {
+        use crate::query::visual_query::SortDirection;
+        use std::collections::HashSet;
+
+        let valid_group_by_cols: HashSet<&str> =
+            group_by.iter().map(|g| g.column.as_str()).collect();
+        let valid_agg_aliases: HashSet<&str> =
+            aggregates.iter().map(|a| a.alias.as_str()).collect();
+
+        let entries: Vec<String> = sort
+            .iter()
+            .filter(|s| {
+                valid_group_by_cols.contains(s.column.as_str())
+                    || valid_agg_aliases.contains(s.column.as_str())
+            })
+            .map(|s| {
+                let col = self.dialect.quote_identifier(&s.column);
+                let dir = match s.direction {
+                    SortDirection::Asc => "ASC",
+                    SortDirection::Desc => "DESC",
+                };
+                format!("{} {}", col, dir)
+            })
+            .collect();
+
+        if entries.is_empty() {
+            None
+        } else {
+            Some(format!("ORDER BY {}", entries.join(", ")))
+        }
     }
 
     fn build_projection(&self, projection: &crate::query::visual_query::Projection) -> String {
@@ -706,7 +932,7 @@ impl<'a> SqlSelectBuilder<'a> {
                 // Skip predicates the user is still authoring: an empty column
                 // reference would trip identifier-quoting asserts in dialect
                 // drivers (PostgreSQL's pg_quote_ident is debug-asserted).
-                if pred.column.trim().is_empty() || pred.source_alias.trim().is_empty() {
+                if pred.column.trim().is_empty() {
                     return Ok(String::new());
                 }
                 self.render_predicate(pred, params, param_index)
@@ -750,11 +976,15 @@ impl<'a> SqlSelectBuilder<'a> {
     ) -> Result<String, QueryGenError> {
         use crate::query::visual_query::{Comparator, PredicateValue};
 
-        let col = format!(
-            "{}.{}",
-            self.dialect.quote_identifier(&pred.source_alias),
-            self.dialect.quote_identifier(&pred.column),
-        );
+        let col = if pred.source_alias.trim().is_empty() {
+            self.dialect.quote_identifier(&pred.column)
+        } else {
+            format!(
+                "{}.{}",
+                self.dialect.quote_identifier(&pred.source_alias),
+                self.dialect.quote_identifier(&pred.column),
+            )
+        };
 
         match pred.comparator {
             Comparator::IsNull => Ok(format!("{} IS NULL", col)),
