@@ -94,6 +94,15 @@ pub trait SqlDialect: Send + Sync {
         true
     }
 
+    /// Returns the dialect-appropriate clause to append at the END of a SELECT
+    /// to limit rows. Safe to append after `ORDER BY`.
+    ///
+    /// Most dialects use `LIMIT n`. SQL Server (T-SQL) requires
+    /// `OFFSET 0 ROWS FETCH NEXT n ROWS ONLY` because `LIMIT` is not valid T-SQL.
+    fn limit_clause(&self, n: u32) -> String {
+        format!("LIMIT {}", n)
+    }
+
     /// Build an UPSERT statement for this dialect.
     fn build_upsert_statement(
         &self,
@@ -272,5 +281,19 @@ mod tests {
     fn normalize_default_preserves_already_lowercase() {
         let dialect = NopDialect;
         assert_eq!(dialect.normalize_identifier("email"), "email");
+    }
+
+    // F-R3-1: limit_clause default returns LIMIT n (used by Postgres, MySQL, SQLite)
+    #[test]
+    fn postgres_limit_clause_uses_limit() {
+        let dialect = NopDialect;
+        assert_eq!(dialect.limit_clause(5), "LIMIT 5");
+    }
+
+    // F-R3-1: limit_clause with n=1
+    #[test]
+    fn default_limit_clause_single_row() {
+        let dialect = NopDialect;
+        assert_eq!(dialect.limit_clause(1), "LIMIT 1");
     }
 }
