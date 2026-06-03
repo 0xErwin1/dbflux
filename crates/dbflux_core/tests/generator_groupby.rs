@@ -711,8 +711,7 @@ fn count_of_grouped_mysql_uses_backtick_quoting() {
     spec.limit = Some(25);
     spec.offset = 5;
 
-    let q =
-        dbflux_core::build_count_of_grouped_query(&spec, &MySqlDialect).expect("must succeed");
+    let q = dbflux_core::build_count_of_grouped_query(&spec, &MySqlDialect).expect("must succeed");
 
     assert!(
         q.sql.starts_with("SELECT COUNT(*) FROM ("),
@@ -742,8 +741,7 @@ fn count_of_grouped_mssql_uses_bracket_quoting() {
     spec.limit = Some(25);
     spec.offset = 5;
 
-    let q =
-        dbflux_core::build_count_of_grouped_query(&spec, &MssqlDialect).expect("must succeed");
+    let q = dbflux_core::build_count_of_grouped_query(&spec, &MssqlDialect).expect("must succeed");
 
     assert!(
         q.sql.starts_with("SELECT COUNT(*) FROM ("),

@@ -2262,12 +2262,7 @@ impl QueryBuilderPanel {
             move |this, entity, event: &InputEvent, window, cx| {
                 if matches!(event, InputEvent::Change) {
                     let text = entity.read(cx).value().to_string();
-                    this.set_predicate_column_ref_for(
-                        FilterTarget::Having,
-                        path.clone(),
-                        text,
-                        cx,
-                    );
+                    this.set_predicate_column_ref_for(FilterTarget::Having, path.clone(), text, cx);
                     let _ = window;
                 }
             },
@@ -3268,7 +3263,12 @@ mod tests {
             self.rebuild_spec_pure();
         }
 
-        fn t_add_aggregate_with_column(&mut self, function: AggFn, source_alias: &str, column: &str) {
+        fn t_add_aggregate_with_column(
+            &mut self,
+            function: AggFn,
+            source_alias: &str,
+            column: &str,
+        ) {
             let was_empty = self.group_by_rows.is_empty() && self.aggregate_rows.is_empty();
             let alias = self.generate_aggregate_alias(function, column);
             self.aggregate_rows.push(AggregateRow {
@@ -3765,7 +3765,10 @@ mod tests {
 
         // Remove group_by only — still grouped because aggregate remains
         panel.t_remove_group_by_row(0);
-        assert!(panel.is_grouped(), "still grouped due to remaining aggregate");
+        assert!(
+            panel.is_grouped(),
+            "still grouped due to remaining aggregate"
+        );
 
         // Remove aggregate — now ungrouped
         panel.t_remove_aggregate_row(0);
