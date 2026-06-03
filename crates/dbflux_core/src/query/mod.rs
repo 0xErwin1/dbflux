@@ -9,7 +9,7 @@ pub(crate) mod time_macros;
 pub(crate) mod types;
 pub(crate) mod visual_query;
 
-pub use column_kind::infer_column_kind;
+pub use column_kind::{infer_column_kind, project_aggregate_kinds};
 pub use generator::{
     CollectionTemplateRequest, GeneratedQuery, MutationCategory, MutationTemplateOperation,
     MutationTemplateRequest, QueryGenError, QueryGenerator, ReadTemplateOperation,
@@ -37,10 +37,10 @@ pub use types::{
     ColumnKind, ColumnMeta, QueryHandle, QueryRequest, QueryResult, QueryResultShape,
     ResolvedWindow, Row,
 };
+pub use visual_query::AggregateSpec as VisualAggregateSpec;
 pub use visual_query::SortDirection as VisualSortDirection;
 pub use visual_query::{
     AggFn, AliasOrigin, BoolOp, Comparator, FilterNode, GroupByEntry, JoinFilterNode, JoinKind,
     JoinOn, JoinPredicate, JoinStep, LiteralValue, Predicate, PredicateValue, ProjectedColumn,
     Projection, SortEntry, SourceTable, SpecError, VisualQuerySpec,
 };
-pub use visual_query::AggregateSpec as VisualAggregateSpec;
