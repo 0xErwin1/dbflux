@@ -3099,10 +3099,15 @@ impl DataGridPanel {
                 self.import_builder_query(source_id.clone(), cx);
             }
 
-            BuilderEvent::MutationRunRequested { spec, opts } => {
+            BuilderEvent::MutationRunRequested {
+                spec,
+                opts,
+                est_rows,
+            } => {
                 self.on_mutation_run_requested(
                     spec.as_ref().clone(),
                     opts.as_ref().clone(),
+                    *est_rows,
                     window,
                     cx,
                 );
@@ -3252,6 +3257,7 @@ impl DataGridPanel {
         &mut self,
         spec: dbflux_core::VisualMutationSpec,
         opts: crate::data_grid_panel::mutation_executor::MutationExecOptions,
+        est_rows: Option<u64>,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -3307,7 +3313,12 @@ impl DataGridPanel {
             MutationPolicy::ApprovalRequired => {
                 #[cfg(feature = "mcp")]
                 {
+                    use dbflux_core::MutationKind;
                     use dbflux_policy::ExecutionClassification;
+                    let classification = match &spec.kind {
+                        MutationKind::Delete => ExecutionClassification::Destructive,
+                        MutationKind::Update { .. } => ExecutionClassification::Write,
+                    };
                     let spec_json = serde_json::to_value(&spec).unwrap_or_default();
                     let connection_id = profile_id.to_string();
                     self.app_state.update(cx, |app, _| {
@@ -3315,7 +3326,7 @@ impl DataGridPanel {
                             "user".to_string(),
                             connection_id,
                             "mutation.run".to_string(),
-                            ExecutionClassification::Write,
+                            classification,
                             spec_json,
                         );
                     });
@@ -3356,7 +3367,7 @@ impl DataGridPanel {
         let modal = crate::data_grid_panel::mutation_confirm::build_pending_modal(
             &spec,
             sql_preview,
-            None,
+            est_rows,
             sample_columns,
             sample_rows_opt,
             &pk_col_refs,
@@ -3418,7 +3429,12 @@ impl DataGridPanel {
 
         #[cfg(feature = "mcp")]
         if matches!(policy, dbflux_core::MutationPolicy::ApprovalRequired) {
+            use dbflux_core::MutationKind;
             use dbflux_policy::ExecutionClassification;
+            let classification = match &pending.spec.kind {
+                MutationKind::Delete => ExecutionClassification::Destructive,
+                MutationKind::Update { .. } => ExecutionClassification::Write,
+            };
             let spec_json = serde_json::to_value(&pending.spec).unwrap_or_default();
             let connection_id = pending.profile_id.to_string();
             self.app_state.update(cx, |app, _| {
@@ -3426,7 +3442,7 @@ impl DataGridPanel {
                     "user".to_string(),
                     connection_id,
                     "mutation.run".to_string(),
-                    ExecutionClassification::Write,
+                    classification,
                     spec_json,
                 );
             });
@@ -3467,13 +3483,13 @@ impl DataGridPanel {
                 return;
             }
 
-            let (_task_id, cancel_handle) = self.runner.start_mutation(
+            let (task_id, cancel_handle) = self.runner.start_mutation(
                 dbflux_core::TaskKind::Query,
                 "Visual mutation (chunked)",
                 cx,
             );
 
-            cx.spawn(async move |_this, cx| {
+            cx.spawn(async move |this, cx| {
                 use crate::data_grid_panel::mutation_executor::{
                     MutationExecutor, MutationOutcome,
                 };
@@ -3490,6 +3506,13 @@ impl DataGridPanel {
 
                 match result {
                     Err(e) => {
+                        cx.update(|cx| {
+                            this.update(cx, |grid, cx| {
+                                grid.runner.fail_mutation(task_id, e.to_string(), cx);
+                            })
+                            .ok();
+                        })
+                        .ok();
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
@@ -3500,6 +3523,10 @@ impl DataGridPanel {
                     }
                     Ok(MutationOutcome::Success { rows_affected }) => {
                         cx.update(|cx| {
+                            this.update(cx, |grid, cx| {
+                                grid.runner.complete_mutation(task_id, cx);
+                            })
+                            .ok();
                             dbflux_ui_base::toast::Toast::success(format!(
                                 "Mutation completed: {} row{} affected",
                                 rows_affected,
@@ -3511,6 +3538,10 @@ impl DataGridPanel {
                     }
                     Ok(MutationOutcome::Cancelled { rows_affected }) => {
                         cx.update(|cx| {
+                            this.update(cx, |grid, cx| {
+                                grid.runner.cancel_mutation(task_id, cx);
+                            })
+                            .ok();
                             dbflux_ui_base::toast::Toast::info(format!(
                                 "Mutation cancelled after {} row{} processed",
                                 rows_affected,
@@ -3521,6 +3552,13 @@ impl DataGridPanel {
                         .ok();
                     }
                     Ok(MutationOutcome::Failed { error }) => {
+                        cx.update(|cx| {
+                            this.update(cx, |grid, cx| {
+                                grid.runner.fail_mutation(task_id, error.clone(), cx);
+                            })
+                            .ok();
+                        })
+                        .ok();
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
@@ -3536,7 +3574,13 @@ impl DataGridPanel {
             opts.mode,
             crate::data_grid_panel::mutation_executor::ExecutionMode::DirectAutocommit
         ) {
-            cx.spawn(async move |_this, cx| {
+            let (task_id, _cancel_handle) = self.runner.start_mutation(
+                dbflux_core::TaskKind::Query,
+                "Visual mutation (direct)",
+                cx,
+            );
+
+            cx.spawn(async move |this, cx| {
                 use crate::data_grid_panel::mutation_executor::{
                     MutationExecutor, MutationOutcome,
                 };
@@ -3552,6 +3596,13 @@ impl DataGridPanel {
 
                 match result {
                     Err(e) => {
+                        cx.update(|cx| {
+                            this.update(cx, |grid, cx| {
+                                grid.runner.fail_mutation(task_id, e.to_string(), cx);
+                            })
+                            .ok();
+                        })
+                        .ok();
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
@@ -3562,6 +3613,10 @@ impl DataGridPanel {
                     }
                     Ok(MutationOutcome::Success { rows_affected }) => {
                         cx.update(|cx| {
+                            this.update(cx, |grid, cx| {
+                                grid.runner.complete_mutation(task_id, cx);
+                            })
+                            .ok();
                             dbflux_ui_base::toast::Toast::success(format!(
                                 "Mutation completed: {} row{} affected",
                                 rows_affected,
@@ -3573,6 +3628,10 @@ impl DataGridPanel {
                     }
                     Ok(MutationOutcome::Cancelled { rows_affected }) => {
                         cx.update(|cx| {
+                            this.update(cx, |grid, cx| {
+                                grid.runner.cancel_mutation(task_id, cx);
+                            })
+                            .ok();
                             dbflux_ui_base::toast::Toast::info(format!(
                                 "Mutation cancelled after {} row{} processed",
                                 rows_affected,
@@ -3583,6 +3642,13 @@ impl DataGridPanel {
                         .ok();
                     }
                     Ok(MutationOutcome::Failed { error }) => {
+                        cx.update(|cx| {
+                            this.update(cx, |grid, cx| {
+                                grid.runner.fail_mutation(task_id, error.clone(), cx);
+                            })
+                            .ok();
+                        })
+                        .ok();
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
@@ -3595,7 +3661,13 @@ impl DataGridPanel {
             })
             .detach();
         } else {
-            cx.spawn(async move |_this, cx| {
+            let (task_id, _cancel_handle) = self.runner.start_mutation(
+                dbflux_core::TaskKind::Query,
+                "Visual mutation (single transaction)",
+                cx,
+            );
+
+            cx.spawn(async move |this, cx| {
                 use crate::data_grid_panel::mutation_executor::{
                     MutationExecutor, MutationOutcome,
                 };
@@ -3611,6 +3683,13 @@ impl DataGridPanel {
 
                 match result {
                     Err(e) => {
+                        cx.update(|cx| {
+                            this.update(cx, |grid, cx| {
+                                grid.runner.fail_mutation(task_id, e.to_string(), cx);
+                            })
+                            .ok();
+                        })
+                        .ok();
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
@@ -3621,6 +3700,10 @@ impl DataGridPanel {
                     }
                     Ok(MutationOutcome::Success { rows_affected }) => {
                         cx.update(|cx| {
+                            this.update(cx, |grid, cx| {
+                                grid.runner.complete_mutation(task_id, cx);
+                            })
+                            .ok();
                             dbflux_ui_base::toast::Toast::success(format!(
                                 "Mutation completed: {} row{} affected",
                                 rows_affected,
@@ -3632,6 +3715,10 @@ impl DataGridPanel {
                     }
                     Ok(MutationOutcome::Cancelled { rows_affected }) => {
                         cx.update(|cx| {
+                            this.update(cx, |grid, cx| {
+                                grid.runner.cancel_mutation(task_id, cx);
+                            })
+                            .ok();
                             dbflux_ui_base::toast::Toast::info(format!(
                                 "Mutation cancelled after {} row{} processed",
                                 rows_affected,
@@ -3642,6 +3729,13 @@ impl DataGridPanel {
                         .ok();
                     }
                     Ok(MutationOutcome::Failed { error }) => {
+                        cx.update(|cx| {
+                            this.update(cx, |grid, cx| {
+                                grid.runner.fail_mutation(task_id, error.clone(), cx);
+                            })
+                            .ok();
+                        })
+                        .ok();
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
@@ -5197,7 +5291,7 @@ mod tests {
 
         window.update(|window, app| {
             panel.update(app, |panel, cx| {
-                panel.on_mutation_run_requested(spec, opts, window, cx);
+                panel.on_mutation_run_requested(spec, opts, None, window, cx);
             });
         });
 
