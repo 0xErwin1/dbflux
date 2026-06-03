@@ -700,3 +700,69 @@ fn ungrouped_query_unchanged_mssql() {
         q.sql
     );
 }
+
+// =============================================================================
+// SUGGESTION 2: MySQL/MSSQL count-of-grouped coverage
+// =============================================================================
+
+#[test]
+fn count_of_grouped_mysql_uses_backtick_quoting() {
+    let mut spec = grouped_sum_spec();
+    spec.limit = Some(25);
+    spec.offset = 5;
+
+    let q =
+        dbflux_core::build_count_of_grouped_query(&spec, &MySqlDialect).expect("must succeed");
+
+    assert!(
+        q.sql.starts_with("SELECT COUNT(*) FROM ("),
+        "mysql: must start with COUNT subquery: {}",
+        q.sql
+    );
+    assert!(
+        q.sql.ends_with(") AS _dbflux_count_subq"),
+        "mysql: must end with subquery alias: {}",
+        q.sql
+    );
+    assert!(
+        !q.sql.contains("LIMIT"),
+        "mysql: inner query must not have LIMIT: {}",
+        q.sql
+    );
+    assert!(
+        q.sql.contains("`country`"),
+        "mysql: group-by column must be backtick-quoted: {}",
+        q.sql
+    );
+}
+
+#[test]
+fn count_of_grouped_mssql_uses_bracket_quoting() {
+    let mut spec = grouped_sum_spec();
+    spec.limit = Some(25);
+    spec.offset = 5;
+
+    let q =
+        dbflux_core::build_count_of_grouped_query(&spec, &MssqlDialect).expect("must succeed");
+
+    assert!(
+        q.sql.starts_with("SELECT COUNT(*) FROM ("),
+        "mssql: must start with COUNT subquery: {}",
+        q.sql
+    );
+    assert!(
+        q.sql.ends_with(") AS _dbflux_count_subq"),
+        "mssql: must end with subquery alias: {}",
+        q.sql
+    );
+    assert!(
+        !q.sql.contains("TOP"),
+        "mssql: inner query must not have TOP (pagination): {}",
+        q.sql
+    );
+    assert!(
+        q.sql.contains("[country]"),
+        "mssql: group-by column must be bracket-quoted: {}",
+        q.sql
+    );
+}
