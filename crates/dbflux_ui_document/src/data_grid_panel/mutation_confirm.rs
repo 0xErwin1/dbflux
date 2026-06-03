@@ -523,7 +523,7 @@ mod tests {
         impl PgRecordingConnection {
             fn new() -> Arc<Self> {
                 let meta = DriverMetadataBuilder::new(
-                    "postgres",
+                    "postgres", // guardrail-allow: test stub, not production driver branching
                     "PostgreSQL",
                     DatabaseCategory::Relational,
                     QueryLanguage::Sql,

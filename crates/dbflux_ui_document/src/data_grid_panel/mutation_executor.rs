@@ -411,7 +411,10 @@ impl MutationExecutor {
         if cancel.is_cancelled() {
             let rollback_req = QueryRequest::new(vocab.rollback);
             if let Err(rb_err) = self.deps.connection.execute(&rollback_req) {
-                log::warn!("ROLLBACK failed during cancellation after BEGIN: {}", rb_err);
+                log::warn!(
+                    "ROLLBACK failed during cancellation after BEGIN: {}",
+                    rb_err
+                );
             }
             self.emit_cancelled_event(&run_id, op_kind, &table_name, 0);
             self.reset_lock_timeout_if_needed(&vocab);
@@ -1362,7 +1365,9 @@ mod tests {
             let deps = make_deps(conn, None);
             let executor = MutationExecutor::new(spec, opts, deps);
 
-            let result = executor.run_single_tx(&no_cancel()).expect("expected success");
+            let result = executor
+                .run_single_tx(&no_cancel())
+                .expect("expected success");
             assert_eq!(result, MutationOutcome::Success { rows_affected: 42 });
         }
 
@@ -1660,12 +1665,8 @@ mod tests {
             let conn = RecordingConnection::new(DbKind::Postgres, 5);
             let conn_ref = Arc::clone(&conn);
             let spec = make_delete_spec("orders");
-            let opts = MutationExecOptions::new(
-                ExecutionMode::DirectAutocommit,
-                1_000,
-                None,
-                3_000,
-            );
+            let opts =
+                MutationExecOptions::new(ExecutionMode::DirectAutocommit, 1_000, None, 3_000);
             let deps = make_deps(conn, None);
             let executor = MutationExecutor::new(spec, opts, deps);
 
@@ -3320,7 +3321,9 @@ mod tests {
                 let u = c.to_ascii_uppercase();
                 u.starts_with("DELETE") || u.starts_with("UPDATE")
             });
-            let reset_pos = calls.iter().rposition(|c| c.to_ascii_uppercase().contains("DEFAULT"));
+            let reset_pos = calls
+                .iter()
+                .rposition(|c| c.to_ascii_uppercase().contains("DEFAULT"));
 
             assert!(
                 set_pos.is_some(),
@@ -3421,7 +3424,10 @@ mod tests {
             // max_params=100, 4 PK cols, 50 SET params, 10 filter params
             // => overhead=60, per_row=4, max_safe=(100-60)/4 = 10
             let (effective, reduced_from) = compute_effective_chunk_size(1_000, 100, 10, 50, 4);
-            assert_eq!(effective, 10, "effective must follow driver limit below floor");
+            assert_eq!(
+                effective, 10,
+                "effective must follow driver limit below floor"
+            );
             assert_eq!(
                 reduced_from,
                 Some(1_000),
@@ -3432,8 +3438,7 @@ mod tests {
         // F-R4-2: max_params=0 means unlimited — no reduction.
         #[test]
         fn chunk_size_unchanged_when_max_params_is_zero() {
-            let (effective, reduced_from) =
-                compute_effective_chunk_size(5_000, 0, 100, 100, 4);
+            let (effective, reduced_from) = compute_effective_chunk_size(5_000, 0, 100, 100, 4);
             assert_eq!(effective, 5_000, "zero max_params means unlimited");
             assert_eq!(reduced_from, None);
         }
