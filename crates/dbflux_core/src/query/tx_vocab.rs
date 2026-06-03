@@ -21,6 +21,16 @@ pub struct TransactionVocab {
     /// `SET LOCAL lock_timeout` and MSSQL's `SET LOCK_TIMEOUT` are effective inside
     /// the transaction and must be emitted after BEGIN.
     pub lock_timeout_before_begin: bool,
+
+    /// SQL to reset the lock timeout to its default after the run completes.
+    ///
+    /// Some drivers use session-scoped lock timeout settings (MySQL's
+    /// `SET SESSION innodb_lock_wait_timeout`) that persist for the connection
+    /// lifetime. This statement is emitted after the run concludes (success,
+    /// failure, or cancel) so pooled connections don't inherit the previous
+    /// timeout. `None` when the driver's timeout scope is transaction-local
+    /// (Postgres, SQL Server) and resets automatically.
+    pub lock_timeout_reset_sql: Option<&'static str>,
 }
 
 impl TransactionVocab {
@@ -39,6 +49,8 @@ impl TransactionVocab {
                 rollback: "ROLLBACK",
                 lock_timeout_template: Some("SET LOCAL lock_timeout = '{ms}ms'"),
                 lock_timeout_before_begin: false,
+                // Postgres uses SET LOCAL — resets automatically at transaction end.
+                lock_timeout_reset_sql: None,
             }),
             DbKind::MySQL | DbKind::MariaDB => Some(Self {
                 begin: "START TRANSACTION",
@@ -48,6 +60,8 @@ impl TransactionVocab {
                 // Emitted BEFORE BEGIN so it takes effect before any lock acquisition.
                 lock_timeout_template: Some("SET SESSION innodb_lock_wait_timeout = {seconds}"),
                 lock_timeout_before_begin: true,
+                // SESSION scope persists on pooled connections; reset to default after run.
+                lock_timeout_reset_sql: Some("SET SESSION innodb_lock_wait_timeout = DEFAULT"),
             }),
             DbKind::SQLite => Some(Self {
                 begin: "BEGIN IMMEDIATE",
@@ -55,6 +69,7 @@ impl TransactionVocab {
                 rollback: "ROLLBACK",
                 lock_timeout_template: None,
                 lock_timeout_before_begin: false,
+                lock_timeout_reset_sql: None,
             }),
             DbKind::SqlServer => Some(Self {
                 begin: "BEGIN TRANSACTION",
@@ -62,6 +77,9 @@ impl TransactionVocab {
                 rollback: "ROLLBACK",
                 lock_timeout_template: Some("SET LOCK_TIMEOUT {ms}"),
                 lock_timeout_before_begin: false,
+                // SQL Server's SET LOCK_TIMEOUT is connection-scoped; reset it so pooled
+                // connections don't silently inherit the timeout from a previous mutation.
+                lock_timeout_reset_sql: Some("SET LOCK_TIMEOUT -1"),
             }),
             DbKind::MongoDB
             | DbKind::Redis
