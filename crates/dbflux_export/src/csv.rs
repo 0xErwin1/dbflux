@@ -43,7 +43,7 @@ impl CsvExporter {
 
 fn value_to_csv_field(value: &Value) -> String {
     match value {
-        Value::Null => "\\N".to_string(),
+        Value::Null => String::new(),
         Value::Bool(b) => if *b { "true" } else { "false" }.to_string(),
         Value::Int(i) => i.to_string(),
         Value::Float(f) => {
@@ -147,18 +147,23 @@ mod tests {
     }
 
     #[test]
-    fn null_exports_as_backslash_n() {
-        let result = make_result(vec!["value"], vec![vec![Value::Null]]);
+    fn null_exports_as_empty_field() {
+        let result = make_result(
+            vec!["a", "b"],
+            vec![vec![Value::Text("x".to_string()), Value::Null]],
+        );
 
         let mut buf = Vec::new();
         CsvExporter.export(&result, &mut buf).unwrap();
 
         let output = String::from_utf8(buf).unwrap();
-        assert!(output.contains("\\N"));
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(lines, vec!["a,b", "x,"]);
+        assert!(!output.contains("\\N"));
     }
 
     #[test]
-    fn empty_string_is_distinct_from_null() {
+    fn null_and_empty_string_share_representation() {
         let result = make_result(
             vec!["null_col", "empty_col"],
             vec![vec![Value::Null, Value::Text(String::new())]],
@@ -170,7 +175,7 @@ mod tests {
         let output = String::from_utf8(buf).unwrap();
         let lines: Vec<&str> = output.lines().collect();
         assert_eq!(lines.len(), 2);
-        assert!(lines[1].starts_with("\\N,"));
+        assert_eq!(lines[1], ",");
     }
 
     #[test]
