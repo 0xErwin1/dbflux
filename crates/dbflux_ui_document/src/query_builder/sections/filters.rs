@@ -41,7 +41,10 @@ pub fn render_filters_for_target(
 
     let filter_depth = tree.as_ref().map_or(0, |f| f.depth());
 
-    let source_alias = panel.current_spec.source.alias.clone();
+    let source_alias = match target {
+        FilterTarget::Having => String::new(),
+        FilterTarget::Where => panel.current_spec.source.alias.clone(),
+    };
     let source_alias_for_group = source_alias.clone();
 
     let (add_pred_id, add_group_id): (ElementId, ElementId) = match target {
