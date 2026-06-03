@@ -2399,8 +2399,13 @@ impl DataGridPanel {
         cx.notify();
     }
 
-    /// Returns `true` when the last successfully executed query was a grouped
-    /// (aggregated) query.
+    /// Returns `true` when the currently displayed result rows are from a
+    /// grouped (aggregated) query.
+    ///
+    /// `current_visual_spec` is updated only on successful query completion so
+    /// it always describes the rows visible in the grid. On query failure the
+    /// previous successful spec is retained, which keeps this method consistent
+    /// with what the user can actually see and interact with.
     pub fn is_grouped_result(&self) -> bool {
         self.current_visual_spec
             .as_ref()

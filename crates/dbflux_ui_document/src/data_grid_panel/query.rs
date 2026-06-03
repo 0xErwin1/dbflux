@@ -408,7 +408,6 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.fail_primary(task_id, e.to_string(), cx);
-                            panel.current_visual_spec = committed_spec.clone();
                             panel.state = GridState::Error;
                             panel.pending_toast = Some(PendingToast {
                                 message: format!("Query failed: {}", e),
