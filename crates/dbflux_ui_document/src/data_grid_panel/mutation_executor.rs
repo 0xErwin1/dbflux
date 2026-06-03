@@ -333,6 +333,7 @@ impl MutationExecutor {
             if let Err(e) = self.deps.connection.execute(&lock_req) {
                 let err_msg = e.to_string();
                 self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
+                self.reset_lock_timeout_if_needed(&vocab);
                 return Err(ExecutorError::Transaction(err_msg));
             }
         }
@@ -341,6 +342,7 @@ impl MutationExecutor {
         if let Err(e) = self.deps.connection.execute(&begin_req) {
             let err_msg = e.to_string();
             self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
+            self.reset_lock_timeout_if_needed(&vocab);
             return Err(ExecutorError::Transaction(err_msg));
         }
 
@@ -356,6 +358,7 @@ impl MutationExecutor {
                     log::warn!("ROLLBACK failed after lock_timeout error: {}", rb_err);
                 }
                 self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
+                self.reset_lock_timeout_if_needed(&vocab);
                 return Err(ExecutorError::Transaction(err_msg));
             }
         }
@@ -372,6 +375,7 @@ impl MutationExecutor {
                     log::warn!("ROLLBACK failed during error recovery: {}", rb_err);
                 }
                 self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
+                self.reset_lock_timeout_if_needed(&vocab);
                 Err(ExecutorError::Transaction(err_msg))
             }
             Ok(result) => {
@@ -381,6 +385,7 @@ impl MutationExecutor {
                 if let Err(e) = self.deps.connection.execute(&commit_req) {
                     let err_msg = e.to_string();
                     self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
+                    self.reset_lock_timeout_if_needed(&vocab);
                     return Err(ExecutorError::Transaction(err_msg));
                 }
 
@@ -398,7 +403,7 @@ impl MutationExecutor {
                 .with_correlation_id(run_id);
 
                 self.emit_event(success_event);
-
+                self.reset_lock_timeout_if_needed(&vocab);
                 Ok(MutationOutcome::Success { rows_affected })
             }
         }
@@ -483,6 +488,18 @@ impl MutationExecutor {
     /// the executor never post-concatenates SQL.
     ///
     /// Cancellation is checked between chunks; the current chunk always runs to completion.
+    /// When cancel is pressed, the current in-flight DML is not interrupted — it runs to its
+    /// natural end (commit or rollback), and the loop exits before starting the next chunk.
+    ///
+    /// # PK SELECT consistency note
+    ///
+    /// The keyset SELECT runs outside any chunk transaction. This is an accepted trade-off:
+    /// the SELECT is read-only and used only to compute the next batch of PKs; it does not
+    /// need to see the effects of earlier chunks. Running it outside the transaction avoids
+    /// holding read locks across the SELECT + DML window, which would increase contention
+    /// on busy tables. The approach is safe because the DML itself re-filters by PK IN (...)
+    /// combined with the original user filter, so rows that disappear between the SELECT and
+    /// the DML are simply missed (no phantom deletes, no stale updates).
     ///
     /// `pk_cols` are the primary key column names of the target table.
     /// `cancel` is checked between chunks — flip it to abort after the current chunk.
@@ -506,7 +523,6 @@ impl MutationExecutor {
             MutationKind::Update { .. } => "update",
             MutationKind::Delete => "delete",
         };
-        let chunk_size = self.opts.chunk_size as usize;
 
         let run_id = uuid::Uuid::new_v4().to_string();
 
@@ -528,6 +544,58 @@ impl MutationExecutor {
 
         let dialect = self.deps.connection.dialect();
 
+        // Clamp chunk_size to stay within the driver's max_query_parameters limit.
+        // A composite PK chunk binds `chunk_size * pk_cols.len()` params for PK IN,
+        // plus filter params and SET params. If the total would exceed the driver
+        // limit, reduce chunk_size to the largest safe value.
+        let effective_chunk_size = {
+            let max_params = self
+                .deps
+                .connection
+                .metadata()
+                .query
+                .as_ref()
+                .map(|q| q.max_query_parameters)
+                .unwrap_or(0);
+
+            if max_params == 0 {
+                // Zero means unlimited — no clamping needed.
+                self.opts.chunk_size
+            } else {
+                // Count filter params (overhead shared by every chunk).
+                let mut dummy_filter_params: Vec<Value> = Vec::new();
+                let mut dummy_idx: usize = 1;
+                render_filter_node_sql(
+                    self.spec.filter.as_ref(),
+                    dialect,
+                    &mut dummy_filter_params,
+                    &mut dummy_idx,
+                );
+                let filter_param_count = dummy_filter_params.len() as u32;
+
+                // Count SET params (each assignment that uses a bound value).
+                let assignment_param_count = match &self.spec.kind {
+                    MutationKind::Update { assignments } => assignments.len() as u32,
+                    MutationKind::Delete => 0,
+                };
+
+                let overhead = filter_param_count + assignment_param_count;
+                let per_row = (pk_cols.len() as u32).max(1);
+                let max_safe = max_params.saturating_sub(overhead) / per_row;
+
+                if max_safe < self.opts.chunk_size {
+                    log::info!(
+                        "chunk_size reduced from {} to {} due to driver max_query_parameters={}",
+                        self.opts.chunk_size,
+                        max_safe.max(1),
+                        max_params
+                    );
+                }
+
+                self.opts.chunk_size.min(max_safe).max(1)
+            }
+        };
+
         loop {
             if cancel.is_cancelled() {
                 let cancelled_event = EventRecord::new(
@@ -543,13 +611,13 @@ impl MutationExecutor {
                 ))
                 .with_correlation_id(run_id.clone());
                 self.emit_event(cancelled_event);
-
+                self.reset_lock_timeout_if_needed(&vocab);
                 return Ok(MutationOutcome::Cancelled {
                     rows_affected: rows_affected_total,
                 });
             }
 
-            // Step 1: SELECT pk_cols WHERE (user_filter AND) keyset_pred ORDER BY pk LIMIT chunk_size
+            // Step 1: SELECT pk_cols WHERE (user_filter AND) keyset_pred ORDER BY pk {limit clause}
             //
             // The user filter is included so we only page through rows that match the mutation
             // predicate — without it, the loop would scan the entire table's PK space.
@@ -591,22 +659,23 @@ impl MutationExecutor {
                 .filter(|s| !s.is_empty())
                 .collect();
 
+            let limit = dialect.limit_clause(effective_chunk_size);
             let select_sql = if where_parts.is_empty() {
                 format!(
-                    "SELECT {} FROM {} ORDER BY {} LIMIT {}",
+                    "SELECT {} FROM {} ORDER BY {} {}",
                     pk_select,
                     qualified_table,
                     pk_col_refs.join(", "),
-                    chunk_size,
+                    limit,
                 )
             } else {
                 format!(
-                    "SELECT {} FROM {} WHERE {} ORDER BY {} LIMIT {}",
+                    "SELECT {} FROM {} WHERE {} ORDER BY {} {}",
                     pk_select,
                     qualified_table,
                     where_parts.join(" AND "),
                     pk_col_refs.join(", "),
-                    chunk_size,
+                    limit,
                 )
             };
 
@@ -618,6 +687,7 @@ impl MutationExecutor {
                 Err(e) => {
                     let err_msg = e.to_string();
                     self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
+                    self.reset_lock_timeout_if_needed(&vocab);
                     return Err(ExecutorError::Transaction(err_msg));
                 }
             };
@@ -652,6 +722,7 @@ impl MutationExecutor {
                 if let Err(e) = self.deps.connection.execute(&lock_req) {
                     let err_msg = e.to_string();
                     self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
+                    self.reset_lock_timeout_if_needed(&vocab);
                     return Err(ExecutorError::Transaction(err_msg));
                 }
             }
@@ -660,6 +731,7 @@ impl MutationExecutor {
             if let Err(e) = self.deps.connection.execute(&begin_req) {
                 let err_msg = e.to_string();
                 self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
+                self.reset_lock_timeout_if_needed(&vocab);
                 return Err(ExecutorError::Transaction(err_msg));
             }
 
@@ -675,6 +747,7 @@ impl MutationExecutor {
                         log::warn!("ROLLBACK failed after lock_timeout error: {}", rb_err);
                     }
                     self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
+                    self.reset_lock_timeout_if_needed(&vocab);
                     return Err(ExecutorError::Transaction(err_msg));
                 }
             }
@@ -707,6 +780,7 @@ impl MutationExecutor {
                     self.emit_event(chunk_event);
 
                     self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
+                    self.reset_lock_timeout_if_needed(&vocab);
                     return Err(ExecutorError::Transaction(err_msg));
                 }
                 Ok(result) => {
@@ -716,6 +790,7 @@ impl MutationExecutor {
                     if let Err(e) = self.deps.connection.execute(&commit_req) {
                         let err_msg = e.to_string();
                         self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
+                        self.reset_lock_timeout_if_needed(&vocab);
                         return Err(ExecutorError::Transaction(err_msg));
                     }
 
@@ -738,7 +813,7 @@ impl MutationExecutor {
                 }
             }
 
-            if pk_rows.len() < chunk_size {
+            if pk_rows.len() < effective_chunk_size as usize {
                 break;
             }
         }
@@ -756,10 +831,33 @@ impl MutationExecutor {
         ))
         .with_correlation_id(run_id);
         self.emit_event(success_event);
+        self.reset_lock_timeout_if_needed(&vocab);
 
         Ok(MutationOutcome::Success {
             rows_affected: rows_affected_total,
         })
+    }
+
+    /// Emit the driver's lock timeout reset SQL if one was set for this run.
+    ///
+    /// MySQL's `SET SESSION innodb_lock_wait_timeout` and SQL Server's `SET LOCK_TIMEOUT`
+    /// are connection-scoped: they persist for the lifetime of the pooled connection.
+    /// This method resets them to the driver default so subsequent mutations on the same
+    /// connection do not silently inherit the previous timeout.
+    ///
+    /// Failure to reset is a `log::warn!` only — the primary mutation has already completed.
+    fn reset_lock_timeout_if_needed(&self, vocab: &TransactionVocab) {
+        if self.opts.lock_timeout_ms.is_some()
+            && let Some(reset_sql) = vocab.lock_timeout_reset_sql
+        {
+            let reset_req = dbflux_core::QueryRequest::new(reset_sql);
+            if let Err(e) = self.deps.connection.execute(&reset_req) {
+                log::warn!(
+                    "lock_timeout reset failed (connection may retain previous timeout): {}",
+                    e
+                );
+            }
+        }
     }
 
     fn emit_event(&self, event: EventRecord) {
@@ -818,6 +916,7 @@ mod tests {
         // -----------------------------------------------------------------
 
         pub(super) struct RecordingConnection {
+            db_kind: DbKind,
             meta: dbflux_core::DriverMetadata,
             calls: Mutex<Vec<String>>,
             dml_affected_rows: u64,
@@ -834,6 +933,7 @@ mod tests {
                 .capabilities(DriverCapabilities::TRANSACTIONS)
                 .build();
                 Arc::new(Self {
+                    db_kind: kind,
                     meta,
                     calls: Mutex::new(Vec::new()),
                     dml_affected_rows,
@@ -887,7 +987,7 @@ mod tests {
             }
 
             fn kind(&self) -> DbKind {
-                DbKind::Postgres
+                self.db_kind
             }
 
             fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
@@ -1147,6 +1247,165 @@ mod tests {
             let result = executor.run_single_tx().expect("expected success");
             assert_eq!(result, MutationOutcome::Success { rows_affected: 42 });
         }
+
+        // F-R3-7: MySQL lock_timeout reset is emitted after COMMIT (success path).
+        //
+        // MySQL's `SET SESSION innodb_lock_wait_timeout` is connection-scoped.
+        // After a successful mutation, the executor must emit the reset SQL so the
+        // pooled connection does not carry the timeout into the next mutation.
+        #[test]
+        fn mysql_lock_timeout_reset_emitted_after_commit() {
+            let conn = RecordingConnection::new(DbKind::MySQL, 5);
+            let conn_ref = Arc::clone(&conn);
+            let spec = make_delete_spec("orders");
+            let opts = MutationExecOptions::new(
+                ExecutionMode::SingleTransaction,
+                5_000,
+                Some(5_000), // enable lock_timeout
+                3_000,
+            );
+            let deps = make_deps(conn, None);
+            let executor = MutationExecutor::new(spec, opts, deps);
+
+            let result = executor.run_single_tx();
+            assert!(result.is_ok(), "expected success; got: {:?}", result);
+
+            let calls = conn_ref.recorded_calls();
+            let last = calls.last().expect("must have at least one call");
+            assert!(
+                last.contains("DEFAULT"),
+                "last call must be the lock_timeout reset (contains DEFAULT); calls: {:?}",
+                calls
+            );
+        }
+
+        // F-R3-7: MySQL lock_timeout reset is emitted even when the mutation fails.
+        //
+        // The executor must reset the session-scoped timeout regardless of outcome.
+        #[test]
+        fn mysql_lock_timeout_reset_emitted_after_rollback() {
+            // Use a connection where DML fails so the mutation rolls back.
+            struct FailingDMLOnMySQL {
+                calls: Mutex<Vec<String>>,
+                meta: dbflux_core::DriverMetadata,
+            }
+
+            impl FailingDMLOnMySQL {
+                fn new() -> Arc<Self> {
+                    let meta = DriverMetadataBuilder::new(
+                        "test",
+                        "Test",
+                        DatabaseCategory::Relational,
+                        QueryLanguage::Sql,
+                    )
+                    .capabilities(DriverCapabilities::TRANSACTIONS)
+                    .build();
+                    Arc::new(Self {
+                        calls: Mutex::new(Vec::new()),
+                        meta,
+                    })
+                }
+            }
+
+            impl dbflux_core::Connection for FailingDMLOnMySQL {
+                fn metadata(&self) -> &dbflux_core::DriverMetadata {
+                    &self.meta
+                }
+                fn ping(&self) -> Result<(), dbflux_core::DbError> {
+                    Ok(())
+                }
+                fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+                    Ok(())
+                }
+                fn execute(
+                    &self,
+                    req: &dbflux_core::QueryRequest,
+                ) -> Result<QueryResult, dbflux_core::DbError> {
+                    self.calls.lock().unwrap().push(req.sql.clone());
+                    let sql_upper = req.sql.to_ascii_uppercase();
+                    if sql_upper.starts_with("DELETE") || sql_upper.starts_with("UPDATE") {
+                        return Err(dbflux_core::DbError::query_failed("simulated DML error"));
+                    }
+                    Ok(QueryResult::empty())
+                }
+                fn cancel(&self, _: &dbflux_core::QueryHandle) -> Result<(), dbflux_core::DbError> {
+                    Ok(())
+                }
+                fn schema(&self) -> Result<SchemaSnapshot, dbflux_core::DbError> {
+                    Err(dbflux_core::DbError::NotSupported("stub".to_string()))
+                }
+                fn kind(&self) -> DbKind {
+                    DbKind::MySQL
+                }
+                fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+                    SchemaLoadingStrategy::SingleDatabase
+                }
+                fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+                    &DefaultSqlDialect
+                }
+                fn query_generator(&self) -> Option<&dyn QueryGenerator> {
+                    static GENERATOR: SimpleDeleteGenerator = SimpleDeleteGenerator;
+                    Some(&GENERATOR)
+                }
+            }
+
+            let conn = FailingDMLOnMySQL::new();
+            let conn_ref = Arc::clone(&conn);
+            let deps = MutationDeps {
+                connection: conn as Arc<dyn dbflux_core::Connection>,
+                event_sink: None,
+                policy: MutationPolicy::Allowed,
+            };
+            let spec = make_delete_spec("orders");
+            let opts = MutationExecOptions::new(
+                ExecutionMode::SingleTransaction,
+                5_000,
+                Some(5_000),
+                3_000,
+            );
+            let executor = MutationExecutor::new(spec, opts, deps);
+
+            let result = executor.run_single_tx();
+            assert!(result.is_err(), "expected failure; got: {:?}", result);
+
+            let calls = conn_ref.calls.lock().unwrap().clone();
+            let last = calls.last().expect("must have at least one call");
+            assert!(
+                last.contains("DEFAULT"),
+                "last call must be the lock_timeout reset even on failure; calls: {:?}",
+                calls
+            );
+        }
+
+        // F-R3-7: Postgres does NOT emit lock_timeout reset (SET LOCAL is transaction-local,
+        // resets automatically on COMMIT/ROLLBACK — no explicit reset needed).
+        #[test]
+        fn postgres_lock_timeout_no_reset_emitted() {
+            let conn = RecordingConnection::new(DbKind::Postgres, 5);
+            let conn_ref = Arc::clone(&conn);
+            let spec = make_delete_spec("orders");
+            let opts = MutationExecOptions::new(
+                ExecutionMode::SingleTransaction,
+                5_000,
+                Some(2_000), // enable lock_timeout for Postgres (SET LOCAL inside tx)
+                3_000,
+            );
+            let deps = make_deps(conn, None);
+            let executor = MutationExecutor::new(spec, opts, deps);
+
+            let _ = executor.run_single_tx();
+
+            let calls = conn_ref.recorded_calls();
+            let has_reset = calls.iter().any(|c| {
+                let upper = c.to_ascii_uppercase();
+                upper.contains("DEFAULT") || upper.contains("LOCK_TIMEOUT -1")
+            });
+            assert!(
+                !has_reset,
+                "Postgres must NOT emit a lock_timeout reset call; calls: {:?}",
+                calls
+            );
+        }
     }
 
     // T-29 — [RED] Tests for chunked-tx execution loop (F-1, F-2, F-4, F-5, F-6, DR-10.1–10.9)
@@ -1176,14 +1435,29 @@ mod tests {
 
         impl ProgrammedConnection {
             fn new(select_responses: Vec<Vec<Vec<Value>>>, dml_affected_rows: u64) -> Arc<Self> {
-                let meta = DriverMetadataBuilder::new(
+                Self::new_with_max_params(select_responses, dml_affected_rows, 0)
+            }
+
+            fn new_with_max_params(
+                select_responses: Vec<Vec<Vec<Value>>>,
+                dml_affected_rows: u64,
+                max_query_parameters: u32,
+            ) -> Arc<Self> {
+                use dbflux_core::QueryCapabilities;
+                let mut builder = DriverMetadataBuilder::new(
                     "test",
                     "Test",
                     DatabaseCategory::Relational,
                     QueryLanguage::Sql,
                 )
-                .capabilities(DriverCapabilities::TRANSACTIONS)
-                .build();
+                .capabilities(DriverCapabilities::TRANSACTIONS);
+                if max_query_parameters > 0 {
+                    builder = builder.query(QueryCapabilities {
+                        max_query_parameters,
+                        ..QueryCapabilities::default()
+                    });
+                }
+                let meta = builder.build();
                 Arc::new(Self {
                     meta,
                     calls: Mutex::new(Vec::new()),
@@ -1306,6 +1580,17 @@ mod tests {
                 })
             }
 
+            fn generate_update_from_spec(
+                &self,
+                spec: &VisualMutationSpec,
+            ) -> Result<GeneratedMutation, dbflux_core::GeneratorError> {
+                Ok(GeneratedMutation {
+                    sql: format!("UPDATE {} SET x = $1", spec.from.name),
+                    params: vec![Value::Int(1)],
+                    used_raw_expression: false,
+                })
+            }
+
             fn generate_delete_chunk_from_spec(
                 &self,
                 spec: &VisualMutationSpec,
@@ -1320,6 +1605,35 @@ mod tests {
                     .collect();
                 let sql = format!(
                     "DELETE FROM {} WHERE {} IN ({})",
+                    spec.from.name,
+                    pk_col,
+                    in_list.join(", ")
+                );
+                let params: Vec<Value> = pk_values
+                    .iter()
+                    .map(|row| row.first().cloned().unwrap_or(Value::Null))
+                    .collect();
+                Ok(GeneratedMutation {
+                    sql,
+                    params,
+                    used_raw_expression: false,
+                })
+            }
+
+            fn generate_update_chunk_from_spec(
+                &self,
+                spec: &VisualMutationSpec,
+                pk_cols: &[&str],
+                pk_values: &[Vec<Value>],
+            ) -> Result<GeneratedMutation, dbflux_core::GeneratorError> {
+                let pk_col = pk_cols.first().copied().unwrap_or("id");
+                let in_list: Vec<String> = pk_values
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| format!("${}", i + 1))
+                    .collect();
+                let sql = format!(
+                    "UPDATE {} SET x = 1 WHERE {} IN ({})",
                     spec.from.name,
                     pk_col,
                     in_list.join(", ")
@@ -1718,6 +2032,193 @@ mod tests {
             assert!(
                 select_sql.to_ascii_uppercase().contains("WHERE"),
                 "PK SELECT must include a WHERE clause reflecting spec.filter; SQL: {}",
+                select_sql
+            );
+        }
+
+        // F-R3-2: With a 2-column PK and driver max_params=100, chunk_size=1000 must be
+        // clamped to ≤ 50 (100 / 2). No filter or SET params in this case.
+        #[test]
+        fn chunked_chunk_size_clamped_to_driver_max_params() {
+            // One partial batch of 30 rows → loop runs once and terminates.
+            let select_responses = vec![pk_batch(1, 30)];
+            let conn = ProgrammedConnection::new_with_max_params(select_responses, 30, 100);
+            let conn_ref = Arc::clone(&conn);
+            let spec = make_delete_spec("orders");
+            // chunk_size = 1000, but driver only allows 100 params; 2-col PK → max 50/chunk.
+            let opts =
+                MutationExecOptions::new(ExecutionMode::ChunkedTransaction, 1_000, None, 3_000);
+            let deps = make_deps(conn, None);
+            let executor = MutationExecutor::new(spec, opts, deps);
+
+            let _ = executor.run_chunked_tx(&["id", "tenant"], &no_cancel());
+
+            let calls = conn_ref.recorded_calls();
+            let select_sql = calls
+                .iter()
+                .find(|c| c.to_ascii_uppercase().starts_with("SELECT"))
+                .expect("must issue at least one SELECT");
+
+            // The LIMIT (or equivalent) must be ≤ 50.
+            // Extract the number after LIMIT or FETCH NEXT.
+            let limit_n = if let Some(pos) = select_sql.to_ascii_uppercase().find("LIMIT ") {
+                select_sql[pos + 6..]
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse::<u32>().ok())
+            } else if let Some(pos) = select_sql.to_ascii_uppercase().find("FETCH NEXT ") {
+                select_sql[pos + 11..]
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse::<u32>().ok())
+            } else {
+                None
+            };
+
+            assert!(
+                limit_n.is_some(),
+                "SELECT must include a row limit clause; SQL: {}",
+                select_sql
+            );
+            assert!(
+                limit_n.unwrap() <= 50,
+                "effective chunk_size must be ≤ 50 for 2-col PK with max_params=100; \
+                 got limit_n={:?}, SQL: {}",
+                limit_n,
+                select_sql
+            );
+        }
+
+        // F-R3-2: With overhead from filter+set params, effective chunk_size is further reduced.
+        // driver max_params=100, 5 SET params, 3 filter params → overhead=8, single-col PK.
+        // max_safe = (100 - 8) / 1 = 92, so chunk_size=1000 must be clamped to ≤ 92.
+        #[test]
+        fn chunked_chunk_size_accounts_for_filter_and_set_params() {
+            use dbflux_core::{
+                Assignment, AssignmentValue, BoolOp, Comparator, FilterNode, LiteralValue,
+                Predicate, PredicateValue, ScalarLiteral, TableRef, VisualMutationSpec,
+            };
+            let select_responses = vec![pk_batch(1, 10)];
+            let conn = ProgrammedConnection::new_with_max_params(select_responses, 10, 100);
+            let conn_ref = Arc::clone(&conn);
+
+            // 3 filter predicates (3 params overhead) + 5 UPDATE SET params (5 overhead) = 8 total.
+            let filter = Some(FilterNode::Group {
+                op: BoolOp::And,
+                children: vec![
+                    FilterNode::Predicate(Predicate {
+                        source_alias: "t".to_string(),
+                        column: "col1".to_string(),
+                        comparator: Comparator::Eq,
+                        value: PredicateValue::Single(LiteralValue::Integer(1)),
+                        node_id: 1,
+                    }),
+                    FilterNode::Predicate(Predicate {
+                        source_alias: "t".to_string(),
+                        column: "col2".to_string(),
+                        comparator: Comparator::Eq,
+                        value: PredicateValue::Single(LiteralValue::Integer(2)),
+                        node_id: 2,
+                    }),
+                    FilterNode::Predicate(Predicate {
+                        source_alias: "t".to_string(),
+                        column: "col3".to_string(),
+                        comparator: Comparator::Eq,
+                        value: PredicateValue::Single(LiteralValue::Integer(3)),
+                        node_id: 3,
+                    }),
+                ],
+            });
+            let assignments: Vec<Assignment> = (1u8..=5)
+                .map(|i| Assignment {
+                    column: format!("c{}", i),
+                    value: AssignmentValue::Literal(ScalarLiteral::Integer(i as i64)),
+                })
+                .collect();
+            let spec = VisualMutationSpec {
+                from: TableRef {
+                    schema: None,
+                    name: "orders".to_string(),
+                },
+                filter,
+                kind: dbflux_core::MutationKind::Update { assignments },
+            };
+
+            let opts =
+                MutationExecOptions::new(ExecutionMode::ChunkedTransaction, 1_000, None, 3_000);
+            let deps = make_deps(conn, None);
+            let executor = MutationExecutor::new(spec, opts, deps);
+
+            let _ = executor.run_chunked_tx(&["id"], &no_cancel());
+
+            let calls = conn_ref.recorded_calls();
+            let select_sql = calls
+                .iter()
+                .find(|c| c.to_ascii_uppercase().starts_with("SELECT"))
+                .expect("must issue at least one SELECT");
+
+            let limit_n = if let Some(pos) = select_sql.to_ascii_uppercase().find("LIMIT ") {
+                select_sql[pos + 6..]
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse::<u32>().ok())
+            } else if let Some(pos) = select_sql.to_ascii_uppercase().find("FETCH NEXT ") {
+                select_sql[pos + 11..]
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse::<u32>().ok())
+            } else {
+                None
+            };
+
+            assert!(
+                limit_n.is_some(),
+                "SELECT must include a row limit clause; SQL: {}",
+                select_sql
+            );
+            assert!(
+                limit_n.unwrap() <= 92,
+                "effective chunk_size must be ≤ 92 with overhead=8 and max_params=100; \
+                 got limit_n={:?}, SQL: {}",
+                limit_n,
+                select_sql
+            );
+        }
+
+        // F-R3-2: When max_params is 0 (unlimited), chunk_size passes through unchanged.
+        #[test]
+        fn chunked_chunk_size_unchanged_when_under_driver_limit() {
+            // max_params=0 → unlimited; chunk_size=1000 must pass through.
+            let select_responses = vec![pk_batch(1, 50)];
+            let conn = ProgrammedConnection::new(select_responses, 50); // max_params=0
+            let conn_ref = Arc::clone(&conn);
+            let spec = make_delete_spec("orders");
+            let opts =
+                MutationExecOptions::new(ExecutionMode::ChunkedTransaction, 1_000, None, 3_000);
+            let deps = make_deps(conn, None);
+            let executor = MutationExecutor::new(spec, opts, deps);
+
+            let _ = executor.run_chunked_tx(&["id"], &no_cancel());
+
+            let calls = conn_ref.recorded_calls();
+            let select_sql = calls
+                .iter()
+                .find(|c| c.to_ascii_uppercase().starts_with("SELECT"))
+                .expect("must issue at least one SELECT");
+
+            let limit_n = if let Some(pos) = select_sql.to_ascii_uppercase().find("LIMIT ") {
+                select_sql[pos + 6..]
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse::<u32>().ok())
+            } else {
+                None
+            };
+
+            assert_eq!(
+                limit_n,
+                Some(1000),
+                "with unlimited max_params, chunk_size must stay at 1000; SQL: {}",
                 select_sql
             );
         }
