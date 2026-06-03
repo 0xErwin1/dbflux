@@ -598,8 +598,8 @@ fn count_of_grouped_wraps_inner_query_without_limit_offset() {
         q.sql
     );
     assert!(
-        q.sql.ends_with(") AS _dbflux_count_subq"),
-        "must end with subquery alias: {}",
+        q.sql.ends_with(") AS \"_dbflux_count_subq\""),
+        "must end with quoted subquery alias: {}",
         q.sql
     );
     assert!(
@@ -719,8 +719,8 @@ fn count_of_grouped_mysql_uses_backtick_quoting() {
         q.sql
     );
     assert!(
-        q.sql.ends_with(") AS _dbflux_count_subq"),
-        "mysql: must end with subquery alias: {}",
+        q.sql.ends_with(") AS `_dbflux_count_subq`"),
+        "mysql: must end with backtick-quoted subquery alias: {}",
         q.sql
     );
     assert!(
@@ -749,8 +749,8 @@ fn count_of_grouped_mssql_uses_bracket_quoting() {
         q.sql
     );
     assert!(
-        q.sql.ends_with(") AS _dbflux_count_subq"),
-        "mssql: must end with subquery alias: {}",
+        q.sql.ends_with(") AS [_dbflux_count_subq]"),
+        "mssql: must end with bracket-quoted subquery alias: {}",
         q.sql
     );
     assert!(
