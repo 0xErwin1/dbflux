@@ -505,8 +505,6 @@ impl<'a> SqlSelectBuilder<'a> {
     }
 
     fn build_grouped(&self, spec: &VisualQuerySpec) -> Result<SelectQuery, QueryGenError> {
-        use crate::query::visual_query::{AggFn, AggregateSpec};
-
         let mut params: Vec<crate::Value> = Vec::new();
         let mut param_index: usize = 1;
 
@@ -602,9 +600,7 @@ impl<'a> SqlSelectBuilder<'a> {
                         )
                     })?;
                     let col = agg.column.as_deref().ok_or_else(|| {
-                        QueryGenError::InvalidSpec(
-                            "CountDistinct requires column".to_string(),
-                        )
+                        QueryGenError::InvalidSpec("CountDistinct requires column".to_string())
                     })?;
                     format!(
                         "COUNT(DISTINCT {}.{}) AS {}",
@@ -615,16 +611,10 @@ impl<'a> SqlSelectBuilder<'a> {
                 }
                 fn_name => {
                     let source = agg.source_alias.as_deref().ok_or_else(|| {
-                        QueryGenError::InvalidSpec(format!(
-                            "{:?} requires source_alias",
-                            fn_name
-                        ))
+                        QueryGenError::InvalidSpec(format!("{:?} requires source_alias", fn_name))
                     })?;
                     let col = agg.column.as_deref().ok_or_else(|| {
-                        QueryGenError::InvalidSpec(format!(
-                            "{:?} requires column",
-                            fn_name
-                        ))
+                        QueryGenError::InvalidSpec(format!("{:?} requires column", fn_name))
                     })?;
                     let sql_fn = match fn_name {
                         AggFn::Count => "COUNT",

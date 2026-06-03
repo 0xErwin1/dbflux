@@ -21,7 +21,6 @@ fn base_spec() -> VisualQuerySpec {
     }
 }
 
-
 fn country_group_by() -> GroupByEntry {
     GroupByEntry {
         source_alias: "o".to_string(),

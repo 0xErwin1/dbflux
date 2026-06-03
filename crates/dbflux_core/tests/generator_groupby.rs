@@ -1,7 +1,7 @@
 use dbflux_core::{
-    AggFn, Comparator, FilterNode, GroupByEntry, LiteralValue, Predicate, PredicateValue,
-    PlaceholderStyle, Projection, SelectQuery, SortEntry, SourceTable, SqlDialect,
-    VisualAggregateSpec, VisualQuerySpec, VisualSortDirection, DefaultSqlDialect, Value,
+    AggFn, Comparator, DefaultSqlDialect, FilterNode, GroupByEntry, LiteralValue, PlaceholderStyle,
+    Predicate, PredicateValue, Projection, SelectQuery, SortEntry, SourceTable, SqlDialect, Value,
+    VisualAggregateSpec, VisualQuerySpec, VisualSortDirection,
 };
 
 // =============================================================================
@@ -590,8 +590,7 @@ fn count_of_grouped_wraps_inner_query_without_limit_offset() {
     spec.limit = Some(50);
     spec.offset = 10;
 
-    let q = dbflux_core::build_count_of_grouped_query(&spec, &SqliteDialect)
-        .expect("must succeed");
+    let q = dbflux_core::build_count_of_grouped_query(&spec, &SqliteDialect).expect("must succeed");
 
     assert!(
         q.sql.starts_with("SELECT COUNT(*) FROM ("),
@@ -626,8 +625,8 @@ fn count_of_grouped_postgres_uses_dollar_placeholders() {
         node_id: 0,
     }));
 
-    let q = dbflux_core::build_count_of_grouped_query(&spec, &PostgresDialect)
-        .expect("must succeed");
+    let q =
+        dbflux_core::build_count_of_grouped_query(&spec, &PostgresDialect).expect("must succeed");
 
     assert!(
         q.sql.contains("$1"),
@@ -650,8 +649,7 @@ fn ungrouped_query_unchanged_sqlite() {
     let spec = orders_spec();
     let q = run_with_dialect(&spec, &SqliteDialect);
     assert_eq!(
-        q.sql,
-        "SELECT *\nFROM \"orders\" AS \"o\"",
+        q.sql, "SELECT *\nFROM \"orders\" AS \"o\"",
         "ungrouped spec must produce unchanged output"
     );
     assert!(q.params.is_empty());

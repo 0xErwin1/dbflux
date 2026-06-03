@@ -19,7 +19,10 @@ fn legacy_json_without_group_fields_deserializes_with_defaults() {
     let spec: VisualQuerySpec =
         serde_json::from_str(LEGACY_JSON).expect("legacy JSON must deserialise");
 
-    assert!(spec.group_by.is_empty(), "group_by must default to empty vec");
+    assert!(
+        spec.group_by.is_empty(),
+        "group_by must default to empty vec"
+    );
     assert!(
         spec.aggregates.is_empty(),
         "aggregates must default to empty vec"
