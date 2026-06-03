@@ -1,6 +1,3 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use dbflux_core::{CancelToken, TaskId, TaskKind, TaskSlot, TaskTarget};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::*;
@@ -8,12 +5,13 @@ use uuid::Uuid;
 
 /// A cloneable cancellation handle for a visual mutation execution.
 ///
-/// Backed by a shared `Arc<AtomicBool>`. Callers hold this handle and call
-/// `cancel()` to signal the executor loop to stop before the next chunk.
-/// The executor polls `is_cancelled()` between chunks — not mid-chunk.
+/// Wraps the `CancelToken` returned by `start_task_for_target` so that the task
+/// manager's cancel path (triggered by the task chip UI) and the executor's poll
+/// point (`is_cancelled`) share the same underlying flag. This ensures that
+/// `DocumentTaskRunner::cancel_mutation` actually stops the executor loop.
 #[derive(Clone)]
 pub struct MutationCancelHandle {
-    flag: Arc<AtomicBool>,
+    token: CancelToken,
 }
 
 impl Default for MutationCancelHandle {
@@ -25,22 +23,30 @@ impl Default for MutationCancelHandle {
 impl MutationCancelHandle {
     pub fn new() -> Self {
         Self {
-            flag: Arc::new(AtomicBool::new(false)),
+            token: CancelToken::new(),
         }
     }
 
+    /// Build a handle from an existing token (used by `start_mutation` to share
+    /// the task manager's cancel flag with the executor loop).
+    fn from_token(token: CancelToken) -> Self {
+        Self { token }
+    }
+
     pub fn is_cancelled(&self) -> bool {
-        self.flag.load(Ordering::SeqCst)
+        self.token.is_cancelled()
     }
 
     pub fn cancel(&self) {
-        self.flag.store(true, Ordering::SeqCst);
+        self.token.cancel();
     }
 }
 
 #[cfg(test)]
 mod tests {
     // Import only what we need — avoid `use gpui::*` which triggers macro recursion.
+    use dbflux_core::CancelToken;
+
     use super::MutationCancelHandle;
 
     // T-21 — [RED] Tests for MutationCancelHandle (spec J-1, J-2, DR-15.1)
@@ -71,6 +77,41 @@ mod tests {
         assert!(
             clone.is_cancelled(),
             "clone must see cancellation from original"
+        );
+    }
+
+    // F-R2-2: DR-15.1 — cancellation via the task manager's CancelToken must propagate
+    // to the MutationCancelHandle that the executor polls.
+    //
+    // `start_mutation` now wraps the token returned by `start_task_for_target` into the
+    // handle via `from_token`. This test proves the shared-state invariant without
+    // requiring a GPUI context: cancelling the original token must flip the handle.
+    #[test]
+    fn cancel_mutation_via_task_runner_flips_executor_handle() {
+        let token = CancelToken::new();
+        let handle = MutationCancelHandle::from_token(token.clone());
+
+        assert!(!handle.is_cancelled(), "handle must start as not-cancelled");
+
+        token.cancel();
+
+        assert!(
+            handle.is_cancelled(),
+            "cancelling the CancelToken must flip is_cancelled() on the handle (DR-15.1)"
+        );
+    }
+
+    // Inverse: cancelling the handle must also flip the shared token.
+    #[test]
+    fn cancel_on_handle_also_cancels_shared_token() {
+        let token = CancelToken::new();
+        let handle = MutationCancelHandle::from_token(token.clone());
+
+        handle.cancel();
+
+        assert!(
+            token.is_cancelled(),
+            "cancelling the handle must propagate to the shared CancelToken"
         );
     }
 }
@@ -187,11 +228,11 @@ impl DocumentTaskRunner {
         description: impl Into<String>,
         cx: &mut App,
     ) -> (TaskId, MutationCancelHandle) {
-        let (task_id, _cancel_token) = self.app_state.update(cx, |state, _cx| {
+        let (task_id, cancel_token) = self.app_state.update(cx, |state, _cx| {
             state.start_task_for_target(kind, description, self.default_target())
         });
 
-        let handle = MutationCancelHandle::new();
+        let handle = MutationCancelHandle::from_token(cancel_token);
         (task_id, handle)
     }
 
