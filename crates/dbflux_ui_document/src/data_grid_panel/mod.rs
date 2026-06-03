@@ -3457,7 +3457,7 @@ impl DataGridPanel {
         };
 
         let spec = pending.spec;
-        let opts = pending.opts;
+        let mut opts = pending.opts;
 
         let is_chunked = matches!(
             opts.mode,
@@ -3481,6 +3481,72 @@ impl DataGridPanel {
                     cx,
                 );
                 return;
+            }
+
+            // Compute the effective chunk size before spawning so we can surface
+            // any reduction to the user via Toast while we still have a cx handle.
+            {
+                use crate::data_grid_panel::mutation_executor::{
+                    compute_effective_chunk_size, count_assignment_params,
+                };
+                use dbflux_core::render_filter_node_sql;
+
+                let max_params = deps
+                    .connection
+                    .metadata()
+                    .query
+                    .as_ref()
+                    .map(|q| q.max_query_parameters)
+                    .unwrap_or(0);
+
+                if max_params > 0 {
+                    let dialect = deps.connection.dialect();
+                    let mut dummy_params = Vec::new();
+                    let mut dummy_idx: usize = 1;
+                    render_filter_node_sql(
+                        spec.filter.as_ref(),
+                        dialect,
+                        &mut dummy_params,
+                        &mut dummy_idx,
+                    );
+                    let filter_param_count = dummy_params.len() as u32;
+
+                    let assignment_param_count = match &spec.kind {
+                        dbflux_core::MutationKind::Update { assignments } => {
+                            count_assignment_params(assignments)
+                        }
+                        dbflux_core::MutationKind::Delete => 0,
+                    };
+
+                    let (effective, reduced_from) = compute_effective_chunk_size(
+                        opts.chunk_size,
+                        max_params,
+                        filter_param_count,
+                        assignment_param_count,
+                        pk_columns.len() as u32,
+                    );
+
+                    if let Some(original) = reduced_from {
+                        const FLOOR: u32 = 1_000;
+                        if effective < FLOOR {
+                            dbflux_ui_base::toast::Toast::warning(format!(
+                                "Chunk size reduced from {} to {} — driver parameter limit \
+                                 forced the chunk floor below {FLOOR}. Processing will be \
+                                 slower than expected.",
+                                original, effective
+                            ))
+                            .push(cx);
+                        } else {
+                            dbflux_ui_base::toast::Toast::info(format!(
+                                "Chunk size adjusted from {} to {} to stay within driver \
+                                 parameter limits.",
+                                original, effective
+                            ))
+                            .push(cx);
+                        }
+                        opts.chunk_size = effective;
+                    }
+                }
             }
 
             let (task_id, cancel_handle) = self.runner.start_mutation(

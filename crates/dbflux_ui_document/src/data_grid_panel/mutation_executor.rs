@@ -253,6 +253,55 @@ impl std::fmt::Display for ExecutorError {
 
 impl std::error::Error for ExecutorError {}
 
+/// Computes the effective chunk size, clamping `requested` to the driver's
+/// `max_query_parameters` limit.
+///
+/// Returns `(effective, reduced_from)` where `reduced_from` is `Some(requested)`
+/// when clamping occurred, `None` when no clamping was needed.
+///
+/// When the driver imposes a low parameter limit that forces the effective chunk
+/// size below the spec floor of 1000, the floor is relaxed automatically. A
+/// `Toast::warning` (not info) is emitted by the caller when this occurs.
+pub fn compute_effective_chunk_size(
+    requested: u32,
+    max_params: u32,
+    filter_param_count: u32,
+    assignment_param_count: u32,
+    pk_col_count: u32,
+) -> (u32, Option<u32>) {
+    if max_params == 0 {
+        return (requested, None);
+    }
+
+    let overhead = filter_param_count + assignment_param_count;
+    let per_row = pk_col_count.max(1);
+    let max_safe = max_params.saturating_sub(overhead) / per_row;
+    let max_safe = max_safe.max(1);
+
+    if max_safe < requested {
+        (max_safe, Some(requested))
+    } else {
+        (requested, None)
+    }
+}
+
+/// Counts the number of parameters a set of assignments will bind.
+///
+/// `AssignmentValue::Null`, `Default`, and `Expression` produce no bound
+/// parameters — only `Literal` and `Param` variants bind placeholder slots.
+pub fn count_assignment_params(assignments: &[dbflux_core::Assignment]) -> u32 {
+    use dbflux_core::AssignmentValue;
+    assignments
+        .iter()
+        .filter(|a| {
+            !matches!(
+                a.value,
+                AssignmentValue::Null | AssignmentValue::Default | AssignmentValue::Expression(_)
+            )
+        })
+        .count() as u32
+}
+
 /// Dependencies injected into `MutationExecutor`.
 ///
 /// All fields are `Arc`-wrapped so the executor can be sent to a background thread.
@@ -558,42 +607,30 @@ impl MutationExecutor {
                 .map(|q| q.max_query_parameters)
                 .unwrap_or(0);
 
-            if max_params == 0 {
-                // Zero means unlimited — no clamping needed.
-                self.opts.chunk_size
-            } else {
-                // Count filter params (overhead shared by every chunk).
-                let mut dummy_filter_params: Vec<Value> = Vec::new();
-                let mut dummy_idx: usize = 1;
-                render_filter_node_sql(
-                    self.spec.filter.as_ref(),
-                    dialect,
-                    &mut dummy_filter_params,
-                    &mut dummy_idx,
-                );
-                let filter_param_count = dummy_filter_params.len() as u32;
+            let mut dummy_filter_params: Vec<Value> = Vec::new();
+            let mut dummy_idx: usize = 1;
+            render_filter_node_sql(
+                self.spec.filter.as_ref(),
+                dialect,
+                &mut dummy_filter_params,
+                &mut dummy_idx,
+            );
+            let filter_param_count = dummy_filter_params.len() as u32;
 
-                // Count SET params (each assignment that uses a bound value).
-                let assignment_param_count = match &self.spec.kind {
-                    MutationKind::Update { assignments } => assignments.len() as u32,
-                    MutationKind::Delete => 0,
-                };
+            let assignment_param_count = match &self.spec.kind {
+                MutationKind::Update { assignments } => count_assignment_params(assignments),
+                MutationKind::Delete => 0,
+            };
 
-                let overhead = filter_param_count + assignment_param_count;
-                let per_row = (pk_cols.len() as u32).max(1);
-                let max_safe = max_params.saturating_sub(overhead) / per_row;
+            let (effective, _) = compute_effective_chunk_size(
+                self.opts.chunk_size,
+                max_params,
+                filter_param_count,
+                assignment_param_count,
+                pk_cols.len() as u32,
+            );
 
-                if max_safe < self.opts.chunk_size {
-                    log::info!(
-                        "chunk_size reduced from {} to {} due to driver max_query_parameters={}",
-                        self.opts.chunk_size,
-                        max_safe.max(1),
-                        max_params
-                    );
-                }
-
-                self.opts.chunk_size.min(max_safe).max(1)
-            }
+            effective
         };
 
         loop {
@@ -3003,6 +3040,131 @@ mod tests {
                     timestamps
                 );
             }
+        }
+    }
+
+    // F-R4-2/F-R4-3: Tests for compute_effective_chunk_size and count_assignment_params.
+
+    mod effective_chunk_size_tests {
+        use super::super::{compute_effective_chunk_size, count_assignment_params};
+        use dbflux_core::{Assignment, AssignmentValue, ScalarLiteral};
+
+        // F-R4-2: When max_params forces a reduction within [1000, 10000], returns
+        // (effective, Some(requested)).
+        #[test]
+        fn chunk_size_reduced_when_max_params_forces_it() {
+            // max_params=2100 (MSSQL), 1 PK col, 1 filter param, 1 SET param
+            // => overhead=2, per_row=1, max_safe = (2100-2)/1 = 2098
+            // requested=5000 > 2098 → reduction
+            let (effective, reduced_from) = compute_effective_chunk_size(5_000, 2_100, 1, 1, 1);
+            assert_eq!(effective, 2_098, "effective must be max_safe");
+            assert_eq!(
+                reduced_from,
+                Some(5_000),
+                "reduced_from must carry the original request"
+            );
+        }
+
+        // F-R4-2: When effective == requested (no reduction needed), reduced_from is None.
+        #[test]
+        fn chunk_size_unchanged_when_under_driver_limit() {
+            // max_params=10000, requested=1000, overhead=0, per_row=1 → max_safe=10000
+            let (effective, reduced_from) = compute_effective_chunk_size(1_000, 10_000, 0, 0, 1);
+            assert_eq!(effective, 1_000);
+            assert_eq!(
+                reduced_from, None,
+                "no reduction expected when requested <= max_safe"
+            );
+        }
+
+        // F-R4-3: When max_params is very low (e.g. wide PK + many SET cols),
+        // effective can fall below the spec floor of 1000.
+        // The function returns the raw effective value (floor relaxation is allowed),
+        // and reduced_from is Some(requested).
+        #[test]
+        fn chunk_size_can_fall_below_floor_when_driver_forces_it() {
+            // max_params=100, 4 PK cols, 50 SET params, 10 filter params
+            // => overhead=60, per_row=4, max_safe=(100-60)/4 = 10
+            let (effective, reduced_from) = compute_effective_chunk_size(1_000, 100, 10, 50, 4);
+            assert_eq!(effective, 10, "effective must follow driver limit below floor");
+            assert_eq!(
+                reduced_from,
+                Some(1_000),
+                "reduced_from must carry original request"
+            );
+        }
+
+        // F-R4-2: max_params=0 means unlimited — no reduction.
+        #[test]
+        fn chunk_size_unchanged_when_max_params_is_zero() {
+            let (effective, reduced_from) =
+                compute_effective_chunk_size(5_000, 0, 100, 100, 4);
+            assert_eq!(effective, 5_000, "zero max_params means unlimited");
+            assert_eq!(reduced_from, None);
+        }
+
+        // F-R4-6: count_assignment_params excludes Null, Default, and Expression.
+        #[test]
+        fn assignment_param_count_excludes_non_param_values() {
+            let assignments = vec![
+                Assignment {
+                    column: "a".to_string(),
+                    value: AssignmentValue::Literal(ScalarLiteral::Integer(1)),
+                },
+                Assignment {
+                    column: "b".to_string(),
+                    value: AssignmentValue::Null,
+                },
+                Assignment {
+                    column: "c".to_string(),
+                    value: AssignmentValue::Default,
+                },
+                Assignment {
+                    column: "d".to_string(),
+                    value: AssignmentValue::Expression("price * 1.1".to_string()),
+                },
+                Assignment {
+                    column: "e".to_string(),
+                    value: AssignmentValue::Literal(ScalarLiteral::Text("x".to_string())),
+                },
+            ];
+            let count = count_assignment_params(&assignments);
+            assert_eq!(
+                count, 2,
+                "only Literal values bind params; Null/Default/Expression do not"
+            );
+        }
+
+        // F-R4-6: all Literal → count equals assignments.len()
+        #[test]
+        fn assignment_param_count_all_literals() {
+            let assignments = vec![
+                Assignment {
+                    column: "x".to_string(),
+                    value: AssignmentValue::Literal(ScalarLiteral::Integer(1)),
+                },
+                Assignment {
+                    column: "y".to_string(),
+                    value: AssignmentValue::Literal(ScalarLiteral::Integer(2)),
+                },
+            ];
+            assert_eq!(count_assignment_params(&assignments), 2);
+        }
+
+        // F-R4-6: no Literal → count is 0
+        #[test]
+        fn assignment_param_count_no_literals() {
+            let assignments = vec![
+                Assignment {
+                    column: "a".to_string(),
+                    value: AssignmentValue::Null,
+                },
+                Assignment {
+                    column: "b".to_string(),
+                    value: AssignmentValue::Expression("NOW()".to_string()),
+                },
+            ];
+            assert_eq!(count_assignment_params(&assignments), 0);
         }
     }
 }
