@@ -408,6 +408,7 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.fail_primary(task_id, e.to_string(), cx);
+                            panel.current_visual_spec = committed_spec.clone();
                             panel.state = GridState::Error;
                             panel.pending_toast = Some(PendingToast {
                                 message: format!("Query failed: {}", e),
@@ -1020,15 +1021,24 @@ impl DataGridPanel {
             if let Err(e) = cx.update(|cx| {
                 if let Ok(query_result) = result
                     && let Some(row) = query_result.rows.first()
-                    && let Some(dbflux_core::Value::Int(count)) = row.first()
+                    && let Some(first_value) = row.first()
                 {
-                    entity.update(cx, |panel, cx| {
-                        panel.pending_total_count = Some(PendingTotalCount {
-                            source_qualified: table_name,
-                            total: *count as u64,
+                    let count_opt: Option<u64> = match first_value {
+                        dbflux_core::Value::Int(n) => Some(*n as u64),
+                        dbflux_core::Value::Float(f) => Some(*f as u64),
+                        dbflux_core::Value::Decimal(s) => s.parse::<u64>().ok(),
+                        dbflux_core::Value::Text(s) => s.parse::<u64>().ok(),
+                        _ => None,
+                    };
+                    if let Some(total) = count_opt {
+                        entity.update(cx, |panel, cx| {
+                            panel.pending_total_count = Some(PendingTotalCount {
+                                source_qualified: table_name,
+                                total,
+                            });
+                            cx.notify();
                         });
-                        cx.notify();
-                    });
+                    }
                 }
             }) {
                 log::warn!("Failed to apply grouped count result: {:?}", e);
