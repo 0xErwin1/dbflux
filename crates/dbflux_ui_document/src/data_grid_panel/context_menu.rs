@@ -582,11 +582,18 @@ impl DataGridPanel {
         //   [sep + GenSQL trigger]?   (if has_generate_sql)
         //   [sep + CopyQuery trigger]?(if has_copy_query)
         //   [sep + row_action...]?    (if row_actions non-empty)
+        let inspect_row_enabled = !self
+            .current_visual_spec
+            .as_ref()
+            .map(|s| s.is_grouped())
+            .unwrap_or(false);
+
         let base_items = Self::build_context_menu_items(
             is_editable,
             is_document_view,
             has_row_target,
             can_chart,
+            inspect_row_enabled,
         );
         let base_count = base_items.len();
 
@@ -1116,6 +1123,7 @@ impl DataGridPanel {
         is_document_view: bool,
         has_row_target: bool,
         can_chart: bool,
+        inspect_row_enabled: bool,
     ) -> Vec<ContextMenuItem> {
         if is_document_view {
             // Document view menu: Copy, View/Edit Document, CRUD operations
@@ -1255,14 +1263,16 @@ impl DataGridPanel {
             });
 
             if has_row_target {
-                items.extend([
-                    ContextMenuItem {
+                if inspect_row_enabled {
+                    items.push(ContextMenuItem {
                         label: "Inspect Row",
                         action: Some(ContextMenuAction::InspectRow),
                         icon: Some(AppIcon::Info),
                         is_separator: false,
                         is_danger: false,
-                    },
+                    });
+                }
+                items.extend([
                     ContextMenuItem {
                         label: "Duplicate Row",
                         action: Some(ContextMenuAction::DuplicateRow),
@@ -1305,7 +1315,8 @@ impl DataGridPanel {
     /// This includes all visible items plus the Generate SQL trigger (for table view).
     #[allow(dead_code)]
     pub(super) fn context_menu_item_count(is_editable: bool, is_document_view: bool) -> usize {
-        let base_items = Self::build_context_menu_items(is_editable, is_document_view, true, false);
+        let base_items =
+            Self::build_context_menu_items(is_editable, is_document_view, true, false, true);
         let base_count = base_items.iter().filter(|i| !i.is_separator).count();
         // Add 1 for Generate SQL only in table view
         if is_document_view {
@@ -1441,11 +1452,17 @@ impl DataGridPanel {
         // Build visible menu items list for keyboard navigation
         let has_row_target = self.has_context_menu_row_target(menu.row, menu.is_document_view, cx);
         let can_chart = self.can_chart_from_context_menu(cx);
+        let inspect_row_enabled = !self
+            .current_visual_spec
+            .as_ref()
+            .map(|s| s.is_grouped())
+            .unwrap_or(false);
         let visible_items = Self::build_context_menu_items(
             is_editable,
             menu.is_document_view,
             has_row_target,
             can_chart,
+            inspect_row_enabled,
         );
         let selected_index = menu.selected_index;
         let is_document_view = menu.is_document_view;
@@ -4725,7 +4742,7 @@ mod tests {
 
     #[test]
     fn empty_table_menu_keeps_insert_actions_but_hides_row_actions() {
-        let items = DataGridPanel::build_context_menu_items(true, false, false, false);
+        let items = DataGridPanel::build_context_menu_items(true, false, false, false, true);
         let labels = labels(&items);
 
         assert!(labels.contains(&"Add Row"));
@@ -4737,14 +4754,14 @@ mod tests {
 
     #[test]
     fn non_editable_table_menu_stays_unchanged_without_row_target() {
-        let items = DataGridPanel::build_context_menu_items(false, false, false, false);
+        let items = DataGridPanel::build_context_menu_items(false, false, false, false, true);
 
         assert_eq!(labels(&items), vec!["Copy"]);
     }
 
     #[test]
     fn editable_table_menu_with_row_target_keeps_row_actions() {
-        let items = DataGridPanel::build_context_menu_items(true, false, true, false);
+        let items = DataGridPanel::build_context_menu_items(true, false, true, false, true);
         let labels = labels(&items);
 
         assert!(labels.contains(&"Edit"));
@@ -4757,17 +4774,18 @@ mod tests {
     #[test]
     fn chart_this_query_absent_when_can_chart_false() {
         // can_chart = false: item must NOT appear regardless of other flags.
-        let table_items = DataGridPanel::build_context_menu_items(false, false, false, false);
+        let table_items = DataGridPanel::build_context_menu_items(false, false, false, false, true);
         assert!(!labels(&table_items).contains(&"Chart this query"));
 
-        let editable_items = DataGridPanel::build_context_menu_items(true, false, true, false);
+        let editable_items =
+            DataGridPanel::build_context_menu_items(true, false, true, false, true);
         assert!(!labels(&editable_items).contains(&"Chart this query"));
     }
 
     #[test]
     fn chart_this_query_present_only_when_can_chart_true() {
         // can_chart = true: item must appear.
-        let items = DataGridPanel::build_context_menu_items(false, false, false, true);
+        let items = DataGridPanel::build_context_menu_items(false, false, false, true, true);
         assert!(labels(&items).contains(&"Chart this query"));
     }
 
@@ -4775,7 +4793,26 @@ mod tests {
     fn chart_this_query_absent_in_document_view_regardless_of_can_chart() {
         // Document-view menu never shows Chart this query because the source is never
         // a QueryResult when is_document_view is true.
-        let doc_items = DataGridPanel::build_context_menu_items(false, true, false, true);
+        let doc_items = DataGridPanel::build_context_menu_items(false, true, false, true, true);
         assert!(!labels(&doc_items).contains(&"Chart this query"));
+    }
+
+    #[test]
+    fn inspect_row_hidden_when_inspect_row_disabled() {
+        let items_with_target =
+            DataGridPanel::build_context_menu_items(true, false, true, false, false);
+        assert!(
+            !labels(&items_with_target).contains(&"Inspect Row"),
+            "Inspect Row must not appear when inspect_row_enabled=false"
+        );
+    }
+
+    #[test]
+    fn inspect_row_present_when_enabled_and_has_target() {
+        let items = DataGridPanel::build_context_menu_items(true, false, true, false, true);
+        assert!(
+            labels(&items).contains(&"Inspect Row"),
+            "Inspect Row must appear when inspect_row_enabled=true and has_row_target=true"
+        );
     }
 }
