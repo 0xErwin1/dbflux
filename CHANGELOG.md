@@ -6,6 +6,31 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **GROUP BY and aggregates in the visual query builder (#161)** — The
+  visual SELECT builder gains a `Group By / Aggregates` section between
+  Joins and Sort, with a separate `Having` section that reuses the same
+  predicate editor as `Filters` (WHERE). Supported aggregate functions:
+  `COUNT`, `COUNT(*)`, `COUNT(DISTINCT)`, `SUM`, `AVG`, `MIN`, `MAX`,
+  each with an editable alias that auto-generates from the function and
+  column. When the spec becomes grouped, the projection section is
+  replaced by a read-only effective `SELECT` preview composed of group
+  columns followed by aggregate aliases; sort entries are restricted to
+  group columns and aggregate aliases, with invalid entries rejected
+  with a visible error. The DataView reshapes in place: rows reflect
+  the aggregated result, pagination switches to a `COUNT(*)` subquery
+  over the grouped SELECT so the total page count is accurate, and
+  aggregate result columns receive the correct `ColumnKind` so chart
+  auto-detection keeps working (`COUNT*` → Integer, `AVG` → Float,
+  `SUM` preserves Integer/Float, `MIN`/`MAX` preserve input). Editing
+  is gated when the result is aggregated: add-row, delete-row,
+  edit-cell, and inspect-row become unavailable with explanatory
+  tooltips, and the footer surfaces a count of incomplete aggregate
+  rows so silently-dropped rows are visible to the user. Driver-
+  agnostic by construction: gated on `QueryLanguage::Sql` with no
+  per-driver branching, and the existing `SqlSelectBuilder` is extended
+  with `build_group_by`, `build_having`, and `build_count_of_grouped`
+  shared across SQLite, PostgreSQL, MySQL/MariaDB, and SQL Server.
+
 * **Schema-aware autocomplete for the visual query builder and DataView
   filter (#165)** — Inline suggestion popovers now appear on the
   builder rail's single-line inputs (filter / sort / projected columns,
