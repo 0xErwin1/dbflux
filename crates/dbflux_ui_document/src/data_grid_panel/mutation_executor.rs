@@ -313,13 +313,8 @@ impl MutationExecutor {
             dbflux_core::MutationKind::Delete => "delete",
         };
 
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
-
         let pending_event = EventRecord::new(
-            now_ms,
+            Self::now_ms(),
             EventSeverity::Info,
             EventCategory::Query,
             EventOutcome::Pending,
@@ -330,14 +325,27 @@ impl MutationExecutor {
 
         self.emit_event(pending_event);
 
+        if let Some(ms) = self.opts.lock_timeout_ms
+            && vocab.lock_timeout_before_begin
+            && let Some(lock_sql) = vocab.lock_timeout_sql(ms)
+        {
+            let lock_req = QueryRequest::new(lock_sql);
+            if let Err(e) = self.deps.connection.execute(&lock_req) {
+                let err_msg = e.to_string();
+                self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
+                return Err(ExecutorError::Transaction(err_msg));
+            }
+        }
+
         let begin_req = QueryRequest::new(vocab.begin);
         if let Err(e) = self.deps.connection.execute(&begin_req) {
             let err_msg = e.to_string();
-            self.emit_failure_event(now_ms, &run_id, op_kind, &table_name, &err_msg);
+            self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
             return Err(ExecutorError::Transaction(err_msg));
         }
 
         if let Some(ms) = self.opts.lock_timeout_ms
+            && !vocab.lock_timeout_before_begin
             && let Some(lock_sql) = vocab.lock_timeout_sql(ms)
         {
             let lock_req = QueryRequest::new(lock_sql);
@@ -347,7 +355,7 @@ impl MutationExecutor {
                 if let Err(rb_err) = self.deps.connection.execute(&rollback_req) {
                     log::warn!("ROLLBACK failed after lock_timeout error: {}", rb_err);
                 }
-                self.emit_failure_event(now_ms, &run_id, op_kind, &table_name, &err_msg);
+                self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
                 return Err(ExecutorError::Transaction(err_msg));
             }
         }
@@ -363,7 +371,7 @@ impl MutationExecutor {
                 if let Err(rb_err) = self.deps.connection.execute(&rollback_req) {
                     log::warn!("ROLLBACK failed during error recovery: {}", rb_err);
                 }
-                self.emit_failure_event(now_ms, &run_id, op_kind, &table_name, &err_msg);
+                self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
                 Err(ExecutorError::Transaction(err_msg))
             }
             Ok(result) => {
@@ -372,12 +380,12 @@ impl MutationExecutor {
                 let commit_req = QueryRequest::new(vocab.commit);
                 if let Err(e) = self.deps.connection.execute(&commit_req) {
                     let err_msg = e.to_string();
-                    self.emit_failure_event(now_ms, &run_id, op_kind, &table_name, &err_msg);
+                    self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
                     return Err(ExecutorError::Transaction(err_msg));
                 }
 
                 let success_event = EventRecord::new(
-                    now_ms,
+                    Self::now_ms(),
                     EventSeverity::Info,
                     EventCategory::Query,
                     EventOutcome::Success,
@@ -423,13 +431,9 @@ impl MutationExecutor {
         };
 
         let run_id = uuid::Uuid::new_v4().to_string();
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
 
         let pending_event = EventRecord::new(
-            now_ms,
+            Self::now_ms(),
             EventSeverity::Info,
             EventCategory::Query,
             EventOutcome::Pending,
@@ -446,14 +450,14 @@ impl MutationExecutor {
         match self.deps.connection.execute(&dml_req) {
             Err(e) => {
                 let err_msg = e.to_string();
-                self.emit_failure_event(now_ms, &run_id, op_kind, &table_name, &err_msg);
+                self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
                 Err(ExecutorError::Transaction(err_msg))
             }
             Ok(result) => {
                 let rows_affected = result.affected_rows.unwrap_or(0);
 
                 let success_event = EventRecord::new(
-                    now_ms,
+                    Self::now_ms(),
                     EventSeverity::Info,
                     EventCategory::Query,
                     EventOutcome::Success,
@@ -505,13 +509,9 @@ impl MutationExecutor {
         let chunk_size = self.opts.chunk_size as usize;
 
         let run_id = uuid::Uuid::new_v4().to_string();
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
 
         let pending_event = EventRecord::new(
-            now_ms,
+            Self::now_ms(),
             EventSeverity::Info,
             EventCategory::Query,
             EventOutcome::Pending,
@@ -531,7 +531,7 @@ impl MutationExecutor {
         loop {
             if cancel.is_cancelled() {
                 let cancelled_event = EventRecord::new(
-                    now_ms,
+                    Self::now_ms(),
                     EventSeverity::Info,
                     EventCategory::Query,
                     EventOutcome::Cancelled,
@@ -617,7 +617,7 @@ impl MutationExecutor {
                 Ok(r) => r.rows,
                 Err(e) => {
                     let err_msg = e.to_string();
-                    self.emit_failure_event(now_ms, &run_id, op_kind, &table_name, &err_msg);
+                    self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
                     return Err(ExecutorError::Transaction(err_msg));
                 }
             };
@@ -642,15 +642,29 @@ impl MutationExecutor {
                     .map_err(|e| ExecutorError::Generation(e.to_string()))?,
             };
 
-            // Step 3: Execute BEGIN / [lock_timeout] / DML / COMMIT for this chunk.
+            // Step 3: Execute [lock_timeout if before_begin] / BEGIN / [lock_timeout if in-tx]
+            //         / DML / COMMIT for this chunk.
+            if let Some(ms) = self.opts.lock_timeout_ms
+                && vocab.lock_timeout_before_begin
+                && let Some(lock_sql) = vocab.lock_timeout_sql(ms)
+            {
+                let lock_req = QueryRequest::new(lock_sql);
+                if let Err(e) = self.deps.connection.execute(&lock_req) {
+                    let err_msg = e.to_string();
+                    self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
+                    return Err(ExecutorError::Transaction(err_msg));
+                }
+            }
+
             let begin_req = QueryRequest::new(vocab.begin);
             if let Err(e) = self.deps.connection.execute(&begin_req) {
                 let err_msg = e.to_string();
-                self.emit_failure_event(now_ms, &run_id, op_kind, &table_name, &err_msg);
+                self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
                 return Err(ExecutorError::Transaction(err_msg));
             }
 
             if let Some(ms) = self.opts.lock_timeout_ms
+                && !vocab.lock_timeout_before_begin
                 && let Some(lock_sql) = vocab.lock_timeout_sql(ms)
             {
                 let lock_req = QueryRequest::new(lock_sql);
@@ -660,7 +674,7 @@ impl MutationExecutor {
                     if let Err(rb_err) = self.deps.connection.execute(&rollback_req) {
                         log::warn!("ROLLBACK failed after lock_timeout error: {}", rb_err);
                     }
-                    self.emit_failure_event(now_ms, &run_id, op_kind, &table_name, &err_msg);
+                    self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
                     return Err(ExecutorError::Transaction(err_msg));
                 }
             }
@@ -678,7 +692,7 @@ impl MutationExecutor {
                     }
 
                     let chunk_event = EventRecord::new(
-                        now_ms,
+                        Self::now_ms(),
                         EventSeverity::Error,
                         EventCategory::Query,
                         EventOutcome::Failure,
@@ -692,7 +706,7 @@ impl MutationExecutor {
                     .with_correlation_id(run_id.clone());
                     self.emit_event(chunk_event);
 
-                    self.emit_failure_event(now_ms, &run_id, op_kind, &table_name, &err_msg);
+                    self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
                     return Err(ExecutorError::Transaction(err_msg));
                 }
                 Ok(result) => {
@@ -701,7 +715,7 @@ impl MutationExecutor {
                     let commit_req = QueryRequest::new(vocab.commit);
                     if let Err(e) = self.deps.connection.execute(&commit_req) {
                         let err_msg = e.to_string();
-                        self.emit_failure_event(now_ms, &run_id, op_kind, &table_name, &err_msg);
+                        self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
                         return Err(ExecutorError::Transaction(err_msg));
                     }
 
@@ -709,7 +723,7 @@ impl MutationExecutor {
                     rows_affected_total += chunk_rows;
 
                     let chunk_event = EventRecord::new(
-                        now_ms,
+                        Self::now_ms(),
                         EventSeverity::Info,
                         EventCategory::Query,
                         EventOutcome::Success,
@@ -730,7 +744,7 @@ impl MutationExecutor {
         }
 
         let success_event = EventRecord::new(
-            now_ms,
+            Self::now_ms(),
             EventSeverity::Info,
             EventCategory::Query,
             EventOutcome::Success,
@@ -756,16 +770,9 @@ impl MutationExecutor {
         }
     }
 
-    fn emit_failure_event(
-        &self,
-        now_ms: i64,
-        run_id: &str,
-        op_kind: &str,
-        table_name: &str,
-        error: &str,
-    ) {
+    fn emit_failure_event(&self, run_id: &str, op_kind: &str, table_name: &str, error: &str) {
         let event = EventRecord::new(
-            now_ms,
+            Self::now_ms(),
             EventSeverity::Error,
             EventCategory::Query,
             EventOutcome::Failure,
@@ -775,6 +782,13 @@ impl MutationExecutor {
         .with_correlation_id(run_id.to_string());
 
         self.emit_event(event);
+    }
+
+    fn now_ms() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64
     }
 }
 
@@ -2270,6 +2284,224 @@ mod tests {
                 "expected Success(13); got: {:?}",
                 result
             );
+        }
+
+        // F-R2-5: MySQL lock_timeout must be emitted BEFORE START TRANSACTION.
+        // Sequence must be: SET SESSION innodb_lock_wait_timeout = N, START TRANSACTION, DELETE ..., COMMIT
+        #[test]
+        fn mysql_lock_timeout_emitted_before_begin() {
+            use dbflux_core::{
+                DatabaseCategory, DefaultSqlDialect, DriverCapabilities, DriverMetadataBuilder,
+                GeneratedMutation, GeneratedQuery, MutationCategory, MutationPolicy,
+                MutationRequest, QueryGenerator, QueryResult, SchemaLoadingStrategy,
+                SchemaSnapshot, VisualMutationSpec,
+            };
+            use std::sync::{Arc, Mutex};
+
+            struct MysqlRecordingConn {
+                meta: dbflux_core::DriverMetadata,
+                calls: Mutex<Vec<String>>,
+            }
+
+            impl MysqlRecordingConn {
+                fn new() -> Arc<Self> {
+                    let meta = DriverMetadataBuilder::new(
+                        "mysql", // guardrail-allow: test stub; not production branching logic
+                        "MySQL",
+                        DatabaseCategory::Relational,
+                        QueryLanguage::Sql,
+                    )
+                    .capabilities(DriverCapabilities::TRANSACTIONS)
+                    .build();
+                    Arc::new(Self {
+                        meta,
+                        calls: Mutex::new(Vec::new()),
+                    })
+                }
+
+                fn recorded_calls(&self) -> Vec<String> {
+                    self.calls.lock().unwrap().clone()
+                }
+            }
+
+            impl dbflux_core::Connection for MysqlRecordingConn {
+                fn metadata(&self) -> &dbflux_core::DriverMetadata {
+                    &self.meta
+                }
+                fn ping(&self) -> Result<(), dbflux_core::DbError> {
+                    Ok(())
+                }
+                fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+                    Ok(())
+                }
+                fn execute(
+                    &self,
+                    req: &dbflux_core::QueryRequest,
+                ) -> Result<QueryResult, dbflux_core::DbError> {
+                    self.calls.lock().unwrap().push(req.sql.clone());
+                    let mut result = QueryResult::empty();
+                    let sql_upper = req.sql.to_ascii_uppercase();
+                    if sql_upper.starts_with("UPDATE")
+                        || sql_upper.starts_with("DELETE")
+                        || sql_upper.starts_with("INSERT")
+                    {
+                        result.affected_rows = Some(1);
+                    }
+                    Ok(result)
+                }
+                fn cancel(&self, _: &dbflux_core::QueryHandle) -> Result<(), dbflux_core::DbError> {
+                    Ok(())
+                }
+                fn schema(&self) -> Result<SchemaSnapshot, dbflux_core::DbError> {
+                    Err(dbflux_core::DbError::NotSupported("stub".to_string()))
+                }
+                fn kind(&self) -> DbKind {
+                    DbKind::MySQL
+                }
+                fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+                    SchemaLoadingStrategy::SingleDatabase
+                }
+                fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+                    &DefaultSqlDialect
+                }
+                fn query_generator(&self) -> Option<&dyn QueryGenerator> {
+                    static GENERATOR: SimpleDeleteGenerator = SimpleDeleteGenerator;
+                    Some(&GENERATOR)
+                }
+            }
+
+            let conn = MysqlRecordingConn::new();
+            let conn_ref = Arc::clone(&conn);
+            let spec = make_delete_spec("orders");
+            // lock_timeout_ms = Some(5000) so the SET SESSION statement is emitted
+            let opts = MutationExecOptions::new(
+                ExecutionMode::SingleTransaction,
+                5_000,
+                Some(5_000),
+                3_000,
+            );
+            let deps = MutationDeps {
+                connection: conn as Arc<dyn dbflux_core::Connection>,
+                event_sink: None,
+                policy: MutationPolicy::Allowed,
+            };
+            let executor = MutationExecutor::new(spec, opts, deps);
+
+            let result = executor.run_single_tx();
+            assert!(result.is_ok(), "expected ok: {:?}", result);
+
+            let calls = conn_ref.recorded_calls();
+            assert!(
+                calls.len() >= 3,
+                "expected at least SET SESSION + START TRANSACTION + DML; got: {:?}",
+                calls
+            );
+
+            let set_pos = calls
+                .iter()
+                .position(|c| c.to_ascii_uppercase().contains("SESSION"));
+            let begin_pos = calls.iter().position(|c| {
+                c.to_ascii_uppercase().contains("START TRANSACTION")
+                    || c.to_ascii_uppercase() == "BEGIN"
+                    || c.to_ascii_uppercase() == "BEGIN TRANSACTION"
+            });
+            let dml_pos = calls.iter().position(|c| {
+                let u = c.to_ascii_uppercase();
+                u.starts_with("DELETE") || u.starts_with("UPDATE")
+            });
+
+            assert!(
+                set_pos.is_some(),
+                "must have SET SESSION call; calls: {:?}",
+                calls
+            );
+            assert!(
+                begin_pos.is_some(),
+                "must have BEGIN/START TRANSACTION; calls: {:?}",
+                calls
+            );
+            assert!(dml_pos.is_some(), "must have DML call; calls: {:?}", calls);
+
+            assert!(
+                set_pos.unwrap() < begin_pos.unwrap(),
+                "SET SESSION lock_timeout must come BEFORE START TRANSACTION; calls: {:?}",
+                calls
+            );
+            assert!(
+                begin_pos.unwrap() < dml_pos.unwrap(),
+                "START TRANSACTION must come BEFORE DML; calls: {:?}",
+                calls
+            );
+        }
+
+        // F-R2-6: audit events must be timestamped at emission time, not at run-start.
+        //
+        // This test cannot use sleep (too flaky), so it uses a simpler invariant:
+        // every emitted event must have a timestamp >= the test start time. Before this
+        // fix, `now_ms` was captured once before any events were emitted and all events
+        // reused that stale value. After the fix, `Self::now_ms()` is called per event,
+        // so timestamps are guaranteed to be fresh.
+        #[test]
+        fn chunked_run_events_have_monotonic_timestamps() {
+            use dbflux_core::{EventRecord, EventSink, EventSinkError, MutationPolicy};
+            use std::sync::{Arc, Mutex};
+
+            struct TimestampCollector {
+                timestamps: Mutex<Vec<i64>>,
+            }
+
+            impl TimestampCollector {
+                fn new() -> Arc<Self> {
+                    Arc::new(Self {
+                        timestamps: Mutex::new(Vec::new()),
+                    })
+                }
+
+                fn collected(&self) -> Vec<i64> {
+                    self.timestamps.lock().unwrap().clone()
+                }
+            }
+
+            impl EventSink for TimestampCollector {
+                fn record(&self, event: EventRecord) -> Result<EventRecord, EventSinkError> {
+                    self.timestamps.lock().unwrap().push(event.ts_ms);
+                    Ok(event)
+                }
+            }
+
+            let test_start_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64;
+
+            let conn = RecordingConnection::new(DbKind::Postgres, 5);
+            let sink = TimestampCollector::new();
+            let sink_ref = Arc::clone(&sink);
+            let spec = make_delete_spec("events");
+            let opts = MutationExecOptions::single_transaction();
+            let deps = MutationDeps {
+                connection: conn as Arc<dyn dbflux_core::Connection>,
+                event_sink: Some(sink as Arc<dyn dbflux_core::EventSink>),
+                policy: MutationPolicy::Allowed,
+            };
+            let executor = MutationExecutor::new(spec, opts, deps);
+            let _ = executor.run_single_tx();
+
+            let timestamps = sink_ref.collected();
+            assert!(
+                !timestamps.is_empty(),
+                "expected at least one event to be emitted"
+            );
+
+            for ts in &timestamps {
+                assert!(
+                    *ts >= test_start_ms,
+                    "event timestamp {} must be >= test start {}; all timestamps: {:?}",
+                    ts,
+                    test_start_ms,
+                    timestamps
+                );
+            }
         }
     }
 }
