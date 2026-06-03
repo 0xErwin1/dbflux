@@ -4,10 +4,11 @@ use dbflux_components::components::data_table::SortState as TableSortState;
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionRef, OrderByColumn, Pagination,
     QueryRequest, QueryResult, SelectQuery, SourceTable, TableBrowseRequest, TableCountRequest,
-    TableRef, TaskKind, TaskTarget,
+    TableRef, TaskKind, TaskTarget, VisualQuerySpec,
 };
 use dbflux_core::{
     RelationalFilterError, RelationalResolveError, count_query_from_spec, parse_and_resolve,
+    project_aggregate_kinds,
 };
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui::*;
@@ -30,18 +31,24 @@ impl DataGridPanel {
                 order_by,
                 total_rows,
             } => {
+                let profile_id = *profile_id;
+                let database = database.clone();
+                let table = table.clone();
+                let pagination = pagination.clone();
+                let order_by = order_by.clone();
+                let total_rows = *total_rows;
+
                 if let Some(select) = self.visual_select.clone() {
-                    self.run_visual_query(*profile_id, database.clone(), select, window, cx);
+                    self.run_visual_query(profile_id, database.clone(), select, window, cx);
+
+                    if let Some(spec) = self.builder_draft_spec.clone()
+                        && spec.is_grouped()
+                    {
+                        self.fetch_grouped_total_count(profile_id, database, spec, cx);
+                    }
                 } else {
                     self.run_table_query(
-                        *profile_id,
-                        database.clone(),
-                        table.clone(),
-                        pagination.clone(),
-                        order_by.clone(),
-                        *total_rows,
-                        window,
-                        cx,
+                        profile_id, database, table, pagination, order_by, total_rows, window, cx,
                     );
                 }
             }
@@ -294,6 +301,10 @@ impl DataGridPanel {
     /// Called by `refresh` when `visual_select` is set. The `SelectQuery` is
     /// already fully formed (pagination baked in by the builder); we execute it
     /// as a raw parameterized query and apply the result to the grid.
+    ///
+    /// On success, sets `current_visual_spec` from `builder_draft_spec` and
+    /// applies `project_aggregate_kinds` so aggregate result columns carry the
+    /// correct `ColumnKind` for the chart engine.
     pub(super) fn run_visual_query(
         &mut self,
         profile_id: Uuid,
@@ -354,6 +365,8 @@ impl DataGridPanel {
             request.database = Some(db.clone());
         }
 
+        let committed_spec: Option<VisualQuerySpec> = self.builder_draft_spec.clone();
+
         let task = cx
             .background_executor()
             .spawn(async move { conn.execute(&request) });
@@ -370,17 +383,22 @@ impl DataGridPanel {
                     return;
                 }
 
-                match &result {
-                    Ok(query_result) => {
+                match result {
+                    Ok(mut query_result) => {
                         info!(
                             "Visual query returned {} rows in {:?}",
                             query_result.row_count(),
                             query_result.execution_time
                         );
 
+                        if let Some(ref spec) = committed_spec {
+                            project_aggregate_kinds(spec, &mut query_result.columns);
+                        }
+
                         entity.update(cx, |panel, cx| {
                             panel.runner.complete_primary(task_id, cx);
-                            panel.result = query_result.clone();
+                            panel.current_visual_spec = committed_spec.clone();
+                            panel.result = query_result;
                             panel.state = GridState::Ready;
                             cx.notify();
                         });
@@ -881,9 +899,12 @@ impl DataGridPanel {
                         cx,
                     );
 
-                    // Relational count path (T23 / FR-COUNT-1)
                     if let Some(spec) = &self.builder_draft_spec {
-                        self.fetch_relational_count(profile_id, database, spec.clone(), cx);
+                        if spec.is_grouped() {
+                            self.fetch_grouped_total_count(profile_id, database, spec.clone(), cx);
+                        } else {
+                            self.fetch_relational_count(profile_id, database, spec.clone(), cx);
+                        }
                     }
                 }
 
@@ -941,6 +962,79 @@ impl DataGridPanel {
                 false
             }
         }
+    }
+
+    /// Execute the grouped total-count subquery for a grouped visual query.
+    ///
+    /// When the visual spec is grouped, a plain `COUNT(*) FROM table` would
+    /// count source rows rather than the number of groups. This method wraps
+    /// the full grouped query (without LIMIT/OFFSET) in a
+    /// `SELECT COUNT(*) FROM (...) AS _dbflux_count_subq` to get the correct
+    /// group count for the pagination footer.
+    pub(super) fn fetch_grouped_total_count(
+        &mut self,
+        profile_id: Uuid,
+        database: Option<String>,
+        spec: VisualQuerySpec,
+        cx: &mut Context<Self>,
+    ) {
+        let (conn, count_query) = {
+            let state = self.app_state.read(cx);
+            let Some(connected) = state.connections().get(&profile_id) else {
+                return;
+            };
+
+            let conn = match connected.resolve_connection_for_execution(database.as_deref()) {
+                Ok(c) => c,
+                Err(_) => return,
+            };
+
+            let dialect = connected.connection.dialect();
+            let count_query = match dbflux_core::build_count_of_grouped_query(&spec, dialect) {
+                Ok(q) => q,
+                Err(e) => {
+                    log::warn!("Failed to build grouped count query: {}", e);
+                    return;
+                }
+            };
+
+            (conn, count_query)
+        };
+
+        let table_name = spec.source.table.clone();
+        let entity = cx.entity().clone();
+
+        let mut request = dbflux_core::QueryRequest::new(count_query.sql.clone());
+        request.params = count_query.params.clone();
+        if let Some(ref db) = database {
+            request.database = Some(db.clone());
+        }
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { conn.execute(&request) });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            if let Err(e) = cx.update(|cx| {
+                if let Ok(query_result) = result
+                    && let Some(row) = query_result.rows.first()
+                    && let Some(dbflux_core::Value::Int(count)) = row.first()
+                {
+                    entity.update(cx, |panel, cx| {
+                        panel.pending_total_count = Some(PendingTotalCount {
+                            source_qualified: table_name,
+                            total: *count as u64,
+                        });
+                        cx.notify();
+                    });
+                }
+            }) {
+                log::warn!("Failed to apply grouped count result: {:?}", e);
+            }
+        })
+        .detach();
     }
 
     /// Execute the count subquery for an active relational filter.
