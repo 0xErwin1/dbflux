@@ -79,10 +79,7 @@ impl Sidebar {
 
     /// Public re-export for callers that build their own tree (e.g. scripts)
     /// and need user collapse/expand overrides applied on top.
-    pub(super) fn apply_expansion_overrides_public(
-        &self,
-        items: Vec<TreeItem>,
-    ) -> Vec<TreeItem> {
+    pub(super) fn apply_expansion_overrides_public(&self, items: Vec<TreeItem>) -> Vec<TreeItem> {
         self.apply_expansion_overrides(items)
     }
 
