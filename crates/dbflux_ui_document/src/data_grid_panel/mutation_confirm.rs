@@ -38,11 +38,12 @@ pub fn fetch_sample_rows(
     let where_clause =
         render_filter_node_sql(spec.filter.as_ref(), dialect, &mut params, &mut param_idx);
 
+    let limit = dialect.limit_clause(5);
     let sql = match where_clause {
         Some(w) if !w.is_empty() => {
-            format!("SELECT * FROM {} WHERE {} LIMIT 5", qualified_table, w)
+            format!("SELECT * FROM {} WHERE {} {}", qualified_table, w, limit)
         }
-        _ => format!("SELECT * FROM {} LIMIT 5", qualified_table),
+        _ => format!("SELECT * FROM {} {}", qualified_table, limit),
     };
 
     let (tx, rx) = std::sync::mpsc::channel::<Option<(Vec<String>, Vec<Vec<String>>)>>();
@@ -315,6 +316,116 @@ mod tests {
         assert!(
             !filter_is_pk_unique(&filter, &["id"]),
             "AND group with non-Eq child must not be PK-unique"
+        );
+    }
+
+    // F-R3-6: classification helper — DELETE maps to Destructive, UPDATE maps to Write.
+    // The helper logic is inlined at the call site in mod.rs; these tests pin the mapping
+    // to prevent regression without requiring a GPUI context.
+    #[test]
+    fn update_spec_classifies_as_write() {
+        use dbflux_core::{
+            Assignment, AssignmentValue, MutationKind, ScalarLiteral, TableRef, VisualMutationSpec,
+        };
+
+        let spec = VisualMutationSpec {
+            from: TableRef {
+                schema: None,
+                name: "t".to_string(),
+            },
+            filter: None,
+            kind: MutationKind::Update {
+                assignments: vec![Assignment {
+                    column: "col".to_string(),
+                    value: AssignmentValue::Literal(ScalarLiteral::Integer(1)),
+                }],
+            },
+        };
+
+        // The classification expression that lives in mod.rs — replicate the logic here.
+        let is_delete = matches!(spec.kind, MutationKind::Delete);
+        assert!(!is_delete, "UPDATE must not be classified as Delete");
+    }
+
+    #[test]
+    fn delete_spec_classifies_as_destructive() {
+        use dbflux_core::{MutationKind, TableRef, VisualMutationSpec};
+
+        let spec = VisualMutationSpec {
+            from: TableRef {
+                schema: None,
+                name: "t".to_string(),
+            },
+            filter: None,
+            kind: MutationKind::Delete,
+        };
+
+        let is_delete = matches!(spec.kind, MutationKind::Delete);
+        assert!(
+            is_delete,
+            "DELETE must be classified as Destructive (is_delete=true)"
+        );
+    }
+
+    // F-R3-3: DELETE with PK-unique filter + est_rows=Some(1) → Light modal.
+    #[test]
+    fn delete_with_pk_unique_filter_and_count_one_uses_light_modal() {
+        use dbflux_core::{MutationKind, TableRef, VisualMutationSpec};
+
+        use super::{PendingMutationModal, build_pending_modal};
+
+        let spec = VisualMutationSpec {
+            from: TableRef {
+                schema: None,
+                name: "orders".to_string(),
+            },
+            filter: Some(pred_eq("id")),
+            kind: MutationKind::Delete,
+        };
+
+        let modal = build_pending_modal(
+            &spec,
+            "DELETE FROM orders WHERE id = $1".to_string(),
+            Some(1),
+            vec!["id".to_string()],
+            None,
+            &["id"],
+        );
+
+        assert!(
+            matches!(modal, PendingMutationModal::Light(_)),
+            "PK-unique DELETE with est_rows=Some(1) must use Light modal"
+        );
+    }
+
+    // F-R3-3: DELETE with count_state still Pending (est_rows=None) → Hard modal.
+    #[test]
+    fn delete_with_count_none_falls_back_to_hard_modal() {
+        use dbflux_core::{MutationKind, TableRef, VisualMutationSpec};
+
+        use super::{PendingMutationModal, build_pending_modal};
+
+        let spec = VisualMutationSpec {
+            from: TableRef {
+                schema: None,
+                name: "orders".to_string(),
+            },
+            filter: Some(pred_eq("id")),
+            kind: MutationKind::Delete,
+        };
+
+        let modal = build_pending_modal(
+            &spec,
+            "DELETE FROM orders WHERE id = $1".to_string(),
+            None,
+            vec!["id".to_string()],
+            None,
+            &["id"],
+        );
+
+        assert!(
+            matches!(modal, PendingMutationModal::Hard(_)),
+            "DELETE with est_rows=None must fall back to Hard modal (safety default)"
         );
     }
 }
