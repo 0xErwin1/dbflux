@@ -199,7 +199,11 @@ impl Render for DataGridPanel {
             })
             .unwrap_or((false, false, 0, false, false));
 
-        let show_pk_warning = is_table_view && shows_table_content && !is_editable;
+        let is_grouped_result = self.is_grouped_result();
+
+        let show_grouped_warning = is_table_view && shows_table_content && is_grouped_result;
+        let show_pk_warning =
+            is_table_view && shows_table_content && !is_editable && !is_grouped_result;
         let show_edit_toolbar = is_table_view && has_columns && is_editable;
 
         div()
@@ -235,6 +239,29 @@ impl Render for DataGridPanel {
                     &theme,
                     cx,
                 ))
+            })
+            // Grouped-result banner (when result is from a GROUP BY query)
+            .when(show_grouped_warning, |d| {
+                d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::SM)
+                        .h(Heights::ROW_COMPACT)
+                        .px(Spacing::SM)
+                        .bg(theme.muted.opacity(0.15))
+                        .border_b_1()
+                        .border_color(theme.border)
+                        .child(
+                            Icon::new(AppIcon::TriangleAlert)
+                                .small()
+                                .color(theme.muted_foreground),
+                        )
+                        .child(
+                            Text::caption("Aggregated results cannot be edited")
+                                .color(theme.muted_foreground),
+                        ),
+                )
             })
             // PK warning banner (when table has no PK)
             .when(show_pk_warning, |d| {

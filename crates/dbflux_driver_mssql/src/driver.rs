@@ -309,6 +309,10 @@ impl SqlDialect for MssqlDialect {
         true
     }
 
+    fn having_repeats_aggregate_expressions(&self) -> bool {
+        true
+    }
+
     fn build_upsert_statement(
         &self,
         _schema: Option<&str>,

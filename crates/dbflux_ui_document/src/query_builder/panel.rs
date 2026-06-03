@@ -6,10 +6,10 @@ use dbflux_components::controls::{
     CompletionProvider, Dropdown, DropdownItem, DropdownSelectionChanged, InputEvent, InputState,
 };
 use dbflux_core::{
-    BoolOp, ColumnInfo, ColumnKind, Comparator, FilterNode, JoinFilterNode, JoinKind, JoinOn,
-    JoinPredicate, JoinStep, LiteralValue, Predicate, PredicateValue, ProjectedColumn, Projection,
-    SchemaForeignKeyInfo, SelectQuery, SortEntry, SourceTable, VisualQuerySpec,
-    VisualSortDirection,
+    AggFn, BoolOp, ColumnInfo, ColumnKind, Comparator, FilterNode, GroupByEntry, JoinFilterNode,
+    JoinKind, JoinOn, JoinPredicate, JoinStep, LiteralValue, Predicate, PredicateValue,
+    ProjectedColumn, Projection, SchemaForeignKeyInfo, SelectQuery, SortEntry, SourceTable,
+    VisualAggregateSpec, VisualQuerySpec, VisualSortDirection,
 };
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Render, Subscription, WeakEntity,
@@ -134,6 +134,59 @@ impl ProjectionRow {
             source_alias: self.source_alias.clone(),
             column: self.column.clone(),
             alias: self.alias.clone(),
+        }
+    }
+}
+
+/// Discriminant that routes filter-tree mutations to either the WHERE or
+/// HAVING predicate tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterTarget {
+    Where,
+    Having,
+}
+
+/// A single group-by entry as tracked by the builder panel.
+#[derive(Debug, Clone)]
+pub struct GroupByRow {
+    pub source_alias: String,
+    pub column: String,
+}
+
+impl GroupByRow {
+    fn to_group_by_entry(&self) -> GroupByEntry {
+        GroupByEntry {
+            source_alias: self.source_alias.clone(),
+            column: self.column.clone(),
+        }
+    }
+}
+
+/// A single aggregate row as tracked by the builder panel.
+#[derive(Debug, Clone)]
+pub struct AggregateRow {
+    pub function: AggFn,
+    pub source_alias: String,
+    pub column: String,
+    pub alias: String,
+}
+
+impl AggregateRow {
+    fn to_aggregate_spec(&self) -> VisualAggregateSpec {
+        if self.function == AggFn::CountStar {
+            VisualAggregateSpec {
+                function: self.function,
+                source_alias: None,
+                column: None,
+                alias: self.alias.clone(),
+            }
+        } else {
+            VisualAggregateSpec {
+                function: self.function,
+                source_alias: Some(self.source_alias.clone()),
+                column: Some(self.column.clone()),
+                alias: self.alias.clone(),
+            }
         }
     }
 }
@@ -298,6 +351,67 @@ pub struct QueryBuilderPanel {
     /// replaces `join_rows`) so the render cycle sweeps stale entries from the
     /// join-condition HashMaps.
     pub(crate) pending_join_condition_sweep: bool,
+
+    /// Group-by column rows in display order.
+    pub(crate) group_by_rows: Vec<GroupByRow>,
+
+    /// Aggregate rows in display order.
+    pub(crate) aggregate_rows: Vec<AggregateRow>,
+
+    /// Per-group-by-row column text input (parallel to `group_by_rows`).
+    ///
+    /// Each entry holds an `InputState` for the "alias.column" text field.
+    /// Rebuilt whenever the group-by row count changes.
+    pub(crate) group_by_col_inputs: Vec<Entity<InputState>>,
+
+    /// Per-aggregate-row function `Dropdown` (parallel to `aggregate_rows`).
+    pub(crate) agg_fn_dropdowns: Vec<Entity<Dropdown>>,
+
+    /// Per-aggregate-row column text input (parallel to `aggregate_rows`).
+    ///
+    /// Holds an `InputState` for the "alias.column" reference. Disabled (read-only)
+    /// when the selected function is `CountStar`.
+    pub(crate) agg_col_inputs: Vec<Entity<InputState>>,
+
+    /// Per-aggregate-row alias text input (parallel to `aggregate_rows`).
+    pub(crate) agg_alias_inputs: Vec<Entity<InputState>>,
+
+    /// Set to `true` whenever `group_by_rows` or `aggregate_rows` count changes so
+    /// the render cycle can rebuild the per-row entity vectors.
+    pub(crate) pending_group_by_rebuild: bool,
+
+    /// Per-predicate value `InputState` for HAVING predicates, keyed by node_id.
+    pub(crate) having_predicate_input_states: HashMap<u64, Entity<InputState>>,
+
+    /// Per-predicate column-reference `InputState` for HAVING predicates, keyed by node_id.
+    pub(crate) having_predicate_column_input_states: HashMap<u64, Entity<InputState>>,
+
+    /// Per-predicate comparator `Dropdown` for HAVING predicates, keyed by node_id.
+    pub(crate) having_predicate_comparator_dropdowns: HashMap<u64, Entity<Dropdown>>,
+
+    /// Set to `true` after any HAVING filter mutation so the render cycle
+    /// sweeps stale entries from `having_predicate_*` maps.
+    pub(crate) pending_having_input_sweep: bool,
+
+    /// Snapshot of the projection before entering grouped mode.
+    ///
+    /// Builder UI state only — NOT serialized on VisualQuerySpec.
+    /// Captured when the first group-by or aggregate row is added while
+    /// `projection == All`. Restored when all group-by and aggregate rows
+    /// are removed. If `None`, no snapshot was taken (either the spec was
+    /// loaded already grouped, or the user started with `Explicit`).
+    pub(crate) pre_group_projection: Option<Projection>,
+
+    /// Non-empty when a sort entry was rejected because the column is not in
+    /// the current group-by / aggregate alias set.
+    ///
+    /// Cleared when the sort input loses focus or the user adds a valid entry.
+    pub(crate) sort_validation_error: Option<String>,
+
+    /// Count of aggregate rows that are present in the UI but excluded from
+    /// `spec.aggregates` because they are incomplete (empty column for
+    /// non-CountStar functions). Surfaced as a footer warning.
+    pub(crate) incomplete_aggregate_row_count: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +443,9 @@ impl QueryBuilderPanel {
             projection: Projection::All,
             joins: vec![],
             filter: None,
+            group_by: vec![],
+            aggregates: vec![],
+            having: None,
             sort: vec![],
             limit: Some(DEFAULT_LIMIT),
             offset: 0,
@@ -499,6 +616,26 @@ impl QueryBuilderPanel {
             },
         );
 
+        let group_by_rows: Vec<GroupByRow> = spec
+            .group_by
+            .iter()
+            .map(|g| GroupByRow {
+                source_alias: g.source_alias.clone(),
+                column: g.column.clone(),
+            })
+            .collect();
+
+        let aggregate_rows: Vec<AggregateRow> = spec
+            .aggregates
+            .iter()
+            .map(|a| AggregateRow {
+                function: a.function,
+                source_alias: a.source_alias.clone().unwrap_or_default(),
+                column: a.column.clone().unwrap_or_default(),
+                alias: a.alias.clone(),
+            })
+            .collect();
+
         Self {
             current_spec: spec,
             projection_mode,
@@ -537,6 +674,20 @@ impl QueryBuilderPanel {
             schema_profile_id: profile_id,
             pending_filter_input_sweep: false,
             pending_join_condition_sweep: false,
+            group_by_rows,
+            aggregate_rows,
+            group_by_col_inputs: Vec::new(),
+            agg_fn_dropdowns: Vec::new(),
+            agg_col_inputs: Vec::new(),
+            agg_alias_inputs: Vec::new(),
+            pending_group_by_rebuild: false,
+            having_predicate_input_states: HashMap::new(),
+            having_predicate_column_input_states: HashMap::new(),
+            having_predicate_comparator_dropdowns: HashMap::new(),
+            pending_having_input_sweep: false,
+            pre_group_projection: None,
+            sort_validation_error: None,
+            incomplete_aggregate_row_count: 0,
         }
     }
 
@@ -611,6 +762,26 @@ impl QueryBuilderPanel {
             })
             .collect();
 
+        let group_by_rows: Vec<GroupByRow> = spec
+            .group_by
+            .iter()
+            .map(|g| GroupByRow {
+                source_alias: g.source_alias.clone(),
+                column: g.column.clone(),
+            })
+            .collect();
+
+        let aggregate_rows: Vec<AggregateRow> = spec
+            .aggregates
+            .iter()
+            .map(|a| AggregateRow {
+                function: a.function,
+                source_alias: a.source_alias.clone().unwrap_or_default(),
+                column: a.column.clone().unwrap_or_default(),
+                alias: a.alias.clone(),
+            })
+            .collect();
+
         self.limit_text = spec
             .limit
             .map_or_else(|| "0".to_string(), |v| v.to_string());
@@ -618,6 +789,18 @@ impl QueryBuilderPanel {
         self.projection_mode = projection_mode;
         self.projection_rows = projection_rows;
         self.join_rows = join_rows;
+        self.group_by_rows = group_by_rows;
+        self.aggregate_rows = aggregate_rows;
+        // Clear per-row interactive entities; they will be rebuilt on next render.
+        self.group_by_col_inputs.clear();
+        self.agg_fn_dropdowns.clear();
+        self.agg_col_inputs.clear();
+        self.agg_alias_inputs.clear();
+        self.pending_group_by_rebuild = true;
+        // Sweep HAVING input states; they will be recreated on next render.
+        self.having_predicate_input_states.clear();
+        self.having_predicate_column_input_states.clear();
+        self.having_predicate_comparator_dropdowns.clear();
         // Both flags are required: the rebuild flag drives the InputState /
         // Dropdown vec back to the new row count, the sweep flag drops node-id
         // entries that the previous spec owned.
@@ -626,7 +809,14 @@ impl QueryBuilderPanel {
         self.sort_rows = sort_rows;
         self.sql_preview = (self.generate_preview)(&spec);
         self.pending_preview_sync = true;
+        self.pre_group_projection = if spec.is_grouped() {
+            Some(Projection::All)
+        } else {
+            None
+        };
         self.current_spec = spec;
+        self.sort_validation_error = None;
+        self.incomplete_aggregate_row_count = 0;
     }
 
     // -----------------------------------------------------------------------
@@ -1252,6 +1442,185 @@ impl QueryBuilderPanel {
         }
     }
 
+    /// Rebuilds the per-row `InputState` and `Dropdown` entities for the
+    /// Group-By and Aggregate sections from the current row vectors.
+    ///
+    /// Called from the render cycle when `pending_group_by_rebuild` is set.
+    /// On any shrink, all per-row entities are cleared and rebuilt from scratch
+    /// to avoid stale subscriptions pointing at shifted row indices.
+    pub fn rebuild_group_by_input_states(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let gb_target = self.group_by_rows.len();
+        let agg_target = self.aggregate_rows.len();
+
+        let gb_needs_rebuild = self.group_by_col_inputs.len() != gb_target;
+        let agg_needs_rebuild = self.agg_fn_dropdowns.len() != agg_target;
+
+        if !gb_needs_rebuild && !agg_needs_rebuild {
+            return;
+        }
+
+        if self.group_by_col_inputs.len() > gb_target {
+            self.group_by_col_inputs.clear();
+        }
+
+        if self.agg_fn_dropdowns.len() > agg_target {
+            self.agg_fn_dropdowns.clear();
+            self.agg_col_inputs.clear();
+            self.agg_alias_inputs.clear();
+        }
+
+        let alias_provider: Rc<dyn CompletionProvider> = Rc::new(SchemaCompletionProvider::new(
+            self.app_state_weak.clone(),
+            self.schema_profile_id,
+            CompletionMode::AliasOrColumn {
+                aliases: self.make_alias_bindings(),
+            },
+            self.schema_cache.clone(),
+        ));
+
+        let gb_start = self.group_by_col_inputs.len();
+        for i in gb_start..gb_target {
+            let col_text = {
+                let row = &self.group_by_rows[i];
+                if row.source_alias.is_empty() || row.source_alias == row.column {
+                    row.column.clone()
+                } else {
+                    format!("{}.{}", row.source_alias, row.column)
+                }
+            };
+
+            let col_input = cx.new(|cx| {
+                let mut state = InputState::new(window, cx).placeholder("alias.column");
+                state.set_value(&col_text, window, cx);
+                state
+            });
+
+            col_input.update(cx, |s, _| {
+                s.lsp.completion_provider = Some(alias_provider.clone());
+            });
+
+            let sub = cx.subscribe_in(
+                &col_input,
+                window,
+                move |this, entity, event: &InputEvent, _window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        let text = entity.read(cx).value().to_string();
+                        let (alias, col) = match text.split_once('.') {
+                            Some((a, c)) => (a.trim().to_string(), c.trim().to_string()),
+                            None => {
+                                let sa = this
+                                    .group_by_rows
+                                    .get(i)
+                                    .map(|r| r.source_alias.clone())
+                                    .unwrap_or_default();
+                                (sa, text.trim().to_string())
+                            }
+                        };
+                        this.set_group_by_column(i, alias, col, cx);
+                    }
+                },
+            );
+
+            self.group_by_col_inputs.push(col_input);
+            self._input_subs.push(sub);
+        }
+
+        let agg_start = self.agg_fn_dropdowns.len();
+        for i in agg_start..agg_target {
+            let current_fn = self.aggregate_rows[i].function;
+
+            let fn_items: Vec<DropdownItem> = AGG_FN_ORDER
+                .iter()
+                .map(|f| DropdownItem::with_value(agg_fn_display(*f), agg_fn_display(*f)))
+                .collect();
+            let fn_selected = AGG_FN_ORDER.iter().position(|f| *f == current_fn);
+
+            let fn_dropdown = cx.new(|_cx| {
+                Dropdown::new(("qb-agg-fn-dd", i))
+                    .items(fn_items)
+                    .selected_index(fn_selected)
+                    .toolbar_style(true)
+            });
+
+            let fn_sub = cx.subscribe(
+                &fn_dropdown,
+                move |this, _entity, event: &DropdownSelectionChanged, cx| {
+                    if let Some(function) = AGG_FN_ORDER.get(event.index).copied() {
+                        this.set_aggregate_function(i, function, cx);
+                    }
+                },
+            );
+
+            let col_text = {
+                let row = &self.aggregate_rows[i];
+                if row.column.is_empty() {
+                    String::new()
+                } else if row.source_alias.is_empty() {
+                    row.column.clone()
+                } else {
+                    format!("{}.{}", row.source_alias, row.column)
+                }
+            };
+
+            let col_input = cx.new(|cx| {
+                let mut state = InputState::new(window, cx).placeholder("alias.column");
+                state.set_value(&col_text, window, cx);
+                state
+            });
+
+            col_input.update(cx, |s, _| {
+                s.lsp.completion_provider = Some(alias_provider.clone());
+            });
+
+            let col_sub = cx.subscribe_in(
+                &col_input,
+                window,
+                move |this, entity, event: &InputEvent, _window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        let text = entity.read(cx).value().to_string();
+                        let (alias, col) = match text.split_once('.') {
+                            Some((a, c)) => (a.trim().to_string(), c.trim().to_string()),
+                            None => {
+                                let sa = this
+                                    .aggregate_rows
+                                    .get(i)
+                                    .map(|r| r.source_alias.clone())
+                                    .unwrap_or_default();
+                                (sa, text.trim().to_string())
+                            }
+                        };
+                        this.set_aggregate_column(i, alias, col, cx);
+                    }
+                },
+            );
+
+            let alias_text = self.aggregate_rows[i].alias.clone();
+            let alias_input = cx.new(|cx| {
+                let mut state = InputState::new(window, cx).placeholder("alias");
+                state.set_value(&alias_text, window, cx);
+                state
+            });
+
+            let alias_sub = cx.subscribe_in(
+                &alias_input,
+                window,
+                move |this, entity, event: &InputEvent, _window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        let text = entity.read(cx).value().to_string();
+                        this.set_aggregate_alias(i, text, cx);
+                    }
+                },
+            );
+
+            self.agg_fn_dropdowns.push(fn_dropdown);
+            self.agg_col_inputs.push(col_input);
+            self.agg_alias_inputs.push(alias_input);
+            self._input_subs.push(fn_sub);
+            self._input_subs.push(col_sub);
+            self._input_subs.push(alias_sub);
+        }
+    }
+
     fn next_comparator(current: Comparator) -> Comparator {
         match current {
             Comparator::Eq => Comparator::Neq,
@@ -1625,7 +1994,31 @@ impl QueryBuilderPanel {
     // -----------------------------------------------------------------------
 
     /// Appends a sort row.
+    ///
+    /// When the spec is grouped, the column must be either a group-by column or
+    /// an aggregate alias. If the column is not in the valid set, the entry is
+    /// rejected and `sort_validation_error` is set for the view to display.
     pub fn add_sort(&mut self, source_alias: &str, column: &str, cx: &mut Context<Self>) {
+        if self.current_spec.is_grouped() {
+            let valid: HashSet<String> = self
+                .group_by_rows
+                .iter()
+                .map(|g| g.column.clone())
+                .chain(self.aggregate_rows.iter().map(|a| a.alias.clone()))
+                .collect();
+
+            if !valid.contains(column) {
+                self.sort_validation_error = Some(format!(
+                    "\"{}\" is not in the GROUP BY columns or aggregate aliases",
+                    column
+                ));
+                cx.notify();
+                return;
+            }
+        }
+
+        self.sort_validation_error = None;
+
         self.sort_rows.push(SortRow {
             source_alias: source_alias.to_string(),
             column: column.to_string(),
@@ -1660,6 +2053,529 @@ impl QueryBuilderPanel {
             self.sort_rows.insert(to_index, row);
             self.rebuild_spec_and_notify(cx);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Group-by mutations
+    // -----------------------------------------------------------------------
+
+    /// Appends a group-by column row.
+    ///
+    /// Triggers the projection auto-transition when this is the first group-by
+    /// or aggregate row.
+    pub fn add_group_by_column(
+        &mut self,
+        source_alias: String,
+        column: String,
+        cx: &mut Context<Self>,
+    ) {
+        let was_empty = self.group_by_rows.is_empty() && self.aggregate_rows.is_empty();
+        self.group_by_rows.push(GroupByRow {
+            source_alias,
+            column,
+        });
+        self.pending_group_by_rebuild = true;
+        if was_empty {
+            self.enter_grouped_mode();
+        }
+        self.rebuild_spec_and_notify(cx);
+    }
+
+    /// Removes the group-by row at `index`.
+    ///
+    /// Triggers exit from grouped mode when this removal leaves both group-by
+    /// and aggregate rows empty.
+    pub fn remove_group_by_row(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.group_by_rows.len() {
+            self.group_by_rows.remove(index);
+            self.pending_group_by_rebuild = true;
+            self.drop_invalid_sort_for_grouped();
+            if self.group_by_rows.is_empty() && self.aggregate_rows.is_empty() {
+                self.exit_grouped_mode();
+            }
+            self.rebuild_spec_and_notify(cx);
+        }
+    }
+
+    /// Updates the column of the group-by row at `index`.
+    pub fn set_group_by_column(
+        &mut self,
+        index: usize,
+        source_alias: String,
+        column: String,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(row) = self.group_by_rows.get_mut(index) {
+            row.source_alias = source_alias;
+            row.column = column;
+            self.drop_invalid_sort_for_grouped();
+            self.rebuild_spec_and_notify(cx);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Aggregate mutations
+    // -----------------------------------------------------------------------
+
+    /// Appends an aggregate row with an auto-generated alias.
+    ///
+    /// Triggers the projection auto-transition when this is the first group-by
+    /// or aggregate row.
+    pub fn add_aggregate(&mut self, function: AggFn, cx: &mut Context<Self>) {
+        let was_empty = self.group_by_rows.is_empty() && self.aggregate_rows.is_empty();
+        let alias = self.generate_aggregate_alias(function, "");
+        self.aggregate_rows.push(AggregateRow {
+            function,
+            source_alias: String::new(),
+            column: String::new(),
+            alias,
+        });
+        self.pending_group_by_rebuild = true;
+        if was_empty {
+            self.enter_grouped_mode();
+        }
+        self.rebuild_spec_and_notify(cx);
+    }
+
+    /// Removes the aggregate row at `index`.
+    ///
+    /// Triggers exit from grouped mode when this removal leaves both group-by
+    /// and aggregate rows empty.
+    pub fn remove_aggregate_row(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.aggregate_rows.len() {
+            self.aggregate_rows.remove(index);
+            self.pending_group_by_rebuild = true;
+            self.drop_invalid_sort_for_grouped();
+            if self.group_by_rows.is_empty() && self.aggregate_rows.is_empty() {
+                self.exit_grouped_mode();
+            }
+            self.rebuild_spec_and_notify(cx);
+        }
+    }
+
+    /// Changes the function of the aggregate row at `index`.
+    ///
+    /// When the new function is `CountStar`, clears the column (CountStar
+    /// requires no column reference). Otherwise preserves the column.
+    pub fn set_aggregate_function(
+        &mut self,
+        index: usize,
+        function: AggFn,
+        cx: &mut Context<Self>,
+    ) {
+        if index >= self.aggregate_rows.len() {
+            return;
+        }
+
+        self.aggregate_rows[index].function = function;
+        if function == AggFn::CountStar {
+            self.aggregate_rows[index].source_alias = String::new();
+            self.aggregate_rows[index].column = String::new();
+        }
+        let old_alias = self.aggregate_rows[index].alias.clone();
+        let col = self.aggregate_rows[index].column.clone();
+        if old_alias.is_empty() || self.is_auto_alias(&old_alias) {
+            let new_alias = self.generate_aggregate_alias(function, &col);
+            self.aggregate_rows[index].alias = new_alias;
+        }
+        self.rebuild_spec_and_notify(cx);
+    }
+
+    /// Updates the column reference of the aggregate row at `index`.
+    pub fn set_aggregate_column(
+        &mut self,
+        index: usize,
+        source_alias: String,
+        column: String,
+        cx: &mut Context<Self>,
+    ) {
+        if index >= self.aggregate_rows.len() {
+            return;
+        }
+
+        let function = self.aggregate_rows[index].function;
+        let old_alias = self.aggregate_rows[index].alias.clone();
+
+        self.aggregate_rows[index].source_alias = source_alias;
+        self.aggregate_rows[index].column = column.clone();
+
+        if old_alias.is_empty() || self.is_auto_alias(&old_alias) {
+            let new_alias = self.generate_aggregate_alias(function, &column);
+            self.aggregate_rows[index].alias = new_alias;
+        }
+
+        self.drop_invalid_sort_for_grouped();
+        self.rebuild_spec_and_notify(cx);
+    }
+
+    /// Sets the alias of the aggregate row at `index`.
+    pub fn set_aggregate_alias(&mut self, index: usize, alias: String, cx: &mut Context<Self>) {
+        if let Some(row) = self.aggregate_rows.get_mut(index) {
+            row.alias = alias;
+            self.drop_invalid_sort_for_grouped();
+            self.rebuild_spec_and_notify(cx);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // HAVING filter mutations (routed through FilterTarget)
+    // -----------------------------------------------------------------------
+
+    /// Replaces the HAVING root node.
+    pub fn set_having(&mut self, having: Option<FilterNode>, cx: &mut Context<Self>) {
+        self.current_spec.having = having;
+        self.refresh_preview_and_notify(cx);
+    }
+
+    /// Adds a new empty predicate to the filter tree identified by `target`.
+    pub fn add_predicate_for(
+        &mut self,
+        target: FilterTarget,
+        parent_path: Vec<usize>,
+        source_alias: &str,
+        column: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.next_node_id += 1;
+        let new_pred = FilterNode::Predicate(Predicate {
+            source_alias: source_alias.to_string(),
+            column: column.to_string(),
+            comparator: Comparator::Eq,
+            value: PredicateValue::Single(LiteralValue::Text(String::new())),
+            node_id: self.next_node_id,
+        });
+
+        let tree = match target {
+            FilterTarget::Where => &mut self.current_spec.filter,
+            FilterTarget::Having => &mut self.current_spec.having,
+        };
+
+        match tree {
+            None => {
+                *tree = Some(FilterNode::Group {
+                    op: BoolOp::And,
+                    children: vec![new_pred],
+                });
+            }
+            Some(root) => {
+                insert_filter_at_path(root, &parent_path, new_pred);
+            }
+        }
+
+        match target {
+            FilterTarget::Where => self.pending_filter_input_sweep = true,
+            FilterTarget::Having => self.pending_having_input_sweep = true,
+        }
+        self.refresh_preview_and_notify(cx);
+    }
+
+    /// Adds a new empty sub-group to the filter tree identified by `target`.
+    pub fn add_group_for(
+        &mut self,
+        target: FilterTarget,
+        parent_path: Vec<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        let new_group = FilterNode::Group {
+            op: BoolOp::And,
+            children: Vec::new(),
+        };
+
+        let tree = match target {
+            FilterTarget::Where => &mut self.current_spec.filter,
+            FilterTarget::Having => &mut self.current_spec.having,
+        };
+
+        match tree {
+            None => {
+                *tree = Some(new_group);
+            }
+            Some(root) => {
+                insert_filter_at_path(root, &parent_path, new_group);
+            }
+        }
+
+        self.refresh_preview_and_notify(cx);
+    }
+
+    /// Removes the node at `path` from the filter tree identified by `target`.
+    pub fn remove_filter_node_for(
+        &mut self,
+        target: FilterTarget,
+        path: Vec<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        let tree = match target {
+            FilterTarget::Where => &mut self.current_spec.filter,
+            FilterTarget::Having => &mut self.current_spec.having,
+        };
+
+        if path.is_empty() {
+            *tree = None;
+        } else {
+            if let Some(root) = tree.as_mut() {
+                remove_filter_at_path(root, &path);
+            }
+            if let Some(FilterNode::Group { children, .. }) = tree.as_ref()
+                && children.is_empty()
+            {
+                *tree = None;
+            }
+        }
+
+        match target {
+            FilterTarget::Where => self.pending_filter_input_sweep = true,
+            FilterTarget::Having => self.pending_having_input_sweep = true,
+        }
+        self.refresh_preview_and_notify(cx);
+    }
+
+    /// Toggles the boolean operator (AND ↔ OR) of the group at `path` in the
+    /// filter tree identified by `target`.
+    pub fn toggle_group_op_for(
+        &mut self,
+        target: FilterTarget,
+        path: Vec<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        let tree = match target {
+            FilterTarget::Where => &mut self.current_spec.filter,
+            FilterTarget::Having => &mut self.current_spec.having,
+        };
+
+        if let Some(root) = tree.as_mut()
+            && let Some(FilterNode::Group { op, .. }) = filter_node_at_path_mut(root, &path)
+        {
+            *op = match *op {
+                BoolOp::And => BoolOp::Or,
+                BoolOp::Or => BoolOp::And,
+            };
+        }
+
+        self.refresh_preview_and_notify(cx);
+    }
+
+    /// Sets the predicate value at `path` in the filter tree identified by
+    /// `target`.
+    pub fn set_predicate_value_for(
+        &mut self,
+        target: FilterTarget,
+        path: Vec<usize>,
+        text: String,
+        cx: &mut Context<Self>,
+    ) {
+        let tree = match target {
+            FilterTarget::Where => &mut self.current_spec.filter,
+            FilterTarget::Having => &mut self.current_spec.having,
+        };
+
+        if let Some(root) = tree.as_mut()
+            && let Some(FilterNode::Predicate(pred)) = filter_node_at_path_mut(root, &path)
+        {
+            pred.value = PredicateValue::Single(LiteralValue::Text(text));
+        }
+
+        self.refresh_preview_and_notify(cx);
+    }
+
+    /// Updates the column reference of a predicate at `path` in the filter tree
+    /// identified by `target`.
+    pub fn set_predicate_column_ref_for(
+        &mut self,
+        target: FilterTarget,
+        path: Vec<usize>,
+        text: String,
+        cx: &mut Context<Self>,
+    ) {
+        let tree = match target {
+            FilterTarget::Where => &mut self.current_spec.filter,
+            FilterTarget::Having => &mut self.current_spec.having,
+        };
+
+        if let Some(root) = tree.as_mut()
+            && let Some(FilterNode::Predicate(pred)) = filter_node_at_path_mut(root, &path)
+        {
+            match text.split_once('.') {
+                Some((alias, column)) => {
+                    pred.source_alias = alias.trim().to_string();
+                    pred.column = column.trim().to_string();
+                }
+                None => {
+                    pred.column = text.trim().to_string();
+                }
+            }
+        }
+
+        self.refresh_preview_and_notify(cx);
+    }
+
+    /// Sets the comparator at `path` in the filter tree identified by `target`.
+    pub fn set_predicate_comparator_for(
+        &mut self,
+        target: FilterTarget,
+        path: Vec<usize>,
+        comparator: Comparator,
+        cx: &mut Context<Self>,
+    ) {
+        let tree = match target {
+            FilterTarget::Where => &mut self.current_spec.filter,
+            FilterTarget::Having => &mut self.current_spec.having,
+        };
+
+        if let Some(root) = tree.as_mut()
+            && let Some(FilterNode::Predicate(pred)) = filter_node_at_path_mut(root, &path)
+        {
+            pred.comparator = comparator;
+        }
+
+        self.refresh_preview_and_notify(cx);
+    }
+
+    /// Returns the set of node_ids for all Predicate nodes in the HAVING tree.
+    pub fn collect_having_predicate_node_ids(&self) -> HashSet<u64> {
+        let mut ids = HashSet::new();
+        if let Some(root) = &self.current_spec.having {
+            collect_filter_predicate_ids(root, &mut ids);
+        }
+        ids
+    }
+
+    /// Sweeps stale HAVING predicate input state after mutations.
+    pub fn sweep_stale_having_predicate_inputs(&mut self) {
+        let live_ids = self.collect_having_predicate_node_ids();
+        self.having_predicate_input_states
+            .retain(|id, _| live_ids.contains(id));
+        self.having_predicate_column_input_states
+            .retain(|id, _| live_ids.contains(id));
+        self.having_predicate_comparator_dropdowns
+            .retain(|id, _| live_ids.contains(id));
+    }
+
+    /// Ensures a value `InputState` exists for the HAVING predicate at `node_id`.
+    pub fn ensure_having_predicate_input(
+        &mut self,
+        node_id: u64,
+        path: Vec<usize>,
+        current_value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.having_predicate_input_states.contains_key(&node_id) {
+            return;
+        }
+
+        let value = current_value.to_string();
+        let state = cx.new(|cx| {
+            let mut s = InputState::new(window, cx).placeholder("<value>");
+            s.set_value(&value, window, cx);
+            s
+        });
+
+        let sub = cx.subscribe_in(
+            &state,
+            window,
+            move |this, entity, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let text = entity.read(cx).value().to_string();
+                    this.set_predicate_value_for(FilterTarget::Having, path.clone(), text, cx);
+                    let _ = window;
+                }
+            },
+        );
+
+        self.having_predicate_input_states.insert(node_id, state);
+        self._input_subs.push(sub);
+    }
+
+    /// Ensures a column-reference `InputState` exists for the HAVING predicate
+    /// at `node_id`.
+    pub fn ensure_having_predicate_column_input(
+        &mut self,
+        node_id: u64,
+        path: Vec<usize>,
+        current_text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .having_predicate_column_input_states
+            .contains_key(&node_id)
+        {
+            return;
+        }
+
+        let value = current_text.to_string();
+        let state = cx.new(|cx| {
+            let mut s = InputState::new(window, cx).placeholder("alias.column");
+            s.set_value(&value, window, cx);
+            s
+        });
+
+        let sub = cx.subscribe_in(
+            &state,
+            window,
+            move |this, entity, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let text = entity.read(cx).value().to_string();
+                    this.set_predicate_column_ref_for(FilterTarget::Having, path.clone(), text, cx);
+                    let _ = window;
+                }
+            },
+        );
+
+        self.having_predicate_column_input_states
+            .insert(node_id, state);
+        self._input_subs.push(sub);
+    }
+
+    /// Ensures a comparator `Dropdown` exists for the HAVING predicate at
+    /// `node_id`.
+    pub fn ensure_having_predicate_comparator_dropdown(
+        &mut self,
+        node_id: u64,
+        path: Vec<usize>,
+        current: Comparator,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .having_predicate_comparator_dropdowns
+            .contains_key(&node_id)
+        {
+            return;
+        }
+
+        let items: Vec<DropdownItem> = COMPARATOR_ORDER
+            .iter()
+            .map(|c| DropdownItem::with_value(comparator_label(*c), comparator_value(*c)))
+            .collect();
+
+        let selected = COMPARATOR_ORDER.iter().position(|c| *c == current);
+
+        let dropdown = cx.new(|_cx| {
+            Dropdown::new(("qb-having-pred-cmp-dd", node_id))
+                .items(items)
+                .selected_index(selected)
+                .toolbar_style(true)
+        });
+
+        let path_for_sub = path;
+        let sub = cx.subscribe(
+            &dropdown,
+            move |this, _entity, event: &DropdownSelectionChanged, cx| {
+                if let Some(comparator) = COMPARATOR_ORDER.get(event.index).copied() {
+                    this.set_predicate_comparator_for(
+                        FilterTarget::Having,
+                        path_for_sub.clone(),
+                        comparator,
+                        cx,
+                    );
+                }
+            },
+        );
+
+        self.having_predicate_comparator_dropdowns
+            .insert(node_id, dropdown);
+        self._input_subs.push(sub);
     }
 
     // -----------------------------------------------------------------------
@@ -1745,6 +2661,21 @@ impl QueryBuilderPanel {
         let joins: Vec<JoinStep> = self.join_rows.iter().map(|r| r.to_join_step()).collect();
         let sort: Vec<SortEntry> = self.sort_rows.iter().map(|r| r.to_sort_entry()).collect();
 
+        let group_by: Vec<GroupByEntry> = self
+            .group_by_rows
+            .iter()
+            .filter(|r| !r.column.is_empty())
+            .map(|r| r.to_group_by_entry())
+            .collect();
+
+        let aggregates: Vec<VisualAggregateSpec> = self
+            .aggregate_rows
+            .iter()
+            .filter(|r| !r.alias.is_empty())
+            .filter(|r| r.function == AggFn::CountStar || !r.column.is_empty())
+            .map(|r| r.to_aggregate_spec())
+            .collect();
+
         let limit = match self.limit_text.parse::<u64>() {
             Ok(0) | Err(_) => None,
             Ok(n) => Some(n),
@@ -1755,12 +2686,23 @@ impl QueryBuilderPanel {
         self.current_spec.projection = projection;
         self.current_spec.joins = joins;
         self.current_spec.sort = sort;
-        self.current_spec.limit = limit;
-        self.current_spec.offset = offset;
+        self.current_spec.group_by = group_by;
+        self.current_spec.aggregates = aggregates;
+
+        let incomplete_count = self
+            .aggregate_rows
+            .iter()
+            .filter(|r| {
+                r.alias.is_empty() || (r.function != AggFn::CountStar && r.column.is_empty())
+            })
+            .count();
+        self.incomplete_aggregate_row_count = incomplete_count;
 
         let spec = self.current_spec.clone();
         self.sql_preview = (self.generate_preview)(&spec);
         self.pending_preview_sync = true;
+        self.current_spec.limit = limit;
+        self.current_spec.offset = offset;
     }
 
     /// Rebuilds `current_spec` from the panel's mutable row data, then updates
@@ -1802,9 +2744,166 @@ impl QueryBuilderPanel {
         self.current_spec.is_runnable().is_ok()
     }
 
+    /// Returns `true` when the query is currently grouped (has at least one
+    /// group-by or aggregate row).
+    pub fn is_grouped(&self) -> bool {
+        self.current_spec.is_grouped()
+    }
+
     /// The weak handle to the owning `DataGridPanel`, if one was provided.
     pub fn data_grid(&self) -> Option<&WeakEntity<DataGridPanel>> {
         self.data_grid.as_ref()
+    }
+
+    // -----------------------------------------------------------------------
+    // Grouped mode transition helpers
+    // -----------------------------------------------------------------------
+
+    /// Transitions into grouped mode: snapshots the current projection and
+    /// switches projection to `Explicit([])`. Also drops sort entries that
+    /// won't survive the GROUP BY validation.
+    fn enter_grouped_mode(&mut self) {
+        if self.pre_group_projection.is_none() {
+            self.pre_group_projection = Some(self.current_spec.projection.clone());
+        }
+        self.current_spec.projection = Projection::Explicit(Vec::new());
+        self.projection_mode = ProjectionMode::Explicit;
+        self.projection_rows.clear();
+        self.drop_invalid_sort_for_grouped();
+    }
+
+    /// Transitions out of grouped mode: restores the pre-group projection
+    /// snapshot. Any sort entries that reference aggregate aliases are dropped.
+    fn exit_grouped_mode(&mut self) {
+        if let Some(prev) = self.pre_group_projection.take() {
+            self.current_spec.projection = prev.clone();
+            match &prev {
+                Projection::All => {
+                    self.projection_mode = ProjectionMode::All;
+                    self.projection_rows.clear();
+                }
+                Projection::Explicit(cols) => {
+                    self.projection_mode = ProjectionMode::Explicit;
+                    self.projection_rows = cols
+                        .iter()
+                        .map(|c| ProjectionRow {
+                            source_alias: c.source_alias.clone(),
+                            column: c.column.clone(),
+                            alias: c.alias.clone(),
+                        })
+                        .collect();
+                }
+            }
+        }
+        self.drop_invalid_sort_for_ungrouped();
+        // Clear any HAVING state since there is nothing to have without grouping.
+        self.current_spec.having = None;
+        self.having_predicate_input_states.clear();
+        self.having_predicate_column_input_states.clear();
+        self.having_predicate_comparator_dropdowns.clear();
+    }
+
+    /// Drops sort rows whose column is not in the current grouped valid set
+    /// (group-by columns union aggregate aliases).
+    fn drop_invalid_sort_for_grouped(&mut self) {
+        let valid: HashSet<String> = self
+            .group_by_rows
+            .iter()
+            .map(|g| g.column.clone())
+            .chain(self.aggregate_rows.iter().map(|a| a.alias.clone()))
+            .collect();
+
+        self.sort_rows.retain(|s| valid.contains(&s.column));
+        self.current_spec.sort = self.sort_rows.iter().map(|r| r.to_sort_entry()).collect();
+    }
+
+    /// Drops sort rows whose (source_alias, column) pair is not present in the
+    /// restored projection.
+    fn drop_invalid_sort_for_ungrouped(&mut self) {
+        let valid: HashSet<(String, String)> = match &self.current_spec.projection {
+            Projection::All => {
+                self.sort_rows.clear();
+                self.current_spec.sort.clear();
+                return;
+            }
+            Projection::Explicit(cols) => cols
+                .iter()
+                .map(|c| (c.source_alias.clone(), c.column.clone()))
+                .collect(),
+        };
+
+        self.sort_rows
+            .retain(|s| valid.contains(&(s.source_alias.clone(), s.column.clone())));
+        self.current_spec.sort = self.sort_rows.iter().map(|r| r.to_sort_entry()).collect();
+    }
+
+    /// Generates a default alias for an aggregate row.
+    ///
+    /// Returns `count_star` for `CountStar`, `fn_col` for others (e.g.
+    /// `sum_amount`). When the generated alias collides with an existing alias,
+    /// appends `_2`, `_3`, etc. until unique.
+    fn generate_aggregate_alias(&self, function: AggFn, column: &str) -> String {
+        let fn_name = match function {
+            AggFn::Count => "count",
+            AggFn::CountStar => "count_star",
+            AggFn::CountDistinct => "count_distinct",
+            AggFn::Sum => "sum",
+            AggFn::Avg => "avg",
+            AggFn::Min => "min",
+            AggFn::Max => "max",
+        };
+
+        let base = if function == AggFn::CountStar || column.is_empty() {
+            fn_name.to_string()
+        } else {
+            let sanitized: String = column
+                .chars()
+                .map(|c| {
+                    if c.is_alphanumeric() || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            format!("{}_{}", fn_name, sanitized)
+        };
+
+        let existing: HashSet<&str> = self
+            .aggregate_rows
+            .iter()
+            .map(|r| r.alias.as_str())
+            .collect();
+
+        if !existing.contains(base.as_str()) {
+            return base;
+        }
+
+        let mut counter = 2usize;
+        loop {
+            let candidate = format!("{}_{}", base, counter);
+            if !existing.contains(candidate.as_str()) {
+                return candidate;
+            }
+            counter += 1;
+        }
+    }
+
+    /// Returns `true` if `alias` looks like an auto-generated default alias
+    /// for any aggregate function.
+    fn is_auto_alias(&self, alias: &str) -> bool {
+        let auto_prefixes = [
+            "count_star",
+            "count_distinct",
+            "count",
+            "sum",
+            "avg",
+            "min",
+            "max",
+        ];
+        auto_prefixes
+            .iter()
+            .any(|prefix| alias == *prefix || alias.starts_with(&format!("{}_", prefix)))
     }
 
     // -----------------------------------------------------------------------
@@ -2105,6 +3204,28 @@ fn join_kind_label(k: JoinKind) -> &'static str {
     }
 }
 
+pub(crate) const AGG_FN_ORDER: &[AggFn] = &[
+    AggFn::CountStar,
+    AggFn::Count,
+    AggFn::CountDistinct,
+    AggFn::Sum,
+    AggFn::Avg,
+    AggFn::Min,
+    AggFn::Max,
+];
+
+pub(crate) fn agg_fn_display(f: AggFn) -> &'static str {
+    match f {
+        AggFn::CountStar => "COUNT(*)",
+        AggFn::Count => "COUNT",
+        AggFn::CountDistinct => "COUNT DISTINCT",
+        AggFn::Sum => "SUM",
+        AggFn::Avg => "AVG",
+        AggFn::Min => "MIN",
+        AggFn::Max => "MAX",
+    }
+}
+
 // ---------------------------------------------------------------------------
 // GPUI integration
 // ---------------------------------------------------------------------------
@@ -2125,8 +3246,8 @@ impl Render for QueryBuilderPanel {
 mod tests {
     use super::*;
     use dbflux_core::{
-        BoolOp, Comparator, FilterNode, JoinKind, JoinOn, LiteralValue, Predicate, PredicateValue,
-        Projection, SourceTable, VisualQuerySpec, VisualSortDirection,
+        AggFn, BoolOp, Comparator, FilterNode, JoinKind, JoinOn, LiteralValue, Predicate,
+        PredicateValue, Projection, SourceTable, VisualQuerySpec, VisualSortDirection,
     };
 
     // ---- helpers -----------------------------------------------------------
@@ -2145,6 +3266,9 @@ mod tests {
             projection: Projection::All,
             joins: vec![],
             filter: None,
+            group_by: vec![],
+            aggregates: vec![],
+            having: None,
             sort: vec![],
             limit: Some(100),
             offset: 0,
@@ -2199,6 +3323,26 @@ mod tests {
         use std::rc::Rc;
         use uuid::Uuid;
 
+        let group_by_rows: Vec<GroupByRow> = spec
+            .group_by
+            .iter()
+            .map(|g| GroupByRow {
+                source_alias: g.source_alias.clone(),
+                column: g.column.clone(),
+            })
+            .collect();
+
+        let aggregate_rows: Vec<AggregateRow> = spec
+            .aggregates
+            .iter()
+            .map(|a| AggregateRow {
+                function: a.function,
+                source_alias: a.source_alias.clone().unwrap_or_default(),
+                column: a.column.clone().unwrap_or_default(),
+                alias: a.alias.clone(),
+            })
+            .collect();
+
         QueryBuilderPanel {
             current_spec: spec,
             projection_mode: ProjectionMode::All,
@@ -2237,6 +3381,20 @@ mod tests {
             schema_profile_id: Uuid::nil(),
             pending_filter_input_sweep: false,
             pending_join_condition_sweep: false,
+            group_by_rows,
+            aggregate_rows,
+            group_by_col_inputs: Vec::new(),
+            agg_fn_dropdowns: Vec::new(),
+            agg_col_inputs: Vec::new(),
+            agg_alias_inputs: Vec::new(),
+            pending_group_by_rebuild: false,
+            having_predicate_input_states: HashMap::new(),
+            having_predicate_column_input_states: HashMap::new(),
+            having_predicate_comparator_dropdowns: HashMap::new(),
+            pending_having_input_sweep: false,
+            pre_group_projection: None,
+            sort_validation_error: None,
+            incomplete_aggregate_row_count: 0,
         }
     }
 
@@ -2287,6 +3445,33 @@ mod tests {
         }
 
         fn t_add_sort(&mut self, source_alias: &str, column: &str) {
+            self.sort_rows.push(SortRow {
+                source_alias: source_alias.to_string(),
+                column: column.to_string(),
+                direction: VisualSortDirection::Asc,
+            });
+            self.rebuild_spec_pure();
+        }
+
+        fn add_sort_pure(&mut self, source_alias: &str, column: &str) {
+            if self.current_spec.is_grouped() {
+                let valid: HashSet<String> = self
+                    .group_by_rows
+                    .iter()
+                    .map(|g| g.column.clone())
+                    .chain(self.aggregate_rows.iter().map(|a| a.alias.clone()))
+                    .collect();
+
+                if !valid.contains(column) {
+                    self.sort_validation_error = Some(format!(
+                        "\"{}\" is not in the GROUP BY columns or aggregate aliases",
+                        column
+                    ));
+                    return;
+                }
+            }
+
+            self.sort_validation_error = None;
             self.sort_rows.push(SortRow {
                 source_alias: source_alias.to_string(),
                 column: column.to_string(),
@@ -2374,6 +3559,126 @@ mod tests {
             self.offset_text = sanitized;
             self.rebuild_spec_pure();
         }
+
+        fn t_add_group_by_column(&mut self, source_alias: &str, column: &str) {
+            let was_empty = self.group_by_rows.is_empty() && self.aggregate_rows.is_empty();
+            self.group_by_rows.push(GroupByRow {
+                source_alias: source_alias.to_string(),
+                column: column.to_string(),
+            });
+            if was_empty {
+                self.enter_grouped_mode();
+            }
+            self.rebuild_spec_pure();
+        }
+
+        fn t_remove_group_by_row(&mut self, index: usize) {
+            if index < self.group_by_rows.len() {
+                self.group_by_rows.remove(index);
+                self.drop_invalid_sort_for_grouped();
+                if self.group_by_rows.is_empty() && self.aggregate_rows.is_empty() {
+                    self.exit_grouped_mode();
+                }
+                self.rebuild_spec_pure();
+            }
+        }
+
+        fn t_add_aggregate(&mut self, function: AggFn) {
+            let was_empty = self.group_by_rows.is_empty() && self.aggregate_rows.is_empty();
+            let alias = self.generate_aggregate_alias(function, "");
+            self.aggregate_rows.push(AggregateRow {
+                function,
+                source_alias: String::new(),
+                column: String::new(),
+                alias,
+            });
+            if was_empty {
+                self.enter_grouped_mode();
+            }
+            self.rebuild_spec_pure();
+        }
+
+        fn t_add_aggregate_with_column(
+            &mut self,
+            function: AggFn,
+            source_alias: &str,
+            column: &str,
+        ) {
+            let was_empty = self.group_by_rows.is_empty() && self.aggregate_rows.is_empty();
+            let alias = self.generate_aggregate_alias(function, column);
+            self.aggregate_rows.push(AggregateRow {
+                function,
+                source_alias: source_alias.to_string(),
+                column: column.to_string(),
+                alias,
+            });
+            if was_empty {
+                self.enter_grouped_mode();
+            }
+            self.rebuild_spec_pure();
+        }
+
+        fn t_remove_aggregate_row(&mut self, index: usize) {
+            if index < self.aggregate_rows.len() {
+                self.aggregate_rows.remove(index);
+                self.drop_invalid_sort_for_grouped();
+                if self.group_by_rows.is_empty() && self.aggregate_rows.is_empty() {
+                    self.exit_grouped_mode();
+                }
+                self.rebuild_spec_pure();
+            }
+        }
+
+        fn t_set_aggregate_function(&mut self, index: usize, function: AggFn) {
+            if index >= self.aggregate_rows.len() {
+                return;
+            }
+            self.aggregate_rows[index].function = function;
+            if function == AggFn::CountStar {
+                self.aggregate_rows[index].source_alias = String::new();
+                self.aggregate_rows[index].column = String::new();
+            }
+            let old_alias = self.aggregate_rows[index].alias.clone();
+            let col = self.aggregate_rows[index].column.clone();
+            if old_alias.is_empty() || self.is_auto_alias(&old_alias) {
+                let new_alias = self.generate_aggregate_alias(function, &col);
+                self.aggregate_rows[index].alias = new_alias;
+            }
+            self.rebuild_spec_pure();
+        }
+
+        fn t_set_aggregate_column(&mut self, index: usize, source_alias: &str, column: &str) {
+            if index >= self.aggregate_rows.len() {
+                return;
+            }
+            let function = self.aggregate_rows[index].function;
+            let old_alias = self.aggregate_rows[index].alias.clone();
+            self.aggregate_rows[index].source_alias = source_alias.to_string();
+            self.aggregate_rows[index].column = column.to_string();
+            if old_alias.is_empty() || self.is_auto_alias(&old_alias) {
+                let new_alias = self.generate_aggregate_alias(function, column);
+                self.aggregate_rows[index].alias = new_alias;
+            }
+            self.drop_invalid_sort_for_grouped();
+            self.rebuild_spec_pure();
+        }
+
+        fn t_set_aggregate_alias(&mut self, index: usize, alias: &str) {
+            if let Some(row) = self.aggregate_rows.get_mut(index) {
+                row.alias = alias.to_string();
+                self.drop_invalid_sort_for_grouped();
+                self.rebuild_spec_pure();
+            }
+        }
+
+        fn t_set_group_by_column(&mut self, index: usize, source_alias: &str, column: &str) {
+            if let Some(row) = self.group_by_rows.get_mut(index) {
+                row.source_alias = source_alias.to_string();
+                row.column = column.to_string();
+                self.drop_invalid_sort_for_grouped();
+                self.rebuild_spec_pure();
+            }
+        }
     }
 
     // ---- 4.1: default spec on construction --------------------------------
@@ -2408,6 +3713,9 @@ mod tests {
             projection: Projection::All,
             joins: vec![],
             filter: None,
+            group_by: vec![],
+            aggregates: vec![],
+            having: None,
             sort: vec![],
             limit: Some(100),
             offset: 0,
@@ -2778,6 +4086,279 @@ mod tests {
         assert!(ops.contains(&Comparator::Like));
     }
 
+    // ---- Slice 2: group-by state machine -----------------------------------
+
+    #[test]
+    fn add_group_by_row_enters_grouped_mode() {
+        let mut panel = make_panel(make_spec(test_source()));
+        assert_eq!(panel.projection_mode, ProjectionMode::All);
+
+        panel.t_add_group_by_column("users", "country");
+
+        assert!(panel.is_grouped());
+        assert_eq!(panel.group_by_rows.len(), 1);
+        assert_eq!(panel.group_by_rows[0].column, "country");
+        // Projection should have transitioned to Explicit
+        assert_eq!(panel.projection_mode, ProjectionMode::Explicit);
+        // Snapshot should be stored
+        assert!(
+            panel.pre_group_projection.is_some(),
+            "pre_group_projection must be snapshotted on first row"
+        );
+    }
+
+    #[test]
+    fn remove_last_group_by_row_exits_grouped_mode() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        panel.t_remove_group_by_row(0);
+
+        assert!(!panel.is_grouped());
+        assert!(panel.group_by_rows.is_empty());
+        assert_eq!(panel.projection_mode, ProjectionMode::All);
+        assert!(
+            panel.pre_group_projection.is_none(),
+            "snapshot should be cleared after exit"
+        );
+    }
+
+    #[test]
+    fn add_aggregate_enters_grouped_mode() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_aggregate(AggFn::CountStar);
+
+        assert!(panel.is_grouped());
+        assert_eq!(panel.aggregate_rows.len(), 1);
+        assert_eq!(panel.aggregate_rows[0].function, AggFn::CountStar);
+        assert_eq!(panel.projection_mode, ProjectionMode::Explicit);
+    }
+
+    #[test]
+    fn remove_last_aggregate_exits_grouped_mode() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_aggregate(AggFn::CountStar);
+        panel.t_remove_aggregate_row(0);
+
+        assert!(!panel.is_grouped());
+        assert_eq!(panel.projection_mode, ProjectionMode::All);
+    }
+
+    #[test]
+    fn mixed_group_aggregate_stays_grouped_until_both_empty() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+
+        // Remove group_by only — still grouped because aggregate remains
+        panel.t_remove_group_by_row(0);
+        assert!(
+            panel.is_grouped(),
+            "still grouped due to remaining aggregate"
+        );
+
+        // Remove aggregate — now ungrouped
+        panel.t_remove_aggregate_row(0);
+        assert!(!panel.is_grouped());
+    }
+
+    #[test]
+    fn projection_auto_transition_truth_table() {
+        let mut panel = make_panel(make_spec(test_source()));
+        // ([], []) -> not grouped, All
+        assert!(!panel.is_grouped());
+        assert_eq!(panel.projection_mode, ProjectionMode::All);
+
+        // Add group-by: ([country], []) -> grouped, Explicit
+        panel.t_add_group_by_column("users", "country");
+        assert!(panel.is_grouped());
+        assert_eq!(panel.projection_mode, ProjectionMode::Explicit);
+
+        // Remove group-by: ([], []) -> not grouped, All restored
+        panel.t_remove_group_by_row(0);
+        assert!(!panel.is_grouped());
+        assert_eq!(panel.projection_mode, ProjectionMode::All);
+
+        // Add aggregate only: ([], [sum]) -> grouped, Explicit
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+        assert!(panel.is_grouped());
+        assert_eq!(panel.projection_mode, ProjectionMode::Explicit);
+
+        // Remove aggregate: ([], []) -> not grouped, All restored
+        panel.t_remove_aggregate_row(0);
+        assert!(!panel.is_grouped());
+        assert_eq!(panel.projection_mode, ProjectionMode::All);
+    }
+
+    #[test]
+    fn sort_entries_dropped_when_entering_grouped_mode() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_sort("users", "city");
+        panel.t_add_sort("users", "country");
+
+        // Enter grouped mode with country only
+        panel.t_add_group_by_column("users", "country");
+
+        // city is not in group-by, should be dropped
+        assert_eq!(panel.sort_rows.len(), 1);
+        assert_eq!(panel.sort_rows[0].column, "country");
+    }
+
+    #[test]
+    fn sort_entries_referencing_aggregate_alias_dropped_on_exit() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+        // Add a sort on aggregate alias
+        panel.sort_rows.push(SortRow {
+            source_alias: String::new(),
+            column: "sum_amount".to_string(),
+            direction: VisualSortDirection::Asc,
+        });
+        panel.rebuild_spec_pure();
+        assert_eq!(panel.sort_rows.len(), 1);
+
+        // Exit grouped mode
+        panel.t_remove_group_by_row(0);
+        panel.t_remove_aggregate_row(0);
+        // sum_amount alias no longer valid — should be dropped
+        assert!(
+            panel.sort_rows.is_empty(),
+            "stale sort on aggregate alias must be removed"
+        );
+    }
+
+    // ---- Slice 2: rebuild_spec_pure round-trips ----------------------------
+
+    #[test]
+    fn rebuild_spec_pure_writes_group_by_and_aggregates() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+
+        assert_eq!(panel.current_spec.group_by.len(), 1);
+        assert_eq!(panel.current_spec.group_by[0].column, "country");
+        assert_eq!(panel.current_spec.aggregates.len(), 1);
+        assert_eq!(panel.current_spec.aggregates[0].alias, "sum_amount");
+    }
+
+    #[test]
+    fn rebuild_spec_pure_skips_incomplete_rows() {
+        let mut panel = make_panel(make_spec(test_source()));
+        // Group-by with empty column should be skipped
+        panel.group_by_rows.push(GroupByRow {
+            source_alias: String::new(),
+            column: String::new(),
+        });
+        // Aggregate with empty alias should be skipped
+        panel.aggregate_rows.push(AggregateRow {
+            function: AggFn::Sum,
+            source_alias: "users".to_string(),
+            column: "amount".to_string(),
+            alias: String::new(),
+        });
+        panel.rebuild_spec_pure();
+
+        assert!(
+            panel.current_spec.group_by.is_empty(),
+            "empty-column group-by row must be skipped"
+        );
+        assert!(
+            panel.current_spec.aggregates.is_empty(),
+            "empty-alias aggregate row must be skipped"
+        );
+    }
+
+    #[test]
+    fn set_spec_pure_round_trips_grouped_spec() {
+        use dbflux_core::{AggFn as CoreAggFn, GroupByEntry, VisualAggregateSpec};
+
+        let mut spec = make_spec(test_source());
+        spec.group_by = vec![GroupByEntry {
+            source_alias: "users".to_string(),
+            column: "country".to_string(),
+        }];
+        spec.aggregates = vec![VisualAggregateSpec {
+            function: CoreAggFn::Sum,
+            source_alias: Some("users".to_string()),
+            column: Some("amount".to_string()),
+            alias: "total".to_string(),
+        }];
+        spec.having = Some(FilterNode::Group {
+            op: BoolOp::And,
+            children: vec![],
+        });
+
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.set_spec_pure(spec.clone());
+
+        assert_eq!(panel.group_by_rows.len(), 1);
+        assert_eq!(panel.group_by_rows[0].column, "country");
+        assert_eq!(panel.aggregate_rows.len(), 1);
+        assert_eq!(panel.aggregate_rows[0].alias, "total");
+        assert!(panel.current_spec.having.is_some());
+    }
+
+    #[test]
+    fn set_spec_pure_grouped_then_remove_all_restores_all_projection() {
+        use dbflux_core::{AggFn as CoreAggFn, GroupByEntry, VisualAggregateSpec};
+
+        let mut spec = make_spec(test_source());
+        spec.group_by = vec![GroupByEntry {
+            source_alias: "users".to_string(),
+            column: "country".to_string(),
+        }];
+        spec.aggregates = vec![VisualAggregateSpec {
+            function: CoreAggFn::Sum,
+            source_alias: Some("users".to_string()),
+            column: Some("amount".to_string()),
+            alias: "total".to_string(),
+        }];
+
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.set_spec_pure(spec);
+
+        assert!(
+            panel.pre_group_projection.is_some(),
+            "set_spec_pure of a grouped spec must seed pre_group_projection"
+        );
+
+        panel.t_remove_aggregate_row(0);
+        panel.t_remove_group_by_row(0);
+
+        assert!(!panel.is_grouped());
+        assert_eq!(
+            panel.current_spec.projection,
+            Projection::All,
+            "removing all aggregates and group-by rows must restore Projection::All"
+        );
+    }
+
+    // ---- Slice 2: alias auto-generation ------------------------------------
+
+    #[test]
+    fn alias_autogenerated_for_count_star() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_aggregate(AggFn::CountStar);
+        assert_eq!(panel.aggregate_rows[0].alias, "count_star");
+    }
+
+    #[test]
+    fn alias_autogenerated_for_sum_with_column() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+        assert_eq!(panel.aggregate_rows[0].alias, "sum_amount");
+    }
+
+    #[test]
+    fn alias_autogenerated_with_collision_suffix() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+        // Add a second Sum(amount) — should get suffix _2
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+        assert_eq!(panel.aggregate_rows[0].alias, "sum_amount");
+        assert_eq!(panel.aggregate_rows[1].alias, "sum_amount_2");
+    }
+
     // ---- spec is rebuilt from row data ------------------------------------
 
     #[test]
@@ -2943,5 +4524,287 @@ mod tests {
                 "removed node id should not be in live set"
             );
         }
+    }
+
+    // ---- Slice 2: interactive control round-trips ----------------------------
+
+    #[test]
+    fn add_group_by_column_sets_spec_entry() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        panel.t_set_group_by_column(0, "users", "country");
+
+        assert_eq!(panel.current_spec.group_by.len(), 1);
+        assert_eq!(panel.current_spec.group_by[0].source_alias, "users");
+        assert_eq!(panel.current_spec.group_by[0].column, "country");
+    }
+
+    #[test]
+    fn change_group_by_column_updates_spec() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        panel.t_set_group_by_column(0, "users", "region");
+
+        assert_eq!(panel.current_spec.group_by[0].column, "region");
+    }
+
+    #[test]
+    fn add_aggregate_row_sets_spec_entry() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_aggregate(AggFn::CountStar);
+
+        assert_eq!(panel.current_spec.aggregates.len(), 1);
+        assert_eq!(panel.current_spec.aggregates[0].function, AggFn::CountStar);
+        assert!(panel.current_spec.aggregates[0].source_alias.is_none());
+        assert!(panel.current_spec.aggregates[0].column.is_none());
+    }
+
+    #[test]
+    fn change_aggregate_function_to_count_star_clears_column_in_spec() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+        assert_eq!(
+            panel.current_spec.aggregates[0].column,
+            Some("amount".to_string())
+        );
+
+        panel.t_set_aggregate_function(0, AggFn::CountStar);
+
+        assert_eq!(panel.aggregate_rows[0].function, AggFn::CountStar);
+        assert!(
+            panel.aggregate_rows[0].column.is_empty(),
+            "column must be cleared on the row when function is CountStar"
+        );
+        assert!(
+            panel.current_spec.aggregates[0].column.is_none(),
+            "spec column must be None for CountStar"
+        );
+    }
+
+    #[test]
+    fn change_aggregate_function_away_from_count_star_keeps_column() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+        panel.t_set_aggregate_function(0, AggFn::CountStar);
+
+        // Now switch back to SUM. The column was cleared by CountStar, so
+        // the row has function=Sum and column="". The spec filter excludes
+        // rows with empty columns for non-CountStar functions, so aggregates
+        // will be empty in the spec until the user fills in a column.
+        panel.t_set_aggregate_function(0, AggFn::Sum);
+
+        assert_eq!(panel.aggregate_rows[0].function, AggFn::Sum);
+        assert!(
+            panel.aggregate_rows[0].column.is_empty(),
+            "column was cleared by CountStar and not restored"
+        );
+        assert!(
+            panel.current_spec.aggregates.is_empty(),
+            "spec excludes incomplete Sum rows (empty column)"
+        );
+    }
+
+    #[test]
+    fn change_aggregate_column_updates_spec_and_auto_alias() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_aggregate(AggFn::Sum);
+        panel.t_set_aggregate_column(0, "users", "revenue");
+
+        assert_eq!(panel.aggregate_rows[0].column, "revenue");
+        assert_eq!(
+            panel.current_spec.aggregates[0].column,
+            Some("revenue".to_string())
+        );
+        assert_eq!(
+            panel.aggregate_rows[0].alias, "sum_revenue",
+            "auto alias must be regenerated from new column"
+        );
+        assert_eq!(panel.current_spec.aggregates[0].alias, "sum_revenue");
+    }
+
+    #[test]
+    fn manually_set_alias_is_preserved_when_column_changes() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+
+        // Manually set a custom alias — this is not an auto-alias.
+        panel.t_set_aggregate_alias(0, "total_revenue");
+        assert_eq!(panel.aggregate_rows[0].alias, "total_revenue");
+
+        // Change column — alias must not be overwritten because it was manually edited.
+        panel.t_set_aggregate_column(0, "users", "revenue");
+        assert_eq!(
+            panel.aggregate_rows[0].alias, "total_revenue",
+            "manually edited alias must be preserved across column change"
+        );
+    }
+
+    #[test]
+    fn auto_alias_is_regenerated_when_function_changes() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+        assert_eq!(panel.aggregate_rows[0].alias, "sum_amount");
+
+        panel.t_set_aggregate_function(0, AggFn::Avg);
+        assert_eq!(
+            panel.aggregate_rows[0].alias, "avg_amount",
+            "auto alias must be regenerated when function changes"
+        );
+    }
+
+    #[test]
+    fn manually_set_alias_is_preserved_when_function_changes() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+        panel.t_set_aggregate_alias(0, "my_custom_alias");
+
+        panel.t_set_aggregate_function(0, AggFn::Avg);
+        assert_eq!(
+            panel.aggregate_rows[0].alias, "my_custom_alias",
+            "manually edited alias must survive function change"
+        );
+    }
+
+    #[test]
+    fn set_aggregate_alias_updates_spec() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+        panel.t_set_aggregate_alias(0, "grand_total");
+
+        assert_eq!(panel.current_spec.aggregates[0].alias, "grand_total");
+    }
+
+    // ---- Slice 3: sort restriction when grouped ----------------------------
+
+    #[test]
+    fn add_sort_accepts_group_by_column_when_grouped() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+
+        panel.add_sort_pure("users", "country");
+
+        assert_eq!(
+            panel.sort_rows.len(),
+            1,
+            "valid group-by column must be accepted"
+        );
+        assert!(
+            panel.sort_validation_error.is_none(),
+            "no error for valid column"
+        );
+    }
+
+    #[test]
+    fn add_sort_accepts_aggregate_alias_when_grouped() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+
+        panel.add_sort_pure("users", "sum_amount");
+
+        assert_eq!(panel.sort_rows.len(), 1, "aggregate alias must be accepted");
+        assert!(panel.sort_validation_error.is_none());
+    }
+
+    #[test]
+    fn add_sort_rejects_invalid_column_when_grouped_and_sets_error() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+
+        panel.add_sort_pure("users", "city");
+
+        assert_eq!(panel.sort_rows.len(), 0, "invalid column must be rejected");
+        assert!(
+            panel.sort_validation_error.is_some(),
+            "sort_validation_error must be set for invalid column"
+        );
+    }
+
+    #[test]
+    fn add_sort_allows_any_column_when_ungrouped() {
+        let mut panel = make_panel(make_spec(test_source()));
+
+        panel.add_sort_pure("users", "any_column");
+
+        assert_eq!(
+            panel.sort_rows.len(),
+            1,
+            "any column must be accepted when ungrouped"
+        );
+        assert!(panel.sort_validation_error.is_none());
+    }
+
+    // ---- Slice 3: incomplete aggregate count --------------------------------
+
+    #[test]
+    fn incomplete_aggregate_count_zero_when_no_aggregates() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        assert_eq!(panel.incomplete_aggregate_row_count, 0);
+    }
+
+    #[test]
+    fn incomplete_aggregate_count_zero_when_all_complete() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+        assert_eq!(panel.incomplete_aggregate_row_count, 0);
+    }
+
+    #[test]
+    fn incomplete_aggregate_count_zero_for_count_star_without_column() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        panel.t_add_aggregate(AggFn::CountStar);
+        assert_eq!(
+            panel.incomplete_aggregate_row_count, 0,
+            "CountStar without column is NOT incomplete"
+        );
+    }
+
+    #[test]
+    fn incomplete_aggregate_count_one_for_sum_without_column() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        panel.t_add_aggregate(AggFn::Sum);
+        assert_eq!(
+            panel.incomplete_aggregate_row_count, 1,
+            "Sum without column IS incomplete"
+        );
+    }
+
+    #[test]
+    fn incomplete_aggregate_count_includes_empty_alias() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        panel.t_add_aggregate(AggFn::CountStar);
+
+        panel.aggregate_rows[0].alias = String::new();
+        panel.rebuild_spec_pure();
+
+        assert_eq!(
+            panel.incomplete_aggregate_row_count, 1,
+            "row with empty alias IS incomplete regardless of function"
+        );
+    }
+
+    #[test]
+    fn generate_alias_sanitizes_dotted_column_name() {
+        let panel = make_panel(make_spec(test_source()));
+
+        let alias = panel.generate_aggregate_alias(AggFn::Sum, "users.name");
+        assert_eq!(alias, "sum_users_name");
+
+        let alias_nested = panel.generate_aggregate_alias(AggFn::Max, "a.b.c");
+        assert_eq!(alias_nested, "max_a_b_c");
+    }
+
+    #[test]
+    fn generate_alias_sanitizes_other_special_chars() {
+        let panel = make_panel(make_spec(test_source()));
+        let alias = panel.generate_aggregate_alias(AggFn::Sum, "total-amount");
+        assert_eq!(alias, "sum_total_amount");
     }
 }

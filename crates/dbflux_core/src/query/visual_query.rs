@@ -1,6 +1,47 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// Aggregate functions supported by the visual query builder.
+///
+/// `CountStar` maps to `COUNT(*)` and requires no column reference.
+/// All other variants require a `source_alias` + `column` in `AggregateSpec`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AggFn {
+    Count,
+    CountStar,
+    CountDistinct,
+    Sum,
+    Avg,
+    Min,
+    Max,
+}
+
+/// A single GROUP BY entry referencing a column from a source or joined table.
+///
+/// v1 supports plain column references only. Computed expressions are out of
+/// scope per the spec.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GroupByEntry {
+    pub source_alias: String,
+    pub column: String,
+}
+
+/// An aggregate expression in a grouped query.
+///
+/// `column` and `source_alias` MUST be `Some` for every variant except
+/// `AggFn::CountStar`, for which both MUST be `None`.
+///
+/// `alias` is required and must be non-empty. Uniqueness within
+/// `VisualQuerySpec.aggregates` is enforced at the builder layer; the
+/// generator validates defensively.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AggregateSpec {
+    pub function: AggFn,
+    pub source_alias: Option<String>,
+    pub column: Option<String>,
+    pub alias: String,
+}
+
 /// Top-level spec; what the builder owns and what the generator renders.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VisualQuerySpec {
@@ -8,6 +49,12 @@ pub struct VisualQuerySpec {
     pub projection: Projection,
     pub joins: Vec<JoinStep>,
     pub filter: Option<FilterNode>,
+    #[serde(default)]
+    pub group_by: Vec<GroupByEntry>,
+    #[serde(default)]
+    pub aggregates: Vec<AggregateSpec>,
+    #[serde(default)]
+    pub having: Option<FilterNode>,
     pub sort: Vec<SortEntry>,
     /// `None` = no LIMIT; `Some(0)` is collapsed to None at build time.
     pub limit: Option<u64>,
@@ -15,12 +62,58 @@ pub struct VisualQuerySpec {
 }
 
 impl VisualQuerySpec {
+    /// Returns `true` when this spec should render as a grouped query.
+    ///
+    /// Note: a spec with only `aggregates` and no `group_by` (single-row
+    /// aggregate like `SELECT COUNT(*) FROM t`) is treated as grouped for all
+    /// integration purposes: projection auto-transition, mutation gating,
+    /// pagination subquery, and effective-SELECT preview all use this gate.
+    pub fn is_grouped(&self) -> bool {
+        !self.group_by.is_empty() || !self.aggregates.is_empty()
+    }
+
     /// Returns `Ok(())` if the spec can produce a runnable query, or `Err` with
     /// the first validation failure found.
     pub fn is_runnable(&self) -> Result<(), SpecError> {
         if self.source.table.trim().is_empty() {
             return Err(SpecError::MissingSourceTable);
         }
+
+        let mut seen_aliases = std::collections::HashSet::new();
+
+        for agg in &self.aggregates {
+            if agg.alias.trim().is_empty() {
+                return Err(SpecError::InvalidAggregate(
+                    "aggregate alias must not be empty".to_string(),
+                ));
+            }
+
+            if !seen_aliases.insert(agg.alias.clone()) {
+                return Err(SpecError::InvalidAggregate(format!(
+                    "duplicate aggregate alias: {}",
+                    agg.alias
+                )));
+            }
+
+            match agg.function {
+                AggFn::CountStar => {
+                    if agg.column.is_some() || agg.source_alias.is_some() {
+                        return Err(SpecError::InvalidAggregate(
+                            "CountStar must not have a column or source_alias".to_string(),
+                        ));
+                    }
+                }
+                _ => {
+                    if agg.column.is_none() || agg.source_alias.is_none() {
+                        return Err(SpecError::InvalidAggregate(format!(
+                            "aggregate {:?} requires both source_alias and column",
+                            agg.function
+                        )));
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -31,6 +124,10 @@ impl VisualQuerySpec {
     /// before the UI constructs `InputState` entities.
     pub fn reassign_node_ids(&mut self, next_id: &mut u64) {
         if let Some(root) = &mut self.filter {
+            Self::assign_ids_in_node(root, next_id);
+        }
+
+        if let Some(root) = &mut self.having {
             Self::assign_ids_in_node(root, next_id);
         }
 
@@ -309,6 +406,8 @@ pub enum AliasOrigin {
 pub enum SpecError {
     #[error("source table name must not be empty")]
     MissingSourceTable,
+    #[error("invalid aggregate: {0}")]
+    InvalidAggregate(String),
 }
 
 #[cfg(test)]
@@ -384,6 +483,9 @@ mod tests {
             projection: Projection::All,
             joins: vec![],
             filter: None,
+            group_by: vec![],
+            aggregates: vec![],
+            having: None,
             sort: vec![],
             limit: Some(100),
             offset: 0,
@@ -402,6 +504,9 @@ mod tests {
             projection: Projection::All,
             joins: vec![],
             filter: None,
+            group_by: vec![],
+            aggregates: vec![],
+            having: None,
             sort: vec![],
             limit: Some(100),
             offset: 0,
@@ -420,6 +525,9 @@ mod tests {
             projection: Projection::All,
             joins: vec![],
             filter: None,
+            group_by: vec![],
+            aggregates: vec![],
+            having: None,
             sort: vec![],
             limit: Some(100),
             offset: 0,
@@ -491,6 +599,9 @@ mod tests {
                     },
                 ],
             }),
+            group_by: vec![],
+            aggregates: vec![],
+            having: None,
             sort: vec![
                 SortEntry {
                     source_alias: "o".to_string(),
@@ -534,6 +645,9 @@ mod tests {
                 on: JoinOn::RawExpression("o.user_id = u.id".to_string()),
             }],
             filter: None,
+            group_by: vec![],
+            aggregates: vec![],
+            having: None,
             sort: vec![],
             limit: None,
             offset: 0,
@@ -557,6 +671,9 @@ mod tests {
             projection: Projection::All,
             joins: vec![],
             filter: None,
+            group_by: vec![],
+            aggregates: vec![],
+            having: None,
             sort: vec![],
             limit: Some(100),
             offset: 0,

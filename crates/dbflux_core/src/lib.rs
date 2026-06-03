@@ -116,10 +116,10 @@ pub use driver::{
 pub use facade::{DangerousQuerySuppressions, SessionFacade};
 
 pub use query::{
-    AggregateFunction, AggregateRequest, AggregateSpec, AliasOrigin, BoolOp,
+    AggFn, AggregateFunction, AggregateRequest, AggregateSpec, AliasOrigin, BoolOp,
     CollectionBrowseRequest, CollectionCountRequest, CollectionRef, CollectionTemplateRequest,
     ColumnKind, ColumnMeta, ColumnRef, Comparator, DangerousQueryKind, DescribeRequest, Diagnostic,
-    DiagnosticSeverity, EditorDiagnostic, ExplainRequest, FilterNode, GeneratedQuery,
+    DiagnosticSeverity, EditorDiagnostic, ExplainRequest, FilterNode, GeneratedQuery, GroupByEntry,
     JoinFilterNode, JoinKind, JoinOn, JoinPredicate, JoinStep, LanguageService, LiteralValue,
     MutationCategory, MutationTemplateOperation, MutationTemplateRequest, OrderByColumn,
     Pagination, PlannedQuery, Predicate, PredicateValue, ProjectedColumn, Projection,
@@ -128,10 +128,11 @@ pub use query::{
     SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticPlanner, SemanticPredicate,
     SemanticRequest, SemanticRequestKind, SortDirection, SortEntry, SourceTable, SpecError,
     SqlLanguageService, SqlMutationGenerator, TableBrowseRequest, TableCountRequest, TableRef,
-    TextPosition, TextPositionRange, TextRange, ValidationResult, VisualQuerySpec,
-    VisualSortDirection, classify_query_for_governance, classify_query_for_language,
-    classify_sql_execution, contains_time_macros, detect_dangerous_query, detect_dangerous_sql,
-    infer_column_kind, is_safe_read_query, parse_semantic_filter_json, render_semantic_filter_sql,
+    TextPosition, TextPositionRange, TextRange, ValidationResult, VisualAggregateSpec,
+    VisualQuerySpec, VisualSortDirection, classify_query_for_governance,
+    classify_query_for_language, classify_sql_execution, contains_time_macros,
+    detect_dangerous_query, detect_dangerous_sql, infer_column_kind, is_safe_read_query,
+    parse_semantic_filter_json, project_aggregate_kinds, render_semantic_filter_sql,
     strip_leading_comments, substitute_time_macros,
 };
 
@@ -151,6 +152,18 @@ pub fn select_query_from_spec(
     dialect: &dyn sql::dialect::SqlDialect,
 ) -> Result<SelectQuery, QueryGenError> {
     query::generator::build_select_query(spec, dialect)
+}
+
+/// Build the grouped-query total-count subquery:
+/// `SELECT COUNT(*) FROM (<full grouped query without LIMIT/OFFSET>) AS _dbflux_count_subq`.
+///
+/// Used by the DataGridPanel when `spec.is_grouped()` to get the correct group
+/// count for pagination (a plain `COUNT(*) FROM table` would count source rows, not groups).
+pub fn build_count_of_grouped_query(
+    spec: &VisualQuerySpec,
+    dialect: &dyn sql::dialect::SqlDialect,
+) -> Result<SelectQuery, QueryGenError> {
+    query::generator::build_grouped_count_query(spec, dialect)
 }
 
 pub use schema::node_id as schema_node_id;
