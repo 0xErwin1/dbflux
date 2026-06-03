@@ -318,6 +318,12 @@ pub struct QueryBuilderPanel {
     /// Rebuilt whenever `pending_assign_rebuild` is `true`.
     pub(crate) assign_val_inputs: HashMap<usize, Entity<InputState>>,
 
+    /// Subscriptions that mirror assignment column/value inputs back into
+    /// `mutation_state`. Cleared and rebuilt by `rebuild_assign_inputs` whenever
+    /// the assignment list changes length. Kept separate from `_input_subs` so
+    /// rebuilding assignment inputs never drops limit/offset/predicate subs.
+    pub(crate) _assign_input_subs: Vec<Subscription>,
+
     /// `InputState` for the chunk-size field in the execution section.
     pub(crate) exec_chunk_size_input: Option<Entity<InputState>>,
 
@@ -575,6 +581,7 @@ impl QueryBuilderPanel {
             mutation_state: None,
             assign_col_inputs: HashMap::new(),
             assign_val_inputs: HashMap::new(),
+            _assign_input_subs: Vec::new(),
             exec_chunk_size_input: None,
             exec_lock_timeout_input: None,
             pending_assign_rebuild: false,
@@ -1950,11 +1957,53 @@ impl QueryBuilderPanel {
         self.pending_preview_sync = true;
     }
 
+    /// Writes `text` into `mutation_state.assignments[row_ix].assignment.column`
+    /// and refreshes the mutation preview. Called by the column input subscription
+    /// in `rebuild_assign_inputs`.
+    pub fn set_assignment_column(&mut self, row_ix: usize, text: String, cx: &mut Context<Self>) {
+        if let Some(state) = self.mutation_state.as_mut()
+            && row_ix < state.assignments.len()
+        {
+            state.assignments[row_ix].assignment.column = text;
+        }
+
+        self.refresh_mutation_preview_pure();
+        cx.notify();
+    }
+
+    /// Writes `text` into `mutation_state.assignments[row_ix].raw_text` and
+    /// re-derives the `AssignmentValue` for the `Literal` and `Expression`
+    /// variants. `Null` and `Default` are left untouched because their value
+    /// inputs are hidden and no text can be entered for them.
+    pub fn set_assignment_raw_text(&mut self, row_ix: usize, text: String, cx: &mut Context<Self>) {
+        if let Some(state) = self.mutation_state.as_mut()
+            && row_ix < state.assignments.len()
+        {
+            let row = &mut state.assignments[row_ix];
+
+            row.raw_text = text.clone();
+
+            row.assignment.value = match &row.assignment.value {
+                dbflux_core::AssignmentValue::Literal(_) => {
+                    dbflux_core::AssignmentValue::Literal(dbflux_core::ScalarLiteral::Text(text))
+                }
+                dbflux_core::AssignmentValue::Expression(_) => {
+                    dbflux_core::AssignmentValue::Expression(text)
+                }
+                other => other.clone(),
+            };
+        }
+
+        self.refresh_mutation_preview_pure();
+        cx.notify();
+    }
+
     /// Rebuilds `assign_col_inputs` and `assign_val_inputs` to match the
     /// current assignment count.
     ///
     /// Called from the render cycle when `pending_assign_rebuild` is `true`.
     pub fn rebuild_assign_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self._assign_input_subs.clear();
         self.assign_col_inputs.clear();
         self.assign_val_inputs.clear();
 
@@ -1993,8 +2042,32 @@ impl QueryBuilderPanel {
                 s
             });
 
+            let col_sub = cx.subscribe_in(
+                &col_state,
+                window,
+                move |this, entity, event: &InputEvent, _window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        let text = entity.read(cx).value().to_string();
+                        this.set_assignment_column(i, text, cx);
+                    }
+                },
+            );
+
+            let val_sub = cx.subscribe_in(
+                &val_state,
+                window,
+                move |this, entity, event: &InputEvent, _window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        let text = entity.read(cx).value().to_string();
+                        this.set_assignment_raw_text(i, text, cx);
+                    }
+                },
+            );
+
             self.assign_col_inputs.insert(i, col_state);
             self.assign_val_inputs.insert(i, val_state);
+            self._assign_input_subs.push(col_sub);
+            self._assign_input_subs.push(val_sub);
         }
     }
 
@@ -2475,6 +2548,7 @@ mod tests {
             mutation_state: None,
             assign_col_inputs: HashMap::new(),
             assign_val_inputs: HashMap::new(),
+            _assign_input_subs: Vec::new(),
             exec_chunk_size_input: None,
             exec_lock_timeout_input: None,
             pending_assign_rebuild: false,
@@ -2644,6 +2718,40 @@ mod tests {
                     self.assign_val_inputs.clear();
                     self.pending_assign_rebuild = true;
                 }
+            }
+
+            self.refresh_mutation_preview_pure();
+        }
+
+        fn t_set_assignment_column(&mut self, row_ix: usize, text: String) {
+            if let Some(state) = self.mutation_state.as_mut()
+                && row_ix < state.assignments.len()
+            {
+                state.assignments[row_ix].assignment.column = text;
+            }
+
+            self.refresh_mutation_preview_pure();
+        }
+
+        fn t_set_assignment_raw_text(&mut self, row_ix: usize, text: String) {
+            if let Some(state) = self.mutation_state.as_mut()
+                && row_ix < state.assignments.len()
+            {
+                let row = &mut state.assignments[row_ix];
+
+                row.raw_text = text.clone();
+
+                row.assignment.value = match &row.assignment.value {
+                    dbflux_core::AssignmentValue::Literal(_) => {
+                        dbflux_core::AssignmentValue::Literal(dbflux_core::ScalarLiteral::Text(
+                            text,
+                        ))
+                    }
+                    dbflux_core::AssignmentValue::Expression(_) => {
+                        dbflux_core::AssignmentValue::Expression(text)
+                    }
+                    other => other.clone(),
+                };
             }
 
             self.refresh_mutation_preview_pure();
@@ -3309,6 +3417,163 @@ mod tests {
             call_count.load(std::sync::atomic::Ordering::SeqCst),
             1,
             "mutation preview generator must only be called once (first switch)"
+        );
+    }
+
+    #[test]
+    fn assignment_column_setter_writes_to_mutation_state() {
+        use crate::query_builder::mutation_state::{AssignmentRow, BuilderMode};
+        use dbflux_core::{Assignment, AssignmentValue, ScalarLiteral};
+
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_switch_builder_mode(BuilderMode::Update);
+
+        panel
+            .mutation_state
+            .as_mut()
+            .unwrap()
+            .assignments
+            .push(AssignmentRow {
+                assignment: Assignment {
+                    column: String::new(),
+                    value: AssignmentValue::Literal(ScalarLiteral::Text(String::new())),
+                },
+                raw_text: String::new(),
+            });
+
+        // Simulate what the subscription fires by calling the test helper directly.
+        // A live GPUI context is required for cx.notify(); the t_* helpers bypass that.
+        panel.t_set_assignment_column(0, "email".to_string());
+
+        assert_eq!(
+            panel.mutation_state.as_ref().unwrap().assignments[0]
+                .assignment
+                .column,
+            "email",
+        );
+    }
+
+    #[test]
+    fn assignment_value_setter_writes_raw_text_and_derives_value() {
+        use crate::query_builder::mutation_state::{AssignmentRow, BuilderMode};
+        use dbflux_core::{Assignment, AssignmentValue, ScalarLiteral};
+
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_switch_builder_mode(BuilderMode::Update);
+
+        panel
+            .mutation_state
+            .as_mut()
+            .unwrap()
+            .assignments
+            .push(AssignmentRow {
+                assignment: Assignment {
+                    column: "name".to_string(),
+                    value: AssignmentValue::Literal(ScalarLiteral::Text(String::new())),
+                },
+                raw_text: String::new(),
+            });
+
+        panel.t_set_assignment_raw_text(0, "Alice".to_string());
+
+        let row = &panel.mutation_state.as_ref().unwrap().assignments[0];
+        assert_eq!(row.raw_text, "Alice");
+        assert_eq!(
+            row.assignment.value,
+            AssignmentValue::Literal(ScalarLiteral::Text("Alice".to_string())),
+        );
+    }
+
+    #[test]
+    fn adding_assignment_preserves_prior_typed_values() {
+        use crate::query_builder::mutation_state::{AssignmentRow, BuilderMode};
+        use dbflux_core::{Assignment, AssignmentValue, ScalarLiteral};
+
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_switch_builder_mode(BuilderMode::Update);
+
+        panel
+            .mutation_state
+            .as_mut()
+            .unwrap()
+            .assignments
+            .push(AssignmentRow {
+                assignment: Assignment {
+                    column: String::new(),
+                    value: AssignmentValue::Literal(ScalarLiteral::Text(String::new())),
+                },
+                raw_text: String::new(),
+            });
+
+        // User types into the first assignment row via the setters.
+        panel.t_set_assignment_column(0, "email".to_string());
+        panel.t_set_assignment_raw_text(0, "alice@example.com".to_string());
+
+        // User clicks "+ Add assignment".
+        panel
+            .mutation_state
+            .as_mut()
+            .unwrap()
+            .assignments
+            .push(AssignmentRow {
+                assignment: Assignment {
+                    column: String::new(),
+                    value: AssignmentValue::Literal(ScalarLiteral::Text(String::new())),
+                },
+                raw_text: String::new(),
+            });
+        panel.pending_assign_rebuild = true;
+
+        // The render cycle would call rebuild_assign_inputs (requires Window),
+        // but the state in mutation_state is what matters for the spec builder.
+        // Assert the first row still holds the typed values.
+        let first = &panel.mutation_state.as_ref().unwrap().assignments[0];
+        assert_eq!(first.assignment.column, "email");
+        assert_eq!(first.raw_text, "alice@example.com");
+        assert_eq!(
+            first.assignment.value,
+            AssignmentValue::Literal(ScalarLiteral::Text("alice@example.com".to_string())),
+        );
+    }
+
+    #[test]
+    fn mutation_preview_reflects_typed_assignment() {
+        use crate::query_builder::mutation_state::{AssignmentRow, BuilderMode};
+        use dbflux_core::{Assignment, AssignmentValue, ScalarLiteral};
+
+        let mut panel = make_panel_with_mutation_preview(make_spec(test_source()), |spec| {
+            use dbflux_core::MutationKind;
+            match &spec.kind {
+                MutationKind::Update { assignments } => assignments
+                    .iter()
+                    .map(|a| format!("{}=?", a.column))
+                    .collect::<Vec<_>>()
+                    .join(","),
+                MutationKind::Delete => "DELETE".to_string(),
+            }
+        });
+
+        panel.t_switch_builder_mode(BuilderMode::Update);
+
+        panel
+            .mutation_state
+            .as_mut()
+            .unwrap()
+            .assignments
+            .push(AssignmentRow {
+                assignment: Assignment {
+                    column: String::new(),
+                    value: AssignmentValue::Literal(ScalarLiteral::Text(String::new())),
+                },
+                raw_text: String::new(),
+            });
+
+        panel.t_set_assignment_column(0, "email".to_string());
+        panel.t_set_assignment_raw_text(0, "alice@example.com".to_string());
+
+        assert_eq!(
+            panel.sql_preview, "email=?",
+            "sql_preview must be regenerated when an assignment column is typed",
         );
     }
 }
