@@ -2,9 +2,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dbflux_core::{
-    Connection, DbError, DriverCapabilities, EventCategory, EventOutcome, EventRecord,
-    EventSeverity, EventSink, MutationKind, MutationPolicy, PlaceholderStyle, QueryRequest, Row,
-    TransactionVocab, Value, VisualMutationSpec,
+    Connection, DriverCapabilities, EventCategory, EventOutcome, EventRecord, EventSeverity,
+    EventSink, MutationKind, MutationPolicy, QueryRequest, TransactionVocab, Value,
+    VisualMutationSpec, render_filter_node_sql,
 };
 
 /// Execution modes for visual bulk mutations.
@@ -151,7 +151,8 @@ pub fn count_with_deadline(
             })
             .map_err(|e| e.to_string());
 
-        let _ = tx.send(result);
+        // The receiver may have already timed out and been dropped; drop the send error.
+        let _drop_send = tx.send(result);
     });
 
     match rx.recv_timeout(deadline) {
@@ -301,7 +302,9 @@ impl MutationExecutor {
                 .map_err(|e| ExecutorError::Generation(e.to_string()))?,
         };
 
-        let vocab = TransactionVocab::for_kind(self.deps.connection.kind());
+        let vocab = TransactionVocab::for_kind(self.deps.connection.kind()).ok_or_else(|| {
+            ExecutorError::Transaction("driver does not support SQL transactions".to_string())
+        })?;
 
         let run_id = uuid::Uuid::new_v4().to_string();
         let table_name = self.spec.from.name.clone();
@@ -332,6 +335,21 @@ impl MutationExecutor {
             let err_msg = e.to_string();
             self.emit_failure_event(now_ms, &run_id, op_kind, &table_name, &err_msg);
             return Err(ExecutorError::Transaction(err_msg));
+        }
+
+        if let Some(ms) = self.opts.lock_timeout_ms
+            && let Some(lock_sql) = vocab.lock_timeout_sql(ms)
+        {
+            let lock_req = QueryRequest::new(lock_sql);
+            if let Err(e) = self.deps.connection.execute(&lock_req) {
+                let err_msg = e.to_string();
+                let rollback_req = QueryRequest::new(vocab.rollback);
+                if let Err(rb_err) = self.deps.connection.execute(&rollback_req) {
+                    log::warn!("ROLLBACK failed after lock_timeout error: {}", rb_err);
+                }
+                self.emit_failure_event(now_ms, &run_id, op_kind, &table_name, &err_msg);
+                return Err(ExecutorError::Transaction(err_msg));
+            }
         }
 
         let mut dml_req = QueryRequest::new(generated.sql.clone());
@@ -378,9 +396,88 @@ impl MutationExecutor {
         }
     }
 
+    /// Execute the mutation without a transaction wrapper (autocommit mode).
+    ///
+    /// Used when the driver does not support transactions (`DirectAutocommit` mode).
+    /// Emits the same audit events as `run_single_tx` but without BEGIN/COMMIT.
+    pub fn run_direct(&self) -> Result<MutationOutcome, ExecutorError> {
+        let generator = self.deps.connection.query_generator().ok_or_else(|| {
+            ExecutorError::Generation("driver does not support SQL generation".to_string())
+        })?;
+
+        let kind = &self.spec.kind;
+
+        let generated = match kind {
+            MutationKind::Update { .. } => generator
+                .generate_update_from_spec(&self.spec)
+                .map_err(|e| ExecutorError::Generation(e.to_string()))?,
+            MutationKind::Delete => generator
+                .generate_delete_from_spec(&self.spec)
+                .map_err(|e| ExecutorError::Generation(e.to_string()))?,
+        };
+
+        let table_name = self.spec.from.name.clone();
+        let op_kind = match kind {
+            MutationKind::Update { .. } => "update",
+            MutationKind::Delete => "delete",
+        };
+
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+
+        let pending_event = EventRecord::new(
+            now_ms,
+            EventSeverity::Info,
+            EventCategory::Query,
+            EventOutcome::Pending,
+        )
+        .with_action("mutation.run")
+        .with_summary(format!("{} {} (direct autocommit)", op_kind, table_name))
+        .with_correlation_id(run_id.clone());
+
+        self.emit_event(pending_event);
+
+        let mut dml_req = QueryRequest::new(generated.sql.clone());
+        dml_req.params = generated.params.clone();
+
+        match self.deps.connection.execute(&dml_req) {
+            Err(e) => {
+                let err_msg = e.to_string();
+                self.emit_failure_event(now_ms, &run_id, op_kind, &table_name, &err_msg);
+                Err(ExecutorError::Transaction(err_msg))
+            }
+            Ok(result) => {
+                let rows_affected = result.affected_rows.unwrap_or(0);
+
+                let success_event = EventRecord::new(
+                    now_ms,
+                    EventSeverity::Info,
+                    EventCategory::Query,
+                    EventOutcome::Success,
+                )
+                .with_action("mutation.run")
+                .with_summary(format!(
+                    "{} {} completed ({} rows affected, autocommit)",
+                    op_kind, table_name, rows_affected
+                ))
+                .with_correlation_id(run_id);
+
+                self.emit_event(success_event);
+
+                Ok(MutationOutcome::Success { rows_affected })
+            }
+        }
+    }
+
     /// Execute the mutation as a series of keyset-paginated chunks.
     ///
-    /// Each chunk is executed as its own BEGIN / DML WHERE pk IN (batch) / COMMIT.
+    /// Each chunk executes as its own BEGIN / DML WHERE (user_filter) AND pk IN (...) / COMMIT.
+    /// The user filter and PK keyset are merged into a single WHERE clause by the generator —
+    /// the executor never post-concatenates SQL.
+    ///
     /// Cancellation is checked between chunks; the current chunk always runs to completion.
     ///
     /// `pk_cols` are the primary key column names of the target table.
@@ -390,13 +487,16 @@ impl MutationExecutor {
         pk_cols: &[&str],
         cancel: &crate::task_runner::MutationCancelHandle,
     ) -> Result<MutationOutcome, ExecutorError> {
-        use dbflux_core::{DefaultSqlDialect, lower_keyset_predicate};
+        use dbflux_core::lower_keyset_predicate;
 
         let generator = self.deps.connection.query_generator().ok_or_else(|| {
             ExecutorError::Generation("driver does not support SQL generation".to_string())
         })?;
 
-        let vocab = TransactionVocab::for_kind(self.deps.connection.kind());
+        let vocab = TransactionVocab::for_kind(self.deps.connection.kind()).ok_or_else(|| {
+            ExecutorError::Transaction("driver does not support SQL transactions".to_string())
+        })?;
+
         let table_name = self.spec.from.name.clone();
         let op_kind = match &self.spec.kind {
             MutationKind::Update { .. } => "update",
@@ -449,7 +549,10 @@ impl MutationExecutor {
                 });
             }
 
-            // Step 1: SELECT pk_cols WHERE filter AND keyset_pred ORDER BY pk LIMIT chunk_size
+            // Step 1: SELECT pk_cols WHERE (user_filter AND) keyset_pred ORDER BY pk LIMIT chunk_size
+            //
+            // The user filter is included so we only page through rows that match the mutation
+            // predicate — without it, the loop would scan the entire table's PK space.
             let pk_col_refs: Vec<String> = pk_cols
                 .iter()
                 .map(|c| dialect.quote_identifier(c))
@@ -458,6 +561,14 @@ impl MutationExecutor {
 
             let mut select_params: Vec<Value> = Vec::new();
             let mut param_idx: usize = 1;
+
+            // Build user filter clause first, then the keyset continuation predicate.
+            let user_filter_clause = render_filter_node_sql(
+                self.spec.filter.as_ref(),
+                dialect,
+                &mut select_params,
+                &mut param_idx,
+            );
 
             let keyset_clause = last_pk_values.as_ref().map(|last| {
                 let pk_strs: Vec<&str> = pk_cols.to_vec();
@@ -474,22 +585,29 @@ impl MutationExecutor {
             let qualified_table =
                 dialect.qualified_table(self.spec.from.schema.as_deref(), &table_name);
 
-            let select_sql = match keyset_clause {
-                None => format!(
+            let where_parts: Vec<String> = [user_filter_clause, keyset_clause]
+                .into_iter()
+                .flatten()
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            let select_sql = if where_parts.is_empty() {
+                format!(
                     "SELECT {} FROM {} ORDER BY {} LIMIT {}",
                     pk_select,
                     qualified_table,
                     pk_col_refs.join(", "),
                     chunk_size,
-                ),
-                Some(ks) => format!(
+                )
+            } else {
+                format!(
                     "SELECT {} FROM {} WHERE {} ORDER BY {} LIMIT {}",
                     pk_select,
                     qualified_table,
-                    ks,
+                    where_parts.join(" AND "),
                     pk_col_refs.join(", "),
                     chunk_size,
-                ),
+                )
             };
 
             let mut select_req = QueryRequest::new(select_sql);
@@ -505,56 +623,26 @@ impl MutationExecutor {
             };
 
             if pk_rows.is_empty() {
-                // No more rows — done.
                 break;
             }
 
-            // Track last PK for next iteration
+            // Track last PK for next iteration's keyset predicate.
             if let Some(last_row) = pk_rows.last() {
                 last_pk_values = Some(last_row.clone());
             }
 
-            // Step 2: Build IN clause from fetched PKs (single-column PK only for now)
-            let pk_placeholders: Vec<String> = (0..pk_rows.len())
-                .map(|i| {
-                    let ph_idx = param_idx + i;
-                    match dialect.placeholder_style() {
-                        PlaceholderStyle::DollarNumber => {
-                            format!("${}", ph_idx)
-                        }
-                        PlaceholderStyle::AtSign => {
-                            format!("@p{}", ph_idx)
-                        }
-                        _ => "?".to_string(),
-                    }
-                })
-                .collect();
-
-            let pk_values: Vec<Value> = pk_rows.iter().map(|r| r[0].clone()).collect();
-
-            // Build the DML for this chunk
+            // Step 2: Generate the chunk DML via the generator which merges user_filter + pk IN.
+            // The generator emits a single WHERE clause — the executor never post-concatenates.
             let generated = match &self.spec.kind {
                 MutationKind::Update { .. } => generator
-                    .generate_update_from_spec(&self.spec)
+                    .generate_update_chunk_from_spec(&self.spec, pk_cols, &pk_rows)
                     .map_err(|e| ExecutorError::Generation(e.to_string()))?,
                 MutationKind::Delete => generator
-                    .generate_delete_from_spec(&self.spec)
+                    .generate_delete_chunk_from_spec(&self.spec, pk_cols, &pk_rows)
                     .map_err(|e| ExecutorError::Generation(e.to_string()))?,
             };
 
-            // Append WHERE pk IN (...) to the generated DML
-            let pk_quoted = dialect.quote_identifier(pk_cols[0]);
-            let chunk_sql = format!(
-                "{} WHERE {} IN ({})",
-                generated.sql,
-                pk_quoted,
-                pk_placeholders.join(", ")
-            );
-
-            let mut chunk_params = generated.params.clone();
-            chunk_params.extend(pk_values);
-
-            // Step 3: Execute BEGIN / DML / COMMIT for this chunk
+            // Step 3: Execute BEGIN / [lock_timeout] / DML / COMMIT for this chunk.
             let begin_req = QueryRequest::new(vocab.begin);
             if let Err(e) = self.deps.connection.execute(&begin_req) {
                 let err_msg = e.to_string();
@@ -562,8 +650,23 @@ impl MutationExecutor {
                 return Err(ExecutorError::Transaction(err_msg));
             }
 
-            let mut dml_req = QueryRequest::new(chunk_sql);
-            dml_req.params = chunk_params;
+            if let Some(ms) = self.opts.lock_timeout_ms
+                && let Some(lock_sql) = vocab.lock_timeout_sql(ms)
+            {
+                let lock_req = QueryRequest::new(lock_sql);
+                if let Err(e) = self.deps.connection.execute(&lock_req) {
+                    let err_msg = e.to_string();
+                    let rollback_req = QueryRequest::new(vocab.rollback);
+                    if let Err(rb_err) = self.deps.connection.execute(&rollback_req) {
+                        log::warn!("ROLLBACK failed after lock_timeout error: {}", rb_err);
+                    }
+                    self.emit_failure_event(now_ms, &run_id, op_kind, &table_name, &err_msg);
+                    return Err(ExecutorError::Transaction(err_msg));
+                }
+            }
+
+            let mut dml_req = QueryRequest::new(generated.sql);
+            dml_req.params = generated.params;
             let dml_result = self.deps.connection.execute(&dml_req);
 
             match dml_result {
@@ -621,7 +724,6 @@ impl MutationExecutor {
                 }
             }
 
-            // Loop terminates when fewer than chunk_size rows returned (last page)
             if pk_rows.len() < chunk_size {
                 break;
             }
@@ -724,7 +826,7 @@ mod tests {
                 })
             }
 
-            fn recorded_calls(&self) -> Vec<String> {
+            pub(super) fn recorded_calls(&self) -> Vec<String> {
                 self.calls.lock().unwrap().clone()
             }
         }
@@ -1038,9 +1140,10 @@ mod tests {
     mod chunked_executor_tests {
         use super::*;
         use dbflux_core::{
-            DatabaseCategory, DbKind, DefaultSqlDialect, DriverCapabilities, DriverMetadataBuilder,
-            EventOutcome, EventRecord, EventSink, EventSinkError, GeneratedMutation,
-            GeneratedQuery, MutationCategory, MutationKind, MutationPolicy, MutationRequest,
+            Comparator, DatabaseCategory, DbKind, DefaultSqlDialect, DriverCapabilities,
+            DriverMetadataBuilder, EventOutcome, EventRecord, EventSink, EventSinkError,
+            FilterNode, GeneratedMutation, GeneratedQuery, LiteralValue, MutationCategory,
+            MutationKind, MutationPolicy, MutationRequest, Predicate, PredicateValue,
             QueryGenerator, QueryLanguage, QueryResult, SchemaLoadingStrategy, SchemaSnapshot,
             TableRef, Value, VisualMutationSpec,
         };
@@ -1185,6 +1288,35 @@ mod tests {
                 Ok(GeneratedMutation {
                     sql: format!("DELETE FROM {}", spec.from.name),
                     params: vec![],
+                    used_raw_expression: false,
+                })
+            }
+
+            fn generate_delete_chunk_from_spec(
+                &self,
+                spec: &VisualMutationSpec,
+                pk_cols: &[&str],
+                pk_values: &[Vec<Value>],
+            ) -> Result<GeneratedMutation, dbflux_core::GeneratorError> {
+                let pk_col = pk_cols.first().copied().unwrap_or("id");
+                let in_list: Vec<String> = pk_values
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| format!("${}", i + 1))
+                    .collect();
+                let sql = format!(
+                    "DELETE FROM {} WHERE {} IN ({})",
+                    spec.from.name,
+                    pk_col,
+                    in_list.join(", ")
+                );
+                let params: Vec<Value> = pk_values
+                    .iter()
+                    .map(|row| row.first().cloned().unwrap_or(Value::Null))
+                    .collect();
+                Ok(GeneratedMutation {
+                    sql,
+                    params,
                     used_raw_expression: false,
                 })
             }
@@ -1523,6 +1655,56 @@ mod tests {
                 chunk_events
                     .iter()
                     .all(|e| e.outcome == EventOutcome::Success)
+            );
+        }
+
+        // F-2: PK SELECT must include spec.filter in its WHERE clause.
+        //
+        // When the spec has a filter (e.g. status = 'active'), the PK SELECT
+        // must contain a WHERE clause so only matching rows are paginated.
+        // Without this fix, run_chunked_tx would page through the entire table
+        // PK space, not just the filtered subset.
+        #[test]
+        fn chunked_pk_select_applies_user_filter() {
+            let select_responses = vec![
+                vec![vec![Value::Int(1)]],
+                vec![], // terminator
+            ];
+            let conn = ProgrammedConnection::new(select_responses, 1);
+            let conn_ref = Arc::clone(&conn);
+
+            let spec = VisualMutationSpec {
+                from: TableRef {
+                    schema: None,
+                    name: "orders".to_string(),
+                },
+                filter: Some(FilterNode::Predicate(Predicate {
+                    source_alias: "t".to_string(),
+                    column: "status".to_string(),
+                    comparator: Comparator::Eq,
+                    value: PredicateValue::Single(LiteralValue::Text("active".to_string())),
+                    node_id: 0,
+                })),
+                kind: MutationKind::Delete,
+            };
+
+            let opts =
+                MutationExecOptions::new(ExecutionMode::ChunkedTransaction, 1_000, None, 3_000);
+            let deps = make_deps(conn, None);
+            let executor = MutationExecutor::new(spec, opts, deps);
+
+            let _ = executor.run_chunked_tx(&["id"], &no_cancel());
+
+            let calls = conn_ref.recorded_calls();
+            let select_sql = calls
+                .iter()
+                .find(|c| c.to_ascii_uppercase().starts_with("SELECT"))
+                .expect("run_chunked_tx must issue at least one SELECT for PK pagination");
+
+            assert!(
+                select_sql.to_ascii_uppercase().contains("WHERE"),
+                "PK SELECT must include a WHERE clause reflecting spec.filter; SQL: {}",
+                select_sql
             );
         }
     }
@@ -1960,6 +2142,132 @@ mod tests {
             assert!(
                 matches!(result, Ok(MutationOutcome::Success { rows_affected: 42 })),
                 "expected Success with 42 rows_affected; got: {:?}",
+                result
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // F-3: lock_timeout SQL must be emitted between BEGIN and DML
+    // F-5: run_direct must not emit BEGIN or COMMIT
+    // F-7: Cancelled and Failed outcomes propagated (test at executor level)
+    // -----------------------------------------------------------------------
+
+    mod fix_tests {
+        use super::executor_tests::{RecordingConnection, SimpleDeleteGenerator, make_delete_spec};
+        use super::*;
+        use dbflux_core::{
+            DatabaseCategory, DbKind, DefaultSqlDialect, DriverCapabilities, DriverMetadataBuilder,
+            GeneratedMutation, GeneratedQuery, MutationCategory, MutationPolicy, MutationRequest,
+            QueryGenerator, QueryLanguage, QueryResult, SchemaLoadingStrategy, SchemaSnapshot,
+            VisualMutationSpec,
+        };
+        use std::sync::Arc;
+
+        fn make_deps_no_sink(conn: Arc<RecordingConnection>) -> MutationDeps {
+            MutationDeps {
+                connection: conn as Arc<dyn dbflux_core::Connection>,
+                event_sink: None,
+                policy: MutationPolicy::Allowed,
+            }
+        }
+
+        // F-3: lock_timeout_sql_emitted_before_dml_postgres
+        // Sequence must be: BEGIN, SET LOCAL lock_timeout = '500ms', DELETE ..., COMMIT
+        #[test]
+        fn lock_timeout_sql_emitted_before_dml_postgres() {
+            let conn = RecordingConnection::new(DbKind::Postgres, 1);
+            let conn_ref = Arc::clone(&conn);
+            let spec = make_delete_spec("orders");
+            let opts =
+                MutationExecOptions::new(ExecutionMode::SingleTransaction, 5_000, Some(500), 3_000);
+            let deps = make_deps_no_sink(conn);
+            let executor = MutationExecutor::new(spec, opts, deps);
+
+            let result = executor.run_single_tx();
+            assert!(result.is_ok(), "expected ok: {:?}", result);
+
+            let calls = conn_ref.recorded_calls();
+            assert!(
+                calls.len() >= 3,
+                "expected at least BEGIN + lock_timeout + DML: {:?}",
+                calls
+            );
+            assert_eq!(calls[0], "BEGIN", "first call must be BEGIN");
+            assert!(
+                calls[1].contains("lock_timeout") || calls[1].contains("500"),
+                "second call must be lock_timeout SQL; got: {}",
+                calls[1]
+            );
+            let dml_idx = calls.iter().position(|c| {
+                c.to_ascii_uppercase().starts_with("DELETE")
+                    || c.to_ascii_uppercase().starts_with("UPDATE")
+            });
+            assert!(dml_idx.is_some(), "must have a DML call");
+            assert!(
+                dml_idx.unwrap() > 1,
+                "DML must come after lock_timeout; calls: {:?}",
+                calls
+            );
+            let commit_pos = calls.iter().position(|c| c == "COMMIT");
+            let dml_pos = dml_idx.unwrap();
+            assert!(
+                commit_pos.map(|p| p > dml_pos).unwrap_or(false),
+                "COMMIT must come after DML; calls: {:?}",
+                calls
+            );
+        }
+
+        // F-5: run_direct_emits_no_begin_or_commit
+        #[test]
+        fn run_direct_emits_no_begin_or_commit() {
+            let conn = RecordingConnection::new(DbKind::Postgres, 7);
+            let conn_ref = Arc::clone(&conn);
+            let spec = make_delete_spec("events");
+            let opts =
+                MutationExecOptions::new(ExecutionMode::DirectAutocommit, 5_000, None, 3_000);
+            let deps = make_deps_no_sink(conn);
+            let executor = MutationExecutor::new(spec, opts, deps);
+
+            let result = executor.run_direct();
+            assert!(result.is_ok(), "expected ok: {:?}", result);
+
+            let calls = conn_ref.recorded_calls();
+            assert!(
+                !calls.iter().any(|c| c == "BEGIN"),
+                "run_direct must NOT emit BEGIN; calls: {:?}",
+                calls
+            );
+            assert!(
+                !calls.iter().any(|c| c == "COMMIT"),
+                "run_direct must NOT emit COMMIT; calls: {:?}",
+                calls
+            );
+            let has_dml = calls.iter().any(|c| {
+                let u = c.to_ascii_uppercase();
+                u.starts_with("DELETE") || u.starts_with("UPDATE")
+            });
+            assert!(
+                has_dml,
+                "run_direct must execute the DML; calls: {:?}",
+                calls
+            );
+        }
+
+        // F-5: run_direct success returns MutationOutcome::Success
+        #[test]
+        fn run_direct_success_returns_rows_affected() {
+            let conn = RecordingConnection::new(DbKind::Postgres, 13);
+            let spec = make_delete_spec("logs");
+            let opts =
+                MutationExecOptions::new(ExecutionMode::DirectAutocommit, 5_000, None, 3_000);
+            let deps = make_deps_no_sink(conn);
+            let executor = MutationExecutor::new(spec, opts, deps);
+
+            let result = executor.run_direct();
+            assert!(
+                matches!(result, Ok(MutationOutcome::Success { rows_affected: 13 })),
+                "expected Success(13); got: {:?}",
                 result
             );
         }
