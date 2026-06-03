@@ -16,6 +16,7 @@ pub use generator::{
     CollectionTemplateRequest, GeneratedMutation, GeneratedQuery, GeneratorError, MutationCategory,
     MutationTemplateOperation, MutationTemplateRequest, QueryGenError, QueryGenerator,
     ReadTemplateOperation, ReadTemplateRequest, SelectQuery, SqlMutationGenerator,
+    render_filter_node_sql,
 };
 pub use keyset::lower_keyset_predicate;
 pub use language_service::{

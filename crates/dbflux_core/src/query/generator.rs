@@ -322,6 +322,48 @@ pub trait QueryGenerator: Send + Sync {
         ))
     }
 
+    /// Generate a parameterized UPDATE for one keyset chunk.
+    ///
+    /// The generated SQL merges `spec.filter` (user predicate) and the PK keyset
+    /// into a single `WHERE (<user_filter>) AND (<pk_cols>) IN (row_constructors)`.
+    /// Only one WHERE keyword is emitted. `pk_values` is one `Vec<Value>` per row.
+    ///
+    /// The default delegates to `generate_update_from_spec` then appends the IN
+    /// clause — overridden by `SqlMutationGenerator` to emit correct SQL.
+    fn generate_update_chunk_from_spec(
+        &self,
+        _spec: &crate::query::visual_query::VisualMutationSpec,
+        pk_cols: &[&str],
+        pk_values: &[Vec<crate::Value>],
+    ) -> Result<GeneratedMutation, GeneratorError> {
+        Err(GeneratorError::Unsupported(format!(
+            "generator does not support chunked UPDATE (pk_cols={:?}, rows={})",
+            pk_cols,
+            pk_values.len()
+        )))
+    }
+
+    /// Generate a parameterized DELETE for one keyset chunk.
+    ///
+    /// The generated SQL merges `spec.filter` (user predicate) and the PK keyset
+    /// into a single `WHERE (<user_filter>) AND (<pk_cols>) IN (row_constructors)`.
+    /// Only one WHERE keyword is emitted. `pk_values` is one `Vec<Value>` per row.
+    ///
+    /// The default delegates to `generate_delete_from_spec` then appends the IN
+    /// clause — overridden by `SqlMutationGenerator` to emit correct SQL.
+    fn generate_delete_chunk_from_spec(
+        &self,
+        _spec: &crate::query::visual_query::VisualMutationSpec,
+        pk_cols: &[&str],
+        pk_values: &[Vec<crate::Value>],
+    ) -> Result<GeneratedMutation, GeneratorError> {
+        Err(GeneratorError::Unsupported(format!(
+            "generator does not support chunked DELETE (pk_cols={:?}, rows={})",
+            pk_cols,
+            pk_values.len()
+        )))
+    }
+
     /// Replaces parameter placeholders in `query` with dialect-quoted literals,
     /// producing human-readable SQL suitable for a read-only editor tab.
     ///
@@ -465,8 +507,6 @@ impl QueryGenerator for SqlMutationGenerator {
         &self,
         spec: &crate::query::visual_query::VisualMutationSpec,
     ) -> Result<GeneratedMutation, GeneratorError> {
-        use crate::sql::dialect::PlaceholderStyle;
-
         let mut params: Vec<crate::Value> = Vec::new();
         let mut param_index: usize = 1;
 
@@ -481,52 +521,14 @@ impl QueryGenerator for SqlMutationGenerator {
             Some(w) => format!("DELETE FROM {table}\nWHERE {w}"),
         };
 
-        // Rewrite $N → ? for QuestionMark dialects (params are already in order).
-        let sql = match self.dialect.placeholder_style() {
-            PlaceholderStyle::QuestionMark | PlaceholderStyle::NamedColon => {
-                let mut i = 1usize;
-                let mut out = sql.clone();
-                loop {
-                    let ph = format!("${i}");
-                    if out.contains(&ph) {
-                        out = out.replacen(&ph, "?", 1);
-                        i += 1;
-                    } else {
-                        break;
-                    }
-                }
-                out
-            }
-            PlaceholderStyle::AtSign => {
-                let mut i = 1usize;
-                let mut out = sql.clone();
-                loop {
-                    let ph = format!("${i}");
-                    if out.contains(&ph) {
-                        out = out.replacen(&ph, &format!("@p{i}"), 1);
-                        i += 1;
-                    } else {
-                        break;
-                    }
-                }
-                out
-            }
-            PlaceholderStyle::DollarNumber => sql,
-        };
-
-        Ok(GeneratedMutation {
-            sql,
-            params,
-            used_raw_expression: false,
-        })
+        rewrite_placeholders_if_needed(self.dialect, sql, params, false)
     }
 
     fn generate_update_from_spec(
         &self,
         spec: &crate::query::visual_query::VisualMutationSpec,
     ) -> Result<GeneratedMutation, GeneratorError> {
-        use crate::query::visual_query::{AssignmentValue, MutationKind, ScalarLiteral};
-        use crate::sql::dialect::PlaceholderStyle;
+        use crate::query::visual_query::{AssignmentValue, MutationKind};
 
         let assignments = match &spec.kind {
             MutationKind::Update { assignments } => {
@@ -554,30 +556,8 @@ impl QueryGenerator for SqlMutationGenerator {
                 let col = self.dialect.quote_identifier(&a.column);
                 match &a.value {
                     AssignmentValue::Literal(lit) => {
-                        let ph = match self.dialect.placeholder_style() {
-                            PlaceholderStyle::DollarNumber => {
-                                let p = format!("${}", param_index);
-                                param_index += 1;
-                                p
-                            }
-                            PlaceholderStyle::AtSign => {
-                                let p = format!("@p{}", param_index);
-                                param_index += 1;
-                                p
-                            }
-                            _ => {
-                                param_index += 1;
-                                "?".to_string()
-                            }
-                        };
-                        let val = match lit {
-                            ScalarLiteral::Text(s) => crate::Value::Text(s.clone()),
-                            ScalarLiteral::Integer(n) => crate::Value::Int(*n),
-                            ScalarLiteral::Float(f) => crate::Value::Float(*f),
-                            ScalarLiteral::Bool(b) => crate::Value::Bool(*b),
-                            ScalarLiteral::Timestamp(s) => crate::Value::Text(s.clone()),
-                            ScalarLiteral::Null => crate::Value::Null,
-                        };
+                        let ph = self.next_placeholder(&mut param_index);
+                        let val = scalar_to_value(lit);
                         params.push(val);
                         format!("{col} = {ph}")
                     }
@@ -585,12 +565,8 @@ impl QueryGenerator for SqlMutationGenerator {
                         used_raw_expression = true;
                         format!("{col} = {expr}")
                     }
-                    AssignmentValue::Null => {
-                        format!("{col} = NULL")
-                    }
-                    AssignmentValue::Default => {
-                        format!("{col} = DEFAULT")
-                    }
+                    AssignmentValue::Null => format!("{col} = NULL"),
+                    AssignmentValue::Default => format!("{col} = DEFAULT"),
                 }
             })
             .collect();
@@ -605,17 +581,297 @@ impl QueryGenerator for SqlMutationGenerator {
             Some(w) => format!("UPDATE {table}\nSET {set_str}\nWHERE {w}"),
         };
 
-        Ok(GeneratedMutation {
-            sql,
-            params,
-            used_raw_expression,
-        })
+        rewrite_placeholders_if_needed(self.dialect, sql, params, used_raw_expression)
+    }
+
+    fn generate_delete_chunk_from_spec(
+        &self,
+        spec: &crate::query::visual_query::VisualMutationSpec,
+        pk_cols: &[&str],
+        pk_values: &[Vec<crate::Value>],
+    ) -> Result<GeneratedMutation, GeneratorError> {
+        let mut params: Vec<crate::Value> = Vec::new();
+        let mut param_index: usize = 1;
+
+        let table = self
+            .dialect
+            .qualified_table(spec.from.schema.as_deref(), &spec.from.name);
+
+        let filter_clause = SqlSelectBuilder::new(self.dialect)
+            .build_where(spec.filter.as_ref(), &mut params, &mut param_index)
+            .map_err(|e| GeneratorError::Unsupported(e.to_string()))?;
+
+        let pk_in = build_pk_in_clause(
+            self.dialect,
+            pk_cols,
+            pk_values,
+            &mut params,
+            &mut param_index,
+        );
+
+        let where_parts: Vec<String> = [filter_clause, Some(pk_in)]
+            .into_iter()
+            .flatten()
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        let sql = if where_parts.is_empty() {
+            format!("DELETE FROM {table}")
+        } else if where_parts.len() == 1 {
+            format!("DELETE FROM {table}\nWHERE {}", where_parts[0])
+        } else {
+            format!(
+                "DELETE FROM {table}\nWHERE ({}) AND ({})",
+                where_parts[0], where_parts[1]
+            )
+        };
+
+        rewrite_placeholders_if_needed(self.dialect, sql, params, false)
+    }
+
+    fn generate_update_chunk_from_spec(
+        &self,
+        spec: &crate::query::visual_query::VisualMutationSpec,
+        pk_cols: &[&str],
+        pk_values: &[Vec<crate::Value>],
+    ) -> Result<GeneratedMutation, GeneratorError> {
+        use crate::query::visual_query::{AssignmentValue, MutationKind};
+
+        let assignments = match &spec.kind {
+            MutationKind::Update { assignments } => {
+                if assignments.is_empty() {
+                    return Err(GeneratorError::EmptyAssignments);
+                }
+                assignments
+            }
+            MutationKind::Delete => {
+                return Err(GeneratorError::Unsupported(
+                    "DELETE passed to generate_update_chunk_from_spec".to_string(),
+                ));
+            }
+        };
+
+        let mut params: Vec<crate::Value> = Vec::new();
+        let mut param_index: usize = 1;
+        let mut used_raw_expression = false;
+
+        let table = self
+            .dialect
+            .qualified_table(spec.from.schema.as_deref(), &spec.from.name);
+
+        let set_clauses: Vec<String> = assignments
+            .iter()
+            .map(|a| {
+                let col = self.dialect.quote_identifier(&a.column);
+                match &a.value {
+                    AssignmentValue::Literal(lit) => {
+                        let ph = self.next_placeholder(&mut param_index);
+                        let val = scalar_to_value(lit);
+                        params.push(val);
+                        format!("{col} = {ph}")
+                    }
+                    AssignmentValue::Expression(expr) => {
+                        used_raw_expression = true;
+                        format!("{col} = {expr}")
+                    }
+                    AssignmentValue::Null => format!("{col} = NULL"),
+                    AssignmentValue::Default => format!("{col} = DEFAULT"),
+                }
+            })
+            .collect();
+
+        let filter_clause = SqlSelectBuilder::new(self.dialect)
+            .build_where(spec.filter.as_ref(), &mut params, &mut param_index)
+            .map_err(|e| GeneratorError::Unsupported(e.to_string()))?;
+
+        let pk_in = build_pk_in_clause(
+            self.dialect,
+            pk_cols,
+            pk_values,
+            &mut params,
+            &mut param_index,
+        );
+
+        let where_parts: Vec<String> = [filter_clause, Some(pk_in)]
+            .into_iter()
+            .flatten()
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        let set_str = set_clauses.join(", ");
+        let sql = if where_parts.is_empty() {
+            format!("UPDATE {table}\nSET {set_str}")
+        } else if where_parts.len() == 1 {
+            format!("UPDATE {table}\nSET {set_str}\nWHERE {}", where_parts[0])
+        } else {
+            format!(
+                "UPDATE {table}\nSET {set_str}\nWHERE ({}) AND ({})",
+                where_parts[0], where_parts[1]
+            )
+        };
+
+        rewrite_placeholders_if_needed(self.dialect, sql, params, used_raw_expression)
+    }
+}
+
+impl SqlMutationGenerator {
+    fn next_placeholder(&self, param_index: &mut usize) -> String {
+        match self.dialect.placeholder_style() {
+            PlaceholderStyle::DollarNumber => {
+                let p = format!("${}", *param_index);
+                *param_index += 1;
+                p
+            }
+            PlaceholderStyle::AtSign => {
+                let p = format!("@p{}", *param_index);
+                *param_index += 1;
+                p
+            }
+            _ => {
+                *param_index += 1;
+                "?".to_string()
+            }
+        }
+    }
+}
+
+/// Build the `(pk0, pk1) IN ((?,?), (?,?))` row-constructor predicate,
+/// appending the bound values to `params` and advancing `param_index`.
+///
+/// For a single-column PK, emits `pk_col IN (?, ?, ?)`.
+/// For a multi-column PK, emits `(pk0, pk1) IN ((?,?), (?,?))`.
+/// Uses the dialect's placeholder style.
+fn build_pk_in_clause(
+    dialect: &dyn SqlDialect,
+    pk_cols: &[&str],
+    pk_values: &[Vec<crate::Value>],
+    params: &mut Vec<crate::Value>,
+    param_index: &mut usize,
+) -> String {
+    let make_ph = |idx: usize| match dialect.placeholder_style() {
+        PlaceholderStyle::DollarNumber => format!("${idx}"),
+        PlaceholderStyle::AtSign => format!("@p{idx}"),
+        _ => "?".to_string(),
+    };
+
+    if pk_cols.len() == 1 {
+        let col = dialect.quote_identifier(pk_cols[0]);
+        let placeholders: Vec<String> = pk_values
+            .iter()
+            .map(|row| {
+                let ph = make_ph(*param_index);
+                *param_index += 1;
+                params.push(row.first().cloned().unwrap_or(crate::Value::Null));
+                ph
+            })
+            .collect();
+        format!("{col} IN ({})", placeholders.join(", "))
+    } else {
+        let cols: Vec<String> = pk_cols
+            .iter()
+            .map(|c| dialect.quote_identifier(c))
+            .collect();
+        let col_list = cols.join(", ");
+        let row_constructors: Vec<String> = pk_values
+            .iter()
+            .map(|row| {
+                let phs: Vec<String> = (0..pk_cols.len())
+                    .map(|ci| {
+                        let ph = make_ph(*param_index);
+                        *param_index += 1;
+                        params.push(row.get(ci).cloned().unwrap_or(crate::Value::Null));
+                        ph
+                    })
+                    .collect();
+                format!("({})", phs.join(", "))
+            })
+            .collect();
+        format!("({col_list}) IN ({})", row_constructors.join(", "))
+    }
+}
+
+/// Rewrite `$N` placeholders for QuestionMark/AtSign dialects.
+///
+/// The filter builder emits `$N` style internally; this converts those to `?` or `@pN`
+/// for dialects that require it. For DollarNumber dialects, returns unchanged.
+fn rewrite_placeholders_if_needed(
+    dialect: &dyn SqlDialect,
+    sql: String,
+    params: Vec<crate::Value>,
+    used_raw_expression: bool,
+) -> Result<GeneratedMutation, GeneratorError> {
+    let sql = match dialect.placeholder_style() {
+        PlaceholderStyle::QuestionMark | PlaceholderStyle::NamedColon => {
+            let mut out = sql;
+            let mut i = 1usize;
+            loop {
+                let ph = format!("${i}");
+                if out.contains(&ph) {
+                    out = out.replacen(&ph, "?", 1);
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            out
+        }
+        PlaceholderStyle::AtSign => {
+            let mut out = sql;
+            let mut i = 1usize;
+            loop {
+                let ph = format!("${i}");
+                if out.contains(&ph) {
+                    out = out.replacen(&ph, &format!("@p{i}"), 1);
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            out
+        }
+        PlaceholderStyle::DollarNumber => sql,
+    };
+
+    Ok(GeneratedMutation {
+        sql,
+        params,
+        used_raw_expression,
+    })
+}
+
+fn scalar_to_value(lit: &crate::query::visual_query::ScalarLiteral) -> crate::Value {
+    use crate::query::visual_query::ScalarLiteral;
+    match lit {
+        ScalarLiteral::Text(s) => crate::Value::Text(s.clone()),
+        ScalarLiteral::Integer(n) => crate::Value::Int(*n),
+        ScalarLiteral::Float(f) => crate::Value::Float(*f),
+        ScalarLiteral::Bool(b) => crate::Value::Bool(*b),
+        ScalarLiteral::Timestamp(s) => crate::Value::Text(s.clone()),
+        ScalarLiteral::Null => crate::Value::Null,
     }
 }
 
 // =============================================================================
 // SQL SELECT builder for VisualQuerySpec
 // =============================================================================
+
+/// Render a `FilterNode` to a parameterized SQL predicate using `dialect`.
+///
+/// Returns `None` when `filter` is `None` or produces an empty expression.
+/// Appends bound values to `params` and advances `param_index` for each placeholder.
+///
+/// Used by the chunked executor to include the user filter in the PK SELECT query
+/// without duplicating the filter-rendering logic from `SqlSelectBuilder`.
+pub fn render_filter_node_sql(
+    filter: Option<&crate::query::visual_query::FilterNode>,
+    dialect: &dyn SqlDialect,
+    params: &mut Vec<crate::Value>,
+    param_index: &mut usize,
+) -> Option<String> {
+    SqlSelectBuilder::new(dialect)
+        .build_where(filter, params, param_index)
+        .unwrap_or(None)
+}
 
 /// Build a parameterized SELECT query from `spec` using `dialect`.
 ///
@@ -2504,6 +2760,34 @@ mod tests {
         }
         static MYSQL: MySqlDialect = MySqlDialect;
 
+        // Postgres dialect (DollarNumber placeholders) for chunk parameter tests
+        struct PgDialect;
+        impl SqlDialect for PgDialect {
+            fn quote_identifier(&self, name: &str) -> String {
+                format!("\"{}\"", name)
+            }
+            fn qualified_table(&self, schema: Option<&str>, table: &str) -> String {
+                match schema {
+                    Some(s) => format!(
+                        "{}.{}",
+                        self.quote_identifier(s),
+                        self.quote_identifier(table)
+                    ),
+                    None => self.quote_identifier(table),
+                }
+            }
+            fn value_to_literal(&self, value: &Value) -> String {
+                DIALECT.value_to_literal(value)
+            }
+            fn escape_string(&self, s: &str) -> String {
+                s.replace('\'', "''")
+            }
+            fn placeholder_style(&self) -> PlaceholderStyle {
+                PlaceholderStyle::DollarNumber
+            }
+        }
+        static PG: PgDialect = PgDialect;
+
         // B-1: generate_delete_from_spec with filter (PostgreSQL default dialect)
         #[test]
         fn b1_delete_with_filter_postgres() {
@@ -2696,6 +2980,127 @@ mod tests {
             assert!(
                 result.sql.contains('?'),
                 "MySQL must use ? placeholder: {}",
+                result.sql
+            );
+        }
+
+        // -----------------------------------------------------------------------
+        // Chunk generator tests (F-1 fixes)
+        // -----------------------------------------------------------------------
+
+        fn pk_values_single(ids: &[i64]) -> Vec<Vec<Value>> {
+            ids.iter().map(|id| vec![Value::Int(*id)]).collect()
+        }
+
+        fn pk_values_composite(pairs: &[(i64, i64)]) -> Vec<Vec<Value>> {
+            pairs
+                .iter()
+                .map(|(a, b)| vec![Value::Int(*a), Value::Int(*b)])
+                .collect()
+        }
+
+        // DR-10.x: chunked_update_with_user_filter_emits_single_where
+        // When spec.filter is Some, the chunk DML must contain exactly one WHERE keyword.
+        #[test]
+        fn chunked_update_with_user_filter_emits_single_where() {
+            let generator = SqlMutationGenerator::new(&DIALECT);
+            let spec = update_spec_with_literal_and_filter("orders");
+            let pk_values = pk_values_single(&[1, 2, 3]);
+            let result = generator
+                .generate_update_chunk_from_spec(&spec, &["id"], &pk_values)
+                .expect("must succeed");
+            let where_count = result.sql.matches("WHERE").count();
+            assert_eq!(
+                where_count, 1,
+                "must contain exactly one WHERE; SQL: {}",
+                result.sql
+            );
+        }
+
+        // DR-13.x: chunked_delete_with_composite_pk_uses_row_constructor
+        // A 2-column PK must produce (pk0, pk1) IN ((?,?), ...) row-constructor syntax.
+        #[test]
+        fn chunked_delete_with_composite_pk_uses_row_constructor() {
+            let generator = SqlMutationGenerator::new(&DIALECT);
+            let spec = VisualMutationSpec {
+                from: table_ref("orders"),
+                filter: None,
+                kind: MutationKind::Delete,
+            };
+            let pk_values = pk_values_composite(&[(1, 10), (2, 20)]);
+            let result = generator
+                .generate_delete_chunk_from_spec(&spec, &["tenant_id", "id"], &pk_values)
+                .expect("must succeed");
+            assert!(
+                result.sql.contains("\"tenant_id\", \"id\"")
+                    || result.sql.contains("(\"tenant_id\", \"id\")"),
+                "composite PK must be row-constructor form; SQL: {}",
+                result.sql
+            );
+            assert!(
+                result.sql.contains("IN"),
+                "must have IN clause; SQL: {}",
+                result.sql
+            );
+            assert_eq!(
+                result.params.len(),
+                4,
+                "2 rows × 2 PK cols = 4 params; got {} params; SQL: {}",
+                result.params.len(),
+                result.sql
+            );
+        }
+
+        // Verifies that placeholder numbering starts fresh ($1) for each new chunk statement.
+        // In Postgres, `generate_delete_chunk_from_spec` for a chunk should use $1, $2, ... .
+        #[test]
+        fn chunked_chunk_param_numbering_postgres() {
+            let generator = SqlMutationGenerator::new(&PG);
+            let spec = VisualMutationSpec {
+                from: table_ref("events"),
+                filter: None,
+                kind: MutationKind::Delete,
+            };
+            let pk_values = pk_values_single(&[100, 200]);
+            let result = generator
+                .generate_delete_chunk_from_spec(&spec, &["id"], &pk_values)
+                .expect("must succeed");
+            assert!(
+                result.sql.contains("$1") && result.sql.contains("$2"),
+                "placeholders must start at $1; SQL: {}",
+                result.sql
+            );
+            assert_eq!(result.params.len(), 2, "2 pk values = 2 params");
+        }
+
+        // chunked DELETE with user filter: filter param then pk param
+        #[test]
+        fn chunked_delete_filter_params_before_pk_params() {
+            let generator = SqlMutationGenerator::new(&DIALECT);
+            let spec = VisualMutationSpec {
+                from: table_ref("users"),
+                filter: Some(filter_id_eq(42)),
+                kind: MutationKind::Delete,
+            };
+            let pk_values = pk_values_single(&[10, 20]);
+            let result = generator
+                .generate_delete_chunk_from_spec(&spec, &["pk"], &pk_values)
+                .expect("must succeed");
+            assert_eq!(
+                result.params.len(),
+                3,
+                "1 filter param + 2 pk params = 3 total; SQL: {}",
+                result.sql
+            );
+            assert!(
+                result.sql.contains("WHERE"),
+                "must have WHERE; SQL: {}",
+                result.sql
+            );
+            let where_count = result.sql.matches("WHERE").count();
+            assert_eq!(
+                where_count, 1,
+                "must have exactly one WHERE; SQL: {}",
                 result.sql
             );
         }
