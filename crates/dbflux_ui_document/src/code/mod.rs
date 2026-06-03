@@ -332,6 +332,14 @@ pub struct CodeDocument {
     /// Routine definition body fetched from the DB and waiting to be applied in
     /// the next render cycle (where `Window` is available for `set_content`).
     pending_routine_definition: Option<String>,
+
+    /// Last editor_mode pushed to `InputState::set_highlighter`. Tracked so
+    /// `sync_editor_language` only resets the highlighter when the mode
+    /// actually changes — `set_highlighter` nukes the cached highlighter to
+    /// `None` and gpui-component only rebuilds it on text edits, so calling
+    /// it on every `AppStateChanged` would silently strip syntax colors
+    /// until the next keystroke.
+    current_editor_mode: &'static str,
 }
 
 struct PendingQueryResult {
@@ -813,6 +821,7 @@ impl CodeDocument {
             _saved_label_timer: None,
             pending_error: None,
             pending_routine_definition: None,
+            current_editor_mode: editor_mode,
         };
 
         document.sync_context_dropdowns(cx);

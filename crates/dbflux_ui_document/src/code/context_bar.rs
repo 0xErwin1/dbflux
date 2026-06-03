@@ -136,9 +136,19 @@ impl CodeDocument {
             QueryCompletionProvider::new(query_language, self.app_state.clone(), connection_id),
         );
 
+        let editor_mode_changed = editor_mode != self.current_editor_mode;
+        self.current_editor_mode = editor_mode;
+
         self.input_state.update(cx, |state, cx| {
             state.lsp.completion_provider = Some(completion_provider);
-            state.set_highlighter(editor_mode, cx);
+
+            // `set_highlighter` resets the cached SyntaxHighlighter to `None`
+            // and gpui-component only rebuilds it on the next text edit, so
+            // re-applying the same mode on every `AppStateChanged` would strip
+            // syntax colors from the buffer until the user types again.
+            if editor_mode_changed {
+                state.set_highlighter(editor_mode, cx);
+            }
         });
     }
 
