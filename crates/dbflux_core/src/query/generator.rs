@@ -929,6 +929,7 @@ impl<'a> SqlSelectBuilder<'a> {
                 {
                     let expr = self.build_aggregate_expression(agg);
                     let mut expanded = pred.clone();
+                    expanded.source_alias = "\x00raw".to_string();
                     expanded.column = expr;
                     return FilterNode::Predicate(expanded);
                 }
@@ -1064,7 +1065,9 @@ impl<'a> SqlSelectBuilder<'a> {
     ) -> Result<String, QueryGenError> {
         use crate::query::visual_query::{Comparator, PredicateValue};
 
-        let col = if pred.source_alias.trim().is_empty() {
+        let col = if pred.source_alias == "\x00raw" {
+            pred.column.clone()
+        } else if pred.source_alias.trim().is_empty() {
             self.dialect.quote_identifier(&pred.column)
         } else {
             format!(

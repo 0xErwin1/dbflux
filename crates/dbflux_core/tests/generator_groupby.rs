@@ -1,7 +1,7 @@
 use dbflux_core::{
-    AggFn, Comparator, DefaultSqlDialect, FilterNode, GroupByEntry, LiteralValue, PlaceholderStyle,
-    Predicate, PredicateValue, Projection, SelectQuery, SortEntry, SourceTable, SqlDialect, Value,
-    VisualAggregateSpec, VisualQuerySpec, VisualSortDirection,
+    AggFn, BoolOp, Comparator, DefaultSqlDialect, FilterNode, GroupByEntry, LiteralValue,
+    PlaceholderStyle, Predicate, PredicateValue, Projection, SelectQuery, SortEntry, SourceTable,
+    SqlDialect, Value, VisualAggregateSpec, VisualQuerySpec, VisualSortDirection,
 };
 
 // =============================================================================
@@ -133,6 +133,10 @@ impl SqlDialect for MssqlDialect {
 
     fn placeholder_style(&self) -> PlaceholderStyle {
         PlaceholderStyle::AtSign
+    }
+
+    fn having_repeats_aggregate_expressions(&self) -> bool {
+        true
     }
 }
 
@@ -335,7 +339,74 @@ fn mssql_having_clause() {
     let spec = grouped_sum_with_having_spec();
     let q = run_with_dialect(&spec, &MssqlDialect);
     assert!(q.sql.contains("HAVING"), "mssql: HAVING: {}", q.sql);
-    assert!(q.sql.contains("[total]"), "mssql: total col: {}", q.sql);
+
+    let after_having = q.sql.split("HAVING").nth(1).unwrap_or("");
+
+    assert!(
+        after_having.contains("SUM([o].[amount])"),
+        "mssql: HAVING must contain the expanded aggregate expression, not just the alias: {}",
+        q.sql
+    );
+    assert!(
+        !after_having.contains("[total]"),
+        "mssql: HAVING must not reference the SELECT-list alias [total] — MSSQL requires the full aggregate expression: {}",
+        q.sql
+    );
+}
+
+#[test]
+fn mssql_having_nested_and_or_expands_all_aliases() {
+    let mut spec = grouped_sum_spec();
+    spec.aggregates.push(VisualAggregateSpec {
+        function: AggFn::CountStar,
+        source_alias: None,
+        column: None,
+        alias: "cnt".to_string(),
+    });
+
+    spec.having = Some(FilterNode::Group {
+        op: BoolOp::Or,
+        children: vec![
+            FilterNode::Predicate(Predicate {
+                source_alias: "".to_string(),
+                column: "total".to_string(),
+                comparator: Comparator::Gt,
+                value: PredicateValue::Single(LiteralValue::Integer(1000)),
+                node_id: 0,
+            }),
+            FilterNode::Predicate(Predicate {
+                source_alias: "".to_string(),
+                column: "cnt".to_string(),
+                comparator: Comparator::Gt,
+                value: PredicateValue::Single(LiteralValue::Integer(5)),
+                node_id: 1,
+            }),
+        ],
+    });
+
+    let q = run_with_dialect(&spec, &MssqlDialect);
+    let after_having = q.sql.split("HAVING").nth(1).unwrap_or("");
+
+    assert!(
+        after_having.contains("SUM([o].[amount])"),
+        "mssql nested HAVING: first alias must expand to aggregate expression: {}",
+        q.sql
+    );
+    assert!(
+        after_having.contains("COUNT(*)"),
+        "mssql nested HAVING: second alias must expand to COUNT(*): {}",
+        q.sql
+    );
+    assert!(
+        !after_having.contains("[total]"),
+        "mssql nested HAVING: [total] alias must not appear after HAVING: {}",
+        q.sql
+    );
+    assert!(
+        !after_having.contains("[cnt]"),
+        "mssql nested HAVING: [cnt] alias must not appear after HAVING: {}",
+        q.sql
+    );
 }
 
 // =============================================================================
