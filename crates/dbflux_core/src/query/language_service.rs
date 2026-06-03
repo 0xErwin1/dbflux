@@ -137,6 +137,11 @@ pub enum DangerousQueryKind {
     RedisMultiDelete,
     /// KEYS * — performance hazard on large databases
     RedisKeysPattern,
+
+    // Visual mutation builder
+    /// At least one SET assignment uses a raw SQL expression rather than a
+    /// bound parameter. Forces the hard-confirm modal regardless of other gates.
+    RawExpressionInSet,
 }
 
 impl DangerousQueryKind {
@@ -158,7 +163,74 @@ impl DangerousQueryKind {
             Self::RedisKeysPattern => {
                 "KEYS with a pattern is a performance hazard on large databases"
             }
+            Self::RawExpressionInSet => {
+                "SET clause contains a raw SQL expression — bypasses parameter binding"
+            }
         }
+    }
+}
+
+/// The result of the double-gate classification applied to a `VisualMutationSpec`.
+///
+/// Both `spec_kinds` and `text_kinds` are checked independently; `effective`
+/// is their union (deduplicated). `requires_hard_confirm` is true when the
+/// effective set is non-empty OR when `RawExpressionInSet` is present.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClassifiedMutation {
+    /// Dangers detected by inspecting the spec structure (no-WHERE, raw expression).
+    pub spec_kinds: Vec<DangerousQueryKind>,
+    /// Dangers detected by running the generated SQL text through the language gate.
+    /// Always empty for visual-spec classification (text check is caller's responsibility).
+    pub text_kinds: Vec<DangerousQueryKind>,
+    /// Deduplicated union of `spec_kinds` and `text_kinds`.
+    pub effective: Vec<DangerousQueryKind>,
+    /// True when any effective kind warrants the hard-confirm flow (Danger modal +
+    /// TypeToConfirm). All current effective kinds qualify.
+    pub requires_hard_confirm: bool,
+}
+
+/// Classifies a `VisualMutationSpec` for dangerous patterns at the spec level.
+///
+/// This is one half of the double-gate (DR-7.1, DR-7.2, DR-7.4). The other
+/// half — text-level classification of the generated SQL — is the caller's
+/// responsibility via `classify_query_for_language`.
+pub fn classify_visual_mutation(
+    spec: &crate::query::visual_query::VisualMutationSpec,
+) -> ClassifiedMutation {
+    use crate::query::visual_query::{AssignmentValue, MutationKind};
+
+    let mut spec_kinds: Vec<DangerousQueryKind> = Vec::new();
+
+    match &spec.kind {
+        MutationKind::Delete => {
+            if spec.filter.is_none() {
+                spec_kinds.push(DangerousQueryKind::DeleteNoWhere);
+            }
+        }
+
+        MutationKind::Update { assignments } => {
+            if spec.filter.is_none() {
+                spec_kinds.push(DangerousQueryKind::UpdateNoWhere);
+            }
+
+            let has_raw_expression = assignments
+                .iter()
+                .any(|a| matches!(&a.value, AssignmentValue::Expression(_)));
+
+            if has_raw_expression {
+                spec_kinds.push(DangerousQueryKind::RawExpressionInSet);
+            }
+        }
+    }
+
+    let effective = spec_kinds.clone();
+    let requires_hard_confirm = !effective.is_empty();
+
+    ClassifiedMutation {
+        spec_kinds,
+        text_kinds: Vec::new(),
+        effective,
+        requires_hard_confirm,
     }
 }
 
@@ -1026,6 +1098,22 @@ mod tests {
         assert!(!DangerousQueryKind::RedisFlushDb.message().is_empty());
         assert!(!DangerousQueryKind::RedisMultiDelete.message().is_empty());
         assert!(!DangerousQueryKind::RedisKeysPattern.message().is_empty());
+        assert!(!DangerousQueryKind::RawExpressionInSet.message().is_empty());
+    }
+
+    // T-05/T-06 — RawExpressionInSet variant (spec scenario DR-2.5, design R-D1)
+    #[test]
+    fn raw_expression_in_set_variant_exists_and_has_message() {
+        let kind = DangerousQueryKind::RawExpressionInSet;
+        let msg = kind.message();
+        assert!(
+            !msg.is_empty(),
+            "RawExpressionInSet must have a non-empty message"
+        );
+        assert!(
+            msg.contains("expression") || msg.contains("binding") || msg.contains("SET"),
+            "message should describe the risk: {msg}"
+        );
     }
 
     #[test]
@@ -1118,5 +1206,209 @@ END $$;"#;
             classify_query_for_language(&QueryLanguage::RedisCommands, "CONFIG SET a b"),
             ExecutionClassification::Admin
         );
+    }
+
+    // T-11 — [RED] Tests for classify_visual_mutation (spec scenarios C-1 through C-6, DR-7.1–DR-7.6)
+
+    #[cfg(test)]
+    mod classify_visual_mutation_tests {
+        use super::*;
+        use crate::query::table_browser::TableRef;
+        use crate::query::visual_query::{
+            Assignment, AssignmentValue, Comparator, FilterNode, LiteralValue, MutationKind,
+            Predicate, PredicateValue, ScalarLiteral, VisualMutationSpec,
+        };
+
+        fn table_ref(name: &str) -> TableRef {
+            TableRef {
+                schema: None,
+                name: name.to_string(),
+            }
+        }
+
+        fn filter_id_eq_1() -> FilterNode {
+            FilterNode::Predicate(Predicate {
+                source_alias: "t".to_string(),
+                column: "id".to_string(),
+                comparator: Comparator::Eq,
+                value: PredicateValue::Single(LiteralValue::Integer(1)),
+                node_id: 0,
+            })
+        }
+
+        fn literal_assignment(col: &str) -> Assignment {
+            Assignment {
+                column: col.to_string(),
+                value: AssignmentValue::Literal(ScalarLiteral::Text("v".to_string())),
+            }
+        }
+
+        fn expr_assignment(col: &str) -> Assignment {
+            Assignment {
+                column: col.to_string(),
+                value: AssignmentValue::Expression("price * 1.1".to_string()),
+            }
+        }
+
+        // C-1: spec-level gate — Delete no WHERE → DeleteNoWhere
+        #[test]
+        fn c1_delete_no_filter_returns_delete_no_where() {
+            let spec = VisualMutationSpec {
+                from: table_ref("orders"),
+                filter: None,
+                kind: MutationKind::Delete,
+            };
+            let result = classify_visual_mutation(&spec);
+            assert!(
+                result
+                    .spec_kinds
+                    .contains(&DangerousQueryKind::DeleteNoWhere)
+            );
+            assert!(
+                result
+                    .effective
+                    .contains(&DangerousQueryKind::DeleteNoWhere)
+            );
+        }
+
+        // C-2: spec-level gate — Update no WHERE → UpdateNoWhere
+        #[test]
+        fn c2_update_no_filter_returns_update_no_where() {
+            let spec = VisualMutationSpec {
+                from: table_ref("users"),
+                filter: None,
+                kind: MutationKind::Update {
+                    assignments: vec![literal_assignment("name")],
+                },
+            };
+            let result = classify_visual_mutation(&spec);
+            assert!(
+                result
+                    .spec_kinds
+                    .contains(&DangerousQueryKind::UpdateNoWhere)
+            );
+            assert!(
+                result
+                    .effective
+                    .contains(&DangerousQueryKind::UpdateNoWhere)
+            );
+        }
+
+        // C-3: spec-level gate passes with filter
+        #[test]
+        fn c3_delete_with_filter_no_spec_danger() {
+            let spec = VisualMutationSpec {
+                from: table_ref("orders"),
+                filter: Some(filter_id_eq_1()),
+                kind: MutationKind::Delete,
+            };
+            let result = classify_visual_mutation(&spec);
+            assert!(
+                !result
+                    .spec_kinds
+                    .contains(&DangerousQueryKind::DeleteNoWhere)
+            );
+            assert!(
+                !result
+                    .spec_kinds
+                    .contains(&DangerousQueryKind::UpdateNoWhere)
+            );
+        }
+
+        // C-6: both checks clear for safe mutation
+        #[test]
+        fn c6_update_with_filter_and_literal_is_safe() {
+            let spec = VisualMutationSpec {
+                from: table_ref("users"),
+                filter: Some(filter_id_eq_1()),
+                kind: MutationKind::Update {
+                    assignments: vec![literal_assignment("name")],
+                },
+            };
+            let result = classify_visual_mutation(&spec);
+            assert!(result.spec_kinds.is_empty());
+            assert!(!result.requires_hard_confirm);
+        }
+
+        // RawExpressionInSet when any assignment uses Expression variant
+        #[test]
+        fn raw_expression_triggers_raw_expression_in_set() {
+            let spec = VisualMutationSpec {
+                from: table_ref("products"),
+                filter: Some(filter_id_eq_1()),
+                kind: MutationKind::Update {
+                    assignments: vec![expr_assignment("price")],
+                },
+            };
+            let result = classify_visual_mutation(&spec);
+            assert!(
+                result
+                    .spec_kinds
+                    .contains(&DangerousQueryKind::RawExpressionInSet)
+            );
+            assert!(
+                result
+                    .effective
+                    .contains(&DangerousQueryKind::RawExpressionInSet)
+            );
+            assert!(result.requires_hard_confirm);
+        }
+
+        // RawExpressionInSet forces hard confirm even when filter is present
+        #[test]
+        fn raw_expression_with_filter_still_hard_confirm() {
+            let spec = VisualMutationSpec {
+                from: table_ref("products"),
+                filter: Some(filter_id_eq_1()),
+                kind: MutationKind::Update {
+                    assignments: vec![literal_assignment("name"), expr_assignment("computed")],
+                },
+            };
+            let result = classify_visual_mutation(&spec);
+            assert!(result.requires_hard_confirm);
+        }
+
+        // effective contains union of spec_kinds (no text_kinds for visual specs)
+        #[test]
+        fn effective_is_superset_of_spec_kinds() {
+            let spec = VisualMutationSpec {
+                from: table_ref("orders"),
+                filter: None,
+                kind: MutationKind::Delete,
+            };
+            let result = classify_visual_mutation(&spec);
+            for k in &result.spec_kinds {
+                assert!(
+                    result.effective.contains(k),
+                    "effective must include all spec_kinds"
+                );
+            }
+        }
+
+        // Delete with no filter is hard confirm
+        #[test]
+        fn delete_no_where_requires_hard_confirm() {
+            let spec = VisualMutationSpec {
+                from: table_ref("orders"),
+                filter: None,
+                kind: MutationKind::Delete,
+            };
+            let result = classify_visual_mutation(&spec);
+            assert!(result.requires_hard_confirm);
+        }
+
+        // Update with no filter is hard confirm
+        #[test]
+        fn update_no_where_requires_hard_confirm() {
+            let spec = VisualMutationSpec {
+                from: table_ref("users"),
+                filter: None,
+                kind: MutationKind::Update {
+                    assignments: vec![literal_assignment("status")],
+                },
+            };
+            let result = classify_visual_mutation(&spec);
+            assert!(result.requires_hard_confirm);
+        }
     }
 }

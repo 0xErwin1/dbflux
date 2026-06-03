@@ -54,7 +54,7 @@ pub use pane::{BoxedDocEventCallback, CodeSessionTabSnapshot, PaneHandle};
 pub use result_view::ResultViewMode;
 pub use tab_bar::{TabBar, TabBarEvent};
 pub use tab_manager::{Tab, TabManager, TabManagerEvent};
-pub use task_runner::DocumentTaskRunner;
+pub use task_runner::{DocumentTaskRunner, MutationCancelHandle};
 pub use types::{
     DataSourceKind, DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot, DocumentState,
 };

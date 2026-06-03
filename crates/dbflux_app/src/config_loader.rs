@@ -1493,6 +1493,7 @@ fn load_profiles(
                 value_refs: value_refs_map,
                 access_kind,
                 mcp_governance,
+                read_only_flag: false,
             })
         })
         .collect()

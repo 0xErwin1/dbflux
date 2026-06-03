@@ -1,5 +1,7 @@
 mod context_menu;
 pub(crate) mod filter_bar;
+pub(crate) mod mutation_confirm;
+pub(crate) mod mutation_executor;
 mod mutations;
 mod navigation;
 mod query;
@@ -34,6 +36,9 @@ use dbflux_components::modals::cell_editor::{
 };
 use dbflux_components::modals::document_preview::{
     DocumentPreviewClosedEvent, DocumentPreviewModal, DocumentPreviewSaveEvent,
+};
+use dbflux_components::modals::{
+    ModalMutationConfirm, ModalMutationConfirmHard, MutationConfirmOutcome,
 };
 use dbflux_core::{
     CollectionRef, DatabaseCategory, OrderByColumn, Pagination, QueryResult, RefreshPolicy,
@@ -527,6 +532,31 @@ pub struct DataGridPanel {
     /// When `true`, the raw filter input row is hidden in the toolbar because
     /// the builder is open and owns query composition for this panel.
     pub(crate) filter_input_hidden: bool,
+
+    /// Controls which mutation confirmation modal to open on the next render cycle.
+    ///
+    /// Set by `on_mutation_run_requested`; read and taken by the render cycle.
+    pub(crate) pending_mutation_modal:
+        Option<crate::data_grid_panel::mutation_confirm::PendingMutationModal>,
+
+    /// Spec + opts held while the confirmation modal is open.
+    ///
+    /// Cleared when the user confirms (executor is dispatched) or cancels.
+    pub(crate) pending_mutation_exec: Option<PendingMutationExec>,
+
+    /// Mutation confirmation modal (light variant) for small row counts.
+    pub(crate) mutation_confirm_light: Entity<dbflux_components::modals::ModalMutationConfirm>,
+
+    /// Mutation confirmation modal (hard variant) for large row counts / DELETE.
+    pub(crate) mutation_confirm_hard: Entity<dbflux_components::modals::ModalMutationConfirmHard>,
+}
+
+/// Pending mutation execution — holds the spec and options while the
+/// confirmation modal is open so the confirm handler can dispatch the executor.
+pub(crate) struct PendingMutationExec {
+    pub(crate) spec: dbflux_core::VisualMutationSpec,
+    pub(crate) opts: crate::data_grid_panel::mutation_executor::MutationExecOptions,
+    pub(crate) profile_id: uuid::Uuid,
 }
 
 /// State held while the "Save chart" name-prompt overlay is visible for a
@@ -652,7 +682,13 @@ impl DataGridPanel {
                 let fetch_result = match result {
                     Ok(r) => r,
                     Err(e) => {
-                        log::error!("[PK] Failed to fetch table details: {}", e);
+                        dbflux_ui_base::user_error::report_error(
+                            dbflux_ui_base::user_error::UserFacingError::new(
+                                dbflux_ui_base::user_error::ErrorKind::Driver,
+                                format!("Failed to fetch table details for PK: {}", e),
+                            ),
+                            cx,
+                        );
                         return;
                     }
                 };
@@ -875,6 +911,29 @@ impl DataGridPanel {
         )
         .detach();
 
+        let mutation_confirm_light =
+            cx.new(|_cx| dbflux_components::modals::ModalMutationConfirm::new(window, _cx));
+        let mutation_confirm_hard =
+            cx.new(|cx| dbflux_components::modals::ModalMutationConfirmHard::new(window, cx));
+
+        cx.subscribe_in(
+            &mutation_confirm_light,
+            window,
+            |this, _, outcome: &dbflux_components::modals::MutationConfirmOutcome, window, cx| {
+                this.handle_mutation_confirm_outcome(outcome.clone(), window, cx);
+            },
+        )
+        .detach();
+
+        cx.subscribe_in(
+            &mutation_confirm_hard,
+            window,
+            |this, _, outcome: &dbflux_components::modals::MutationConfirmOutcome, window, cx| {
+                this.handle_mutation_confirm_outcome(outcome.clone(), window, cx);
+            },
+        )
+        .detach();
+
         let view_config = super::data_view::DataViewConfig::for_source(&source);
         let result_view_mode = ResultViewMode::Table;
 
@@ -1009,6 +1068,10 @@ impl DataGridPanel {
             builder_panel: None,
             _builder_subscriptions: Vec::new(),
             filter_input_hidden: false,
+            pending_mutation_modal: None,
+            pending_mutation_exec: None,
+            mutation_confirm_light,
+            mutation_confirm_hard,
         }
     }
 
@@ -2439,7 +2502,7 @@ impl DataGridPanel {
             .map(|c| c.connection.clone());
 
         let generate_preview: Box<dyn Fn(&VisualQuerySpec) -> String + Send + Sync> =
-            if let Some(conn) = connection_arc {
+            if let Some(conn) = connection_arc.clone() {
                 Box::new(move |spec: &VisualQuerySpec| {
                     conn.query_generator()
                         .and_then(|qgen| qgen.generate_select(spec).ok().flatten())
@@ -2449,6 +2512,28 @@ impl DataGridPanel {
             } else {
                 Box::new(|_spec: &VisualQuerySpec| String::new())
             };
+
+        let generate_mutation_preview: Box<
+            dyn Fn(&dbflux_core::VisualMutationSpec) -> String + Send + Sync,
+        > = if let Some(conn) = connection_arc {
+            Box::new(move |spec: &dbflux_core::VisualMutationSpec| {
+                conn.query_generator()
+                    .and_then(|qgen| {
+                        use dbflux_core::MutationKind;
+                        match &spec.kind {
+                            MutationKind::Delete => {
+                                qgen.generate_delete_from_spec(spec).ok().map(|m| m.sql)
+                            }
+                            MutationKind::Update { .. } => {
+                                qgen.generate_update_from_spec(spec).ok().map(|m| m.sql)
+                            }
+                        }
+                    })
+                    .unwrap_or_default()
+            })
+        } else {
+            Box::new(|_spec: &dbflux_core::VisualMutationSpec| String::new())
+        };
 
         let available_columns: Vec<String> =
             self.result.columns.iter().map(|c| c.name.clone()).collect();
@@ -2471,6 +2556,7 @@ impl DataGridPanel {
                     self.app_state.clone(),
                     profile_id,
                     generate_preview,
+                    generate_mutation_preview,
                     window,
                     cx,
                 )
@@ -3012,6 +3098,15 @@ impl DataGridPanel {
             BuilderEvent::ImportRequested { source_id } => {
                 self.import_builder_query(source_id.clone(), cx);
             }
+
+            BuilderEvent::MutationRunRequested { spec, opts } => {
+                self.on_mutation_run_requested(
+                    spec.as_ref().clone(),
+                    opts.as_ref().clone(),
+                    window,
+                    cx,
+                );
+            }
         }
     }
 
@@ -3145,6 +3240,323 @@ impl DataGridPanel {
         let connected = state.connections().get(&profile_id)?;
 
         connected.connection.query_generator()
+    }
+
+    /// Handles `BuilderEvent::MutationRunRequested`.
+    ///
+    /// 1. Reads `mutation_policy` from `ConnectedProfile`. `ReadOnly` → error toast; returns.
+    /// 2. Generates the SQL preview via the driver's `QueryGenerator`.
+    /// 3. Fetches sample rows from the connection (2s deadline, synchronous on background thread).
+    /// 4. Builds `PendingMutationModal` and stores it; the render cycle will open the modal.
+    pub(crate) fn on_mutation_run_requested(
+        &mut self,
+        spec: dbflux_core::VisualMutationSpec,
+        opts: crate::data_grid_panel::mutation_executor::MutationExecOptions,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use dbflux_core::MutationPolicy;
+
+        let profile_id = match &self.source {
+            DataSource::Table { profile_id, .. } => *profile_id,
+            _ => return,
+        };
+
+        let (policy, sql_preview, connection) = {
+            let state = self.app_state.read(cx);
+            let connected = match state.connections().get(&profile_id) {
+                Some(c) => c,
+                None => return,
+            };
+
+            let policy = connected.mutation_policy;
+
+            let sql_preview = connected
+                .connection
+                .query_generator()
+                .and_then(|qgen| {
+                    use dbflux_core::MutationKind;
+                    match &spec.kind {
+                        MutationKind::Delete => {
+                            qgen.generate_delete_from_spec(&spec).ok().map(|m| m.sql)
+                        }
+                        MutationKind::Update { .. } => {
+                            qgen.generate_update_from_spec(&spec).ok().map(|m| m.sql)
+                        }
+                    }
+                })
+                .unwrap_or_else(|| "<SQL preview unavailable>".to_string());
+
+            let connection = Arc::clone(&connected.connection);
+
+            (policy, sql_preview, connection)
+        };
+
+        // Gate on mutation policy — state borrow has been released above.
+        match policy {
+            MutationPolicy::ReadOnly => {
+                dbflux_ui_base::user_error::report_error(
+                    dbflux_ui_base::user_error::UserFacingError::new(
+                        dbflux_ui_base::user_error::ErrorKind::User,
+                        "This connection is read-only. Mutations are not allowed.",
+                    ),
+                    cx,
+                );
+                return;
+            }
+            MutationPolicy::ApprovalRequired => {
+                #[cfg(feature = "mcp")]
+                {
+                    use dbflux_policy::ExecutionClassification;
+                    let spec_json = serde_json::to_value(&spec).unwrap_or_default();
+                    let connection_id = profile_id.to_string();
+                    self.app_state.update(cx, |app, _| {
+                        app.request_mcp_execution(
+                            "user".to_string(),
+                            connection_id,
+                            "mutation.run".to_string(),
+                            ExecutionClassification::Write,
+                            spec_json,
+                        );
+                    });
+                    dbflux_ui_base::toast::Toast::info("Mutation queued for approval.").push(cx);
+                    return;
+                }
+
+                #[cfg(not(feature = "mcp"))]
+                {
+                    dbflux_ui_base::user_error::report_error(
+                        dbflux_ui_base::user_error::UserFacingError::new(
+                            dbflux_ui_base::user_error::ErrorKind::User,
+                            "Mutations require approval for this connection. Enable the MCP feature to activate the approval workflow.",
+                        ),
+                        cx,
+                    );
+                    return;
+                }
+            }
+            MutationPolicy::Allowed => {}
+        }
+
+        // Fetch sample rows synchronously on background thread (2s deadline).
+        let table_name = spec.from.name.clone();
+        let schema_name = spec.from.schema.clone();
+        let filter = spec.filter.clone();
+
+        let (sample_columns, sample_rows) =
+            crate::data_grid_panel::mutation_confirm::fetch_sample_rows(
+                connection,
+                &table_name,
+                &filter,
+                schema_name.as_deref(),
+            );
+
+        let sample_rows_opt = if sample_rows.is_empty() {
+            None
+        } else {
+            Some(sample_rows)
+        };
+
+        let modal = crate::data_grid_panel::mutation_confirm::build_pending_modal(
+            &spec,
+            sql_preview,
+            None,
+            sample_columns,
+            sample_rows_opt,
+        );
+
+        self.pending_mutation_exec = Some(PendingMutationExec {
+            spec,
+            opts,
+            profile_id,
+        });
+        self.pending_mutation_modal = Some(modal);
+        cx.notify();
+    }
+
+    /// Called when either `ModalMutationConfirm` or `ModalMutationConfirmHard` emits
+    /// a `MutationConfirmOutcome` (Confirmed or Cancelled).
+    ///
+    /// On `Confirmed`: takes `pending_mutation_exec`, dispatches `MutationExecutor`
+    /// to a background thread, and emits audit events via `EventSink`.
+    /// On `Cancelled`: clears `pending_mutation_exec` with no side effects.
+    fn handle_mutation_confirm_outcome(
+        &mut self,
+        outcome: MutationConfirmOutcome,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let pending = match self.pending_mutation_exec.take() {
+            Some(p) => p,
+            None => return,
+        };
+
+        if matches!(outcome, MutationConfirmOutcome::Cancelled) {
+            return;
+        }
+
+        let (connection, event_sink, policy) = {
+            let state = self.app_state.read(cx);
+            let connected = match state.connections().get(&pending.profile_id) {
+                Some(c) => c,
+                None => {
+                    dbflux_ui_base::user_error::report_error(
+                        dbflux_ui_base::user_error::UserFacingError::new(
+                            dbflux_ui_base::user_error::ErrorKind::Driver,
+                            "Connection not found — cannot execute mutation.",
+                        ),
+                        cx,
+                    );
+                    return;
+                }
+            };
+
+            let connection = Arc::clone(&connected.connection);
+            let event_sink: Option<Arc<dyn dbflux_core::EventSink>> =
+                Some(Arc::new(state.audit_service().clone()) as Arc<dyn dbflux_core::EventSink>);
+            let policy = connected.mutation_policy;
+
+            (connection, event_sink, policy)
+        };
+
+        #[cfg(feature = "mcp")]
+        if matches!(policy, dbflux_core::MutationPolicy::ApprovalRequired) {
+            use dbflux_policy::ExecutionClassification;
+            let spec_json = serde_json::to_value(&pending.spec).unwrap_or_default();
+            let connection_id = pending.profile_id.to_string();
+            self.app_state.update(cx, |app, _| {
+                app.request_mcp_execution(
+                    "user".to_string(),
+                    connection_id,
+                    "mutation.run".to_string(),
+                    ExecutionClassification::Write,
+                    spec_json,
+                );
+            });
+            dbflux_ui_base::toast::Toast::info("Mutation queued for approval.").push(cx);
+            return;
+        }
+
+        let deps = crate::data_grid_panel::mutation_executor::MutationDeps {
+            connection,
+            event_sink,
+            policy,
+        };
+
+        let spec = pending.spec;
+        let opts = pending.opts;
+
+        let is_chunked = matches!(
+            opts.mode,
+            crate::data_grid_panel::mutation_executor::ExecutionMode::ChunkedTransaction
+        );
+
+        let table_name = spec.from.name.clone();
+
+        if is_chunked {
+            let pk_columns: Vec<String> = match &self.source {
+                DataSource::Table { .. } => self.pk_columns.clone(),
+                _ => vec![],
+            };
+
+            if pk_columns.is_empty() {
+                dbflux_ui_base::user_error::report_error(
+                    dbflux_ui_base::user_error::UserFacingError::new(
+                        dbflux_ui_base::user_error::ErrorKind::User,
+                        "Chunked mode requires a primary key — none found for this table.",
+                    ),
+                    cx,
+                );
+                return;
+            }
+
+            let (_task_id, cancel_handle) = self.runner.start_mutation(
+                dbflux_core::TaskKind::Query,
+                "Visual mutation (chunked)",
+                cx,
+            );
+
+            cx.spawn(async move |_this, cx| {
+                use crate::data_grid_panel::mutation_executor::{
+                    MutationExecutor, MutationOutcome,
+                };
+                use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
+
+                let result = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let executor = MutationExecutor::new(spec, opts, deps);
+                        let pk_refs: Vec<&str> = pk_columns.iter().map(|s| s.as_str()).collect();
+                        executor.run_chunked_tx(&pk_refs, &cancel_handle)
+                    })
+                    .await;
+
+                match result {
+                    Err(e) => {
+                        report_error_async(
+                            UserFacingError::new(
+                                ErrorKind::Driver,
+                                format!("Chunked mutation on '{}' failed: {}", table_name, e),
+                            ),
+                            cx,
+                        );
+                    }
+                    Ok(MutationOutcome::Success { rows_affected }) => {
+                        cx.update(|cx| {
+                            dbflux_ui_base::toast::Toast::success(format!(
+                                "Mutation completed: {} row{} affected",
+                                rows_affected,
+                                if rows_affected == 1 { "" } else { "s" }
+                            ))
+                            .push(cx);
+                        })
+                        .ok();
+                    }
+                    Ok(_) => {}
+                }
+            })
+            .detach();
+        } else {
+            cx.spawn(async move |_this, cx| {
+                use crate::data_grid_panel::mutation_executor::{
+                    MutationExecutor, MutationOutcome,
+                };
+                use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
+
+                let result = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let executor = MutationExecutor::new(spec, opts, deps);
+                        executor.run_single_tx()
+                    })
+                    .await;
+
+                match result {
+                    Err(e) => {
+                        report_error_async(
+                            UserFacingError::new(
+                                ErrorKind::Driver,
+                                format!("Mutation on '{}' failed: {}", table_name, e),
+                            ),
+                            cx,
+                        );
+                    }
+                    Ok(MutationOutcome::Success { rows_affected }) => {
+                        cx.update(|cx| {
+                            dbflux_ui_base::toast::Toast::success(format!(
+                                "Mutation completed: {} row{} affected",
+                                rows_affected,
+                                if rows_affected == 1 { "" } else { "s" }
+                            ))
+                            .push(cx);
+                        })
+                        .ok();
+                    }
+                    Ok(_) => {}
+                }
+            })
+            .detach();
+        }
     }
 }
 
@@ -3906,6 +4318,8 @@ mod tests {
                     ssl_modes: None,
                     ssl_cert_fields: None,
                     classification_override: None,
+                    default_chunk_size: None,
+                    supports_lock_timeout: false,
                 })
             }
 
@@ -3968,6 +4382,7 @@ mod tests {
                     profile,
                     connection: Arc::new(StubSqlConnection),
                     schema: None,
+                    mutation_policy: dbflux_core::MutationPolicy::default(),
                     database_schemas: Default::default(),
                     table_details: Default::default(),
                     collection_children: Default::default(),
@@ -4520,5 +4935,182 @@ mod tests {
                 );
             });
         });
+    }
+
+    // H-3 — ApprovalRequired does not open a confirmation modal (spec DR-12.4)
+    //
+    // On non-MCP builds the policy gate shows an error toast and returns early.
+    // On MCP builds it enqueues via ApprovalService and returns early.
+    // In either case `pending_mutation_modal` must remain None.
+    #[gpui::test]
+    fn h3_approval_required_does_not_open_confirmation_modal(cx: &mut TestAppContext) {
+        use dbflux_core::{
+            ConnectedProfile, Connection, DatabaseCategory, DbConfig, DbError, DbKind,
+            DriverCapabilities, DriverMetadata, Icon as CoreIcon, MutationPolicy, QueryLanguage,
+            QueryResult as CoreQueryResult, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
+        };
+        use std::path::PathBuf;
+
+        init_test_runtime(cx);
+
+        struct StubSqlConnection2;
+
+        impl Connection for StubSqlConnection2 {
+            fn metadata(&self) -> &DriverMetadata {
+                static META: std::sync::OnceLock<DriverMetadata> = std::sync::OnceLock::new();
+                META.get_or_init(|| DriverMetadata {
+                    id: "stub-sql-2".to_string(),
+                    display_name: "Stub SQL 2".to_string(),
+                    description: "test stub for H-3".to_string(),
+                    category: DatabaseCategory::Relational,
+                    deployment_class: None,
+                    query_language: QueryLanguage::Sql,
+                    capabilities: DriverCapabilities::empty(),
+                    default_port: None,
+                    uri_scheme: "stub2".to_string(),
+                    icon: CoreIcon::Database,
+                    syntax: None,
+                    query: None,
+                    mutation: None,
+                    ddl: None,
+                    transactions: None,
+                    limits: None,
+                    ssl_modes: None,
+                    ssl_cert_fields: None,
+                    classification_override: None,
+                    default_chunk_size: None,
+                    supports_lock_timeout: false,
+                })
+            }
+
+            fn kind(&self) -> DbKind {
+                DbKind::Postgres
+            }
+
+            fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+                SchemaLoadingStrategy::SingleDatabase
+            }
+
+            fn dialect(&self) -> &dyn SqlDialect {
+                unimplemented!("StubSqlConnection2::dialect not needed")
+            }
+
+            fn ping(&self) -> Result<(), DbError> {
+                Ok(())
+            }
+
+            fn close(&mut self) -> Result<(), DbError> {
+                Ok(())
+            }
+
+            fn execute(
+                &self,
+                _req: &dbflux_core::QueryRequest,
+            ) -> Result<CoreQueryResult, DbError> {
+                Err(DbError::NotSupported("stub2".to_string()))
+            }
+
+            fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), DbError> {
+                Ok(())
+            }
+
+            fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+                Ok(SchemaSnapshot::default())
+            }
+        }
+
+        let profile_id = Uuid::new_v4();
+
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime =
+                    StorageRuntime::in_memory().expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+            })
+        });
+
+        cx.update(|cx| {
+            app_state.update(cx, |app, _cx| {
+                let profile = dbflux_core::ConnectionProfile::new(
+                    "approval-test",
+                    DbConfig::SQLite {
+                        path: PathBuf::from(":memory:"),
+                        connection_id: None,
+                    },
+                );
+                let connected = ConnectedProfile {
+                    profile,
+                    connection: Arc::new(StubSqlConnection2),
+                    schema: None,
+                    mutation_policy: MutationPolicy::ApprovalRequired,
+                    database_schemas: Default::default(),
+                    table_details: Default::default(),
+                    collection_children: Default::default(),
+                    schema_types: Default::default(),
+                    schema_indexes: Default::default(),
+                    schema_foreign_keys: Default::default(),
+                    schema_routines: Default::default(),
+                    dependents_cache: Default::default(),
+                    active_database: None,
+                    redis_key_cache: Default::default(),
+                    database_connections: Default::default(),
+                    proxy_tunnel: None,
+                };
+                app.connections_mut().insert(profile_id, connected);
+            });
+        });
+
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id,
+                    database: Some("test".to_string()),
+                    table: TableRef::with_schema("public", "orders"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+
+                DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx)
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        let spec = dbflux_core::VisualMutationSpec {
+            from: TableRef {
+                schema: Some("public".to_string()),
+                name: "orders".to_string(),
+            },
+            filter: None,
+            kind: dbflux_core::MutationKind::Delete,
+        };
+
+        let opts =
+            crate::data_grid_panel::mutation_executor::MutationExecOptions::single_transaction();
+
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| {
+                panel.on_mutation_run_requested(spec, opts, window, cx);
+            });
+        });
+
+        let pending_modal_is_none =
+            window.update(|_, app| panel.read(app).pending_mutation_modal.is_none());
+
+        assert!(
+            pending_modal_is_none,
+            "ApprovalRequired must not open a confirmation modal — \
+             pending_mutation_modal must remain None"
+        );
     }
 }

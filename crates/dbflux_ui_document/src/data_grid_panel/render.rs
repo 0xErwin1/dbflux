@@ -113,6 +113,22 @@ impl Render for DataGridPanel {
             });
         }
 
+        if let Some(pending_modal) = self.pending_mutation_modal.take() {
+            use crate::data_grid_panel::mutation_confirm::PendingMutationModal;
+            match pending_modal {
+                PendingMutationModal::Light(req) => {
+                    self.mutation_confirm_light.update(cx, |modal, cx| {
+                        modal.open(req, cx);
+                    });
+                }
+                PendingMutationModal::Hard(req) => {
+                    self.mutation_confirm_hard.update(cx, |modal, cx| {
+                        modal.open(req, window, cx);
+                    });
+                }
+            }
+        }
+
         // Clone theme colors to avoid borrow conflicts with cx
         let theme = cx.theme().clone();
 
@@ -416,6 +432,13 @@ impl Render for DataGridPanel {
             // Document preview modal overlay
             .when(self.document_preview_modal.read(cx).is_visible(), |d| {
                 d.child(self.document_preview_modal.clone())
+            })
+            // Mutation confirmation modal overlays
+            .when(self.mutation_confirm_light.read(cx).is_visible(), |d| {
+                d.child(self.mutation_confirm_light.clone())
+            })
+            .when(self.mutation_confirm_hard.read(cx).is_visible(), |d| {
+                d.child(self.mutation_confirm_hard.clone())
             })
     }
 }

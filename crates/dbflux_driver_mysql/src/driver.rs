@@ -182,6 +182,8 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
         client_cert: true,
     }),
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
 });
 
 /// MariaDB driver metadata.
@@ -337,6 +339,8 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
         client_cert: true,
     }),
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
 });
 
 /// MySQL/MariaDB SQL dialect implementation.

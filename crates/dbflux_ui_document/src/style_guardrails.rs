@@ -160,4 +160,70 @@ mod style_guardrails {
             violations.join("\n")
         );
     }
+
+    /// Mutation code must not hard-code driver-specific string literals.
+    ///
+    /// Scans files under `data_grid_panel/mutation_*` and
+    /// `query_builder/mutation_state.rs` / `sections/assignments.rs` /
+    /// `sections/execution.rs` for driver-id string literals like `"postgres"`,
+    /// `"mysql"`, `"sqlite"`, `"mssql"`.
+    ///
+    /// These must never appear because mutation logic adapts through
+    /// `DriverCapabilities`, `QueryLanguage`, and `MutationPolicy` only.
+    /// (Spec scenario: I-3, DR-13.2)
+    #[test]
+    fn mutation_code_has_no_driver_id_literals() {
+        let mutation_path_fragments: &[&str] = &[
+            "mutation_executor.rs",
+            "mutation_confirm.rs",
+            "mutation_state.rs",
+            "sections/assignments.rs",
+            "sections/execution.rs",
+        ];
+
+        let driver_id_literals: &[&str] = &["\"postgres\"", "\"mysql\"", "\"sqlite\"", "\"mssql\""];
+
+        let src_root = PathBuf::from(SRC_DIR);
+        let mut files = Vec::new();
+        collect_rust_files(&src_root, &mut files);
+
+        let mut violations = Vec::new();
+
+        for file in &files {
+            let path_str = file.to_string_lossy();
+            let is_mutation_file = mutation_path_fragments
+                .iter()
+                .any(|frag| path_str.contains(frag));
+            if !is_mutation_file {
+                continue;
+            }
+
+            let Ok(content) = fs::read_to_string(file) else {
+                continue;
+            };
+
+            for (line_number, line) in content.lines().enumerate() {
+                if is_line_exempt(line) {
+                    continue;
+                }
+                for literal in driver_id_literals {
+                    if line.contains(literal) {
+                        violations.push(format!(
+                            "{}:{}: found driver-id literal {} in mutation code — adapt via DriverCapabilities or QueryLanguage instead",
+                            file.display(),
+                            line_number + 1,
+                            literal
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            violations.is_empty(),
+            "Mutation code must not contain driver-id string literals (I-3, DR-13.2):\n{}",
+            violations.join("\n")
+        );
+    }
 }

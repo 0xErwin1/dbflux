@@ -381,6 +381,24 @@ impl Default for ToastHost {
     }
 }
 
+#[cfg(test)]
+impl ToastHost {
+    /// Returns the number of currently-visible toasts. For use in tests only.
+    pub fn toast_count(&self) -> usize {
+        self.toasts.len()
+    }
+
+    /// Returns the title of the most-recently-pushed toast, if any. For use in tests only.
+    pub fn last_toast_title(&self) -> Option<String> {
+        self.toasts.last().map(|t| t.title.to_string())
+    }
+
+    /// Returns the `ToastKind` of the most-recently-pushed toast, if any. For use in tests only.
+    pub fn last_toast_kind(&self) -> Option<ToastKind> {
+        self.toasts.last().map(|t| t.kind)
+    }
+}
+
 impl Render for ToastHost {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.toasts.is_empty() {

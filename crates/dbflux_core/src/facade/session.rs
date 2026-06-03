@@ -53,6 +53,8 @@ impl DangerousQuerySuppressions {
             DangerousQueryKind::RedisFlushDb => self.redis_flush_db,
             DangerousQueryKind::RedisMultiDelete => self.redis_multi_delete,
             DangerousQueryKind::RedisKeysPattern => self.redis_keys_pattern,
+            // Raw expression in SET is never suppressible — always requires confirmation.
+            DangerousQueryKind::RawExpressionInSet => false,
         }
     }
 
@@ -72,6 +74,8 @@ impl DangerousQuerySuppressions {
             DangerousQueryKind::RedisFlushDb => self.redis_flush_db = true,
             DangerousQueryKind::RedisMultiDelete => self.redis_multi_delete = true,
             DangerousQueryKind::RedisKeysPattern => self.redis_keys_pattern = true,
+            // Raw expression in SET cannot be suppressed per-session.
+            DangerousQueryKind::RawExpressionInSet => {}
         }
     }
 }

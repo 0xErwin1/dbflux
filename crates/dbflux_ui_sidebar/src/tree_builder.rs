@@ -3074,6 +3074,8 @@ mod tests {
                     ssl_modes: None,
                     ssl_cert_fields: None,
                     classification_override: None,
+                    default_chunk_size: None,
+                    supports_lock_timeout: false,
                 },
             }
         }
@@ -3139,6 +3141,7 @@ mod tests {
             ),
             connection: Arc::new(CapabilityConnection::with_capabilities(capabilities)),
             schema: None,
+            mutation_policy: dbflux_core::MutationPolicy::default(),
             database_schemas: HashMap::new(),
             table_details: HashMap::new(),
             collection_children: HashMap::new(),

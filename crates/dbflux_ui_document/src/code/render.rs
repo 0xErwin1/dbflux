@@ -680,6 +680,7 @@ impl CodeDocument {
                     DangerousQueryKind::RedisFlushDb => "FLUSHDB",
                     DangerousQueryKind::RedisMultiDelete => "DEL (multiple keys)",
                     DangerousQueryKind::RedisKeysPattern => "KEYS pattern",
+                    DangerousQueryKind::RawExpressionInSet => "Raw SQL expression in SET",
                 };
                 (title, p.kind.message())
             })

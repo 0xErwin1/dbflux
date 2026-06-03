@@ -1,4 +1,6 @@
-use dbflux_core::VisualQuerySpec;
+use dbflux_core::{VisualMutationSpec, VisualQuerySpec};
+
+use crate::data_grid_panel::mutation_executor::MutationExecOptions;
 
 /// Events emitted by `QueryBuilderPanel` to signal state changes and user actions.
 ///
@@ -12,6 +14,16 @@ pub enum BuilderEvent {
 
     /// The user pressed Run or Cmd+Enter.
     RunRequested,
+
+    /// The user pressed Run from UPDATE or DELETE mode.
+    ///
+    /// Carries the fully-built mutation spec and the execution options
+    /// chosen in the Execution section. `DataGridPanel` handles this event
+    /// by constructing a `MutationExecutor` and driving the confirmation flow.
+    MutationRunRequested {
+        spec: Box<VisualMutationSpec>,
+        opts: Box<MutationExecOptions>,
+    },
 
     /// The user pressed Open in Editor or Cmd+E.
     OpenInEditorRequested,
@@ -27,4 +39,38 @@ pub enum BuilderEvent {
 
     /// The user chose to import a saved query to the current profile.
     ImportRequested { source_id: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dbflux_core::{MutationKind, TableRef};
+
+    use crate::data_grid_panel::mutation_executor::ExecutionMode;
+
+    #[test]
+    fn mutation_run_requested_variant_exists_and_fields_accessible() {
+        let spec = VisualMutationSpec {
+            from: TableRef {
+                schema: None,
+                name: "orders".to_string(),
+            },
+            filter: None,
+            kind: MutationKind::Delete,
+        };
+        let opts = MutationExecOptions::single_transaction();
+
+        let event = BuilderEvent::MutationRunRequested {
+            spec: Box::new(spec.clone()),
+            opts: Box::new(opts),
+        };
+
+        match event {
+            BuilderEvent::MutationRunRequested { spec: s, opts: o } => {
+                assert_eq!(s.from.name, "orders");
+                assert_eq!(o.mode, ExecutionMode::SingleTransaction);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
 }

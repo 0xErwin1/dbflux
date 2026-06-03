@@ -1679,6 +1679,22 @@ pub struct DriverMetadata {
     /// Note: Not serialized - must be re-established on deserialization.
     #[serde(skip)]
     pub classification_override: Option<Box<dyn OperationClassifier>>,
+
+    /// Default number of rows per chunk for `ChunkedTransaction` mutation mode.
+    ///
+    /// `None` means the driver defers to the UI default (5,000). Drivers with
+    /// known performance characteristics (e.g. SQLite embedded, MSSQL row-locks)
+    /// should set an explicit value.
+    #[serde(default)]
+    pub default_chunk_size: Option<usize>,
+
+    /// Whether the driver supports a lock-timeout hint before DML execution.
+    ///
+    /// When `true`, the execution section exposes a lock-timeout input. When
+    /// `false`, the input is hidden. Postgres, MySQL, and MSSQL support this;
+    /// SQLite does not.
+    #[serde(default)]
+    pub supports_lock_timeout: bool,
 }
 
 impl Debug for DriverMetadata {
@@ -1703,6 +1719,8 @@ impl Debug for DriverMetadata {
             .field("ssl_modes", &self.ssl_modes)
             .field("ssl_cert_fields", &self.ssl_cert_fields)
             .field("classification_override", &"...")
+            .field("default_chunk_size", &self.default_chunk_size)
+            .field("supports_lock_timeout", &self.supports_lock_timeout)
             .finish()
     }
 }
@@ -1731,6 +1749,8 @@ impl Clone for DriverMetadata {
             // Note: classification_override is not cloned as it requires
             // concrete type knowledge. Use None after clone.
             classification_override: None,
+            default_chunk_size: self.default_chunk_size,
+            supports_lock_timeout: self.supports_lock_timeout,
         }
     }
 }
@@ -1817,6 +1837,8 @@ pub struct DriverMetadataBuilder {
     ssl_modes: Option<&'static [SslModeOption]>,
     ssl_cert_fields: Option<SslCertFields>,
     classification_override: Option<Box<dyn OperationClassifier>>,
+    default_chunk_size: Option<usize>,
+    supports_lock_timeout: bool,
 }
 
 impl DriverMetadataBuilder {
@@ -1847,6 +1869,8 @@ impl DriverMetadataBuilder {
             ssl_modes: None,
             ssl_cert_fields: None,
             classification_override: None,
+            default_chunk_size: None,
+            supports_lock_timeout: false,
         }
     }
 
@@ -1968,7 +1992,21 @@ impl DriverMetadataBuilder {
             ssl_modes: self.ssl_modes,
             ssl_cert_fields: self.ssl_cert_fields,
             classification_override: self.classification_override,
+            default_chunk_size: self.default_chunk_size,
+            supports_lock_timeout: self.supports_lock_timeout,
         }
+    }
+
+    /// Set the default chunk size for `ChunkedTransaction` mode.
+    pub fn default_chunk_size(mut self, size: usize) -> Self {
+        self.default_chunk_size = Some(size);
+        self
+    }
+
+    /// Indicate that this driver supports a lock-timeout hint.
+    pub fn supports_lock_timeout(mut self, supported: bool) -> Self {
+        self.supports_lock_timeout = supported;
+        self
     }
 }
 
@@ -2990,5 +3028,34 @@ mod tests {
                 "CHART_AUTHORING bit (1 << 53) collides with existing flag '{name}'"
             );
         }
+    }
+
+    // T-19 — [RED] Tests for DriverMetadata new fields (design §4, §6, R-D3)
+    #[test]
+    fn driver_metadata_has_default_chunk_size_field() {
+        let meta = DriverMetadataBuilder::new(
+            "test",
+            "Test",
+            DatabaseCategory::Relational,
+            QueryLanguage::Sql,
+        )
+        .build();
+
+        // Field must exist and be accessible; default is None
+        let _: Option<usize> = meta.default_chunk_size;
+    }
+
+    #[test]
+    fn driver_metadata_has_supports_lock_timeout_field() {
+        let meta = DriverMetadataBuilder::new(
+            "test",
+            "Test",
+            DatabaseCategory::Relational,
+            QueryLanguage::Sql,
+        )
+        .build();
+
+        // Field must exist and be accessible; default is false
+        let _: bool = meta.supports_lock_timeout;
     }
 }

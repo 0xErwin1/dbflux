@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+use crate::query::table_browser::TableRef;
+
 /// Top-level spec; what the builder owns and what the generator renders.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VisualQuerySpec {
@@ -309,6 +311,91 @@ pub enum AliasOrigin {
 pub enum SpecError {
     #[error("source table name must not be empty")]
     MissingSourceTable,
+}
+
+// =============================================================================
+// Visual Mutation types — UPDATE / DELETE builder
+// =============================================================================
+
+/// A scalar literal value used in SET assignments.
+///
+/// Mirrors `LiteralValue` from the SELECT builder but kept distinct so the two
+/// paths can evolve independently.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ScalarLiteral {
+    Text(String),
+    Integer(i64),
+    Float(f64),
+    Bool(bool),
+    Timestamp(String),
+    Null,
+}
+
+/// The value to assign to a column in an UPDATE SET clause.
+///
+/// `Expression` is an explicit escape hatch that embeds raw SQL text inline
+/// rather than going through parameter binding. The `used_raw_expression`
+/// side-channel flag in `GeneratedMutation` (see `generator.rs`) communicates
+/// this to the classification layer without embedding any marker in the SQL
+/// string itself.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum AssignmentValue {
+    /// Routed through parameter binding — safe by default.
+    Literal(ScalarLiteral),
+    /// Raw SQL expression fragment interpolated verbatim. Opt-in only.
+    Expression(String),
+    /// Emits `NULL` — does not bind a parameter.
+    Null,
+    /// Emits the driver `DEFAULT` keyword.
+    Default,
+}
+
+/// A single column → value assignment in a SET clause.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Assignment {
+    pub column: String,
+    pub value: AssignmentValue,
+}
+
+/// Whether a mutation targets a specific subset of rows (Update) or all rows
+/// matching the filter (Delete).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum MutationKind {
+    Update { assignments: Vec<Assignment> },
+    Delete,
+}
+
+/// Top-level spec for the visual UPDATE / DELETE builder.
+///
+/// Intentionally distinct from `VisualQuerySpec` (SELECT) — the two paths
+/// have different shape requirements and must not diverge silently.
+///
+/// `filter: None` means "no WHERE clause", which is legal at the generator
+/// level. The classification layer applies the dangerous-query gate.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VisualMutationSpec {
+    pub from: TableRef,
+    pub filter: Option<FilterNode>,
+    pub kind: MutationKind,
+}
+
+/// A minimal SELECT-COUNT spec used by the pre-execution count preview.
+///
+/// Produced from a `VisualMutationSpec` via `From<&VisualMutationSpec>`.
+/// Contains only what is needed to emit `SELECT COUNT(*) FROM table WHERE filter`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CountSpec {
+    pub from: TableRef,
+    pub filter: Option<FilterNode>,
+}
+
+impl From<&VisualMutationSpec> for CountSpec {
+    fn from(spec: &VisualMutationSpec) -> Self {
+        CountSpec {
+            from: spec.from.clone(),
+            filter: spec.filter.clone(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -648,5 +735,136 @@ mod tests {
         );
         pred.node_id = 0;
         assert_eq!(pred, roundtripped);
+    }
+
+    // =========================================================================
+    // T-01 / T-02 — VisualMutationSpec types (spec scenario A-1)
+    // =========================================================================
+
+    use super::super::table_browser::TableRef;
+
+    fn mutation_table_ref() -> TableRef {
+        TableRef {
+            schema: None,
+            name: "users".to_string(),
+        }
+    }
+
+    fn eq_filter(alias: &str, col: &str, val: i64) -> FilterNode {
+        FilterNode::Predicate(Predicate {
+            source_alias: alias.to_string(),
+            column: col.to_string(),
+            comparator: Comparator::Eq,
+            value: PredicateValue::Single(LiteralValue::Integer(val)),
+            node_id: 0,
+        })
+    }
+
+    #[test]
+    fn visual_mutation_spec_constructs_and_derives() {
+        let spec = VisualMutationSpec {
+            from: mutation_table_ref(),
+            filter: Some(eq_filter("users", "id", 1)),
+            kind: MutationKind::Update {
+                assignments: vec![Assignment {
+                    column: "name".to_string(),
+                    value: AssignmentValue::Literal(ScalarLiteral::Text("Alice".to_string())),
+                }],
+            },
+        };
+
+        let cloned = spec.clone();
+        assert_eq!(spec, cloned, "PartialEq and Clone must work");
+        let debug_str = format!("{spec:?}");
+        assert!(debug_str.contains("VisualMutationSpec"), "Debug must work");
+        assert_eq!(spec.from.name, "users");
+        assert!(spec.filter.is_some());
+    }
+
+    #[test]
+    fn assignment_value_variants_accessible() {
+        let _lit = AssignmentValue::Literal(ScalarLiteral::Integer(42));
+        let _expr = AssignmentValue::Expression("price * 1.1".to_string());
+        let _null = AssignmentValue::Null;
+        let _default = AssignmentValue::Default;
+    }
+
+    #[test]
+    fn mutation_kind_delete_variant_accessible() {
+        let spec = VisualMutationSpec {
+            from: mutation_table_ref(),
+            filter: None,
+            kind: MutationKind::Delete,
+        };
+        assert!(matches!(spec.kind, MutationKind::Delete));
+    }
+
+    #[test]
+    fn visual_mutation_spec_serde_round_trip() {
+        let spec = VisualMutationSpec {
+            from: TableRef {
+                schema: Some("public".to_string()),
+                name: "orders".to_string(),
+            },
+            filter: Some(eq_filter("orders", "id", 42)),
+            kind: MutationKind::Update {
+                assignments: vec![
+                    Assignment {
+                        column: "status".to_string(),
+                        value: AssignmentValue::Literal(ScalarLiteral::Text("shipped".to_string())),
+                    },
+                    Assignment {
+                        column: "discount".to_string(),
+                        value: AssignmentValue::Expression("price * 0.1".to_string()),
+                    },
+                    Assignment {
+                        column: "note".to_string(),
+                        value: AssignmentValue::Null,
+                    },
+                ],
+            },
+        };
+
+        let json = serde_json::to_string(&spec).expect("serialisation must succeed");
+        let rt: VisualMutationSpec =
+            serde_json::from_str(&json).expect("deserialisation must succeed");
+        assert_eq!(spec, rt);
+    }
+
+    // =========================================================================
+    // T-03 / T-04 — CountSpec conversion (spec scenarios A-2, A-3)
+    // =========================================================================
+
+    #[test]
+    fn count_spec_from_mutation_spec_with_filter() {
+        let filter = eq_filter("users", "id", 7);
+        let spec = VisualMutationSpec {
+            from: TableRef {
+                schema: None,
+                name: "users".to_string(),
+            },
+            filter: Some(filter.clone()),
+            kind: MutationKind::Delete,
+        };
+
+        let count_spec = CountSpec::from(&spec);
+        assert_eq!(count_spec.from.name, "users");
+        assert_eq!(count_spec.filter, Some(filter));
+    }
+
+    #[test]
+    fn count_spec_from_mutation_spec_without_filter() {
+        let spec = VisualMutationSpec {
+            from: TableRef {
+                schema: None,
+                name: "orders".to_string(),
+            },
+            filter: None,
+            kind: MutationKind::Delete,
+        };
+
+        let count_spec = CountSpec::from(&spec);
+        assert_eq!(count_spec.from.name, "orders");
+        assert!(count_spec.filter.is_none());
     }
 }

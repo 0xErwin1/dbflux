@@ -221,6 +221,8 @@ pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
         client_cert: true,
     }),
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
 });
 
 pub struct MongoDriver;

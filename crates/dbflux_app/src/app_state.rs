@@ -1428,10 +1428,15 @@ impl AppState {
         connection: Arc<dyn Connection>,
         schema: Option<SchemaSnapshot>,
         proxy_tunnel: Option<Box<dyn std::any::Any + Send + Sync>>,
+        is_mcp_actor: bool,
     ) {
-        self.facade
-            .connections
-            .apply_connect_profile(profile, connection, schema, proxy_tunnel);
+        self.facade.connections.apply_connect_profile(
+            profile,
+            connection,
+            schema,
+            proxy_tunnel,
+            is_mcp_actor,
+        );
     }
 
     pub fn prepare_database_connection(

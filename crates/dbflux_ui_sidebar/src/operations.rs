@@ -3090,6 +3090,7 @@ impl Sidebar {
                         connected.connection,
                         connected.schema,
                         connected.proxy_tunnel,
+                        false,
                     );
                     cx.emit(AppStateChanged);
                     cx.notify();
@@ -3721,7 +3722,13 @@ impl Sidebar {
                 app_state.update(cx, |state, cx| {
                     state.complete_task(task_id);
                     state.finish_pending_operation(profile_id, None);
-                    state.apply_connect_profile(profile, connection.into(), schema, tunnel_handle);
+                    state.apply_connect_profile(
+                        profile,
+                        connection.into(),
+                        schema,
+                        tunnel_handle,
+                        false,
+                    );
                     cx.emit(dbflux_ui_base::AppStateChanged);
                     cx.notify();
                 });

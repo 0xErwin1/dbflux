@@ -47,6 +47,8 @@ pub static INFLUXDB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
     ssl_modes: None,
     ssl_cert_fields: None,
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
 });
 
 pub static INFLUXDB_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {

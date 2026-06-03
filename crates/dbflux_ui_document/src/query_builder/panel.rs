@@ -200,6 +200,13 @@ pub struct QueryBuilderPanel {
     /// generator and materialises the SQL text for display.
     generate_preview: Box<dyn Fn(&VisualQuerySpec) -> String + Send + Sync>,
 
+    /// Generator function for mutation preview: takes a `VisualMutationSpec`, returns SQL text.
+    ///
+    /// Injected at construction time alongside `generate_preview`. Returns an
+    /// empty string when no generator is available (e.g. no active connection).
+    generate_mutation_preview:
+        Box<dyn Fn(&dbflux_core::VisualMutationSpec) -> String + Send + Sync>,
+
     /// Read-only code editor state backing the SQL preview widget.
     ///
     /// The editor uses SQL syntax highlighting and is disabled (no user edits).
@@ -298,6 +305,28 @@ pub struct QueryBuilderPanel {
     /// replaces `join_rows`) so the render cycle sweeps stale entries from the
     /// join-condition HashMaps.
     pub(crate) pending_join_condition_sweep: bool,
+
+    /// Current builder mode state. `None` when the panel is in SELECT mode.
+    /// `Some(MutationBuilderState)` when in UPDATE or DELETE mode.
+    pub(crate) mutation_state: Option<crate::query_builder::mutation_state::MutationBuilderState>,
+
+    /// Per-assignment-row column-name `InputState`, keyed by row index.
+    /// Rebuilt whenever `pending_assign_rebuild` is `true`.
+    pub(crate) assign_col_inputs: HashMap<usize, Entity<InputState>>,
+
+    /// Per-assignment-row value `InputState`, keyed by row index.
+    /// Rebuilt whenever `pending_assign_rebuild` is `true`.
+    pub(crate) assign_val_inputs: HashMap<usize, Entity<InputState>>,
+
+    /// `InputState` for the chunk-size field in the execution section.
+    pub(crate) exec_chunk_size_input: Option<Entity<InputState>>,
+
+    /// `InputState` for the lock-timeout field in the execution section.
+    pub(crate) exec_lock_timeout_input: Option<Entity<InputState>>,
+
+    /// Set to `true` when the assignment list changes length so the render
+    /// cycle can rebuild `assign_col_inputs` / `assign_val_inputs`.
+    pub(crate) pending_assign_rebuild: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -311,6 +340,8 @@ impl QueryBuilderPanel {
     /// previously run the builder; `None` produces the default spec.
     /// `generate_preview` is a closure that calls the driver's
     /// `QueryGenerator::generate_select` and returns the SQL text.
+    /// `generate_mutation_preview` is a closure that calls `generate_update_from_spec`
+    /// or `generate_delete_from_spec` based on `spec.kind` and returns the SQL text.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         source: SourceTable,
@@ -320,6 +351,9 @@ impl QueryBuilderPanel {
         app_state: Entity<AppStateEntity>,
         profile_id: Uuid,
         generate_preview: Box<dyn Fn(&VisualQuerySpec) -> String + Send + Sync>,
+        generate_mutation_preview: Box<
+            dyn Fn(&dbflux_core::VisualMutationSpec) -> String + Send + Sync,
+        >,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -514,6 +548,7 @@ impl QueryBuilderPanel {
             focus_handle,
             sql_preview,
             generate_preview,
+            generate_mutation_preview,
             sql_preview_state: Some(sql_preview_state),
             pending_preview_sync: true,
             limit_input_state: Some(limit_input_state),
@@ -537,6 +572,12 @@ impl QueryBuilderPanel {
             schema_profile_id: profile_id,
             pending_filter_input_sweep: false,
             pending_join_condition_sweep: false,
+            mutation_state: None,
+            assign_col_inputs: HashMap::new(),
+            assign_val_inputs: HashMap::new(),
+            exec_chunk_size_input: None,
+            exec_lock_timeout_input: None,
+            pending_assign_rebuild: false,
         }
     }
 
@@ -1758,9 +1799,7 @@ impl QueryBuilderPanel {
         self.current_spec.limit = limit;
         self.current_spec.offset = offset;
 
-        let spec = self.current_spec.clone();
-        self.sql_preview = (self.generate_preview)(&spec);
-        self.pending_preview_sync = true;
+        self.refresh_mutation_preview_pure();
     }
 
     /// Rebuilds `current_spec` from the panel's mutable row data, then updates
@@ -1775,9 +1814,7 @@ impl QueryBuilderPanel {
 
     /// Recomputes the SQL preview from `current_spec` and notifies GPUI.
     fn refresh_preview_and_notify(&mut self, cx: &mut Context<Self>) {
-        let spec = self.current_spec.clone();
-        self.sql_preview = (self.generate_preview)(&spec);
-        self.pending_preview_sync = true;
+        self.refresh_mutation_preview_pure();
         cx.emit(BuilderEvent::SpecChanged(Box::new(
             self.current_spec.clone(),
         )));
@@ -1805,6 +1842,203 @@ impl QueryBuilderPanel {
     /// The weak handle to the owning `DataGridPanel`, if one was provided.
     pub fn data_grid(&self) -> Option<&WeakEntity<DataGridPanel>> {
         self.data_grid.as_ref()
+    }
+
+    // -----------------------------------------------------------------------
+    // Mutation mode support
+    // -----------------------------------------------------------------------
+
+    /// Returns `true` when the mutation mode selector (SELECT / UPDATE / DELETE)
+    /// should be rendered.
+    ///
+    /// Hidden when the connected driver uses a non-SQL query language or when
+    /// the profile's mutation policy is `ReadOnly` (H-1, H-2, I-1, I-2).
+    pub fn shows_mutation_selector(&self, cx: &App) -> bool {
+        let profile_id = self.schema_profile_id;
+        if profile_id.is_nil() {
+            return false;
+        }
+        let Some(app_state) = self.app_state_weak.upgrade() else {
+            return false;
+        };
+        let state = app_state.read(cx);
+        let Some(connected) = state.connections().get(&profile_id) else {
+            return false;
+        };
+        if connected.mutation_policy == dbflux_core::MutationPolicy::ReadOnly {
+            return false;
+        }
+        connected.connection.metadata().query_language == dbflux_core::QueryLanguage::Sql
+    }
+
+    /// Switches the panel to the given builder mode.
+    ///
+    /// `Select` drops `mutation_state`. `Update` / `Delete` create a fresh
+    /// `MutationBuilderState` if not already in that mode. The filter and
+    /// source are preserved; mode-specific state resets (DR-1.6).
+    pub fn switch_builder_mode(
+        &mut self,
+        mode: crate::query_builder::mutation_state::BuilderMode,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::query_builder::mutation_state::{BuilderMode, MutationBuilderState};
+
+        let current = self
+            .mutation_state
+            .as_ref()
+            .map(|s| s.mode)
+            .unwrap_or(BuilderMode::Select);
+
+        if current == mode {
+            return;
+        }
+
+        match mode {
+            BuilderMode::Select => {
+                self.mutation_state = None;
+                self.assign_col_inputs.clear();
+                self.assign_val_inputs.clear();
+            }
+            _ => {
+                self.mutation_state = Some(MutationBuilderState::new(mode));
+                self.assign_col_inputs.clear();
+                self.assign_val_inputs.clear();
+                self.pending_assign_rebuild = true;
+            }
+        }
+
+        self.refresh_mutation_preview_pure();
+        cx.notify();
+    }
+
+    /// Recomputes `sql_preview` from current state without needing a GPUI context.
+    ///
+    /// In SELECT mode, regenerates from `current_spec` via `generate_preview`.
+    /// In UPDATE/DELETE mode, builds the mutation spec and calls
+    /// `generate_mutation_preview`; falls back to a placeholder when no valid
+    /// spec can be produced (e.g. UPDATE with no table configured yet).
+    pub(crate) fn refresh_mutation_preview_pure(&mut self) {
+        use crate::query_builder::mutation_state::BuilderMode;
+
+        let in_mutation_mode = self
+            .mutation_state
+            .as_ref()
+            .map(|s| s.mode.is_mutation())
+            .unwrap_or(false);
+
+        if in_mutation_mode {
+            if let Some((spec, _opts)) = self.build_mutation_spec_and_opts() {
+                self.sql_preview = (self.generate_mutation_preview)(&spec);
+            } else {
+                let kind_label = self
+                    .mutation_state
+                    .as_ref()
+                    .map(|s| match s.mode {
+                        BuilderMode::Update => "UPDATE",
+                        BuilderMode::Delete => "DELETE",
+                        BuilderMode::Select => "SELECT",
+                    })
+                    .unwrap_or("UPDATE");
+                self.sql_preview =
+                    format!("-- {kind_label}: configure assignments / filter to preview SQL");
+            }
+        } else {
+            let spec = self.current_spec.clone();
+            self.sql_preview = (self.generate_preview)(&spec);
+        }
+
+        self.pending_preview_sync = true;
+    }
+
+    /// Rebuilds `assign_col_inputs` and `assign_val_inputs` to match the
+    /// current assignment count.
+    ///
+    /// Called from the render cycle when `pending_assign_rebuild` is `true`.
+    pub fn rebuild_assign_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.assign_col_inputs.clear();
+        self.assign_val_inputs.clear();
+
+        let count = self
+            .mutation_state
+            .as_ref()
+            .map(|s| s.assignments.len())
+            .unwrap_or(0);
+
+        for i in 0..count {
+            let col_placeholder = "column";
+            let val_placeholder = "value";
+
+            let col_name = self
+                .mutation_state
+                .as_ref()
+                .and_then(|s| s.assignments.get(i))
+                .map(|r| r.assignment.column.clone())
+                .unwrap_or_default();
+
+            let raw_text = self
+                .mutation_state
+                .as_ref()
+                .and_then(|s| s.assignments.get(i))
+                .map(|r| r.raw_text.clone())
+                .unwrap_or_default();
+
+            let col_state = cx.new(|cx| {
+                let mut s = InputState::new(window, cx).placeholder(col_placeholder);
+                s.set_value(&col_name, window, cx);
+                s
+            });
+            let val_state = cx.new(|cx| {
+                let mut s = InputState::new(window, cx).placeholder(val_placeholder);
+                s.set_value(&raw_text, window, cx);
+                s
+            });
+
+            self.assign_col_inputs.insert(i, col_state);
+            self.assign_val_inputs.insert(i, val_state);
+        }
+    }
+
+    /// Builds the `VisualMutationSpec` and `MutationExecOptions` from the
+    /// current mutation state and spec.
+    ///
+    /// Returns `None` if the mode is `Select` or if the spec cannot be built.
+    pub fn build_mutation_spec_and_opts(
+        &self,
+    ) -> Option<(
+        dbflux_core::VisualMutationSpec,
+        crate::data_grid_panel::mutation_executor::MutationExecOptions,
+    )> {
+        use crate::query_builder::mutation_state::BuilderMode;
+        use dbflux_core::{MutationKind, TableRef, VisualMutationSpec};
+
+        let state = self.mutation_state.as_ref()?;
+
+        let from = TableRef {
+            schema: self.current_spec.source.schema.clone(),
+            name: self.current_spec.source.table.clone(),
+        };
+
+        let kind = match state.mode {
+            BuilderMode::Select => return None,
+            BuilderMode::Delete => MutationKind::Delete,
+            BuilderMode::Update => {
+                let assignments: Vec<dbflux_core::Assignment> = state
+                    .assignments
+                    .iter()
+                    .filter(|r| !r.assignment.column.is_empty())
+                    .map(|r| r.assignment.clone())
+                    .collect();
+                MutationKind::Update { assignments }
+            }
+        };
+
+        let spec = VisualMutationSpec {
+            from,
+            filter: self.current_spec.filter.clone(),
+            kind,
+        };
+
+        Some((spec, state.exec_options.clone()))
     }
 
     // -----------------------------------------------------------------------
@@ -2214,6 +2448,7 @@ mod tests {
             focus_handle: None,
             sql_preview,
             generate_preview: Box::new(no_op_preview),
+            generate_mutation_preview: Box::new(|_spec| String::new()),
             sql_preview_state: None,
             pending_preview_sync: false,
             limit_input_state: None,
@@ -2237,6 +2472,12 @@ mod tests {
             schema_profile_id: Uuid::nil(),
             pending_filter_input_sweep: false,
             pending_join_condition_sweep: false,
+            mutation_state: None,
+            assign_col_inputs: HashMap::new(),
+            assign_val_inputs: HashMap::new(),
+            exec_chunk_size_input: None,
+            exec_lock_timeout_input: None,
+            pending_assign_rebuild: false,
         }
     }
 
@@ -2373,6 +2614,39 @@ mod tests {
             let sanitized: String = text.chars().filter(|c| c.is_ascii_digit()).collect();
             self.offset_text = sanitized;
             self.rebuild_spec_pure();
+        }
+
+        fn t_switch_builder_mode(
+            &mut self,
+            mode: crate::query_builder::mutation_state::BuilderMode,
+        ) {
+            use crate::query_builder::mutation_state::{BuilderMode, MutationBuilderState};
+
+            let current = self
+                .mutation_state
+                .as_ref()
+                .map(|s| s.mode)
+                .unwrap_or(BuilderMode::Select);
+
+            if current == mode {
+                return;
+            }
+
+            match mode {
+                BuilderMode::Select => {
+                    self.mutation_state = None;
+                    self.assign_col_inputs.clear();
+                    self.assign_val_inputs.clear();
+                }
+                _ => {
+                    self.mutation_state = Some(MutationBuilderState::new(mode));
+                    self.assign_col_inputs.clear();
+                    self.assign_val_inputs.clear();
+                    self.pending_assign_rebuild = true;
+                }
+            }
+
+            self.refresh_mutation_preview_pure();
         }
     }
 
@@ -2943,5 +3217,98 @@ mod tests {
                 "removed node id should not be in live set"
             );
         }
+    }
+
+    // ---- Slice 8: mutation preview regen -----------------------------------
+
+    fn make_panel_with_mutation_preview(
+        spec: VisualQuerySpec,
+        mutation_preview: impl Fn(&dbflux_core::VisualMutationSpec) -> String + Send + Sync + 'static,
+    ) -> QueryBuilderPanel {
+        let mut panel = make_panel(spec);
+        panel.generate_mutation_preview = Box::new(mutation_preview);
+        panel
+    }
+
+    #[test]
+    fn switch_to_update_mode_regenerates_sql_preview() {
+        use crate::query_builder::mutation_state::BuilderMode;
+
+        let mut panel = make_panel_with_mutation_preview(make_spec(test_source()), |spec| {
+            format!("UPDATE {} SET ...", spec.from.name)
+        });
+
+        assert_eq!(panel.sql_preview, "SELECT * FROM users");
+
+        panel.t_switch_builder_mode(BuilderMode::Update);
+
+        assert_eq!(
+            panel.sql_preview, "UPDATE users SET ...",
+            "preview must be regenerated when switching to UPDATE mode"
+        );
+    }
+
+    #[test]
+    fn switch_to_delete_mode_regenerates_sql_preview() {
+        use crate::query_builder::mutation_state::BuilderMode;
+
+        let mut panel = make_panel_with_mutation_preview(make_spec(test_source()), |spec| {
+            format!("DELETE FROM {}", spec.from.name)
+        });
+
+        panel.t_switch_builder_mode(BuilderMode::Delete);
+
+        assert_eq!(
+            panel.sql_preview, "DELETE FROM users",
+            "preview must be regenerated when switching to DELETE mode"
+        );
+    }
+
+    #[test]
+    fn switch_back_to_select_restores_select_preview() {
+        use crate::query_builder::mutation_state::BuilderMode;
+
+        let mut panel = make_panel_with_mutation_preview(make_spec(test_source()), |_spec| {
+            "UPDATE users SET ...".to_string()
+        });
+
+        panel.t_switch_builder_mode(BuilderMode::Update);
+        assert_eq!(panel.sql_preview, "UPDATE users SET ...");
+
+        panel.t_switch_builder_mode(BuilderMode::Select);
+
+        assert_eq!(
+            panel.sql_preview, "SELECT * FROM users",
+            "preview must revert to SELECT text when switching back to Select mode"
+        );
+    }
+
+    #[test]
+    fn switch_to_same_mode_is_noop_for_preview() {
+        use crate::query_builder::mutation_state::BuilderMode;
+
+        let call_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = call_count.clone();
+
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.generate_mutation_preview = Box::new(move |_spec| {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            "UPDATE users SET ...".to_string()
+        });
+
+        panel.t_switch_builder_mode(BuilderMode::Update);
+        let preview_after_first = panel.sql_preview.clone();
+
+        panel.t_switch_builder_mode(BuilderMode::Update);
+
+        assert_eq!(
+            panel.sql_preview, preview_after_first,
+            "preview must not change when re-selecting the current mode"
+        );
+        assert_eq!(
+            call_count.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "mutation preview generator must only be called once (first switch)"
+        );
     }
 }

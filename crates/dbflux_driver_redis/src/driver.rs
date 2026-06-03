@@ -234,6 +234,8 @@ pub static REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
         client_cert: true,
     }),
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
 });
 
 pub struct RedisDriver;

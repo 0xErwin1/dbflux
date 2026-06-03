@@ -273,10 +273,55 @@ impl std::fmt::Display for PrepareConnectError {
     }
 }
 
+/// Controls whether mutation operations (UPDATE / DELETE) are permitted for a
+/// connected profile and, if so, whether they require additional approval.
+///
+/// Computed at connect time by `ProfilePolicyResolver::resolve` and cached on
+/// `ConnectedProfile`. The default value for a locally-connected profile is
+/// `Allowed`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MutationPolicy {
+    /// No extra gate beyond classification and confirmation flows.
+    #[default]
+    Allowed,
+    /// Mode selector hides UPDATE and DELETE in the query builder panel.
+    ReadOnly,
+    /// Execution is deferred through `ApprovalService` instead of running immediately.
+    ApprovalRequired,
+}
+
+/// Resolves the `MutationPolicy` for a given connection profile and actor context.
+///
+/// Injected into `AppState` at startup. The default `DefaultMutationPolicyResolver`
+/// applies simple rules; future implementations may consult a role service.
+pub trait ProfilePolicyResolver: Send + Sync {
+    fn resolve(&self, profile: &ConnectionProfile, is_mcp_actor: bool) -> MutationPolicy;
+}
+
+/// Default policy resolution rules (v1):
+/// 1. MCP-governed actor → `ApprovalRequired`.
+/// 2. Profile has `read_only_flag` set → `ReadOnly`.
+/// 3. Otherwise → `Allowed`.
+pub struct DefaultMutationPolicyResolver;
+
+impl ProfilePolicyResolver for DefaultMutationPolicyResolver {
+    fn resolve(&self, profile: &ConnectionProfile, is_mcp_actor: bool) -> MutationPolicy {
+        if is_mcp_actor {
+            return MutationPolicy::ApprovalRequired;
+        }
+        if profile.read_only_flag {
+            return MutationPolicy::ReadOnly;
+        }
+        MutationPolicy::Allowed
+    }
+}
+
 pub struct ConnectedProfile {
     pub profile: ConnectionProfile,
     pub connection: Arc<dyn Connection>,
     pub schema: Option<SchemaSnapshot>,
+    /// Mutation policy resolved at connect time.
+    pub mutation_policy: MutationPolicy,
     /// Lazy-loaded schemas per database (MySQL/MariaDB).
     pub database_schemas: HashMap<String, DbSchemaInfo>,
     pub table_details: HashMap<(String, String), TableInfo>,
@@ -523,6 +568,7 @@ pub struct ConnectionManager {
     pub connections: HashMap<Uuid, ConnectedProfile>,
     pub active_connection_id: Option<Uuid>,
     pub pending_operations: HashSet<PendingOperation>,
+    policy_resolver: Box<dyn ProfilePolicyResolver>,
 }
 
 impl ConnectionManager {
@@ -532,7 +578,17 @@ impl ConnectionManager {
             connections: HashMap::new(),
             active_connection_id: None,
             pending_operations: HashSet::new(),
+            policy_resolver: Box::new(DefaultMutationPolicyResolver),
         }
+    }
+
+    /// Sets a custom policy resolver for mutation policy computation.
+    ///
+    /// Must be called before any connections are established. The resolver is
+    /// invoked once per connection at connect time and its result is cached in
+    /// `ConnectedProfile.mutation_policy`.
+    pub fn set_policy_resolver(&mut self, resolver: Box<dyn ProfilePolicyResolver>) {
+        self.policy_resolver = resolver;
     }
 
     pub fn active_connection(&self) -> Option<&ConnectedProfile> {
@@ -603,14 +659,17 @@ impl ConnectionManager {
         connection: Arc<dyn Connection>,
         schema: Option<SchemaSnapshot>,
         proxy_tunnel: Option<Box<dyn Any + Send + Sync>>,
+        is_mcp_actor: bool,
     ) {
         let id = profile.id;
+        let mutation_policy = self.policy_resolver.resolve(&profile, is_mcp_actor);
         self.connections.insert(
             id,
             ConnectedProfile {
                 profile,
                 connection,
                 schema,
+                mutation_policy,
                 database_schemas: HashMap::new(),
                 table_details: HashMap::new(),
                 collection_children: HashMap::new(),
@@ -1090,8 +1149,9 @@ impl ConnectionManager {
         connection: Arc<dyn Connection>,
         schema: Option<SchemaSnapshot>,
         proxy_tunnel: Option<Box<dyn Any + Send + Sync>>,
+        is_mcp_actor: bool,
     ) {
-        self.add_connection(profile, connection, schema, proxy_tunnel);
+        self.add_connection(profile, connection, schema, proxy_tunnel, is_mcp_actor);
     }
 
     pub fn prepare_switch_database(
@@ -1226,6 +1286,7 @@ impl ConnectionManager {
                 profile: original_profile,
                 connection,
                 schema,
+                mutation_policy: MutationPolicy::default(),
                 database_schemas: HashMap::new(),
                 table_details: HashMap::new(),
                 collection_children: HashMap::new(),
@@ -1923,6 +1984,8 @@ mod tests {
                     ssl_modes: None,
                     ssl_cert_fields: None,
                     classification_override: None,
+                    default_chunk_size: None,
+                    supports_lock_timeout: false,
                 },
             }
         }
@@ -1987,6 +2050,7 @@ mod tests {
             profile,
             connection: primary,
             schema,
+            mutation_policy: MutationPolicy::default(),
             database_schemas: HashMap::new(),
             table_details: HashMap::new(),
             collection_children: HashMap::new(),
@@ -2303,6 +2367,8 @@ mod tests {
                     ssl_modes: None,
                     ssl_cert_fields: None,
                     classification_override: None,
+                    default_chunk_size: None,
+                    supports_lock_timeout: false,
                 },
                 form: &TEST_FORM,
             })
@@ -2504,6 +2570,8 @@ mod tests {
                     ssl_modes: None,
                     ssl_cert_fields: None,
                     classification_override: None,
+                    default_chunk_size: None,
+                    supports_lock_timeout: false,
                 });
                 &META
             }
@@ -2629,7 +2697,7 @@ mod tests {
             SchemaLoadingStrategy::ConnectionPerDatabase,
         );
         let mut manager = ConnectionManager::new(HashMap::new());
-        manager.add_connection(profile.clone(), connection, None, None);
+        manager.add_connection(profile.clone(), connection, None, None, false);
 
         let profile_id = profile.id;
 
@@ -2669,5 +2737,80 @@ mod tests {
         } else {
             panic!("Expected CacheEntry::SchemaRoutines but got something else");
         }
+    }
+
+    // =========================================================================
+    // T-07 / T-08 — MutationPolicy and ConnectedProfile (spec scenarios H-4, DR-12.1–12.7)
+    // =========================================================================
+
+    #[test]
+    fn mutation_policy_variants_accessible() {
+        let _allowed = MutationPolicy::Allowed;
+        let _read_only = MutationPolicy::ReadOnly;
+        let _approval = MutationPolicy::ApprovalRequired;
+    }
+
+    #[test]
+    fn mutation_policy_default_is_allowed() {
+        let policy = MutationPolicy::default();
+        assert_eq!(
+            policy,
+            MutationPolicy::Allowed,
+            "default must be Allowed (H-4)"
+        );
+    }
+
+    fn sqlite_profile(name: &str) -> ConnectionProfile {
+        use std::path::PathBuf;
+        ConnectionProfile::new(
+            name,
+            DbConfig::SQLite {
+                path: PathBuf::from(":memory:"),
+                connection_id: None,
+            },
+        )
+    }
+
+    #[test]
+    fn default_resolver_allows_for_normal_actor() {
+        let resolver = DefaultMutationPolicyResolver;
+        let profile = sqlite_profile("test");
+        assert_eq!(
+            resolver.resolve(&profile, false),
+            MutationPolicy::Allowed,
+            "non-MCP actor with default profile must be Allowed"
+        );
+    }
+
+    #[test]
+    fn default_resolver_requires_approval_for_mcp_actor() {
+        let resolver = DefaultMutationPolicyResolver;
+        let profile = sqlite_profile("test");
+        assert_eq!(
+            resolver.resolve(&profile, true),
+            MutationPolicy::ApprovalRequired,
+            "MCP actor must require approval (H-3)"
+        );
+    }
+
+    #[test]
+    fn default_resolver_read_only_for_flagged_profile() {
+        let resolver = DefaultMutationPolicyResolver;
+        let mut profile = sqlite_profile("test");
+        profile.read_only_flag = true;
+        assert_eq!(
+            resolver.resolve(&profile, false),
+            MutationPolicy::ReadOnly,
+            "read_only_flag=true must resolve to ReadOnly (H-1)"
+        );
+    }
+
+    #[test]
+    fn connection_profile_read_only_flag_defaults_false() {
+        let profile = sqlite_profile("test");
+        assert!(
+            !profile.read_only_flag,
+            "read_only_flag must default to false (H-4, DR-12.7)"
+        );
     }
 }

@@ -261,6 +261,8 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         client_cert: false,
     }),
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
 });
 
 // =============================================================================

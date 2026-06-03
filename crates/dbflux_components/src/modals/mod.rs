@@ -4,6 +4,7 @@ pub mod delete_connection;
 pub mod document_preview;
 pub mod drop_table;
 pub mod import_dashboard;
+pub mod mutation_confirm;
 pub mod schema_drift;
 pub mod shell;
 pub mod tunnel_auth;
@@ -22,6 +23,10 @@ pub use document_preview::{
 pub use drop_table::{DropTableOutcome, DropTableRequest, ModalDropTable};
 pub use import_dashboard::{
     ImportDashboardCancelled, ImportDashboardConfirmed, ModalImportDashboard,
+};
+pub use mutation_confirm::{
+    ModalMutationConfirm, ModalMutationConfirmHard, MutationConfirmHardRequest,
+    MutationConfirmOutcome, MutationConfirmRequest,
 };
 pub use schema_drift::{
     ModalSchemaDrift, SchemaDriftContinue, SchemaDriftDismissed, SchemaDriftRefresh,

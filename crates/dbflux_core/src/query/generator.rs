@@ -224,6 +224,30 @@ pub struct CollectionTemplateRequest<'a> {
     pub database: &'a str,
 }
 
+/// Errors specific to visual-spec SQL generation.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum GeneratorError {
+    #[error("UPDATE spec contains no assignments; at least one SET clause is required")]
+    EmptyAssignments,
+    #[error("unsupported spec: {0}")]
+    Unsupported(String),
+}
+
+/// Output of `generate_update_from_spec` / `generate_delete_from_spec`.
+///
+/// `used_raw_expression` is set to `true` when at least one `AssignmentValue::Expression`
+/// was present, signalling the classification layer to raise `RawExpressionInSet` without
+/// inspecting the SQL text for a marker.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GeneratedMutation {
+    /// Parameterized SQL text ready for execution.
+    pub sql: String,
+    /// Bound parameter values in placeholder order.
+    pub params: Vec<crate::Value>,
+    /// True when at least one assignment used `AssignmentValue::Expression`.
+    pub used_raw_expression: bool,
+}
+
 pub trait QueryGenerator: Send + Sync {
     fn supported_categories(&self) -> &'static [MutationCategory];
 
@@ -269,6 +293,33 @@ pub trait QueryGenerator: Send + Sync {
         _spec: &VisualQuerySpec,
     ) -> Result<Option<SelectQuery>, QueryGenError> {
         Ok(None)
+    }
+
+    /// Generate a parameterized UPDATE statement from a `VisualMutationSpec`.
+    ///
+    /// Returns `Err(GeneratorError::EmptyAssignments)` when the spec carries no
+    /// assignments. The default returns `Err(GeneratorError::Unsupported)`.
+    fn generate_update_from_spec(
+        &self,
+        _spec: &crate::query::visual_query::VisualMutationSpec,
+    ) -> Result<GeneratedMutation, GeneratorError> {
+        Err(GeneratorError::Unsupported(
+            "this generator does not support visual UPDATE".to_string(),
+        ))
+    }
+
+    /// Generate a parameterized DELETE statement from a `VisualMutationSpec`.
+    ///
+    /// A `filter: None` spec produces a bare `DELETE FROM table` — the caller
+    /// (classification layer) is responsible for the dangerous-query gate.
+    /// The default returns `Err(GeneratorError::Unsupported)`.
+    fn generate_delete_from_spec(
+        &self,
+        _spec: &crate::query::visual_query::VisualMutationSpec,
+    ) -> Result<GeneratedMutation, GeneratorError> {
+        Err(GeneratorError::Unsupported(
+            "this generator does not support visual DELETE".to_string(),
+        ))
     }
 
     /// Replaces parameter placeholders in `query` with dialect-quoted literals,
@@ -408,6 +459,157 @@ impl QueryGenerator for SqlMutationGenerator {
 
     fn materialize_select_for_editor(&self, query: &SelectQuery) -> String {
         query.materialize_for_editor(self.dialect)
+    }
+
+    fn generate_delete_from_spec(
+        &self,
+        spec: &crate::query::visual_query::VisualMutationSpec,
+    ) -> Result<GeneratedMutation, GeneratorError> {
+        use crate::sql::dialect::PlaceholderStyle;
+
+        let mut params: Vec<crate::Value> = Vec::new();
+        let mut param_index: usize = 1;
+
+        let table = self.dialect.quote_identifier(&spec.from.name);
+
+        let where_clause = SqlSelectBuilder::new(self.dialect)
+            .build_where(spec.filter.as_ref(), &mut params, &mut param_index)
+            .map_err(|e| GeneratorError::Unsupported(e.to_string()))?;
+
+        let sql = match where_clause {
+            None => format!("DELETE FROM {table}"),
+            Some(w) => format!("DELETE FROM {table}\nWHERE {w}"),
+        };
+
+        // Rewrite $N → ? for QuestionMark dialects (params are already in order).
+        let sql = match self.dialect.placeholder_style() {
+            PlaceholderStyle::QuestionMark | PlaceholderStyle::NamedColon => {
+                let mut i = 1usize;
+                let mut out = sql.clone();
+                loop {
+                    let ph = format!("${i}");
+                    if out.contains(&ph) {
+                        out = out.replacen(&ph, "?", 1);
+                        i += 1;
+                    } else {
+                        break;
+                    }
+                }
+                out
+            }
+            PlaceholderStyle::AtSign => {
+                let mut i = 1usize;
+                let mut out = sql.clone();
+                loop {
+                    let ph = format!("${i}");
+                    if out.contains(&ph) {
+                        out = out.replacen(&ph, &format!("@p{i}"), 1);
+                        i += 1;
+                    } else {
+                        break;
+                    }
+                }
+                out
+            }
+            PlaceholderStyle::DollarNumber => sql,
+        };
+
+        Ok(GeneratedMutation {
+            sql,
+            params,
+            used_raw_expression: false,
+        })
+    }
+
+    fn generate_update_from_spec(
+        &self,
+        spec: &crate::query::visual_query::VisualMutationSpec,
+    ) -> Result<GeneratedMutation, GeneratorError> {
+        use crate::query::visual_query::{AssignmentValue, MutationKind, ScalarLiteral};
+        use crate::sql::dialect::PlaceholderStyle;
+
+        let assignments = match &spec.kind {
+            MutationKind::Update { assignments } => {
+                if assignments.is_empty() {
+                    return Err(GeneratorError::EmptyAssignments);
+                }
+                assignments
+            }
+            MutationKind::Delete => {
+                return Err(GeneratorError::Unsupported(
+                    "DELETE passed to generate_update_from_spec".to_string(),
+                ));
+            }
+        };
+
+        let mut params: Vec<crate::Value> = Vec::new();
+        let mut param_index: usize = 1;
+        let mut used_raw_expression = false;
+
+        let table = self.dialect.quote_identifier(&spec.from.name);
+
+        let set_clauses: Vec<String> = assignments
+            .iter()
+            .map(|a| {
+                let col = self.dialect.quote_identifier(&a.column);
+                match &a.value {
+                    AssignmentValue::Literal(lit) => {
+                        let ph = match self.dialect.placeholder_style() {
+                            PlaceholderStyle::DollarNumber => {
+                                let p = format!("${}", param_index);
+                                param_index += 1;
+                                p
+                            }
+                            PlaceholderStyle::AtSign => {
+                                let p = format!("@p{}", param_index);
+                                param_index += 1;
+                                p
+                            }
+                            _ => {
+                                param_index += 1;
+                                "?".to_string()
+                            }
+                        };
+                        let val = match lit {
+                            ScalarLiteral::Text(s) => crate::Value::Text(s.clone()),
+                            ScalarLiteral::Integer(n) => crate::Value::Int(*n),
+                            ScalarLiteral::Float(f) => crate::Value::Float(*f),
+                            ScalarLiteral::Bool(b) => crate::Value::Bool(*b),
+                            ScalarLiteral::Timestamp(s) => crate::Value::Text(s.clone()),
+                            ScalarLiteral::Null => crate::Value::Null,
+                        };
+                        params.push(val);
+                        format!("{col} = {ph}")
+                    }
+                    AssignmentValue::Expression(expr) => {
+                        used_raw_expression = true;
+                        format!("{col} = {expr}")
+                    }
+                    AssignmentValue::Null => {
+                        format!("{col} = NULL")
+                    }
+                    AssignmentValue::Default => {
+                        format!("{col} = DEFAULT")
+                    }
+                }
+            })
+            .collect();
+
+        let where_clause = SqlSelectBuilder::new(self.dialect)
+            .build_where(spec.filter.as_ref(), &mut params, &mut param_index)
+            .map_err(|e| GeneratorError::Unsupported(e.to_string()))?;
+
+        let set_str = set_clauses.join(", ");
+        let sql = match where_clause {
+            None => format!("UPDATE {table}\nSET {set_str}"),
+            Some(w) => format!("UPDATE {table}\nSET {set_str}\nWHERE {w}"),
+        };
+
+        Ok(GeneratedMutation {
+            sql,
+            params,
+            used_raw_expression,
+        })
     }
 }
 
@@ -851,6 +1053,58 @@ fn literal_to_value(lit: &crate::query::visual_query::LiteralValue) -> crate::Va
         LiteralValue::Bool(b) => crate::Value::Bool(*b),
         LiteralValue::Timestamp(s) => crate::Value::Text(s.clone()),
         LiteralValue::Null => crate::Value::Null,
+    }
+}
+
+/// Test-only minimal implementation of `QueryGenerator` that:
+/// - Rejects empty UPDATE assignments with `GeneratorError::EmptyAssignments`
+/// - Accepts all other UPDATE specs (returns a placeholder SQL string)
+/// - Accepts all DELETE specs
+#[cfg(test)]
+pub(crate) struct MockMutationGenerator;
+
+#[cfg(test)]
+impl QueryGenerator for MockMutationGenerator {
+    fn supported_categories(&self) -> &'static [MutationCategory] {
+        &[]
+    }
+
+    fn generate_mutation(&self, _: &MutationRequest) -> Option<GeneratedQuery> {
+        None
+    }
+
+    fn generate_update_from_spec(
+        &self,
+        spec: &crate::query::visual_query::VisualMutationSpec,
+    ) -> Result<GeneratedMutation, GeneratorError> {
+        use crate::query::visual_query::MutationKind;
+
+        match &spec.kind {
+            MutationKind::Update { assignments } => {
+                if assignments.is_empty() {
+                    return Err(GeneratorError::EmptyAssignments);
+                }
+                Ok(GeneratedMutation {
+                    sql: format!("UPDATE {} SET ...", spec.from.name),
+                    params: vec![],
+                    used_raw_expression: false,
+                })
+            }
+            MutationKind::Delete => Err(GeneratorError::Unsupported(
+                "DELETE passed to generate_update_from_spec".to_string(),
+            )),
+        }
+    }
+
+    fn generate_delete_from_spec(
+        &self,
+        spec: &crate::query::visual_query::VisualMutationSpec,
+    ) -> Result<GeneratedMutation, GeneratorError> {
+        Ok(GeneratedMutation {
+            sql: format!("DELETE FROM {}", spec.from.name),
+            params: vec![],
+            used_raw_expression: false,
+        })
     }
 }
 
@@ -2045,5 +2299,405 @@ mod tests {
             "expected aliased column, got: {}",
             q.sql
         );
+    }
+
+    // T-13 — [RED] Tests for QueryGenerator trait extensions (spec B-5, DR-3.1, DR-3.3)
+
+    mod mutation_generator_tests {
+        use super::super::{
+            GeneratedMutation, GeneratorError, MockMutationGenerator, QueryGenerator,
+        };
+        use crate::query::table_browser::TableRef;
+        use crate::query::visual_query::{
+            Assignment, AssignmentValue, MutationKind, ScalarLiteral, VisualMutationSpec,
+        };
+
+        fn table_ref(name: &str) -> TableRef {
+            TableRef {
+                schema: None,
+                name: name.to_string(),
+            }
+        }
+
+        fn spec_delete_no_filter(table: &str) -> VisualMutationSpec {
+            VisualMutationSpec {
+                from: table_ref(table),
+                filter: None,
+                kind: MutationKind::Delete,
+            }
+        }
+
+        fn spec_update_empty_assignments(table: &str) -> VisualMutationSpec {
+            VisualMutationSpec {
+                from: table_ref(table),
+                filter: None,
+                kind: MutationKind::Update {
+                    assignments: vec![],
+                },
+            }
+        }
+
+        fn spec_update_with_literal(table: &str) -> VisualMutationSpec {
+            VisualMutationSpec {
+                from: table_ref(table),
+                filter: None,
+                kind: MutationKind::Update {
+                    assignments: vec![Assignment {
+                        column: "name".to_string(),
+                        value: AssignmentValue::Literal(ScalarLiteral::Text("Alice".to_string())),
+                    }],
+                },
+            }
+        }
+
+        // B-5: generate_update_from_spec with empty assignments → EmptyAssignments error
+        #[test]
+        fn empty_assignments_returns_error() {
+            let mock = MockMutationGenerator;
+            let spec = spec_update_empty_assignments("users");
+            let result = mock.generate_update_from_spec(&spec);
+            assert!(
+                matches!(result, Err(GeneratorError::EmptyAssignments)),
+                "expected EmptyAssignments, got: {result:?}"
+            );
+        }
+
+        // Return type is Result<GeneratedMutation, GeneratorError>
+        #[test]
+        fn delete_returns_generated_mutation() {
+            let mock = MockMutationGenerator;
+            let spec = spec_delete_no_filter("orders");
+            let result = mock.generate_delete_from_spec(&spec);
+            assert!(result.is_ok(), "delete should succeed: {result:?}");
+        }
+
+        // GeneratedMutation fields are accessible
+        #[test]
+        fn generated_mutation_fields_accessible() {
+            let mock = MockMutationGenerator;
+            let spec = spec_update_with_literal("users");
+            let result = mock.generate_update_from_spec(&spec).expect("must succeed");
+            let _ = &result.sql;
+            let _ = &result.params;
+            let _ = result.used_raw_expression;
+        }
+
+        // GeneratorError::EmptyAssignments has Display
+        #[test]
+        fn generator_error_empty_assignments_has_display() {
+            let err = GeneratorError::EmptyAssignments;
+            let msg = err.to_string();
+            assert!(!msg.is_empty());
+        }
+    }
+
+    // T-15 — [RED] Tests for SqlMutationGenerator::generate_delete_from_spec (B-1, B-2, B-8)
+    // T-17 — [RED] Tests for SqlMutationGenerator::generate_update_from_spec (B-3–B-7)
+
+    mod sql_mutation_generator_tests {
+        use super::{DIALECT, QueryGenerator, SqlMutationGenerator};
+        use crate::Value;
+        use crate::query::table_browser::TableRef;
+        use crate::query::visual_query::{
+            Assignment, AssignmentValue, BoolOp, Comparator, FilterNode, LiteralValue,
+            MutationKind, Predicate, PredicateValue, ScalarLiteral, VisualMutationSpec,
+        };
+        use crate::sql::dialect::{PlaceholderStyle, SqlDialect};
+
+        fn table_ref(name: &str) -> TableRef {
+            TableRef {
+                schema: None,
+                name: name.to_string(),
+            }
+        }
+
+        fn filter_id_eq(id: i64) -> FilterNode {
+            FilterNode::Predicate(Predicate {
+                source_alias: "t".to_string(),
+                column: "id".to_string(),
+                comparator: Comparator::Eq,
+                value: PredicateValue::Single(LiteralValue::Integer(id)),
+                node_id: 0,
+            })
+        }
+
+        fn delete_spec_with_filter(table: &str) -> VisualMutationSpec {
+            VisualMutationSpec {
+                from: table_ref(table),
+                filter: Some(filter_id_eq(42)),
+                kind: MutationKind::Delete,
+            }
+        }
+
+        fn delete_spec_no_filter(table: &str) -> VisualMutationSpec {
+            VisualMutationSpec {
+                from: table_ref(table),
+                filter: None,
+                kind: MutationKind::Delete,
+            }
+        }
+
+        fn update_spec_with_literal_and_filter(table: &str) -> VisualMutationSpec {
+            VisualMutationSpec {
+                from: table_ref(table),
+                filter: Some(filter_id_eq(7)),
+                kind: MutationKind::Update {
+                    assignments: vec![Assignment {
+                        column: "name".to_string(),
+                        value: AssignmentValue::Literal(ScalarLiteral::Text("Alice".to_string())),
+                    }],
+                },
+            }
+        }
+
+        fn update_spec_no_filter(table: &str) -> VisualMutationSpec {
+            VisualMutationSpec {
+                from: table_ref(table),
+                filter: None,
+                kind: MutationKind::Update {
+                    assignments: vec![Assignment {
+                        column: "status".to_string(),
+                        value: AssignmentValue::Literal(ScalarLiteral::Text("active".to_string())),
+                    }],
+                },
+            }
+        }
+
+        fn update_spec_with_expression(table: &str) -> VisualMutationSpec {
+            VisualMutationSpec {
+                from: table_ref(table),
+                filter: Some(filter_id_eq(1)),
+                kind: MutationKind::Update {
+                    assignments: vec![Assignment {
+                        column: "price".to_string(),
+                        value: AssignmentValue::Expression("price * 1.1".to_string()),
+                    }],
+                },
+            }
+        }
+
+        // MySQL dialect for B-7 dialect parity test
+        struct MySqlDialect;
+        impl SqlDialect for MySqlDialect {
+            fn quote_identifier(&self, name: &str) -> String {
+                format!("`{}`", name)
+            }
+            fn qualified_table(&self, schema: Option<&str>, table: &str) -> String {
+                match schema {
+                    Some(s) => format!(
+                        "{}.{}",
+                        self.quote_identifier(s),
+                        self.quote_identifier(table)
+                    ),
+                    None => self.quote_identifier(table),
+                }
+            }
+            fn value_to_literal(&self, value: &Value) -> String {
+                DIALECT.value_to_literal(value)
+            }
+            fn escape_string(&self, s: &str) -> String {
+                s.replace('\'', "''")
+            }
+            fn placeholder_style(&self) -> PlaceholderStyle {
+                PlaceholderStyle::QuestionMark
+            }
+        }
+        static MYSQL: MySqlDialect = MySqlDialect;
+
+        // B-1: generate_delete_from_spec with filter (PostgreSQL default dialect)
+        #[test]
+        fn b1_delete_with_filter_postgres() {
+            let generator = SqlMutationGenerator::new(&DIALECT);
+            let spec = delete_spec_with_filter("orders");
+            let result = generator
+                .generate_delete_from_spec(&spec)
+                .expect("must succeed");
+            assert!(
+                result.sql.contains("DELETE FROM"),
+                "must have DELETE FROM: {}",
+                result.sql
+            );
+            assert!(
+                result.sql.contains("orders"),
+                "must reference table: {}",
+                result.sql
+            );
+            assert!(
+                result.sql.contains("WHERE"),
+                "must have WHERE: {}",
+                result.sql
+            );
+            assert!(
+                result.sql.contains("id"),
+                "WHERE must reference id: {}",
+                result.sql
+            );
+            assert!(!result.used_raw_expression);
+        }
+
+        // B-2: generate_delete_from_spec without filter — no WHERE clause, no error
+        #[test]
+        fn b2_delete_no_filter_produces_bare_delete() {
+            let generator = SqlMutationGenerator::new(&DIALECT);
+            let spec = delete_spec_no_filter("orders");
+            let result = generator
+                .generate_delete_from_spec(&spec)
+                .expect("must succeed");
+            assert!(
+                result.sql.contains("DELETE FROM"),
+                "must have DELETE FROM: {}",
+                result.sql
+            );
+            assert!(
+                result.sql.contains("orders"),
+                "must reference table: {}",
+                result.sql
+            );
+            assert!(
+                !result.sql.contains("WHERE"),
+                "must NOT have WHERE: {}",
+                result.sql
+            );
+        }
+
+        // B-8: generate_delete_from_spec — SQLite (uses DIALECT which is QuestionMark)
+        #[test]
+        fn b8_delete_with_filter_sqlite_dialect() {
+            let generator = SqlMutationGenerator::new(&DIALECT);
+            let spec = delete_spec_with_filter("orders");
+            let result = generator
+                .generate_delete_from_spec(&spec)
+                .expect("must succeed");
+            assert!(
+                result.sql.contains("?") || result.sql.contains("id"),
+                "SQLite uses ? placeholder: {}",
+                result.sql
+            );
+        }
+
+        // B-3: generate_update_from_spec with assignments and filter (PostgreSQL)
+        #[test]
+        fn b3_update_with_literal_and_filter() {
+            let generator = SqlMutationGenerator::new(&DIALECT);
+            let spec = update_spec_with_literal_and_filter("users");
+            let result = generator
+                .generate_update_from_spec(&spec)
+                .expect("must succeed");
+            assert!(
+                result.sql.contains("UPDATE"),
+                "must have UPDATE: {}",
+                result.sql
+            );
+            assert!(
+                result.sql.contains("users"),
+                "must reference table: {}",
+                result.sql
+            );
+            assert!(result.sql.contains("SET"), "must have SET: {}", result.sql);
+            assert!(
+                result.sql.contains("name"),
+                "must reference column: {}",
+                result.sql
+            );
+            assert!(
+                result.sql.contains("WHERE"),
+                "must have WHERE: {}",
+                result.sql
+            );
+            assert!(!result.used_raw_expression);
+            assert!(!result.params.is_empty(), "literal must be a bound param");
+        }
+
+        // B-4: generate_update_from_spec without filter
+        #[test]
+        fn b4_update_no_filter_no_where_clause() {
+            let generator = SqlMutationGenerator::new(&DIALECT);
+            let spec = update_spec_no_filter("users");
+            let result = generator
+                .generate_update_from_spec(&spec)
+                .expect("must succeed");
+            assert!(
+                result.sql.contains("UPDATE"),
+                "must have UPDATE: {}",
+                result.sql
+            );
+            assert!(
+                !result.sql.contains("WHERE"),
+                "must NOT have WHERE: {}",
+                result.sql
+            );
+        }
+
+        // B-5: generate_update_from_spec with empty assignments → error
+        #[test]
+        fn b5_update_empty_assignments_error() {
+            let generator = SqlMutationGenerator::new(&DIALECT);
+            let spec = VisualMutationSpec {
+                from: table_ref("users"),
+                filter: None,
+                kind: MutationKind::Update {
+                    assignments: vec![],
+                },
+            };
+            let result = generator.generate_update_from_spec(&spec);
+            assert!(
+                matches!(
+                    result,
+                    Err(crate::query::generator::GeneratorError::EmptyAssignments)
+                ),
+                "expected EmptyAssignments, got: {result:?}"
+            );
+        }
+
+        // B-6: AssignmentValue::Expression is interpolated inline, used_raw_expression = true,
+        // and NO `/* expr */` comment appears in the SQL (delivery decision #6188 locks this:
+        // the side-channel flag, not SQL text, carries the literal-vs-expression signal).
+        #[test]
+        fn b6_expression_assignment_inline_and_flags_raw() {
+            let generator = SqlMutationGenerator::new(&DIALECT);
+            // spec has expression assignment + filter (filter_id_eq(1) adds one bound param)
+            let spec = update_spec_with_expression("products");
+            let result = generator
+                .generate_update_from_spec(&spec)
+                .expect("must succeed");
+            assert!(
+                result.sql.contains("price * 1.1"),
+                "expression must be inline: {}",
+                result.sql
+            );
+            assert!(result.used_raw_expression, "must set used_raw_expression");
+            assert!(
+                !result.sql.contains("/* expr */"),
+                "SQL must NOT contain /* expr */ annotation (use used_raw_expression flag instead): {}",
+                result.sql
+            );
+            // The WHERE clause adds one param for id = 1; the expression assignment itself
+            // must NOT add a param. So params.len() == 1 (only the WHERE param).
+            assert_eq!(
+                result.params.len(),
+                1,
+                "only WHERE param expected, expression is not bound"
+            );
+        }
+
+        // B-7: MySQL backtick quoting and ? placeholder
+        #[test]
+        fn b7_mysql_backtick_and_question_mark() {
+            let generator = SqlMutationGenerator::new(&MYSQL);
+            let spec = update_spec_with_literal_and_filter("users");
+            let result = generator
+                .generate_update_from_spec(&spec)
+                .expect("must succeed");
+            assert!(
+                result.sql.contains('`'),
+                "MySQL must use backtick quoting: {}",
+                result.sql
+            );
+            assert!(
+                result.sql.contains('?'),
+                "MySQL must use ? placeholder: {}",
+                result.sql
+            );
+        }
     }
 }

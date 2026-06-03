@@ -685,6 +685,8 @@ static FAKE_POSTGRES_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Drive
     ssl_modes: None,
     ssl_cert_fields: None,
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
 });
 
 static FAKE_SQLITE_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -741,6 +743,8 @@ static FAKE_SQLITE_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
     ssl_modes: None,
     ssl_cert_fields: None,
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
 });
 
 static FAKE_MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -781,6 +785,8 @@ static FAKE_MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMe
     ssl_modes: None,
     ssl_cert_fields: None,
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
 });
 
 static FAKE_MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -821,6 +827,8 @@ static FAKE_MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
     ssl_modes: None,
     ssl_cert_fields: None,
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
 });
 
 static FAKE_MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -875,6 +883,8 @@ static FAKE_MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
     ssl_modes: None,
     ssl_cert_fields: None,
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
 });
 
 static FAKE_REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -924,6 +934,8 @@ static FAKE_REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMe
     ssl_modes: None,
     ssl_cert_fields: None,
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
 });
 
 static FAKE_DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -954,6 +966,8 @@ static FAKE_DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Drive
     ssl_modes: None,
     ssl_cert_fields: None,
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
 });
 
 static FAKE_CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -984,6 +998,8 @@ static FAKE_CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Dri
     ssl_modes: None,
     ssl_cert_fields: None,
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
 });
 
 static FAKE_INFLUXDB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -1014,6 +1030,8 @@ static FAKE_INFLUXDB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Drive
     ssl_modes: None,
     ssl_cert_fields: None,
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
 });
 
 #[cfg(test)]

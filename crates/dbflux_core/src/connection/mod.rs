@@ -52,13 +52,14 @@ pub use item_manager::{AuthProfileManager, Identifiable, ItemManager};
 pub use manager::{
     CacheEntry, CacheKey, ConnectProfileParams, ConnectProfileResult, ConnectedProfile,
     ConnectionManager, ConnectionResolutionError, DatabaseConnection,
-    FetchCollectionChildrenParams, FetchCollectionChildrenResult, FetchDatabaseSchemaParams,
-    FetchDatabaseSchemaResult, FetchSchemaForeignKeysParams, FetchSchemaForeignKeysResult,
-    FetchSchemaIndexesParams, FetchSchemaIndexesResult, FetchSchemaRoutinesParams,
-    FetchSchemaRoutinesResult, FetchSchemaTypesParams, FetchSchemaTypesResult,
-    FetchTableDetailsParams, FetchTableDetailsResult, HookExecutionContext, OwnedCacheEntry,
-    PendingOperation, PrepareConnectError, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy,
-    SchemaCacheKey, SwitchDatabaseParams, SwitchDatabaseResult,
+    DefaultMutationPolicyResolver, FetchCollectionChildrenParams, FetchCollectionChildrenResult,
+    FetchDatabaseSchemaParams, FetchDatabaseSchemaResult, FetchSchemaForeignKeysParams,
+    FetchSchemaForeignKeysResult, FetchSchemaIndexesParams, FetchSchemaIndexesResult,
+    FetchSchemaRoutinesParams, FetchSchemaRoutinesResult, FetchSchemaTypesParams,
+    FetchSchemaTypesResult, FetchTableDetailsParams, FetchTableDetailsResult, HookExecutionContext,
+    MutationPolicy, OwnedCacheEntry, PendingOperation, PrepareConnectError, ProfilePolicyResolver,
+    RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, SwitchDatabaseParams,
+    SwitchDatabaseResult,
 };
 #[allow(deprecated)]
 pub use profile::{
