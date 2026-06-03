@@ -2689,7 +2689,7 @@ impl QueryBuilderPanel {
             .aggregate_rows
             .iter()
             .filter(|r| {
-                !r.alias.is_empty() && r.function != AggFn::CountStar && r.column.is_empty()
+                r.alias.is_empty() || (r.function != AggFn::CountStar && r.column.is_empty())
             })
             .count();
         self.incomplete_aggregate_row_count = incomplete_count;
@@ -2813,18 +2813,23 @@ impl QueryBuilderPanel {
         self.current_spec.sort = self.sort_rows.iter().map(|r| r.to_sort_entry()).collect();
     }
 
-    /// Drops sort rows whose column is not present in the restored projection.
+    /// Drops sort rows whose (source_alias, column) pair is not present in the
+    /// restored projection.
     fn drop_invalid_sort_for_ungrouped(&mut self) {
-        let valid: HashSet<String> = match &self.current_spec.projection {
+        let valid: HashSet<(String, String)> = match &self.current_spec.projection {
             Projection::All => {
                 self.sort_rows.clear();
                 self.current_spec.sort.clear();
                 return;
             }
-            Projection::Explicit(cols) => cols.iter().map(|c| c.column.clone()).collect(),
+            Projection::Explicit(cols) => cols
+                .iter()
+                .map(|c| (c.source_alias.clone(), c.column.clone()))
+                .collect(),
         };
 
-        self.sort_rows.retain(|s| valid.contains(&s.column));
+        self.sort_rows
+            .retain(|s| valid.contains(&(s.source_alias.clone(), s.column.clone())));
         self.current_spec.sort = self.sort_rows.iter().map(|r| r.to_sort_entry()).collect();
     }
 
@@ -2847,7 +2852,17 @@ impl QueryBuilderPanel {
         let base = if function == AggFn::CountStar || column.is_empty() {
             fn_name.to_string()
         } else {
-            format!("{}_{}", fn_name, column)
+            let sanitized: String = column
+                .chars()
+                .map(|c| {
+                    if c.is_alphanumeric() || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            format!("{}_{}", fn_name, sanitized)
         };
 
         let existing: HashSet<&str> = self
@@ -4719,5 +4734,38 @@ mod tests {
             panel.incomplete_aggregate_row_count, 1,
             "Sum without column IS incomplete"
         );
+    }
+
+    #[test]
+    fn incomplete_aggregate_count_includes_empty_alias() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        panel.t_add_aggregate(AggFn::CountStar);
+
+        panel.aggregate_rows[0].alias = String::new();
+        panel.rebuild_spec_pure();
+
+        assert_eq!(
+            panel.incomplete_aggregate_row_count, 1,
+            "row with empty alias IS incomplete regardless of function"
+        );
+    }
+
+    #[test]
+    fn generate_alias_sanitizes_dotted_column_name() {
+        let panel = make_panel(make_spec(test_source()));
+
+        let alias = panel.generate_aggregate_alias(AggFn::Sum, "users.name");
+        assert_eq!(alias, "sum_users_name");
+
+        let alias_nested = panel.generate_aggregate_alias(AggFn::Max, "a.b.c");
+        assert_eq!(alias_nested, "max_a_b_c");
+    }
+
+    #[test]
+    fn generate_alias_sanitizes_other_special_chars() {
+        let panel = make_panel(make_spec(test_source()));
+        let alias = panel.generate_aggregate_alias(AggFn::Sum, "total-amount");
+        assert_eq!(alias, "sum_total_amount");
     }
 }
