@@ -318,6 +318,13 @@ impl SqlDialect for MssqlDialect {
         false
     }
 
+    fn limit_clause(&self, n: u32) -> String {
+        // T-SQL has no LIMIT keyword. The equivalent is OFFSET ... FETCH NEXT,
+        // which must appear after ORDER BY. The caller is responsible for
+        // including ORDER BY before this clause.
+        format!("OFFSET 0 ROWS FETCH NEXT {} ROWS ONLY", n)
+    }
+
     fn build_upsert_statement(
         &self,
         _schema: Option<&str>,
@@ -4165,6 +4172,70 @@ mod tests {
                 .capabilities
                 .contains(DriverCapabilities::INSTANCE_METRICS),
             "INSTANCE_METRICS must remain set on MSSQL driver"
+        );
+    }
+
+    // F-R3-1: T-SQL limit_clause must use OFFSET/FETCH, not LIMIT.
+    #[test]
+    fn mssql_limit_clause_uses_offset_fetch() {
+        assert_eq!(
+            MSSQL_DIALECT.limit_clause(5),
+            "OFFSET 0 ROWS FETCH NEXT 5 ROWS ONLY",
+            "T-SQL must use OFFSET/FETCH syntax, not LIMIT"
+        );
+    }
+
+    // F-R3-1: T-SQL limit_clause with n=1000 (typical chunk size).
+    #[test]
+    fn mssql_limit_clause_uses_offset_fetch_thousand() {
+        let clause = MSSQL_DIALECT.limit_clause(1000);
+        assert!(
+            clause.contains("OFFSET 0 ROWS FETCH NEXT 1000 ROWS ONLY"),
+            "got: {}",
+            clause
+        );
+        assert!(
+            !clause.to_ascii_uppercase().contains("LIMIT"),
+            "must not contain LIMIT; got: {}",
+            clause
+        );
+    }
+
+    // F-R3-1: The PK SELECT built by run_chunked_tx for MSSQL must use OFFSET/FETCH.
+    // This tests the clause construction pattern directly so no live connection is needed.
+    #[test]
+    fn mssql_chunked_pk_select_uses_offset_fetch() {
+        use dbflux_core::SqlDialect;
+        let chunk_size: u32 = 1000;
+        let limit = MSSQL_DIALECT.limit_clause(chunk_size);
+        let select_sql = format!("SELECT [id] FROM [orders] ORDER BY [id] {}", limit);
+        assert!(
+            select_sql.contains("OFFSET 0 ROWS FETCH NEXT 1000 ROWS ONLY"),
+            "chunked PK SELECT for MSSQL must use OFFSET/FETCH; got: {}",
+            select_sql
+        );
+        assert!(
+            !select_sql.to_ascii_uppercase().contains(" LIMIT "),
+            "chunked PK SELECT for MSSQL must not use LIMIT; got: {}",
+            select_sql
+        );
+    }
+
+    // F-R3-1: The sample rows SELECT for MSSQL must use OFFSET/FETCH.
+    #[test]
+    fn mssql_sample_rows_uses_offset_fetch() {
+        use dbflux_core::SqlDialect;
+        let limit = MSSQL_DIALECT.limit_clause(5);
+        let sql = format!("SELECT * FROM [orders] {}", limit);
+        assert!(
+            sql.contains("OFFSET 0 ROWS FETCH NEXT 5 ROWS ONLY"),
+            "sample rows SELECT for MSSQL must use OFFSET/FETCH; got: {}",
+            sql
+        );
+        assert!(
+            !sql.to_ascii_uppercase().contains(" LIMIT "),
+            "sample rows SELECT for MSSQL must not use LIMIT; got: {}",
+            sql
         );
     }
 }
