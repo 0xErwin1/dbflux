@@ -82,6 +82,18 @@ pub trait SqlDialect: Send + Sync {
         std::borrow::Cow::Owned(name.to_lowercase())
     }
 
+    /// Whether this dialect supports row-value constructors in IN lists.
+    ///
+    /// Standard SQL and most engines (PostgreSQL, MySQL, SQLite) accept:
+    ///   `(col_a, col_b) IN ((?, ?), (?, ?))`
+    ///
+    /// SQL Server (T-SQL) does NOT — composite PK chunks must be expressed as
+    /// OR-of-AND predicates instead. Returns `true` for all dialects except
+    /// the MSSQL override.
+    fn supports_row_constructor_in(&self) -> bool {
+        true
+    }
+
     /// Build an UPSERT statement for this dialect.
     fn build_upsert_statement(
         &self,

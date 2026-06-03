@@ -311,6 +311,13 @@ impl SqlDialect for MssqlDialect {
         true
     }
 
+    fn supports_row_constructor_in(&self) -> bool {
+        // T-SQL does not support row-value constructors in IN lists:
+        //   (col_a, col_b) IN ((?, ?), ...)
+        // Composite PK chunked DML must use OR-of-AND predicates instead.
+        false
+    }
+
     fn build_upsert_statement(
         &self,
         _schema: Option<&str>,

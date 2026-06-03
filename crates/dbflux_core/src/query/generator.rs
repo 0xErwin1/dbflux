@@ -510,7 +510,9 @@ impl QueryGenerator for SqlMutationGenerator {
         let mut params: Vec<crate::Value> = Vec::new();
         let mut param_index: usize = 1;
 
-        let table = self.dialect.quote_identifier(&spec.from.name);
+        let table = self
+            .dialect
+            .qualified_table(spec.from.schema.as_deref(), &spec.from.name);
 
         let where_clause = SqlSelectBuilder::new(self.dialect)
             .build_where(spec.filter.as_ref(), &mut params, &mut param_index)
@@ -548,7 +550,9 @@ impl QueryGenerator for SqlMutationGenerator {
         let mut param_index: usize = 1;
         let mut used_raw_expression = false;
 
-        let table = self.dialect.quote_identifier(&spec.from.name);
+        let table = self
+            .dialect
+            .qualified_table(spec.from.schema.as_deref(), &spec.from.name);
 
         let set_clauses: Vec<String> = assignments
             .iter()
@@ -735,12 +739,15 @@ impl SqlMutationGenerator {
     }
 }
 
-/// Build the `(pk0, pk1) IN ((?,?), (?,?))` row-constructor predicate,
-/// appending the bound values to `params` and advancing `param_index`.
+/// Build the PK keyset predicate for a chunk WHERE clause.
 ///
-/// For a single-column PK, emits `pk_col IN (?, ?, ?)`.
-/// For a multi-column PK, emits `(pk0, pk1) IN ((?,?), (?,?))`.
-/// Uses the dialect's placeholder style.
+/// For a single-column PK, emits `pk_col IN (?, ?, ?)` on all dialects.
+///
+/// For a multi-column PK, emits one of two forms depending on dialect support:
+/// - Dialects that support row-value constructors (`supports_row_constructor_in = true`):
+///   `(pk0, pk1) IN ((?,?), (?,?))`
+/// - T-SQL (SQL Server), which does NOT support row-value constructors:
+///   `((pk0 = ? AND pk1 = ?) OR (pk0 = ? AND pk1 = ?))`
 fn build_pk_in_clause(
     dialect: &dyn SqlDialect,
     pk_cols: &[&str],
@@ -766,7 +773,7 @@ fn build_pk_in_clause(
             })
             .collect();
         format!("{col} IN ({})", placeholders.join(", "))
-    } else {
+    } else if dialect.supports_row_constructor_in() {
         let cols: Vec<String> = pk_cols
             .iter()
             .map(|c| dialect.quote_identifier(c))
@@ -787,6 +794,26 @@ fn build_pk_in_clause(
             })
             .collect();
         format!("({col_list}) IN ({})", row_constructors.join(", "))
+    } else {
+        // OR-of-ANDs for dialects that do not support row-value constructors (e.g. T-SQL).
+        let and_terms: Vec<String> = pk_values
+            .iter()
+            .map(|row| {
+                let eq_parts: Vec<String> = pk_cols
+                    .iter()
+                    .enumerate()
+                    .map(|(ci, col)| {
+                        let quoted = dialect.quote_identifier(col);
+                        let ph = make_ph(*param_index);
+                        *param_index += 1;
+                        params.push(row.get(ci).cloned().unwrap_or(crate::Value::Null));
+                        format!("{quoted} = {ph}")
+                    })
+                    .collect();
+                format!("({})", eq_parts.join(" AND "))
+            })
+            .collect();
+        format!("({})", and_terms.join(" OR "))
     }
 }
 
@@ -3101,6 +3128,202 @@ mod tests {
             assert_eq!(
                 where_count, 1,
                 "must have exactly one WHERE; SQL: {}",
+                result.sql
+            );
+        }
+
+        // -----------------------------------------------------------------------
+        // F-R2-1: MSSQL composite PK must use OR-of-ANDs, not row-constructor IN
+        // -----------------------------------------------------------------------
+
+        struct MssqlTestDialect;
+        impl SqlDialect for MssqlTestDialect {
+            fn quote_identifier(&self, name: &str) -> String {
+                format!("[{}]", name.replace(']', "]]"))
+            }
+            fn qualified_table(&self, schema: Option<&str>, table: &str) -> String {
+                match schema {
+                    Some(s) => format!(
+                        "{}.{}",
+                        self.quote_identifier(s),
+                        self.quote_identifier(table)
+                    ),
+                    None => self.quote_identifier(table),
+                }
+            }
+            fn value_to_literal(&self, value: &Value) -> String {
+                DIALECT.value_to_literal(value)
+            }
+            fn escape_string(&self, s: &str) -> String {
+                s.replace('\'', "''")
+            }
+            fn placeholder_style(&self) -> PlaceholderStyle {
+                PlaceholderStyle::QuestionMark
+            }
+            fn supports_row_constructor_in(&self) -> bool {
+                false
+            }
+        }
+        static MSSQL: MssqlTestDialect = MssqlTestDialect;
+
+        // DR-13.x: MSSQL composite PK must expand to OR-of-ANDs (T-SQL cannot use row constructors in IN).
+        #[test]
+        fn composite_pk_in_clause_mssql_uses_or_of_ands() {
+            let generator = SqlMutationGenerator::new(&MSSQL);
+            let spec = VisualMutationSpec {
+                from: table_ref("orders"),
+                filter: None,
+                kind: MutationKind::Delete,
+            };
+            let pk_values = pk_values_composite(&[(1, 10), (2, 20)]);
+            let result = generator
+                .generate_delete_chunk_from_spec(&spec, &["tenant_id", "order_id"], &pk_values)
+                .expect("must succeed");
+
+            assert!(
+                result.sql.contains("OR"),
+                "MSSQL composite PK must use OR-of-ANDs; SQL: {}",
+                result.sql
+            );
+            assert!(
+                !result.sql.contains(") IN ("),
+                "MSSQL must NOT use row-constructor IN; SQL: {}",
+                result.sql
+            );
+            assert_eq!(
+                result.params.len(),
+                4,
+                "2 rows × 2 PK cols = 4 params; got {}; SQL: {}",
+                result.params.len(),
+                result.sql
+            );
+        }
+
+        // DR-13.x: PostgreSQL composite PK keeps row-constructor syntax.
+        #[test]
+        fn composite_pk_in_clause_postgres_uses_row_constructor() {
+            let generator = SqlMutationGenerator::new(&PG);
+            let spec = VisualMutationSpec {
+                from: table_ref("orders"),
+                filter: None,
+                kind: MutationKind::Delete,
+            };
+            let pk_values = pk_values_composite(&[(1, 10), (2, 20)]);
+            let result = generator
+                .generate_delete_chunk_from_spec(&spec, &["a", "b"], &pk_values)
+                .expect("must succeed");
+
+            assert!(
+                result.sql.contains("IN"),
+                "Postgres composite PK must use row-constructor IN; SQL: {}",
+                result.sql
+            );
+            assert!(
+                !result.sql.contains(" OR "),
+                "Postgres must NOT use OR-of-ANDs for composite PK; SQL: {}",
+                result.sql
+            );
+        }
+
+        // DR-13.x: SQLite composite PK keeps row-constructor syntax.
+        #[test]
+        fn composite_pk_in_clause_sqlite_uses_row_constructor() {
+            // SQLite default dialect uses QuestionMark and double-quoted identifiers —
+            // same as DefaultSqlDialect which has supports_row_constructor_in = true.
+            let generator = SqlMutationGenerator::new(&DIALECT);
+            let spec = VisualMutationSpec {
+                from: table_ref("events"),
+                filter: None,
+                kind: MutationKind::Delete,
+            };
+            let pk_values = pk_values_composite(&[(3, 30), (4, 40)]);
+            let result = generator
+                .generate_delete_chunk_from_spec(&spec, &["a", "b"], &pk_values)
+                .expect("must succeed");
+
+            assert!(
+                result.sql.contains("IN"),
+                "SQLite composite PK must use row-constructor IN; SQL: {}",
+                result.sql
+            );
+            assert!(
+                !result.sql.contains(" OR "),
+                "SQLite must NOT use OR-of-ANDs; SQL: {}",
+                result.sql
+            );
+        }
+
+        // DR-13.x: MySQL composite PK keeps row-constructor syntax.
+        #[test]
+        fn composite_pk_in_clause_mysql_uses_row_constructor() {
+            let generator = SqlMutationGenerator::new(&MYSQL);
+            let spec = VisualMutationSpec {
+                from: table_ref("sales"),
+                filter: None,
+                kind: MutationKind::Delete,
+            };
+            let pk_values = pk_values_composite(&[(5, 50)]);
+            let result = generator
+                .generate_delete_chunk_from_spec(&spec, &["a", "b"], &pk_values)
+                .expect("must succeed");
+
+            assert!(
+                result.sql.contains("IN"),
+                "MySQL composite PK must use row-constructor IN; SQL: {}",
+                result.sql
+            );
+            assert!(
+                !result.sql.contains(" OR "),
+                "MySQL must NOT use OR-of-ANDs; SQL: {}",
+                result.sql
+            );
+        }
+
+        // F-R2-4: single_tx DELETE must use qualified_table (include schema when present).
+        #[test]
+        fn single_tx_delete_includes_schema_when_present() {
+            let generator = SqlMutationGenerator::new(&PG);
+            let spec = VisualMutationSpec {
+                from: crate::query::table_browser::TableRef {
+                    schema: Some("public".to_string()),
+                    name: "orders".to_string(),
+                },
+                filter: None,
+                kind: MutationKind::Delete,
+            };
+            let result = generator
+                .generate_delete_from_spec(&spec)
+                .expect("must succeed");
+            assert!(
+                result.sql.contains("\"public\".\"orders\""),
+                "single-tx DELETE must use qualified table; SQL: {}",
+                result.sql
+            );
+        }
+
+        // F-R2-4: single_tx UPDATE must use qualified_table (include schema when present).
+        #[test]
+        fn single_tx_update_includes_schema_when_present() {
+            let generator = SqlMutationGenerator::new(&PG);
+            let spec = VisualMutationSpec {
+                from: crate::query::table_browser::TableRef {
+                    schema: Some("public".to_string()),
+                    name: "orders".to_string(),
+                },
+                filter: None,
+                kind: MutationKind::Update {
+                    assignments: vec![Assignment {
+                        column: "status".to_string(),
+                        value: AssignmentValue::Literal(ScalarLiteral::Text("done".to_string())),
+                    }],
+                },
+            };
+            let result = generator
+                .generate_update_from_spec(&spec)
+                .expect("must succeed");
+            assert!(
+                result.sql.contains("\"public\".\"orders\""),
+                "single-tx UPDATE must use qualified table; SQL: {}",
                 result.sql
             );
         }
