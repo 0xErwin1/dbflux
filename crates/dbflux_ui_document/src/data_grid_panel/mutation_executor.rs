@@ -331,11 +331,19 @@ impl MutationExecutor {
 
     /// Execute the mutation as a single BEGIN / DML / COMMIT sequence.
     ///
+    /// Cancellation is checked at three points: before lock_timeout SET / before
+    /// BEGIN, after BEGIN before DML, and is not checked mid-DML (the current
+    /// operation runs to natural completion). When cancel is detected before BEGIN
+    /// no transaction is started. When detected after BEGIN, a ROLLBACK is issued.
+    ///
     /// Emits a parent audit event with `Pending` at start, then finalizes with
     /// `Success`, `Failed`, or `Cancelled` depending on outcome.
     ///
     /// Returns the outcome after the transaction is committed or rolled back.
-    pub fn run_single_tx(&self) -> Result<MutationOutcome, ExecutorError> {
+    pub fn run_single_tx(
+        &self,
+        cancel: &crate::task_runner::MutationCancelHandle,
+    ) -> Result<MutationOutcome, ExecutorError> {
         let generator = self.deps.connection.query_generator().ok_or_else(|| {
             ExecutorError::Generation("driver does not support SQL generation".to_string())
         })?;
@@ -374,6 +382,11 @@ impl MutationExecutor {
 
         self.emit_event(pending_event);
 
+        if cancel.is_cancelled() {
+            self.emit_cancelled_event(&run_id, op_kind, &table_name, 0);
+            return Ok(MutationOutcome::Cancelled { rows_affected: 0 });
+        }
+
         if let Some(ms) = self.opts.lock_timeout_ms
             && vocab.lock_timeout_before_begin
             && let Some(lock_sql) = vocab.lock_timeout_sql(ms)
@@ -393,6 +406,16 @@ impl MutationExecutor {
             self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
             self.reset_lock_timeout_if_needed(&vocab);
             return Err(ExecutorError::Transaction(err_msg));
+        }
+
+        if cancel.is_cancelled() {
+            let rollback_req = QueryRequest::new(vocab.rollback);
+            if let Err(rb_err) = self.deps.connection.execute(&rollback_req) {
+                log::warn!("ROLLBACK failed during cancellation after BEGIN: {}", rb_err);
+            }
+            self.emit_cancelled_event(&run_id, op_kind, &table_name, 0);
+            self.reset_lock_timeout_if_needed(&vocab);
+            return Ok(MutationOutcome::Cancelled { rows_affected: 0 });
         }
 
         if let Some(ms) = self.opts.lock_timeout_ms
@@ -460,9 +483,15 @@ impl MutationExecutor {
 
     /// Execute the mutation without a transaction wrapper (autocommit mode).
     ///
+    /// Cancellation is checked once before execute. If cancelled, returns
+    /// `Cancelled { rows_affected: 0 }` without executing any SQL.
+    ///
     /// Used when the driver does not support transactions (`DirectAutocommit` mode).
     /// Emits the same audit events as `run_single_tx` but without BEGIN/COMMIT.
-    pub fn run_direct(&self) -> Result<MutationOutcome, ExecutorError> {
+    pub fn run_direct(
+        &self,
+        cancel: &crate::task_runner::MutationCancelHandle,
+    ) -> Result<MutationOutcome, ExecutorError> {
         let generator = self.deps.connection.query_generator().ok_or_else(|| {
             ExecutorError::Generation("driver does not support SQL generation".to_string())
         })?;
@@ -497,6 +526,11 @@ impl MutationExecutor {
         .with_correlation_id(run_id.clone());
 
         self.emit_event(pending_event);
+
+        if cancel.is_cancelled() {
+            self.emit_cancelled_event(&run_id, op_kind, &table_name, 0);
+            return Ok(MutationOutcome::Cancelled { rows_affected: 0 });
+        }
 
         let mut dml_req = QueryRequest::new(generated.sql.clone());
         dml_req.params = generated.params.clone();
@@ -919,6 +953,29 @@ impl MutationExecutor {
         self.emit_event(event);
     }
 
+    fn emit_cancelled_event(
+        &self,
+        run_id: &str,
+        op_kind: &str,
+        table_name: &str,
+        rows_affected: u64,
+    ) {
+        let event = EventRecord::new(
+            Self::now_ms(),
+            EventSeverity::Info,
+            EventCategory::Query,
+            EventOutcome::Cancelled,
+        )
+        .with_action("mutation.run")
+        .with_summary(format!(
+            "{} {} cancelled ({} rows affected)",
+            op_kind, table_name, rows_affected
+        ))
+        .with_correlation_id(run_id.to_string());
+
+        self.emit_event(event);
+    }
+
     fn now_ms() -> i64 {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -934,6 +991,10 @@ impl MutationExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn no_cancel() -> crate::task_runner::MutationCancelHandle {
+        crate::task_runner::MutationCancelHandle::new()
+    }
 
     // T-27 — [RED] Tests for MutationExecutor single-tx happy path (G-1, G-2, G-6, DR-11.1–11.4)
 
@@ -1158,7 +1219,7 @@ mod tests {
             let deps = make_deps(conn, Some(sink));
             let executor = MutationExecutor::new(spec, opts, deps);
 
-            let result = executor.run_single_tx();
+            let result = executor.run_single_tx(&no_cancel());
             assert!(result.is_ok(), "expected success, got: {:?}", result);
 
             let events = sink_ref.recorded();
@@ -1191,7 +1252,7 @@ mod tests {
             let deps = make_deps(conn, Some(sink));
             let executor = MutationExecutor::new(spec, opts, deps);
 
-            let result = executor.run_single_tx();
+            let result = executor.run_single_tx(&no_cancel());
             assert!(matches!(
                 result,
                 Ok(MutationOutcome::Success { rows_affected: 3 })
@@ -1222,7 +1283,7 @@ mod tests {
             let deps = make_deps(conn, Some(sink));
             let executor = MutationExecutor::new(spec, opts, deps);
 
-            let _ = executor.run_single_tx();
+            let _ = executor.run_single_tx(&no_cancel());
 
             // All events must have been received by the fake sink — not empty.
             assert!(
@@ -1254,7 +1315,7 @@ mod tests {
             };
             let executor = MutationExecutor::new(spec, opts, deps);
 
-            let _ = executor.run_single_tx();
+            let _ = executor.run_single_tx(&no_cancel());
 
             let calls = conn_ref.recorded_calls();
             assert_eq!(
@@ -1281,7 +1342,7 @@ mod tests {
             let deps = make_deps(conn, None);
             let executor = MutationExecutor::new(spec, opts, deps);
 
-            let result = executor.run_single_tx().expect("expected success");
+            let result = executor.run_single_tx(&no_cancel()).expect("expected success");
             assert_eq!(result, MutationOutcome::Success { rows_affected: 42 });
         }
 
@@ -1304,7 +1365,7 @@ mod tests {
             let deps = make_deps(conn, None);
             let executor = MutationExecutor::new(spec, opts, deps);
 
-            let result = executor.run_single_tx();
+            let result = executor.run_single_tx(&no_cancel());
             assert!(result.is_ok(), "expected success; got: {:?}", result);
 
             let calls = conn_ref.recorded_calls();
@@ -1402,7 +1463,7 @@ mod tests {
             );
             let executor = MutationExecutor::new(spec, opts, deps);
 
-            let result = executor.run_single_tx();
+            let result = executor.run_single_tx(&no_cancel());
             assert!(result.is_err(), "expected failure; got: {:?}", result);
 
             let calls = conn_ref.calls.lock().unwrap().clone();
@@ -1430,7 +1491,7 @@ mod tests {
             let deps = make_deps(conn, None);
             let executor = MutationExecutor::new(spec, opts, deps);
 
-            let _ = executor.run_single_tx();
+            let _ = executor.run_single_tx(&no_cancel());
 
             let calls = conn_ref.recorded_calls();
             let has_reset = calls.iter().any(|c| {
@@ -1440,6 +1501,168 @@ mod tests {
             assert!(
                 !has_reset,
                 "Postgres must NOT emit a lock_timeout reset call; calls: {:?}",
+                calls
+            );
+        }
+
+        // F-R4-4: single-tx cancel before BEGIN — no transaction started, outcome Cancelled.
+        #[test]
+        fn single_tx_cancel_before_begin_returns_cancelled() {
+            let conn = RecordingConnection::new(DbKind::Postgres, 5);
+            let conn_ref = Arc::clone(&conn);
+            let spec = make_delete_spec("orders");
+            let opts = MutationExecOptions::single_transaction();
+            let deps = make_deps(conn, None);
+            let executor = MutationExecutor::new(spec, opts, deps);
+
+            let cancel = crate::task_runner::MutationCancelHandle::new();
+            cancel.cancel();
+
+            let result = executor.run_single_tx(&cancel);
+            assert!(
+                matches!(result, Ok(MutationOutcome::Cancelled { rows_affected: 0 })),
+                "expected Cancelled{{0}}, got: {:?}",
+                result
+            );
+
+            let calls = conn_ref.recorded_calls();
+            assert!(
+                !calls.iter().any(|c| c.eq_ignore_ascii_case("BEGIN")),
+                "no BEGIN must be issued when cancelled before BEGIN; calls: {:?}",
+                calls
+            );
+        }
+
+        // F-R4-4: single-tx cancel between BEGIN and DML — ROLLBACK must be issued.
+        #[test]
+        fn single_tx_cancel_between_begin_and_dml_rolls_back() {
+            // We need a connection that triggers cancel after BEGIN is recorded.
+            // Use a connection that sets the cancel flag on the first execute (BEGIN).
+            struct CancelOnBeginConnection {
+                meta: dbflux_core::DriverMetadata,
+                calls: Mutex<Vec<String>>,
+                cancel: crate::task_runner::MutationCancelHandle,
+            }
+
+            impl CancelOnBeginConnection {
+                fn new(cancel: crate::task_runner::MutationCancelHandle) -> Arc<Self> {
+                    let meta = DriverMetadataBuilder::new(
+                        "test",
+                        "Test",
+                        DatabaseCategory::Relational,
+                        QueryLanguage::Sql,
+                    )
+                    .capabilities(DriverCapabilities::TRANSACTIONS)
+                    .build();
+                    Arc::new(Self {
+                        meta,
+                        calls: Mutex::new(Vec::new()),
+                        cancel,
+                    })
+                }
+            }
+
+            impl dbflux_core::Connection for CancelOnBeginConnection {
+                fn metadata(&self) -> &dbflux_core::DriverMetadata {
+                    &self.meta
+                }
+                fn ping(&self) -> Result<(), dbflux_core::DbError> {
+                    Ok(())
+                }
+                fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+                    Ok(())
+                }
+                fn execute(
+                    &self,
+                    req: &dbflux_core::QueryRequest,
+                ) -> Result<QueryResult, dbflux_core::DbError> {
+                    let sql_upper = req.sql.to_ascii_uppercase();
+                    self.calls.lock().unwrap().push(req.sql.clone());
+                    if sql_upper.eq("BEGIN") {
+                        self.cancel.cancel();
+                    }
+                    Ok(QueryResult::empty())
+                }
+                fn cancel(
+                    &self,
+                    _handle: &dbflux_core::QueryHandle,
+                ) -> Result<(), dbflux_core::DbError> {
+                    Ok(())
+                }
+                fn schema(&self) -> Result<SchemaSnapshot, dbflux_core::DbError> {
+                    Err(dbflux_core::DbError::NotSupported("stub".to_string()))
+                }
+                fn kind(&self) -> DbKind {
+                    DbKind::Postgres
+                }
+                fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+                    SchemaLoadingStrategy::SingleDatabase
+                }
+                fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+                    &DefaultSqlDialect
+                }
+                fn query_generator(&self) -> Option<&dyn QueryGenerator> {
+                    static GENERATOR: SimpleDeleteGenerator = SimpleDeleteGenerator;
+                    Some(&GENERATOR)
+                }
+            }
+
+            let cancel = crate::task_runner::MutationCancelHandle::new();
+            let conn = CancelOnBeginConnection::new(cancel.clone());
+            let conn_calls = Arc::clone(&conn);
+            let spec = make_delete_spec("orders");
+            let opts = MutationExecOptions::single_transaction();
+            let deps = MutationDeps {
+                connection: conn as Arc<dyn dbflux_core::Connection>,
+                event_sink: None,
+                policy: MutationPolicy::Allowed,
+            };
+            let executor = MutationExecutor::new(spec, opts, deps);
+
+            let result = executor.run_single_tx(&cancel);
+            assert!(
+                matches!(result, Ok(MutationOutcome::Cancelled { rows_affected: 0 })),
+                "expected Cancelled{{0}}, got: {:?}",
+                result
+            );
+
+            let calls = conn_calls.calls.lock().unwrap().clone();
+            assert!(
+                calls.iter().any(|c| c.eq_ignore_ascii_case("ROLLBACK")),
+                "ROLLBACK must be issued when cancelled after BEGIN; calls: {:?}",
+                calls
+            );
+        }
+
+        // F-R4-4: direct mode cancel before execute — no SQL executed, outcome Cancelled.
+        #[test]
+        fn direct_cancel_before_execute_returns_cancelled() {
+            let conn = RecordingConnection::new(DbKind::Postgres, 5);
+            let conn_ref = Arc::clone(&conn);
+            let spec = make_delete_spec("orders");
+            let opts = MutationExecOptions::new(
+                ExecutionMode::DirectAutocommit,
+                1_000,
+                None,
+                3_000,
+            );
+            let deps = make_deps(conn, None);
+            let executor = MutationExecutor::new(spec, opts, deps);
+
+            let cancel = crate::task_runner::MutationCancelHandle::new();
+            cancel.cancel();
+
+            let result = executor.run_direct(&cancel);
+            assert!(
+                matches!(result, Ok(MutationOutcome::Cancelled { rows_affected: 0 })),
+                "expected Cancelled{{0}}, got: {:?}",
+                result
+            );
+
+            let calls = conn_ref.recorded_calls();
+            assert!(
+                calls.is_empty(),
+                "no SQL must be executed when cancelled before execute; calls: {:?}",
                 calls
             );
         }
@@ -2650,7 +2873,7 @@ mod tests {
             };
             let executor = MutationExecutor::new(spec, opts, deps);
 
-            let result = executor.run_single_tx();
+            let result = executor.run_single_tx(&no_cancel());
 
             assert!(
                 result.is_err(),
@@ -2689,7 +2912,7 @@ mod tests {
             };
             let executor = MutationExecutor::new(spec, opts, deps);
 
-            let result = executor.run_single_tx();
+            let result = executor.run_single_tx(&no_cancel());
 
             assert!(
                 matches!(result, Ok(MutationOutcome::Success { rows_affected: 42 })),
@@ -2736,7 +2959,7 @@ mod tests {
             let deps = make_deps_no_sink(conn);
             let executor = MutationExecutor::new(spec, opts, deps);
 
-            let result = executor.run_single_tx();
+            let result = executor.run_single_tx(&no_cancel());
             assert!(result.is_ok(), "expected ok: {:?}", result);
 
             let calls = conn_ref.recorded_calls();
@@ -2781,7 +3004,7 @@ mod tests {
             let deps = make_deps_no_sink(conn);
             let executor = MutationExecutor::new(spec, opts, deps);
 
-            let result = executor.run_direct();
+            let result = executor.run_direct(&no_cancel());
             assert!(result.is_ok(), "expected ok: {:?}", result);
 
             let calls = conn_ref.recorded_calls();
@@ -2816,7 +3039,7 @@ mod tests {
             let deps = make_deps_no_sink(conn);
             let executor = MutationExecutor::new(spec, opts, deps);
 
-            let result = executor.run_direct();
+            let result = executor.run_direct(&no_cancel());
             assert!(
                 matches!(result, Ok(MutationOutcome::Success { rows_affected: 13 })),
                 "expected Success(13); got: {:?}",
@@ -2925,7 +3148,7 @@ mod tests {
             };
             let executor = MutationExecutor::new(spec, opts, deps);
 
-            let result = executor.run_single_tx();
+            let result = executor.run_single_tx(&no_cancel());
             assert!(result.is_ok(), "expected ok: {:?}", result);
 
             let calls = conn_ref.recorded_calls();
@@ -3023,7 +3246,7 @@ mod tests {
                 policy: MutationPolicy::Allowed,
             };
             let executor = MutationExecutor::new(spec, opts, deps);
-            let _ = executor.run_single_tx();
+            let _ = executor.run_single_tx(&no_cancel());
 
             let timestamps = sink_ref.collected();
             assert!(

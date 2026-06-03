@@ -3640,7 +3640,7 @@ impl DataGridPanel {
             opts.mode,
             crate::data_grid_panel::mutation_executor::ExecutionMode::DirectAutocommit
         ) {
-            let (task_id, _cancel_handle) = self.runner.start_mutation(
+            let (task_id, cancel_handle) = self.runner.start_mutation(
                 dbflux_core::TaskKind::Query,
                 "Visual mutation (direct)",
                 cx,
@@ -3656,7 +3656,7 @@ impl DataGridPanel {
                     .background_executor()
                     .spawn(async move {
                         let executor = MutationExecutor::new(spec, opts, deps);
-                        executor.run_direct()
+                        executor.run_direct(&cancel_handle)
                     })
                     .await;
 
@@ -3727,7 +3727,7 @@ impl DataGridPanel {
             })
             .detach();
         } else {
-            let (task_id, _cancel_handle) = self.runner.start_mutation(
+            let (task_id, cancel_handle) = self.runner.start_mutation(
                 dbflux_core::TaskKind::Query,
                 "Visual mutation (single transaction)",
                 cx,
@@ -3743,7 +3743,7 @@ impl DataGridPanel {
                     .background_executor()
                     .spawn(async move {
                         let executor = MutationExecutor::new(spec, opts, deps);
-                        executor.run_single_tx()
+                        executor.run_single_tx(&cancel_handle)
                     })
                     .await;
 
