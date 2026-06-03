@@ -40,3 +40,4 @@ aws = ["dbflux_app/aws", "dbflux_ui_base/aws"]
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+dbflux_driver_mssql = { workspace = true }

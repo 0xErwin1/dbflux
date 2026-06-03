@@ -41,9 +41,12 @@ pub fn fetch_sample_rows(
     let limit = dialect.limit_clause(5);
     let sql = match where_clause {
         Some(w) if !w.is_empty() => {
-            format!("SELECT * FROM {} WHERE {} {}", qualified_table, w, limit)
+            format!(
+                "SELECT * FROM {} WHERE {} ORDER BY 1 {}",
+                qualified_table, w, limit
+            )
         }
-        _ => format!("SELECT * FROM {} {}", qualified_table, limit),
+        _ => format!("SELECT * FROM {} ORDER BY 1 {}", qualified_table, limit),
     };
 
     let (tx, rx) = std::sync::mpsc::channel::<Option<(Vec<String>, Vec<Vec<String>>)>>();
@@ -427,5 +430,233 @@ mod tests {
             matches!(modal, PendingMutationModal::Hard(_)),
             "DELETE with est_rows=None must fall back to Hard modal (safety default)"
         );
+    }
+
+    // F-R4-1: fetch_sample_rows must include ORDER BY 1 before the limit clause.
+    //
+    // T-SQL rejects "OFFSET 0 ROWS FETCH NEXT n ROWS ONLY" without a preceding ORDER BY.
+    // The function must emit "ORDER BY 1" unconditionally so all dialects produce valid SQL.
+    mod fetch_sample_rows_sql_tests {
+        use std::sync::{Arc, Mutex};
+
+        use dbflux_core::{
+            DatabaseCategory, DbKind, DefaultSqlDialect, DriverCapabilities, DriverMetadataBuilder,
+            MutationKind, QueryLanguage, QueryResult, SchemaLoadingStrategy, SchemaSnapshot,
+            TableRef, VisualMutationSpec,
+        };
+        use dbflux_driver_mssql::MssqlDialect;
+
+        use super::super::fetch_sample_rows;
+
+        struct MssqlRecordingConnection {
+            meta: dbflux_core::DriverMetadata,
+            calls: Mutex<Vec<String>>,
+        }
+
+        impl MssqlRecordingConnection {
+            fn new() -> Arc<Self> {
+                let meta = DriverMetadataBuilder::new(
+                    "sqlserver",
+                    "SQL Server",
+                    DatabaseCategory::Relational,
+                    QueryLanguage::Sql,
+                )
+                .capabilities(DriverCapabilities::TRANSACTIONS)
+                .build();
+                Arc::new(Self {
+                    meta,
+                    calls: Mutex::new(Vec::new()),
+                })
+            }
+
+            fn recorded_calls(&self) -> Vec<String> {
+                self.calls.lock().unwrap().clone()
+            }
+        }
+
+        impl dbflux_core::Connection for MssqlRecordingConnection {
+            fn metadata(&self) -> &dbflux_core::DriverMetadata {
+                &self.meta
+            }
+            fn ping(&self) -> Result<(), dbflux_core::DbError> {
+                Ok(())
+            }
+            fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+                Ok(())
+            }
+            fn execute(
+                &self,
+                req: &dbflux_core::QueryRequest,
+            ) -> Result<QueryResult, dbflux_core::DbError> {
+                self.calls.lock().unwrap().push(req.sql.clone());
+                Ok(QueryResult::empty())
+            }
+            fn cancel(
+                &self,
+                _handle: &dbflux_core::QueryHandle,
+            ) -> Result<(), dbflux_core::DbError> {
+                Ok(())
+            }
+            fn schema(&self) -> Result<SchemaSnapshot, dbflux_core::DbError> {
+                Err(dbflux_core::DbError::NotSupported("stub".to_string()))
+            }
+            fn kind(&self) -> DbKind {
+                DbKind::SqlServer
+            }
+            fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+                SchemaLoadingStrategy::SingleDatabase
+            }
+            fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+                static D: MssqlDialect = MssqlDialect;
+                &D
+            }
+            fn query_generator(&self) -> Option<&dyn dbflux_core::QueryGenerator> {
+                None
+            }
+        }
+
+        struct PgRecordingConnection {
+            meta: dbflux_core::DriverMetadata,
+            calls: Mutex<Vec<String>>,
+        }
+
+        impl PgRecordingConnection {
+            fn new() -> Arc<Self> {
+                let meta = DriverMetadataBuilder::new(
+                    "postgres",
+                    "PostgreSQL",
+                    DatabaseCategory::Relational,
+                    QueryLanguage::Sql,
+                )
+                .capabilities(DriverCapabilities::TRANSACTIONS)
+                .build();
+                Arc::new(Self {
+                    meta,
+                    calls: Mutex::new(Vec::new()),
+                })
+            }
+
+            fn recorded_calls(&self) -> Vec<String> {
+                self.calls.lock().unwrap().clone()
+            }
+        }
+
+        impl dbflux_core::Connection for PgRecordingConnection {
+            fn metadata(&self) -> &dbflux_core::DriverMetadata {
+                &self.meta
+            }
+            fn ping(&self) -> Result<(), dbflux_core::DbError> {
+                Ok(())
+            }
+            fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+                Ok(())
+            }
+            fn execute(
+                &self,
+                req: &dbflux_core::QueryRequest,
+            ) -> Result<QueryResult, dbflux_core::DbError> {
+                self.calls.lock().unwrap().push(req.sql.clone());
+                Ok(QueryResult::empty())
+            }
+            fn cancel(
+                &self,
+                _handle: &dbflux_core::QueryHandle,
+            ) -> Result<(), dbflux_core::DbError> {
+                Ok(())
+            }
+            fn schema(&self) -> Result<SchemaSnapshot, dbflux_core::DbError> {
+                Err(dbflux_core::DbError::NotSupported("stub".to_string()))
+            }
+            fn kind(&self) -> DbKind {
+                DbKind::Postgres
+            }
+            fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+                SchemaLoadingStrategy::SingleDatabase
+            }
+            fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+                static D: DefaultSqlDialect = DefaultSqlDialect;
+                &D
+            }
+            fn query_generator(&self) -> Option<&dyn dbflux_core::QueryGenerator> {
+                None
+            }
+        }
+
+        fn delete_spec(table: &str) -> VisualMutationSpec {
+            VisualMutationSpec {
+                from: TableRef {
+                    schema: None,
+                    name: table.to_string(),
+                },
+                filter: None,
+                kind: MutationKind::Delete,
+            }
+        }
+
+        // F-R4-1: MSSQL — SELECT must contain "ORDER BY 1" before "OFFSET 0 ROWS FETCH NEXT".
+        #[test]
+        fn mssql_sample_rows_includes_order_by_before_offset_fetch() {
+            let conn = MssqlRecordingConnection::new();
+            let conn_ref = Arc::clone(&conn);
+            let spec = delete_spec("orders");
+
+            fetch_sample_rows(conn as Arc<dyn dbflux_core::Connection>, &spec);
+
+            let calls = conn_ref.recorded_calls();
+            assert_eq!(calls.len(), 1, "expected exactly one SELECT call");
+            let sql = &calls[0];
+
+            let order_by_pos = sql.to_ascii_uppercase().find("ORDER BY 1");
+            let offset_pos = sql.to_ascii_uppercase().find("OFFSET");
+
+            assert!(
+                order_by_pos.is_some(),
+                "MSSQL sample rows SELECT must contain ORDER BY 1; got: {}",
+                sql
+            );
+            assert!(
+                offset_pos.is_some(),
+                "MSSQL sample rows SELECT must contain OFFSET clause; got: {}",
+                sql
+            );
+            assert!(
+                order_by_pos.unwrap() < offset_pos.unwrap(),
+                "ORDER BY 1 must precede OFFSET clause; got: {}",
+                sql
+            );
+        }
+
+        // F-R4-1: PostgreSQL — SELECT must contain "ORDER BY 1" before "LIMIT".
+        #[test]
+        fn postgres_sample_rows_includes_order_by_one() {
+            let conn = PgRecordingConnection::new();
+            let conn_ref = Arc::clone(&conn);
+            let spec = delete_spec("orders");
+
+            fetch_sample_rows(conn as Arc<dyn dbflux_core::Connection>, &spec);
+
+            let calls = conn_ref.recorded_calls();
+            assert_eq!(calls.len(), 1, "expected exactly one SELECT call");
+            let sql = &calls[0];
+
+            let order_by_pos = sql.to_ascii_uppercase().find("ORDER BY 1");
+            let limit_pos = sql.to_ascii_uppercase().find("LIMIT");
+
+            assert!(
+                order_by_pos.is_some(),
+                "Postgres sample rows SELECT must contain ORDER BY 1; got: {}",
+                sql
+            );
+            assert!(
+                limit_pos.is_some(),
+                "Postgres sample rows SELECT must contain LIMIT clause; got: {}",
+                sql
+            );
+            assert!(
+                order_by_pos.unwrap() < limit_pos.unwrap(),
+                "ORDER BY 1 must precede LIMIT clause; got: {}",
+                sql
+            );
+        }
     }
 }
