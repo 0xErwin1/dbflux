@@ -495,9 +495,18 @@ fn render_footer(
                     use crate::query_builder::events::BuilderEvent;
                     if is_mutation_mode {
                         if let Some(result) = this.build_mutation_spec_and_opts() {
+                            use crate::data_grid_panel::mutation_executor::CountState;
+                            let est_rows =
+                                this.mutation_state
+                                    .as_ref()
+                                    .and_then(|s| match &s.count_state {
+                                        CountState::Done(n) => Some(*n),
+                                        _ => None,
+                                    });
                             cx.emit(BuilderEvent::MutationRunRequested {
                                 spec: Box::new(result.0),
                                 opts: Box::new(result.1),
+                                est_rows,
                             });
                         }
                     } else {

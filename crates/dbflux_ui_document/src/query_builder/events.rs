@@ -17,12 +17,15 @@ pub enum BuilderEvent {
 
     /// The user pressed Run from UPDATE or DELETE mode.
     ///
-    /// Carries the fully-built mutation spec and the execution options
-    /// chosen in the Execution section. `DataGridPanel` handles this event
-    /// by constructing a `MutationExecutor` and driving the confirmation flow.
+    /// Carries the fully-built mutation spec, the execution options chosen in
+    /// the Execution section, and the current row count estimate (if available).
+    /// `DataGridPanel` uses `est_rows` to select the Light vs Hard confirmation
+    /// modal (spec DR-9.1). `None` means the count is unknown or still in flight.
     MutationRunRequested {
         spec: Box<VisualMutationSpec>,
         opts: Box<MutationExecOptions>,
+        /// Row count estimate at run-press time. `None` if counting or unavailable.
+        est_rows: Option<u64>,
     },
 
     /// The user pressed Open in Editor or Cmd+E.
@@ -63,12 +66,18 @@ mod tests {
         let event = BuilderEvent::MutationRunRequested {
             spec: Box::new(spec.clone()),
             opts: Box::new(opts),
+            est_rows: Some(42),
         };
 
         match event {
-            BuilderEvent::MutationRunRequested { spec: s, opts: o } => {
+            BuilderEvent::MutationRunRequested {
+                spec: s,
+                opts: o,
+                est_rows,
+            } => {
                 assert_eq!(s.from.name, "orders");
                 assert_eq!(o.mode, ExecutionMode::SingleTransaction);
+                assert_eq!(est_rows, Some(42));
             }
             _ => panic!("wrong variant"),
         }
