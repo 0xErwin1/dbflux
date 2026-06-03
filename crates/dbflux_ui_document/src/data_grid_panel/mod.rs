@@ -2399,6 +2399,14 @@ impl DataGridPanel {
         cx.notify();
     }
 
+    /// Returns `true` when the last successfully executed query was a grouped
+    /// (aggregated) query.
+    pub fn is_grouped_result(&self) -> bool {
+        self.current_visual_spec
+            .as_ref()
+            .is_some_and(|s| s.is_grouped())
+    }
+
     /// Returns `true` when row mutations (add, edit, delete) are permitted on
     /// the current result.
     ///
@@ -2406,12 +2414,7 @@ impl DataGridPanel {
     /// rows have no row identity) or when no primary key columns are known
     /// (preventing UPDATE/DELETE target identification).
     pub fn mutations_enabled(&self) -> bool {
-        if self
-            .current_visual_spec
-            .as_ref()
-            .map(|s| s.is_grouped())
-            .unwrap_or(false)
-        {
+        if self.is_grouped_result() {
             return false;
         }
 

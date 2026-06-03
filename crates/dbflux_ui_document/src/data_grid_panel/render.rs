@@ -199,11 +199,7 @@ impl Render for DataGridPanel {
             })
             .unwrap_or((false, false, 0, false, false));
 
-        let is_grouped_result = self
-            .current_visual_spec
-            .as_ref()
-            .map(|s| s.is_grouped())
-            .unwrap_or(false);
+        let is_grouped_result = self.is_grouped_result();
 
         let show_grouped_warning = is_table_view && shows_table_content && is_grouped_result;
         let show_pk_warning =

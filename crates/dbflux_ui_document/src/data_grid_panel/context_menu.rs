@@ -582,11 +582,7 @@ impl DataGridPanel {
         //   [sep + GenSQL trigger]?   (if has_generate_sql)
         //   [sep + CopyQuery trigger]?(if has_copy_query)
         //   [sep + row_action...]?    (if row_actions non-empty)
-        let inspect_row_enabled = !self
-            .current_visual_spec
-            .as_ref()
-            .map(|s| s.is_grouped())
-            .unwrap_or(false);
+        let inspect_row_enabled = !self.is_grouped_result();
 
         let base_items = Self::build_context_menu_items(
             is_editable,
@@ -1452,11 +1448,7 @@ impl DataGridPanel {
         // Build visible menu items list for keyboard navigation
         let has_row_target = self.has_context_menu_row_target(menu.row, menu.is_document_view, cx);
         let can_chart = self.can_chart_from_context_menu(cx);
-        let inspect_row_enabled = !self
-            .current_visual_spec
-            .as_ref()
-            .map(|s| s.is_grouped())
-            .unwrap_or(false);
+        let inspect_row_enabled = !self.is_grouped_result();
         let visible_items = Self::build_context_menu_items(
             is_editable,
             menu.is_document_view,
