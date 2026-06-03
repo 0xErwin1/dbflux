@@ -28,7 +28,6 @@ pub fn render_group_by(
 
     let mut container = div().flex().flex_col().gap_1();
 
-    // --- Group-by sub-section ---
     container = container.child(
         div()
             .text_sm()
@@ -75,7 +74,6 @@ pub fn render_group_by(
             })),
     );
 
-    // --- Aggregate sub-section ---
     container = container.child(
         div()
             .text_sm()
@@ -113,7 +111,7 @@ pub fn render_group_by(
                         .opacity(0.4)
                         .child(SharedString::from("*")),
                 );
-                let _ = col_input;
+                let _col_input = col_input;
             } else {
                 row_div = row_div.child(
                     completion_input_keys_wrapper(&col_input)
