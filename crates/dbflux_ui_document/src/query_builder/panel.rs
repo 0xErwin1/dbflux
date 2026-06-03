@@ -358,6 +358,28 @@ pub struct QueryBuilderPanel {
     /// Aggregate rows in display order.
     pub(crate) aggregate_rows: Vec<AggregateRow>,
 
+    /// Per-group-by-row column text input (parallel to `group_by_rows`).
+    ///
+    /// Each entry holds an `InputState` for the "alias.column" text field.
+    /// Rebuilt whenever the group-by row count changes.
+    pub(crate) group_by_col_inputs: Vec<Entity<InputState>>,
+
+    /// Per-aggregate-row function `Dropdown` (parallel to `aggregate_rows`).
+    pub(crate) agg_fn_dropdowns: Vec<Entity<Dropdown>>,
+
+    /// Per-aggregate-row column text input (parallel to `aggregate_rows`).
+    ///
+    /// Holds an `InputState` for the "alias.column" reference. Disabled (read-only)
+    /// when the selected function is `CountStar`.
+    pub(crate) agg_col_inputs: Vec<Entity<InputState>>,
+
+    /// Per-aggregate-row alias text input (parallel to `aggregate_rows`).
+    pub(crate) agg_alias_inputs: Vec<Entity<InputState>>,
+
+    /// Set to `true` whenever `group_by_rows` or `aggregate_rows` count changes so
+    /// the render cycle can rebuild the per-row entity vectors.
+    pub(crate) pending_group_by_rebuild: bool,
+
     /// Per-predicate value `InputState` for HAVING predicates, keyed by node_id.
     pub(crate) having_predicate_input_states: HashMap<u64, Entity<InputState>>,
 
@@ -643,6 +665,11 @@ impl QueryBuilderPanel {
             pending_join_condition_sweep: false,
             group_by_rows,
             aggregate_rows,
+            group_by_col_inputs: Vec::new(),
+            agg_fn_dropdowns: Vec::new(),
+            agg_col_inputs: Vec::new(),
+            agg_alias_inputs: Vec::new(),
+            pending_group_by_rebuild: false,
             having_predicate_input_states: HashMap::new(),
             having_predicate_column_input_states: HashMap::new(),
             having_predicate_comparator_dropdowns: HashMap::new(),
@@ -751,6 +778,12 @@ impl QueryBuilderPanel {
         self.join_rows = join_rows;
         self.group_by_rows = group_by_rows;
         self.aggregate_rows = aggregate_rows;
+        // Clear per-row interactive entities; they will be rebuilt on next render.
+        self.group_by_col_inputs.clear();
+        self.agg_fn_dropdowns.clear();
+        self.agg_col_inputs.clear();
+        self.agg_alias_inputs.clear();
+        self.pending_group_by_rebuild = true;
         // Sweep HAVING input states; they will be recreated on next render.
         self.having_predicate_input_states.clear();
         self.having_predicate_column_input_states.clear();
@@ -1392,6 +1425,185 @@ impl QueryBuilderPanel {
         }
     }
 
+    /// Rebuilds the per-row `InputState` and `Dropdown` entities for the
+    /// Group-By and Aggregate sections from the current row vectors.
+    ///
+    /// Called from the render cycle when `pending_group_by_rebuild` is set.
+    /// On any shrink, all per-row entities are cleared and rebuilt from scratch
+    /// to avoid stale subscriptions pointing at shifted row indices.
+    pub fn rebuild_group_by_input_states(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let gb_target = self.group_by_rows.len();
+        let agg_target = self.aggregate_rows.len();
+
+        let gb_needs_rebuild = self.group_by_col_inputs.len() != gb_target;
+        let agg_needs_rebuild = self.agg_fn_dropdowns.len() != agg_target;
+
+        if !gb_needs_rebuild && !agg_needs_rebuild {
+            return;
+        }
+
+        if self.group_by_col_inputs.len() > gb_target {
+            self.group_by_col_inputs.clear();
+        }
+
+        if self.agg_fn_dropdowns.len() > agg_target {
+            self.agg_fn_dropdowns.clear();
+            self.agg_col_inputs.clear();
+            self.agg_alias_inputs.clear();
+        }
+
+        let alias_provider: Rc<dyn CompletionProvider> = Rc::new(SchemaCompletionProvider::new(
+            self.app_state_weak.clone(),
+            self.schema_profile_id,
+            CompletionMode::AliasOrColumn {
+                aliases: self.make_alias_bindings(),
+            },
+            self.schema_cache.clone(),
+        ));
+
+        let gb_start = self.group_by_col_inputs.len();
+        for i in gb_start..gb_target {
+            let col_text = {
+                let row = &self.group_by_rows[i];
+                if row.source_alias.is_empty() || row.source_alias == row.column {
+                    row.column.clone()
+                } else {
+                    format!("{}.{}", row.source_alias, row.column)
+                }
+            };
+
+            let col_input = cx.new(|cx| {
+                let mut state = InputState::new(window, cx).placeholder("alias.column");
+                state.set_value(&col_text, window, cx);
+                state
+            });
+
+            col_input.update(cx, |s, _| {
+                s.lsp.completion_provider = Some(alias_provider.clone());
+            });
+
+            let sub = cx.subscribe_in(
+                &col_input,
+                window,
+                move |this, entity, event: &InputEvent, _window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        let text = entity.read(cx).value().to_string();
+                        let (alias, col) = match text.split_once('.') {
+                            Some((a, c)) => (a.trim().to_string(), c.trim().to_string()),
+                            None => {
+                                let sa = this
+                                    .group_by_rows
+                                    .get(i)
+                                    .map(|r| r.source_alias.clone())
+                                    .unwrap_or_default();
+                                (sa, text.trim().to_string())
+                            }
+                        };
+                        this.set_group_by_column(i, alias, col, cx);
+                    }
+                },
+            );
+
+            self.group_by_col_inputs.push(col_input);
+            self._input_subs.push(sub);
+        }
+
+        let agg_start = self.agg_fn_dropdowns.len();
+        for i in agg_start..agg_target {
+            let current_fn = self.aggregate_rows[i].function;
+
+            let fn_items: Vec<DropdownItem> = AGG_FN_ORDER
+                .iter()
+                .map(|f| DropdownItem::with_value(agg_fn_display(*f), agg_fn_display(*f)))
+                .collect();
+            let fn_selected = AGG_FN_ORDER.iter().position(|f| *f == current_fn);
+
+            let fn_dropdown = cx.new(|_cx| {
+                Dropdown::new(("qb-agg-fn-dd", i))
+                    .items(fn_items)
+                    .selected_index(fn_selected)
+                    .toolbar_style(true)
+            });
+
+            let fn_sub = cx.subscribe(
+                &fn_dropdown,
+                move |this, _entity, event: &DropdownSelectionChanged, cx| {
+                    if let Some(function) = AGG_FN_ORDER.get(event.index).copied() {
+                        this.set_aggregate_function(i, function, cx);
+                    }
+                },
+            );
+
+            let col_text = {
+                let row = &self.aggregate_rows[i];
+                if row.column.is_empty() {
+                    String::new()
+                } else if row.source_alias.is_empty() {
+                    row.column.clone()
+                } else {
+                    format!("{}.{}", row.source_alias, row.column)
+                }
+            };
+
+            let col_input = cx.new(|cx| {
+                let mut state = InputState::new(window, cx).placeholder("alias.column");
+                state.set_value(&col_text, window, cx);
+                state
+            });
+
+            col_input.update(cx, |s, _| {
+                s.lsp.completion_provider = Some(alias_provider.clone());
+            });
+
+            let col_sub = cx.subscribe_in(
+                &col_input,
+                window,
+                move |this, entity, event: &InputEvent, _window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        let text = entity.read(cx).value().to_string();
+                        let (alias, col) = match text.split_once('.') {
+                            Some((a, c)) => (a.trim().to_string(), c.trim().to_string()),
+                            None => {
+                                let sa = this
+                                    .aggregate_rows
+                                    .get(i)
+                                    .map(|r| r.source_alias.clone())
+                                    .unwrap_or_default();
+                                (sa, text.trim().to_string())
+                            }
+                        };
+                        this.set_aggregate_column(i, alias, col, cx);
+                    }
+                },
+            );
+
+            let alias_text = self.aggregate_rows[i].alias.clone();
+            let alias_input = cx.new(|cx| {
+                let mut state = InputState::new(window, cx).placeholder("alias");
+                state.set_value(&alias_text, window, cx);
+                state
+            });
+
+            let alias_sub = cx.subscribe_in(
+                &alias_input,
+                window,
+                move |this, entity, event: &InputEvent, _window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        let text = entity.read(cx).value().to_string();
+                        this.set_aggregate_alias(i, text, cx);
+                    }
+                },
+            );
+
+            self.agg_fn_dropdowns.push(fn_dropdown);
+            self.agg_col_inputs.push(col_input);
+            self.agg_alias_inputs.push(alias_input);
+            self._input_subs.push(fn_sub);
+            self._input_subs.push(col_sub);
+            self._input_subs.push(alias_sub);
+        }
+    }
+
     fn next_comparator(current: Comparator) -> Comparator {
         match current {
             Comparator::Eq => Comparator::Neq,
@@ -1821,6 +2033,7 @@ impl QueryBuilderPanel {
             source_alias,
             column,
         });
+        self.pending_group_by_rebuild = true;
         if was_empty {
             self.enter_grouped_mode();
         }
@@ -1834,6 +2047,7 @@ impl QueryBuilderPanel {
     pub fn remove_group_by_row(&mut self, index: usize, cx: &mut Context<Self>) {
         if index < self.group_by_rows.len() {
             self.group_by_rows.remove(index);
+            self.pending_group_by_rebuild = true;
             self.drop_invalid_sort_for_grouped();
             if self.group_by_rows.is_empty() && self.aggregate_rows.is_empty() {
                 self.exit_grouped_mode();
@@ -1875,6 +2089,7 @@ impl QueryBuilderPanel {
             column: String::new(),
             alias,
         });
+        self.pending_group_by_rebuild = true;
         if was_empty {
             self.enter_grouped_mode();
         }
@@ -1888,6 +2103,7 @@ impl QueryBuilderPanel {
     pub fn remove_aggregate_row(&mut self, index: usize, cx: &mut Context<Self>) {
         if index < self.aggregate_rows.len() {
             self.aggregate_rows.remove(index);
+            self.pending_group_by_rebuild = true;
             self.drop_invalid_sort_for_grouped();
             if self.group_by_rows.is_empty() && self.aggregate_rows.is_empty() {
                 self.exit_grouped_mode();
@@ -1937,14 +2153,12 @@ impl QueryBuilderPanel {
         }
 
         let function = self.aggregate_rows[index].function;
-        let old_col = self.aggregate_rows[index].column.clone();
         let old_alias = self.aggregate_rows[index].alias.clone();
-        let auto_old = self.generate_aggregate_alias(function, &old_col);
 
         self.aggregate_rows[index].source_alias = source_alias;
         self.aggregate_rows[index].column = column.clone();
 
-        if old_alias.is_empty() || old_alias == auto_old {
+        if old_alias.is_empty() || self.is_auto_alias(&old_alias) {
             let new_alias = self.generate_aggregate_alias(function, &column);
             self.aggregate_rows[index].alias = new_alias;
         }
@@ -2925,6 +3139,28 @@ fn join_kind_label(k: JoinKind) -> &'static str {
     }
 }
 
+pub(crate) const AGG_FN_ORDER: &[AggFn] = &[
+    AggFn::CountStar,
+    AggFn::Count,
+    AggFn::CountDistinct,
+    AggFn::Sum,
+    AggFn::Avg,
+    AggFn::Min,
+    AggFn::Max,
+];
+
+pub(crate) fn agg_fn_display(f: AggFn) -> &'static str {
+    match f {
+        AggFn::CountStar => "COUNT(*)",
+        AggFn::Count => "COUNT",
+        AggFn::CountDistinct => "COUNT DISTINCT",
+        AggFn::Sum => "SUM",
+        AggFn::Avg => "AVG",
+        AggFn::Min => "MIN",
+        AggFn::Max => "MAX",
+    }
+}
+
 // ---------------------------------------------------------------------------
 // GPUI integration
 // ---------------------------------------------------------------------------
@@ -3082,6 +3318,11 @@ mod tests {
             pending_join_condition_sweep: false,
             group_by_rows,
             aggregate_rows,
+            group_by_col_inputs: Vec::new(),
+            agg_fn_dropdowns: Vec::new(),
+            agg_col_inputs: Vec::new(),
+            agg_alias_inputs: Vec::new(),
+            pending_group_by_rebuild: false,
             having_predicate_input_states: HashMap::new(),
             having_predicate_column_input_states: HashMap::new(),
             having_predicate_comparator_dropdowns: HashMap::new(),
@@ -3290,6 +3531,57 @@ mod tests {
                 if self.group_by_rows.is_empty() && self.aggregate_rows.is_empty() {
                     self.exit_grouped_mode();
                 }
+                self.rebuild_spec_pure();
+            }
+        }
+
+        fn t_set_aggregate_function(&mut self, index: usize, function: AggFn) {
+            if index >= self.aggregate_rows.len() {
+                return;
+            }
+            self.aggregate_rows[index].function = function;
+            if function == AggFn::CountStar {
+                self.aggregate_rows[index].source_alias = String::new();
+                self.aggregate_rows[index].column = String::new();
+            }
+            let old_alias = self.aggregate_rows[index].alias.clone();
+            let col = self.aggregate_rows[index].column.clone();
+            if old_alias.is_empty() || self.is_auto_alias(&old_alias) {
+                let new_alias = self.generate_aggregate_alias(function, &col);
+                self.aggregate_rows[index].alias = new_alias;
+            }
+            self.rebuild_spec_pure();
+        }
+
+        fn t_set_aggregate_column(&mut self, index: usize, source_alias: &str, column: &str) {
+            if index >= self.aggregate_rows.len() {
+                return;
+            }
+            let function = self.aggregate_rows[index].function;
+            let old_alias = self.aggregate_rows[index].alias.clone();
+            self.aggregate_rows[index].source_alias = source_alias.to_string();
+            self.aggregate_rows[index].column = column.to_string();
+            if old_alias.is_empty() || self.is_auto_alias(&old_alias) {
+                let new_alias = self.generate_aggregate_alias(function, column);
+                self.aggregate_rows[index].alias = new_alias;
+            }
+            self.drop_invalid_sort_for_grouped();
+            self.rebuild_spec_pure();
+        }
+
+        fn t_set_aggregate_alias(&mut self, index: usize, alias: &str) {
+            if let Some(row) = self.aggregate_rows.get_mut(index) {
+                row.alias = alias.to_string();
+                self.drop_invalid_sort_for_grouped();
+                self.rebuild_spec_pure();
+            }
+        }
+
+        fn t_set_group_by_column(&mut self, index: usize, source_alias: &str, column: &str) {
+            if let Some(row) = self.group_by_rows.get_mut(index) {
+                row.source_alias = source_alias.to_string();
+                row.column = column.to_string();
+                self.drop_invalid_sort_for_grouped();
                 self.rebuild_spec_pure();
             }
         }
@@ -4103,5 +4395,153 @@ mod tests {
                 "removed node id should not be in live set"
             );
         }
+    }
+
+    // ---- Slice 2: interactive control round-trips ----------------------------
+
+    #[test]
+    fn add_group_by_column_sets_spec_entry() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        panel.t_set_group_by_column(0, "users", "country");
+
+        assert_eq!(panel.current_spec.group_by.len(), 1);
+        assert_eq!(panel.current_spec.group_by[0].source_alias, "users");
+        assert_eq!(panel.current_spec.group_by[0].column, "country");
+    }
+
+    #[test]
+    fn change_group_by_column_updates_spec() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_group_by_column("users", "country");
+        panel.t_set_group_by_column(0, "users", "region");
+
+        assert_eq!(panel.current_spec.group_by[0].column, "region");
+    }
+
+    #[test]
+    fn add_aggregate_row_sets_spec_entry() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_aggregate(AggFn::CountStar);
+
+        assert_eq!(panel.current_spec.aggregates.len(), 1);
+        assert_eq!(panel.current_spec.aggregates[0].function, AggFn::CountStar);
+        assert!(panel.current_spec.aggregates[0].source_alias.is_none());
+        assert!(panel.current_spec.aggregates[0].column.is_none());
+    }
+
+    #[test]
+    fn change_aggregate_function_to_count_star_clears_column_in_spec() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+        assert_eq!(
+            panel.current_spec.aggregates[0].column,
+            Some("amount".to_string())
+        );
+
+        panel.t_set_aggregate_function(0, AggFn::CountStar);
+
+        assert_eq!(panel.aggregate_rows[0].function, AggFn::CountStar);
+        assert!(
+            panel.aggregate_rows[0].column.is_empty(),
+            "column must be cleared on the row when function is CountStar"
+        );
+        assert!(
+            panel.current_spec.aggregates[0].column.is_none(),
+            "spec column must be None for CountStar"
+        );
+    }
+
+    #[test]
+    fn change_aggregate_function_away_from_count_star_keeps_column() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+        panel.t_set_aggregate_function(0, AggFn::CountStar);
+
+        // Now switch back to SUM. The column was cleared by CountStar, so
+        // the row has function=Sum and column="". The spec filter excludes
+        // rows with empty columns for non-CountStar functions, so aggregates
+        // will be empty in the spec until the user fills in a column.
+        panel.t_set_aggregate_function(0, AggFn::Sum);
+
+        assert_eq!(panel.aggregate_rows[0].function, AggFn::Sum);
+        assert!(
+            panel.aggregate_rows[0].column.is_empty(),
+            "column was cleared by CountStar and not restored"
+        );
+        assert!(
+            panel.current_spec.aggregates.is_empty(),
+            "spec excludes incomplete Sum rows (empty column)"
+        );
+    }
+
+    #[test]
+    fn change_aggregate_column_updates_spec_and_auto_alias() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_aggregate(AggFn::Sum);
+        panel.t_set_aggregate_column(0, "users", "revenue");
+
+        assert_eq!(panel.aggregate_rows[0].column, "revenue");
+        assert_eq!(
+            panel.current_spec.aggregates[0].column,
+            Some("revenue".to_string())
+        );
+        assert_eq!(
+            panel.aggregate_rows[0].alias, "sum_revenue",
+            "auto alias must be regenerated from new column"
+        );
+        assert_eq!(panel.current_spec.aggregates[0].alias, "sum_revenue");
+    }
+
+    #[test]
+    fn manually_set_alias_is_preserved_when_column_changes() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+
+        // Manually set a custom alias — this is not an auto-alias.
+        panel.t_set_aggregate_alias(0, "total_revenue");
+        assert_eq!(panel.aggregate_rows[0].alias, "total_revenue");
+
+        // Change column — alias must not be overwritten because it was manually edited.
+        panel.t_set_aggregate_column(0, "users", "revenue");
+        assert_eq!(
+            panel.aggregate_rows[0].alias, "total_revenue",
+            "manually edited alias must be preserved across column change"
+        );
+    }
+
+    #[test]
+    fn auto_alias_is_regenerated_when_function_changes() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+        assert_eq!(panel.aggregate_rows[0].alias, "sum_amount");
+
+        panel.t_set_aggregate_function(0, AggFn::Avg);
+        assert_eq!(
+            panel.aggregate_rows[0].alias, "avg_amount",
+            "auto alias must be regenerated when function changes"
+        );
+    }
+
+    #[test]
+    fn manually_set_alias_is_preserved_when_function_changes() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+        panel.t_set_aggregate_alias(0, "my_custom_alias");
+
+        panel.t_set_aggregate_function(0, AggFn::Avg);
+        assert_eq!(
+            panel.aggregate_rows[0].alias, "my_custom_alias",
+            "manually edited alias must survive function change"
+        );
+    }
+
+    #[test]
+    fn set_aggregate_alias_updates_spec() {
+        let mut panel = make_panel(make_spec(test_source()));
+        panel.t_add_aggregate_with_column(AggFn::Sum, "users", "amount");
+        panel.t_set_aggregate_alias(0, "grand_total");
+
+        assert_eq!(panel.current_spec.aggregates[0].alias, "grand_total");
     }
 }

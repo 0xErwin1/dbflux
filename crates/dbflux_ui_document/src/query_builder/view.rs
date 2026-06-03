@@ -35,6 +35,11 @@ pub fn render_panel(
         panel.rebuild_join_input_states(window, cx);
     }
 
+    if panel.pending_group_by_rebuild {
+        panel.pending_group_by_rebuild = false;
+        panel.rebuild_group_by_input_states(window, cx);
+    }
+
     if panel.pending_filter_input_sweep {
         panel.pending_filter_input_sweep = false;
         panel.sweep_stale_predicate_inputs();
