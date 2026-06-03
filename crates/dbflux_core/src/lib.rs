@@ -116,10 +116,10 @@ pub use driver::{
 pub use facade::{DangerousQuerySuppressions, SessionFacade};
 
 pub use query::{
-    AggregateFunction, AggregateRequest, AggregateSpec, AliasOrigin, BoolOp,
+    AggFn, AggregateFunction, AggregateRequest, AggregateSpec, AliasOrigin, BoolOp,
     CollectionBrowseRequest, CollectionCountRequest, CollectionRef, CollectionTemplateRequest,
     ColumnKind, ColumnMeta, ColumnRef, Comparator, DangerousQueryKind, DescribeRequest, Diagnostic,
-    DiagnosticSeverity, EditorDiagnostic, ExplainRequest, FilterNode, GeneratedQuery,
+    DiagnosticSeverity, EditorDiagnostic, ExplainRequest, FilterNode, GeneratedQuery, GroupByEntry,
     JoinFilterNode, JoinKind, JoinOn, JoinPredicate, JoinStep, LanguageService, LiteralValue,
     MutationCategory, MutationTemplateOperation, MutationTemplateRequest, OrderByColumn,
     Pagination, PlannedQuery, Predicate, PredicateValue, ProjectedColumn, Projection,
@@ -128,11 +128,12 @@ pub use query::{
     SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticPlanner, SemanticPredicate,
     SemanticRequest, SemanticRequestKind, SortDirection, SortEntry, SourceTable, SpecError,
     SqlLanguageService, SqlMutationGenerator, TableBrowseRequest, TableCountRequest, TableRef,
-    TextPosition, TextPositionRange, TextRange, ValidationResult, VisualQuerySpec,
-    VisualSortDirection, classify_query_for_governance, classify_query_for_language,
-    classify_sql_execution, contains_time_macros, detect_dangerous_query, detect_dangerous_sql,
-    infer_column_kind, is_safe_read_query, parse_semantic_filter_json, render_semantic_filter_sql,
-    strip_leading_comments, substitute_time_macros,
+    TextPosition, TextPositionRange, TextRange, ValidationResult, VisualAggregateSpec,
+    VisualQuerySpec, VisualSortDirection, classify_query_for_governance,
+    classify_query_for_language, classify_sql_execution, contains_time_macros,
+    detect_dangerous_query, detect_dangerous_sql, infer_column_kind, is_safe_read_query,
+    parse_semantic_filter_json, render_semantic_filter_sql, strip_leading_comments,
+    substitute_time_macros,
 };
 
 pub use query::relational_filter::{
