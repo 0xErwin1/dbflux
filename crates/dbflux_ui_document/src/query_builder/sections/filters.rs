@@ -1,9 +1,9 @@
 use gpui::{AnyElement, Context, ElementId, Entity, IntoElement, SharedString, div};
 
-use crate::query_builder::panel::{FILTER_DEPTH_CAP, QueryBuilderPanel};
+use crate::query_builder::panel::{FILTER_DEPTH_CAP, FilterTarget, QueryBuilderPanel};
 use dbflux_components::controls::{Dropdown, InputState};
 
-/// Renders the Filters section of the Query Builder.
+/// Renders the Filters section of the Query Builder (WHERE target).
 ///
 /// Displays a recursive AND/OR group tree. Each group node shows:
 /// - an AND/OR toggle button
@@ -18,14 +18,55 @@ pub fn render_filters(
     panel: &mut QueryBuilderPanel,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
+    render_filters_for_target(panel, FilterTarget::Where, cx)
+}
+
+/// Parameterized filter renderer — renders either the WHERE or HAVING tree.
+///
+/// Routes all mutations through `add_predicate_for`, `remove_filter_node_for`,
+/// etc., so the same predicate-tree UI serves both sections.
+pub fn render_filters_for_target(
+    panel: &mut QueryBuilderPanel,
+    target: FilterTarget,
+    cx: &mut Context<QueryBuilderPanel>,
+) -> impl IntoElement {
     use dbflux_components::controls::Button;
     use gpui::SharedString;
     use gpui::prelude::*;
 
-    let filter_depth = panel.current_spec.filter.as_ref().map_or(0, |f| f.depth());
+    let tree = match target {
+        FilterTarget::Where => panel.current_spec.filter.clone(),
+        FilterTarget::Having => panel.current_spec.having.clone(),
+    };
+
+    let filter_depth = tree.as_ref().map_or(0, |f| f.depth());
 
     let source_alias = panel.current_spec.source.alias.clone();
     let source_alias_for_group = source_alias.clone();
+
+    let (add_pred_id, add_group_id): (ElementId, ElementId) = match target {
+        FilterTarget::Where => (
+            ElementId::Name(SharedString::from("qb-add-first-pred")),
+            ElementId::Name(SharedString::from("qb-add-first-group")),
+        ),
+        FilterTarget::Having => (
+            ElementId::Name(SharedString::from("qb-having-add-first-pred")),
+            ElementId::Name(SharedString::from("qb-having-add-first-group")),
+        ),
+    };
+
+    let (input_states, column_input_states, comparator_dropdowns) = match target {
+        FilterTarget::Where => (
+            panel.predicate_input_states.clone(),
+            panel.predicate_column_input_states.clone(),
+            panel.predicate_comparator_dropdowns.clone(),
+        ),
+        FilterTarget::Having => (
+            panel.having_predicate_input_states.clone(),
+            panel.having_predicate_column_input_states.clone(),
+            panel.having_predicate_comparator_dropdowns.clone(),
+        ),
+    };
 
     let mut container =
         div()
@@ -38,7 +79,7 @@ pub fn render_filters(
                 )))
             });
 
-    match panel.current_spec.filter.clone() {
+    match tree {
         None => {
             container = container.child(
                 div()
@@ -53,31 +94,35 @@ pub fn render_filters(
                             .child(SharedString::from("No filters")),
                     )
                     .child(
-                        Button::new("qb-add-first-pred", "+ Filter")
+                        Button::new(add_pred_id, "+ Filter")
                             .ghost()
                             .small()
                             .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.add_predicate(vec![], &source_alias.clone(), "", cx);
+                                this.add_predicate_for(
+                                    target,
+                                    vec![],
+                                    &source_alias.clone(),
+                                    "",
+                                    cx,
+                                );
                             })),
                     )
                     .child(
-                        Button::new("qb-add-first-group", "+ Sub-group")
+                        Button::new(add_group_id, "+ Sub-group")
                             .ghost()
                             .small()
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.add_group(vec![], cx);
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.add_group_for(target, vec![], cx);
                             })),
                     ),
             );
         }
 
         Some(root) => {
-            let input_states = panel.predicate_input_states.clone();
-            let column_input_states = panel.predicate_column_input_states.clone();
-            let comparator_dropdowns = panel.predicate_comparator_dropdowns.clone();
             let root_element = render_filter_node(
                 root,
                 vec![],
+                target,
                 &source_alias_for_group,
                 &input_states,
                 &column_input_states,
@@ -91,9 +136,11 @@ pub fn render_filters(
     container
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_filter_node(
     node: dbflux_core::FilterNode,
     path: Vec<usize>,
+    target: FilterTarget,
     source_alias: &str,
     input_states: &std::collections::HashMap<u64, Entity<InputState>>,
     column_input_states: &std::collections::HashMap<u64, Entity<InputState>>,
@@ -108,6 +155,7 @@ fn render_filter_node(
             op,
             children,
             path,
+            target,
             source_alias,
             input_states,
             column_input_states,
@@ -123,6 +171,7 @@ fn render_filter_node(
             render_filter_predicate(
                 pred,
                 path,
+                target,
                 input_state,
                 column_input,
                 comparator_dropdown,
@@ -138,6 +187,7 @@ fn render_filter_group(
     op: dbflux_core::BoolOp,
     children: Vec<dbflux_core::FilterNode>,
     path: Vec<usize>,
+    target: FilterTarget,
     source_alias: &str,
     input_states: &std::collections::HashMap<u64, Entity<InputState>>,
     column_input_states: &std::collections::HashMap<u64, Entity<InputState>>,
@@ -151,6 +201,11 @@ fn render_filter_group(
     let op_label = match op {
         dbflux_core::BoolOp::And => "AND",
         dbflux_core::BoolOp::Or => "OR",
+    };
+
+    let prefix = match target {
+        FilterTarget::Where => "qb-grp",
+        FilterTarget::Having => "qb-hav-grp",
     };
 
     let at_depth_cap = path.len() >= FILTER_DEPTH_CAP;
@@ -167,46 +222,53 @@ fn render_filter_group(
             .gap_1()
             .items_center()
             .child(
-                Button::new(path_id("qb-grp-op", &path_for_toggle), op_label)
-                    .ghost()
-                    .small()
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.toggle_group_op(path_for_toggle.clone(), cx);
-                    })),
-            )
-            .child(
-                Button::new(path_id("qb-grp-add-pred", &path_for_add_pred), "+ Filter")
-                    .ghost()
-                    .small()
-                    .disabled(at_depth_cap)
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.add_predicate(
-                            path_for_add_pred.clone(),
-                            &source_alias_for_pred.clone(),
-                            "",
-                            cx,
-                        );
-                    })),
+                Button::new(
+                    path_id(&format!("{}-op", prefix), &path_for_toggle),
+                    op_label,
+                )
+                .ghost()
+                .small()
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.toggle_group_op_for(target, path_for_toggle.clone(), cx);
+                })),
             )
             .child(
                 Button::new(
-                    path_id("qb-grp-add-grp", &path_for_add_group),
+                    path_id(&format!("{}-add-pred", prefix), &path_for_add_pred),
+                    "+ Filter",
+                )
+                .ghost()
+                .small()
+                .disabled(at_depth_cap)
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.add_predicate_for(
+                        target,
+                        path_for_add_pred.clone(),
+                        &source_alias_for_pred.clone(),
+                        "",
+                        cx,
+                    );
+                })),
+            )
+            .child(
+                Button::new(
+                    path_id(&format!("{}-add-grp", prefix), &path_for_add_group),
                     "+ Sub-group",
                 )
                 .ghost()
                 .small()
                 .disabled(at_depth_cap)
                 .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.add_group(path_for_add_group.clone(), cx);
+                    this.add_group_for(target, path_for_add_group.clone(), cx);
                 })),
             )
             .when(!path.is_empty(), |this| {
                 this.child(
-                    Button::new(path_id("qb-grp-rm", &path_for_remove), "✕")
+                    Button::new(path_id(&format!("{}-rm", prefix), &path_for_remove), "✕")
                         .ghost()
                         .small()
                         .on_click(cx.listener(move |this, _event, _window, cx| {
-                            this.remove_filter_node(path_for_remove.clone(), cx);
+                            this.remove_filter_node_for(target, path_for_remove.clone(), cx);
                         })),
                 )
             }),
@@ -218,6 +280,7 @@ fn render_filter_group(
         let child_element = render_filter_node(
             child,
             child_path,
+            target,
             source_alias,
             input_states,
             column_input_states,
@@ -233,6 +296,7 @@ fn render_filter_group(
 fn render_filter_predicate(
     pred: dbflux_core::Predicate,
     path: Vec<usize>,
+    target: FilterTarget,
     input_state: Option<Entity<InputState>>,
     column_input_state: Option<Entity<InputState>>,
     comparator_dropdown: Option<Entity<Dropdown>>,
@@ -241,6 +305,11 @@ fn render_filter_predicate(
     use dbflux_components::controls::{Button, Input, completion_input_keys_wrapper};
     use gpui::SharedString;
     use gpui::prelude::*;
+
+    let rm_prefix = match target {
+        FilterTarget::Where => "qb-pred-rm",
+        FilterTarget::Having => "qb-hav-pred-rm",
+    };
 
     let path_for_rm = path.clone();
 
@@ -286,11 +355,11 @@ fn render_filter_predicate(
     }
 
     row.child(
-        Button::new(path_id("qb-pred-rm", &path_for_rm), "✕")
+        Button::new(path_id(rm_prefix, &path_for_rm), "✕")
             .ghost()
             .small()
             .on_click(cx.listener(move |this, _event, _window, cx| {
-                this.remove_filter_node(path_for_rm.clone(), cx);
+                this.remove_filter_node_for(target, path_for_rm.clone(), cx);
             })),
     )
 }
