@@ -532,6 +532,21 @@ impl MutationExecutor {
             return Ok(MutationOutcome::Cancelled { rows_affected: 0 });
         }
 
+        let vocab = TransactionVocab::for_kind(self.deps.connection.kind());
+
+        if let Some(v) = &vocab
+            && let Some(ms) = self.opts.lock_timeout_ms
+            && let Some(lock_sql) = v.lock_timeout_sql(ms)
+        {
+            let lock_req = QueryRequest::new(lock_sql);
+            if let Err(e) = self.deps.connection.execute(&lock_req) {
+                let err_msg = e.to_string();
+                self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
+                self.reset_lock_timeout_if_needed(v);
+                return Err(ExecutorError::Transaction(err_msg));
+            }
+        }
+
         let mut dml_req = QueryRequest::new(generated.sql.clone());
         dml_req.params = generated.params.clone();
 
@@ -539,6 +554,9 @@ impl MutationExecutor {
             Err(e) => {
                 let err_msg = e.to_string();
                 self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
+                if let Some(v) = &vocab {
+                    self.reset_lock_timeout_if_needed(v);
+                }
                 Err(ExecutorError::Transaction(err_msg))
             }
             Ok(result) => {
@@ -558,7 +576,9 @@ impl MutationExecutor {
                 .with_correlation_id(run_id);
 
                 self.emit_event(success_event);
-
+                if let Some(v) = &vocab {
+                    self.reset_lock_timeout_if_needed(v);
+                }
                 Ok(MutationOutcome::Success { rows_affected })
             }
         }
@@ -3263,6 +3283,98 @@ mod tests {
                     timestamps
                 );
             }
+        }
+
+        // F-R4-5: run_direct with lock_timeout must emit SET before DML and reset after DML.
+        // Sequence: SET SESSION innodb_lock_wait_timeout = N, DELETE ..., SET SESSION ... DEFAULT
+        #[test]
+        fn direct_emits_lock_timeout_and_reset() {
+            use super::executor_tests::RecordingConnection;
+
+            let conn = RecordingConnection::new(DbKind::MySQL, 3);
+            let conn_ref = Arc::clone(&conn);
+            let spec = make_delete_spec("orders");
+            let opts = MutationExecOptions::new(
+                ExecutionMode::DirectAutocommit,
+                1_000,
+                Some(5_000),
+                3_000,
+            );
+            let deps = make_deps_no_sink(conn);
+            let executor = MutationExecutor::new(spec, opts, deps);
+
+            let result = executor.run_direct(&no_cancel());
+            assert!(result.is_ok(), "expected ok: {:?}", result);
+
+            let calls = conn_ref.recorded_calls();
+            assert!(
+                calls.len() >= 3,
+                "expected at least SET + DML + RESET; calls: {:?}",
+                calls
+            );
+
+            let set_pos = calls
+                .iter()
+                .position(|c| c.to_ascii_uppercase().contains("INNODB_LOCK_WAIT_TIMEOUT"));
+            let dml_pos = calls.iter().position(|c| {
+                let u = c.to_ascii_uppercase();
+                u.starts_with("DELETE") || u.starts_with("UPDATE")
+            });
+            let reset_pos = calls.iter().rposition(|c| c.to_ascii_uppercase().contains("DEFAULT"));
+
+            assert!(
+                set_pos.is_some(),
+                "SET SESSION lock_timeout must be emitted; calls: {:?}",
+                calls
+            );
+            assert!(dml_pos.is_some(), "DML must be emitted; calls: {:?}", calls);
+            assert!(
+                reset_pos.is_some(),
+                "lock_timeout RESET must be emitted; calls: {:?}",
+                calls
+            );
+            assert!(
+                set_pos.unwrap() < dml_pos.unwrap(),
+                "SET must come before DML; calls: {:?}",
+                calls
+            );
+            assert!(
+                dml_pos.unwrap() < reset_pos.unwrap(),
+                "RESET must come after DML; calls: {:?}",
+                calls
+            );
+        }
+
+        // F-R4-5: run_direct without lock_timeout must not emit any SET or RESET.
+        #[test]
+        fn direct_no_lock_timeout_skips_emit_and_reset() {
+            use super::executor_tests::RecordingConnection;
+
+            let conn = RecordingConnection::new(DbKind::MySQL, 3);
+            let conn_ref = Arc::clone(&conn);
+            let spec = make_delete_spec("orders");
+            let opts = MutationExecOptions::new(
+                ExecutionMode::DirectAutocommit,
+                1_000,
+                None, // no lock_timeout
+                3_000,
+            );
+            let deps = make_deps_no_sink(conn);
+            let executor = MutationExecutor::new(spec, opts, deps);
+
+            let result = executor.run_direct(&no_cancel());
+            assert!(result.is_ok(), "expected ok: {:?}", result);
+
+            let calls = conn_ref.recorded_calls();
+            let has_lock_timeout = calls.iter().any(|c| {
+                let u = c.to_ascii_uppercase();
+                u.contains("INNODB_LOCK_WAIT_TIMEOUT") || u.contains("LOCK_TIMEOUT")
+            });
+            assert!(
+                !has_lock_timeout,
+                "no lock_timeout SQL expected when lock_timeout_ms is None; calls: {:?}",
+                calls
+            );
         }
     }
 
