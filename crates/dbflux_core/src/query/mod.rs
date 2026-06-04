@@ -45,8 +45,8 @@ pub use types::{
 pub use visual_query::AggregateSpec as VisualAggregateSpec;
 pub use visual_query::SortDirection as VisualSortDirection;
 pub use visual_query::{
-    AggFn, AliasOrigin, Assignment, AssignmentValue, BoolOp, Comparator, CountSpec, FilterNode,
-    GroupByEntry, JoinFilterNode, JoinKind, JoinOn, JoinPredicate, JoinStep, LiteralValue,
-    MutationKind, Predicate, PredicateValue, ProjectedColumn, Projection, ScalarLiteral, SortEntry,
-    SourceTable, SpecError, VisualMutationSpec, VisualQuerySpec,
+    AggFn, AliasOrigin, Assignment, AssignmentValue, BoolOp, ColumnOrigin, Comparator, CountSpec,
+    EditableBinding, FilterNode, GroupByEntry, JoinFilterNode, JoinKind, JoinOn, JoinPredicate,
+    JoinStep, LiteralValue, MutationKind, Predicate, PredicateValue, ProjectedColumn, Projection,
+    ScalarLiteral, SortEntry, SourceTable, SpecError, VisualMutationSpec, VisualQuerySpec,
 };
