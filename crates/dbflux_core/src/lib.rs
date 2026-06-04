@@ -216,7 +216,8 @@ pub use storage::{
     KeyringSecretStore, NoopSecretStore, ProfileStore, ProxyStore, RecentFile, RecentFilesStore,
     SavedQuery, SavedQueryManager, SavedQueryStore, SecretManager, SecretStore, SessionManifest,
     SessionStore, SessionTab, SessionTabKind, SshTunnelStore, UiState, UiStateStore,
-    connection_secret_ref, create_secret_store, proxy_secret_ref, ssh_tunnel_secret_ref,
+    auth_field_secret_ref, connection_secret_ref, create_secret_store, proxy_secret_ref,
+    ssh_tunnel_secret_ref,
 };
 
 pub use observability::{

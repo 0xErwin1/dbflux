@@ -435,6 +435,9 @@ impl AwsSsoAuthProvider {
                     name: p.name.clone(),
                     provider_id: "aws-sso".to_string(),
                     fields,
+                    // Reflected AWS profiles never carry key material; secrets
+                    // live in ~/.aws/credentials, not in DBFlux storage.
+                    secret_fields: std::collections::HashMap::new(),
                     enabled: true,
                     // Reflected non-dangling profiles are editable (design §13).
                     read_only: false,
@@ -508,6 +511,9 @@ impl AwsSsoSessionAuthProvider {
                     name: p.name.clone(),
                     provider_id: "aws-sso-session".to_string(),
                     fields,
+                    // Reflected AWS profiles never carry key material; secrets
+                    // live in ~/.aws/credentials, not in DBFlux storage.
+                    secret_fields: std::collections::HashMap::new(),
                     enabled: true,
                     // Reflected non-dangling profiles are editable (design §13).
                     read_only: false,
@@ -597,6 +603,9 @@ impl AwsSharedCredentialsAuthProvider {
                     name: name.clone(),
                     provider_id: "aws-shared-credentials".to_string(),
                     fields,
+                    // Reflected AWS profiles never carry key material; secrets
+                    // live in ~/.aws/credentials, not in DBFlux storage.
+                    secret_fields: std::collections::HashMap::new(),
                     enabled: true,
                     // Reflected non-dangling profiles are editable (design §13).
                     read_only: false,
@@ -2600,6 +2609,7 @@ mod tests {
             name: "Test".to_string(),
             provider_id: "aws-sso".to_string(),
             fields,
+            secret_fields: std::collections::HashMap::new(),
             enabled: true,
             read_only: false,
             dangling_origin: None,
@@ -3151,6 +3161,7 @@ sso_region = us-east-1
             name: "dev-sso".to_string(),
             provider_id: "aws-sso".to_string(),
             fields,
+            secret_fields: std::collections::HashMap::new(),
             enabled: true,
             read_only: true,
             dangling_origin: None,

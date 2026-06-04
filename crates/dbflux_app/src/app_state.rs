@@ -364,7 +364,101 @@ impl AppState {
             }
         }
 
+        state.hydrate_and_migrate_auth_secrets();
+
         state
+    }
+
+    /// Re-hydrates secret-kind auth profile fields from the OS keyring and
+    /// migrates any legacy plaintext secrets out of SQLite.
+    ///
+    /// Runs once at startup, after the provider registry and secret manager
+    /// exist. For every stored profile it asks the owning provider's form
+    /// definition which fields are secret-kind (`Password` / `WriteOnly`), then:
+    ///
+    /// - if the value is still sitting in `fields` as plaintext (a profile saved
+    ///   before secrets were keyring-routed), it is moved into the keyring,
+    ///   removed from `fields`, and the profile is re-persisted so SQLite keeps
+    ///   only a keyring-reference marker; otherwise
+    /// - the value is read back from the keyring into `secret_fields`.
+    ///
+    /// Providers not present in the registry are skipped (their secret layout is
+    /// unknown), leaving their data untouched.
+    fn hydrate_and_migrate_auth_secrets(&mut self) {
+        let mut needs_persist = false;
+        let count = self.facade.auth_profiles.items.len();
+
+        for idx in 0..count {
+            let provider_id = self.facade.auth_profiles.items[idx].provider_id.clone();
+            let profile_id = self.facade.auth_profiles.items[idx].id;
+
+            let Some(provider) = self.auth_provider_by_id(&provider_id) else {
+                continue;
+            };
+
+            let secret_field_ids: Vec<String> = provider
+                .form_def()
+                .tabs
+                .iter()
+                .flat_map(|tab| tab.sections.iter())
+                .flat_map(|section| section.fields.iter())
+                .filter(|field| {
+                    matches!(
+                        field.kind,
+                        dbflux_core::FormFieldKind::Password
+                            | dbflux_core::FormFieldKind::WriteOnly
+                    )
+                })
+                .map(|field| field.id.clone())
+                .collect();
+            drop(provider);
+
+            for field_id in secret_field_ids {
+                let secret_ref = dbflux_core::auth_field_secret_ref(&profile_id, &field_id);
+
+                if let Some(plaintext) = self.facade.auth_profiles.items[idx]
+                    .fields
+                    .remove(&field_id)
+                {
+                    let secret = dbflux_core::secrecy::SecretString::from(plaintext);
+                    self.facade.secrets.set_by_ref(&secret_ref, &secret);
+                    self.facade.auth_profiles.items[idx]
+                        .secret_fields
+                        .insert(field_id, secret);
+                    needs_persist = true;
+                } else if let Some(secret) = self.facade.secrets.get_by_ref(&secret_ref) {
+                    self.facade.auth_profiles.items[idx]
+                        .secret_fields
+                        .insert(field_id, secret);
+                }
+            }
+        }
+
+        if needs_persist
+            && let Err(e) = crate::config_loader::save_auth_profiles(
+                &self.storage_runtime,
+                &self.facade.auth_profiles.items,
+            )
+        {
+            log::error!("Failed to persist migrated auth profile secrets: {}", e);
+        }
+    }
+
+    /// Writes a profile's secret-kind field values to the OS keyring under
+    /// per-field references. The matching SQLite rows store only the reference.
+    fn persist_auth_secret_fields(&self, profile: &dbflux_core::AuthProfile) {
+        for (field_id, secret) in &profile.secret_fields {
+            let secret_ref = dbflux_core::auth_field_secret_ref(&profile.id, field_id);
+            self.facade.secrets.set_by_ref(&secret_ref, secret);
+        }
+    }
+
+    /// Deletes a profile's secret-kind field values from the OS keyring.
+    fn delete_auth_secret_fields(&self, profile: &dbflux_core::AuthProfile) {
+        for field_id in profile.secret_fields.keys() {
+            let secret_ref = dbflux_core::auth_field_secret_ref(&profile.id, field_id);
+            self.facade.secrets.delete_by_ref(&secret_ref);
+        }
     }
 
     #[cfg(feature = "mcp")]
@@ -1969,8 +2063,9 @@ impl AppState {
             error_msg,
         );
 
-        if let Err(e) = save_result {
-            log::error!("Failed to save auth profiles: {}", e);
+        match save_result {
+            Ok(()) => self.persist_auth_secret_fields(&profile),
+            Err(e) => log::error!("Failed to save auth profiles: {}", e),
         }
     }
 
@@ -2001,8 +2096,9 @@ impl AppState {
             error_msg,
         );
 
-        if let Err(e) = save_result {
-            log::error!("Failed to save auth profiles after remove: {}", e);
+        match save_result {
+            Ok(()) => self.delete_auth_secret_fields(&removed),
+            Err(e) => log::error!("Failed to save auth profiles after remove: {}", e),
         }
         Some(removed)
     }
@@ -2037,8 +2133,9 @@ impl AppState {
                 error_msg,
             );
 
-            if let Err(e) = save_result {
-                log::error!("Failed to save auth profiles: {}", e);
+            match save_result {
+                Ok(()) => self.persist_auth_secret_fields(&profile),
+                Err(e) => log::error!("Failed to save auth profiles: {}", e),
             }
         }
     }
@@ -2083,6 +2180,21 @@ impl AppState {
     #[deprecated(note = "use list_auth_profiles(); stored-only view hides reflected AWS profiles")]
     pub fn auth_profiles(&self) -> &[dbflux_core::AuthProfile] {
         &self.facade.auth_profiles.items
+    }
+
+    /// Returns a clone of the re-hydrated secret-kind fields for a stored
+    /// profile, used by the Settings UI to preserve a WriteOnly secret the user
+    /// left blank when re-saving. `None` if no stored profile matches `id`.
+    pub fn stored_auth_profile_secret_fields(
+        &self,
+        id: Uuid,
+    ) -> Option<HashMap<String, SecretString>> {
+        self.facade
+            .auth_profiles
+            .items
+            .iter()
+            .find(|profile| profile.id == id)
+            .map(|profile| profile.secret_fields.clone())
     }
 
     // --- ConnectionTreeManager ---
@@ -3945,6 +4057,7 @@ mod tests {
             name: name.to_string(),
             provider_id: "aws-sso".to_string(),
             fields: HashMap::new(),
+            secret_fields: HashMap::new(),
             enabled: true,
             read_only: true,
             dangling_origin: None,
@@ -3991,6 +4104,7 @@ mod tests {
             name: "OIDC Provider".to_string(),
             provider_id: "custom-oidc".to_string(),
             fields: HashMap::new(),
+            secret_fields: HashMap::new(),
             enabled: true,
             read_only: false,
             dangling_origin: None,
@@ -4035,6 +4149,7 @@ mod tests {
             name: "legacy-sso".to_string(),
             provider_id: "aws-sso".to_string(),
             fields: HashMap::new(),
+            secret_fields: HashMap::new(),
             enabled: true,
             read_only: false,
             dangling_origin: None,

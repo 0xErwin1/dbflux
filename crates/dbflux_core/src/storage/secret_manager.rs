@@ -1,6 +1,4 @@
-use crate::{
-    AuthProfile, ConnectionProfile, DbConfig, ProxyProfile, SecretStore, SshTunnelProfile,
-};
+use crate::{ConnectionProfile, DbConfig, ProxyProfile, SecretStore, SshTunnelProfile};
 use log::error;
 use secrecy::SecretString;
 use std::sync::Arc;
@@ -18,12 +16,6 @@ impl HasSecretRef for SshTunnelProfile {
 }
 
 impl HasSecretRef for ProxyProfile {
-    fn secret_ref(&self) -> String {
-        self.secret_ref()
-    }
-}
-
-impl HasSecretRef for AuthProfile {
     fn secret_ref(&self) -> String {
         self.secret_ref()
     }
@@ -56,6 +48,54 @@ impl SecretManager {
 
     pub fn secret_store_arc(&self) -> Arc<RwLock<Box<dyn SecretStore>>> {
         self.secret_store.clone()
+    }
+
+    /// Reads a secret stored under an explicit keyring reference.
+    ///
+    /// Used for per-field auth-profile secrets, whose reference is computed as
+    /// `dbflux:auth:{profile_id}:{field_id}` rather than derived from a single
+    /// `HasSecretRef` value (a profile can hold several independent secrets).
+    pub fn get_by_ref(&self, secret_ref: &str) -> Option<SecretString> {
+        let store = self.store_read();
+
+        if !store.is_available() {
+            return None;
+        }
+
+        match store.get(secret_ref) {
+            Ok(secret) => secret,
+            Err(e) => {
+                error!("Failed to get secret '{}': {:?}", secret_ref, e);
+                None
+            }
+        }
+    }
+
+    /// Writes a secret under an explicit keyring reference. No-op when the
+    /// keyring backend is unavailable.
+    pub fn set_by_ref(&self, secret_ref: &str, secret: &SecretString) {
+        let store = self.store_read();
+
+        if !store.is_available() {
+            return;
+        }
+
+        if let Err(e) = store.set(secret_ref, secret) {
+            error!("Failed to save secret '{}': {:?}", secret_ref, e);
+        }
+    }
+
+    /// Deletes a secret stored under an explicit keyring reference.
+    pub fn delete_by_ref(&self, secret_ref: &str) {
+        let store = self.store_read();
+
+        if !store.is_available() {
+            return;
+        }
+
+        if let Err(e) = store.delete(secret_ref) {
+            log::warn!("Failed to delete secret '{}': {:?}", secret_ref, e);
+        }
     }
 
     pub fn get_secret<T: HasSecretRef>(&self, item: &T, label: &str) -> Option<SecretString> {

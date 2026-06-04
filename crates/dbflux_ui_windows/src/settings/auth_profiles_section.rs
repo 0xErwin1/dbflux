@@ -11,6 +11,7 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::focus_frame;
 use dbflux_components::primitives::{Icon as FluxIcon, Label, Text};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
+use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     AccessKind, AuthEditCapabilities, AuthEditSnapshot, AuthProfile, AuthSaveOutcome,
     DanglingMessage, FetchOptionsError, FetchOptionsRequest, FormFieldKind, RefreshTrigger,
@@ -205,6 +206,10 @@ fn build_auth_profile_from_form(
         name: trimmed_name.to_string(),
         provider_id: provider_id.to_string(),
         fields,
+        // Transient form profile used for live provider calls (validation,
+        // option fetching); secret values stay inline and are never persisted
+        // from here. The SQLite save path splits them out separately.
+        secret_fields: HashMap::new(),
         enabled,
         read_only: false,
         dangling_origin: None,
@@ -740,6 +745,9 @@ impl AuthProfilesSection {
             name: self.input_name.read(cx).value().to_string(),
             provider_id: provider_id_snap,
             fields: fields_snap,
+            // Transient snapshot for live option fetching: secrets stay inline
+            // and are sent to the provider verbatim; nothing here is persisted.
+            secret_fields: HashMap::new(),
             enabled: self.profile_enabled,
             read_only: false,
             dangling_origin: None,
@@ -1240,26 +1248,44 @@ impl AuthProfilesSection {
 
         self.rebuild_form_inputs(window, cx);
 
-        // Determine which field ids are WriteOnly so we never pre-fill them.
-        let write_only_fields: std::collections::HashSet<String> = self
-            .selected_provider(cx)
-            .map(|provider| {
-                provider
-                    .form_def()
-                    .tabs
-                    .iter()
-                    .flat_map(|tab| tab.sections.iter())
-                    .flat_map(|section| section.fields.iter())
-                    .filter(|field| field.kind == FormFieldKind::WriteOnly)
-                    .map(|field| field.id.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
+        // Classify secret-kind fields. `WriteOnly` fields are never pre-filled;
+        // `Password` fields are pre-filled from the re-hydrated `secret_fields`
+        // so the user sees the stored value (masked) and can keep or change it.
+        let mut write_only_fields: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        let mut password_fields: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
+        if let Some(provider) = self.selected_provider(cx) {
+            for field in provider
+                .form_def()
+                .tabs
+                .iter()
+                .flat_map(|tab| tab.sections.iter())
+                .flat_map(|section| section.fields.iter())
+            {
+                match field.kind {
+                    FormFieldKind::WriteOnly => {
+                        write_only_fields.insert(field.id.clone());
+                    }
+                    FormFieldKind::Password => {
+                        password_fields.insert(field.id.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
 
         for (field_id, input) in &self.form_inputs {
             // WriteOnly fields are always rendered empty (spec R9.4.1, S33).
             let value = if write_only_fields.contains(field_id) {
                 String::new()
+            } else if password_fields.contains(field_id) {
+                profile
+                    .secret_fields
+                    .get(field_id)
+                    .map(|secret| secret.expose_secret().to_string())
+                    .unwrap_or_default()
             } else {
                 profile.fields.get(field_id).cloned().unwrap_or_default()
             };
@@ -1330,17 +1356,68 @@ impl AuthProfilesSection {
         }
 
         let profile_id = self.editing_profile_id.unwrap_or_else(Uuid::new_v4);
-        let fields = self
-            .form_inputs
-            .iter()
-            .map(|(field_id, input)| (field_id.clone(), input.read(cx).value().to_string()))
-            .collect::<HashMap<_, _>>();
+
+        // Secret-kind fields (Password / WriteOnly) are split out of `fields`
+        // into `secret_fields` so they are routed to the keyring and never
+        // persisted as plaintext.
+        let secret_field_ids: HashSet<String> = self
+            .selected_provider(cx)
+            .map(|provider| {
+                provider
+                    .form_def()
+                    .tabs
+                    .iter()
+                    .flat_map(|tab| tab.sections.iter())
+                    .flat_map(|section| section.fields.iter())
+                    .filter(|field| {
+                        matches!(
+                            field.kind,
+                            FormFieldKind::Password | FormFieldKind::WriteOnly
+                        )
+                    })
+                    .map(|field| field.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Secrets already stored for the profile being edited, used to preserve
+        // a WriteOnly value the user intentionally left blank (spec R9.4.2).
+        let existing_secrets: HashMap<String, SecretString> = self
+            .editing_profile_id
+            .and_then(|id| {
+                self.app_state
+                    .read(cx)
+                    .stored_auth_profile_secret_fields(id)
+            })
+            .unwrap_or_default();
+
+        let mut fields: HashMap<String, String> = HashMap::new();
+        let mut secret_fields: HashMap<String, SecretString> = HashMap::new();
+
+        for (field_id, input) in &self.form_inputs {
+            let value = input.read(cx).value().to_string();
+
+            if !secret_field_ids.contains(field_id) {
+                fields.insert(field_id.clone(), value);
+                continue;
+            }
+
+            if value.is_empty() {
+                // Blank secret input: keep the existing stored secret, if any.
+                if let Some(existing) = existing_secrets.get(field_id) {
+                    secret_fields.insert(field_id.clone(), existing.clone());
+                }
+            } else {
+                secret_fields.insert(field_id.clone(), SecretString::from(value));
+            }
+        }
 
         let profile = AuthProfile {
             id: profile_id,
             name,
             provider_id,
             fields,
+            secret_fields,
             enabled: self.profile_enabled,
             read_only: false,
             dangling_origin: None,
@@ -1477,6 +1554,9 @@ impl AuthProfilesSection {
             name: name.clone(),
             provider_id: provider_id.clone(),
             fields: raw_fields,
+            // File-backed save path: secrets transit inline to save_edit (which
+            // writes them to the external config file), never to DBFlux storage.
+            secret_fields: HashMap::new(),
             enabled: self.profile_enabled,
             read_only: false,
             dangling_origin: None,

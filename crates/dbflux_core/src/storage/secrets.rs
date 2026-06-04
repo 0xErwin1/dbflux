@@ -125,6 +125,13 @@ pub fn proxy_secret_ref(proxy_id: &uuid::Uuid) -> String {
     format!("dbflux:proxy:{}", proxy_id)
 }
 
+/// Keyring reference for a single secret-kind auth profile field
+/// (`Password` / `WriteOnly`). One entry per (profile, field) so a profile can
+/// hold several independent secrets (e.g. `secret_access_key` + `session_token`).
+pub fn auth_field_secret_ref(profile_id: &uuid::Uuid, field_id: &str) -> String {
+    format!("dbflux:auth:{}:{}", profile_id, field_id)
+}
+
 pub fn create_secret_store() -> Box<dyn SecretStore> {
     let keyring_store = KeyringSecretStore::new();
     if keyring_store.is_available() {

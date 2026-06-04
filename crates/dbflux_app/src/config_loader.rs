@@ -759,15 +759,27 @@ pub fn save_auth_profiles(
             dangling_origin: None,
         };
 
+        // Secret-kind fields are persisted as keyring-reference markers only;
+        // the values themselves are written to the keyring by the caller
+        // (AppState), never to SQLite. `fields` already excludes them.
+        let secret_refs: std::collections::HashMap<String, String> = profile
+            .secret_fields
+            .keys()
+            .map(|key| {
+                (
+                    key.clone(),
+                    dbflux_core::auth_field_secret_ref(&profile.id, key),
+                )
+            })
+            .collect();
+
         if existing_ids.contains(&dto.id) {
             repo.update(&dto)?;
-            // Update fields in child table
-            repo.set_fields(&dto.id, &profile.fields)?;
         } else {
             repo.insert(&dto)?;
-            // Insert fields in child table
-            repo.set_fields(&dto.id, &profile.fields)?;
         }
+
+        repo.set_fields_and_secrets(&dto.id, &profile.fields, &secret_refs)?;
     }
 
     // Delete profiles that are in DB but not in the desired state.
@@ -1517,6 +1529,10 @@ fn load_auth_profiles(
                     name: dto.name,
                     provider_id: dto.provider_id,
                     fields,
+                    // Re-hydrated from the keyring by AppState after load, where
+                    // the auth-provider registry is available to identify which
+                    // fields are secret-kind.
+                    secret_fields: std::collections::HashMap::new(),
                     enabled: dto.enabled,
                     read_only: false,
                     dangling_origin: dto.dangling_origin,
