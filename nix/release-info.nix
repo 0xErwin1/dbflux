@@ -1,5 +1,5 @@
 {
-  version = "0.6.0-rc.0";
+  version = "0.6.0-rc.1";
 
   # SHA256 SRI hashes of each prebuilt artifact published in the matching
   # GitHub Release. This pins the prebuilt package to whatever release line the
@@ -20,12 +20,12 @@
   # Then update `version`, the two `url`s, and the two `hash`es below.
   artifacts = {
     "x86_64-linux" = {
-      url = "https://github.com/0xErwin1/dbflux/releases/download/v0.6.0-rc.0/dbflux-linux-amd64.tar.gz";
-      hash = "sha256-LN42s/N0pTRea3oN5qzA9TfihW41H0mb0nQkFdUMGck=";
+      url = "https://github.com/0xErwin1/dbflux/releases/download/v0.6.0-rc.1/dbflux-linux-amd64.tar.gz";
+      hash = "sha256-BmVYwKdSVGhOP5pnKAueNWJOiEWMWUC5gVX0gWY954Y=";
     };
     "aarch64-linux" = {
-      url = "https://github.com/0xErwin1/dbflux/releases/download/v0.6.0-rc.0/dbflux-linux-arm64.tar.gz";
-      hash = "sha256-/UjS44xgUdImccL+j+Yg2S9tZdvMl25oVS6YHQvpwLo=";
+      url = "https://github.com/0xErwin1/dbflux/releases/download/v0.6.0-rc.1/dbflux-linux-arm64.tar.gz";
+      hash = "sha256-uPidMVbDrCAtuf1FtFtMTtlRL6y+65MFnXztMMJVbT4=";
     };
   };
 }
