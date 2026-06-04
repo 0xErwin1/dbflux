@@ -295,7 +295,10 @@ impl AppState {
         // Construct viz repositories sharing a single connection.
         // Decision C.1: one shared Arc<Mutex<Connection>> is used for all five repos so
         // they serialize through the same lock, matching the pattern used by saved_filters.
-        let viz_conn = storage_runtime.viz_connection();
+        let viz_conn = storage_runtime.viz_connection().unwrap_or_else(|e| {
+            log::error!("Failed to open shared viz connection during startup: {e}");
+            panic!("Storage initialization failed: cannot open viz connection");
+        });
         let saved_charts_repo = Arc::new(SavedChartsRepository::new(Arc::clone(&viz_conn)));
         let saved_chart_series_repo =
             Arc::new(SavedChartSeriesRepository::new(Arc::clone(&viz_conn)));

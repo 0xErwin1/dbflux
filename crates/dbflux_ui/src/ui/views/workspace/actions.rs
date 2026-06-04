@@ -223,8 +223,22 @@ impl Workspace {
             return;
         }
 
-        // Create a new audit document.
-        let doc = cx.new(|cx| AuditDocument::new(self.app_state.clone(), window, cx));
+        // Create a new audit document. Pre-open the audit repo so failures can
+        // be surfaced through report_error before entering cx.new.
+        let audit_repo = match self.app_state.read(cx).storage_runtime().audit() {
+            Ok(repo) => repo,
+            Err(e) => {
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::Storage,
+                        format!("Cannot open audit viewer: {e}"),
+                    ),
+                    cx,
+                );
+                return;
+            }
+        };
+        let doc = cx.new(|cx| AuditDocument::new(audit_repo, self.app_state.clone(), window, cx));
         let pane = AuditDocument::into_pane(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
@@ -275,8 +289,27 @@ impl Workspace {
 
         match correlation_id {
             Some(id) => {
+                let audit_repo = match self.app_state.read(cx).storage_runtime().audit() {
+                    Ok(repo) => repo,
+                    Err(e) => {
+                        report_error(
+                            UserFacingError::new(
+                                ErrorKind::Storage,
+                                format!("Cannot open audit viewer: {e}"),
+                            ),
+                            cx,
+                        );
+                        return;
+                    }
+                };
                 let doc = cx.new(|cx| {
-                    AuditDocument::new_with_correlation_id(id, self.app_state.clone(), window, cx)
+                    AuditDocument::new_with_correlation_id(
+                        id,
+                        audit_repo,
+                        self.app_state.clone(),
+                        window,
+                        cx,
+                    )
                 });
                 let pane = AuditDocument::into_pane(doc, cx);
                 self.tab_manager.update(cx, |mgr, cx| {
@@ -3273,12 +3306,14 @@ impl Workspace {
             .unwrap_or_default();
 
         // Build the referencing-dashboard list for the orphan-warning block.
+        // dashboards_repo() is now fallible; degrade gracefully on open failure.
         let referencing_ids = self
             .app_state
             .read(cx)
             .storage_runtime()
             .dashboards_repo()
-            .find_dashboards_referencing_chart(chart_id)
+            .ok()
+            .and_then(|r| r.find_dashboards_referencing_chart(chart_id).ok())
             .unwrap_or_default();
 
         let referencing_dashboards: Vec<(uuid::Uuid, String)> = referencing_ids

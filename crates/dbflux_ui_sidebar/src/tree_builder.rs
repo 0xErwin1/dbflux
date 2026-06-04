@@ -2846,7 +2846,9 @@ mod tests {
         // Insert a row into cfg_connection_profiles so that FK constraints
         // on viz_dashboards.profile_id and viz_saved_charts.profile_id succeed.
         {
-            let conn = rt.viz_connection();
+            let conn = rt
+                .viz_connection()
+                .expect("viz connection should open in test");
             let guard = conn.lock().unwrap();
             guard
                 .execute(

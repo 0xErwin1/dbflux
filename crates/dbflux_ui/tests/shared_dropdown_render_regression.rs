@@ -34,7 +34,13 @@ struct ProductionRefreshDropdownHarness {
 
 impl ProductionRefreshDropdownHarness {
     fn new(app_state: Entity<AppStateEntity>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let audit_document = cx.new(|cx| AuditDocument::new(app_state.clone(), window, cx));
+        let audit_repo = app_state
+            .read(cx)
+            .storage_runtime()
+            .audit()
+            .expect("audit repo should open in test");
+        let audit_document =
+            cx.new(|cx| AuditDocument::new(audit_repo, app_state.clone(), window, cx));
         let key_value_document = cx.new(|cx| {
             KeyValueDocument::new(Uuid::nil(), "0".to_string(), app_state.clone(), window, cx)
         });
