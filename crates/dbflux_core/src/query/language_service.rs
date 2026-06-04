@@ -612,7 +612,41 @@ fn skip_cte_prefix(sql: &str) -> &str {
 }
 
 fn contains_where_clause(normalized_sql: &str) -> bool {
-    normalized_sql.contains(" where ")
+    strip_single_quoted_literals(normalized_sql)
+        .split(|c: char| c.is_whitespace() || c == '(' || c == ')')
+        .any(|token| token == "where")
+}
+
+/// Replace the contents of single-quoted string literals with spaces so that
+/// keyword detection never matches text that lives inside a value. Escaped
+/// quotes (`''`) are treated as part of the literal, not a delimiter.
+fn strip_single_quoted_literals(sql: &str) -> String {
+    let mut result = String::with_capacity(sql.len());
+    let mut chars = sql.chars().peekable();
+    let mut in_literal = false;
+
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' if !in_literal => {
+                in_literal = true;
+                result.push('\'');
+            }
+            '\'' if in_literal => {
+                if chars.peek() == Some(&'\'') {
+                    chars.next();
+                    result.push(' ');
+                    result.push(' ');
+                } else {
+                    in_literal = false;
+                    result.push('\'');
+                }
+            }
+            _ if in_literal => result.push(' '),
+            _ => result.push(c),
+        }
+    }
+
+    result
 }
 
 fn is_empty_filter(args_start: &str) -> bool {
@@ -726,6 +760,28 @@ mod tests {
             detect_dangerous_query("update users set active = false"),
             Some(DangerousQueryKind::UpdateNoWhere)
         );
+    }
+
+    #[test]
+    fn update_with_multiline_where_is_safe() {
+        let sql =
+            "UPDATE business_nad_status\nSET last_error = 'error 193'\nWHERE business_id = 193;";
+        assert_eq!(detect_dangerous_query(sql), None);
+    }
+
+    #[test]
+    fn update_with_where_word_inside_string_value_is_dangerous() {
+        let sql = "UPDATE notes SET body = 'see the where clause docs'";
+        assert_eq!(
+            detect_dangerous_query(sql),
+            Some(DangerousQueryKind::UpdateNoWhere)
+        );
+    }
+
+    #[test]
+    fn update_with_escaped_quote_before_where_is_safe() {
+        let sql = "UPDATE t SET note = 'it''s fine' WHERE id = 1";
+        assert_eq!(detect_dangerous_query(sql), None);
     }
 
     // ==================== TRUNCATE tests ====================
