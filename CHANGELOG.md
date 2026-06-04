@@ -6,6 +6,27 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Inline edit on builder-generated SELECT results (#170)** — Inline
+  cell edit and row delete now work on results produced by the visual
+  query builder, not just plain table browses, when the result is
+  provably *editable-safe*: it maps 1:1 to a single underlying table
+  and every primary-key column of that table is projected under its
+  original name. The builder computes an `EditableBinding` from the
+  committed `VisualQuerySpec` and threads it into the DataView, so edits
+  and deletes reuse the existing single-table mutation path with a
+  `WHERE` built from the projected PK values — no parsing of the
+  generated SQL. JOINs are allowed: columns originating from the source
+  table are editable while joined columns are marked read-only. The
+  result falls back to read-only — with a toolbar hint explaining why —
+  when any rule fails: aggregates / `GROUP BY` / `HAVING`, a wildcard
+  projection across a JOIN, a primary key that is missing or projected
+  under an alias, or a schema cache that has not yet loaded the table's
+  keys (the grid upgrades to editable on its own once the keys arrive).
+  Free-form editor SQL stays read-only; this is scoped to builder-
+  generated queries. Driver-agnostic by construction: the editable-safe
+  proof lives in `dbflux_core` over generic spec and metadata types with
+  no per-driver branching, so every relational driver picks it up.
+
 * **GROUP BY and aggregates in the visual query builder (#161)** — The
   visual SELECT builder gains a `Group By / Aggregates` section between
   Joins and Sort, with a separate `Having` section that reuses the same

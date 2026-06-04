@@ -1,10 +1,10 @@
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    Connection, ConnectionProfile, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
-    DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, FormValues,
-    Icon, MutationCapabilities, QueryCapabilities, QueryHandle, QueryLanguage, QueryRequest,
-    QueryResult, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlLanguageService, SyntaxInfo,
-    TransactionCapabilities,
+    Connection, ConnectionProfile, CrudResult, DatabaseCategory, DbConfig, DbDriver, DbError,
+    DbKind, DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
+    FormValues, Icon, MutationCapabilities, QueryCapabilities, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch, SchemaLoadingStrategy,
+    SchemaSnapshot, SqlDialect, SqlLanguageService, SyntaxInfo, TransactionCapabilities,
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
 use dbflux_driver_cloudwatch::CLOUDWATCH_FORM;
@@ -45,9 +45,18 @@ impl FakeQueryOutcome {
     }
 }
 
+/// A single recorded CRUD call made through `FakeConnection`.
+#[derive(Debug, Clone)]
+pub enum CrudOp {
+    Update(RowPatch),
+    Insert(RowInsert),
+    Delete(RowDelete),
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct FakeDriverStats {
     pub executed_requests: Vec<QueryRequest>,
+    pub crud_ops: Vec<CrudOp>,
     pub cancelled_handle_count: usize,
     pub cancel_active_calls: usize,
     pub close_calls: usize,
@@ -59,6 +68,7 @@ struct FakeDriverState {
     query_outcomes: RwLock<HashMap<String, FakeQueryOutcome>>,
     default_outcome: RwLock<Option<FakeQueryOutcome>>,
     executed_requests: Mutex<Vec<QueryRequest>>,
+    crud_ops: Mutex<Vec<CrudOp>>,
     cancelled_handles: Mutex<Vec<QueryHandle>>,
     cancel_active_calls: AtomicUsize,
     close_calls: AtomicUsize,
@@ -127,6 +137,7 @@ impl FakeDriver {
     pub fn stats(&self) -> FakeDriverStats {
         FakeDriverStats {
             executed_requests: mutex_lock(&self.state.executed_requests).clone(),
+            crud_ops: mutex_lock(&self.state.crud_ops).clone(),
             cancelled_handle_count: mutex_lock(&self.state.cancelled_handles).len(),
             cancel_active_calls: self.state.cancel_active_calls.load(Ordering::Relaxed),
             close_calls: self.state.close_calls.load(Ordering::Relaxed),
@@ -135,6 +146,13 @@ impl FakeDriver {
 
     pub fn as_driver_arc(self) -> Arc<dyn DbDriver> {
         Arc::new(self)
+    }
+
+    /// Connect and return the connection as `Arc<dyn Connection>` for use with
+    /// `ConnectedProfile` in GPUI tests.
+    pub fn connect_arc(&self, profile: &ConnectionProfile) -> Result<Arc<dyn Connection>, DbError> {
+        let connection = self.connect_with_secrets(profile, None, None)?;
+        Ok(Arc::from(connection))
     }
 }
 
@@ -532,6 +550,21 @@ impl Connection for FakeConnection {
                 SchemaLoadingStrategy::SingleDatabase
             }
         }
+    }
+
+    fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
+        mutex_lock(&self.state.crud_ops).push(CrudOp::Update(patch.clone()));
+        Ok(CrudResult::new(1, None))
+    }
+
+    fn insert_row(&self, insert: &RowInsert) -> Result<CrudResult, DbError> {
+        mutex_lock(&self.state.crud_ops).push(CrudOp::Insert(insert.clone()));
+        Ok(CrudResult::new(1, None))
+    }
+
+    fn delete_row(&self, delete: &RowDelete) -> Result<CrudResult, DbError> {
+        mutex_lock(&self.state.crud_ops).push(CrudOp::Delete(delete.clone()));
+        Ok(CrudResult::new(1, None))
     }
 
     fn language_service(&self) -> &dyn dbflux_core::LanguageService {

@@ -497,6 +497,143 @@ impl From<&VisualMutationSpec> for CountSpec {
     }
 }
 
+// =============================================================================
+// EditableBinding — editable-safety detection for builder SELECT results
+// =============================================================================
+
+/// Per result-column origin: belongs to the source table or a joined table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnOrigin {
+    Source,
+    Joined,
+}
+
+/// Carries everything the data-grid panel needs to enable inline editing on a
+/// builder SELECT result.
+///
+/// Produced by `VisualQuerySpec::compute_editable_binding` when all editability
+/// preconditions are satisfied. The binding is driver-agnostic; it never
+/// branches on driver identity.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EditableBinding {
+    /// The mutation target — always equals `DataSource::Table.table` in the UI.
+    pub table: TableRef,
+    /// Result-column output keys (alias if set, else real column name) for the
+    /// source table's PK columns, in PK order. Matched against
+    /// `QueryResult.columns[i].name` by the grid to derive `pk_indices`.
+    pub pk_columns: Vec<String>,
+    /// Maps each result-column output key to its origin (Source vs Joined).
+    /// For `Projection::All` with no joins, this map is empty (absence implies
+    /// Source). For `Projection::Explicit`, every projected column is present.
+    pub column_origin: BTreeMap<String, ColumnOrigin>,
+    /// True only when the spec has no joins (single-table INSERT is safe).
+    /// False when joins are present (column-origin ambiguity prevents INSERT).
+    pub insertable: bool,
+}
+
+impl VisualQuerySpec {
+    /// Compute an `EditableBinding` for this spec, given a PK-lookup closure.
+    ///
+    /// `pk_lookup(source)` must return the real primary-key column names for
+    /// the source table, or `None` when schema details are not yet cached.
+    /// Returning `Some(vec![])` means the table has no PK.
+    ///
+    /// Returns `None` (read-only) when any editability precondition fails:
+    /// - the spec is grouped (GROUP BY / aggregates / HAVING)
+    /// - `pk_lookup` returns `None` (cold cache) or `Some(vec![])` (no PK)
+    /// - `Projection::All` with at least one JOIN (cannot attribute columns)
+    /// - `Projection::Explicit` with at least one source PK column absent
+    ///
+    // TODO: gate on DISTINCT when VisualQuerySpec gains a distinct field.
+    pub fn compute_editable_binding(
+        &self,
+        pk_lookup: impl Fn(&SourceTable) -> Option<Vec<String>>,
+    ) -> Option<EditableBinding> {
+        // Gate 1: grouped spec is never editable.
+        if self.is_grouped() {
+            return None;
+        }
+
+        // Gate 2: PK must be known and non-empty.
+        let pk_names = pk_lookup(&self.source)?;
+        if pk_names.is_empty() {
+            return None;
+        }
+
+        match &self.projection {
+            Projection::All => {
+                // Gate 3: All + JOIN is ambiguous — cannot attribute columns.
+                if !self.joins.is_empty() {
+                    return None;
+                }
+
+                // Positive case: All, single-table, PKs known.
+                // Output key == real column name under SELECT *.
+                let pk_columns = pk_names.clone();
+
+                Some(EditableBinding {
+                    table: TableRef {
+                        schema: self.source.schema.clone(),
+                        name: self.source.table.clone(),
+                    },
+                    pk_columns,
+                    column_origin: BTreeMap::new(),
+                    insertable: true,
+                })
+            }
+
+            Projection::Explicit(cols) => {
+                // Gate 4: every source PK must be projected as a plain column
+                // reference from the source alias, without an alias.
+                //
+                // An aliased PK (e.g. `id AS user_id`) produces a WHERE clause that
+                // names the alias rather than the real column, which the driver
+                // rejects. Read-only is the safe fallback.
+                //
+                // TODO: when ProjectedColumn gains an expression variant, extend the
+                // find() below to also return None for expression-over-PK projections.
+                let mut pk_output_keys: Vec<String> = Vec::with_capacity(pk_names.len());
+
+                for pk_real in &pk_names {
+                    let projected = cols
+                        .iter()
+                        .find(|pc| pc.source_alias == self.source.alias && pc.column == *pk_real);
+
+                    match projected {
+                        Some(pc) if pc.alias.is_some() => return None,
+                        Some(pc) => {
+                            pk_output_keys.push(pc.column.clone());
+                        }
+                        None => return None,
+                    }
+                }
+
+                // Build the column_origin map for every projected column.
+                let mut column_origin = BTreeMap::new();
+                for pc in cols {
+                    let output_key = pc.alias.clone().unwrap_or_else(|| pc.column.clone());
+                    let origin = if pc.source_alias == self.source.alias {
+                        ColumnOrigin::Source
+                    } else {
+                        ColumnOrigin::Joined
+                    };
+                    column_origin.insert(output_key, origin);
+                }
+
+                Some(EditableBinding {
+                    table: TableRef {
+                        schema: self.source.schema.clone(),
+                        name: self.source.table.clone(),
+                    },
+                    pk_columns: pk_output_keys,
+                    column_origin,
+                    insertable: self.joins.is_empty(),
+                })
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -983,5 +1120,343 @@ mod tests {
         let count_spec = CountSpec::from(&spec);
         assert_eq!(count_spec.from.name, "orders");
         assert!(count_spec.filter.is_none());
+    }
+
+    // =========================================================================
+    // editable_binding_tests — T1.1 test matrix for compute_editable_binding
+    // =========================================================================
+
+    mod editable_binding_tests {
+        use super::super::*;
+
+        fn single_table_spec_all() -> VisualQuerySpec {
+            VisualQuerySpec {
+                source: SourceTable {
+                    schema: None,
+                    table: "users".to_string(),
+                    alias: "users".to_string(),
+                },
+                projection: Projection::All,
+                joins: vec![],
+                filter: None,
+                group_by: vec![],
+                aggregates: vec![],
+                having: None,
+                sort: vec![],
+                limit: Some(100),
+                offset: 0,
+            }
+        }
+
+        fn single_table_spec_explicit(cols: Vec<ProjectedColumn>) -> VisualQuerySpec {
+            VisualQuerySpec {
+                source: SourceTable {
+                    schema: None,
+                    table: "users".to_string(),
+                    alias: "users".to_string(),
+                },
+                projection: Projection::Explicit(cols),
+                joins: vec![],
+                filter: None,
+                group_by: vec![],
+                aggregates: vec![],
+                having: None,
+                sort: vec![],
+                limit: Some(100),
+                offset: 0,
+            }
+        }
+
+        fn warm_pk(pk: &str) -> impl Fn(&SourceTable) -> Option<Vec<String>> {
+            let pk = pk.to_string();
+            move |_| Some(vec![pk.clone()])
+        }
+
+        fn warm_pks(pks: Vec<&str>) -> impl Fn(&SourceTable) -> Option<Vec<String>> {
+            let pks: Vec<String> = pks.into_iter().map(|s| s.to_string()).collect();
+            move |_| Some(pks.clone())
+        }
+
+        fn cold_cache(_: &SourceTable) -> Option<Vec<String>> {
+            None
+        }
+
+        fn no_pk(_: &SourceTable) -> Option<Vec<String>> {
+            Some(vec![])
+        }
+
+        // T1.1-P1: Projection::All, single table, no join, single PK, warm cache.
+        #[test]
+        fn p1_all_single_table_no_join_single_pk_warm_cache() {
+            let spec = single_table_spec_all();
+            let binding = spec.compute_editable_binding(warm_pk("id"));
+            let b = binding.expect("should produce a binding");
+            assert_eq!(b.pk_columns, vec!["id"]);
+            assert!(b.insertable);
+            assert_eq!(b.table.name, "users");
+            assert!(b.table.schema.is_none());
+            assert!(b.column_origin.is_empty());
+        }
+
+        // T1.1-P2: Projection::Explicit, single table, all source cols including PK.
+        #[test]
+        fn p2_explicit_single_table_all_source_cols_including_pk() {
+            let cols = vec![
+                ProjectedColumn {
+                    source_alias: "users".to_string(),
+                    column: "id".to_string(),
+                    alias: None,
+                },
+                ProjectedColumn {
+                    source_alias: "users".to_string(),
+                    column: "name".to_string(),
+                    alias: None,
+                },
+            ];
+            let spec = single_table_spec_explicit(cols);
+            let binding = spec.compute_editable_binding(warm_pk("id"));
+            let b = binding.expect("should produce a binding");
+            assert_eq!(b.pk_columns, vec!["id"]);
+            assert!(b.insertable);
+            assert_eq!(b.column_origin.get("id"), Some(&ColumnOrigin::Source));
+            assert_eq!(b.column_origin.get("name"), Some(&ColumnOrigin::Source));
+        }
+
+        // T1.1-P3: Aliased PK column → read-only (None), because the mutation WHERE
+        // clause would use the alias as the column name and the driver would reject it.
+        #[test]
+        fn p3_aliased_pk_column_returns_none() {
+            let cols = vec![ProjectedColumn {
+                source_alias: "users".to_string(),
+                column: "id".to_string(),
+                alias: Some("user_id".to_string()),
+            }];
+            let spec = single_table_spec_explicit(cols);
+            assert!(
+                spec.compute_editable_binding(warm_pk("id")).is_none(),
+                "aliased PK must produce read-only (None) — WHERE clause cannot use the alias"
+            );
+        }
+
+        // W1-P3b: Aliased non-PK column with PK projected unaliased → still editable.
+        // Only PK alias triggers read-only; aliases on non-PK columns are fine.
+        #[test]
+        fn p3b_aliased_non_pk_column_with_unaliased_pk_is_editable() {
+            let cols = vec![
+                ProjectedColumn {
+                    source_alias: "users".to_string(),
+                    column: "id".to_string(),
+                    alias: None,
+                },
+                ProjectedColumn {
+                    source_alias: "users".to_string(),
+                    column: "name".to_string(),
+                    alias: Some("full_name".to_string()),
+                },
+            ];
+            let spec = single_table_spec_explicit(cols);
+            let binding = spec
+                .compute_editable_binding(warm_pk("id"))
+                .expect("unaliased PK with aliased non-PK must remain editable");
+            assert_eq!(binding.pk_columns, vec!["id"]);
+            assert_eq!(binding.column_origin.get("id"), Some(&ColumnOrigin::Source));
+            assert_eq!(
+                binding.column_origin.get("full_name"),
+                Some(&ColumnOrigin::Source)
+            );
+        }
+
+        // T1.1-P4: Composite PK (N=2), all projected.
+        #[test]
+        fn p4_composite_pk_all_projected() {
+            let cols = vec![
+                ProjectedColumn {
+                    source_alias: "orders".to_string(),
+                    column: "order_id".to_string(),
+                    alias: None,
+                },
+                ProjectedColumn {
+                    source_alias: "orders".to_string(),
+                    column: "product_id".to_string(),
+                    alias: None,
+                },
+            ];
+            let mut spec = single_table_spec_explicit(cols);
+            spec.source.table = "orders".to_string();
+            spec.source.alias = "orders".to_string();
+            let binding = spec.compute_editable_binding(warm_pks(vec!["order_id", "product_id"]));
+            let b = binding.expect("should produce a binding");
+            assert_eq!(b.pk_columns, vec!["order_id", "product_id"]);
+        }
+
+        // T1.1-P5: Explicit + JOIN, source PKs projected, joined columns present.
+        #[test]
+        fn p5_explicit_join_source_pks_projected_joined_cols_tagged() {
+            let cols = vec![
+                ProjectedColumn {
+                    source_alias: "users".to_string(),
+                    column: "id".to_string(),
+                    alias: None,
+                },
+                ProjectedColumn {
+                    source_alias: "users".to_string(),
+                    column: "name".to_string(),
+                    alias: None,
+                },
+                ProjectedColumn {
+                    source_alias: "orders".to_string(),
+                    column: "amount".to_string(),
+                    alias: None,
+                },
+            ];
+            let join = JoinStep {
+                kind: JoinKind::Left,
+                from_alias: "users".to_string(),
+                to_schema: None,
+                to_table: "orders".to_string(),
+                to_alias: "orders".to_string(),
+                on: JoinOn::RawExpression("users.id = orders.user_id".to_string()),
+            };
+            let mut spec = single_table_spec_explicit(cols);
+            spec.joins = vec![join];
+            let binding = spec.compute_editable_binding(warm_pk("id"));
+            let b = binding.expect("should produce a binding with join");
+            assert_eq!(b.pk_columns, vec!["id"]);
+            assert!(!b.insertable);
+            assert_eq!(b.column_origin.get("amount"), Some(&ColumnOrigin::Joined));
+            assert_eq!(b.column_origin.get("id"), Some(&ColumnOrigin::Source));
+            assert_eq!(b.column_origin.get("name"), Some(&ColumnOrigin::Source));
+        }
+
+        // T1.1-P6: Schema-qualified source → binding.table carries schema.
+        #[test]
+        fn p6_schema_qualified_source_carries_schema() {
+            let mut spec = single_table_spec_all();
+            spec.source.schema = Some("public".to_string());
+            let binding = spec.compute_editable_binding(warm_pk("id"));
+            let b = binding.expect("should produce a binding");
+            assert_eq!(b.table.schema, Some("public".to_string()));
+            assert_eq!(b.table.name, "users");
+        }
+
+        // T1.1-P7: pk_lookup receives the exact SourceTable struct.
+        #[test]
+        fn p7_pk_lookup_receives_correct_source_table() {
+            let spec = single_table_spec_all();
+            let captured_table = std::cell::RefCell::new(None::<SourceTable>);
+            let captured_ref = &captured_table;
+            let binding = spec.compute_editable_binding(|source| {
+                *captured_ref.borrow_mut() = Some(source.clone());
+                Some(vec!["id".to_string()])
+            });
+            assert!(binding.is_some());
+            let captured = captured_table.borrow();
+            let src = captured.as_ref().expect("pk_lookup must have been called");
+            assert_eq!(src.table, "users");
+            assert_eq!(src.alias, "users");
+        }
+
+        // T1.1-N1: pk_lookup returns None (cold cache) → None.
+        #[test]
+        fn n1_cold_cache_returns_none() {
+            let spec = single_table_spec_all();
+            assert!(spec.compute_editable_binding(cold_cache).is_none());
+        }
+
+        // T1.1-N2: pk_lookup returns Some(vec![]) (no PK on table) → None.
+        #[test]
+        fn n2_no_pk_table_returns_none() {
+            let spec = single_table_spec_all();
+            assert!(spec.compute_editable_binding(no_pk).is_none());
+        }
+
+        // T1.1-N3: Projection::All + at least one JOIN → None.
+        #[test]
+        fn n3_all_projection_with_join_returns_none() {
+            let mut spec = single_table_spec_all();
+            spec.joins = vec![JoinStep {
+                kind: JoinKind::Inner,
+                from_alias: "users".to_string(),
+                to_schema: None,
+                to_table: "orders".to_string(),
+                to_alias: "orders".to_string(),
+                on: JoinOn::RawExpression("users.id = orders.user_id".to_string()),
+            }];
+            assert!(spec.compute_editable_binding(warm_pk("id")).is_none());
+        }
+
+        // T1.1-N4: is_grouped() true due to non-empty group_by → None.
+        #[test]
+        fn n4_grouped_by_group_by_returns_none() {
+            let mut spec = single_table_spec_all();
+            spec.group_by = vec![GroupByEntry {
+                source_alias: "users".to_string(),
+                column: "country".to_string(),
+            }];
+            assert!(spec.compute_editable_binding(warm_pk("id")).is_none());
+        }
+
+        // T1.1-N5: is_grouped() true due to non-empty aggregates → None.
+        #[test]
+        fn n5_grouped_by_aggregates_returns_none() {
+            let mut spec = single_table_spec_all();
+            spec.aggregates = vec![AggregateSpec {
+                function: AggFn::CountStar,
+                source_alias: None,
+                column: None,
+                alias: "cnt".to_string(),
+            }];
+            assert!(spec.compute_editable_binding(warm_pk("id")).is_none());
+        }
+
+        // T1.1-N6: is_grouped() true due to non-empty having → None.
+        // Note: is_grouped() checks group_by and aggregates, not having directly.
+        // having alone does not trigger is_grouped(). A spec with having but no
+        // group_by / aggregates is malformed at the builder level but technically
+        // passes is_grouped(). We test the realistic paired case.
+        #[test]
+        fn n6_grouped_by_group_by_plus_having_returns_none() {
+            let mut spec = single_table_spec_all();
+            spec.group_by = vec![GroupByEntry {
+                source_alias: "users".to_string(),
+                column: "country".to_string(),
+            }];
+            spec.having = Some(FilterNode::Predicate(Predicate {
+                source_alias: "users".to_string(),
+                column: "id".to_string(),
+                comparator: Comparator::Gt,
+                value: PredicateValue::Single(LiteralValue::Integer(5)),
+                node_id: 0,
+            }));
+            assert!(spec.compute_editable_binding(warm_pk("id")).is_none());
+        }
+
+        // T1.1-N7: Partial PK in Projection::Explicit (one of two PKs missing) → None.
+        #[test]
+        fn n7_partial_pk_in_explicit_returns_none() {
+            let cols = vec![ProjectedColumn {
+                source_alias: "orders".to_string(),
+                column: "order_id".to_string(),
+                alias: None,
+            }];
+            let mut spec = single_table_spec_explicit(cols);
+            spec.source.table = "orders".to_string();
+            spec.source.alias = "orders".to_string();
+            // PK is (order_id, product_id) but only order_id is projected.
+            let binding = spec.compute_editable_binding(warm_pks(vec!["order_id", "product_id"]));
+            assert!(binding.is_none());
+        }
+
+        // T1.1-N8: PK column absent from Projection::Explicit entirely → None.
+        #[test]
+        fn n8_pk_absent_from_explicit_returns_none() {
+            let cols = vec![ProjectedColumn {
+                source_alias: "users".to_string(),
+                column: "name".to_string(),
+                alias: None,
+            }];
+            let spec = single_table_spec_explicit(cols);
+            assert!(spec.compute_editable_binding(warm_pk("id")).is_none());
+        }
     }
 }

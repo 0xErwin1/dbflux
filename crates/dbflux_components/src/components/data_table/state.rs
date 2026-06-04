@@ -66,6 +66,12 @@ pub struct DataTableState {
     /// Column indices that are foreign-key source columns.
     fk_columns: HashSet<usize>,
 
+    /// Column indices that are permanently read-only regardless of `is_editable`.
+    ///
+    /// Used to mark joined columns in builder SELECT results read-only while
+    /// source-table columns remain editable.
+    readonly_columns: HashSet<usize>,
+
     /// Whether this table is editable (requires PK for row identification).
     is_editable: bool,
 
@@ -115,6 +121,7 @@ impl DataTableState {
             edit_buffer,
             pk_columns: Vec::new(),
             fk_columns: HashSet::new(),
+            readonly_columns: HashSet::new(),
             is_editable: false,
             is_insertable: false,
             enum_options: std::collections::HashMap::new(),
@@ -510,6 +517,18 @@ impl DataTableState {
         &self.fk_columns
     }
 
+    /// Set column indices that are permanently read-only (e.g. joined columns
+    /// in a builder SELECT result). These columns block `start_editing`
+    /// regardless of the global `is_editable` flag.
+    pub fn set_readonly_columns(&mut self, cols: HashSet<usize>) {
+        self.readonly_columns = cols;
+    }
+
+    /// Get the read-only column index set.
+    pub fn readonly_columns(&self) -> &HashSet<usize> {
+        &self.readonly_columns
+    }
+
     /// Check if the table supports INSERT operations (add/duplicate rows).
     pub fn is_insertable(&self) -> bool {
         self.is_insertable
@@ -566,7 +585,7 @@ impl DataTableState {
 
         let row_source = visual_order.get(coord.row).copied();
 
-        // Check if editing is allowed for this row
+        // Check if editing is allowed for this row and column.
         let can_edit = match row_source {
             Some(VisualRowSource::Base(_)) => self.is_editable,
             Some(VisualRowSource::Insert(_)) => self.is_insertable || self.is_editable,
@@ -574,6 +593,10 @@ impl DataTableState {
         };
 
         if !can_edit {
+            return false;
+        }
+
+        if self.readonly_columns.contains(&coord.col) {
             return false;
         }
 
@@ -985,5 +1008,149 @@ mod tests {
         let current = Some(SortState::descending(1));
         let next = next_sort_state(current, 5);
         assert_eq!(next, Some(SortState::ascending(5)));
+    }
+
+    // =========================================================================
+    // start_editing gate tests (Tier 1)
+    // =========================================================================
+    //
+    // These require a GPUI window because start_editing takes a &mut Window.
+    // A minimal Render harness is used — no theme or global init needed for
+    // the editing-gate logic itself.
+
+    use gpui::AppContext as _;
+
+    /// Harness that wraps a DataTableState entity so it can be placed in a window.
+    struct StateHarness {
+        state: gpui::Entity<super::DataTableState>,
+    }
+
+    impl gpui::Render for StateHarness {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div()
+        }
+    }
+
+    fn one_row_model() -> std::sync::Arc<super::super::model::TableModel> {
+        use crate::components::data_table::model::{
+            CellValue, ColumnKind, ColumnSpec, RowData, TableModel,
+        };
+        use gpui::TextAlign;
+
+        let columns = vec![
+            ColumnSpec {
+                id: "id".into(),
+                title: "id".into(),
+                kind: ColumnKind::Integer,
+                align: TextAlign::Left,
+                type_name: "int4".into(),
+            },
+            ColumnSpec {
+                id: "name".into(),
+                title: "name".into(),
+                kind: ColumnKind::Text,
+                align: TextAlign::Left,
+                type_name: "text".into(),
+            },
+        ];
+        let rows = vec![RowData {
+            cells: vec![CellValue::int(1), CellValue::text("alice")],
+        }];
+        std::sync::Arc::new(TableModel::new(columns, rows))
+    }
+
+    /// Negative: start_editing on a column in readonly_columns returns false.
+    #[gpui::test]
+    fn start_editing_blocked_by_readonly_column(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+        use std::collections::HashSet;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+
+        let (_, window) = cx.add_window_view(move |window, cx| {
+            let model = one_row_model();
+            let state = cx.new(|cx| {
+                let mut s = super::DataTableState::new(model, cx);
+                // col 0 = PK (enables is_editable), col 1 = readonly
+                s.set_pk_columns(vec![0]);
+                s.set_readonly_columns(HashSet::from([1usize]));
+                s
+            });
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("state entity must be created");
+
+        let result = window.update(|window, app| {
+            state.update(app, |s, cx| {
+                s.start_editing(CellCoord::new(0, 1), window, cx)
+            })
+        });
+
+        assert!(
+            !result,
+            "start_editing must return false for a column in readonly_columns"
+        );
+
+        let editing_cell = window.update(|_, app| state.read(app).editing_cell());
+        assert!(
+            editing_cell.is_none(),
+            "editing_cell must remain None when start_editing is blocked"
+        );
+    }
+
+    /// Positive: start_editing on an editable, non-readonly column returns true.
+    #[gpui::test]
+    fn start_editing_allowed_on_non_readonly_editable_column(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+        use std::collections::HashSet;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+
+        let (_, window) = cx.add_window_view(move |window, cx| {
+            let model = one_row_model();
+            let state = cx.new(|cx| {
+                let mut s = super::DataTableState::new(model, cx);
+                // col 0 = PK (enables is_editable), no readonly columns
+                s.set_pk_columns(vec![0]);
+                s.set_readonly_columns(HashSet::new());
+                s
+            });
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("state entity must be created");
+
+        let result = window.update(|window, app| {
+            state.update(app, |s, cx| {
+                s.start_editing(CellCoord::new(0, 1), window, cx)
+            })
+        });
+
+        assert!(
+            result,
+            "start_editing must return true for an editable column with no readonly guard"
+        );
+
+        let editing_cell = window.update(|_, app| state.read(app).editing_cell());
+        assert_eq!(
+            editing_cell,
+            Some(CellCoord::new(0, 1)),
+            "editing_cell must be set to the requested coord after successful start_editing"
+        );
     }
 }

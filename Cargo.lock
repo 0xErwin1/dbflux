@@ -2979,6 +2979,7 @@ dependencies = [
  "dbflux_mcp",
  "dbflux_policy",
  "dbflux_storage",
+ "dbflux_test_support",
  "dbflux_ui_base",
  "gpui",
  "gpui-component",

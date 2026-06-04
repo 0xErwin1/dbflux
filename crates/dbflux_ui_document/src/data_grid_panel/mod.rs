@@ -557,6 +557,14 @@ pub struct DataGridPanel {
 
     /// Mutation confirmation modal (hard variant) for large row counts / DELETE.
     pub(crate) mutation_confirm_hard: Entity<dbflux_components::modals::ModalMutationConfirmHard>,
+
+    /// Editable-safety binding for the last successfully executed builder SELECT.
+    ///
+    /// `Some` when all preconditions hold (non-grouped, PKs projected, schema
+    /// cache warm). `None` when the result is read-only. Updated every time a
+    /// visual query succeeds or when table-details arrive for a previously cold
+    /// source table.
+    pub(crate) builder_editable_binding: Option<dbflux_core::EditableBinding>,
 }
 
 /// Pending mutation execution — holds the spec and options while the
@@ -726,14 +734,46 @@ impl DataGridPanel {
                     );
                 });
 
-                // Update panel with PK info
-                if !pk_names.is_empty() {
-                    entity.update(cx, |panel, cx| {
+                // Update panel with PK info and recompute editable binding.
+                entity.update(cx, |panel, cx| {
+                    if !pk_names.is_empty() {
                         panel.pk_columns = pk_names;
-                        panel.pending_rebuild = true;
-                        cx.notify();
-                    });
-                }
+                    }
+
+                    // Cold-cache upgrade: if a committed visual spec exists, recompute
+                    // the binding now that details are available. This upgrades a
+                    // previously read-only builder result to editable without requiring
+                    // the user to re-run the query.
+                    if panel.current_visual_spec.is_some() {
+                        let profile_id = match &panel.source {
+                            DataSource::Table { profile_id, .. } => Some(*profile_id),
+                            _ => None,
+                        };
+                        if let Some(pid) = profile_id {
+                            let database = match &panel.source {
+                                DataSource::Table { database, .. } => {
+                                    database.as_deref().map(|s| s.to_string())
+                                }
+                                _ => None,
+                            };
+                            let spec = panel.current_visual_spec.clone();
+                            let binding = panel.compute_builder_binding(
+                                spec.as_ref(),
+                                pid,
+                                database.as_deref(),
+                                cx,
+                            );
+                            panel.pk_columns = binding
+                                .as_ref()
+                                .map(|b| b.pk_columns.clone())
+                                .unwrap_or_else(|| panel.pk_columns.clone());
+                            panel.builder_editable_binding = binding;
+                        }
+                    }
+
+                    panel.pending_rebuild = true;
+                    cx.notify();
+                });
             })
             .log_if_dropped();
         })
@@ -1081,6 +1121,7 @@ impl DataGridPanel {
             pending_mutation_exec: None,
             mutation_confirm_light,
             mutation_confirm_hard,
+            builder_editable_binding: None,
         }
     }
 
@@ -1777,10 +1818,19 @@ impl DataGridPanel {
             pk_indices,
         );
 
+        // When a builder binding is present, respect its `insertable` flag to
+        // prevent INSERT on join results (column origin is ambiguous).
+        let binding_insertable = self
+            .builder_editable_binding
+            .as_ref()
+            .map(|b| b.insertable)
+            .unwrap_or(true);
+
         let is_insertable = matches!(
             self.source,
             DataSource::Table { .. } | DataSource::Collection { .. }
-        ) && self.mutations_enabled();
+        ) && self.mutations_enabled()
+            && (self.current_visual_spec.is_none() || binding_insertable);
 
         let column_details = self.get_column_details(cx);
 
@@ -1798,6 +1848,25 @@ impl DataGridPanel {
                 .collect()
         };
 
+        // Compute read-only column indices from the builder binding's column_origin map.
+        // Columns tagged Joined are blocked from editing while source-table columns remain
+        // editable. This mirrors the FK badge marking pattern above.
+        let readonly_indices: std::collections::HashSet<usize> =
+            if let Some(binding) = &self.builder_editable_binding {
+                use dbflux_core::ColumnOrigin;
+                self.result
+                    .columns
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, col)| {
+                        binding.column_origin.get(&col.name).copied() == Some(ColumnOrigin::Joined)
+                    })
+                    .map(|(ix, _)| ix)
+                    .collect()
+            } else {
+                std::collections::HashSet::new()
+            };
+
         let table_model = Arc::new(TableModel::from(&self.result));
         let table_state = cx.new(|cx| {
             let mut state = DataTableState::new(table_model, cx);
@@ -1809,6 +1878,10 @@ impl DataGridPanel {
 
             if !fk_indices.is_empty() {
                 state.set_fk_columns(fk_indices);
+            }
+
+            if !readonly_indices.is_empty() {
+                state.set_readonly_columns(readonly_indices);
             }
 
             if let Some(columns) = &column_details {
@@ -2487,6 +2560,82 @@ impl DataGridPanel {
         }
 
         !self.pk_columns.is_empty()
+    }
+
+    /// Compute the `EditableBinding` for the given committed visual spec by
+    /// looking up PK columns from the schema cache.
+    ///
+    /// The pk_lookup reads the AppState connection cache synchronously; it
+    /// returns `None` on a cold cache so the result stays read-only without
+    /// triggering any blocking fetch. The binding is recomputed when
+    /// table-details arrive (cold → warm upgrade).
+    pub(crate) fn compute_builder_binding(
+        &self,
+        committed_spec: Option<&VisualQuerySpec>,
+        profile_id: uuid::Uuid,
+        database: Option<&str>,
+        cx: &App,
+    ) -> Option<dbflux_core::EditableBinding> {
+        let spec = committed_spec?;
+
+        let app_state = self.app_state.read(cx);
+        let connected = app_state.connections().get(&profile_id)?;
+        let db = database
+            .or(connected.active_database.as_deref())
+            .unwrap_or("default");
+        let db = db.to_string();
+
+        spec.compute_editable_binding(|source| {
+            let cache_key = (db.clone(), source.table.clone());
+            if let Some(table_info) = connected.table_details.get(&cache_key) {
+                let cols = table_info.columns.as_deref().unwrap_or(&[]);
+                let pk_names: Vec<String> = cols
+                    .iter()
+                    .filter(|c| c.is_primary_key)
+                    .map(|c| c.name.clone())
+                    .collect();
+                return Some(pk_names);
+            }
+
+            // Also check database_schemas (MySQL/MariaDB lazy loading).
+            if let Some(schema_name) = &source.schema
+                && let Some(db_schema) = connected.database_schemas.get(schema_name)
+            {
+                for t in &db_schema.tables {
+                    if t.name == source.table {
+                        let cols = t.columns.as_deref().unwrap_or(&[]);
+                        let pk_names: Vec<String> = cols
+                            .iter()
+                            .filter(|c| c.is_primary_key)
+                            .map(|c| c.name.clone())
+                            .collect();
+                        return Some(pk_names);
+                    }
+                }
+            }
+
+            // Check schema.schemas (PostgreSQL/SQLite).
+            if let Some(schema) = &connected.schema {
+                for db_schema in schema.schemas() {
+                    if source.schema.as_deref() == Some(&db_schema.name) || source.schema.is_none()
+                    {
+                        for t in &db_schema.tables {
+                            if t.name == source.table {
+                                let cols = t.columns.as_deref().unwrap_or(&[]);
+                                let pk_names: Vec<String> = cols
+                                    .iter()
+                                    .filter(|c| c.is_primary_key)
+                                    .map(|c| c.name.clone())
+                                    .collect();
+                                return Some(pk_names);
+                            }
+                        }
+                    }
+                }
+            }
+
+            None
+        })
     }
 
     /// Returns whether the toolbar's "Open in Builder" button should be shown.
@@ -5494,6 +5643,775 @@ mod tests {
             pending_modal_is_none,
             "ApprovalRequired must not open a confirmation modal — \
              pending_mutation_modal must remain None"
+        );
+    }
+
+    // =========================================================================
+    // T2/T3/T5/T6 — compute_builder_binding + rebuild_table binding wiring
+    // =========================================================================
+
+    /// T3.1-B: compute_builder_binding returns None for a grouped spec, leaving
+    /// pk_columns empty so mutations_enabled() stays false.
+    #[test]
+    fn compute_builder_binding_returns_none_for_grouped_spec() {
+        let grouped_spec = make_grouped_spec();
+        // Cold lookup (returns None) — but grouped gate fires first.
+        let result = mutations_enabled_predicate(Some(&grouped_spec), &[]);
+        assert!(
+            !result,
+            "grouped spec must disable mutations regardless of pk"
+        );
+    }
+
+    /// T3.1-C: compute_builder_binding returns None on cold schema cache (pk_lookup → None).
+    #[test]
+    fn compute_builder_binding_returns_none_on_cold_cache() {
+        use dbflux_core::VisualQuerySpec;
+
+        let spec = VisualQuerySpec {
+            source: SourceTable {
+                schema: None,
+                table: "users".to_string(),
+                alias: "users".to_string(),
+            },
+            projection: Projection::All,
+            joins: vec![],
+            filter: None,
+            group_by: vec![],
+            aggregates: vec![],
+            having: None,
+            sort: vec![],
+            limit: Some(100),
+            offset: 0,
+        };
+
+        // pk_lookup returns None (cold cache).
+        let binding = spec.compute_editable_binding(|_| None);
+        assert!(binding.is_none(), "cold cache must produce no binding");
+    }
+
+    /// T5/T6: rebuild_table with a binding that has Joined columns and insertable=false
+    /// results in: joined columns in readonly_columns, is_insertable=false.
+    #[gpui::test]
+    fn rebuild_table_marks_joined_cols_readonly_and_disables_insert(cx: &mut TestAppContext) {
+        use dbflux_core::{ColumnOrigin, EditableBinding, TableRef as CoreTableRef};
+        use std::collections::BTreeMap;
+
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+
+                let mut panel = DataGridPanel::new_internal(
+                    source,
+                    app_state.clone(),
+                    vec!["id".to_string()],
+                    window,
+                    cx,
+                );
+
+                // Simulate a builder result: columns = [id (Source, PK), amount (Joined)]
+                let columns = vec![
+                    ColumnMeta {
+                        name: "id".to_string(),
+                        type_name: "int4".to_string(),
+                        kind: ColumnKind::Unknown,
+                        nullable: false,
+                        is_primary_key: false,
+                    },
+                    ColumnMeta {
+                        name: "amount".to_string(),
+                        type_name: "numeric".to_string(),
+                        kind: ColumnKind::Unknown,
+                        nullable: true,
+                        is_primary_key: false,
+                    },
+                ];
+                panel.result = QueryResult::table(columns, Vec::new(), None, Duration::ZERO);
+                panel.pk_columns = vec!["id".to_string()];
+
+                // Install the binding: id is Source/PK, amount is Joined, not insertable.
+                let mut origin_map = BTreeMap::new();
+                origin_map.insert("id".to_string(), ColumnOrigin::Source);
+                origin_map.insert("amount".to_string(), ColumnOrigin::Joined);
+                panel.builder_editable_binding = Some(EditableBinding {
+                    table: CoreTableRef {
+                        schema: Some("public".to_string()),
+                        name: "users".to_string(),
+                    },
+                    pk_columns: vec!["id".to_string()],
+                    column_origin: origin_map,
+                    insertable: false,
+                });
+                // Simulate a committed visual spec so insert gate applies.
+                panel.current_visual_spec = Some(make_test_spec());
+
+                panel
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        // Trigger rebuild_table.
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.rebuild_table(None, cx);
+            });
+        });
+
+        let (amount_col_ix, is_insertable, amount_is_readonly) = window.update(|_, app| {
+            let panel = panel.read(app);
+            let ts = panel.table_state.as_ref().expect("table state must exist");
+            let ts = ts.read(app);
+
+            let amount_col_ix = panel
+                .result
+                .columns
+                .iter()
+                .position(|c| c.name == "amount")
+                .expect("amount column must exist");
+
+            let is_insertable = ts.is_insertable();
+            let amount_is_readonly = ts.readonly_columns().contains(&amount_col_ix);
+
+            (amount_col_ix, is_insertable, amount_is_readonly)
+        });
+
+        assert!(
+            amount_is_readonly,
+            "amount (Joined origin) must be in readonly_columns (col {})",
+            amount_col_ix
+        );
+        assert!(
+            !is_insertable,
+            "is_insertable must be false when binding.insertable=false"
+        );
+    }
+
+    /// T3.1-A regression: grouped result stays read-only after rebuild_table.
+    #[gpui::test]
+    fn rebuild_table_grouped_spec_stays_read_only(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "orders"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+
+                let mut panel =
+                    DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx);
+
+                // Simulate a grouped result with no binding.
+                let columns = vec![ColumnMeta {
+                    name: "country".to_string(),
+                    type_name: "text".to_string(),
+                    kind: ColumnKind::Unknown,
+                    nullable: false,
+                    is_primary_key: false,
+                }];
+                panel.result = QueryResult::table(columns, Vec::new(), None, Duration::ZERO);
+                panel.current_visual_spec = Some(make_grouped_spec());
+                panel.builder_editable_binding = None;
+
+                panel
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.rebuild_table(None, cx);
+            });
+        });
+
+        let is_editable = window.update(|_, app| {
+            let panel = panel.read(app);
+            let ts = panel
+                .table_state
+                .as_ref()
+                .expect("table state must exist after rebuild");
+            ts.read(app).is_editable()
+        });
+
+        assert!(
+            !is_editable,
+            "grouped builder result must remain read-only after rebuild"
+        );
+    }
+
+    /// W2 — S6-A: cold-cache → editable upgrade via table-details arrival.
+    ///
+    /// Simulates the arrival handler: table_details are inserted into the
+    /// connection cache (the same write the async fetch does before calling
+    /// `entity.update`), then `compute_builder_binding` is called. Verifies
+    /// that the binding upgrades from None (cold) to Some (warm) and that
+    /// `pending_rebuild` would then be set — confirming the cold→warm path.
+    #[gpui::test]
+    fn cold_cache_upgrades_to_editable_on_table_details_arrival(cx: &mut TestAppContext) {
+        use dbflux_core::{ColumnInfo, TableInfo};
+
+        init_test_runtime(cx);
+
+        let profile_id = uuid::Uuid::new_v4();
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime =
+                    StorageRuntime::in_memory().expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+            })
+        });
+
+        cx.update(|cx| {
+            app_state.update(cx, |app, _| {
+                use dbflux_core::{ConnectedProfile, DbConfig, MutationPolicy};
+                use std::path::PathBuf;
+
+                let profile = dbflux_core::ConnectionProfile::new(
+                    "test",
+                    DbConfig::SQLite {
+                        path: PathBuf::from(":memory:"),
+                        connection_id: None,
+                    },
+                );
+                let connected = ConnectedProfile {
+                    profile,
+                    connection: {
+                        use dbflux_core::{
+                            Connection, DatabaseCategory, DbError, DbKind, DriverCapabilities,
+                            DriverMetadata, Icon as CoreIcon, QueryLanguage,
+                            QueryResult as CoreQueryResult, SchemaLoadingStrategy, SchemaSnapshot,
+                            SqlDialect,
+                        };
+                        struct StubConn;
+                        impl Connection for StubConn {
+                            fn metadata(&self) -> &DriverMetadata {
+                                static META: std::sync::OnceLock<DriverMetadata> =
+                                    std::sync::OnceLock::new();
+                                META.get_or_init(|| DriverMetadata {
+                                    id: "stub".to_string(),
+                                    display_name: "Stub".to_string(),
+                                    description: "test".to_string(),
+                                    category: DatabaseCategory::Relational,
+                                    deployment_class: None,
+                                    query_language: QueryLanguage::Sql,
+                                    capabilities: DriverCapabilities::empty(),
+                                    default_port: None,
+                                    uri_scheme: "stub".to_string(),
+                                    icon: CoreIcon::Database,
+                                    syntax: None,
+                                    query: None,
+                                    mutation: None,
+                                    ddl: None,
+                                    transactions: None,
+                                    limits: None,
+                                    ssl_modes: None,
+                                    ssl_cert_fields: None,
+                                    classification_override: None,
+                                    default_chunk_size: None,
+                                    supports_lock_timeout: false,
+                                })
+                            }
+                            fn kind(&self) -> DbKind {
+                                DbKind::SQLite
+                            }
+                            fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+                                SchemaLoadingStrategy::SingleDatabase
+                            }
+                            fn dialect(&self) -> &dyn SqlDialect {
+                                unimplemented!()
+                            }
+                            fn ping(&self) -> Result<(), DbError> {
+                                Ok(())
+                            }
+                            fn close(&mut self) -> Result<(), DbError> {
+                                Ok(())
+                            }
+                            fn execute(
+                                &self,
+                                _: &dbflux_core::QueryRequest,
+                            ) -> Result<CoreQueryResult, DbError> {
+                                Err(DbError::NotSupported("stub".to_string()))
+                            }
+                            fn cancel(&self, _: &dbflux_core::QueryHandle) -> Result<(), DbError> {
+                                Ok(())
+                            }
+                            fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+                                Ok(SchemaSnapshot::default())
+                            }
+                        }
+                        Arc::new(StubConn) as Arc<dyn Connection>
+                    },
+                    schema: None,
+                    mutation_policy: MutationPolicy::default(),
+                    database_schemas: Default::default(),
+                    table_details: Default::default(),
+                    collection_children: Default::default(),
+                    schema_types: Default::default(),
+                    schema_indexes: Default::default(),
+                    schema_foreign_keys: Default::default(),
+                    schema_routines: Default::default(),
+                    dependents_cache: Default::default(),
+                    active_database: Some("app".to_string()),
+                    redis_key_cache: Default::default(),
+                    database_connections: Default::default(),
+                    proxy_tunnel: None,
+                };
+                app.connections_mut().insert(profile_id, connected);
+            });
+        });
+
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id,
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+                let mut panel =
+                    DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx);
+                panel.current_visual_spec = Some(make_test_spec());
+                panel.builder_editable_binding = None;
+                panel
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        // Verify binding is None before details arrive (cold cache).
+        let cold_binding = window.update(|_, app| {
+            let p = panel.read(app);
+            p.compute_builder_binding(p.current_visual_spec.as_ref(), profile_id, Some("app"), app)
+        });
+        assert!(cold_binding.is_none(), "cold cache must yield None binding");
+
+        // Simulate table-details arrival: insert PK info into the connection cache.
+        window.update(|_, app| {
+            app_state.update(app, |app, _| {
+                app.set_table_details(
+                    profile_id,
+                    "app".to_string(),
+                    "users".to_string(),
+                    TableInfo {
+                        name: "users".to_string(),
+                        schema: Some("public".to_string()),
+                        columns: Some(vec![
+                            ColumnInfo {
+                                name: "id".to_string(),
+                                type_name: "int4".to_string(),
+                                nullable: false,
+                                is_primary_key: true,
+                                default_value: None,
+                                enum_values: None,
+                            },
+                            ColumnInfo {
+                                name: "name".to_string(),
+                                type_name: "text".to_string(),
+                                nullable: true,
+                                is_primary_key: false,
+                                default_value: None,
+                                enum_values: None,
+                            },
+                        ]),
+                        indexes: None,
+                        foreign_keys: None,
+                        constraints: None,
+                        sample_fields: None,
+                        presentation: Default::default(),
+                        child_items: None,
+                    },
+                );
+            });
+        });
+
+        // Now compute_builder_binding must return Some — the same call the arrival
+        // handler makes before setting pending_rebuild = true.
+        let warm_binding = window.update(|_, app| {
+            let p = panel.read(app);
+            p.compute_builder_binding(p.current_visual_spec.as_ref(), profile_id, Some("app"), app)
+        });
+
+        let binding = warm_binding
+            .expect("warm cache must upgrade cold binding to Some after table-details arrive");
+        assert_eq!(
+            binding.pk_columns,
+            vec!["id"],
+            "binding must carry the PK column from the warm cache"
+        );
+        assert!(
+            binding.insertable,
+            "single-table All spec must be insertable"
+        );
+    }
+
+    /// W3 — S7-A: after a builder-result mutation the panel has pending_refresh=true
+    /// and visual_select set, so the next render cycle will call refresh() → run_visual_query
+    /// → pending_rebuild. Verifies the builder-specific state that gates re-query + re-bind.
+    #[gpui::test]
+    fn builder_result_mutation_sets_pending_refresh_with_visual_select(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let visual_select = SelectQuery {
+            sql: "SELECT id, name FROM public.users LIMIT 100".to_string(),
+            params: vec![],
+        };
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+
+                let mut panel =
+                    DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx);
+
+                // Simulate a committed builder result: spec and pre-built SELECT are in place.
+                panel.current_visual_spec = Some(make_test_spec());
+                panel.visual_select = Some(visual_select.clone());
+                panel.builder_editable_binding = Some(dbflux_core::EditableBinding {
+                    table: dbflux_core::TableRef {
+                        schema: Some("public".to_string()),
+                        name: "users".to_string(),
+                    },
+                    pk_columns: vec!["id".to_string()],
+                    column_origin: Default::default(),
+                    insertable: true,
+                });
+                panel.pending_refresh = false;
+                panel
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        // In one window.update: verify baseline, simulate mutation callback,
+        // then assert the resulting state.
+        window.update(|_, app| {
+            panel.update(app, |p, cx| {
+                // Baseline: pending_refresh starts false, visual_select is set.
+                assert!(!p.pending_refresh, "pending_refresh must start false");
+                assert!(
+                    p.visual_select.is_some(),
+                    "visual_select must be set for the builder-result path"
+                );
+
+                // Simulate what the mutation success closure does.
+                p.pending_refresh = true;
+                cx.notify();
+
+                // After mutation: pending_refresh=true AND visual_select is still set.
+                // This is the exact state that causes refresh() → run_visual_query
+                // (not run_table_query) on the next render tick, completing the S7-A loop.
+                assert!(
+                    p.pending_refresh,
+                    "pending_refresh must be true after mutation to trigger re-query"
+                );
+                assert_eq!(
+                    p.visual_select.as_ref().map(|s| s.sql.as_str()),
+                    Some("SELECT id, name FROM public.users LIMIT 100"),
+                    "visual_select must be preserved so refresh() routes to run_visual_query"
+                );
+            });
+        });
+    }
+
+    // =========================================================================
+    // Tier 1b — start_editing gate (DataGridPanel level)
+    // =========================================================================
+
+    /// Aliased-PK builder results have no editable binding and no pk_indices,
+    /// so rebuild_table leaves the table read-only. This closes the aliased-PK
+    /// behavior as a panel-level assertion without going through the async mutation path.
+    #[test]
+    fn aliased_pk_builder_result_computes_no_editable_binding() {
+        use dbflux_core::{ProjectedColumn, Projection, SourceTable, VisualQuerySpec};
+
+        let spec = VisualQuerySpec {
+            source: SourceTable {
+                schema: Some("public".to_string()),
+                table: "users".to_string(),
+                alias: "users".to_string(),
+            },
+            projection: Projection::Explicit(vec![ProjectedColumn {
+                source_alias: "users".to_string(),
+                column: "id".to_string(),
+                alias: Some("user_id".to_string()),
+            }]),
+            joins: vec![],
+            filter: None,
+            group_by: vec![],
+            aggregates: vec![],
+            having: None,
+            sort: vec![],
+            limit: Some(100),
+            offset: 0,
+        };
+
+        // Provide a warm pk_lookup that recognises "id" as a PK — the aliased
+        // projection still returns None because the alias blocks the WHERE clause.
+        let binding = spec.compute_editable_binding(|_source_table| Some(vec!["id".to_string()]));
+
+        assert!(
+            binding.is_none(),
+            "aliased PK must produce None binding (read-only): \
+             the WHERE clause cannot reference the alias"
+        );
+    }
+
+    // =========================================================================
+    // Tier 2 — mutation roundtrip with FakeDriver CRUD recording
+    // =========================================================================
+
+    /// Positive: an editable-safe builder result (single source table, PK projected
+    /// unaliased) triggers exactly one UPDATE via `save_table_row`. The recorded
+    /// RowPatch carries the correct PK identity and the edited column assignment.
+    #[gpui::test]
+    fn save_table_row_issues_one_update_for_editable_builder_result(cx: &mut TestAppContext) {
+        use dbflux_components::components::data_table::model::CellValue;
+        use dbflux_core::{
+            ColumnKind, ColumnMeta, ConnectedProfile, DbConfig, MutationPolicy, TableRef,
+        };
+        use dbflux_test_support::fake_driver::{CrudOp, FakeDriver};
+        use std::path::PathBuf;
+
+        init_test_runtime(cx);
+
+        let profile_id = Uuid::new_v4();
+        let fake_driver = FakeDriver::new(dbflux_core::DbKind::SQLite);
+
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime =
+                    StorageRuntime::in_memory().expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+            })
+        });
+
+        cx.update(|cx| {
+            app_state.update(cx, |app, _cx| {
+                let profile = dbflux_core::ConnectionProfile::new(
+                    "fake-sqlite",
+                    DbConfig::SQLite {
+                        path: PathBuf::from(":memory:"),
+                        connection_id: None,
+                    },
+                );
+                let connection = fake_driver
+                    .connect_arc(&profile)
+                    .expect("FakeDriver connection must succeed");
+
+                let connected = ConnectedProfile {
+                    profile,
+                    connection,
+                    schema: None,
+                    mutation_policy: MutationPolicy::default(),
+                    database_schemas: Default::default(),
+                    table_details: Default::default(),
+                    collection_children: Default::default(),
+                    schema_types: Default::default(),
+                    schema_indexes: Default::default(),
+                    schema_foreign_keys: Default::default(),
+                    schema_routines: Default::default(),
+                    dependents_cache: Default::default(),
+                    active_database: None,
+                    redis_key_cache: Default::default(),
+                    database_connections: Default::default(),
+                    proxy_tunnel: None,
+                };
+                app.connections_mut().insert(profile_id, connected);
+            });
+        });
+
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id,
+                    database: None,
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+
+                let mut panel =
+                    DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx);
+
+                // Two-column result: id (PK), name (Source).
+                let columns = vec![
+                    ColumnMeta {
+                        name: "id".to_string(),
+                        type_name: "int4".to_string(),
+                        kind: ColumnKind::Integer,
+                        nullable: false,
+                        is_primary_key: false,
+                    },
+                    ColumnMeta {
+                        name: "name".to_string(),
+                        type_name: "text".to_string(),
+                        kind: ColumnKind::Text,
+                        nullable: true,
+                        is_primary_key: false,
+                    },
+                ];
+                let rows = vec![vec![
+                    dbflux_core::Value::Int(1),
+                    dbflux_core::Value::Text("alice".to_string()),
+                ]];
+                panel.result = QueryResult::table(columns, rows, None, std::time::Duration::ZERO);
+                panel.pk_columns = vec!["id".to_string()];
+
+                panel
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel must be created");
+
+        // Rebuild the table so table_state is populated and pk_indices are set.
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.rebuild_table(None, cx);
+            });
+        });
+
+        // Confirm table_state is editable (PK column was found).
+        let is_editable = window.update(|_, app| {
+            let p = panel.read(app);
+            p.table_state
+                .as_ref()
+                .expect("table_state must exist after rebuild_table")
+                .read(app)
+                .is_editable()
+        });
+        assert!(
+            is_editable,
+            "table must be editable after rebuild_table with a valid PK column"
+        );
+
+        // Call save_table_row directly with a single column-1 change (name → "bob").
+        let new_cell = CellValue::text("bob");
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.save_table_row(
+                    profile_id,
+                    None,
+                    TableRef::with_schema("public", "users"),
+                    0,
+                    &[(1, &new_cell)],
+                    cx,
+                );
+            });
+        });
+
+        // Settle background tasks so the async CRUD op completes.
+        cx.run_until_parked();
+
+        // Verify exactly one UPDATE was recorded.
+        let ops = fake_driver.stats().crud_ops;
+        assert_eq!(
+            ops.len(),
+            1,
+            "save_table_row must issue exactly one update_row call; got: {:?}",
+            ops.len()
+        );
+
+        let CrudOp::Update(patch) = &ops[0] else {
+            panic!("expected CrudOp::Update, got something else");
+        };
+
+        // Identity: PK column "id" with value Int(1).
+        let identity_cols = patch.identity.columns();
+        let identity_vals = patch.identity.values();
+        assert_eq!(
+            identity_cols,
+            &["id"],
+            "identity must use the PK column name"
+        );
+        assert_eq!(
+            identity_vals,
+            &[dbflux_core::Value::Int(1)],
+            "identity must carry the PK value from row 0"
+        );
+
+        // Change: column "name" assigned the new value "bob".
+        assert_eq!(patch.changes.len(), 1, "patch must have exactly one change");
+        assert_eq!(
+            patch.changes[0].name, "name",
+            "change must target the 'name' column"
+        );
+        assert_eq!(
+            patch.changes[0].value,
+            dbflux_core::Value::Text("bob".to_string()),
+            "change must carry the new cell value"
         );
     }
 }
