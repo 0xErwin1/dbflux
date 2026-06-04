@@ -4,11 +4,11 @@
 //! The `aud_audit_events` table is created by the unified schema migration
 //! in `dbflux_storage::migrations::mod_001_initial`.
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use dbflux_core::observability::EventRecord;
+use dbflux_storage::migrations::aud_schema;
 use dbflux_storage::repositories::audit::AuditEventDto;
 use dbflux_storage::{
     AppendAuditEventExtended, AuditAggregateParams, AuditQueryFilter as StorageAuditQueryFilter,
@@ -113,86 +113,7 @@ impl SqliteAuditStore {
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(AuditError::Sqlite)?;
 
-        // Apply migrations if the table doesn't exist
-        let table_exists: bool = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='aud_audit_events'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|count| count > 0)
-            .unwrap_or(false);
-
-        if !table_exists {
-            // Create the table with extended schema - note: no FK constraint since cfg_connection_profiles
-            // may not exist when used standalone (outside of StorageRuntime migrations)
-            conn.execute_batch(
-                "CREATE TABLE IF NOT EXISTS aud_audit_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    actor_id TEXT NOT NULL,
-                    tool_id TEXT NOT NULL,
-                    decision TEXT NOT NULL,
-                    reason TEXT,
-                    profile_id TEXT,
-                    classification TEXT,
-                    duration_ms INTEGER,
-                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                    created_at_epoch_ms INTEGER NOT NULL,
-                    level TEXT,
-                    category TEXT,
-                    action TEXT,
-                    outcome TEXT,
-                    actor_type TEXT,
-                    source_id TEXT,
-                    summary TEXT,
-                    connection_id TEXT,
-                    database_name TEXT,
-                    driver_id TEXT,
-                    object_type TEXT,
-                    object_id TEXT,
-                    details_json TEXT,
-                    error_code TEXT,
-                    error_message TEXT,
-                    session_id TEXT,
-                    correlation_id TEXT
-                )",
-            )?;
-        } else {
-            // Table exists but may not have extended columns - add them if missing
-            let extended_columns = [
-                "level",
-                "category",
-                "action",
-                "outcome",
-                "actor_type",
-                "source_id",
-                "summary",
-                "connection_id",
-                "database_name",
-                "driver_id",
-                "object_type",
-                "object_id",
-                "details_json",
-                "error_code",
-                "error_message",
-                "session_id",
-                "correlation_id",
-            ];
-
-            let mut statement = conn.prepare("PRAGMA table_info(aud_audit_events)")?;
-            let existing_columns: HashSet<String> = statement
-                .query_map([], |row| row.get::<_, String>(1))?
-                .collect::<Result<HashSet<_>, _>>()?;
-
-            for col in extended_columns {
-                if existing_columns.contains(col) {
-                    continue;
-                }
-
-                let sql = format!("ALTER TABLE aud_audit_events ADD COLUMN {} TEXT", col);
-                conn.execute_batch(&sql)?;
-            }
-        }
+        aud_schema::create_aud_audit_events(&conn, false)?;
 
         // Wrap in Arc<Mutex<Connection>> for AuditRepository
         let conn = Arc::new(Mutex::new(conn));

@@ -294,6 +294,7 @@ impl Default for MigrationRegistry {
     }
 }
 
+pub mod aud_schema;
 mod mod_001_initial;
 mod mod_002_audit_extended;
 mod mod_003_audit_settings;
