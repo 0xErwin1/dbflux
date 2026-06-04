@@ -2,9 +2,33 @@
 
 All notable changes to DBFlux will be documented in this file.
 
-## [Unreleased]
+## [0.6.0] - 2026-06-04
 
 ### Added
+
+* **Visual UPDATE / DELETE query builder (#163)** — The
+  `QueryBuilderPanel` gains a mode selector that extends the visual SELECT
+  builder with UPDATE and DELETE modes, reusing the relational filter bar
+  for `WHERE` composition. The SQL preview is always visible and
+  regenerates synchronously on every builder change. New core types
+  (`VisualMutationSpec`, `MutationKind`, `ColumnAssignment`,
+  `AssignmentValue`) feed `QueryGenerator::generate_update_from_spec` /
+  `generate_delete_from_spec`, which emit keyset-paginated chunked DML for
+  all four SQL dialects; a raw-expression assignment is tracked via a
+  `used_raw_expression` flag rather than a textual marker. Execution runs
+  through a `MutationExecutor` state machine with three modes —
+  `SingleTransaction`, `ChunkedTransaction`, `DirectAutocommit` —
+  auto-suggested from the count estimate, the `TRANSACTIONS` capability,
+  and primary-key availability, with a tradeoff modal on user override.
+  Chunked runs use keyset pagination over the table PK (chunk size
+  clamped to `[1000, 10000]`, default 5000), surface per-chunk entries in
+  the Tasks panel with cancellation between chunks, and `ROLLBACK` on
+  chunk failure. No-`WHERE` UPDATE/DELETE is gated by a doubled
+  spec-level + text-level `DangerousQueryKind` check, and a new
+  `MutationPolicy` seam (`Allowed` / `ReadOnly` / `ApprovalRequired`)
+  composes MCP-actor, per-profile read-only, and default resolution.
+  Driver-agnostic by construction: gated on `QueryLanguage::Sql` with no
+  per-driver branching.
 
 * **Inline edit on builder-generated SELECT results (#170)** — Inline
   cell edit and row delete now work on results produced by the visual
@@ -81,6 +105,24 @@ All notable changes to DBFlux will be documented in this file.
   driver-agnostic and gated on `QueryLanguage::Sql`; non-dotted input
   keeps today's raw-WHERE behavior.
 
+* **Visual SELECT query builder (#146)** — A right-rail query builder
+  composes SELECT statements without writing SQL: projection, FROM with
+  alias, JOINs, a recursive `WHERE` predicate tree, `ORDER BY`, and
+  `LIMIT`/`OFFSET`, with a live parameterized SQL preview. The foundation
+  is the new `VisualQuerySpec` (and supporting `FilterNode`, `Predicate`,
+  `JoinStep`, `JoinOn`, `Projection`, `SortEntry` types) in
+  `dbflux_core`, rendered by `SqlSelectBuilder` behind the defaulted
+  `QueryGenerator::generate_select` trait method with dialect-specific
+  placeholders for SQLite, PostgreSQL, MySQL/MariaDB, and SQL Server.
+  Builders can be saved and reopened: migration 017 adds `qry_saved_queries`
+  and its child tables (columns, sorts, joins) with cascading FKs and a
+  `UNIQUE (profile_id, name)` constraint, fronted by `SavedQueryRepo` and
+  an in-memory `SavedQueryManager`. A `TableProbe` seam verifies table
+  existence when importing a saved query onto another connection without
+  reaching into driver code. A `column_kind` inference fallback maps
+  `type_name` to `ColumnKind` so charts keep working on builder results.
+  Driver-agnostic by construction: gated on `QueryLanguage::Sql`.
+
 * **Instance metrics charts and inspectors across drivers (#93)** —
   PostgreSQL, MySQL/MariaDB, MongoDB, Redis, and SQL Server now expose
   live server metrics (time series) and tabular inspectors (sessions,
@@ -117,10 +159,19 @@ All notable changes to DBFlux will be documented in this file.
   advertise the capability/flag remain silent.
 - Centralized user-facing error reporting (`report_error` / `report_error_async` in `dbflux_ui_base`). Failures across mutations, file save, settings, and workspace actions now surface as a styled toast with a "View in Audit" action, increment a status-bar error badge, and emit a tracing event correlated with the audit row (#156).
 - `EventRecord.correlation_id` is now populated from the `correlation_id` tracing field across all `dbflux` targets, regardless of whether the field is recorded via `%` (Display) or `?` (Debug) sigil (#156).
+- **Tracing-to-audit bridge for centralized log capture (#154)** — A new `tracing-bridge` feature installs an `AuditLayer` subscriber in the `dbflux`, `dbflux_mcp_server`, and `dbflux_driver_host` binaries that funnels `tracing` events into the audit log through a bounded background queue with an atomic drop counter and in-flight gauge. A configurable `log_capture_min_level` audit setting (default `info`, persisted via migration 014) gates capture and updates the shared level atomic immediately. The layer applies a recursion guard, level gate, and summary truncation, and `AuditService::dropped_log_event_count()` exposes overflow drops.
 
 ### Changed
 
 - Toast host applies a severity-aware throttle (capacity 5, refill 1 token / 2 s) to Warning and Info toasts so connection-storm noise does not bury the UI; Error and Fatal toasts bypass the throttle (#156).
+- **Provider-neutral auth-profile edit seam (#155)** — The auth-profile edit path no longer carries AWS-specific types in the public core API. `dbflux_core::auth::edit` now exposes a provider-neutral `AuthEditSnapshot` (opaque `Arc<dyn Any>`), `AuthEditTarget`, and `AuthSaveOutcome`; the former `AwsEditFile` / `AwsEditSnapshot` / `AwsSectionHash` types moved to a private `dbflux_aws::edit` module, and `AuthProviderCapabilities` gained an optional `edit` field (serde-defaulted for backward compatibility). All three AWS providers were rewired to the neutral types with no behavior change.
+
+### Fixed
+
+- **Scripts-tab folders can be collapsed again** — Chevron clicks were routed through the connections tree only, so script-folder expansion lookups always returned `false` and every click tried to expand. Toggling now routes through the active tab's tree, propagates the override into the scripts tree state, and applies expansion overrides when building script items so collapses survive a refresh.
+- **Syntax highlighting preserved across `AppStateChanged`** — `CodeDocument` re-applied the highlighter mode on every `AppStateChanged`, and `InputState::set_highlighter` clears the cached highlighter until the next render — wiping SQL coloring after running a query until the next keystroke. The document now tracks the last applied `editor_mode` and only re-applies the highlighter when it actually changes.
+- **NULL rendered as an empty field in CSV export** — CSV export emitted the PostgreSQL `\COPY` sentinel `\N` for NULL, which most CSV consumers (Excel, Sheets, generic parsers) read as the literal string. NULL now exports as an empty field, the de facto CSV convention.
+- **Inactive tab background no longer mismatches the tab bar.**
 
 ## [0.6.0-dev.10] - 2026-05-29
 
