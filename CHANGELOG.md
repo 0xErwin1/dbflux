@@ -172,6 +172,7 @@ All notable changes to DBFlux will be documented in this file.
 - **Syntax highlighting preserved across `AppStateChanged`** — `CodeDocument` re-applied the highlighter mode on every `AppStateChanged`, and `InputState::set_highlighter` clears the cached highlighter until the next render — wiping SQL coloring after running a query until the next keystroke. The document now tracks the last applied `editor_mode` and only re-applies the highlighter when it actually changes.
 - **NULL rendered as an empty field in CSV export** — CSV export emitted the PostgreSQL `\COPY` sentinel `\N` for NULL, which most CSV consumers (Excel, Sheets, generic parsers) read as the literal string. NULL now exports as an empty field, the de facto CSV convention.
 - **Inactive tab background no longer mismatches the tab bar.**
+- **Multiline UPDATE/DELETE no longer falsely flagged as missing a `WHERE`** — The dangerous-query check matched only the literal substring `" where "`, so a `WHERE` placed on its own line (preceded by a newline rather than a space) was never found and the statement was wrongly reported as affecting all rows. Detection now strips single-quoted string literals (honoring `''` escapes) and matches `where` as a whitespace/paren-delimited token, fixing the false positive for both UPDATE and DELETE while still catching `where` text that only appears inside a value.
 
 ## [0.6.0-dev.10] - 2026-05-29
 
