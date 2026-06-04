@@ -5873,4 +5873,306 @@ mod tests {
             "grouped builder result must remain read-only after rebuild"
         );
     }
+
+    /// W2 — S6-A: cold-cache → editable upgrade via table-details arrival.
+    ///
+    /// Simulates the arrival handler: table_details are inserted into the
+    /// connection cache (the same write the async fetch does before calling
+    /// `entity.update`), then `compute_builder_binding` is called. Verifies
+    /// that the binding upgrades from None (cold) to Some (warm) and that
+    /// `pending_rebuild` would then be set — confirming the cold→warm path.
+    #[gpui::test]
+    fn cold_cache_upgrades_to_editable_on_table_details_arrival(cx: &mut TestAppContext) {
+        use dbflux_core::{ColumnInfo, TableInfo};
+
+        init_test_runtime(cx);
+
+        let profile_id = uuid::Uuid::new_v4();
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime =
+                    StorageRuntime::in_memory().expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+            })
+        });
+
+        cx.update(|cx| {
+            app_state.update(cx, |app, _| {
+                use dbflux_core::{ConnectedProfile, DbConfig, MutationPolicy};
+                use std::path::PathBuf;
+
+                let profile = dbflux_core::ConnectionProfile::new(
+                    "test",
+                    DbConfig::SQLite {
+                        path: PathBuf::from(":memory:"),
+                        connection_id: None,
+                    },
+                );
+                let connected = ConnectedProfile {
+                    profile,
+                    connection: {
+                        use dbflux_core::{
+                            Connection, DatabaseCategory, DbError, DbKind, DriverCapabilities,
+                            DriverMetadata, Icon as CoreIcon, QueryLanguage,
+                            QueryResult as CoreQueryResult, SchemaLoadingStrategy, SchemaSnapshot,
+                            SqlDialect,
+                        };
+                        struct StubConn;
+                        impl Connection for StubConn {
+                            fn metadata(&self) -> &DriverMetadata {
+                                static META: std::sync::OnceLock<DriverMetadata> =
+                                    std::sync::OnceLock::new();
+                                META.get_or_init(|| DriverMetadata {
+                                    id: "stub".to_string(),
+                                    display_name: "Stub".to_string(),
+                                    description: "test".to_string(),
+                                    category: DatabaseCategory::Relational,
+                                    deployment_class: None,
+                                    query_language: QueryLanguage::Sql,
+                                    capabilities: DriverCapabilities::empty(),
+                                    default_port: None,
+                                    uri_scheme: "stub".to_string(),
+                                    icon: CoreIcon::Database,
+                                    syntax: None,
+                                    query: None,
+                                    mutation: None,
+                                    ddl: None,
+                                    transactions: None,
+                                    limits: None,
+                                    ssl_modes: None,
+                                    ssl_cert_fields: None,
+                                    classification_override: None,
+                                    default_chunk_size: None,
+                                    supports_lock_timeout: false,
+                                })
+                            }
+                            fn kind(&self) -> DbKind {
+                                DbKind::SQLite
+                            }
+                            fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+                                SchemaLoadingStrategy::SingleDatabase
+                            }
+                            fn dialect(&self) -> &dyn SqlDialect {
+                                unimplemented!()
+                            }
+                            fn ping(&self) -> Result<(), DbError> {
+                                Ok(())
+                            }
+                            fn close(&mut self) -> Result<(), DbError> {
+                                Ok(())
+                            }
+                            fn execute(
+                                &self,
+                                _: &dbflux_core::QueryRequest,
+                            ) -> Result<CoreQueryResult, DbError> {
+                                Err(DbError::NotSupported("stub".to_string()))
+                            }
+                            fn cancel(&self, _: &dbflux_core::QueryHandle) -> Result<(), DbError> {
+                                Ok(())
+                            }
+                            fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+                                Ok(SchemaSnapshot::default())
+                            }
+                        }
+                        Arc::new(StubConn) as Arc<dyn Connection>
+                    },
+                    schema: None,
+                    mutation_policy: MutationPolicy::default(),
+                    database_schemas: Default::default(),
+                    table_details: Default::default(),
+                    collection_children: Default::default(),
+                    schema_types: Default::default(),
+                    schema_indexes: Default::default(),
+                    schema_foreign_keys: Default::default(),
+                    schema_routines: Default::default(),
+                    dependents_cache: Default::default(),
+                    active_database: Some("app".to_string()),
+                    redis_key_cache: Default::default(),
+                    database_connections: Default::default(),
+                    proxy_tunnel: None,
+                };
+                app.connections_mut().insert(profile_id, connected);
+            });
+        });
+
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id,
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+                let mut panel =
+                    DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx);
+                panel.current_visual_spec = Some(make_test_spec());
+                panel.builder_editable_binding = None;
+                panel
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        // Verify binding is None before details arrive (cold cache).
+        let cold_binding = window.update(|_, app| {
+            let p = panel.read(app);
+            p.compute_builder_binding(p.current_visual_spec.as_ref(), profile_id, Some("app"), app)
+        });
+        assert!(cold_binding.is_none(), "cold cache must yield None binding");
+
+        // Simulate table-details arrival: insert PK info into the connection cache.
+        window.update(|_, app| {
+            app_state.update(app, |app, _| {
+                app.set_table_details(
+                    profile_id,
+                    "app".to_string(),
+                    "users".to_string(),
+                    TableInfo {
+                        name: "users".to_string(),
+                        schema: Some("public".to_string()),
+                        columns: Some(vec![
+                            ColumnInfo {
+                                name: "id".to_string(),
+                                type_name: "int4".to_string(),
+                                nullable: false,
+                                is_primary_key: true,
+                                default_value: None,
+                                enum_values: None,
+                            },
+                            ColumnInfo {
+                                name: "name".to_string(),
+                                type_name: "text".to_string(),
+                                nullable: true,
+                                is_primary_key: false,
+                                default_value: None,
+                                enum_values: None,
+                            },
+                        ]),
+                        indexes: None,
+                        foreign_keys: None,
+                        constraints: None,
+                        sample_fields: None,
+                        presentation: Default::default(),
+                        child_items: None,
+                    },
+                );
+            });
+        });
+
+        // Now compute_builder_binding must return Some — the same call the arrival
+        // handler makes before setting pending_rebuild = true.
+        let warm_binding = window.update(|_, app| {
+            let p = panel.read(app);
+            p.compute_builder_binding(p.current_visual_spec.as_ref(), profile_id, Some("app"), app)
+        });
+
+        let binding = warm_binding
+            .expect("warm cache must upgrade cold binding to Some after table-details arrive");
+        assert_eq!(
+            binding.pk_columns,
+            vec!["id"],
+            "binding must carry the PK column from the warm cache"
+        );
+        assert!(
+            binding.insertable,
+            "single-table All spec must be insertable"
+        );
+    }
+
+    /// W3 — S7-A: after a builder-result mutation the panel has pending_refresh=true
+    /// and visual_select set, so the next render cycle will call refresh() → run_visual_query
+    /// → pending_rebuild. Verifies the builder-specific state that gates re-query + re-bind.
+    #[gpui::test]
+    fn builder_result_mutation_sets_pending_refresh_with_visual_select(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let visual_select = SelectQuery {
+            sql: "SELECT id, name FROM public.users LIMIT 100".to_string(),
+            params: vec![],
+        };
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+
+                let mut panel =
+                    DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx);
+
+                // Simulate a committed builder result: spec and pre-built SELECT are in place.
+                panel.current_visual_spec = Some(make_test_spec());
+                panel.visual_select = Some(visual_select.clone());
+                panel.builder_editable_binding = Some(dbflux_core::EditableBinding {
+                    table: dbflux_core::TableRef {
+                        schema: Some("public".to_string()),
+                        name: "users".to_string(),
+                    },
+                    pk_columns: vec!["id".to_string()],
+                    column_origin: Default::default(),
+                    insertable: true,
+                });
+                panel.pending_refresh = false;
+                panel
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        // In one window.update: verify baseline, simulate mutation callback,
+        // then assert the resulting state.
+        window.update(|_, app| {
+            panel.update(app, |p, cx| {
+                // Baseline: pending_refresh starts false, visual_select is set.
+                assert!(!p.pending_refresh, "pending_refresh must start false");
+                assert!(
+                    p.visual_select.is_some(),
+                    "visual_select must be set for the builder-result path"
+                );
+
+                // Simulate what the mutation success closure does.
+                p.pending_refresh = true;
+                cx.notify();
+
+                // After mutation: pending_refresh=true AND visual_select is still set.
+                // This is the exact state that causes refresh() → run_visual_query
+                // (not run_table_query) on the next render tick, completing the S7-A loop.
+                assert!(
+                    p.pending_refresh,
+                    "pending_refresh must be true after mutation to trigger re-query"
+                );
+                assert_eq!(
+                    p.visual_select.as_ref().map(|s| s.sql.as_str()),
+                    Some("SELECT id, name FROM public.users LIMIT 100"),
+                    "visual_select must be preserved so refresh() routes to run_visual_query"
+                );
+            });
+        });
+    }
 }

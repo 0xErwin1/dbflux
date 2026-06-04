@@ -584,7 +584,14 @@ impl VisualQuerySpec {
 
             Projection::Explicit(cols) => {
                 // Gate 4: every source PK must be projected as a plain column
-                // reference from the source alias.
+                // reference from the source alias, without an alias.
+                //
+                // An aliased PK (e.g. `id AS user_id`) produces a WHERE clause that
+                // names the alias rather than the real column, which the driver
+                // rejects. Read-only is the safe fallback.
+                //
+                // TODO: when ProjectedColumn gains an expression variant, extend the
+                // find() below to also return None for expression-over-PK projections.
                 let mut pk_output_keys: Vec<String> = Vec::with_capacity(pk_names.len());
 
                 for pk_real in &pk_names {
@@ -593,9 +600,9 @@ impl VisualQuerySpec {
                         .find(|pc| pc.source_alias == self.source.alias && pc.column == *pk_real);
 
                     match projected {
+                        Some(pc) if pc.alias.is_some() => return None,
                         Some(pc) => {
-                            let output_key = pc.alias.clone().unwrap_or_else(|| pc.column.clone());
-                            pk_output_keys.push(output_key);
+                            pk_output_keys.push(pc.column.clone());
                         }
                         None => return None,
                     }
@@ -1215,19 +1222,48 @@ mod tests {
             assert_eq!(b.column_origin.get("name"), Some(&ColumnOrigin::Source));
         }
 
-        // T1.1-P3: Aliased PK column → pk_columns uses the alias, origin is Source.
+        // T1.1-P3: Aliased PK column → read-only (None), because the mutation WHERE
+        // clause would use the alias as the column name and the driver would reject it.
         #[test]
-        fn p3_aliased_pk_column_uses_alias_as_output_key() {
+        fn p3_aliased_pk_column_returns_none() {
             let cols = vec![ProjectedColumn {
                 source_alias: "users".to_string(),
                 column: "id".to_string(),
                 alias: Some("user_id".to_string()),
             }];
             let spec = single_table_spec_explicit(cols);
-            let binding = spec.compute_editable_binding(warm_pk("id"));
-            let b = binding.expect("should produce a binding");
-            assert_eq!(b.pk_columns, vec!["user_id"]);
-            assert_eq!(b.column_origin.get("user_id"), Some(&ColumnOrigin::Source));
+            assert!(
+                spec.compute_editable_binding(warm_pk("id")).is_none(),
+                "aliased PK must produce read-only (None) — WHERE clause cannot use the alias"
+            );
+        }
+
+        // W1-P3b: Aliased non-PK column with PK projected unaliased → still editable.
+        // Only PK alias triggers read-only; aliases on non-PK columns are fine.
+        #[test]
+        fn p3b_aliased_non_pk_column_with_unaliased_pk_is_editable() {
+            let cols = vec![
+                ProjectedColumn {
+                    source_alias: "users".to_string(),
+                    column: "id".to_string(),
+                    alias: None,
+                },
+                ProjectedColumn {
+                    source_alias: "users".to_string(),
+                    column: "name".to_string(),
+                    alias: Some("full_name".to_string()),
+                },
+            ];
+            let spec = single_table_spec_explicit(cols);
+            let binding = spec
+                .compute_editable_binding(warm_pk("id"))
+                .expect("unaliased PK with aliased non-PK must remain editable");
+            assert_eq!(binding.pk_columns, vec!["id"]);
+            assert_eq!(binding.column_origin.get("id"), Some(&ColumnOrigin::Source));
+            assert_eq!(
+                binding.column_origin.get("full_name"),
+                Some(&ColumnOrigin::Source)
+            );
         }
 
         // T1.1-P4: Composite PK (N=2), all projected.
