@@ -497,29 +497,65 @@ impl AuditService {
             event = self.apply_redaction(event);
         }
 
-        self.enforce_max_detail_bytes(&event)?;
+        let event = self.enforce_max_detail_bytes(event)?;
 
         Ok(event)
     }
 
-    fn enforce_max_detail_bytes(&self, event: &EventRecord) -> Result<(), AuditError> {
+    fn enforce_max_detail_bytes(&self, mut event: EventRecord) -> Result<EventRecord, AuditError> {
         let Some(details) = event.details_json.as_ref() else {
-            return Ok(());
+            return Ok(event);
         };
 
-        let detail_len = details.len();
-        let max_detail_bytes = self.max_detail_bytes();
+        let max = self.max_detail_bytes();
 
-        if detail_len > max_detail_bytes {
-            return Err(AuditError::EventSink(EventSinkError::Serialization(
-                format!(
-                    "details_json exceeds max_detail_bytes ({} > {})",
-                    detail_len, max_detail_bytes
-                ),
-            )));
+        if details.len() <= max {
+            return Ok(event);
         }
 
-        Ok(())
+        let envelope = Self::build_truncated_envelope(details, max)?;
+        event.details_json = Some(envelope);
+
+        Ok(event)
+    }
+
+    /// Builds a `{"__truncated":true,"partial":"..."}` envelope whose serialized
+    /// form is guaranteed to be at most `max_bytes` in length.
+    ///
+    /// The partial value is the original string sliced to a valid UTF-8 boundary
+    /// and then shrunk until the full JSON-serialized envelope fits the budget.
+    fn build_truncated_envelope(details: &str, max_bytes: usize) -> Result<String, AuditError> {
+        let mut budget = max_bytes;
+        let candidate = details;
+
+        loop {
+            let end = candidate
+                .char_indices()
+                .map(|(i, _)| i)
+                .take_while(|&i| i < budget)
+                .last()
+                .unwrap_or(0);
+
+            let sliced = &candidate[..end];
+
+            let envelope = serde_json::json!({
+                "__truncated": true,
+                "partial": sliced,
+            });
+
+            let serialized = serde_json::to_string(&envelope)
+                .map_err(|e| AuditError::EventSink(EventSinkError::Serialization(e.to_string())))?;
+
+            if serialized.len() <= max_bytes {
+                return Ok(serialized);
+            }
+
+            if budget == 0 {
+                return Ok(serialized);
+            }
+
+            budget = budget.saturating_sub(serialized.len().saturating_sub(max_bytes) + 1);
+        }
     }
 
     /// Applies redaction for sensitive values in details_json and error_message.

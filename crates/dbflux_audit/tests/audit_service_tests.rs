@@ -292,9 +292,59 @@ fn details_json_is_fingerprinted_after_normalization() {
 }
 
 #[test]
-fn max_detail_bytes_is_enforced_on_stored_payload() {
+fn max_detail_bytes_truncates_oversized_details_json() {
     let service = service_for_test("dbflux-audit-max-detail.sqlite");
-    service.set_max_detail_bytes(32);
+    let max = 64usize;
+    service.set_max_detail_bytes(max);
+    service.set_redact_sensitive(false);
+
+    // Use non-hex, non-base64 characters to avoid redaction masking the truncation
+    let large_detail = "hello world ".repeat(20);
+    let event = EventRecord::new(
+        1000,
+        EventSeverity::Info,
+        EventCategory::System,
+        EventOutcome::Success,
+    )
+    .with_action("system.test")
+    .with_summary("System event")
+    .with_details_json(serde_json::json!({ "note": large_detail }).to_string());
+
+    let stored = service
+        .record(event)
+        .expect("oversized details_json should be truncated and stored");
+
+    let details = stored
+        .details_json
+        .expect("stored details_json should be present after truncation");
+
+    assert!(
+        details.len() <= max,
+        "stored details_json ({} bytes) must be <= max ({} bytes)",
+        details.len(),
+        max
+    );
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&details).expect("truncated details must be valid JSON");
+
+    assert_eq!(
+        parsed.get("__truncated"),
+        Some(&serde_json::Value::Bool(true)),
+        "truncated envelope must have __truncated:true"
+    );
+    assert!(
+        parsed.get("partial").is_some(),
+        "truncated envelope must have a partial field"
+    );
+}
+
+#[test]
+fn max_detail_bytes_not_truncated_when_exactly_at_limit() {
+    let service = service_for_test("dbflux-audit-max-detail-exact.sqlite");
+    let details_str = serde_json::json!({ "k": "v" }).to_string();
+    let max = details_str.len();
+    service.set_max_detail_bytes(max);
 
     let event = EventRecord::new(
         1000,
@@ -304,17 +354,97 @@ fn max_detail_bytes_is_enforced_on_stored_payload() {
     )
     .with_action("system.test")
     .with_summary("System event")
-    .with_details_json(serde_json::json!({ "note": "this payload is too large" }).to_string());
+    .with_details_json(details_str.clone());
 
-    let err = service
+    let stored = service
         .record(event)
-        .expect_err("oversized details_json must fail");
+        .expect("details_json exactly at limit should store without truncation");
 
-    assert!(matches!(
-        err,
-        dbflux_audit::AuditError::EventSink(EventSinkError::Serialization(_))
-    ));
-    assert!(err.to_string().contains("max_detail_bytes"));
+    let stored_details = stored
+        .details_json
+        .expect("stored details_json should be present");
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stored_details).expect("stored details must be valid JSON");
+
+    assert!(
+        parsed.get("__truncated").is_none(),
+        "details exactly at limit must not be truncated"
+    );
+}
+
+#[test]
+fn max_detail_bytes_handles_multibyte_utf8_boundary() {
+    let service = service_for_test("dbflux-audit-max-detail-utf8.sqlite");
+    let max = 80usize;
+    service.set_max_detail_bytes(max);
+
+    let multibyte = "é".repeat(50);
+    let event = EventRecord::new(
+        1000,
+        EventSeverity::Info,
+        EventCategory::System,
+        EventOutcome::Success,
+    )
+    .with_action("system.test")
+    .with_summary("System event")
+    .with_details_json(serde_json::json!({ "data": multibyte }).to_string());
+
+    let stored = service
+        .record(event)
+        .expect("multibyte details_json should be stored");
+
+    let details = stored
+        .details_json
+        .expect("stored details_json should be present");
+
+    assert!(
+        details.len() <= max,
+        "stored details_json ({} bytes) must be <= max ({} bytes)",
+        details.len(),
+        max
+    );
+
+    assert!(
+        std::str::from_utf8(details.as_bytes()).is_ok(),
+        "result must be valid UTF-8"
+    );
+    serde_json::from_str::<serde_json::Value>(&details).expect("result must be valid JSON");
+}
+
+#[test]
+fn max_detail_bytes_envelope_within_limit_when_escaping_needed() {
+    let service = service_for_test("dbflux-audit-max-detail-escape.sqlite");
+    let max = 80usize;
+    service.set_max_detail_bytes(max);
+
+    let escaping_heavy = "\"\\".repeat(30);
+    let event = EventRecord::new(
+        1000,
+        EventSeverity::Info,
+        EventCategory::System,
+        EventOutcome::Success,
+    )
+    .with_action("system.test")
+    .with_summary("System event")
+    .with_details_json(serde_json::json!({ "q": escaping_heavy }).to_string());
+
+    let stored = service
+        .record(event)
+        .expect("details with heavy escaping should be stored");
+
+    let details = stored
+        .details_json
+        .expect("stored details_json should be present");
+
+    assert!(
+        details.len() <= max,
+        "envelope ({} bytes) must fit within max ({} bytes) even with escaping",
+        details.len(),
+        max
+    );
+
+    serde_json::from_str::<serde_json::Value>(&details).expect("envelope must be valid JSON");
 }
 
 #[test]
