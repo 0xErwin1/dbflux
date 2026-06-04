@@ -53,7 +53,7 @@
           # Import default.nix with crane support
           dbflux = import ./default.nix {
             inherit pkgs craneLib;
-            version = "0.6.0-dev.10";
+            version = "0.6.0-rc.0";
           };
 
           # Source build (current behavior, compiles locally via crane).
