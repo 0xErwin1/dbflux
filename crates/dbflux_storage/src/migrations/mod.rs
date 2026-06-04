@@ -283,8 +283,7 @@ impl MigrationRegistry {
         let mut stmt = conn.prepare("SELECT name FROM sys_migrations")?;
         let names: std::collections::HashSet<String> = stmt
             .query_map([], |row| row.get::<_, String>(0))?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Result<std::collections::HashSet<_>, _>>()?;
         Ok(names)
     }
 }
