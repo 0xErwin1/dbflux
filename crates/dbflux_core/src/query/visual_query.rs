@@ -588,16 +588,13 @@ impl VisualQuerySpec {
                 let mut pk_output_keys: Vec<String> = Vec::with_capacity(pk_names.len());
 
                 for pk_real in &pk_names {
-                    let projected = cols.iter().find(|pc| {
-                        pc.source_alias == self.source.alias && pc.column == *pk_real
-                    });
+                    let projected = cols
+                        .iter()
+                        .find(|pc| pc.source_alias == self.source.alias && pc.column == *pk_real);
 
                     match projected {
                         Some(pc) => {
-                            let output_key = pc
-                                .alias
-                                .clone()
-                                .unwrap_or_else(|| pc.column.clone());
+                            let output_key = pc.alias.clone().unwrap_or_else(|| pc.column.clone());
                             pk_output_keys.push(output_key);
                         }
                         None => return None,
@@ -607,10 +604,7 @@ impl VisualQuerySpec {
                 // Build the column_origin map for every projected column.
                 let mut column_origin = BTreeMap::new();
                 for pc in cols {
-                    let output_key = pc
-                        .alias
-                        .clone()
-                        .unwrap_or_else(|| pc.column.clone());
+                    let output_key = pc.alias.clone().unwrap_or_else(|| pc.column.clone());
                     let origin = if pc.source_alias == self.source.alias {
                         ColumnOrigin::Source
                     } else {
@@ -1413,8 +1407,7 @@ mod tests {
             spec.source.table = "orders".to_string();
             spec.source.alias = "orders".to_string();
             // PK is (order_id, product_id) but only order_id is projected.
-            let binding =
-                spec.compute_editable_binding(warm_pks(vec!["order_id", "product_id"]));
+            let binding = spec.compute_editable_binding(warm_pks(vec!["order_id", "product_id"]));
             assert!(binding.is_none());
         }
 

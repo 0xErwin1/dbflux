@@ -66,6 +66,12 @@ pub struct DataTableState {
     /// Column indices that are foreign-key source columns.
     fk_columns: HashSet<usize>,
 
+    /// Column indices that are permanently read-only regardless of `is_editable`.
+    ///
+    /// Used to mark joined columns in builder SELECT results read-only while
+    /// source-table columns remain editable.
+    readonly_columns: HashSet<usize>,
+
     /// Whether this table is editable (requires PK for row identification).
     is_editable: bool,
 
@@ -115,6 +121,7 @@ impl DataTableState {
             edit_buffer,
             pk_columns: Vec::new(),
             fk_columns: HashSet::new(),
+            readonly_columns: HashSet::new(),
             is_editable: false,
             is_insertable: false,
             enum_options: std::collections::HashMap::new(),
@@ -510,6 +517,18 @@ impl DataTableState {
         &self.fk_columns
     }
 
+    /// Set column indices that are permanently read-only (e.g. joined columns
+    /// in a builder SELECT result). These columns block `start_editing`
+    /// regardless of the global `is_editable` flag.
+    pub fn set_readonly_columns(&mut self, cols: HashSet<usize>) {
+        self.readonly_columns = cols;
+    }
+
+    /// Get the read-only column index set.
+    pub fn readonly_columns(&self) -> &HashSet<usize> {
+        &self.readonly_columns
+    }
+
     /// Check if the table supports INSERT operations (add/duplicate rows).
     pub fn is_insertable(&self) -> bool {
         self.is_insertable
@@ -566,7 +585,7 @@ impl DataTableState {
 
         let row_source = visual_order.get(coord.row).copied();
 
-        // Check if editing is allowed for this row
+        // Check if editing is allowed for this row and column.
         let can_edit = match row_source {
             Some(VisualRowSource::Base(_)) => self.is_editable,
             Some(VisualRowSource::Insert(_)) => self.is_insertable || self.is_editable,
@@ -574,6 +593,10 @@ impl DataTableState {
         };
 
         if !can_edit {
+            return false;
+        }
+
+        if self.readonly_columns.contains(&coord.col) {
             return false;
         }
 

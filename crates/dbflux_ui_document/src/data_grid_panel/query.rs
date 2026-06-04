@@ -2,9 +2,9 @@ use super::filter_bar::{FilterMode, RelationalFilterState, classify_filter_input
 use super::{DataGridPanel, DataSource, GridState, PendingToast, PendingTotalCount};
 use dbflux_components::components::data_table::SortState as TableSortState;
 use dbflux_core::{
-    CollectionBrowseRequest, CollectionCountRequest, CollectionRef, OrderByColumn, Pagination,
-    QueryRequest, QueryResult, SelectQuery, SourceTable, TableBrowseRequest, TableCountRequest,
-    TableRef, TaskKind, TaskTarget, VisualQuerySpec,
+    CollectionBrowseRequest, CollectionCountRequest, CollectionRef, EditableBinding, OrderByColumn,
+    Pagination, QueryRequest, QueryResult, SelectQuery, SourceTable, TableBrowseRequest,
+    TableCountRequest, TableRef, TaskKind, TaskTarget, VisualQuerySpec,
 };
 use dbflux_core::{
     RelationalFilterError, RelationalResolveError, count_query_from_spec, parse_and_resolve,
@@ -400,6 +400,20 @@ impl DataGridPanel {
                             panel.current_visual_spec = committed_spec.clone();
                             panel.result = query_result;
                             panel.state = GridState::Ready;
+
+                            let binding = panel.compute_builder_binding(
+                                committed_spec.as_ref(),
+                                profile_id,
+                                database.as_deref(),
+                                cx,
+                            );
+                            panel.pk_columns = binding
+                                .as_ref()
+                                .map(|b| b.pk_columns.clone())
+                                .unwrap_or_default();
+                            panel.builder_editable_binding = binding;
+                            panel.pending_rebuild = true;
+
                             cx.notify();
                         });
                     }

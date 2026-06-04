@@ -218,8 +218,17 @@ impl Render for DataGridPanel {
         let is_grouped_result = self.is_grouped_result();
 
         let show_grouped_warning = is_table_view && shows_table_content && is_grouped_result;
-        let show_pk_warning =
-            is_table_view && shows_table_content && !is_editable && !is_grouped_result;
+        let show_pk_warning = is_table_view
+            && shows_table_content
+            && !is_editable
+            && !is_grouped_result
+            && self.current_visual_spec.is_none();
+        let show_builder_readonly_hint = is_table_view
+            && shows_table_content
+            && !is_editable
+            && !is_grouped_result
+            && self.current_visual_spec.is_some()
+            && self.builder_editable_binding.is_none();
         let show_edit_toolbar = is_table_view && has_columns && is_editable;
 
         div()
@@ -295,6 +304,31 @@ impl Render for DataGridPanel {
                         .child(
                             Text::caption("This table has no primary key - editing is disabled")
                                 .warning(),
+                        ),
+                )
+            })
+            // Builder read-only hint (when builder result is not editable-safe)
+            .when(show_builder_readonly_hint, |d| {
+                d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::SM)
+                        .h(Heights::ROW_COMPACT)
+                        .px(Spacing::SM)
+                        .bg(theme.muted.opacity(0.15))
+                        .border_b_1()
+                        .border_color(theme.border)
+                        .child(
+                            Icon::new(AppIcon::TriangleAlert)
+                                .small()
+                                .color(theme.muted_foreground),
+                        )
+                        .child(
+                            Text::caption(
+                                "Editing disabled: result is not bound to a single table.",
+                            )
+                            .color(theme.muted_foreground),
                         ),
                 )
             })
