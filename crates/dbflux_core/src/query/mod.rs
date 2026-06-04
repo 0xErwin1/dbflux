@@ -11,7 +11,7 @@ pub(crate) mod tx_vocab;
 pub(crate) mod types;
 pub(crate) mod visual_query;
 
-pub use column_kind::infer_column_kind;
+pub use column_kind::{infer_column_kind, project_aggregate_kinds};
 pub use generator::{
     CollectionTemplateRequest, GeneratedMutation, GeneratedQuery, GeneratorError, MutationCategory,
     MutationTemplateOperation, MutationTemplateRequest, QueryGenError, QueryGenerator,
@@ -42,10 +42,11 @@ pub use types::{
     ColumnKind, ColumnMeta, QueryHandle, QueryRequest, QueryResult, QueryResultShape,
     ResolvedWindow, Row,
 };
+pub use visual_query::AggregateSpec as VisualAggregateSpec;
 pub use visual_query::SortDirection as VisualSortDirection;
 pub use visual_query::{
-    AliasOrigin, Assignment, AssignmentValue, BoolOp, Comparator, CountSpec, FilterNode,
-    JoinFilterNode, JoinKind, JoinOn, JoinPredicate, JoinStep, LiteralValue, MutationKind,
-    Predicate, PredicateValue, ProjectedColumn, Projection, ScalarLiteral, SortEntry, SourceTable,
-    SpecError, VisualMutationSpec, VisualQuerySpec,
+    AggFn, AliasOrigin, Assignment, AssignmentValue, BoolOp, Comparator, CountSpec, FilterNode,
+    GroupByEntry, JoinFilterNode, JoinKind, JoinOn, JoinPredicate, JoinStep, LiteralValue,
+    MutationKind, Predicate, PredicateValue, ProjectedColumn, Projection, ScalarLiteral, SortEntry,
+    SourceTable, SpecError, VisualMutationSpec, VisualQuerySpec,
 };

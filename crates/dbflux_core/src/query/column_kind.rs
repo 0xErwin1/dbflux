@@ -1,4 +1,5 @@
-use crate::query::types::ColumnKind;
+use crate::query::types::{ColumnKind, ColumnMeta};
+use crate::query::visual_query::{AggFn, VisualQuerySpec};
 
 /// Infers a `ColumnKind` from a driver-reported `type_name` string using
 /// case-insensitive substring matching.
@@ -60,6 +61,47 @@ pub fn infer_column_kind(type_name: &str) -> ColumnKind {
     }
 
     ColumnKind::Unknown
+}
+
+/// Overwrites `ColumnKind` on aggregate result columns in a grouped query.
+///
+/// The `columns` slice must be positionally aligned with the query output:
+/// the first `spec.group_by.len()` entries correspond to group-by columns and
+/// are left untouched. The remaining entries correspond to `spec.aggregates` in
+/// order; each entry's `kind` is set according to the aggregate function and
+/// the kind already present in that slot (as reported by the driver for the
+/// result column).
+///
+/// If `columns` is shorter than `group_by.len() + aggregates.len()`, the
+/// function processes only the columns that exist and never panics.
+///
+/// Kind assignment rules per aggregate function:
+/// - `Count`, `CountStar`, `CountDistinct` → always `Integer`
+/// - `Avg` → always `Float`
+/// - `Sum` → `Integer` if existing kind is `Integer`; `Float` if `Float`; else `Unknown`
+/// - `Min`, `Max` → preserve the existing kind (driver-reported or inferred)
+pub fn project_aggregate_kinds(spec: &VisualQuerySpec, columns: &mut [ColumnMeta]) {
+    let offset = spec.group_by.len();
+
+    for (i, agg) in spec.aggregates.iter().enumerate() {
+        let col_index = offset + i;
+        if col_index >= columns.len() {
+            break;
+        }
+
+        let existing_kind = columns[col_index].kind;
+
+        columns[col_index].kind = match agg.function {
+            AggFn::Count | AggFn::CountStar | AggFn::CountDistinct => ColumnKind::Integer,
+            AggFn::Avg => ColumnKind::Float,
+            AggFn::Sum => match existing_kind {
+                ColumnKind::Integer => ColumnKind::Integer,
+                ColumnKind::Float => ColumnKind::Float,
+                _ => ColumnKind::Unknown,
+            },
+            AggFn::Min | AggFn::Max => existing_kind,
+        };
+    }
 }
 
 #[cfg(test)]

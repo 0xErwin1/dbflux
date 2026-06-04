@@ -103,6 +103,16 @@ pub trait SqlDialect: Send + Sync {
         format!("LIMIT {}", n)
     }
 
+    /// Whether this dialect requires HAVING clauses to repeat the full aggregate
+    /// expression rather than referencing the column alias.
+    ///
+    /// SQL Server does not allow aliases defined in the SELECT list to be
+    /// referenced in HAVING; the aggregate expression must be repeated.
+    /// All other supported dialects (PostgreSQL, SQLite, MySQL) accept aliases.
+    fn having_repeats_aggregate_expressions(&self) -> bool {
+        false
+    }
+
     /// Build an UPSERT statement for this dialect.
     fn build_upsert_statement(
         &self,

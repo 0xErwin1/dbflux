@@ -325,6 +325,10 @@ impl SqlDialect for MssqlDialect {
         format!("OFFSET 0 ROWS FETCH NEXT {} ROWS ONLY", n)
     }
 
+    fn having_repeats_aggregate_expressions(&self) -> bool {
+        true
+    }
+
     fn build_upsert_statement(
         &self,
         _schema: Option<&str>,

@@ -522,6 +522,14 @@ pub struct DataGridPanel {
     /// Cleared whenever `builder_draft_spec` changes.
     pub(crate) visual_select: Option<SelectQuery>,
 
+    /// The `VisualQuerySpec` that was last successfully executed by
+    /// `run_visual_query`.
+    ///
+    /// This is the committed spec, not the draft. It is set when the query
+    /// succeeds and is used to determine whether the current result is grouped
+    /// (which gates mutations and pagination subquery selection).
+    pub(crate) current_visual_spec: Option<VisualQuerySpec>,
+
     /// The builder panel entity; kept alive here so inspector close/re-open
     /// preserves state across sessions.
     pub(crate) builder_panel: Option<Entity<QueryBuilderPanel>>,
@@ -1065,6 +1073,7 @@ impl DataGridPanel {
             relational_filter_state: filter_bar::RelationalFilterState::Inactive,
             builder_draft_spec: None,
             visual_select: None,
+            current_visual_spec: None,
             builder_panel: None,
             _builder_subscriptions: Vec::new(),
             filter_input_hidden: false,
@@ -1750,12 +1759,17 @@ impl DataGridPanel {
             // If no columns are marked as PK, keep the existing pk_columns (fallback to "_id" for MongoDB)
         }
 
-        // Find PK column indices in result columns
-        let pk_indices: Vec<usize> = self
-            .pk_columns
-            .iter()
-            .filter_map(|pk_name| self.result.columns.iter().position(|c| c.name == *pk_name))
-            .collect();
+        // Find PK column indices in result columns. When mutations are
+        // disabled (grouped result or no PK), pass an empty set to the table
+        // state so `is_editable` returns false.
+        let pk_indices: Vec<usize> = if self.mutations_enabled() {
+            self.pk_columns
+                .iter()
+                .filter_map(|pk_name| self.result.columns.iter().position(|c| c.name == *pk_name))
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         log::debug!(
             "rebuild_table: pk_columns={:?}, pk_indices={:?}",
@@ -1766,7 +1780,7 @@ impl DataGridPanel {
         let is_insertable = matches!(
             self.source,
             DataSource::Table { .. } | DataSource::Collection { .. }
-        );
+        ) && self.mutations_enabled();
 
         let column_details = self.get_column_details(cx);
 
@@ -2442,9 +2456,37 @@ impl DataGridPanel {
     pub fn clear_builder_draft_spec(&mut self, cx: &mut Context<Self>) {
         self.builder_draft_spec = None;
         self.visual_select = None;
+        self.current_visual_spec = None;
         self.filter_input_hidden = false;
 
         cx.notify();
+    }
+
+    /// Returns `true` when the currently displayed result rows are from a
+    /// grouped (aggregated) query.
+    ///
+    /// `current_visual_spec` is updated only on successful query completion so
+    /// it always describes the rows visible in the grid. On query failure the
+    /// previous successful spec is retained, which keeps this method consistent
+    /// with what the user can actually see and interact with.
+    pub fn is_grouped_result(&self) -> bool {
+        self.current_visual_spec
+            .as_ref()
+            .is_some_and(|s| s.is_grouped())
+    }
+
+    /// Returns `true` when row mutations (add, edit, delete) are permitted on
+    /// the current result.
+    ///
+    /// Mutations are disabled when the current result is grouped (aggregated
+    /// rows have no row identity) or when no primary key columns are known
+    /// (preventing UPDATE/DELETE target identification).
+    pub fn mutations_enabled(&self) -> bool {
+        if self.is_grouped_result() {
+            return false;
+        }
+
+        !self.pk_columns.is_empty()
     }
 
     /// Returns whether the toolbar's "Open in Builder" button should be shown.
@@ -3824,8 +3866,8 @@ mod tests {
     use super::{DataGridPanel, DataSource};
     use dbflux_components::theme;
     use dbflux_core::{
-        CollectionRef, ColumnKind, ColumnMeta, Pagination, Projection, QueryResult, SelectQuery,
-        SourceTable, TableRef, VisualQuerySpec,
+        AggFn, CollectionRef, ColumnKind, ColumnMeta, GroupByEntry, Pagination, Projection,
+        QueryResult, SelectQuery, SourceTable, TableRef, VisualAggregateSpec, VisualQuerySpec,
     };
     use dbflux_storage::bootstrap::StorageRuntime;
     use dbflux_ui_base::AppStateEntity;
@@ -3878,6 +3920,87 @@ mod tests {
             let host = cx.new(|_cx| ToastHost::new());
             cx.set_global(ToastGlobal { host });
         });
+    }
+
+    fn make_grouped_spec() -> VisualQuerySpec {
+        use dbflux_core::{AggFn, GroupByEntry, VisualAggregateSpec};
+
+        VisualQuerySpec {
+            source: SourceTable {
+                schema: Some("public".to_string()),
+                table: "orders".to_string(),
+                alias: "orders".to_string(),
+            },
+            projection: Projection::Explicit(vec![]),
+            joins: vec![],
+            filter: None,
+            group_by: vec![GroupByEntry {
+                source_alias: "orders".to_string(),
+                column: "country".to_string(),
+            }],
+            aggregates: vec![VisualAggregateSpec {
+                function: AggFn::Sum,
+                source_alias: Some("orders".to_string()),
+                column: Some("amount".to_string()),
+                alias: "total".to_string(),
+            }],
+            having: None,
+            sort: vec![],
+            limit: Some(100),
+            offset: 0,
+        }
+    }
+
+    /// Tests the `mutations_enabled` predicate directly without constructing
+    /// a full panel (avoiding the GPUI window requirement).
+    ///
+    /// The predicate is: `!is_grouped(spec) && !pk_columns.is_empty()`.
+    /// This helper mirrors the logic in `DataGridPanel::mutations_enabled`.
+    fn mutations_enabled_predicate(spec: Option<&VisualQuerySpec>, pk_columns: &[String]) -> bool {
+        if spec.map(|s| s.is_grouped()).unwrap_or(false) {
+            return false;
+        }
+        !pk_columns.is_empty()
+    }
+
+    #[test]
+    fn mutations_enabled_truth_table() {
+        let ungrouped_spec = {
+            let mut s = make_test_spec();
+            s.group_by = vec![];
+            s.aggregates = vec![];
+            s
+        };
+        let grouped_spec = make_grouped_spec();
+
+        let cases: &[(&'static str, Option<VisualQuerySpec>, Vec<String>, bool)] = &[
+            ("no spec, no pk", None, vec![], false),
+            ("no spec, has pk", None, vec!["id".to_string()], true),
+            (
+                "ungrouped, no pk",
+                Some(ungrouped_spec.clone()),
+                vec![],
+                false,
+            ),
+            (
+                "ungrouped, has pk",
+                Some(ungrouped_spec.clone()),
+                vec!["id".to_string()],
+                true,
+            ),
+            ("grouped, no pk", Some(grouped_spec.clone()), vec![], false),
+            (
+                "grouped, has pk",
+                Some(grouped_spec.clone()),
+                vec!["id".to_string()],
+                false,
+            ),
+        ];
+
+        for (label, spec, pk_cols, expected) in cases {
+            let result = mutations_enabled_predicate(spec.as_ref(), pk_cols);
+            assert_eq!(result, *expected, "mutations_enabled failed for: {}", label);
+        }
     }
 
     #[test]
@@ -4334,6 +4457,9 @@ mod tests {
             projection: Projection::All,
             joins: vec![],
             filter: None,
+            group_by: vec![],
+            aggregates: vec![],
+            having: None,
             sort: vec![],
             limit: Some(100),
             offset: 0,

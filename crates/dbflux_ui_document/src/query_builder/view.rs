@@ -37,12 +37,23 @@ pub fn render_panel(
         panel.rebuild_join_input_states(window, cx);
     }
 
+    if panel.pending_group_by_rebuild {
+        panel.pending_group_by_rebuild = false;
+        panel.rebuild_group_by_input_states(window, cx);
+    }
+
     if panel.pending_filter_input_sweep {
         panel.pending_filter_input_sweep = false;
         panel.sweep_stale_predicate_inputs();
     }
 
+    if panel.pending_having_input_sweep {
+        panel.pending_having_input_sweep = false;
+        panel.sweep_stale_having_predicate_inputs();
+    }
+
     ensure_predicate_inputs(panel, window, cx);
+    ensure_having_predicate_inputs(panel, window, cx);
     ensure_join_condition_inputs(panel, window, cx);
 
     if panel.pending_join_condition_sweep {
@@ -204,7 +215,7 @@ fn render_body(
     theme: &Theme,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
-    use super::sections::{assignments, columns, execution, filters, joins, sort};
+    use super::sections::{assignments, columns, execution, filters, group_by, joins, sort};
 
     let current_mode = panel
         .mutation_state
@@ -214,13 +225,21 @@ fn render_body(
 
     match current_mode {
         BuilderMode::Select => {
-            let columns_body = columns::render_columns(panel, cx).into_any_element();
+            let is_grouped = panel.is_grouped();
+
+            let columns_body = if is_grouped {
+                render_effective_select_preview(panel, theme).into_any_element()
+            } else {
+                columns::render_columns(panel, cx).into_any_element()
+            };
+
             let filters_body = filters::render_filters(panel, cx).into_any_element();
             let joins_body = joins::render_joins(panel, cx).into_any_element();
+            let group_by_body = group_by::render_group_by(panel, cx).into_any_element();
             let sort_body = sort::render_sort(panel, cx).into_any_element();
             let limit_body = render_limit_offset_body(panel).into_any_element();
 
-            div()
+            let mut body = div()
                 .flex_1()
                 .min_h(px(0.0))
                 .overflow_y_scrollbar()
@@ -237,7 +256,24 @@ fn render_body(
                     filters_body,
                 ))
                 .child(section_card("JOINS", AppIcon::Layers, theme, joins_body))
-                .child(section_card("SORT", AppIcon::ArrowUpDown, theme, sort_body))
+                .child(section_card(
+                    "GROUP BY / AGGREGATES",
+                    AppIcon::Layers,
+                    theme,
+                    group_by_body,
+                ));
+
+            if is_grouped {
+                let having_body = group_by::render_having(panel, cx).into_any_element();
+                body = body.child(section_card(
+                    "HAVING",
+                    AppIcon::ListFilter,
+                    theme,
+                    having_body,
+                ));
+            }
+
+            body.child(section_card("SORT", AppIcon::ArrowUpDown, theme, sort_body))
                 .child(section_card(
                     "LIMIT & OFFSET",
                     AppIcon::Hash,
@@ -395,6 +431,54 @@ fn render_limit_offset_body(panel: &mut QueryBuilderPanel) -> impl IntoElement {
 }
 
 // ---------------------------------------------------------------------------
+// Effective SELECT preview (shown when grouped, replaces editable columns)
+// ---------------------------------------------------------------------------
+
+fn render_effective_select_preview(
+    panel: &mut QueryBuilderPanel,
+    theme: &Theme,
+) -> impl IntoElement {
+    use dbflux_core::AggFn;
+
+    let mut container = div().flex().flex_col().gap(Spacing::XS).child(
+        Text::caption(SharedString::from(
+            "Grouped query — SELECT is managed automatically",
+        ))
+        .color(theme.muted_foreground),
+    );
+
+    for entry in &panel.current_spec.group_by {
+        let label = format!("{}.{}", entry.source_alias, entry.column);
+        container = container.child(div().text_sm().child(SharedString::from(label)));
+    }
+
+    for agg in &panel.current_spec.aggregates {
+        let fn_name = match agg.function {
+            AggFn::Count => "COUNT",
+            AggFn::CountStar => "COUNT",
+            AggFn::CountDistinct => "COUNT DISTINCT",
+            AggFn::Sum => "SUM",
+            AggFn::Avg => "AVG",
+            AggFn::Min => "MIN",
+            AggFn::Max => "MAX",
+        };
+        let col_part = if agg.function == AggFn::CountStar {
+            "*".to_string()
+        } else {
+            match (&agg.source_alias, &agg.column) {
+                (Some(sa), Some(col)) => format!("{}.{}", sa, col),
+                (None, Some(col)) => col.clone(),
+                _ => String::new(),
+            }
+        };
+        let label = format!("{}({}) AS {}", fn_name, col_part, agg.alias);
+        container = container.child(div().text_sm().child(SharedString::from(label)));
+    }
+
+    container
+}
+
+// ---------------------------------------------------------------------------
 // SQL Preview
 // ---------------------------------------------------------------------------
 
@@ -450,7 +534,6 @@ fn render_footer(
 
     let is_mutation_mode = current_mode.is_mutation();
 
-    // For mutation modes, disable Run if there's nothing to run.
     let mutation_disabled = is_mutation_mode
         && panel
             .mutation_state
@@ -475,58 +558,114 @@ fn render_footer(
         "Run"
     };
 
+    let sort_error = panel.sort_validation_error.clone();
+    let incomplete_count = panel.incomplete_aggregate_row_count;
+    let is_grouped = panel.is_grouped();
+
     div()
         .flex()
-        .flex_row()
-        .items_center()
-        .gap(Spacing::SM)
-        .px(Spacing::MD)
-        .h(Heights::HEADER)
+        .flex_col()
         .border_t_1()
         .border_color(theme.border)
         .bg(theme.background)
-        .child(
-            Button::new("qb-run", run_label)
-                .icon(AppIcon::Play)
-                .primary()
-                .small()
-                .disabled(!is_runnable)
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    use crate::query_builder::events::BuilderEvent;
-                    if is_mutation_mode {
-                        if let Some(result) = this.build_mutation_spec_and_opts() {
-                            use crate::data_grid_panel::mutation_executor::CountState;
-                            let est_rows =
-                                this.mutation_state
-                                    .as_ref()
-                                    .and_then(|s| match &s.count_state {
-                                        CountState::Done(n) => Some(*n),
-                                        _ => None,
-                                    });
-                            cx.emit(BuilderEvent::MutationRunRequested {
-                                spec: Box::new(result.0),
-                                opts: Box::new(result.1),
-                                est_rows,
-                            });
-                        }
-                    } else {
-                        cx.emit(BuilderEvent::RunRequested);
-                    }
-                })),
-        )
-        .when(!is_mutation_mode, |row| {
-            row.child(
-                Button::new("qb-open-editor", "Open in Editor")
-                    .icon(AppIcon::ExternalLink)
-                    .variant(ButtonVariant::Ghost)
-                    .small()
-                    .on_click(cx.listener(|_this, _event, _window, cx| {
-                        use crate::query_builder::events::BuilderEvent;
-                        cx.emit(BuilderEvent::OpenInEditorRequested);
-                    })),
+        .when_some(sort_error, |d, error_msg| {
+            d.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::SM)
+                    .px(Spacing::MD)
+                    .py(Spacing::XS)
+                    .bg(theme.danger.opacity(0.08))
+                    .border_b_1()
+                    .border_color(theme.danger.opacity(0.3))
+                    .child(
+                        Icon::new(AppIcon::TriangleAlert)
+                            .small()
+                            .color(theme.danger),
+                    )
+                    .child(Text::caption(SharedString::from(error_msg)).color(theme.danger)),
             )
         })
-        .child(div().flex_1())
+        .when(is_grouped && incomplete_count > 0, |d| {
+            let label = if incomplete_count == 1 {
+                SharedString::from(
+                    "1 aggregate row is incomplete and will be excluded from the query",
+                )
+            } else {
+                SharedString::from(format!(
+                    "{} aggregate rows are incomplete and will be excluded from the query",
+                    incomplete_count
+                ))
+            };
+            d.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::SM)
+                    .px(Spacing::MD)
+                    .py(Spacing::XS)
+                    .bg(theme.warning.opacity(0.08))
+                    .border_b_1()
+                    .border_color(theme.warning.opacity(0.3))
+                    .child(
+                        Icon::new(AppIcon::TriangleAlert)
+                            .small()
+                            .color(theme.warning),
+                    )
+                    .child(Text::caption(label).color(theme.warning)),
+            )
+        })
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(Spacing::SM)
+                .px(Spacing::MD)
+                .h(Heights::HEADER)
+                .child(
+                    Button::new("qb-run", run_label)
+                        .icon(AppIcon::Play)
+                        .primary()
+                        .small()
+                        .disabled(!is_runnable)
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            use crate::query_builder::events::BuilderEvent;
+                            if is_mutation_mode {
+                                if let Some(result) = this.build_mutation_spec_and_opts() {
+                                    use crate::data_grid_panel::mutation_executor::CountState;
+                                    let est_rows = this.mutation_state.as_ref().and_then(|s| {
+                                        match &s.count_state {
+                                            CountState::Done(n) => Some(*n),
+                                            _ => None,
+                                        }
+                                    });
+                                    cx.emit(BuilderEvent::MutationRunRequested {
+                                        spec: Box::new(result.0),
+                                        opts: Box::new(result.1),
+                                        est_rows,
+                                    });
+                                }
+                            } else {
+                                cx.emit(BuilderEvent::RunRequested);
+                            }
+                        })),
+                )
+                .when(!is_mutation_mode, |row| {
+                    row.child(
+                        Button::new("qb-open-editor", "Open in Editor")
+                            .icon(AppIcon::ExternalLink)
+                            .variant(ButtonVariant::Ghost)
+                            .small()
+                            .on_click(cx.listener(|_this, _event, _window, cx| {
+                                use crate::query_builder::events::BuilderEvent;
+                                cx.emit(BuilderEvent::OpenInEditorRequested);
+                            })),
+                    )
+                })
+                .child(div().flex_1()),
+        )
 }
 
 // ---------------------------------------------------------------------------
@@ -589,6 +728,77 @@ fn ensure_in_node(
                 let mut child_path = path.clone();
                 child_path.push(i);
                 ensure_in_node(panel, child, child_path, window, cx);
+            }
+        }
+    }
+}
+
+/// Walks the HAVING filter tree and ensures every `Predicate` node has a
+/// corresponding `Entity<InputState>` in `panel.having_predicate_*` maps.
+fn ensure_having_predicate_inputs(
+    panel: &mut QueryBuilderPanel,
+    window: &mut Window,
+    cx: &mut Context<QueryBuilderPanel>,
+) {
+    let having = panel.current_spec.having.clone();
+    if let Some(root) = having {
+        ensure_in_having_node(panel, &root, vec![], window, cx);
+    }
+}
+
+fn ensure_in_having_node(
+    panel: &mut QueryBuilderPanel,
+    node: &dbflux_core::FilterNode,
+    path: Vec<usize>,
+    window: &mut Window,
+    cx: &mut Context<QueryBuilderPanel>,
+) {
+    use dbflux_core::FilterNode;
+
+    match node {
+        FilterNode::Predicate(pred) => {
+            let current_value = match &pred.value {
+                dbflux_core::PredicateValue::None => String::new(),
+                dbflux_core::PredicateValue::Single(v) => literal_to_display_string(v),
+                dbflux_core::PredicateValue::List(vs) => vs
+                    .iter()
+                    .map(literal_to_display_string)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            };
+            let column_ref = if pred.column.is_empty() {
+                String::new()
+            } else if pred.source_alias.is_empty() {
+                pred.column.clone()
+            } else {
+                format!("{}.{}", pred.source_alias, pred.column)
+            };
+            panel.ensure_having_predicate_input(
+                pred.node_id,
+                path.clone(),
+                &current_value,
+                window,
+                cx,
+            );
+            panel.ensure_having_predicate_column_input(
+                pred.node_id,
+                path.clone(),
+                &column_ref,
+                window,
+                cx,
+            );
+            panel.ensure_having_predicate_comparator_dropdown(
+                pred.node_id,
+                path,
+                pred.comparator,
+                cx,
+            );
+        }
+        FilterNode::Group { children, .. } => {
+            for (i, child) in children.iter().enumerate() {
+                let mut child_path = path.clone();
+                child_path.push(i);
+                ensure_in_having_node(panel, child, child_path, window, cx);
             }
         }
     }
