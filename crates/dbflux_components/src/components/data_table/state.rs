@@ -1009,4 +1009,148 @@ mod tests {
         let next = next_sort_state(current, 5);
         assert_eq!(next, Some(SortState::ascending(5)));
     }
+
+    // =========================================================================
+    // start_editing gate tests (Tier 1)
+    // =========================================================================
+    //
+    // These require a GPUI window because start_editing takes a &mut Window.
+    // A minimal Render harness is used — no theme or global init needed for
+    // the editing-gate logic itself.
+
+    use gpui::AppContext as _;
+
+    /// Harness that wraps a DataTableState entity so it can be placed in a window.
+    struct StateHarness {
+        state: gpui::Entity<super::DataTableState>,
+    }
+
+    impl gpui::Render for StateHarness {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div()
+        }
+    }
+
+    fn one_row_model() -> std::sync::Arc<super::super::model::TableModel> {
+        use crate::components::data_table::model::{
+            CellValue, ColumnKind, ColumnSpec, RowData, TableModel,
+        };
+        use gpui::TextAlign;
+
+        let columns = vec![
+            ColumnSpec {
+                id: "id".into(),
+                title: "id".into(),
+                kind: ColumnKind::Integer,
+                align: TextAlign::Left,
+                type_name: "int4".into(),
+            },
+            ColumnSpec {
+                id: "name".into(),
+                title: "name".into(),
+                kind: ColumnKind::Text,
+                align: TextAlign::Left,
+                type_name: "text".into(),
+            },
+        ];
+        let rows = vec![RowData {
+            cells: vec![CellValue::int(1), CellValue::text("alice")],
+        }];
+        std::sync::Arc::new(TableModel::new(columns, rows))
+    }
+
+    /// Negative: start_editing on a column in readonly_columns returns false.
+    #[gpui::test]
+    fn start_editing_blocked_by_readonly_column(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+        use std::collections::HashSet;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+
+        let (_, window) = cx.add_window_view(move |window, cx| {
+            let model = one_row_model();
+            let state = cx.new(|cx| {
+                let mut s = super::DataTableState::new(model, cx);
+                // col 0 = PK (enables is_editable), col 1 = readonly
+                s.set_pk_columns(vec![0]);
+                s.set_readonly_columns(HashSet::from([1usize]));
+                s
+            });
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("state entity must be created");
+
+        let result = window.update(|window, app| {
+            state.update(app, |s, cx| {
+                s.start_editing(CellCoord::new(0, 1), window, cx)
+            })
+        });
+
+        assert!(
+            !result,
+            "start_editing must return false for a column in readonly_columns"
+        );
+
+        let editing_cell = window.update(|_, app| state.read(app).editing_cell());
+        assert!(
+            editing_cell.is_none(),
+            "editing_cell must remain None when start_editing is blocked"
+        );
+    }
+
+    /// Positive: start_editing on an editable, non-readonly column returns true.
+    #[gpui::test]
+    fn start_editing_allowed_on_non_readonly_editable_column(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+        use std::collections::HashSet;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+
+        let (_, window) = cx.add_window_view(move |window, cx| {
+            let model = one_row_model();
+            let state = cx.new(|cx| {
+                let mut s = super::DataTableState::new(model, cx);
+                // col 0 = PK (enables is_editable), no readonly columns
+                s.set_pk_columns(vec![0]);
+                s.set_readonly_columns(HashSet::new());
+                s
+            });
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("state entity must be created");
+
+        let result = window.update(|window, app| {
+            state.update(app, |s, cx| {
+                s.start_editing(CellCoord::new(0, 1), window, cx)
+            })
+        });
+
+        assert!(
+            result,
+            "start_editing must return true for an editable column with no readonly guard"
+        );
+
+        let editing_cell = window.update(|_, app| state.read(app).editing_cell());
+        assert_eq!(
+            editing_cell,
+            Some(CellCoord::new(0, 1)),
+            "editing_cell must be set to the requested coord after successful start_editing"
+        );
+    }
 }

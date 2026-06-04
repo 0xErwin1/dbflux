@@ -6175,4 +6175,243 @@ mod tests {
             });
         });
     }
+
+    // =========================================================================
+    // Tier 1b — start_editing gate (DataGridPanel level)
+    // =========================================================================
+
+    /// Aliased-PK builder results have no editable binding and no pk_indices,
+    /// so rebuild_table leaves the table read-only. This closes the aliased-PK
+    /// behavior as a panel-level assertion without going through the async mutation path.
+    #[test]
+    fn aliased_pk_builder_result_computes_no_editable_binding() {
+        use dbflux_core::{ProjectedColumn, Projection, SourceTable, VisualQuerySpec};
+
+        let spec = VisualQuerySpec {
+            source: SourceTable {
+                schema: Some("public".to_string()),
+                table: "users".to_string(),
+                alias: "users".to_string(),
+            },
+            projection: Projection::Explicit(vec![ProjectedColumn {
+                source_alias: "users".to_string(),
+                column: "id".to_string(),
+                alias: Some("user_id".to_string()),
+            }]),
+            joins: vec![],
+            filter: None,
+            group_by: vec![],
+            aggregates: vec![],
+            having: None,
+            sort: vec![],
+            limit: Some(100),
+            offset: 0,
+        };
+
+        // Provide a warm pk_lookup that recognises "id" as a PK — the aliased
+        // projection still returns None because the alias blocks the WHERE clause.
+        let binding = spec.compute_editable_binding(|_source_table| Some(vec!["id".to_string()]));
+
+        assert!(
+            binding.is_none(),
+            "aliased PK must produce None binding (read-only): \
+             the WHERE clause cannot reference the alias"
+        );
+    }
+
+    // =========================================================================
+    // Tier 2 — mutation roundtrip with FakeDriver CRUD recording
+    // =========================================================================
+
+    /// Positive: an editable-safe builder result (single source table, PK projected
+    /// unaliased) triggers exactly one UPDATE via `save_table_row`. The recorded
+    /// RowPatch carries the correct PK identity and the edited column assignment.
+    #[gpui::test]
+    fn save_table_row_issues_one_update_for_editable_builder_result(cx: &mut TestAppContext) {
+        use dbflux_components::components::data_table::model::CellValue;
+        use dbflux_core::{
+            ColumnKind, ColumnMeta, ConnectedProfile, DbConfig, MutationPolicy, TableRef,
+        };
+        use dbflux_test_support::fake_driver::{CrudOp, FakeDriver};
+        use std::path::PathBuf;
+
+        init_test_runtime(cx);
+
+        let profile_id = Uuid::new_v4();
+        let fake_driver = FakeDriver::new(dbflux_core::DbKind::SQLite);
+
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime =
+                    StorageRuntime::in_memory().expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+            })
+        });
+
+        cx.update(|cx| {
+            app_state.update(cx, |app, _cx| {
+                let profile = dbflux_core::ConnectionProfile::new(
+                    "fake-sqlite",
+                    DbConfig::SQLite {
+                        path: PathBuf::from(":memory:"),
+                        connection_id: None,
+                    },
+                );
+                let connection = fake_driver
+                    .connect_arc(&profile)
+                    .expect("FakeDriver connection must succeed");
+
+                let connected = ConnectedProfile {
+                    profile,
+                    connection,
+                    schema: None,
+                    mutation_policy: MutationPolicy::default(),
+                    database_schemas: Default::default(),
+                    table_details: Default::default(),
+                    collection_children: Default::default(),
+                    schema_types: Default::default(),
+                    schema_indexes: Default::default(),
+                    schema_foreign_keys: Default::default(),
+                    schema_routines: Default::default(),
+                    dependents_cache: Default::default(),
+                    active_database: None,
+                    redis_key_cache: Default::default(),
+                    database_connections: Default::default(),
+                    proxy_tunnel: None,
+                };
+                app.connections_mut().insert(profile_id, connected);
+            });
+        });
+
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id,
+                    database: None,
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+
+                let mut panel =
+                    DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx);
+
+                // Two-column result: id (PK), name (Source).
+                let columns = vec![
+                    ColumnMeta {
+                        name: "id".to_string(),
+                        type_name: "int4".to_string(),
+                        kind: ColumnKind::Integer,
+                        nullable: false,
+                        is_primary_key: false,
+                    },
+                    ColumnMeta {
+                        name: "name".to_string(),
+                        type_name: "text".to_string(),
+                        kind: ColumnKind::Text,
+                        nullable: true,
+                        is_primary_key: false,
+                    },
+                ];
+                let rows = vec![vec![
+                    dbflux_core::Value::Int(1),
+                    dbflux_core::Value::Text("alice".to_string()),
+                ]];
+                panel.result = QueryResult::table(columns, rows, None, std::time::Duration::ZERO);
+                panel.pk_columns = vec!["id".to_string()];
+
+                panel
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel must be created");
+
+        // Rebuild the table so table_state is populated and pk_indices are set.
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.rebuild_table(None, cx);
+            });
+        });
+
+        // Confirm table_state is editable (PK column was found).
+        let is_editable = window.update(|_, app| {
+            let p = panel.read(app);
+            p.table_state
+                .as_ref()
+                .expect("table_state must exist after rebuild_table")
+                .read(app)
+                .is_editable()
+        });
+        assert!(
+            is_editable,
+            "table must be editable after rebuild_table with a valid PK column"
+        );
+
+        // Call save_table_row directly with a single column-1 change (name → "bob").
+        let new_cell = CellValue::text("bob");
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.save_table_row(
+                    profile_id,
+                    None,
+                    TableRef::with_schema("public", "users"),
+                    0,
+                    &[(1, &new_cell)],
+                    cx,
+                );
+            });
+        });
+
+        // Settle background tasks so the async CRUD op completes.
+        cx.run_until_parked();
+
+        // Verify exactly one UPDATE was recorded.
+        let ops = fake_driver.stats().crud_ops;
+        assert_eq!(
+            ops.len(),
+            1,
+            "save_table_row must issue exactly one update_row call; got: {:?}",
+            ops.len()
+        );
+
+        let CrudOp::Update(patch) = &ops[0] else {
+            panic!("expected CrudOp::Update, got something else");
+        };
+
+        // Identity: PK column "id" with value Int(1).
+        let identity_cols = patch.identity.columns();
+        let identity_vals = patch.identity.values();
+        assert_eq!(
+            identity_cols,
+            &["id"],
+            "identity must use the PK column name"
+        );
+        assert_eq!(
+            identity_vals,
+            &[dbflux_core::Value::Int(1)],
+            "identity must carry the PK value from row 0"
+        );
+
+        // Change: column "name" assigned the new value "bob".
+        assert_eq!(patch.changes.len(), 1, "patch must have exactly one change");
+        assert_eq!(
+            patch.changes[0].name, "name",
+            "change must target the 'name' column"
+        );
+        assert_eq!(
+            patch.changes[0].value,
+            dbflux_core::Value::Text("bob".to_string()),
+            "change must carry the new cell value"
+        );
+    }
 }
