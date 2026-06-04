@@ -17,6 +17,7 @@ use dbflux_core::{
     DanglingMessage, FetchOptionsError, FetchOptionsRequest, FormFieldKind, RefreshTrigger,
 };
 use dbflux_ui_base::keymap::key_chord_from_gpui;
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
 use gpui::*;
@@ -1412,6 +1413,8 @@ impl AuthProfilesSection {
             }
         }
 
+        let has_secret_fields = !secret_fields.is_empty();
+
         let profile = AuthProfile {
             id: profile_id,
             name,
@@ -1482,6 +1485,20 @@ impl AuthProfilesSection {
 
             cx.emit(AppStateChanged);
         });
+
+        // The profile row is saved, but secret-kind fields live in the OS
+        // keyring. If it is unavailable the secret could not be persisted and
+        // will be gone after restart — tell the user instead of failing silently.
+        if has_secret_fields && !self.app_state.read(cx).secret_store_available() {
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    "Keyring unavailable: the profile's secret was not stored and \
+                     will not persist after restart.",
+                ),
+                cx,
+            );
+        }
 
         if let Some(provider) = self
             .app_state

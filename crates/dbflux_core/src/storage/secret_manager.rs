@@ -71,12 +71,17 @@ impl SecretManager {
         }
     }
 
-    /// Writes a secret under an explicit keyring reference. No-op when the
-    /// keyring backend is unavailable.
+    /// Writes a secret under an explicit keyring reference.
+    ///
+    /// When the keyring backend is unavailable the write is skipped, but this is
+    /// logged rather than swallowed silently — callers that need the user to
+    /// know (e.g. saving an auth profile secret) should also check
+    /// `is_available()` and surface a warning.
     pub fn set_by_ref(&self, secret_ref: &str, secret: &SecretString) {
         let store = self.store_read();
 
         if !store.is_available() {
+            log::warn!("Secret store unavailable; secret '{secret_ref}' was NOT persisted");
             return;
         }
 
@@ -112,6 +117,7 @@ impl SecretManager {
         let store = self.store_read();
 
         if !store.is_available() {
+            log::warn!("Secret store unavailable; {label} secret was NOT persisted");
             return;
         }
 
@@ -140,6 +146,7 @@ impl SecretManager {
         let store = self.store_read();
 
         if !store.is_available() {
+            log::warn!("Secret store unavailable; connection password was NOT persisted");
             return;
         }
 
@@ -196,6 +203,7 @@ impl SecretManager {
         let store = self.store_read();
 
         if !store.is_available() {
+            log::warn!("Secret store unavailable; SSH password was NOT persisted");
             return;
         }
 

@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use sha1::{Digest, Sha1};
 
 use aws_sdk_sts::config::ProvideCredentials;
@@ -1565,14 +1565,21 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
             .filter_map(|&key| fields.get(key).map(|v| (key.to_string(), v.clone())))
             .collect();
 
-        // Credentials-side fields (includes write-only secrets).
-        let creds_fields: Vec<(String, String)> = [
+        // Credentials-side fields (includes write-only secrets). Held as
+        // SecretString and exposed only at the point the credentials block is
+        // written, so the in-process copies are zeroized on drop. (The ultimate
+        // sink is the plaintext `~/.aws/credentials` file the AWS SDK reads.)
+        let creds_fields: Vec<(String, SecretString)> = [
             "aws_access_key_id",
             "aws_secret_access_key",
             "aws_session_token",
         ]
         .iter()
-        .filter_map(|&key| fields.get(key).map(|v| (key.to_string(), v.clone())))
+        .filter_map(|&key| {
+            fields
+                .get(key)
+                .map(|v| (key.to_string(), SecretString::from(v.clone())))
+        })
         .collect();
 
         let has_config_fields = !config_fields.is_empty();
@@ -1640,7 +1647,7 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
 
                     let borrowed: Vec<(&str, &str)> = creds_fields_borrowed
                         .iter()
-                        .map(|(k, v)| (k.as_str(), v.as_str()))
+                        .map(|(k, v)| (k.as_str(), v.expose_secret()))
                         .collect();
                     crate::config::replace_or_append_credentials_block(existing, name, &borrowed)
                 });
