@@ -2697,7 +2697,7 @@ impl DataGridPanel {
                 Box::new(move |spec: &VisualQuerySpec| {
                     conn.query_generator()
                         .and_then(|qgen| qgen.generate_select(spec).ok().flatten())
-                        .map(|q| q.sql)
+                        .map(|q| q.materialize_for_editor(conn.dialect()))
                         .unwrap_or_default()
                 })
             } else {
@@ -2711,14 +2711,13 @@ impl DataGridPanel {
                 conn.query_generator()
                     .and_then(|qgen| {
                         use dbflux_core::MutationKind;
-                        match &spec.kind {
-                            MutationKind::Delete => {
-                                qgen.generate_delete_from_spec(spec).ok().map(|m| m.sql)
-                            }
+                        let generated = match &spec.kind {
+                            MutationKind::Delete => qgen.generate_delete_from_spec(spec).ok(),
                             MutationKind::Update { .. } => {
-                                qgen.generate_update_from_spec(spec).ok().map(|m| m.sql)
+                                qgen.generate_update_from_spec(spec).ok()
                             }
-                        }
+                        };
+                        generated.map(|m| m.materialize_for_editor(conn.dialect()))
                     })
                     .unwrap_or_default()
             })
@@ -3468,19 +3467,17 @@ impl DataGridPanel {
 
             let policy = connected.mutation_policy;
 
+            let dialect = connected.connection.dialect();
             let sql_preview = connected
                 .connection
                 .query_generator()
                 .and_then(|qgen| {
                     use dbflux_core::MutationKind;
-                    match &spec.kind {
-                        MutationKind::Delete => {
-                            qgen.generate_delete_from_spec(&spec).ok().map(|m| m.sql)
-                        }
-                        MutationKind::Update { .. } => {
-                            qgen.generate_update_from_spec(&spec).ok().map(|m| m.sql)
-                        }
-                    }
+                    let generated = match &spec.kind {
+                        MutationKind::Delete => qgen.generate_delete_from_spec(&spec).ok(),
+                        MutationKind::Update { .. } => qgen.generate_update_from_spec(&spec).ok(),
+                    };
+                    generated.map(|m| m.materialize_for_editor(dialect))
                 })
                 .unwrap_or_else(|| "<SQL preview unavailable>".to_string());
 
