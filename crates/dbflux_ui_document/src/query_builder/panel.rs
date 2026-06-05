@@ -333,6 +333,13 @@ pub struct QueryBuilderPanel {
     /// once at panel construction from the data grid's current result.
     pub(crate) available_columns: Vec<String>,
 
+    /// Semantic kind of each source column, keyed by column name. Used to
+    /// promote free-text SET values to a typed `ScalarLiteral` (e.g. integer)
+    /// when building the mutation spec, so a numeric column is not assigned a
+    /// string literal. Empty when no type information is available, in which
+    /// case values stay textual.
+    pub(crate) column_kinds: std::collections::HashMap<String, dbflux_core::ColumnKind>,
+
     /// Shared schema cache for completion providers.
     ///
     /// `source_columns` is populated at panel construction. `joined_columns`
@@ -710,6 +717,7 @@ impl QueryBuilderPanel {
             join_cond_right_inputs: HashMap::new(),
             join_cond_op_dropdowns: HashMap::new(),
             available_columns,
+            column_kinds: std::collections::HashMap::new(),
             schema_cache,
             app_state_weak,
             schema_profile_id: profile_id,
@@ -3047,7 +3055,7 @@ impl QueryBuilderPanel {
                     .assignments
                     .iter()
                     .filter(|r| !r.assignment.column.is_empty())
-                    .map(|r| r.assignment.clone())
+                    .map(|r| self.typed_assignment(r))
                     .collect();
                 MutationKind::Update { assignments }
             }
@@ -3060,6 +3068,28 @@ impl QueryBuilderPanel {
         };
 
         Some((spec, state.exec_options.clone()))
+    }
+
+    /// Clones an assignment row into its spec `Assignment`, promoting a free-text
+    /// literal to the target column's typed `ScalarLiteral` when the column kind
+    /// is known. Non-literal values (Expression / Null / Default) and columns
+    /// with unknown kind are left untouched.
+    fn typed_assignment(
+        &self,
+        row: &crate::query_builder::mutation_state::AssignmentRow,
+    ) -> dbflux_core::Assignment {
+        use dbflux_core::{AssignmentValue, ScalarLiteral};
+
+        let mut assignment = row.assignment.clone();
+
+        if let AssignmentValue::Literal(ScalarLiteral::Text(_)) = &assignment.value
+            && let Some(kind) = self.column_kinds.get(&assignment.column)
+        {
+            assignment.value =
+                AssignmentValue::Literal(ScalarLiteral::from_input_for_kind(&row.raw_text, *kind));
+        }
+
+        assignment
     }
 
     // -----------------------------------------------------------------------
@@ -3684,6 +3714,7 @@ mod tests {
             join_cond_right_inputs: HashMap::new(),
             join_cond_op_dropdowns: HashMap::new(),
             available_columns: Vec::new(),
+            column_kinds: std::collections::HashMap::new(),
             schema_cache: Rc::new(RefCell::new(SchemaCache::default())),
             app_state_weak: WeakEntity::new_invalid(),
             schema_profile_id: Uuid::nil(),
@@ -5311,6 +5342,49 @@ mod tests {
             first.assignment.value,
             AssignmentValue::Literal(ScalarLiteral::Text("alice@example.com".to_string())),
         );
+    }
+
+    #[test]
+    fn build_mutation_spec_promotes_text_to_integer_for_integer_column() {
+        use crate::query_builder::mutation_state::{AssignmentRow, BuilderMode};
+        use dbflux_core::{Assignment, AssignmentValue, ColumnKind, MutationKind, ScalarLiteral};
+
+        let mut panel = make_panel(make_spec(test_source()));
+        panel
+            .column_kinds
+            .insert("id".to_string(), ColumnKind::Integer);
+        panel.t_switch_builder_mode(BuilderMode::Update);
+
+        panel
+            .mutation_state
+            .as_mut()
+            .unwrap()
+            .assignments
+            .push(AssignmentRow {
+                assignment: Assignment {
+                    column: String::new(),
+                    value: AssignmentValue::Literal(ScalarLiteral::Text(String::new())),
+                },
+                raw_text: String::new(),
+            });
+
+        panel.t_set_assignment_column(0, "id".to_string());
+        panel.t_set_assignment_raw_text(0, "12".to_string());
+
+        let (spec, _opts) = panel
+            .build_mutation_spec_and_opts()
+            .expect("update spec must build");
+
+        match spec.kind {
+            MutationKind::Update { assignments } => {
+                assert_eq!(
+                    assignments[0].value,
+                    AssignmentValue::Literal(ScalarLiteral::Integer(12)),
+                    "an integer column must receive a typed integer literal, not a string"
+                );
+            }
+            other => panic!("expected Update, got {other:?}"),
+        }
     }
 
     #[test]

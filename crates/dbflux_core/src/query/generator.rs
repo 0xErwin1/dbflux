@@ -66,21 +66,24 @@ impl SelectQuery {
     /// - `$N` placeholders (PostgreSQL): each `$N` is replaced by `params[N-1]`.
     /// - `@pN` placeholders (SQL Server): each `@pN` is replaced by `params[N-1]`.
     pub fn materialize_for_editor(&self, dialect: &dyn crate::sql::dialect::SqlDialect) -> String {
-        materialize_placeholders(&self.sql, &self.params, dialect)
+        inline_params(&self.sql, &self.params, dialect)
     }
 }
 
 /// Replace every parameter placeholder in `sql` with its dialect-quoted literal.
 ///
-/// Shared by `SelectQuery::materialize_for_editor` and
-/// `GeneratedMutation::materialize_for_editor`. The result is for display only
-/// (read-only editor tabs, builder preview, confirmation dialogs) — it is NOT
-/// suitable for execution. The substitution respects the dialect's placeholder
-/// style:
+/// This is both the display path (read-only editor tabs, builder preview,
+/// confirmation dialogs) and the execution path for the visual query builder:
+/// drivers in this codebase execute `QueryRequest.sql` verbatim and do not bind
+/// `QueryRequest.params`, so structured mutations/selects must inline their
+/// values before dispatch. The dialect's `value_to_literal` performs the
+/// quoting/escaping, mirroring how every other mutation path executes.
+///
+/// The substitution respects the dialect's placeholder style:
 /// - `?` placeholders (SQLite/MySQL): replaced left-to-right.
 /// - `$N` placeholders (PostgreSQL): each `$N` is replaced by `params[N-1]`.
 /// - `@pN` placeholders (SQL Server): each `@pN` is replaced by `params[N-1]`.
-fn materialize_placeholders(
+pub fn inline_params(
     sql: &str,
     params: &[crate::Value],
     dialect: &dyn crate::sql::dialect::SqlDialect,
@@ -273,7 +276,7 @@ impl GeneratedMutation {
     /// use `sql` + `params` so values stay bound. See
     /// [`SelectQuery::materialize_for_editor`] for the SELECT counterpart.
     pub fn materialize_for_editor(&self, dialect: &dyn crate::sql::dialect::SqlDialect) -> String {
-        materialize_placeholders(&self.sql, &self.params, dialect)
+        inline_params(&self.sql, &self.params, dialect)
     }
 }
 

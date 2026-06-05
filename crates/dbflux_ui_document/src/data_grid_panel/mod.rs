@@ -2728,12 +2728,20 @@ impl DataGridPanel {
         let available_columns: Vec<String> =
             self.result.columns.iter().map(|c| c.name.clone()).collect();
 
+        let column_kinds: std::collections::HashMap<String, dbflux_core::ColumnKind> = self
+            .result
+            .columns
+            .iter()
+            .map(|c| (c.name.clone(), c.kind))
+            .collect();
+
         let panel = if let Some(existing) = &self.builder_panel {
             existing.update(cx, |p, cx| {
                 if let Some(spec) = initial_spec.clone() {
                     p.set_spec(spec, cx);
                 }
                 p.available_columns = available_columns.clone();
+                p.column_kinds = column_kinds.clone();
             });
             existing.clone()
         } else {
@@ -2750,6 +2758,10 @@ impl DataGridPanel {
                     window,
                     cx,
                 )
+            });
+
+            new_panel.update(cx, |p, _| {
+                p.column_kinds = column_kinds;
             });
 
             let run_sub = cx.subscribe_in(
