@@ -3458,32 +3458,14 @@ impl DataGridPanel {
             _ => return,
         };
 
-        let (policy, sql_preview, connection) = {
+        let (policy, connection) = {
             let state = self.app_state.read(cx);
             let connected = match state.connections().get(&profile_id) {
                 Some(c) => c,
                 None => return,
             };
 
-            let policy = connected.mutation_policy;
-
-            let dialect = connected.connection.dialect();
-            let sql_preview = connected
-                .connection
-                .query_generator()
-                .and_then(|qgen| {
-                    use dbflux_core::MutationKind;
-                    let generated = match &spec.kind {
-                        MutationKind::Delete => qgen.generate_delete_from_spec(&spec).ok(),
-                        MutationKind::Update { .. } => qgen.generate_update_from_spec(&spec).ok(),
-                    };
-                    generated.map(|m| m.materialize_for_editor(dialect))
-                })
-                .unwrap_or_else(|| "<SQL preview unavailable>".to_string());
-
-            let connection = Arc::clone(&connected.connection);
-
-            (policy, sql_preview, connection)
+            (connected.mutation_policy, Arc::clone(&connected.connection))
         };
 
         // Gate on mutation policy — state borrow has been released above.
@@ -3536,6 +3518,18 @@ impl DataGridPanel {
             }
             MutationPolicy::Allowed => {}
         }
+
+        let sql_preview = connection
+            .query_generator()
+            .and_then(|qgen| {
+                use dbflux_core::MutationKind;
+                let generated = match &spec.kind {
+                    MutationKind::Delete => qgen.generate_delete_from_spec(&spec).ok(),
+                    MutationKind::Update { .. } => qgen.generate_update_from_spec(&spec).ok(),
+                };
+                generated.map(|m| m.materialize_for_editor(connection.dialect()))
+            })
+            .unwrap_or_else(|| "<SQL preview unavailable>".to_string());
 
         // Fetch sample rows synchronously on background thread (2s deadline).
         let (sample_columns, sample_rows) =
