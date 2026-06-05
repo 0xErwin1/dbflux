@@ -73,20 +73,26 @@ impl SecretManager {
 
     /// Writes a secret under an explicit keyring reference.
     ///
-    /// When the keyring backend is unavailable the write is skipped, but this is
-    /// logged rather than swallowed silently — callers that need the user to
-    /// know (e.g. saving an auth profile secret) should also check
-    /// `is_available()` and surface a warning.
-    pub fn set_by_ref(&self, secret_ref: &str, secret: &SecretString) {
+    /// Returns `true` only when the value was actually persisted. A `false`
+    /// result (store unavailable, or the backend rejected the write — e.g. a
+    /// locked keyring) is logged, and callers that must not lose data (the
+    /// plaintext->keyring migration) or that need to tell the user (the auth
+    /// profile editor) MUST act on it rather than assume success.
+    #[must_use]
+    pub fn set_by_ref(&self, secret_ref: &str, secret: &SecretString) -> bool {
         let store = self.store_read();
 
         if !store.is_available() {
             log::warn!("Secret store unavailable; secret '{secret_ref}' was NOT persisted");
-            return;
+            return false;
         }
 
-        if let Err(e) = store.set(secret_ref, secret) {
-            error!("Failed to save secret '{}': {:?}", secret_ref, e);
+        match store.set(secret_ref, secret) {
+            Ok(()) => true,
+            Err(e) => {
+                error!("Failed to save secret '{}': {:?}", secret_ref, e);
+                false
+            }
         }
     }
 

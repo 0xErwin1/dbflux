@@ -377,9 +377,11 @@ impl AppState {
     /// definition which fields are secret-kind (`Password` / `WriteOnly`), then:
     ///
     /// - if the value is still sitting in `fields` as plaintext (a profile saved
-    ///   before secrets were keyring-routed), it is moved into the keyring,
-    ///   removed from `fields`, and the profile is re-persisted so SQLite keeps
-    ///   only a keyring-reference marker; otherwise
+    ///   before secrets were keyring-routed), it is moved into the keyring and,
+    ///   ONLY once the keyring write is confirmed, dropped from `fields` and the
+    ///   profile re-persisted so SQLite keeps just a keyring-reference marker.
+    ///   If the keyring is unavailable the plaintext is left untouched so the
+    ///   secret is never destroyed; migration retries on a later launch; otherwise
     /// - the value is read back from the keyring into `secret_fields`.
     ///
     /// Providers not present in the registry are skipped (their secret layout is
@@ -416,20 +418,38 @@ impl AppState {
             for field_id in secret_field_ids {
                 let secret_ref = dbflux_core::auth_field_secret_ref(&profile_id, &field_id);
 
-                if let Some(plaintext) = self.facade.auth_profiles.items[idx]
+                // Already-migrated profile: the secret lives in the keyring only.
+                let Some(plaintext) = self.facade.auth_profiles.items[idx]
                     .fields
-                    .remove(&field_id)
-                {
-                    let secret = dbflux_core::secrecy::SecretString::from(plaintext);
-                    self.facade.secrets.set_by_ref(&secret_ref, &secret);
+                    .get(&field_id)
+                    .cloned()
+                else {
+                    if let Some(secret) = self.facade.secrets.get_by_ref(&secret_ref) {
+                        self.facade.auth_profiles.items[idx]
+                            .secret_fields
+                            .insert(field_id, secret);
+                    }
+                    continue;
+                };
+
+                // Legacy plaintext secret: move it to the keyring, but only drop
+                // the plaintext copy once the write is confirmed. A locked or
+                // unavailable keyring must never destroy the only copy.
+                let secret = dbflux_core::secrecy::SecretString::from(plaintext);
+                if self.facade.secrets.set_by_ref(&secret_ref, &secret) {
+                    self.facade.auth_profiles.items[idx]
+                        .fields
+                        .remove(&field_id);
                     self.facade.auth_profiles.items[idx]
                         .secret_fields
                         .insert(field_id, secret);
                     needs_persist = true;
-                } else if let Some(secret) = self.facade.secrets.get_by_ref(&secret_ref) {
-                    self.facade.auth_profiles.items[idx]
-                        .secret_fields
-                        .insert(field_id, secret);
+                } else {
+                    log::warn!(
+                        "Deferred auth secret migration for field '{}': keyring \
+                         unavailable; leaving the existing value in place",
+                        field_id
+                    );
                 }
             }
         }
@@ -446,11 +466,20 @@ impl AppState {
 
     /// Writes a profile's secret-kind field values to the OS keyring under
     /// per-field references. The matching SQLite rows store only the reference.
-    fn persist_auth_secret_fields(&self, profile: &dbflux_core::AuthProfile) {
+    ///
+    /// Returns `true` only if every secret was actually persisted (vacuously
+    /// true when the profile has none). A `false` result means at least one
+    /// secret could not be written (e.g. the keyring is unavailable) and the
+    /// caller should warn the user.
+    fn persist_auth_secret_fields(&self, profile: &dbflux_core::AuthProfile) -> bool {
+        let mut all_persisted = true;
         for (field_id, secret) in &profile.secret_fields {
             let secret_ref = dbflux_core::auth_field_secret_ref(&profile.id, field_id);
-            self.facade.secrets.set_by_ref(&secret_ref, secret);
+            if !self.facade.secrets.set_by_ref(&secret_ref, secret) {
+                all_persisted = false;
+            }
         }
+        all_persisted
     }
 
     /// Deletes a profile's secret-kind field values from the OS keyring.
@@ -2040,7 +2069,10 @@ impl AppState {
 
     // --- AuthProfileManager ---
 
-    pub fn add_auth_profile(&mut self, profile: dbflux_core::AuthProfile) {
+    /// Adds a stored auth profile. Returns `true` if its secret-kind fields (if
+    /// any) were persisted to the keyring; `false` means the secret could not be
+    /// stored and the caller should warn the user.
+    pub fn add_auth_profile(&mut self, profile: dbflux_core::AuthProfile) -> bool {
         let profile_name = profile.name.clone();
         let profile_id = profile.id.to_string();
         self.facade.auth_profiles.items.push(profile.clone());
@@ -2065,7 +2097,10 @@ impl AppState {
 
         match save_result {
             Ok(()) => self.persist_auth_secret_fields(&profile),
-            Err(e) => log::error!("Failed to save auth profiles: {}", e),
+            Err(e) => {
+                log::error!("Failed to save auth profiles: {}", e);
+                false
+            }
         }
     }
 
@@ -2103,39 +2138,69 @@ impl AppState {
         Some(removed)
     }
 
-    pub fn update_auth_profile(&mut self, profile: dbflux_core::AuthProfile) {
+    /// Updates a stored auth profile. Returns `true` if its secret-kind fields
+    /// (if any) were persisted to the keyring; `false` means the secret could
+    /// not be stored and the caller should warn the user. A profile that is not
+    /// present is a no-op and returns `true`.
+    pub fn update_auth_profile(&mut self, profile: dbflux_core::AuthProfile) -> bool {
         let profile_name = profile.name.clone();
         let profile_id = profile.id.to_string();
-        if let Some(existing) = self
+
+        // Delete keyring entries for secret fields that the updated profile no
+        // longer carries, so a removed or replaced secret does not linger in the
+        // OS keyring as orphaned credential material.
+        let old_secret_keys: Vec<String> = self
+            .facade
+            .auth_profiles
+            .items
+            .iter()
+            .find(|i| i.id == profile.id)
+            .map(|existing| existing.secret_fields.keys().cloned().collect())
+            .unwrap_or_default();
+
+        for field_id in old_secret_keys
+            .iter()
+            .filter(|key| !profile.secret_fields.contains_key(*key))
+        {
+            let secret_ref = dbflux_core::auth_field_secret_ref(&profile.id, field_id);
+            self.facade.secrets.delete_by_ref(&secret_ref);
+        }
+
+        let Some(existing) = self
             .facade
             .auth_profiles
             .items
             .iter_mut()
             .find(|i| i.id == profile.id)
-        {
-            *existing = profile.clone();
-            let save_result = crate::config_loader::save_auth_profiles(
-                &self.storage_runtime,
-                &self.facade.auth_profiles.items,
-            );
+        else {
+            return true;
+        };
 
-            let (outcome, error_msg) = match &save_result {
-                Ok(()) => (EventOutcome::Success, None),
-                Err(e) => (EventOutcome::Failure, Some(e.to_string())),
-            };
+        *existing = profile.clone();
+        let save_result = crate::config_loader::save_auth_profiles(
+            &self.storage_runtime,
+            &self.facade.auth_profiles.items,
+        );
 
-            self.record_config_event(
-                outcome,
-                CONFIG_UPDATE,
-                "auth_profile",
-                profile_id,
-                format!("Updated auth profile '{}'", profile_name),
-                error_msg,
-            );
+        let (outcome, error_msg) = match &save_result {
+            Ok(()) => (EventOutcome::Success, None),
+            Err(e) => (EventOutcome::Failure, Some(e.to_string())),
+        };
 
-            match save_result {
-                Ok(()) => self.persist_auth_secret_fields(&profile),
-                Err(e) => log::error!("Failed to save auth profiles: {}", e),
+        self.record_config_event(
+            outcome,
+            CONFIG_UPDATE,
+            "auth_profile",
+            profile_id,
+            format!("Updated auth profile '{}'", profile_name),
+            error_msg,
+        );
+
+        match save_result {
+            Ok(()) => self.persist_auth_secret_fields(&profile),
+            Err(e) => {
+                log::error!("Failed to save auth profiles: {}", e);
+                false
             }
         }
     }

@@ -1476,25 +1476,27 @@ impl AuthProfilesSection {
         }
 
         let is_edit = self.editing_profile_id.is_some();
-        self.app_state.update(cx, |state, cx| {
-            if is_edit {
-                state.update_auth_profile(profile.clone());
+        let secrets_persisted = self.app_state.update(cx, |state, cx| {
+            let persisted = if is_edit {
+                state.update_auth_profile(profile.clone())
             } else {
-                state.add_auth_profile(profile.clone());
-            }
+                state.add_auth_profile(profile.clone())
+            };
 
             cx.emit(AppStateChanged);
+            persisted
         });
 
         // The profile row is saved, but secret-kind fields live in the OS
-        // keyring. If it is unavailable the secret could not be persisted and
-        // will be gone after restart — tell the user instead of failing silently.
-        if has_secret_fields && !self.app_state.read(cx).secret_store_available() {
+        // keyring. Drive this off the actual write result (not a cached
+        // availability probe): a locked keyring reports available yet rejects
+        // writes, so only the real outcome tells us the secret was lost.
+        if has_secret_fields && !secrets_persisted {
             report_error(
                 UserFacingError::new(
                     ErrorKind::Storage,
-                    "Keyring unavailable: the profile's secret was not stored and \
-                     will not persist after restart.",
+                    "The profile's secret could not be stored (the OS keyring may \
+                     be locked or unavailable) and will not persist after restart.",
                 ),
                 cx,
             );

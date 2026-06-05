@@ -86,6 +86,11 @@ pub struct AuthProfile {
     /// derived `Serialize` skips this field; the only place secrets are exposed
     /// on the wire is the auth-provider IPC boundary, which re-merges them into
     /// the flat `fields` map the external provider expects.
+    ///
+    /// A secret saved before this routing existed may still live in `fields` as
+    /// plaintext until startup migration moves it here. That migration is
+    /// deferred (never destructive) when the keyring is unavailable, so such a
+    /// legacy value can remain in `fields` for a session.
     #[serde(skip)]
     pub secret_fields: HashMap<String, SecretString>,
     pub enabled: bool,
