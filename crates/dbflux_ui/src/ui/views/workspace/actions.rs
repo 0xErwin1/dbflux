@@ -3306,14 +3306,27 @@ impl Workspace {
             .unwrap_or_default();
 
         // Build the referencing-dashboard list for the orphan-warning block.
-        // dashboards_repo() is now fallible; degrade gracefully on open failure.
+        // dashboards_repo() is fallible; degrade gracefully on open failure while logging.
         let referencing_ids = self
             .app_state
             .read(cx)
             .storage_runtime()
             .dashboards_repo()
+            .map_err(|e| {
+                log::warn!("Failed to open dashboards repo for orphan check: {e:?}");
+                e
+            })
             .ok()
-            .and_then(|r| r.find_dashboards_referencing_chart(chart_id).ok())
+            .and_then(|r| {
+                r.find_dashboards_referencing_chart(chart_id)
+                    .map_err(|e| {
+                        log::warn!(
+                            "Failed to query dashboards referencing chart {chart_id}: {e:?}"
+                        );
+                        e
+                    })
+                    .ok()
+            })
             .unwrap_or_default();
 
         let referencing_dashboards: Vec<(uuid::Uuid, String)> = referencing_ids

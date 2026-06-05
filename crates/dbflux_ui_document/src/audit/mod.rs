@@ -604,30 +604,6 @@ impl AuditDocument {
         }
     }
 
-    /// Creates a new audit document with a category pre-filter applied.
-    ///
-    /// This is the entry point for opening the audit viewer focused on a specific
-    /// category (e.g., MCP events from the governance panel). The dropdown is synced
-    /// to reflect the pre-selected category.
-    ///
-    /// The caller is responsible for opening the `AuditRepository` (via
-    /// `StorageRuntime::audit()`) and routing any storage error through
-    /// `report_error` before calling this constructor.
-    pub fn new_with_category(
-        category: EventCategory,
-        audit_repo: AuditRepository,
-        app_state: Entity<AppStateEntity>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let mut doc = Self::new(audit_repo, app_state, window, cx);
-
-        doc.set_category_filter(Some(category), cx);
-        doc.pending_initial_load = false;
-
-        doc
-    }
-
     pub fn matches_event_stream(&self, profile_id: Uuid, target: &EventStreamTarget) -> bool {
         match &self.source {
             AuditDocumentSource::ExternalEventStream {
