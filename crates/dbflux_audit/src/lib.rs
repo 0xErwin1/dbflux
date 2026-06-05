@@ -551,7 +551,7 @@ impl AuditService {
             }
 
             if budget == 0 {
-                return Ok(serialized);
+                return Ok(r#"{"__truncated":true,"partial":""}"#.to_string());
             }
 
             budget = budget.saturating_sub(serialized.len().saturating_sub(max_bytes) + 1);

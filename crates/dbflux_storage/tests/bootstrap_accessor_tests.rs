@@ -1,4 +1,4 @@
-/// Tests for StorageRuntime accessor error propagation (AUDIT-2).
+/// Tests for StorageRuntime accessor error propagation.
 ///
 /// Verifies that audit(), saved_filters(), and viz_connection() return Err
 /// rather than panicking when the underlying open_dbflux_db call fails.

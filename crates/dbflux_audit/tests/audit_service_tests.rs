@@ -448,6 +448,47 @@ fn max_detail_bytes_envelope_within_limit_when_escaping_needed() {
 }
 
 #[test]
+fn build_truncated_envelope_at_budget_zero_returns_minimal_valid_envelope() {
+    let service = service_for_test("dbflux-audit-budget-zero.sqlite");
+    let max = 34usize;
+    service.set_max_detail_bytes(max);
+
+    let all_quotes = "\"".repeat(max * 4);
+    let event = EventRecord::new(
+        1000,
+        EventSeverity::Info,
+        EventCategory::System,
+        EventOutcome::Success,
+    )
+    .with_action("system.test")
+    .with_summary("Pathological input")
+    .with_details_json(serde_json::json!({ "q": all_quotes }).to_string());
+
+    let stored = service
+        .record(event)
+        .expect("pathological input must not fail — must truncate gracefully");
+
+    let details = stored
+        .details_json
+        .expect("details_json must be present after truncation");
+
+    assert!(
+        details.len() <= max,
+        "envelope ({} bytes) must not exceed max ({} bytes) even for pathological all-quote input",
+        details.len(),
+        max
+    );
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&details).expect("envelope must always be valid JSON");
+    assert_eq!(
+        parsed.get("__truncated").and_then(|v| v.as_bool()),
+        Some(true),
+        "envelope must contain __truncated:true"
+    );
+}
+
+#[test]
 fn legacy_query_get_and_export_fallback_to_canonical_action_and_outcome() {
     let service = service_for_test("dbflux-audit-canonical-legacy-fallback.sqlite");
 

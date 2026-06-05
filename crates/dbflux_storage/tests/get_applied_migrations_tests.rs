@@ -1,4 +1,4 @@
-/// Tests for get_applied_migrations error propagation (AUDIT-6).
+/// Tests for get_applied_migrations error propagation.
 use rusqlite::Connection;
 
 use dbflux_storage::migrations::MigrationRegistry;

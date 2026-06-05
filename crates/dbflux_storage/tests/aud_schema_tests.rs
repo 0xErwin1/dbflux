@@ -1,4 +1,4 @@
-/// Tests for the aud_schema DDL helper (AUDIT-5).
+/// Tests for the aud_schema DDL helper.
 ///
 /// Verifies that the aud_audit_events table created by the helper has the same
 /// columns as the table created by the full migration path (001 + 002), and that
