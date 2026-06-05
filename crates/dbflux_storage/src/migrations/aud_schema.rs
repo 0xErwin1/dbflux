@@ -12,7 +12,11 @@
 /// standalone databases that were created with an older schema.
 use rusqlite::Connection;
 
-/// All 17 extended columns added by migration 002.
+/// The 17 TEXT columns added by migration 002 to the `aud_audit_events` table.
+///
+/// `duration_ms` is intentionally absent from this list: it was added as an
+/// INTEGER base column in migration 001, not as part of the TEXT-column
+/// reconciliation set here.
 ///
 /// Listed here so the standalone store, migration 001, and this helper share
 /// exactly the same column list without duplication.
@@ -108,12 +112,13 @@ pub fn create_aud_audit_events(conn: &Connection, with_profile_fk: bool) -> rusq
     Ok(())
 }
 
-/// Adds each of the 17 extended columns to `aud_audit_events` if they are
-/// not already present.
+/// Adds each of the 17 extended TEXT columns to `aud_audit_events` if they
+/// are not already present.
 ///
 /// This reconciles databases that were created by an older version of the
 /// standalone store (which had only the 10 base columns) without requiring a
-/// full DROP/CREATE cycle.
+/// full DROP/CREATE cycle. The INTEGER `duration_ms` base column is not
+/// included here as it is part of the original schema, not the extended set.
 fn add_extended_columns_if_missing(conn: &Connection) -> rusqlite::Result<()> {
     let mut stmt = conn.prepare("PRAGMA table_info(aud_audit_events)")?;
     let existing: std::collections::HashSet<String> = stmt
