@@ -3,6 +3,7 @@ pub mod bootstrap;
 pub mod error;
 pub mod migrations;
 pub mod paths;
+pub mod pending_executions;
 pub mod repositories;
 pub mod service_configs;
 pub mod sqlite;

@@ -295,6 +295,24 @@ impl StorageRuntime {
         Ok(DashboardPanelsRepository::new(self.viz_connection()?))
     }
 
+    /// Creates a `SqlitePendingExecutionStore` backed by the unified database.
+    ///
+    /// Returns `Err` if a new database connection cannot be opened. Callers
+    /// should propagate the error rather than unwrapping, since a failure here
+    /// means the approvals subsystem is unavailable at startup.
+    pub fn pending_executions(
+        &self,
+    ) -> Result<crate::pending_executions::SqlitePendingExecutionStore, StorageError> {
+        let conn = self.open_dbflux_db()?;
+        let conn = Arc::new(std::sync::Mutex::new(conn));
+        crate::pending_executions::SqlitePendingExecutionStore::new(conn).map_err(|e| {
+            StorageError::Migration {
+                kind: "pending_executions".to_string(),
+                details: e.to_string(),
+            }
+        })
+    }
+
     /// Returns the artifact store for scratch/shadow path management.
     pub fn artifacts(&self) -> &ArtifactStore {
         &self.artifacts

@@ -14,6 +14,7 @@
 //!
 //! ## Domain Prefix Convention
 //!
+//! - `app_*` — Application runtime domain (pending approvals, transient runtime state)
 //! - `cfg_*` — Config domain (profiles, auth, hooks, services, governance)
 //! - `st_*`  — State domain (sessions, query history, UI state)
 //! - `aud_*` — Audit domain (audit events)
@@ -157,6 +158,7 @@ impl MigrationRegistry {
         registry.register(mod_015_viz_inspector_saved_chart_id_constraint::MigrationImpl);
         registry.register(mod_016_viz_divider_saved_chart_id_constraint::MigrationImpl);
         registry.register(mod_017_qry_saved_queries::MigrationImpl);
+        registry.register(mod_018_app_pending_executions::MigrationImpl);
         registry
     }
 
@@ -315,6 +317,7 @@ mod mod_014_viz_inspector_and_instance_metric;
 mod mod_015_viz_inspector_saved_chart_id_constraint;
 mod mod_016_viz_divider_saved_chart_id_constraint;
 mod mod_017_qry_saved_queries;
+mod mod_018_app_pending_executions;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
