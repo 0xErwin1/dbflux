@@ -2,6 +2,41 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+* **Persistent MCP approvals (#173)** — Pending MCP execution approvals are
+  now stored in SQLite (migration `018_app_pending_executions`) through a new
+  `PendingExecutionStore` trait with a `SqlitePendingExecutionStore`
+  implementation, so approvals survive an application restart. Rows past their
+  `expires_at` are filtered out at list time. The standalone MCP server keeps
+  the in-memory store (it has no `StorageRuntime`).
+
+### Changed
+
+* **Oversized audit details are truncated, not dropped (#173)** — An audit
+  event whose `details_json` exceeds the 64 KiB cap is now truncated at a valid
+  UTF-8 boundary and wrapped in a `{"__truncated":true,"partial":…}` envelope
+  instead of failing the whole event.
+* **Audit schema has a single source of truth (#173)** — `SqliteAuditStore`
+  and migrations 001/002 now share one `aud_audit_events` DDL helper, removing
+  the parallel column list that could drift between the embedded and standalone
+  paths.
+
+### Fixed
+
+* **No crash when storage I/O fails (#173)** — `StorageRuntime` accessors and
+  the `AppState` / `AppStateEntity` constructors now return `Result` instead of
+  panicking; a failure to open the database surfaces a user-facing error (or a
+  clean startup exit) rather than crashing the app.
+* **Corrupt migration rows surface an error (#173)** — `get_applied_migrations`
+  now propagates per-row decode errors instead of silently re-applying a
+  migration.
+* **Defensive table-name validation (#173)** — `column_exists` rejects table
+  names outside `[A-Za-z0-9_]+` before interpolating into a `pragma_table_info`
+  query.
+
 ## [0.6.0] - 2026-06-04
 
 ### Added
