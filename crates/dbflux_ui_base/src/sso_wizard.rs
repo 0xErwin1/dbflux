@@ -150,6 +150,8 @@ impl SsoWizard {
                 name: profile_name,
                 provider_id: "aws-sso".to_string(),
                 fields,
+                // AWS SSO profiles carry only non-secret config; no key material.
+                secret_fields: std::collections::HashMap::new(),
                 enabled: true,
                 read_only: false,
                 dangling_origin: None,

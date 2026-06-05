@@ -17,8 +17,8 @@ pub use saved_query::{SavedQuery, SavedQueryStore};
 pub use saved_query_manager::SavedQueryManager;
 pub use secret_manager::{HasSecretRef, SecretManager};
 pub use secrets::{
-    KeyringSecretStore, NoopSecretStore, SecretStore, connection_secret_ref, create_secret_store,
-    proxy_secret_ref, ssh_tunnel_secret_ref,
+    KeyringSecretStore, NoopSecretStore, SecretStore, auth_field_secret_ref, connection_secret_ref,
+    create_secret_store, proxy_secret_ref, ssh_tunnel_secret_ref,
 };
 pub use session::{SessionManifest, SessionStore, SessionTab, SessionTabKind};
 pub use ui_state::{UiState, UiStateStore};

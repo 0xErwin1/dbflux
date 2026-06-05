@@ -40,14 +40,44 @@ impl KeyringSecretStore {
         Self { available }
     }
 
+    /// Probes the platform secret store and classifies the outcome so a locked
+    /// keyring is not mistaken for a missing one.
+    ///
+    /// - `Ok` / `NoEntry`: backend reachable -> available.
+    /// - `NoStorageAccess`: backend present but locked or access-denied (e.g. a
+    ///   locked login keyring). Reported available so we do NOT downgrade to the
+    ///   no-op store and silently drop secrets; individual writes will surface
+    ///   their own errors until it is unlocked.
+    /// - `PlatformFailure` / other: no working secure storage -> unavailable.
+    ///
+    /// Each case logs a distinct message so a locked keyring can be told apart
+    /// from an absent one when diagnosing.
     fn check_availability() -> bool {
-        let test_entry = keyring::Entry::new(SERVICE_NAME, "__dbflux_test__");
-        match test_entry {
-            Ok(entry) => {
-                let _ = entry.get_password();
+        let entry = match keyring::Entry::new(SERVICE_NAME, "__dbflux_test__") {
+            Ok(entry) => entry,
+            Err(e) => {
+                log::warn!("Keyring backend not constructible; secrets disabled: {e}");
+                return false;
+            }
+        };
+
+        match entry.get_password() {
+            Ok(_) | Err(keyring::Error::NoEntry) => true,
+            Err(keyring::Error::NoStorageAccess(e)) => {
+                log::warn!(
+                    "Keyring present but locked or access-denied; \
+                     secret writes may fail until it is unlocked: {e}"
+                );
                 true
             }
-            Err(_) => false,
+            Err(keyring::Error::PlatformFailure(e)) => {
+                log::warn!("Keyring platform unavailable; secrets disabled: {e}");
+                false
+            }
+            Err(e) => {
+                log::warn!("Keyring probe failed; secrets disabled: {e}");
+                false
+            }
         }
     }
 }
@@ -123,6 +153,13 @@ pub fn ssh_tunnel_secret_ref(tunnel_id: &uuid::Uuid) -> String {
 
 pub fn proxy_secret_ref(proxy_id: &uuid::Uuid) -> String {
     format!("dbflux:proxy:{}", proxy_id)
+}
+
+/// Keyring reference for a single secret-kind auth profile field
+/// (`Password` / `WriteOnly`). One entry per (profile, field) so a profile can
+/// hold several independent secrets (e.g. `secret_access_key` + `session_token`).
+pub fn auth_field_secret_ref(profile_id: &uuid::Uuid, field_id: &str) -> String {
+    format!("dbflux:auth:{}:{}", profile_id, field_id)
 }
 
 pub fn create_secret_store() -> Box<dyn SecretStore> {

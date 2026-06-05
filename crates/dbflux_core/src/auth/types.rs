@@ -2,6 +2,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use secrecy::SecretString;
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -71,12 +72,27 @@ pub struct AuthProviderLoginCapabilities {
 /// files and must not be edited in DBFlux. Stored profiles always have
 /// `read_only = false`. This field is never persisted to SQLite; reflected
 /// profiles are never serialized.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct AuthProfile {
     pub id: Uuid,
     pub name: String,
     pub provider_id: String,
     pub fields: HashMap<String, String>,
+    /// Secret-kind field values (`Password` / `WriteOnly`).
+    ///
+    /// Held as `SecretString` so the value is zeroized on drop and never leaks
+    /// through `Debug` or serde output. These are persisted to the OS keyring,
+    /// never to SQLite in plaintext, and re-hydrated at load time. The default
+    /// derived `Serialize` skips this field; the only place secrets are exposed
+    /// on the wire is the auth-provider IPC boundary, which re-merges them into
+    /// the flat `fields` map the external provider expects.
+    ///
+    /// A secret saved before this routing existed may still live in `fields` as
+    /// plaintext until startup migration moves it here. That migration is
+    /// deferred (never destructive) when the keyring is unavailable, so such a
+    /// legacy value can remain in `fields` for a session.
+    #[serde(skip)]
+    pub secret_fields: HashMap<String, SecretString>,
     pub enabled: bool,
     /// Whether this profile is a live reflection and must not be edited in DBFlux.
     ///
@@ -95,6 +111,26 @@ pub struct AuthProfile {
     /// from the `dangling_origin` column in `cfg_auth_profiles`.
     #[serde(skip)]
     pub dangling_origin: Option<String>,
+}
+
+impl std::fmt::Debug for AuthProfile {
+    /// Redacts secret values: `secret_fields` prints its key names only, never
+    /// the `SecretString` contents. Mirrors the `ResolvedCredentials` Debug
+    /// policy so `{:?}` in logs can never leak credentials.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let secret_keys: Vec<&str> = self.secret_fields.keys().map(String::as_str).collect();
+
+        f.debug_struct("AuthProfile")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("provider_id", &self.provider_id)
+            .field("fields", &self.fields)
+            .field("secret_fields", &secret_keys)
+            .field("enabled", &self.enabled)
+            .field("read_only", &self.read_only)
+            .field("dangling_origin", &self.dangling_origin)
+            .finish()
+    }
 }
 
 /// Provider ID rewrites for old `config.type` values.
@@ -197,6 +233,7 @@ impl<'de> Deserialize<'de> for AuthProfile {
             name,
             provider_id,
             fields,
+            secret_fields: HashMap::new(),
             enabled,
             read_only,
             dangling_origin: None,
@@ -215,14 +252,11 @@ impl AuthProfile {
             name: name.into(),
             provider_id: provider_id.into(),
             fields,
+            secret_fields: HashMap::new(),
             enabled: true,
             read_only: false,
             dangling_origin: None,
         }
-    }
-
-    pub fn secret_ref(&self) -> String {
-        format!("dbflux:auth:{}", self.id)
     }
 }
 
@@ -395,6 +429,7 @@ mod tests {
             name: "Prod".to_string(),
             provider_id: "aws-sso".to_string(),
             fields: fields.clone(),
+            secret_fields: HashMap::new(),
             enabled: true,
             read_only: false,
             dangling_origin: None,
@@ -408,6 +443,75 @@ mod tests {
         assert_eq!(deserialized.provider_id, original.provider_id);
         assert_eq!(deserialized.fields, original.fields);
         assert_eq!(deserialized.enabled, original.enabled);
+    }
+
+    #[test]
+    fn serialize_omits_secret_fields() {
+        let mut secret_fields = HashMap::new();
+        secret_fields.insert(
+            "secret_access_key".to_string(),
+            SecretString::from("AKIAVERYSECRETVALUE".to_string()),
+        );
+
+        let mut fields = HashMap::new();
+        fields.insert("region".to_string(), "us-east-1".to_string());
+
+        let profile = AuthProfile {
+            id: Uuid::parse_str(&make_uuid()).unwrap(),
+            name: "Static".to_string(),
+            provider_id: "custom".to_string(),
+            fields,
+            secret_fields,
+            enabled: true,
+            read_only: false,
+            dangling_origin: None,
+        };
+
+        let json = serde_json::to_string(&profile).unwrap();
+
+        assert!(
+            !json.contains("AKIAVERYSECRETVALUE"),
+            "serialized profile must not contain the secret value: {json}"
+        );
+        assert!(
+            !json.contains("secret_access_key"),
+            "serialized profile must not even name the secret field: {json}"
+        );
+        assert!(
+            json.contains("region"),
+            "non-secret fields must still serialize: {json}"
+        );
+    }
+
+    #[test]
+    fn debug_redacts_secret_values() {
+        let mut secret_fields = HashMap::new();
+        secret_fields.insert(
+            "secret_access_key".to_string(),
+            SecretString::from("AKIAVERYSECRETVALUE".to_string()),
+        );
+
+        let profile = AuthProfile {
+            id: Uuid::parse_str(&make_uuid()).unwrap(),
+            name: "Static".to_string(),
+            provider_id: "custom".to_string(),
+            fields: HashMap::new(),
+            secret_fields,
+            enabled: true,
+            read_only: false,
+            dangling_origin: None,
+        };
+
+        let debug = format!("{profile:?}");
+
+        assert!(
+            !debug.contains("AKIAVERYSECRETVALUE"),
+            "Debug must never print the secret value: {debug}"
+        );
+        assert!(
+            debug.contains("secret_access_key"),
+            "Debug should still list the secret field key: {debug}"
+        );
     }
 
     #[test]
