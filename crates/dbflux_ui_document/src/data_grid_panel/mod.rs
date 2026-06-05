@@ -2697,7 +2697,7 @@ impl DataGridPanel {
                 Box::new(move |spec: &VisualQuerySpec| {
                     conn.query_generator()
                         .and_then(|qgen| qgen.generate_select(spec).ok().flatten())
-                        .map(|q| q.sql)
+                        .map(|q| q.materialize_for_editor(conn.dialect()))
                         .unwrap_or_default()
                 })
             } else {
@@ -2711,14 +2711,13 @@ impl DataGridPanel {
                 conn.query_generator()
                     .and_then(|qgen| {
                         use dbflux_core::MutationKind;
-                        match &spec.kind {
-                            MutationKind::Delete => {
-                                qgen.generate_delete_from_spec(spec).ok().map(|m| m.sql)
-                            }
+                        let generated = match &spec.kind {
+                            MutationKind::Delete => qgen.generate_delete_from_spec(spec).ok(),
                             MutationKind::Update { .. } => {
-                                qgen.generate_update_from_spec(spec).ok().map(|m| m.sql)
+                                qgen.generate_update_from_spec(spec).ok()
                             }
-                        }
+                        };
+                        generated.map(|m| m.materialize_for_editor(conn.dialect()))
                     })
                     .unwrap_or_default()
             })
@@ -2729,12 +2728,20 @@ impl DataGridPanel {
         let available_columns: Vec<String> =
             self.result.columns.iter().map(|c| c.name.clone()).collect();
 
+        let column_kinds: std::collections::HashMap<String, dbflux_core::ColumnKind> = self
+            .result
+            .columns
+            .iter()
+            .map(|c| (c.name.clone(), c.kind))
+            .collect();
+
         let panel = if let Some(existing) = &self.builder_panel {
             existing.update(cx, |p, cx| {
                 if let Some(spec) = initial_spec.clone() {
                     p.set_spec(spec, cx);
                 }
                 p.available_columns = available_columns.clone();
+                p.column_kinds = column_kinds.clone();
             });
             existing.clone()
         } else {
@@ -2751,6 +2758,10 @@ impl DataGridPanel {
                     window,
                     cx,
                 )
+            });
+
+            new_panel.update(cx, |p, _| {
+                p.column_kinds = column_kinds;
             });
 
             let run_sub = cx.subscribe_in(
@@ -3459,34 +3470,14 @@ impl DataGridPanel {
             _ => return,
         };
 
-        let (policy, sql_preview, connection) = {
+        let (policy, connection) = {
             let state = self.app_state.read(cx);
             let connected = match state.connections().get(&profile_id) {
                 Some(c) => c,
                 None => return,
             };
 
-            let policy = connected.mutation_policy;
-
-            let sql_preview = connected
-                .connection
-                .query_generator()
-                .and_then(|qgen| {
-                    use dbflux_core::MutationKind;
-                    match &spec.kind {
-                        MutationKind::Delete => {
-                            qgen.generate_delete_from_spec(&spec).ok().map(|m| m.sql)
-                        }
-                        MutationKind::Update { .. } => {
-                            qgen.generate_update_from_spec(&spec).ok().map(|m| m.sql)
-                        }
-                    }
-                })
-                .unwrap_or_else(|| "<SQL preview unavailable>".to_string());
-
-            let connection = Arc::clone(&connected.connection);
-
-            (policy, sql_preview, connection)
+            (connected.mutation_policy, Arc::clone(&connected.connection))
         };
 
         // Gate on mutation policy — state borrow has been released above.
@@ -3539,6 +3530,18 @@ impl DataGridPanel {
             }
             MutationPolicy::Allowed => {}
         }
+
+        let sql_preview = connection
+            .query_generator()
+            .and_then(|qgen| {
+                use dbflux_core::MutationKind;
+                let generated = match &spec.kind {
+                    MutationKind::Delete => qgen.generate_delete_from_spec(&spec).ok(),
+                    MutationKind::Update { .. } => qgen.generate_update_from_spec(&spec).ok(),
+                };
+                generated.map(|m| m.materialize_for_editor(connection.dialect()))
+            })
+            .unwrap_or_else(|| "<SQL preview unavailable>".to_string());
 
         // Fetch sample rows synchronously on background thread (2s deadline).
         let (sample_columns, sample_rows) =

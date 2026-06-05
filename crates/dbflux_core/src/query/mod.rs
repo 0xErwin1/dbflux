@@ -15,7 +15,7 @@ pub use column_kind::{infer_column_kind, project_aggregate_kinds};
 pub use generator::{
     CollectionTemplateRequest, GeneratedMutation, GeneratedQuery, GeneratorError, MutationCategory,
     MutationTemplateOperation, MutationTemplateRequest, QueryGenError, QueryGenerator,
-    ReadTemplateOperation, ReadTemplateRequest, SelectQuery, SqlMutationGenerator,
+    ReadTemplateOperation, ReadTemplateRequest, SelectQuery, SqlMutationGenerator, inline_params,
     render_filter_node_sql,
 };
 pub use keyset::lower_keyset_predicate;

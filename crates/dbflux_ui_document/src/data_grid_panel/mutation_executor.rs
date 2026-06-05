@@ -4,7 +4,7 @@ use std::time::Duration;
 use dbflux_core::{
     Connection, DriverCapabilities, EventCategory, EventOutcome, EventRecord, EventSeverity,
     EventSink, MutationKind, MutationPolicy, QueryRequest, TransactionVocab, Value,
-    VisualMutationSpec, render_filter_node_sql,
+    VisualMutationSpec, inline_params, render_filter_node_sql,
 };
 
 /// Execution modes for visual bulk mutations.
@@ -447,8 +447,12 @@ impl MutationExecutor {
             }
         }
 
-        let mut dml_req = QueryRequest::new(generated.sql.clone());
-        dml_req.params = generated.params.clone();
+        let dml_sql = inline_params(
+            &generated.sql,
+            &generated.params,
+            self.deps.connection.dialect(),
+        );
+        let dml_req = QueryRequest::new(dml_sql);
         let dml_result = self.deps.connection.execute(&dml_req);
 
         match dml_result {
@@ -578,8 +582,12 @@ impl MutationExecutor {
             false
         };
 
-        let mut dml_req = QueryRequest::new(generated.sql.clone());
-        dml_req.params = generated.params.clone();
+        let dml_sql = inline_params(
+            &generated.sql,
+            &generated.params,
+            self.deps.connection.dialect(),
+        );
+        let dml_req = QueryRequest::new(dml_sql);
 
         match self.deps.connection.execute(&dml_req) {
             Err(e) => {
@@ -802,8 +810,7 @@ impl MutationExecutor {
                 )
             };
 
-            let mut select_req = QueryRequest::new(select_sql);
-            select_req.params = select_params;
+            let select_req = QueryRequest::new(inline_params(&select_sql, &select_params, dialect));
 
             let pk_rows = match self.deps.connection.execute(&select_req) {
                 Ok(r) => r.rows,
@@ -898,8 +905,8 @@ impl MutationExecutor {
                 }
             }
 
-            let mut dml_req = QueryRequest::new(generated.sql);
-            dml_req.params = generated.params;
+            let dml_req =
+                QueryRequest::new(inline_params(&generated.sql, &generated.params, dialect));
             let dml_result = self.deps.connection.execute(&dml_req);
 
             match dml_result {
@@ -1285,7 +1292,7 @@ mod tests {
                 spec: &VisualMutationSpec,
             ) -> Result<GeneratedMutation, dbflux_core::GeneratorError> {
                 Ok(GeneratedMutation {
-                    sql: format!("UPDATE {} SET col = $1", spec.from.name),
+                    sql: format!("UPDATE {} SET col = ?", spec.from.name),
                     params: vec![dbflux_core::Value::Int(1)],
                     used_raw_expression: false,
                 })
@@ -1330,6 +1337,34 @@ mod tests {
                 event_sink,
                 policy: MutationPolicy::Allowed,
             }
+        }
+
+        // Regression: drivers do not bind QueryRequest.params, so the executor
+        // must inline parameter values into the SQL before dispatch. The DML the
+        // connection receives must carry the literal, not a `?` placeholder.
+        #[test]
+        fn single_tx_inlines_params_into_dml_sql() {
+            let conn = RecordingConnection::new(DbKind::Postgres, 1);
+            let conn_ref = Arc::clone(&conn);
+            let spec = make_update_spec("products");
+            let opts = MutationExecOptions::single_transaction();
+            let deps = make_deps(conn, None);
+            let executor = MutationExecutor::new(spec, opts, deps);
+
+            let result = executor.run_single_tx(&no_cancel());
+            assert!(result.is_ok(), "expected success, got: {:?}", result);
+
+            let calls = conn_ref.calls.lock().unwrap().clone();
+            let dml = calls
+                .iter()
+                .find(|s| s.starts_with("UPDATE"))
+                .expect("a DML statement must have been executed");
+
+            assert_eq!(dml, "UPDATE products SET col = 1");
+            assert!(
+                !dml.contains('?'),
+                "DML must not contain an unbound placeholder: {dml}"
+            );
         }
 
         // G-1: parent event emitted at run start with outcome Pending
