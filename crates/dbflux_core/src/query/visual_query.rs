@@ -430,6 +430,38 @@ pub enum ScalarLiteral {
     Null,
 }
 
+impl ScalarLiteral {
+    /// Interprets raw user input as a scalar literal of the target column's kind.
+    ///
+    /// The visual builder captures every SET value as free text. Binding that
+    /// text to a typed column (e.g. an `Integer`) as a string literal relies on
+    /// the database's implicit coercion and is fragile across dialects, so the
+    /// value is promoted to the column's `ColumnKind` when the text parses
+    /// cleanly. Anything that does not parse — or a `Text`/`Timestamp`/`Unknown`
+    /// column — stays `Text`, which preserves values that must not be reshaped
+    /// (a zero-padded code like `"007"` in a text column, for instance).
+    pub fn from_input_for_kind(text: &str, kind: crate::ColumnKind) -> Self {
+        use crate::ColumnKind;
+
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return ScalarLiteral::Text(text.to_string());
+        }
+
+        match kind {
+            ColumnKind::Integer => trimmed
+                .parse::<i64>()
+                .map(ScalarLiteral::Integer)
+                .unwrap_or_else(|_| ScalarLiteral::Text(text.to_string())),
+            ColumnKind::Float => trimmed
+                .parse::<f64>()
+                .map(ScalarLiteral::Float)
+                .unwrap_or_else(|_| ScalarLiteral::Text(text.to_string())),
+            _ => ScalarLiteral::Text(text.to_string()),
+        }
+    }
+}
+
 /// The value to assign to a column in an UPDATE SET clause.
 ///
 /// `Expression` is an explicit escape hatch that embeds raw SQL text inline
@@ -650,6 +682,48 @@ mod tests {
 
     fn make_group(op: BoolOp, children: Vec<FilterNode>) -> FilterNode {
         FilterNode::Group { op, children }
+    }
+
+    // --- ScalarLiteral::from_input_for_kind ---
+
+    #[test]
+    fn from_input_promotes_integer_when_parseable() {
+        assert_eq!(
+            ScalarLiteral::from_input_for_kind("12", crate::ColumnKind::Integer),
+            ScalarLiteral::Integer(12)
+        );
+    }
+
+    #[test]
+    fn from_input_keeps_text_when_integer_does_not_parse() {
+        assert_eq!(
+            ScalarLiteral::from_input_for_kind("12abc", crate::ColumnKind::Integer),
+            ScalarLiteral::Text("12abc".to_string())
+        );
+    }
+
+    #[test]
+    fn from_input_promotes_float() {
+        assert_eq!(
+            ScalarLiteral::from_input_for_kind("3.5", crate::ColumnKind::Float),
+            ScalarLiteral::Float(3.5)
+        );
+    }
+
+    #[test]
+    fn from_input_text_column_preserves_zero_padded_value() {
+        assert_eq!(
+            ScalarLiteral::from_input_for_kind("007", crate::ColumnKind::Text),
+            ScalarLiteral::Text("007".to_string())
+        );
+    }
+
+    #[test]
+    fn from_input_empty_stays_text() {
+        assert_eq!(
+            ScalarLiteral::from_input_for_kind("", crate::ColumnKind::Integer),
+            ScalarLiteral::Text(String::new())
+        );
     }
 
     // --- FilterNode::depth ---
