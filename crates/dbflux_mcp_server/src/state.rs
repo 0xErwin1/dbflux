@@ -277,6 +277,10 @@ fn load_auth_profiles(runtime: &StorageRuntime) -> Result<Vec<dbflux_core::AuthP
                 name: dto.name,
                 provider_id: dto.provider_id,
                 fields,
+                // Secret-kind fields live in the keyring, not in SQLite; the MCP
+                // server lists persisted profile metadata and does not hydrate
+                // them.
+                secret_fields: std::collections::HashMap::new(),
                 enabled: dto.enabled,
                 read_only: false,
                 dangling_origin: dto.dangling_origin,
