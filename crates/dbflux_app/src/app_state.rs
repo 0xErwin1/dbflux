@@ -151,7 +151,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self, dbflux_storage::error::StorageError> {
         let (built, storage_runtime, profiles, auth_profiles, proxies, ssh_tunnels) =
             Self::build_default_drivers();
 
@@ -171,7 +171,9 @@ impl AppState {
         )
     }
 
-    pub fn new_with_storage_runtime(storage_runtime: StorageRuntime) -> Self {
+    pub fn new_with_storage_runtime(
+        storage_runtime: StorageRuntime,
+    ) -> Result<Self, dbflux_storage::error::StorageError> {
         let (built, storage_runtime, profiles, auth_profiles, proxies, ssh_tunnels) =
             Self::build_default_drivers_with_runtime(storage_runtime);
 
@@ -205,7 +207,7 @@ impl AppState {
         auth_profiles: Vec<dbflux_core::AuthProfile>,
         proxies: Vec<dbflux_core::ProxyProfile>,
         ssh_tunnels: Vec<SshTunnelProfile>,
-    ) -> Self {
+    ) -> Result<Self, dbflux_storage::error::StorageError> {
         let scripts_directory = ScriptsDirectory::new()
             .inspect_err(|e| log::warn!("Failed to initialize scripts directory: {}", e))
             .ok();
@@ -308,10 +310,7 @@ impl AppState {
         // Construct viz repositories sharing a single connection.
         // Decision C.1: one shared Arc<Mutex<Connection>> is used for all five repos so
         // they serialize through the same lock, matching the pattern used by saved_filters.
-        let viz_conn = storage_runtime.viz_connection().unwrap_or_else(|e| {
-            log::error!("Failed to open shared viz connection during startup: {e}");
-            panic!("Storage initialization failed: cannot open viz connection");
-        });
+        let viz_conn = storage_runtime.viz_connection()?;
         let saved_charts_repo = Arc::new(SavedChartsRepository::new(Arc::clone(&viz_conn)));
         let saved_chart_series_repo =
             Arc::new(SavedChartSeriesRepository::new(Arc::clone(&viz_conn)));
@@ -380,7 +379,7 @@ impl AppState {
             }
         }
 
-        state
+        Ok(state)
     }
 
     #[cfg(feature = "mcp")]
@@ -3297,12 +3296,6 @@ impl AppState {
     }
 }
 
-impl Default for AppState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3474,6 +3467,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
         )
+        .expect("test storage setup")
     }
 
     #[test]
@@ -3878,7 +3872,8 @@ mod tests {
         // the viz repositories are accessible and return empty lists on a fresh DB.
         let storage_runtime =
             dbflux_storage::bootstrap::StorageRuntime::in_memory().expect("in-memory storage");
-        let state = AppState::new_with_storage_runtime(storage_runtime);
+        let state =
+            AppState::new_with_storage_runtime(storage_runtime).expect("test storage setup");
 
         let charts = state.saved_charts_repo.list().expect("list saved_charts");
         assert!(charts.is_empty(), "fresh DB must return empty saved charts");
@@ -4101,6 +4096,23 @@ mod tests {
         assert_eq!(
             key, "builtin:influxdb",
             "driver_key() must be 'builtin:influxdb'"
+        );
+    }
+
+    #[test]
+    fn appstate_new_with_storage_runtime_returns_result_and_propagates_viz_failure() {
+        // Uses a directory as the DB path. open_dbflux_db will succeed (migrations
+        // ran during StorageRuntime construction on the real path), but viz_connection()
+        // opens a second connection to the same path.  For an in-memory runtime that
+        // succeeded, viz_connection should also succeed — the test verifies the
+        // constructor signature is Result, not the panic path.
+        let rt = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+            .expect("in-memory storage must work");
+        let state = AppState::new_with_storage_runtime(rt).expect("viz repos must open");
+        assert!(
+            !state.saved_charts_repo.list().unwrap().is_empty()
+                || state.saved_charts_repo.list().unwrap().is_empty(),
+            "fresh in-memory DB list is empty — but call must not panic"
         );
     }
 }

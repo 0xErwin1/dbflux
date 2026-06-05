@@ -2290,6 +2290,7 @@ mod tests {
                 let storage_runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
                     .expect("isolated storage runtime");
                 AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
             })
         })
     }

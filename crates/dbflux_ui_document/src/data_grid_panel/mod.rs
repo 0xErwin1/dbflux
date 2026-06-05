@@ -4062,6 +4062,7 @@ mod tests {
                 let storage_runtime =
                     StorageRuntime::in_memory().expect("isolated storage runtime");
                 AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
             })
         })
     }
@@ -4925,6 +4926,7 @@ mod tests {
                 let storage_runtime =
                     StorageRuntime::in_memory().expect("isolated storage runtime");
                 AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
             })
         });
 
@@ -5585,6 +5587,7 @@ mod tests {
                 let storage_runtime =
                     StorageRuntime::in_memory().expect("isolated storage runtime");
                 AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
             })
         });
 
@@ -5920,6 +5923,7 @@ mod tests {
                 let storage_runtime =
                     StorageRuntime::in_memory().expect("isolated storage runtime");
                 AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
             })
         });
 
@@ -6272,6 +6276,7 @@ mod tests {
                 let storage_runtime =
                     StorageRuntime::in_memory().expect("isolated storage runtime");
                 AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
             })
         });
 

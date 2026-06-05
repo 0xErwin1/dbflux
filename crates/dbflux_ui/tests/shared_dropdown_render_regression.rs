@@ -22,7 +22,7 @@ fn isolated_test_app_state(cx: &mut TestAppContext) -> Entity<AppStateEntity> {
     cx.update(|cx| {
         cx.new(|_| {
             let storage_runtime = StorageRuntime::in_memory().expect("isolated storage runtime");
-            AppStateEntity::new_with_storage_runtime(storage_runtime)
+            AppStateEntity::new_with_storage_runtime(storage_runtime).expect("test storage setup")
         })
     })
 }

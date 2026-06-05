@@ -842,7 +842,7 @@ mod tests {
         let app_state: Entity<AppStateEntity> = cx.update(|cx| {
             cx.new(|_| {
                 let runtime = StorageRuntime::in_memory().expect("in-memory storage");
-                AppStateEntity::new_with_storage_runtime(runtime)
+                AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup")
             })
         });
 
@@ -944,7 +944,7 @@ mod tests {
         let app_state: Entity<AppStateEntity> = cx.update(|cx| {
             cx.new(|_| {
                 let runtime = StorageRuntime::in_memory().expect("in-memory storage");
-                AppStateEntity::new_with_storage_runtime(runtime)
+                AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup")
             })
         });
 

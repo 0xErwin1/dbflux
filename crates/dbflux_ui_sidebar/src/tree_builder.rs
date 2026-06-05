@@ -2858,7 +2858,8 @@ mod tests {
                 .unwrap();
         }
 
-        let state = dbflux_ui_base::AppStateEntity::new_with_storage_runtime(rt);
+        let state = dbflux_ui_base::AppStateEntity::new_with_storage_runtime(rt)
+            .expect("test storage setup");
         (state, profile_id)
     }
 
