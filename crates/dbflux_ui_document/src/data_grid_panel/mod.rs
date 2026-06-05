@@ -3512,16 +3512,30 @@ impl DataGridPanel {
                     };
                     let spec_json = serde_json::to_value(&spec).unwrap_or_default();
                     let connection_id = profile_id.to_string();
-                    self.app_state.update(cx, |app, _| {
+                    let enqueue_result = self.app_state.update(cx, |app, _| {
                         app.request_mcp_execution(
                             "user".to_string(),
                             connection_id,
                             "mutation.run".to_string(),
                             classification,
                             spec_json,
-                        );
+                        )
                     });
-                    dbflux_ui_base::toast::Toast::info("Mutation queued for approval.").push(cx);
+                    match enqueue_result {
+                        Ok(_) => {
+                            dbflux_ui_base::toast::Toast::info("Mutation queued for approval.")
+                                .push(cx);
+                        }
+                        Err(e) => {
+                            dbflux_ui_base::user_error::report_error(
+                                dbflux_ui_base::user_error::UserFacingError::new(
+                                    dbflux_ui_base::user_error::ErrorKind::Driver,
+                                    format!("Failed to queue mutation for approval: {e}"),
+                                ),
+                                cx,
+                            );
+                        }
+                    }
                     return;
                 }
 
@@ -3628,16 +3642,29 @@ impl DataGridPanel {
             };
             let spec_json = serde_json::to_value(&pending.spec).unwrap_or_default();
             let connection_id = pending.profile_id.to_string();
-            self.app_state.update(cx, |app, _| {
+            let enqueue_result = self.app_state.update(cx, |app, _| {
                 app.request_mcp_execution(
                     "user".to_string(),
                     connection_id,
                     "mutation.run".to_string(),
                     classification,
                     spec_json,
-                );
+                )
             });
-            dbflux_ui_base::toast::Toast::info("Mutation queued for approval.").push(cx);
+            match enqueue_result {
+                Ok(_) => {
+                    dbflux_ui_base::toast::Toast::info("Mutation queued for approval.").push(cx);
+                }
+                Err(e) => {
+                    dbflux_ui_base::user_error::report_error(
+                        dbflux_ui_base::user_error::UserFacingError::new(
+                            dbflux_ui_base::user_error::ErrorKind::Driver,
+                            format!("Failed to queue mutation for approval: {e}"),
+                        ),
+                        cx,
+                    );
+                }
+            }
             return;
         }
 

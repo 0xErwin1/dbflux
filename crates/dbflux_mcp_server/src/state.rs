@@ -147,7 +147,10 @@ fn build_runtime(
         error_messages::config_error("initialize audit database", Some(&dbflux_db_path), e)
     })?;
 
-    let mut runtime = McpRuntime::new(audit_service);
+    let mut runtime = McpRuntime::new(
+        audit_service,
+        Box::new(dbflux_approval::InMemoryPendingExecutionStore::default()),
+    );
 
     // Pass config_dir for CLI compatibility only; governance state is read from SQLite.
     let governance_settings = load_governance_into_runtime(&mut runtime, config_dir)?;

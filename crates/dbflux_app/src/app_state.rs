@@ -290,7 +290,10 @@ impl AppState {
         history_manager.set_max_entries(general_settings.max_history_entries);
 
         #[cfg(feature = "mcp")]
-        let mcp_runtime = McpRuntime::new(audit_service.clone());
+        let mcp_runtime = McpRuntime::new(
+            audit_service.clone(),
+            Box::new(dbflux_approval::InMemoryPendingExecutionStore::default()),
+        );
 
         // Construct viz repositories sharing a single connection.
         // Decision C.1: one shared Arc<Mutex<Connection>> is used for all five repos so
@@ -2790,7 +2793,7 @@ impl AppState {
         tool_id: String,
         classification: dbflux_policy::ExecutionClassification,
         payload: serde_json::Value,
-    ) -> PendingExecutionSummary {
+    ) -> Result<PendingExecutionSummary, String> {
         let plan = self.mcp_runtime.classify_plan(
             classification,
             payload,
@@ -2799,7 +2802,9 @@ impl AppState {
             tool_id,
         );
 
-        self.mcp_runtime.request_execution_mut(plan)
+        self.mcp_runtime
+            .request_execution_mut(plan)
+            .map_err(|e| e.to_string())
     }
 
     pub fn list_mcp_pending_executions(&self) -> Result<Vec<PendingExecutionSummary>, String> {

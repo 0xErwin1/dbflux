@@ -1,7 +1,9 @@
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::store::{ExecutionPlan, InMemoryPendingExecutionStore, PendingExecution, PendingStatus};
+use crate::store::{
+    ExecutionPlan, PendingExecution, PendingExecutionStore, PendingStatus, PendingStoreError,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalDecision {
@@ -20,36 +22,40 @@ pub struct RejectedExecution {
     pub pending: PendingExecution,
 }
 
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Error)]
 pub enum ApprovalError {
     #[error("pending execution not found: {0}")]
     PendingNotFound(Uuid),
     #[error("pending execution is not in pending state: {0}")]
     InvalidTransition(Uuid),
+    #[error(transparent)]
+    Store(#[from] PendingStoreError),
 }
 
-#[derive(Debug, Clone, Default)]
 pub struct ApprovalService {
-    store: InMemoryPendingExecutionStore,
+    store: Box<dyn PendingExecutionStore>,
 }
 
 impl ApprovalService {
-    pub fn new(store: InMemoryPendingExecutionStore) -> Self {
+    pub fn new(store: Box<dyn PendingExecutionStore>) -> Self {
         Self { store }
     }
 
-    pub fn request_execution(&mut self, plan: &ExecutionPlan) -> PendingExecution {
-        self.store.create_pending(plan)
+    pub fn request_execution(
+        &mut self,
+        plan: &ExecutionPlan,
+    ) -> Result<PendingExecution, ApprovalError> {
+        Ok(self.store.create_pending(plan, None)?)
     }
 
-    pub fn list_pending(&self) -> Vec<PendingExecution> {
-        self.store.list_pending()
+    pub fn list_pending(&self) -> Result<Vec<PendingExecution>, ApprovalError> {
+        Ok(self.store.list_pending()?)
     }
 
     pub fn approve(&mut self, pending_id: Uuid) -> Result<ApprovedExecution, ApprovalError> {
         let pending = self
             .store
-            .get_pending(pending_id)
+            .get_pending(pending_id)?
             .ok_or(ApprovalError::PendingNotFound(pending_id))?;
 
         if pending.status != PendingStatus::Pending {
@@ -59,7 +65,7 @@ impl ApprovalService {
         let replay_plan = pending.plan.clone();
         let updated = self
             .store
-            .update_status(pending_id, PendingStatus::Approved)
+            .update_status(pending_id, PendingStatus::Approved)?
             .ok_or(ApprovalError::PendingNotFound(pending_id))?;
 
         Ok(ApprovedExecution {
@@ -71,7 +77,7 @@ impl ApprovalService {
     pub fn reject(&mut self, pending_id: Uuid) -> Result<RejectedExecution, ApprovalError> {
         let pending = self
             .store
-            .get_pending(pending_id)
+            .get_pending(pending_id)?
             .ok_or(ApprovalError::PendingNotFound(pending_id))?;
 
         if pending.status != PendingStatus::Pending {
@@ -80,7 +86,7 @@ impl ApprovalService {
 
         let updated = self
             .store
-            .update_status(pending_id, PendingStatus::Rejected)
+            .update_status(pending_id, PendingStatus::Rejected)?
             .ok_or(ApprovalError::PendingNotFound(pending_id))?;
 
         Ok(RejectedExecution { pending: updated })
@@ -93,7 +99,7 @@ mod tests {
 
     use crate::store::{ExecutionPlan, InMemoryPendingExecutionStore, PendingStatus};
 
-    use super::{ApprovalError, ApprovalService};
+    use super::ApprovalService;
 
     fn sample_plan() -> ExecutionPlan {
         ExecutionPlan {
@@ -105,12 +111,18 @@ mod tests {
         }
     }
 
+    fn service() -> ApprovalService {
+        ApprovalService::new(Box::new(InMemoryPendingExecutionStore::default()))
+    }
+
     #[test]
     fn request_takes_snapshot_for_exact_replay() {
-        let mut service = ApprovalService::new(InMemoryPendingExecutionStore::default());
+        let mut service = service();
 
         let mut mutable_plan = sample_plan();
-        let pending = service.request_execution(&mutable_plan);
+        let pending = service
+            .request_execution(&mutable_plan)
+            .expect("request_execution should succeed");
         mutable_plan.payload = serde_json::json!({"query": "drop table users"});
 
         let approved = service
@@ -126,14 +138,19 @@ mod tests {
 
     #[test]
     fn reject_prevents_future_approval() {
-        let mut service = ApprovalService::new(InMemoryPendingExecutionStore::default());
+        let mut service = service();
 
-        let pending = service.request_execution(&sample_plan());
+        let pending = service
+            .request_execution(&sample_plan())
+            .expect("request_execution should succeed");
         service
             .reject(pending.id)
             .expect("reject should succeed for pending record");
 
         let result = service.approve(pending.id);
-        assert_eq!(result, Err(ApprovalError::InvalidTransition(pending.id)));
+        assert!(
+            matches!(result, Err(super::ApprovalError::InvalidTransition(_))),
+            "expected InvalidTransition error after reject"
+        );
     }
 }

@@ -90,7 +90,10 @@ fn create_test_server_state() -> dbflux_mcp_server::state::ServerState {
     let temp_dir = tempfile::tempdir().unwrap();
     let audit_path = temp_dir.path().join("test_audit.sqlite");
     let audit_service = dbflux_audit::AuditService::new_sqlite(&audit_path).unwrap();
-    let mut runtime = McpRuntime::new(audit_service);
+    let mut runtime = McpRuntime::new(
+        audit_service,
+        Box::new(dbflux_approval::InMemoryPendingExecutionStore::default()),
+    );
 
     // Register built-in roles and policies
     for role in builtin_roles() {
