@@ -290,10 +290,20 @@ impl AppState {
         history_manager.set_max_entries(general_settings.max_history_entries);
 
         #[cfg(feature = "mcp")]
-        let mcp_runtime = McpRuntime::new(
-            audit_service.clone(),
-            Box::new(dbflux_approval::InMemoryPendingExecutionStore::default()),
-        );
+        let mcp_runtime = {
+            let approval_store: Box<dyn dbflux_approval::PendingExecutionStore> =
+                match storage_runtime.pending_executions() {
+                    Ok(store) => Box::new(store),
+                    Err(e) => {
+                        log::error!(
+                            "Failed to open pending executions store; \
+                             approvals will not survive restart: {e}"
+                        );
+                        Box::new(dbflux_approval::InMemoryPendingExecutionStore::default())
+                    }
+                };
+            McpRuntime::new(audit_service.clone(), approval_store)
+        };
 
         // Construct viz repositories sharing a single connection.
         // Decision C.1: one shared Arc<Mutex<Connection>> is used for all five repos so
