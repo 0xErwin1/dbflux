@@ -41,12 +41,27 @@ pub struct McpRuntime {
 
 impl McpRuntime {
     pub fn new(audit_service: AuditService, store: Box<dyn PendingExecutionStore>) -> Self {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let mut approval_service = ApprovalService::new(store);
+
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+
+        if let Err(e) = approval_service.purge_terminal_and_expired(now_ms) {
+            eprintln!(
+                "[dbflux_mcp] Failed to purge terminal/expired pending executions at startup: {e}"
+            );
+        }
+
         Self {
             trusted_clients: HashMap::new(),
             roles: HashMap::new(),
             policies: HashMap::new(),
             connection_policy_assignments: HashMap::new(),
-            approval_service: ApprovalService::new(store),
+            approval_service,
             audit_service,
             pending_events: Vec::new(),
             mcp_enabled: true,
@@ -402,10 +417,10 @@ impl McpRuntime {
             .to_string(),
         );
 
-        let recorded = self.record_audit_event(event)?;
-
         approval_handler::approve_execution(&mut self.approval_service, pending_id)
             .map_err(|error| GovernanceError::Operation(error.to_string()))?;
+
+        let recorded = self.record_audit_event(event)?;
 
         self.push_event(McpRuntimeEvent::PendingExecutionsUpdated);
 

@@ -53,11 +53,13 @@ fn rejected_execution_cannot_be_approved_and_never_executes() {
         .expect("reject should succeed");
 
     let err = approve_execution(&mut approval_service, &pending.id.to_string())
-        .expect_err("approved should fail after rejection");
+        .expect_err("approval should fail after rejection");
 
+    let err_str = err.to_string();
     assert!(
-        err.to_string()
-            .contains("pending execution is not in pending state")
+        err_str.contains("pending execution is not in pending state")
+            || err_str.contains("pending execution not found"),
+        "expected a rejection-related error, got: {err_str}"
     );
     assert!(
         approval_service

@@ -22,6 +22,7 @@ pub fn open_database(path: &Path) -> Result<Connection, StorageError> {
 /// - WAL journal mode for concurrent readers.
 /// - NORMAL synchronous for a good durability/performance balance.
 /// - Foreign keys ON so schema constraints are enforced.
+/// - busy_timeout of 5000ms so concurrent writers retry rather than returning SQLITE_BUSY.
 fn apply_default_pragmas(conn: &Connection, path: &Path) -> Result<(), StorageError> {
     conn.pragma_update(None, "journal_mode", "WAL")
         .map_err(|source| StorageError::Sqlite {
@@ -36,6 +37,12 @@ fn apply_default_pragmas(conn: &Connection, path: &Path) -> Result<(), StorageEr
         })?;
 
     conn.pragma_update(None, "foreign_keys", "ON")
+        .map_err(|source| StorageError::Sqlite {
+            path: path.to_path_buf(),
+            source,
+        })?;
+
+    conn.pragma_update(None, "busy_timeout", 5000)
         .map_err(|source| StorageError::Sqlite {
             path: path.to_path_buf(),
             source,

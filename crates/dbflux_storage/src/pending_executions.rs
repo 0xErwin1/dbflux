@@ -34,7 +34,7 @@ fn now_epoch_ms() -> i64 {
         .as_millis() as i64
 }
 
-fn classification_to_str(c: dbflux_approval::store::PendingStatus) -> &'static str {
+fn status_to_str(c: PendingStatus) -> &'static str {
     match c {
         PendingStatus::Pending => "pending",
         PendingStatus::Approved => "approved",
@@ -151,6 +151,7 @@ impl PendingExecutionStore for SqlitePendingExecutionStore {
     }
 
     fn get_pending(&self, id: Uuid) -> Result<Option<PendingExecution>, PendingStoreError> {
+        let now = now_epoch_ms();
         let conn = self
             .conn
             .lock()
@@ -160,8 +161,10 @@ impl PendingExecutionStore for SqlitePendingExecutionStore {
             "SELECT id, tool_id, connection_id, actor_id, classification, payload_json,
                     status, created_at, expires_at
              FROM app_pending_executions
-             WHERE id = ?1",
-            rusqlite::params![id.to_string()],
+             WHERE id = ?1
+               AND status = 'pending'
+               AND (expires_at IS NULL OR expires_at > ?2)",
+            rusqlite::params![id.to_string(), now],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -189,7 +192,7 @@ impl PendingExecutionStore for SqlitePendingExecutionStore {
         id: Uuid,
         status: PendingStatus,
     ) -> Result<Option<PendingExecution>, PendingStoreError> {
-        let status_str = classification_to_str(status);
+        let status_str = status_to_str(status);
         let conn = self
             .conn
             .lock()
@@ -272,5 +275,23 @@ impl PendingExecutionStore for SqlitePendingExecutionStore {
         }
 
         Ok(executions)
+    }
+
+    fn purge_terminal_and_expired(&mut self, now_ms: i64) -> Result<usize, PendingStoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| PendingStoreError::Backend(e.to_string()))?;
+
+        let rows_deleted = conn
+            .execute(
+                "DELETE FROM app_pending_executions
+                 WHERE status IN ('approved', 'rejected')
+                    OR (expires_at IS NOT NULL AND expires_at <= ?1)",
+                rusqlite::params![now_ms],
+            )
+            .map_err(|e| PendingStoreError::Backend(e.to_string()))?;
+
+        Ok(rows_deleted)
     }
 }

@@ -63,12 +63,15 @@ fn update_status_changes_stored_row() {
 
     assert_eq!(updated.status, PendingStatus::Approved);
 
+    // get_pending only returns entries that are still in Pending status and not expired.
+    // A row whose status was just set to Approved must no longer be returned.
     let re_fetched = store
         .get_pending(entry.id)
-        .expect("get_pending should succeed")
-        .expect("entry should still be found");
-
-    assert_eq!(re_fetched.status, PendingStatus::Approved);
+        .expect("get_pending should succeed");
+    assert!(
+        re_fetched.is_none(),
+        "approved entry must not be returned by get_pending"
+    );
 }
 
 #[test]

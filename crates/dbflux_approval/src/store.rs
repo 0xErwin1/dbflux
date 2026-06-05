@@ -61,6 +61,11 @@ pub trait PendingExecutionStore: Send + Sync {
     /// Returns only entries whose status is `Pending` AND whose `expires_at` is
     /// either absent or in the future relative to the current wall-clock time.
     fn list_pending(&self) -> Result<Vec<PendingExecution>, PendingStoreError>;
+
+    /// Removes rows whose status is terminal (Approved or Rejected) OR whose
+    /// `expires_at` is at or before `now_ms`. Call once at startup to prevent
+    /// unbounded table growth.
+    fn purge_terminal_and_expired(&mut self, now_ms: i64) -> Result<usize, PendingStoreError>;
 }
 
 fn now_epoch_ms() -> i64 {
@@ -95,7 +100,16 @@ impl PendingExecutionStore for InMemoryPendingExecutionStore {
     }
 
     fn get_pending(&self, id: Uuid) -> Result<Option<PendingExecution>, PendingStoreError> {
-        Ok(self.entries.iter().find(|entry| entry.id == id).cloned())
+        let now = now_epoch_ms();
+        Ok(self
+            .entries
+            .iter()
+            .find(|entry| {
+                entry.id == id
+                    && entry.status == PendingStatus::Pending
+                    && entry.expires_at.is_none_or(|exp| exp > now)
+            })
+            .cloned())
     }
 
     fn update_status(
@@ -124,6 +138,16 @@ impl PendingExecutionStore for InMemoryPendingExecutionStore {
             })
             .cloned()
             .collect())
+    }
+
+    fn purge_terminal_and_expired(&mut self, now_ms: i64) -> Result<usize, PendingStoreError> {
+        let before = self.entries.len();
+        self.entries.retain(|entry| {
+            let is_terminal = entry.status != PendingStatus::Pending;
+            let is_expired = entry.expires_at.is_some_and(|exp| exp <= now_ms);
+            !is_terminal && !is_expired
+        });
+        Ok(before - self.entries.len())
     }
 }
 
@@ -212,5 +236,39 @@ mod tests {
             .get_pending(uuid::Uuid::new_v4())
             .expect("get should succeed");
         assert!(result.is_none());
+    }
+
+    // S1: get_pending must return None for expired entries.
+    #[test]
+    fn get_pending_returns_none_for_expired_entry() {
+        let mut store = InMemoryPendingExecutionStore::default();
+        let entry = store
+            .create_pending(&sample_plan(), Some(1_000i64))
+            .expect("create should succeed");
+
+        let result = store.get_pending(entry.id).expect("get should not error");
+        assert!(
+            result.is_none(),
+            "expired entry must not be returned by get_pending"
+        );
+    }
+
+    // S1: get_pending must return None for terminal (approved/rejected) entries.
+    #[test]
+    fn get_pending_returns_none_for_terminal_entry() {
+        let mut store = InMemoryPendingExecutionStore::default();
+        let entry = store
+            .create_pending(&sample_plan(), None)
+            .expect("create should succeed");
+
+        store
+            .update_status(entry.id, PendingStatus::Approved)
+            .expect("update should succeed");
+
+        let result = store.get_pending(entry.id).expect("get should not error");
+        assert!(
+            result.is_none(),
+            "approved entry must not be returned by get_pending"
+        );
     }
 }

@@ -2413,6 +2413,7 @@ version = "0.6.0-rc.1"
 dependencies = [
  "async-trait",
  "chrono",
+ "dbflux_approval",
  "dbflux_audit",
  "dbflux_aws",
  "dbflux_core",
@@ -2768,6 +2769,7 @@ dependencies = [
  "dbflux_audit",
  "dbflux_core",
  "dbflux_policy",
+ "dbflux_storage",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -2862,7 +2864,9 @@ name = "dbflux_storage"
 version = "0.6.0-rc.1"
 dependencies = [
  "chrono",
+ "dbflux_approval",
  "dbflux_core",
+ "dbflux_policy",
  "dirs 5.0.1",
  "hex",
  "log",
