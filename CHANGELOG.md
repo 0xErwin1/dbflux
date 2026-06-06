@@ -6,6 +6,13 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **MCP audit events fingerprint the executed SQL (#181)** — Every MCP tool
+  that produces a SQL statement (preview/explain, structured reads and
+  mutations, and DDL) now records that SQL on its audit event, so the existing
+  SHA256 fingerprint applies. With `capture_query_text=false` the raw SQL is
+  replaced by its fingerprint before it reaches disk. Tools that build no SQL
+  string (`insert_record`, `select_data`, `count_records`) keep auditing only
+  their result count. (Security audit MCP-2.)
 * **Persistent MCP approvals (#173)** — Pending MCP execution approvals are
   now stored in SQLite (migration `018_app_pending_executions`) through a new
   `PendingExecutionStore` trait with a `SqlitePendingExecutionStore`
@@ -15,6 +22,15 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Changed
 
+* **`drop_index` is gated as a destructive operation (#181)** — Dropping an
+  index is irreversible, so it is now classified `AdminDestructive` instead of
+  `Admin`. Policies that deny `AdminDestructive` now also deny `drop_index`.
+  (Security audit MCP-1.)
+* **`alter_table` is atomic on transactional-DDL drivers (#181)** — A
+  multi-operation `alter_table` runs inside a transaction and rolls back
+  entirely when one operation fails, instead of leaving earlier operations
+  committed. Drivers without transactional DDL return a `non_atomic_alter`
+  flag so the caller knows the batch was not atomic. (Security audit MCP-5.)
 * **Oversized audit details are truncated, not dropped (#173)** — An audit
   event whose `details_json` exceeds the 64 KiB cap is now truncated at a valid
   UTF-8 boundary and wrapped in a `{"__truncated":true,"partial":…}` envelope
@@ -39,6 +55,14 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Security
 
+* **MCP server fails closed on invalid governance config (#181)** — A
+  malformed (empty-id) role, policy, or trusted client now aborts MCP startup
+  with a clear error instead of being silently dropped, which previously could
+  leave the server running with weaker governance than configured. The MCP
+  trust model (process identity via `--client-id`, not a cryptographic
+  guarantee) is now documented in `CLAUDE.md` and the `dbflux mcp` help text,
+  and the dead `preview_ddl` dry-run path was removed. (Security audit MCP-3,
+  MCP-4, MCP-6.)
 * **Auth profile secrets moved to the OS keyring** — Secret-kind auth
   profile fields (`Password` / `WriteOnly`, such as credentials for
   external RPC auth providers) are now held in memory as `SecretString`,
