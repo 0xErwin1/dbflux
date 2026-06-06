@@ -357,12 +357,12 @@ impl DbFluxServer {
             "delete_records" | "truncate_table" => Some(ExecutionClassification::Destructive),
 
             // Admin operations
-            "create_table" | "create_index" | "drop_index" | "create_type" | "delete_script" => {
+            "create_table" | "create_index" | "create_type" | "delete_script" => {
                 Some(ExecutionClassification::Admin)
             }
 
             // Dynamic or strongly destructive operations default to the stricter class.
-            "alter_table" | "execute_script" | "drop_table" | "drop_database" => {
+            "alter_table" | "execute_script" | "drop_table" | "drop_database" | "drop_index" => {
                 Some(ExecutionClassification::AdminDestructive)
             }
 
@@ -427,5 +427,46 @@ mod tests {
     #[test]
     fn reject_execution_uses_runtime_default_reason_when_missing() {
         assert_eq!(effective_rejection_reason(None), DEFAULT_REJECTION_REASON);
+    }
+
+    #[test]
+    fn test_drop_index_classification_admin_destructive() {
+        assert_eq!(
+            DbFluxServer::classify_tool("drop_index"),
+            Some(ExecutionClassification::AdminDestructive),
+            "drop_index must be classified AdminDestructive, not Admin"
+        );
+        assert_eq!(
+            DbFluxServer::classify_tool("create_index"),
+            Some(ExecutionClassification::Admin),
+            "create_index classification must remain Admin"
+        );
+    }
+
+    #[test]
+    fn test_drop_index_denied_by_admin_destructive_policy() {
+        // A policy with ceiling=Admin must not satisfy a drop_index request
+        // classified AdminDestructive. We verify this by checking that the
+        // max() of (Admin, AdminDestructive) is AdminDestructive — meaning the
+        // operation requires a stricter level than the ceiling grants.
+        let classification = DbFluxServer::classify_tool("drop_index")
+            .expect("drop_index must have a classification");
+        assert_eq!(
+            classification,
+            ExecutionClassification::AdminDestructive,
+            "drop_index classification must be AdminDestructive for the policy deny to trigger"
+        );
+
+        let policy_ceiling = ExecutionClassification::Admin;
+        assert_eq!(
+            policy_ceiling.max(classification),
+            ExecutionClassification::AdminDestructive,
+            "AdminDestructive is more restrictive than Admin — a policy capped at Admin denies it"
+        );
+        assert_ne!(
+            policy_ceiling.max(classification),
+            policy_ceiling,
+            "drop_index should not fit within an Admin-capped policy"
+        );
     }
 }

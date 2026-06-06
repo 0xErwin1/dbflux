@@ -860,7 +860,7 @@ impl DbFluxServer {
             .authorize_and_execute(
                 "drop_index",
                 Some(&params.connection_id),
-                ExecutionClassification::Admin,
+                ExecutionClassification::AdminDestructive,
                 move || async move {
                     let result = Self::drop_index_impl(
                         state,
