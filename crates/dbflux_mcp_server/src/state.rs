@@ -197,48 +197,63 @@ fn validate_client_id(
     Ok(())
 }
 
+fn apply_governance_settings(
+    runtime: &mut McpRuntime,
+    governance: &GovernanceSettings,
+) -> Result<(), String> {
+    for client in &governance.trusted_clients {
+        runtime
+            .upsert_trusted_client_mut(TrustedClientDto {
+                id: client.id.clone(),
+                name: client.name.clone(),
+                issuer: client.issuer.clone(),
+                active: client.active,
+            })
+            .map_err(|e| format!("failed to load trusted client: {e}"))?;
+    }
+
+    for role in &governance.roles {
+        runtime
+            .upsert_role_mut(PolicyRoleDto {
+                id: role.id.clone(),
+                policy_ids: role.policy_ids.clone(),
+            })
+            .map_err(|e| format!("failed to load role: {e}"))?;
+    }
+
+    for policy in &governance.policies {
+        runtime
+            .upsert_policy_mut(ToolPolicyDto {
+                id: policy.id.clone(),
+                allowed_tools: policy.allowed_tools.clone(),
+                allowed_classes: policy.allowed_classes.clone(),
+            })
+            .map_err(|e| format!("failed to load policy: {e}"))?;
+    }
+
+    Ok(())
+}
+
 fn load_governance_into_runtime(
     runtime: &mut McpRuntime,
     config_dir: Option<&std::path::Path>,
 ) -> Result<GovernanceSettings, String> {
-    // Inject immutable built-ins first so they are always present.
     for role in builtin_roles() {
-        let _ = runtime.upsert_role_mut(role);
+        runtime
+            .upsert_role_mut(role)
+            .map_err(|e| format!("failed to load built-in role: {e}"))?;
     }
 
     for policy in builtin_policies() {
-        let _ = runtime.upsert_policy_mut(policy);
+        runtime
+            .upsert_policy_mut(policy)
+            .map_err(|e| format!("failed to load built-in policy: {e}"))?;
     }
 
     let governance = load_governance_settings(config_dir)?;
 
-    for client in governance.trusted_clients.clone() {
-        let _ = runtime.upsert_trusted_client_mut(TrustedClientDto {
-            id: client.id,
-            name: client.name,
-            issuer: client.issuer,
-            active: client.active,
-        });
-    }
+    apply_governance_settings(runtime, &governance)?;
 
-    for role in governance.roles.clone() {
-        let _ = runtime.upsert_role_mut(PolicyRoleDto {
-            id: role.id,
-            policy_ids: role.policy_ids,
-        });
-    }
-
-    for policy in governance.policies.clone() {
-        let _ = runtime.upsert_policy_mut(ToolPolicyDto {
-            id: policy.id,
-            allowed_tools: policy.allowed_tools,
-            allowed_classes: policy.allowed_classes,
-        });
-    }
-
-    // Create global policy assignments for all trusted clients
-    // This allows them to use tools without a specific connection_id
-    // (e.g., list_connections, list_scripts, query_audit_logs)
     create_global_assignments(runtime)?;
 
     Ok(governance)
@@ -1361,5 +1376,138 @@ mod tests {
         assert!(!provider.capabilities().login.supported);
 
         server.wait().expect("fake server join");
+    }
+
+    fn runtime_for_governance_tests(file_name: &str) -> McpRuntime {
+        let path = dbflux_audit::temp_sqlite_path(file_name);
+        let _ = std::fs::remove_file(&path);
+        let audit =
+            dbflux_audit::AuditService::new_sqlite(&path).expect("audit service should initialize");
+        McpRuntime::new(
+            audit,
+            Box::new(dbflux_approval::InMemoryPendingExecutionStore::default()),
+        )
+    }
+
+    #[test]
+    fn apply_governance_settings_rejects_client_with_empty_id() {
+        use dbflux_core::{GovernanceSettings, TrustedClientConfig};
+
+        let mut runtime = runtime_for_governance_tests("governance-empty-client-id.sqlite");
+
+        let governance = GovernanceSettings {
+            mcp_enabled_by_default: false,
+            trusted_clients: vec![TrustedClientConfig {
+                id: String::new(),
+                name: "bad client".to_string(),
+                issuer: None,
+                active: true,
+            }],
+            roles: vec![],
+            policies: vec![],
+        };
+
+        let result = apply_governance_settings(&mut runtime, &governance);
+        assert!(result.is_err(), "empty client id must cause an Err");
+        assert!(
+            result
+                .unwrap_err()
+                .contains("failed to load trusted client"),
+            "error message must identify the failed operation"
+        );
+    }
+
+    #[test]
+    fn apply_governance_settings_rejects_role_with_empty_id() {
+        use dbflux_core::{GovernanceSettings, PolicyRoleConfig};
+
+        let mut runtime = runtime_for_governance_tests("governance-empty-role-id.sqlite");
+
+        let governance = GovernanceSettings {
+            mcp_enabled_by_default: false,
+            trusted_clients: vec![],
+            roles: vec![PolicyRoleConfig {
+                id: String::new(),
+                policy_ids: vec![],
+            }],
+            policies: vec![],
+        };
+
+        let result = apply_governance_settings(&mut runtime, &governance);
+        assert!(result.is_err(), "empty role id must cause an Err");
+        assert!(
+            result.unwrap_err().contains("failed to load role"),
+            "error message must identify the failed operation"
+        );
+    }
+
+    #[test]
+    fn apply_governance_settings_rejects_policy_with_empty_id() {
+        use dbflux_core::{GovernanceSettings, ToolPolicyConfig};
+
+        let mut runtime = runtime_for_governance_tests("governance-empty-policy-id.sqlite");
+
+        let governance = GovernanceSettings {
+            mcp_enabled_by_default: false,
+            trusted_clients: vec![],
+            roles: vec![],
+            policies: vec![ToolPolicyConfig {
+                id: String::new(),
+                allowed_tools: vec![],
+                allowed_classes: vec![],
+            }],
+        };
+
+        let result = apply_governance_settings(&mut runtime, &governance);
+        assert!(result.is_err(), "empty policy id must cause an Err");
+        assert!(
+            result.unwrap_err().contains("failed to load policy"),
+            "error message must identify the failed operation"
+        );
+    }
+
+    #[test]
+    fn apply_governance_settings_accepts_well_formed_entries() {
+        use dbflux_core::{
+            GovernanceSettings, PolicyRoleConfig, ToolPolicyConfig, TrustedClientConfig,
+        };
+
+        let mut runtime = runtime_for_governance_tests("governance-well-formed.sqlite");
+
+        let governance = GovernanceSettings {
+            mcp_enabled_by_default: true,
+            trusted_clients: vec![TrustedClientConfig {
+                id: "claude".to_string(),
+                name: "Claude".to_string(),
+                issuer: None,
+                active: true,
+            }],
+            roles: vec![PolicyRoleConfig {
+                id: "custom/analyst".to_string(),
+                policy_ids: vec!["read-only".to_string()],
+            }],
+            policies: vec![ToolPolicyConfig {
+                id: "read-only".to_string(),
+                allowed_tools: vec!["select_data".to_string()],
+                allowed_classes: vec![],
+            }],
+        };
+
+        let result = apply_governance_settings(&mut runtime, &governance);
+        assert!(
+            result.is_ok(),
+            "well-formed governance settings must succeed"
+        );
+
+        let clients = runtime
+            .list_trusted_clients()
+            .expect("list trusted clients");
+        assert!(clients.iter().any(|c| c.id == "claude"));
+
+        let roles = runtime.list_roles().expect("list roles");
+        assert!(roles.iter().any(|r| r.id == "custom/analyst"));
+
+        let policies = runtime.list_policies().expect("list policies");
+        assert!(policies.iter().any(|p| p.id == "read-only"));
     }
 }
