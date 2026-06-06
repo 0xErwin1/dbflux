@@ -1,0 +1,160 @@
+name: Nightly
+
+on:
+  schedule:
+    # 03:17 UTC daily — low-traffic window, avoids the top-of-hour runner rush.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-repo:
+    name: Guard — canonical repo only
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.guard.outputs.proceed }}
+
+    steps:
+      - name: Check repository
+        id: guard
+        run: |
+          if [ "${{ github.repository }}" = "0xErwin1/dbflux" ]; then
+            echo "proceed=true" >> $GITHUB_OUTPUT
+          else
+            echo "proceed=false" >> $GITHUB_OUTPUT
+            echo "Skipping nightly: not the canonical repository."
+          fi
+
+  compute-version:
+    name: Compute nightly version
+    needs: check-repo
+    if: needs.check-repo.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.nightly.outputs.version }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compute version string
+        id: nightly
+        run: |
+          # Read the workspace version (e.g. "0.7.0-rc.0" or "0.7.0-dev.3").
+          # Strip any pre-existing pre-release suffix to get the base semver.
+          BASE=$(grep '^version' Cargo.toml | head -1 | sed 's/.*= *"\(.*\)"/\1/' | sed 's/-[^+]*//')
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          # Produce a semver-compatible nightly identifier. The `+` separator
+          # makes the build metadata portion; it does not affect semver ordering.
+          NIGHTLY_VERSION="${BASE}-nightly+${SHORT_SHA}"
+          echo "version=${NIGHTLY_VERSION}" >> $GITHUB_OUTPUT
+          echo "Nightly version: ${NIGHTLY_VERSION}"
+
+  build:
+    name: Build
+    needs: compute-version
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ needs.compute-version.outputs.version }}
+      channel: nightly
+      prerelease: true
+    secrets: inherit
+
+  release:
+    name: Publish rolling nightly release
+    needs: [compute-version, build]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: "*"
+          merge-multiple: false
+
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+
+      - name: Generate changelog for nightly body
+        run: |
+          # Unreleased range: commits since the last STABLE tag.
+          # cliff.toml already skips -rc.N and -nightly tags via skip_tags.
+          git-cliff --config cliff.toml --unreleased \
+            --strip header \
+            -o cliff_notes.md 2>/dev/null || true
+
+          if [ ! -s cliff_notes.md ]; then
+            echo "No conventional-commit entries since last stable release." > cliff_notes.md
+          fi
+
+      - name: Compose nightly release body
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          DATE=$(date -u '+%Y-%m-%d')
+          REPO="${{ github.repository }}"
+
+          cat > release_body.md <<EOF
+          > **Nightly build** — built automatically from \`main\` HEAD every day at 03:17 UTC.
+          > Not recommended for production use. Artifacts are replaced on each run.
+          >
+          > Commit: \`${SHORT_SHA}\` — ${DATE}
+          > Per-channel app icons are tracked in [#183](https://github.com/${REPO}/issues/183).
+
+          EOF
+
+          if [ -s cliff_notes.md ]; then
+            echo "## Changes since last stable release" >> release_body.md
+            echo "" >> release_body.md
+            cat cliff_notes.md >> release_body.md
+          fi
+
+      - name: Move or create the rolling nightly tag
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git tag -f nightly HEAD
+          git push origin nightly --force
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish rolling nightly release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: DBFlux Nightly
+          body_path: release_body.md
+          prerelease: true
+          files: |
+            artifacts/linux-*/*.tar.gz
+            artifacts/linux-*/*.tar.gz.sha256
+            artifacts/linux-*/*.tar.gz.asc
+            artifacts/linux-*/*.AppImage
+            artifacts/linux-*/*.AppImage.sha256
+            artifacts/linux-*/*.AppImage.asc
+            artifacts/linux-*/*.deb
+            artifacts/linux-*/*.deb.sha256
+            artifacts/linux-*/*.deb.asc
+            artifacts/linux-*/*.rpm
+            artifacts/linux-*/*.rpm.sha256
+            artifacts/linux-*/*.rpm.asc
+            artifacts/macos-*/*.dmg
+            artifacts/macos-*/*.dmg.sha256
+            artifacts/macos-*/*.dmg.asc
+            artifacts/windows-*/*.zip
+            artifacts/windows-*/*.zip.sha256
+            artifacts/windows-*/*.zip.asc
+            artifacts/windows-*/*-setup.exe
+            artifacts/windows-*/*-setup.exe.sha256
+            artifacts/windows-*/*-setup.exe.asc
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
