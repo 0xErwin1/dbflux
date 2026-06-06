@@ -113,8 +113,8 @@ impl AppStateEntity {
     /// Repositories are read from the `AppState`'s internally constructed storage
     /// runtime. This path is used in production where the default DB location is
     /// used (`~/.local/share/dbflux/dbflux.db`).
-    pub fn new() -> Self {
-        let inner = AppState::new();
+    pub fn new() -> Result<Self, dbflux_storage::error::StorageError> {
+        let inner = AppState::new()?;
 
         let saved_charts = SavedChartManager::new(Arc::clone(&inner.saved_charts_repo));
         let dashboards = DashboardManager::new(
@@ -123,7 +123,7 @@ impl AppStateEntity {
         );
         let saved_queries = SavedQueryManager::new(Arc::clone(&inner.saved_query_repo));
 
-        Self {
+        Ok(Self {
             inner,
             settings_window: None,
             saved_charts,
@@ -132,7 +132,7 @@ impl AppStateEntity {
             pending_edit_reconnect_prompt: None,
             pending_reconnect_request: None,
             unread_error_count: 0,
-        }
+        })
     }
 
     /// Creates a new `AppStateEntity` with a caller-provided storage runtime.
@@ -140,8 +140,10 @@ impl AppStateEntity {
     /// The provided `StorageRuntime` is passed to `AppState`, which runs
     /// migrations and opens the viz connection. Managers are then constructed
     /// from the resulting repository `Arc`s.
-    pub fn new_with_storage_runtime(storage_runtime: StorageRuntime) -> Self {
-        let inner = AppState::new_with_storage_runtime(storage_runtime);
+    pub fn new_with_storage_runtime(
+        storage_runtime: StorageRuntime,
+    ) -> Result<Self, dbflux_storage::error::StorageError> {
+        let inner = AppState::new_with_storage_runtime(storage_runtime)?;
 
         let saved_charts = SavedChartManager::new(Arc::clone(&inner.saved_charts_repo));
         let dashboards = DashboardManager::new(
@@ -150,7 +152,7 @@ impl AppStateEntity {
         );
         let saved_queries = SavedQueryManager::new(Arc::clone(&inner.saved_query_repo));
 
-        Self {
+        Ok(Self {
             inner,
             settings_window: None,
             saved_charts,
@@ -159,7 +161,7 @@ impl AppStateEntity {
             pending_edit_reconnect_prompt: None,
             pending_reconnect_request: None,
             unread_error_count: 0,
-        }
+        })
     }
 
     /// Increments the unread-error counter and notifies subscribers.
@@ -202,12 +204,6 @@ impl AppStateEntity {
         self.unread_error_count = 0;
         cx.emit(AppStateChanged);
         cx.notify();
-    }
-}
-
-impl Default for AppStateEntity {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

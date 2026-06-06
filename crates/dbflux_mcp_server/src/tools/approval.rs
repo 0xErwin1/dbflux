@@ -99,7 +99,9 @@ impl DbFluxServer {
 
                     let pending = {
                         let mut runtime = state.runtime.write().await;
-                        runtime.request_execution_mut(plan)
+                        runtime
+                            .request_execution_mut(plan)
+                            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
                     };
 
                     let response = serde_json::json!({
@@ -133,7 +135,9 @@ impl DbFluxServer {
                     let pending_list = {
                         let runtime = state.runtime.read().await;
                         let approval_service = runtime.approval_service();
-                        approval_service.list_pending()
+                        approval_service
+                            .list_pending()
+                            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
                     };
 
                     // Filter by actor_id if provided
@@ -181,6 +185,7 @@ impl DbFluxServer {
                         let approval_service = runtime.approval_service();
                         approval_service
                             .list_pending()
+                            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
                             .into_iter()
                             .find(|p| p.id == pending_id)
                     };
@@ -222,6 +227,7 @@ impl DbFluxServer {
                         runtime
                             .approval_service()
                             .list_pending()
+                            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
                             .into_iter()
                             .find(|pending| pending.id == pending_id)
                             .map(|pending| pending.plan)

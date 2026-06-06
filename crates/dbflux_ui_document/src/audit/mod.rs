@@ -26,7 +26,7 @@ use dbflux_core::{
     CollectionRef, EventQuery, EventRecord, EventStreamTarget, Pagination, RefreshPolicy,
     observability::{EventCategory, EventOutcome, EventSeverity},
 };
-use dbflux_storage::repositories::audit::{AuditEventDto, AuditQueryFilter};
+use dbflux_storage::repositories::audit::{AuditEventDto, AuditQueryFilter, AuditRepository};
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::toast::{PendingToast, flush_pending_toast};
 use gpui::prelude::*;
@@ -199,14 +199,17 @@ pub struct AuditDocument {
 }
 
 impl AuditDocument {
-    /// Creates a new audit document.
+    /// Creates a new audit document backed by the given audit repository.
+    ///
+    /// The caller is responsible for opening the `AuditRepository` (via
+    /// `StorageRuntime::audit()`) and routing any storage error through
+    /// `report_error` before calling this constructor.
     pub fn new(
+        audit_repo: AuditRepository,
         app_state: Entity<AppStateEntity>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let audit_repo = app_state.read(cx).storage_runtime().audit();
-
         Self::new_with_source(
             app_state,
             AuditDocumentSource::Internal {
@@ -599,25 +602,6 @@ impl AuditDocument {
             panel_origin: Point::default(),
             has_focus: false,
         }
-    }
-
-    /// Creates a new audit document with a category pre-filter applied.
-    ///
-    /// This is the entry point for opening the audit viewer focused on a specific
-    /// category (e.g., MCP events from the governance panel). The dropdown is synced
-    /// to reflect the pre-selected category.
-    pub fn new_with_category(
-        category: EventCategory,
-        app_state: Entity<AppStateEntity>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let mut doc = Self::new(app_state, window, cx);
-
-        doc.set_category_filter(Some(category), cx);
-        doc.pending_initial_load = false;
-
-        doc
     }
 
     pub fn matches_event_stream(&self, profile_id: Uuid, target: &EventStreamTarget) -> bool {
@@ -1511,14 +1495,17 @@ impl AuditDocument {
 
     /// Creates a new audit document pre-filtered by correlation id.
     ///
-    /// Mirrors the `new_with_category` constructor pattern.
+    /// The caller is responsible for opening the `AuditRepository` (via
+    /// `StorageRuntime::audit()`) and routing any storage error through
+    /// `report_error` before calling this constructor.
     pub fn new_with_correlation_id(
         correlation_id: uuid::Uuid,
+        audit_repo: AuditRepository,
         app_state: Entity<AppStateEntity>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut doc = Self::new(app_state, window, cx);
+        let mut doc = Self::new(audit_repo, app_state, window, cx);
         doc.filter_by_correlation(correlation_id.to_string(), cx);
         doc.pending_initial_load = false;
         doc

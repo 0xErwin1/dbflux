@@ -786,7 +786,10 @@ mod tests {
 
         ServerState {
             client_id: "test-client".to_string(),
-            runtime: Arc::new(RwLock::new(McpRuntime::new(audit_service))),
+            runtime: Arc::new(RwLock::new(McpRuntime::new(
+                audit_service,
+                Box::new(dbflux_approval::InMemoryPendingExecutionStore::default()),
+            ))),
             profile_manager: Arc::new(RwLock::new(profile_manager)),
             auth_profile_manager: Arc::new(RwLock::new(dbflux_core::AuthProfileManager::default())),
             driver_registry: Arc::new(HashMap::from([(driver_id.to_string(), driver)])),

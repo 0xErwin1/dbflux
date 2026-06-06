@@ -237,11 +237,13 @@ impl StorageRuntime {
     }
 
     /// Creates an audit repository.
-    pub fn audit(&self) -> AuditRepository {
+    ///
+    /// Returns `Err` if a new database connection cannot be opened. This can
+    /// happen when the database path is inaccessible (e.g. removed after startup).
+    pub fn audit(&self) -> Result<AuditRepository, StorageError> {
         use std::sync::Mutex;
-        // Wrap the connection in a Mutex for thread-safe access
-        let conn = self.open_dbflux_db().expect("should open dbflux db");
-        AuditRepository::new(Arc::new(Mutex::new(conn)))
+        let conn = self.open_dbflux_db()?;
+        Ok(AuditRepository::new(Arc::new(Mutex::new(conn))))
     }
 
     /// Creates an audit settings repository.
@@ -250,11 +252,12 @@ impl StorageRuntime {
     }
 
     /// Creates a saved filters repository.
-    pub fn saved_filters(&self) -> SavedFiltersRepository {
+    ///
+    /// Returns `Err` if a new database connection cannot be opened.
+    pub fn saved_filters(&self) -> Result<SavedFiltersRepository, StorageError> {
         use std::sync::Mutex;
-        // Wrap the connection in a Mutex for thread-safe access
-        let conn = self.open_dbflux_db().expect("should open dbflux db");
-        SavedFiltersRepository::new(Arc::new(Mutex::new(conn)))
+        let conn = self.open_dbflux_db()?;
+        Ok(SavedFiltersRepository::new(Arc::new(Mutex::new(conn))))
     }
 
     /// Creates a shared `Arc<Mutex<Connection>>` for the viz repositories.
@@ -262,24 +265,52 @@ impl StorageRuntime {
     /// All five viz repos that share this connection will serialize access
     /// via the same mutex. Callers should create this once and clone the `Arc`
     /// for each repository that needs it.
-    pub fn viz_connection(&self) -> Arc<std::sync::Mutex<rusqlite::Connection>> {
-        let conn = self.open_dbflux_db().expect("should open dbflux db");
-        Arc::new(std::sync::Mutex::new(conn))
+    ///
+    /// Returns `Err` if a new database connection cannot be opened.
+    pub fn viz_connection(
+        &self,
+    ) -> Result<Arc<std::sync::Mutex<rusqlite::Connection>>, StorageError> {
+        let conn = self.open_dbflux_db()?;
+        Ok(Arc::new(std::sync::Mutex::new(conn)))
     }
 
     /// Creates a `SavedChartsRepository` backed by the unified database.
-    pub fn saved_charts(&self) -> SavedChartsRepository {
-        SavedChartsRepository::new(self.viz_connection())
+    ///
+    /// Returns `Err` if a new database connection cannot be opened.
+    pub fn saved_charts(&self) -> Result<SavedChartsRepository, StorageError> {
+        Ok(SavedChartsRepository::new(self.viz_connection()?))
     }
 
     /// Creates a `DashboardsRepository` backed by the unified database.
-    pub fn dashboards_repo(&self) -> DashboardsRepository {
-        DashboardsRepository::new(self.viz_connection())
+    ///
+    /// Returns `Err` if a new database connection cannot be opened.
+    pub fn dashboards_repo(&self) -> Result<DashboardsRepository, StorageError> {
+        Ok(DashboardsRepository::new(self.viz_connection()?))
     }
 
     /// Creates a `DashboardPanelsRepository` backed by the unified database.
-    pub fn dashboard_panels_repo(&self) -> DashboardPanelsRepository {
-        DashboardPanelsRepository::new(self.viz_connection())
+    ///
+    /// Returns `Err` if a new database connection cannot be opened.
+    pub fn dashboard_panels_repo(&self) -> Result<DashboardPanelsRepository, StorageError> {
+        Ok(DashboardPanelsRepository::new(self.viz_connection()?))
+    }
+
+    /// Creates a `SqlitePendingExecutionStore` backed by the unified database.
+    ///
+    /// Returns `Err` if a new database connection cannot be opened. Callers
+    /// should propagate the error rather than unwrapping, since a failure here
+    /// means the approvals subsystem is unavailable at startup.
+    pub fn pending_executions(
+        &self,
+    ) -> Result<crate::pending_executions::SqlitePendingExecutionStore, StorageError> {
+        let conn = self.open_dbflux_db()?;
+        let conn = Arc::new(std::sync::Mutex::new(conn));
+        crate::pending_executions::SqlitePendingExecutionStore::new(conn).map_err(|e| {
+            StorageError::Migration {
+                kind: "pending_executions".to_string(),
+                details: e.to_string(),
+            }
+        })
     }
 
     /// Returns the artifact store for scratch/shadow path management.

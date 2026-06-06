@@ -28,6 +28,7 @@ dbflux_driver_cloudwatch = { workspace = true, optional = true }
 dbflux_driver_influxdb = { workspace = true, optional = true }
 dbflux_driver_mssql = { workspace = true, optional = true }
 dbflux_lua = { workspace = true, optional = true }
+dbflux_approval = { workspace = true, optional = true }
 dbflux_mcp = { workspace = true, optional = true }
 dbflux_mcp_server = { workspace = true, optional = true }
 dbflux_policy = { workspace = true, optional = true }
@@ -58,4 +59,4 @@ influxdb = ["dep:dbflux_driver_influxdb"]
 mssql = ["dep:dbflux_driver_mssql"]
 lua = ["dbflux_lua"]
 aws = ["dbflux_aws", "dbflux_ssm", "dbflux_mcp_server?/aws"]
-mcp = ["dbflux_mcp", "dbflux_mcp_server", "dbflux_policy", "dbflux_core/mcp"]
+mcp = ["dbflux_approval", "dbflux_mcp", "dbflux_mcp_server", "dbflux_policy", "dbflux_core/mcp"]
