@@ -13,12 +13,6 @@ All notable changes to DBFlux will be documented in this file.
   replaced by its fingerprint before it reaches disk. Tools that build no SQL
   string (`insert_record`, `select_data`, `count_records`) keep auditing only
   their result count. (Security audit MCP-2.)
-* **Persistent MCP approvals (#173)** — Pending MCP execution approvals are
-  now stored in SQLite (migration `018_app_pending_executions`) through a new
-  `PendingExecutionStore` trait with a `SqlitePendingExecutionStore`
-  implementation, so approvals survive an application restart. Rows past their
-  `expires_at` are filtered out at list time. The standalone MCP server keeps
-  the in-memory store (it has no `StorageRuntime`).
 
 ### Changed
 
@@ -31,27 +25,6 @@ All notable changes to DBFlux will be documented in this file.
   entirely when one operation fails, instead of leaving earlier operations
   committed. Drivers without transactional DDL return a `non_atomic_alter`
   flag so the caller knows the batch was not atomic. (Security audit MCP-5.)
-* **Oversized audit details are truncated, not dropped (#173)** — An audit
-  event whose `details_json` exceeds the 64 KiB cap is now truncated at a valid
-  UTF-8 boundary and wrapped in a `{"__truncated":true,"partial":…}` envelope
-  instead of failing the whole event.
-* **Audit schema has a single source of truth (#173)** — `SqliteAuditStore`
-  and migrations 001/002 now share one `aud_audit_events` DDL helper, removing
-  the parallel column list that could drift between the embedded and standalone
-  paths.
-
-### Fixed
-
-* **No crash when storage I/O fails (#173)** — `StorageRuntime` accessors and
-  the `AppState` / `AppStateEntity` constructors now return `Result` instead of
-  panicking; a failure to open the database surfaces a user-facing error (or a
-  clean startup exit) rather than crashing the app.
-* **Corrupt migration rows surface an error (#173)** — `get_applied_migrations`
-  now propagates per-row decode errors instead of silently re-applying a
-  migration.
-* **Defensive table-name validation (#173)** — `column_exists` rejects table
-  names outside `[A-Za-z0-9_]+` before interpolating into a `pragma_table_info`
-  query.
 
 ### Security
 
@@ -63,20 +36,6 @@ All notable changes to DBFlux will be documented in this file.
   guarantee) is now documented in `CLAUDE.md` and the `dbflux mcp` help text,
   and the dead `preview_ddl` dry-run path was removed. (Security audit MCP-3,
   MCP-4, MCP-6.)
-* **Auth profile secrets moved to the OS keyring** — Secret-kind auth
-  profile fields (`Password` / `WriteOnly`, such as credentials for
-  external RPC auth providers) are now held in memory as `SecretString`,
-  persisted to the OS keyring, and stored in SQLite only as a keyring
-  reference, never in plaintext. The derived `Debug` and serialization no
-  longer expose secret values. Profiles saved before this change are
-  migrated out of plaintext SQLite into the keyring on first launch.
-  Keyring availability detection now tells a locked keyring apart from an
-  absent one, and a secret write that cannot reach the keyring surfaces a
-  warning (and a toast in the auth profile editor) instead of silently
-  dropping the secret. The AWS file-backed write path carries credentials
-  as `SecretString` up to the point they are written to
-  `~/.aws/credentials`. (Security audit AUTH-1, AUTH-2, AUTH-3, AUTH-4,
-  AUTH-5.)
 
 ## [0.6.0] - 2026-06-04
 
