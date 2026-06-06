@@ -75,9 +75,28 @@ Scope is the affected area: a driver name (`postgres`, `mongodb`), `ui`, `mcp`, 
 5. Keep diffs reviewable. PRs over ~400 changed lines should be split into stacked/chained PRs unless the maintainer approves a `size:exception`.
 6. CI must pass (`tests.yml`, `style.yml`). Re-run locally before pushing if anything fails.
 
-### Updating the CHANGELOG
+### Commit messages are load-bearing
 
-Any user-visible change must add an entry to the `## [Unreleased]` block in [`CHANGELOG.md`](CHANGELOG.md). Use the existing categories (`Added`, `Changed`, `Fixed`, `Removed`, etc.). Internal-only changes (refactors with no behavior change, CI plumbing, tests) do not need a changelog entry.
+DBFlux uses [git-cliff](https://git-cliff.org) to generate the changelog and release notes directly from git history. **Do not hand-edit `CHANGELOG.md` or `[Unreleased]`.** Your commit message is what surfaces to users.
+
+Rules for what appears in the changelog:
+
+| Type | Surfaces in changelog? |
+|------|------------------------|
+| `feat` | Yes — under **Added** |
+| `fix` | Yes — under **Fixed** |
+| `perf` | Yes — under **Changed** |
+| `refactor`, `test`, `ci`, `chore`, `docs`, `style`, `build` | No — internal only |
+| Any type with `(security)` scope or `Security:` footer | Yes — under **Security** |
+
+Breaking changes (`feat!:`, `fix!:`, or a `BREAKING CHANGE:` footer) always surface regardless of type.
+
+**What this means in practice:**
+
+- User-visible changes **must** use `feat`, `fix`, or `perf` as the type. A `chore` or `refactor` commit is invisible to users in the changelog.
+- Write a clear, imperative subject line — it becomes the changelog bullet verbatim.
+- If a single PR contains both internal and user-visible changes, split them into separate commits with the appropriate types.
+- Security fixes: use `fix(security): ...` or add a `Security: ...` trailer so the change lands under the Security section.
 
 ## Issues
 
