@@ -88,4 +88,10 @@ fn print_mcp_help() {
     eprintln!();
     eprintln!("Example:");
     eprintln!("  dbflux mcp --client-id claude-desktop");
+    eprintln!();
+    eprintln!("Security notice:");
+    eprintln!("  Authentication is process-identity only. --client-id is a shared identifier,");
+    eprintln!("  not a cryptographic credential. Any local process that knows the client ID");
+    eprintln!("  can connect. Do not expose this server beyond localhost without an additional");
+    eprintln!("  authentication layer (P3 roadmap item).");
 }

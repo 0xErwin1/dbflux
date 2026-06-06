@@ -94,12 +94,14 @@ impl DbFluxServer {
         let returning = params.returning.clone();
 
         self.governance
-            .authorize_and_execute(
+            .authorize_and_execute_audited(
                 "delete_records",
                 Some(&params.connection_id),
                 ExecutionClassification::Destructive,
                 move || async move {
-                    let result = Self::delete_records_impl(
+                    use crate::governance::AuditDetails;
+
+                    let (result, sql_text) = Self::delete_records_impl(
                         state,
                         &connection_id,
                         &table,
@@ -109,9 +111,12 @@ impl DbFluxServer {
                     .await
                     .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok((
+                        CallToolResult::success(vec![Content::text(
+                            serde_json::to_string_pretty(&result).unwrap(),
+                        )]),
+                        AuditDetails { query: sql_text },
+                    ))
                 },
             )
             .await
@@ -133,18 +138,23 @@ impl DbFluxServer {
         let table = params.table.clone();
 
         self.governance
-            .authorize_and_execute(
+            .authorize_and_execute_audited(
                 "truncate_table",
                 Some(&params.connection_id),
                 ExecutionClassification::Destructive,
                 move || async move {
-                    let result = Self::truncate_table_impl(state, &connection_id, &table)
+                    use crate::governance::AuditDetails;
+
+                    let (result, sql) = Self::truncate_table_impl(state, &connection_id, &table)
                         .await
                         .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok((
+                        CallToolResult::success(vec![Content::text(
+                            serde_json::to_string_pretty(&result).unwrap(),
+                        )]),
+                        AuditDetails { query: Some(sql) },
+                    ))
                 },
             )
             .await
@@ -168,19 +178,24 @@ impl DbFluxServer {
         let if_exists = params.if_exists.unwrap_or(true);
 
         self.governance
-            .authorize_and_execute(
+            .authorize_and_execute_audited(
                 "drop_table",
                 Some(&params.connection_id),
                 ExecutionClassification::AdminDestructive,
                 move || async move {
-                    let result =
+                    use crate::governance::AuditDetails;
+
+                    let (result, sql) =
                         Self::drop_table_impl(state, &connection_id, &table, cascade, if_exists)
                             .await
                             .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok((
+                        CallToolResult::success(vec![Content::text(
+                            serde_json::to_string_pretty(&result).unwrap(),
+                        )]),
+                        AuditDetails { query: Some(sql) },
+                    ))
                 },
             )
             .await
@@ -203,19 +218,24 @@ impl DbFluxServer {
         let if_exists = params.if_exists.unwrap_or(true);
 
         self.governance
-            .authorize_and_execute(
+            .authorize_and_execute_audited(
                 "drop_database",
                 Some(&params.connection_id),
                 ExecutionClassification::AdminDestructive,
                 move || async move {
-                    let result =
+                    use crate::governance::AuditDetails;
+
+                    let (result, sql) =
                         Self::drop_database_impl(state, &connection_id, &database, if_exists)
                             .await
                             .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok((
+                        CallToolResult::success(vec![Content::text(
+                            serde_json::to_string_pretty(&result).unwrap(),
+                        )]),
+                        AuditDetails { query: Some(sql) },
+                    ))
                 },
             )
             .await
@@ -227,7 +247,7 @@ impl DbFluxServer {
         table: &str,
         filter: &serde_json::Value,
         returning: Option<&[String]>,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<(serde_json::Value, Option<String>), String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
 
         if connection.metadata().category == DatabaseCategory::Document {
@@ -240,23 +260,33 @@ impl DbFluxServer {
             })
             .await?;
 
-            return Ok(serde_json::json!({
-                "deleted": result.affected_rows,
-            }));
+            return Ok((serde_json::json!({ "deleted": result.affected_rows }), None));
         }
 
         let mutation = Self::build_relational_delete_mutation(table, filter, returning)?;
-        let result = Self::execute_connection_blocking(connection.clone(), move |connection| {
-            connection
-                .execute_semantic_request(&SemanticRequest::Mutation(mutation))
-                .map_err(|e| format!("Delete error: {}", e))
+        let semantic_request = SemanticRequest::Mutation(mutation);
+
+        let result = Self::execute_connection_blocking(connection.clone(), move |c| {
+            let plan = c
+                .plan_semantic_request(&semantic_request)
+                .map_err(|e| format!("Delete planning error: {}", e))?;
+            let sql_text = plan.primary_query().map(|q| q.text.clone());
+            let planned_query = plan
+                .primary_query()
+                .cloned()
+                .ok_or_else(|| "driver returned no executable query".to_string())?;
+            let request = planned_query.into_query_request();
+            let result = c
+                .execute(&request)
+                .map_err(|e| format!("Delete error: {}", e))?;
+            Ok((result, sql_text))
         })
         .await?;
 
-        Ok(serialize_mutation_result(
-            &result,
-            "deleted",
-            returning.is_some(),
+        let (query_result, sql_text) = result;
+        Ok((
+            serialize_mutation_result(&query_result, "deleted", returning.is_some()),
+            sql_text,
         ))
     }
 
@@ -285,11 +315,11 @@ impl DbFluxServer {
         state: ServerState,
         connection_id: &str,
         table: &str,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<(serde_json::Value, String), String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
 
-        // Build SQL using driver abstraction
         let sql = connection.build_truncate_sql(table);
+        let sql_for_audit = sql.clone();
 
         let request = QueryRequest::new(&sql);
         Self::execute_connection_blocking(connection.clone(), move |connection| {
@@ -300,10 +330,13 @@ impl DbFluxServer {
         })
         .await?;
 
-        Ok(serde_json::json!({
-            "truncated": true,
-            "table": table,
-        }))
+        Ok((
+            serde_json::json!({
+                "truncated": true,
+                "table": table,
+            }),
+            sql_for_audit,
+        ))
     }
 
     async fn drop_table_impl(
@@ -312,7 +345,7 @@ impl DbFluxServer {
         table: &str,
         cascade: bool,
         if_exists: bool,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<(serde_json::Value, String), String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
         let dialect = connection.dialect();
 
@@ -326,6 +359,7 @@ impl DbFluxServer {
             "DROP TABLE {}{}{}",
             if_exists_clause, table_quoted, cascade_clause
         );
+        let sql_for_audit = sql.clone();
 
         let request = QueryRequest::new(&sql);
         Self::execute_connection_blocking(connection.clone(), move |connection| {
@@ -336,10 +370,13 @@ impl DbFluxServer {
         })
         .await?;
 
-        Ok(serde_json::json!({
-            "dropped": true,
-            "table": table,
-        }))
+        Ok((
+            serde_json::json!({
+                "dropped": true,
+                "table": table,
+            }),
+            sql_for_audit,
+        ))
     }
 
     async fn drop_database_impl(
@@ -347,7 +384,7 @@ impl DbFluxServer {
         connection_id: &str,
         database: &str,
         if_exists: bool,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<(serde_json::Value, String), String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
         let dialect = connection.dialect();
 
@@ -355,6 +392,7 @@ impl DbFluxServer {
         let db_quoted = dialect.quote_identifier(database);
 
         let sql = format!("DROP DATABASE {}{}", if_exists_clause, db_quoted);
+        let sql_for_audit = sql.clone();
 
         let request = QueryRequest::new(&sql);
         Self::execute_connection_blocking(connection.clone(), move |connection| {
@@ -365,10 +403,13 @@ impl DbFluxServer {
         })
         .await?;
 
-        Ok(serde_json::json!({
-            "dropped": true,
-            "database": database,
-        }))
+        Ok((
+            serde_json::json!({
+                "dropped": true,
+                "database": database,
+            }),
+            sql_for_audit,
+        ))
     }
 }
 
