@@ -10,27 +10,58 @@ permissions:
   contents: write
 
 jobs:
-  check-repo:
-    name: Guard — canonical repo only
+  guard:
+    name: Guard — canonical repo and new commits
     runs-on: ubuntu-latest
     outputs:
       proceed: ${{ steps.guard.outputs.proceed }}
 
     steps:
-      - name: Check repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Decide whether to build
         id: guard
         run: |
-          if [ "${{ github.repository }}" = "0xErwin1/dbflux" ]; then
-            echo "proceed=true" >> $GITHUB_OUTPUT
-          else
-            echo "proceed=false" >> $GITHUB_OUTPUT
+          # Only the canonical repo runs the schedule.
+          if [ "${{ github.repository }}" != "0xErwin1/dbflux" ]; then
             echo "Skipping nightly: not the canonical repository."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # A manual run always builds, even with no new commits.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual dispatch — building regardless of new commits."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The nightly tag points at a pin commit whose first parent is the
+          # main HEAD the last nightly was built from. Skip when main has not
+          # advanced since then.
+          CURRENT="$(git rev-parse HEAD)"
+          if ! LAST="$(git rev-parse nightly^ 2>/dev/null)"; then
+            echo "No previous nightly tag — building."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$LAST" = "$CURRENT" ]; then
+            echo "No new commits on main since last nightly ($LAST) — skipping."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "main advanced $LAST -> $CURRENT — building."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
           fi
 
   compute-version:
     name: Compute nightly version
-    needs: check-repo
-    if: needs.check-repo.outputs.proceed == 'true'
+    needs: guard
+    if: needs.guard.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.nightly.outputs.version }}

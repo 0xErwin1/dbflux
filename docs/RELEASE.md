@@ -163,6 +163,8 @@ The AUR `PKGBUILD` lives in an **external AUR repository**, not in this repo. It
 
 The nightly tag is force-pushed and the release is replaced on every run. Only the canonical repository (`0xErwin1/dbflux`) runs the schedule.
 
+**Skip when `main` has not advanced.** A scheduled run first compares the current `main` HEAD against the commit the last nightly was built from (`git rev-parse nightly^`, the pin commit's first parent). If they match, the run skips entirely: no rebuild, no tag move, no release churn. This avoids republishing an identical build under a fresh, non-reproducible hash that would needlessly break Nix pins. A manual `workflow_dispatch` run always builds, even with no new commits.
+
 ### Nix nightly package
 
 The workflow pins `nix/nightly-info.nix` at the `nightly` ref on every run. Downstream users get the prebuilt nightly binary without compiling from source:
