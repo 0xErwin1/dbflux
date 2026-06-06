@@ -36,10 +36,15 @@
   libssh2,
   dbus,
   stdenv_cc_libs ? stdenv.cc.cc.lib,
+  # Which release-info file to read. Defaults to the stable channel pointer so
+  # that callers that pass no argument (i.e. dbflux-bin) are byte-for-byte
+  # equivalent to the previous behaviour. Pass ./nightly-info.nix to get the
+  # rolling nightly package instead.
+  infoFile ? ./release-info.nix,
 }:
 
 let
-  releaseInfo = import ./release-info.nix;
+  releaseInfo = import infoFile;
   system = stdenv.hostPlatform.system;
   artifact = releaseInfo.artifacts.${system} or (throw
     "dbflux: no prebuilt binary published for system '${system}'. "
