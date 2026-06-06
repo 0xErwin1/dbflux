@@ -133,10 +133,6 @@ Deferred tools (explicitly rejected at request time in v1):
 - `estimate_query_cost`
 - `get_execution_status`
 
-Not exposed in this branch:
-
-- `preview_ddl` — DBFlux intentionally does not expose schema preview until it has a safe, non-mutating implementation across drivers
-
 ## 5. Execution Classes
 
 Policies gate tools at two levels: the tool ID itself and the execution classification. A request is allowed only when both match the policy's allowlist.

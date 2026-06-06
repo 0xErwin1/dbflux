@@ -34,31 +34,37 @@ fn build_runtime_with_role(connection_id: &str, role_id: &str) -> McpRuntime {
     );
 
     for role in builtin_roles() {
-        let _ = runtime.upsert_role_mut(role);
+        runtime.upsert_role_mut(role).expect("built-in role setup");
     }
 
     for policy in builtin_policies() {
-        let _ = runtime.upsert_policy_mut(policy);
+        runtime
+            .upsert_policy_mut(policy)
+            .expect("built-in policy setup");
     }
 
-    let _ = runtime.upsert_trusted_client_mut(TrustedClientDto {
-        id: "test-client".to_string(),
-        name: "Test Client".to_string(),
-        issuer: None,
-        active: true,
-    });
+    runtime
+        .upsert_trusted_client_mut(TrustedClientDto {
+            id: "test-client".to_string(),
+            name: "Test Client".to_string(),
+            issuer: None,
+            active: true,
+        })
+        .expect("trusted client setup");
 
-    let _ = runtime.save_connection_policy_assignment_mut(ConnectionPolicyAssignmentDto {
-        connection_id: connection_id.to_string(),
-        assignments: vec![ConnectionPolicyAssignment {
-            actor_id: "test-client".to_string(),
-            scope: PolicyBindingScope {
-                connection_id: connection_id.to_string(),
-            },
-            role_ids: vec![role_id.to_string()],
-            policy_ids: vec![],
-        }],
-    });
+    runtime
+        .save_connection_policy_assignment_mut(ConnectionPolicyAssignmentDto {
+            connection_id: connection_id.to_string(),
+            assignments: vec![ConnectionPolicyAssignment {
+                actor_id: "test-client".to_string(),
+                scope: PolicyBindingScope {
+                    connection_id: connection_id.to_string(),
+                },
+                role_ids: vec![role_id.to_string()],
+                policy_ids: vec![],
+            }],
+        })
+        .expect("connection policy assignment setup");
 
     runtime.drain_events();
     runtime
@@ -603,7 +609,7 @@ async fn mcp_execution_writes_correlated_audit_events() {
 }
 
 // ---------------------------------------------------------------------------
-// WU-B: Audit query fingerprint tests
+// Audit query fingerprint tests
 // ---------------------------------------------------------------------------
 
 async fn query_latest_execute_event_details(

@@ -2237,15 +2237,21 @@ mod classification_tests {
 
 #[cfg(test)]
 mod alter_table_integration_tests {
+    #[cfg(feature = "sqlite")]
     use super::*;
+    #[cfg(feature = "sqlite")]
     use crate::connection_cache::ConnectionCache;
-    use crate::governance::GovernanceMiddleware;
+    #[cfg(feature = "sqlite")]
     use crate::state::ServerState;
+    #[cfg(feature = "sqlite")]
     use dbflux_core::{DbConfig, NoopSecretStore, SecretManager};
+    #[cfg(feature = "sqlite")]
     use dbflux_mcp::{McpRuntime, TrustedClientDto, builtin_policies, builtin_roles};
+    #[cfg(feature = "sqlite")]
     use dbflux_policy::{ConnectionPolicyAssignment, PolicyBindingScope};
-    use rmcp::model::CallToolResult;
+    #[cfg(feature = "sqlite")]
     use std::sync::Arc;
+    #[cfg(feature = "sqlite")]
     use tokio::sync::RwLock;
 
     #[cfg(feature = "sqlite")]
@@ -2266,19 +2272,23 @@ mod alter_table_integration_tests {
         );
 
         for role in builtin_roles() {
-            let _ = runtime.upsert_role_mut(role);
+            runtime.upsert_role_mut(role).expect("built-in role setup");
         }
         for policy in builtin_policies() {
-            let _ = runtime.upsert_policy_mut(policy);
+            runtime
+                .upsert_policy_mut(policy)
+                .expect("built-in policy setup");
         }
-        let _ = runtime.upsert_trusted_client_mut(TrustedClientDto {
-            id: "test-client".to_string(),
-            name: "Test".to_string(),
-            issuer: None,
-            active: true,
-        });
-        let _ = runtime.save_connection_policy_assignment_mut(
-            dbflux_mcp::ConnectionPolicyAssignmentDto {
+        runtime
+            .upsert_trusted_client_mut(TrustedClientDto {
+                id: "test-client".to_string(),
+                name: "Test".to_string(),
+                issuer: None,
+                active: true,
+            })
+            .expect("trusted client setup");
+        runtime
+            .save_connection_policy_assignment_mut(dbflux_mcp::ConnectionPolicyAssignmentDto {
                 connection_id: connection_id.to_string(),
                 assignments: vec![ConnectionPolicyAssignment {
                     actor_id: "test-client".to_string(),
@@ -2288,8 +2298,8 @@ mod alter_table_integration_tests {
                     role_ids: vec!["builtin/admin".to_string()],
                     policy_ids: vec![],
                 }],
-            },
-        );
+            })
+            .expect("connection policy assignment setup");
         runtime.drain_events();
 
         let mut profile_manager = dbflux_core::ProfileManager::new_in_memory();

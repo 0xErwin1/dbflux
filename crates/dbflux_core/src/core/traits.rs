@@ -1340,6 +1340,10 @@ pub trait Connection: Send + Sync {
     }
 
     /// Returns whether this driver supports transactional DDL.
+    ///
+    /// Callers that issue BEGIN/statements/COMMIT rely on all three calls executing on
+    /// the same underlying session. A driver returning `true` must guarantee that
+    /// successive `execute()` calls do not switch sessions between calls.
     fn supports_transactional_ddl(&self) -> bool {
         false
     }
