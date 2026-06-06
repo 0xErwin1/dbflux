@@ -118,11 +118,65 @@ jobs:
             cat cliff_notes.md >> release_body.md
           fi
 
-      - name: Move or create the rolling nightly tag
+      - name: Pin nix/nightly-info.nix and move nightly tag
         run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          NIGHTLY_VERSION="${{ needs.compute-version.outputs.version }}"
+
+          # Compute SRI hashes from the downloaded tarballs without requiring nix.
+          # openssl and base64 are both available on ubuntu-latest.
+          HASH_AMD64="sha256-$(openssl dgst -sha256 -binary \
+            artifacts/linux-amd64/dbflux-linux-amd64.tar.gz | base64 -w0)"
+          HASH_ARM64="sha256-$(openssl dgst -sha256 -binary \
+            artifacts/linux-arm64/dbflux-linux-arm64.tar.gz | base64 -w0)"
+
+          # Regenerate nix/nightly-info.nix with the real hashes and version.
+          cat > nix/nightly-info.nix <<NIX_EOF
+          # Rolling nightly channel pointer.
+          #
+          # THIS FILE IS AUTO-UPDATED by .github/workflows/nightly.yml on the \`nightly\`
+          # git ref immediately before the nightly tag is force-moved.  On \`main\` it is
+          # only a seed — the hashes below are placeholders and the file will NOT fetch
+          # successfully from main.
+          #
+          # Consume nightly via the pinned ref:
+          #
+          #   nix run github:0xErwin1/dbflux/nightly#dbflux-nightly
+          #
+          # Do NOT pin to main for this package. The \`nightly\` ref always contains
+          # hashes that match the artifacts published in the rolling nightly release.
+          #
+          # From-source nightly (no hash needed):
+          #
+          #   nix run github:0xErwin1/dbflux/nightly#dbflux-source
+          {
+            version = "${NIGHTLY_VERSION}";
+
+            artifacts = {
+              "x86_64-linux" = {
+                url = "https://github.com/0xErwin1/dbflux/releases/download/nightly/dbflux-linux-amd64.tar.gz";
+                hash = "${HASH_AMD64}";
+              };
+              "aarch64-linux" = {
+                url = "https://github.com/0xErwin1/dbflux/releases/download/nightly/dbflux-linux-arm64.tar.gz";
+                hash = "${HASH_ARM64}";
+              };
+            };
+          }
+          NIX_EOF
+
+          # Commit the pinned info file on top of the current main HEAD.
+          # This commit is NOT pushed to main — it becomes the target of the
+          # nightly tag. Pushing the tag carries the dangling commit object.
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
-          git tag -f nightly HEAD
+          git add nix/nightly-info.nix
+          git commit -m "chore(nightly): pin nix/nightly-info.nix ${SHORT_SHA}"
+
+          # Force-move the nightly tag to the pin commit and push.
+          # The tag push is sufficient to make the commit reachable on the remote.
+          PIN_COMMIT=$(git rev-parse HEAD)
+          git tag -f nightly "${PIN_COMMIT}"
           git push origin nightly --force
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
