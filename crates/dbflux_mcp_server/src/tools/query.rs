@@ -62,11 +62,14 @@ impl DbFluxServer {
         let connection_id = params.connection_id.clone();
 
         self.governance
-            .authorize_and_execute(
+            .authorize_and_execute_audited(
                 "explain_query",
                 Some(&params.connection_id),
                 ExecutionClassification::Read,
                 move || async move {
+                    use crate::governance::AuditDetails;
+
+                    let audit_sql = sql.clone();
                     let result = Self::explain_query_impl(
                         state,
                         &connection_id,
@@ -77,9 +80,12 @@ impl DbFluxServer {
                     .await
                     .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok((
+                        CallToolResult::success(vec![Content::text(
+                            serde_json::to_string_pretty(&result).unwrap(),
+                        )]),
+                        AuditDetails { query: audit_sql },
+                    ))
                 },
             )
             .await
@@ -98,11 +104,14 @@ impl DbFluxServer {
         let connection_id = params.connection_id.clone();
 
         self.governance
-            .authorize_and_execute(
+            .authorize_and_execute_audited(
                 "preview_mutation",
                 Some(&params.connection_id),
                 ExecutionClassification::Read,
                 move || async move {
+                    use crate::governance::AuditDetails;
+
+                    let audit_sql = sql.clone();
                     let result = Self::preview_mutation_impl(
                         state,
                         &connection_id,
@@ -112,9 +121,14 @@ impl DbFluxServer {
                     .await
                     .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok((
+                        CallToolResult::success(vec![Content::text(
+                            serde_json::to_string_pretty(&result).unwrap(),
+                        )]),
+                        AuditDetails {
+                            query: Some(audit_sql),
+                        },
+                    ))
                 },
             )
             .await

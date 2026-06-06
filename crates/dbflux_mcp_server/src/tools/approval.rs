@@ -357,12 +357,12 @@ impl DbFluxServer {
             "delete_records" | "truncate_table" => Some(ExecutionClassification::Destructive),
 
             // Admin operations
-            "create_table" | "create_index" | "drop_index" | "create_type" | "delete_script" => {
+            "create_table" | "create_index" | "create_type" | "delete_script" => {
                 Some(ExecutionClassification::Admin)
             }
 
             // Dynamic or strongly destructive operations default to the stricter class.
-            "alter_table" | "execute_script" | "drop_table" | "drop_database" => {
+            "alter_table" | "execute_script" | "drop_table" | "drop_database" | "drop_index" => {
                 Some(ExecutionClassification::AdminDestructive)
             }
 
@@ -427,5 +427,62 @@ mod tests {
     #[test]
     fn reject_execution_uses_runtime_default_reason_when_missing() {
         assert_eq!(effective_rejection_reason(None), DEFAULT_REJECTION_REASON);
+    }
+
+    #[test]
+    fn test_drop_index_classification_admin_destructive() {
+        assert_eq!(
+            DbFluxServer::classify_tool("drop_index"),
+            Some(ExecutionClassification::AdminDestructive),
+            "drop_index must be classified AdminDestructive, not Admin"
+        );
+        assert_eq!(
+            DbFluxServer::classify_tool("create_index"),
+            Some(ExecutionClassification::Admin),
+            "create_index classification must remain Admin"
+        );
+    }
+
+    #[test]
+    fn test_drop_index_denied_by_admin_destructive_policy() {
+        use dbflux_policy::{
+            ConnectionPolicyAssignment, PolicyBindingScope, PolicyDecision, PolicyDecisionReason,
+            PolicyEngine, PolicyEvaluationRequest, ToolPolicy,
+        };
+
+        let engine = PolicyEngine::new(
+            vec![ConnectionPolicyAssignment {
+                actor_id: "actor".to_string(),
+                scope: PolicyBindingScope {
+                    connection_id: "conn".to_string(),
+                },
+                role_ids: vec![],
+                policy_ids: vec!["admin-only".to_string()],
+            }],
+            vec![],
+            vec![ToolPolicy {
+                id: "admin-only".to_string(),
+                allowed_tools: vec!["drop_index".to_string()],
+                allowed_classes: vec![ExecutionClassification::Admin],
+            }],
+        );
+
+        let classification = DbFluxServer::classify_tool("drop_index")
+            .expect("drop_index must have a classification");
+
+        let decision = engine
+            .evaluate(&PolicyEvaluationRequest {
+                actor_id: "actor".to_string(),
+                connection_id: "conn".to_string(),
+                tool_id: "drop_index".to_string(),
+                classification,
+            })
+            .expect("evaluation must not error");
+
+        assert_eq!(
+            decision,
+            PolicyDecision::Deny(PolicyDecisionReason::ClassificationDenied),
+            "an Admin-only policy must not authorize drop_index when it is classified AdminDestructive"
+        );
     }
 }

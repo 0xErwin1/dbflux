@@ -20,6 +20,17 @@ use std::future::Future;
 
 use crate::state::ServerState;
 
+/// Optional audit details that a tool handler can return alongside its result.
+///
+/// When `query` is `Some`, the SQL string is merged into the success `details_json`
+/// under the `"query"` key. The audit sink then applies fingerprinting or raw
+/// capture depending on the `AuditService::capture_query_text` setting.
+/// `None` leaves `details_json` unchanged (only `content_count` is recorded).
+#[derive(Default)]
+pub struct AuditDetails {
+    pub query: Option<String>,
+}
+
 /// Helper to get current epoch time in milliseconds
 fn now_epoch_ms() -> i64 {
     std::time::SystemTime::now()
@@ -37,6 +48,108 @@ pub struct GovernanceMiddleware {
 impl GovernanceMiddleware {
     pub fn new(state: ServerState) -> Self {
         Self { state }
+    }
+
+    /// Authorize and execute a tool handler, capturing optional SQL for audit.
+    ///
+    /// The handler returns `(CallToolResult, AuditDetails)`. If `AuditDetails.query`
+    /// is `Some`, it is merged into the success `details_json` under the `"query"` key.
+    /// The audit sink applies fingerprinting or raw capture per its configuration.
+    pub async fn authorize_and_execute_audited<F, Fut>(
+        &self,
+        tool_id: &str,
+        connection_id: Option<&str>,
+        classification: ExecutionClassification,
+        handler: F,
+    ) -> Result<CallToolResult, McpError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<(CallToolResult, AuditDetails), McpError>>,
+    {
+        let mcp_enabled_for_connection = if let Some(conn_id) = connection_id {
+            self.state.is_mcp_enabled_for_connection(conn_id).await
+        } else {
+            true
+        };
+
+        let runtime = self.state.runtime.read().await;
+
+        let trusted_clients_dto = runtime.list_trusted_clients().map_err(|e| {
+            McpError::internal_error(format!("Failed to list trusted clients: {}", e), None)
+        })?;
+
+        let clients: Vec<dbflux_policy::TrustedClient> = trusted_clients_dto
+            .into_iter()
+            .map(|dto| dbflux_policy::TrustedClient {
+                id: dto.id,
+                name: dto.name,
+                issuer: dto.issuer,
+                active: dto.active,
+            })
+            .collect();
+        let trusted_clients = dbflux_policy::TrustedClientRegistry::new(clients);
+
+        let assignments = runtime.policy_assignments_for_engine();
+        let roles = runtime.roles_for_engine();
+        let policies = runtime.policies_for_engine();
+        let policy_engine = dbflux_policy::PolicyEngine::new(assignments, roles, policies);
+
+        let correlation_id = new_correlation_id();
+
+        let auth_request = AuthorizationRequest {
+            identity: RequestIdentity {
+                client_id: self.state.client_id.clone(),
+                issuer: None,
+            },
+            connection_id: connection_id.map(String::from).unwrap_or_default(),
+            tool_id: tool_id.to_string(),
+            classification,
+            mcp_enabled_for_connection,
+            correlation_id: Some(correlation_id.clone()),
+        };
+
+        let outcome = authorize_request(
+            &trusted_clients,
+            &policy_engine,
+            runtime.audit_service(),
+            &auth_request,
+            now_epoch_ms(),
+        )
+        .map_err(|e| McpError::internal_error(format!("Authorization error: {}", e), None))?;
+
+        drop(runtime);
+
+        if !outcome.allowed {
+            return Err(McpError::new(
+                rmcp::model::ErrorCode::INVALID_REQUEST,
+                outcome
+                    .deny_reason
+                    .as_deref()
+                    .unwrap_or("authorization denied")
+                    .to_string(),
+                outcome
+                    .deny_code
+                    .map(|code| serde_json::json!({ "code": code })),
+            ));
+        }
+
+        let handler_result = handler().await;
+
+        let (result, audit_details) = match handler_result {
+            Ok((result, details)) => (Ok(result), details),
+            Err(e) => (Err(e), AuditDetails::default()),
+        };
+
+        self.audit_execution_with_details(
+            tool_id,
+            connection_id,
+            &result,
+            &outcome,
+            &audit_details,
+        )
+        .await?;
+
+        result
     }
 
     /// Authorize and execute a tool handler with governance controls.
@@ -58,106 +171,30 @@ impl GovernanceMiddleware {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<CallToolResult, McpError>>,
     {
-        // Check if MCP is enabled for this connection
-        let mcp_enabled_for_connection = if let Some(conn_id) = connection_id {
-            self.state.is_mcp_enabled_for_connection(conn_id).await
-        } else {
-            true // Tools without connection_id are always enabled
-        };
-
-        // Build authorization request
-        let runtime = self.state.runtime.read().await;
-
-        let trusted_clients_dto = runtime.list_trusted_clients().map_err(|e| {
-            McpError::internal_error(format!("Failed to list trusted clients: {}", e), None)
-        })?;
-
-        // Build TrustedClientRegistry from DTOs
-        let clients: Vec<dbflux_policy::TrustedClient> = trusted_clients_dto
-            .into_iter()
-            .map(|dto| dbflux_policy::TrustedClient {
-                id: dto.id,
-                name: dto.name,
-                issuer: dto.issuer,
-                active: dto.active,
-            })
-            .collect();
-        let trusted_clients = dbflux_policy::TrustedClientRegistry::new(clients);
-
-        let assignments = runtime.policy_assignments_for_engine();
-        let roles = runtime.roles_for_engine();
-        let policies = runtime.policies_for_engine();
-        let policy_engine = dbflux_policy::PolicyEngine::new(assignments, roles, policies);
-
-        // Generate correlation_id once and share it across authorization + execution events
-        let correlation_id = new_correlation_id();
-
-        let auth_request = AuthorizationRequest {
-            identity: RequestIdentity {
-                client_id: self.state.client_id.clone(),
-                issuer: None,
-            },
-            // Empty string for tools without a specific connection (matches server_old.rs behavior)
-            connection_id: connection_id.map(String::from).unwrap_or_default(),
-            tool_id: tool_id.to_string(),
-            classification,
-            mcp_enabled_for_connection,
-            correlation_id: Some(correlation_id.clone()),
-        };
-
-        // Authorize the request (keep runtime lock while calling authorize_request)
-        let outcome = authorize_request(
-            &trusted_clients,
-            &policy_engine,
-            runtime.audit_service(),
-            &auth_request,
-            now_epoch_ms(),
-        )
-        .map_err(|e| McpError::internal_error(format!("Authorization error: {}", e), None))?;
-
-        // Drop runtime lock now that authorization is complete
-        drop(runtime);
-
-        // Handle authorization outcome
-        if !outcome.allowed {
-            return Err(McpError::new(
-                rmcp::model::ErrorCode::INVALID_REQUEST,
-                outcome
-                    .deny_reason
-                    .as_deref()
-                    .unwrap_or("authorization denied")
-                    .to_string(),
-                outcome
-                    .deny_code
-                    .map(|code| serde_json::json!({ "code": code })),
-            ));
-        }
-
-        let result = handler().await;
-
-        // Audit the execution (success or failure), sharing the correlation_id from auth
-        self.audit_execution(tool_id, connection_id, &result, &outcome)
-            .await?;
-
-        result
+        self.authorize_and_execute_audited(tool_id, connection_id, classification, || async {
+            handler().await.map(|r| (r, AuditDetails::default()))
+        })
+        .await
     }
 
     /// Audit a tool execution after authorization succeeds.
     ///
     /// Emits exactly one `mcp_tool_execute` or `mcp_tool_execute_failed` event
     /// with the same `correlation_id` as the authorization event.
-    async fn audit_execution(
+    /// When `audit_details.query` is `Some`, the SQL is included in `details_json`
+    /// so the audit sink can fingerprint or store it per the capture-query-text setting.
+    async fn audit_execution_with_details(
         &self,
         tool_id: &str,
         connection_id: Option<&str>,
         result: &Result<CallToolResult, McpError>,
         outcome: &AuthorizationOutcome,
+        audit_details: &AuditDetails,
     ) -> Result<(), McpError> {
         let runtime = self.state.runtime.read().await;
         let audit_service = runtime.audit_service();
 
         let ts_ms = now_epoch_ms();
-        // Use the correlation_id from authorization, or generate a new one if not available
         let correlation_id = outcome
             .correlation_id
             .clone()
@@ -182,12 +219,15 @@ impl GovernanceMiddleware {
                     .with_connection_id(conn_id);
                 ctx.apply_to(&mut event);
 
-                event = event.with_details_json(
-                    serde_json::json!({
-                        "content_count": call_result.content.len(),
-                    })
-                    .to_string(),
+                let mut map = serde_json::Map::new();
+                map.insert(
+                    "content_count".to_string(),
+                    serde_json::json!(call_result.content.len()),
                 );
+                if let Some(q) = &audit_details.query {
+                    map.insert("query".to_string(), serde_json::Value::String(q.clone()));
+                }
+                event = event.with_details_json(serde_json::Value::Object(map).to_string());
 
                 audit_service.record(event).map_err(|e| {
                     McpError::internal_error(format!("Execution audit error: {}", e), None)

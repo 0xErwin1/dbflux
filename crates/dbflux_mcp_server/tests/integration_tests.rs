@@ -34,31 +34,37 @@ fn build_runtime_with_role(connection_id: &str, role_id: &str) -> McpRuntime {
     );
 
     for role in builtin_roles() {
-        let _ = runtime.upsert_role_mut(role);
+        runtime.upsert_role_mut(role).expect("built-in role setup");
     }
 
     for policy in builtin_policies() {
-        let _ = runtime.upsert_policy_mut(policy);
+        runtime
+            .upsert_policy_mut(policy)
+            .expect("built-in policy setup");
     }
 
-    let _ = runtime.upsert_trusted_client_mut(TrustedClientDto {
-        id: "test-client".to_string(),
-        name: "Test Client".to_string(),
-        issuer: None,
-        active: true,
-    });
+    runtime
+        .upsert_trusted_client_mut(TrustedClientDto {
+            id: "test-client".to_string(),
+            name: "Test Client".to_string(),
+            issuer: None,
+            active: true,
+        })
+        .expect("trusted client setup");
 
-    let _ = runtime.save_connection_policy_assignment_mut(ConnectionPolicyAssignmentDto {
-        connection_id: connection_id.to_string(),
-        assignments: vec![ConnectionPolicyAssignment {
-            actor_id: "test-client".to_string(),
-            scope: PolicyBindingScope {
-                connection_id: connection_id.to_string(),
-            },
-            role_ids: vec![role_id.to_string()],
-            policy_ids: vec![],
-        }],
-    });
+    runtime
+        .save_connection_policy_assignment_mut(ConnectionPolicyAssignmentDto {
+            connection_id: connection_id.to_string(),
+            assignments: vec![ConnectionPolicyAssignment {
+                actor_id: "test-client".to_string(),
+                scope: PolicyBindingScope {
+                    connection_id: connection_id.to_string(),
+                },
+                role_ids: vec![role_id.to_string()],
+                policy_ids: vec![],
+            }],
+        })
+        .expect("connection policy assignment setup");
 
     runtime.drain_events();
     runtime
@@ -599,5 +605,129 @@ async fn mcp_execution_writes_correlated_audit_events() {
     assert!(
         actions.contains(&QUERY_EXECUTE.as_str()),
         "correlated events should include query_execute for select_data tool"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Audit query fingerprint tests
+// ---------------------------------------------------------------------------
+
+async fn query_latest_execute_event_details(
+    state: &ServerState,
+    tool_id: &str,
+) -> Option<serde_json::Value> {
+    let runtime = state.runtime.read().await;
+    let audit_service = runtime.audit_service();
+
+    let events = audit_service
+        .query_extended(&dbflux_audit::query::AuditQueryFilter {
+            ..Default::default()
+        })
+        .expect("audit query should succeed");
+
+    events
+        .into_iter()
+        .filter(|e| {
+            e.action
+                .as_deref()
+                .map(|a| a.ends_with("execute") && !a.ends_with("authorize"))
+                .unwrap_or(false)
+        })
+        .find(|e| e.object_id.as_deref() == Some(tool_id))
+        .and_then(|e| e.details_json)
+        .and_then(|d| serde_json::from_str(&d).ok())
+}
+
+#[tokio::test]
+async fn authorize_and_execute_non_audited_has_no_query_key() {
+    let connection_id = uuid::Uuid::new_v4().to_string();
+    let state = build_state_with_role(&connection_id, "builtin/read-only");
+    let middleware = GovernanceMiddleware::new(state.clone());
+
+    let _ = middleware
+        .authorize_and_execute(
+            "select_data",
+            Some(&connection_id),
+            ExecutionClassification::Read,
+            || async {
+                Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+                    "[]",
+                )]))
+            },
+        )
+        .await
+        .expect("authorized read tool should succeed");
+
+    let details = query_latest_execute_event_details(&state, "select_data").await;
+    let map = details.expect("execution event should have details_json");
+
+    assert!(
+        map.get("content_count").is_some(),
+        "details_json must contain content_count"
+    );
+    assert!(
+        map.get("query").is_none(),
+        "non-audited tool must NOT have a query key in details_json"
+    );
+}
+
+/// Seam-contract test: verifies that `authorize_and_execute_audited` correctly routes
+/// `AuditDetails.query` into the audit event (fingerprinting and query_length). This
+/// test uses a mock handler — it proves the governance plumbing, not the tool impls.
+/// Real-tool coverage is provided by the `*_impl_sql_*` tests below.
+#[tokio::test]
+async fn seam_merges_query_into_details_json() {
+    use dbflux_mcp_server::governance::AuditDetails;
+
+    let connection_id = uuid::Uuid::new_v4().to_string();
+    let state = build_state_with_role(&connection_id, "builtin/admin");
+    let middleware = GovernanceMiddleware::new(state.clone());
+
+    let raw_sql = "UPDATE \"users\" SET \"name\" = 'Alice' WHERE \"id\" = 1";
+
+    let _ = middleware
+        .authorize_and_execute_audited(
+            "update_records",
+            Some(&connection_id),
+            ExecutionClassification::Write,
+            || async {
+                Ok((
+                    CallToolResult::success(vec![rmcp::model::Content::text("updated 1")]),
+                    AuditDetails {
+                        query: Some(raw_sql.to_string()),
+                    },
+                ))
+            },
+        )
+        .await
+        .expect("write tool should be authorized for admin role");
+
+    let details = query_latest_execute_event_details(&state, "update_records").await;
+    let map = details.expect("execution event should have details_json");
+
+    assert!(
+        map.get("content_count").is_some(),
+        "details_json must contain content_count"
+    );
+
+    let query_val = map
+        .get("query")
+        .expect("SQL tool must have a query key in details_json");
+    let query_str = query_val.as_str().expect("query must be a string");
+
+    assert!(
+        query_str.starts_with("[FINGERPRINT:"),
+        "with capture_query_text=false (default), query must be fingerprinted; got: {}",
+        query_str
+    );
+
+    let query_length = map.get("query_length");
+    assert!(
+        query_length.is_some(),
+        "fingerprinted query must also include query_length"
+    );
+    assert!(
+        query_length.unwrap().as_u64().unwrap_or(0) > 0,
+        "query_length must be > 0"
     );
 }
