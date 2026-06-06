@@ -253,6 +253,7 @@ impl DbFluxServer {
         &self,
         Parameters(params): Parameters<AggregateDataParams>,
     ) -> Result<CallToolResult, ErrorData> {
+        use crate::governance::AuditDetails;
         use dbflux_policy::ExecutionClassification;
 
         let state = self.state.clone();
@@ -267,12 +268,12 @@ impl DbFluxServer {
         let database = params.database.clone();
 
         self.governance
-            .authorize_and_execute(
+            .authorize_and_execute_audited(
                 "aggregate_data",
                 Some(&params.connection_id),
                 ExecutionClassification::Read,
                 move || async move {
-                    let result = Self::aggregate_data_impl(
+                    let (result, sql_text) = Self::aggregate_data_impl(
                         state,
                         &connection_id,
                         &table,
@@ -287,9 +288,12 @@ impl DbFluxServer {
                     .await
                     .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok((
+                        CallToolResult::success(vec![Content::text(
+                            serde_json::to_string_pretty(&result).unwrap(),
+                        )]),
+                        AuditDetails { query: sql_text },
+                    ))
                 },
             )
             .await
@@ -613,7 +617,7 @@ impl DbFluxServer {
         order_by: Option<&[OrderByItem]>,
         limit: Option<u32>,
         database: Option<&str>,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<(serde_json::Value, Option<String>), String> {
         let semantic_filter = filter
             .map(parse_semantic_filter_json)
             .transpose()?
@@ -656,25 +660,26 @@ impl DbFluxServer {
         }
 
         let semantic_request = SemanticRequest::Aggregate(request);
-        let result = Self::execute_aggregate_semantic_request(
+        let (result, sql_text) = Self::execute_aggregate_semantic_request(
             connection.clone(),
             semantic_request,
             database.map(str::to_string),
         )
         .await?;
 
-        Ok(serialize_query_result(&result))
+        Ok((serialize_query_result(&result), sql_text))
     }
 
     async fn execute_aggregate_semantic_request(
         connection: Arc<dyn Connection>,
         semantic_request: SemanticRequest,
         target_database: Option<String>,
-    ) -> Result<QueryResult, String> {
+    ) -> Result<(QueryResult, Option<String>), String> {
         tokio::task::spawn_blocking(move || -> Result<_, String> {
             let plan = connection
                 .plan_semantic_request(&semantic_request)
                 .map_err(|e| format!("Aggregate planning error: {}", e))?;
+            let sql_text = plan.primary_query().map(|q| q.text.clone());
             let planned_query = plan.primary_query().cloned().ok_or_else(|| {
                 "Aggregate planning error: driver returned no executable query".to_string()
             })?;
@@ -685,9 +690,11 @@ impl DbFluxServer {
             }
 
             #[allow(clippy::large_enum_variant)]
-            connection
+            let result = connection
                 .execute(&request)
-                .map_err(|e| format!("Aggregate error: {}", e))
+                .map_err(|e| format!("Aggregate error: {}", e))?;
+
+            Ok((result, sql_text))
         })
         .await
         .map_err(|e| format!("Blocking task failed: {}", e))?
@@ -898,5 +905,138 @@ mod tests {
 
         assert!(error.contains("Aggregate planning error"));
         assert!(error.contains("aggregate semantics are not supported by this driver"));
+    }
+
+    #[cfg(feature = "sqlite")]
+    fn build_sqlite_state_read(
+        connection_id: &str,
+        db_path: &std::path::Path,
+    ) -> crate::state::ServerState {
+        use crate::connection_cache::ConnectionCache;
+        use dbflux_core::{DbConfig, NoopSecretStore, SecretManager};
+        use dbflux_driver_sqlite::SqliteDriver;
+        use dbflux_mcp::{McpRuntime, TrustedClientDto, builtin_policies, builtin_roles};
+        use dbflux_policy::{ConnectionPolicyAssignment, PolicyBindingScope};
+        use std::collections::HashMap;
+        use tokio::sync::RwLock;
+
+        let audit_path =
+            dbflux_audit::temp_sqlite_path(&format!("read_test_{}.sqlite", uuid::Uuid::new_v4()));
+        let audit_service =
+            dbflux_audit::AuditService::new_sqlite(&audit_path).expect("test audit service");
+
+        let mut runtime = McpRuntime::new(
+            audit_service,
+            Box::new(dbflux_approval::InMemoryPendingExecutionStore::default()),
+        );
+        for role in builtin_roles() {
+            let _ = runtime.upsert_role_mut(role);
+        }
+        for policy in builtin_policies() {
+            let _ = runtime.upsert_policy_mut(policy);
+        }
+        let _ = runtime.upsert_trusted_client_mut(TrustedClientDto {
+            id: "test-client".to_string(),
+            name: "Test".to_string(),
+            issuer: None,
+            active: true,
+        });
+        let _ = runtime.save_connection_policy_assignment_mut(
+            dbflux_mcp::ConnectionPolicyAssignmentDto {
+                connection_id: connection_id.to_string(),
+                assignments: vec![ConnectionPolicyAssignment {
+                    actor_id: "test-client".to_string(),
+                    scope: PolicyBindingScope {
+                        connection_id: connection_id.to_string(),
+                    },
+                    role_ids: vec!["builtin/admin".to_string()],
+                    policy_ids: vec![],
+                }],
+            },
+        );
+        runtime.drain_events();
+
+        let mut profile_manager = dbflux_core::ProfileManager::new_in_memory();
+        let profile_id: uuid::Uuid = connection_id.parse().expect("test connection id");
+        let mut profile = dbflux_core::ConnectionProfile::new(
+            "sqlite-test",
+            DbConfig::SQLite {
+                path: db_path.to_path_buf(),
+                connection_id: None,
+            },
+        );
+        profile.id = profile_id;
+        profile_manager.add(profile);
+
+        let mut driver_registry = HashMap::new();
+        driver_registry.insert(
+            "sqlite".to_string(),
+            Arc::new(SqliteDriver) as Arc<dyn dbflux_core::DbDriver>,
+        );
+
+        crate::state::ServerState {
+            client_id: "test-client".to_string(),
+            runtime: Arc::new(RwLock::new(runtime)),
+            profile_manager: Arc::new(RwLock::new(profile_manager)),
+            auth_profile_manager: Arc::new(RwLock::new(dbflux_core::AuthProfileManager::default())),
+            driver_registry: Arc::new(driver_registry),
+            auth_provider_registry: Arc::new(HashMap::new()),
+            driver_settings: Arc::new(HashMap::new()),
+            connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
+            connection_setup_lock: Arc::new(tokio::sync::Mutex::new(())),
+            secret_manager: Arc::new(SecretManager::new(Box::new(NoopSecretStore))),
+            mcp_enabled_by_default: true,
+        }
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn aggregate_data_impl_sql_text_is_some_and_contains_select() {
+        let db_file = tempfile::NamedTempFile::new().expect("tempfile");
+        let db_path = db_file.path().to_path_buf();
+        let connection_id = uuid::Uuid::new_v4().to_string();
+
+        {
+            use rusqlite::Connection as RusqliteConnection;
+            let conn = RusqliteConnection::open(&db_path).expect("open sqlite");
+            conn.execute_batch(
+                "CREATE TABLE orders (id INTEGER PRIMARY KEY, amount INTEGER NOT NULL);
+                 INSERT INTO orders (id, amount) VALUES (1, 100), (2, 200);",
+            )
+            .expect("seed table");
+        }
+
+        let state = build_sqlite_state_read(&connection_id, &db_path);
+
+        let aggregations = vec![AggregationSpec {
+            function: "COUNT".to_string(),
+            column: "id".to_string(),
+            alias: "cnt".to_string(),
+        }];
+
+        let (_, sql_text) = DbFluxServer::aggregate_data_impl(
+            state,
+            &connection_id,
+            "orders",
+            None,
+            &[],
+            &aggregations,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("aggregate_data_impl should succeed against a seeded SQLite table");
+
+        let sql = sql_text.expect(
+            "aggregate_data_impl must return Some(sql) via plan_semantic_request for SQLite",
+        );
+        assert!(!sql.is_empty(), "audit SQL must not be empty");
+        assert!(
+            sql.to_uppercase().contains("SELECT"),
+            "audit SQL must contain SELECT keyword; got: {}",
+            sql
+        );
     }
 }

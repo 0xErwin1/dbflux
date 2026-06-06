@@ -730,6 +730,10 @@ async fn lookup_postgres_custom_type_kind(
     .and_then(|result| parse_custom_type_kind_result(&result))
 }
 
+fn non_empty(s: String) -> Option<String> {
+    if s.is_empty() { None } else { Some(s) }
+}
+
 /// Build the SQL statement(s) for a single ALTER TABLE operation.
 ///
 /// Returns `Ok(Vec<String>)` where each element is one statement to execute.
@@ -969,12 +973,14 @@ impl DbFluxServer {
         let if_not_exists = params.if_not_exists.unwrap_or(true);
 
         self.governance
-            .authorize_and_execute(
+            .authorize_and_execute_audited(
                 "create_table",
                 Some(&params.connection_id),
                 ExecutionClassification::Admin,
                 move || async move {
-                    let result = Self::create_table_impl(
+                    use crate::governance::AuditDetails;
+
+                    let (result, sql) = Self::create_table_impl(
                         state,
                         &connection_id,
                         &table,
@@ -985,9 +991,14 @@ impl DbFluxServer {
                     .await
                     .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok((
+                        CallToolResult::success(vec![Content::text(
+                            serde_json::to_string_pretty(&result).unwrap(),
+                        )]),
+                        AuditDetails {
+                            query: non_empty(sql),
+                        },
+                    ))
                 },
             )
             .await
@@ -1007,18 +1018,26 @@ impl DbFluxServer {
         let classification = classify_alter_operations(&params.operations);
 
         self.governance
-            .authorize_and_execute(
+            .authorize_and_execute_audited(
                 "alter_table",
                 Some(&params.connection_id),
                 classification,
                 move || async move {
-                    let result = Self::alter_table_impl(state, &connection_id, &table, &operations)
-                        .await
-                        .map_err(|e| e.into_error_data())?;
+                    use crate::governance::AuditDetails;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    let (result, sql) =
+                        Self::alter_table_impl(state, &connection_id, &table, &operations)
+                            .await
+                            .map_err(|e| e.into_error_data())?;
+
+                    Ok((
+                        CallToolResult::success(vec![Content::text(
+                            serde_json::to_string_pretty(&result).unwrap(),
+                        )]),
+                        AuditDetails {
+                            query: non_empty(sql),
+                        },
+                    ))
                 },
             )
             .await
@@ -1040,12 +1059,14 @@ impl DbFluxServer {
         let if_not_exists = params.if_not_exists.unwrap_or(true);
 
         self.governance
-            .authorize_and_execute(
+            .authorize_and_execute_audited(
                 "create_index",
                 Some(&params.connection_id),
                 ExecutionClassification::Admin,
                 move || async move {
-                    let result = Self::create_index_impl(
+                    use crate::governance::AuditDetails;
+
+                    let (result, sql) = Self::create_index_impl(
                         state,
                         &connection_id,
                         &table,
@@ -1057,9 +1078,14 @@ impl DbFluxServer {
                     .await
                     .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok((
+                        CallToolResult::success(vec![Content::text(
+                            serde_json::to_string_pretty(&result).unwrap(),
+                        )]),
+                        AuditDetails {
+                            query: non_empty(sql),
+                        },
+                    ))
                 },
             )
             .await
@@ -1079,12 +1105,14 @@ impl DbFluxServer {
         let if_exists = params.if_exists.unwrap_or(true);
 
         self.governance
-            .authorize_and_execute(
+            .authorize_and_execute_audited(
                 "drop_index",
                 Some(&params.connection_id),
                 ExecutionClassification::AdminDestructive,
                 move || async move {
-                    let result = Self::drop_index_impl(
+                    use crate::governance::AuditDetails;
+
+                    let (result, sql) = Self::drop_index_impl(
                         state,
                         &connection_id,
                         table.as_deref(),
@@ -1094,9 +1122,14 @@ impl DbFluxServer {
                     .await
                     .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok((
+                        CallToolResult::success(vec![Content::text(
+                            serde_json::to_string_pretty(&result).unwrap(),
+                        )]),
+                        AuditDetails {
+                            query: non_empty(sql),
+                        },
+                    ))
                 },
             )
             .await
@@ -1123,18 +1156,25 @@ impl DbFluxServer {
         };
 
         self.governance
-            .authorize_and_execute(
+            .authorize_and_execute_audited(
                 "create_type",
                 Some(&params.connection_id),
                 ExecutionClassification::Admin,
                 move || async move {
-                    let result = Self::create_type_impl(state, &request)
+                    use crate::governance::AuditDetails;
+
+                    let (result, sql) = Self::create_type_impl(state, &request)
                         .await
                         .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok((
+                        CallToolResult::success(vec![Content::text(
+                            serde_json::to_string_pretty(&result).unwrap(),
+                        )]),
+                        AuditDetails {
+                            query: non_empty(sql),
+                        },
+                    ))
                 },
             )
             .await
@@ -1149,7 +1189,7 @@ impl DbFluxServer {
         columns: &[crate::tools::ColumnDef],
         primary_key: Option<&[String]>,
         if_not_exists: bool,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<(serde_json::Value, String), String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
         let table_ref = TableRef::from_qualified(table);
         let dialect = connection.dialect();
@@ -1210,6 +1250,7 @@ impl DbFluxServer {
             pk_clause
         );
 
+        let sql_for_audit = sql.clone();
         let request = QueryRequest::new(&sql);
         Self::execute_connection_blocking(connection.clone(), move |connection| {
             connection
@@ -1219,10 +1260,13 @@ impl DbFluxServer {
         })
         .await?;
 
-        Ok(serde_json::json!({
-            "created": true,
-            "table": table,
-        }))
+        Ok((
+            serde_json::json!({
+                "created": true,
+                "table": table,
+            }),
+            sql_for_audit,
+        ))
     }
 
     /// Execute all ALTER TABLE statements inside a single BEGIN/COMMIT transaction.
@@ -1230,18 +1274,24 @@ impl DbFluxServer {
     /// Builds all SQL first (fast-fail on bad inputs before BEGIN), then wraps
     /// execution in BEGIN/COMMIT. On any failure, attempts a best-effort ROLLBACK;
     /// if ROLLBACK also fails it is logged and the original error is still returned.
+    ///
+    /// Returns the JSON response and the flat list of SQL statements executed,
+    /// which the caller joins for the audit trail.
     async fn run_alter_transactional(
         connection: std::sync::Arc<dyn dbflux_core::Connection>,
         ops: &[AlterOperation],
         table: &str,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<(serde_json::Value, Vec<String>), String> {
         if ops.is_empty() {
-            return Ok(serde_json::json!({
-                "altered": true,
-                "table": table,
-                "atomic": true,
-                "operations": []
-            }));
+            return Ok((
+                serde_json::json!({
+                    "altered": true,
+                    "table": table,
+                    "atomic": true,
+                    "operations": []
+                }),
+                Vec::new(),
+            ));
         }
 
         let table_ref = TableRef::from_qualified(table);
@@ -1337,12 +1387,17 @@ impl DbFluxServer {
             .map(|op| serde_json::json!({"action": op.action, "success": true}))
             .collect();
 
-        Ok(serde_json::json!({
-            "altered": true,
-            "table": table,
-            "atomic": true,
-            "operations": operations,
-        }))
+        let flat_sql: Vec<String> = all_stmts.into_iter().flatten().collect();
+
+        Ok((
+            serde_json::json!({
+                "altered": true,
+                "table": table,
+                "atomic": true,
+                "operations": operations,
+            }),
+            flat_sql,
+        ))
     }
 
     /// Execute ALTER TABLE operations one-by-one without a transaction.
@@ -1351,25 +1406,32 @@ impl DbFluxServer {
     /// applied before the failure are already committed to the database.
     /// `non_atomic_alter: true` is always present in the response so callers
     /// can detect the absence of atomicity even on full success.
+    ///
+    /// Returns the JSON response and the flat list of SQL statements that were
+    /// attempted (up to and including the failing op), for the audit trail.
     async fn run_alter_non_atomic(
         connection: std::sync::Arc<dyn dbflux_core::Connection>,
         ops: &[AlterOperation],
         table: &str,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<(serde_json::Value, Vec<String>), String> {
         if ops.is_empty() {
-            return Ok(serde_json::json!({
-                "altered": true,
-                "table": table,
-                "non_atomic_alter": true,
-                "operations": [],
-                "aborted_at": serde_json::Value::Null,
-            }));
+            return Ok((
+                serde_json::json!({
+                    "altered": true,
+                    "table": table,
+                    "non_atomic_alter": true,
+                    "operations": [],
+                    "aborted_at": serde_json::Value::Null,
+                }),
+                Vec::new(),
+            ));
         }
 
         let table_ref = TableRef::from_qualified(table);
         let table_quoted = table_ref.quoted_with(connection.dialect());
 
         let mut results: Vec<serde_json::Value> = Vec::with_capacity(ops.len());
+        let mut audit_sql: Vec<String> = Vec::new();
         let mut aborted_at: Option<usize> = None;
         let mut all_succeeded = true;
 
@@ -1416,16 +1478,20 @@ impl DbFluxServer {
                 }
             }
 
+            audit_sql.extend(stmts);
             results.push(serde_json::json!({"action": op.action, "success": true}));
         }
 
-        Ok(serde_json::json!({
-            "altered": all_succeeded,
-            "table": table,
-            "non_atomic_alter": true,
-            "operations": results,
-            "aborted_at": aborted_at,
-        }))
+        Ok((
+            serde_json::json!({
+                "altered": all_succeeded,
+                "table": table,
+                "non_atomic_alter": true,
+                "operations": results,
+                "aborted_at": aborted_at,
+            }),
+            audit_sql,
+        ))
     }
 
     async fn alter_table_impl(
@@ -1433,14 +1499,16 @@ impl DbFluxServer {
         connection_id: &str,
         table: &str,
         operations: &[crate::tools::AlterOperation],
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<(serde_json::Value, String), String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
 
-        if connection.supports_transactional_ddl() {
-            Self::run_alter_transactional(connection, operations, table).await
+        let (value, flat_sql) = if connection.supports_transactional_ddl() {
+            Self::run_alter_transactional(connection, operations, table).await?
         } else {
-            Self::run_alter_non_atomic(connection, operations, table).await
-        }
+            Self::run_alter_non_atomic(connection, operations, table).await?
+        };
+
+        Ok((value, flat_sql.join(";\n")))
     }
 
     async fn create_index_impl(
@@ -1451,7 +1519,7 @@ impl DbFluxServer {
         index_name: Option<&str>,
         unique: bool,
         if_not_exists: bool,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<(serde_json::Value, String), String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
         let dialect = connection.dialect();
 
@@ -1480,6 +1548,7 @@ impl DbFluxServer {
             col_quoted.join(", ")
         );
 
+        let sql_for_audit = sql.clone();
         let request = QueryRequest::new(&sql);
         Self::execute_connection_blocking(connection.clone(), move |connection| {
             connection
@@ -1489,11 +1558,14 @@ impl DbFluxServer {
         })
         .await?;
 
-        Ok(serde_json::json!({
-            "created": true,
-            "index_name": index_name,
-            "table": table,
-        }))
+        Ok((
+            serde_json::json!({
+                "created": true,
+                "index_name": index_name,
+                "table": table,
+            }),
+            sql_for_audit,
+        ))
     }
 
     async fn drop_index_impl(
@@ -1502,11 +1574,11 @@ impl DbFluxServer {
         table: Option<&str>,
         index_name: &str,
         if_exists: bool,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<(serde_json::Value, String), String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
 
-        // Build SQL using driver abstraction
         let sql = connection.build_drop_index_sql(index_name, table, if_exists);
+        let sql_for_audit = sql.clone();
 
         let request = QueryRequest::new(&sql);
         Self::execute_connection_blocking(connection.clone(), move |connection| {
@@ -1517,16 +1589,19 @@ impl DbFluxServer {
         })
         .await?;
 
-        Ok(serde_json::json!({
-            "dropped": true,
-            "index_name": index_name,
-        }))
+        Ok((
+            serde_json::json!({
+                "dropped": true,
+                "index_name": index_name,
+            }),
+            sql_for_audit,
+        ))
     }
 
     async fn create_type_impl(
         state: ServerState,
         request: &CreateTypeRequestParams,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<(serde_json::Value, String), String> {
         let connection = Self::get_or_connect(state, &request.connection_id).await?;
 
         if connection.kind() != DbKind::Postgres
@@ -1551,11 +1626,14 @@ impl DbFluxServer {
                 lookup_postgres_custom_type_kind(connection.clone(), &type_ref).await?;
 
             if existing_kind == Some(requested_kind) {
-                return Ok(serde_json::json!({
-                    "created": false,
-                    "type": type_ref.qualified_name(),
-                    "skipped": true,
-                }));
+                return Ok((
+                    serde_json::json!({
+                        "created": false,
+                        "type": type_ref.qualified_name(),
+                        "skipped": true,
+                    }),
+                    String::new(),
+                ));
             }
         }
 
@@ -1568,6 +1646,7 @@ impl DbFluxServer {
             })
             .ok_or_else(|| CREATE_TYPE_POSTGRES_ONLY_ERROR.to_string())?;
 
+        let sql_for_audit = sql.clone();
         let query_request = QueryRequest::new(sql);
         match Self::execute_connection_blocking(connection.clone(), move |connection| {
             connection
@@ -1584,11 +1663,14 @@ impl DbFluxServer {
                     .ok()
                     == Some(Some(requested_kind))
                 {
-                    return Ok(serde_json::json!({
-                        "created": false,
-                        "type": type_ref.qualified_name(),
-                        "skipped": true,
-                    }));
+                    return Ok((
+                        serde_json::json!({
+                            "created": false,
+                            "type": type_ref.qualified_name(),
+                            "skipped": true,
+                        }),
+                        String::new(),
+                    ));
                 }
 
                 return Err(error);
@@ -1596,10 +1678,13 @@ impl DbFluxServer {
             Err(error) => return Err(error),
         }
 
-        Ok(serde_json::json!({
-            "created": true,
-            "type": type_ref.qualified_name(),
-        }))
+        Ok((
+            serde_json::json!({
+                "created": true,
+                "type": type_ref.qualified_name(),
+            }),
+            sql_for_audit,
+        ))
     }
 }
 
@@ -2338,13 +2423,29 @@ mod alter_table_integration_tests {
         let result =
             DbFluxServer::alter_table_impl(state, &connection_id, "test_atomic", &ops).await;
 
-        let value = result.expect("two valid ops should succeed");
+        let (value, sql) = result.expect("two valid ops should succeed");
 
         assert_eq!(
             value["atomic"], true,
             "transactional path should report atomic=true"
         );
         assert_eq!(value["altered"], true);
+
+        assert!(
+            sql.contains("col_x"),
+            "audit SQL must reference col_x; got: {}",
+            sql
+        );
+        assert!(
+            sql.contains("col_y"),
+            "audit SQL must reference col_y; got: {}",
+            sql
+        );
+        assert!(
+            sql.to_uppercase().contains("ADD COLUMN"),
+            "audit SQL must contain ADD COLUMN for both ops; got: {}",
+            sql
+        );
 
         let cols = table_columns(&db_path, "test_atomic");
         assert!(
@@ -2455,7 +2556,8 @@ mod alter_table_integration_tests {
 
         let result = DbFluxServer::run_alter_non_atomic(connection, &ops, "test_tbl").await;
 
-        let value = result.expect("non-atomic helper should return Ok with error info in it");
+        let (value, _sql) =
+            result.expect("non-atomic helper should return Ok with error info in it");
         assert_eq!(
             value["non_atomic_alter"], true,
             "non-atomic flag must always be present"

@@ -115,6 +115,8 @@ impl DbFluxServer {
         let records = params.records.clone();
         let returning = params.returning.clone();
 
+        // insert_record does not produce a capturable SQL string (driver uses insert_row/insert_document
+        // internally). Audit captures content_count only. This is intentional, not a gap to fill here.
         self.governance
             .authorize_and_execute(
                 "insert_record",
@@ -159,12 +161,14 @@ impl DbFluxServer {
         let returning = params.returning.clone();
 
         self.governance
-            .authorize_and_execute(
+            .authorize_and_execute_audited(
                 "update_records",
                 Some(&params.connection_id),
                 ExecutionClassification::Write,
                 move || async move {
-                    let result = Self::update_records_impl(
+                    use crate::governance::AuditDetails;
+
+                    let (result, sql_text) = Self::update_records_impl(
                         state,
                         &connection_id,
                         &table,
@@ -175,9 +179,12 @@ impl DbFluxServer {
                     .await
                     .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok((
+                        CallToolResult::success(vec![Content::text(
+                            serde_json::to_string_pretty(&result).unwrap(),
+                        )]),
+                        AuditDetails { query: sql_text },
+                    ))
                 },
             )
             .await
@@ -198,12 +205,14 @@ impl DbFluxServer {
         let update_on_conflict = params.update_on_conflict.clone();
 
         self.governance
-            .authorize_and_execute(
+            .authorize_and_execute_audited(
                 "upsert_record",
                 Some(&params.connection_id),
                 ExecutionClassification::Write,
                 move || async move {
-                    let result = Self::upsert_record_impl(
+                    use crate::governance::AuditDetails;
+
+                    let (result, sql_text) = Self::upsert_record_impl(
                         state,
                         &connection_id,
                         &table,
@@ -214,9 +223,12 @@ impl DbFluxServer {
                     .await
                     .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok((
+                        CallToolResult::success(vec![Content::text(
+                            serde_json::to_string_pretty(&result).unwrap(),
+                        )]),
+                        AuditDetails { query: sql_text },
+                    ))
                 },
             )
             .await
@@ -374,7 +386,7 @@ impl DbFluxServer {
         filter: &serde_json::Value,
         set: &serde_json::Value,
         returning: Option<&[String]>,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<(serde_json::Value, Option<String>), String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
 
         if connection.metadata().category == DatabaseCategory::Document {
@@ -386,9 +398,7 @@ impl DbFluxServer {
             })
             .await?;
 
-            return Ok(serde_json::json!({
-                "updated": result.affected_rows,
-            }));
+            return Ok((serde_json::json!({ "updated": result.affected_rows }), None));
         }
 
         let table_ref = TableRef::from_qualified(table);
@@ -400,17 +410,29 @@ impl DbFluxServer {
             returning,
             &column_types,
         )?;
-        let result = Self::execute_connection_blocking(connection.clone(), move |connection| {
-            connection
-                .execute_semantic_request(&SemanticRequest::Mutation(mutation))
-                .map_err(|e| format!("Update error: {}", e))
+        let semantic_request = SemanticRequest::Mutation(mutation);
+
+        let result = Self::execute_connection_blocking(connection.clone(), move |c| {
+            let plan = c
+                .plan_semantic_request(&semantic_request)
+                .map_err(|e| format!("Update planning error: {}", e))?;
+            let sql_text = plan.primary_query().map(|q| q.text.clone());
+            let planned_query = plan
+                .primary_query()
+                .cloned()
+                .ok_or_else(|| "driver returned no executable query".to_string())?;
+            let request = planned_query.into_query_request();
+            let result = c
+                .execute(&request)
+                .map_err(|e| format!("Update error: {}", e))?;
+            Ok((result, sql_text))
         })
         .await?;
 
-        Ok(serialize_mutation_result(
-            &result,
-            "updated",
-            returning.is_some(),
+        let (query_result, sql_text) = result;
+        Ok((
+            serialize_mutation_result(&query_result, "updated", returning.is_some()),
+            sql_text,
         ))
     }
 
@@ -477,7 +499,7 @@ impl DbFluxServer {
         record: &serde_json::Value,
         conflict_columns: &[String],
         update_on_conflict: Option<&serde_json::Value>,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<(serde_json::Value, Option<String>), String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
 
         let supports_upsert = connection
@@ -493,23 +515,29 @@ impl DbFluxServer {
             ));
         }
 
-        let mutation = match connection.metadata().category {
-            DatabaseCategory::Document => Self::build_document_upsert_mutation(
-                table,
-                record,
-                conflict_columns,
-                update_on_conflict,
-            )?,
-            DatabaseCategory::Relational => {
-                let table_ref = TableRef::from_qualified(table);
-                let column_types = Self::resolve_column_types(connection.clone(), &table_ref).await;
-                Self::build_relational_upsert_mutation(
-                    table_ref,
+        let (mutation, is_document) = match connection.metadata().category {
+            DatabaseCategory::Document => (
+                Self::build_document_upsert_mutation(
+                    table,
                     record,
                     conflict_columns,
                     update_on_conflict,
-                    &column_types,
-                )?
+                )?,
+                true,
+            ),
+            DatabaseCategory::Relational => {
+                let table_ref = TableRef::from_qualified(table);
+                let column_types = Self::resolve_column_types(connection.clone(), &table_ref).await;
+                (
+                    Self::build_relational_upsert_mutation(
+                        table_ref,
+                        record,
+                        conflict_columns,
+                        update_on_conflict,
+                        &column_types,
+                    )?,
+                    false,
+                )
             }
             _ => {
                 return Err(format!(
@@ -519,14 +547,37 @@ impl DbFluxServer {
             }
         };
 
-        let result = Self::execute_connection_blocking(connection.clone(), move |connection| {
-            connection
-                .execute_semantic_request(&SemanticRequest::Mutation(mutation))
-                .map_err(|e| format!("Upsert error: {}", e))
+        if is_document {
+            let result = Self::execute_connection_blocking(connection.clone(), move |c| {
+                c.execute_semantic_request(&SemanticRequest::Mutation(mutation))
+                    .map_err(|e| format!("Upsert error: {}", e))
+            })
+            .await?;
+            return Ok((serialize_mutation_result(&result, "upserted", false), None));
+        }
+
+        let result = Self::execute_connection_blocking(connection.clone(), move |c| {
+            let plan = c
+                .plan_semantic_request(&SemanticRequest::Mutation(mutation))
+                .map_err(|e| format!("Upsert planning error: {}", e))?;
+            let sql_text = plan.primary_query().map(|q| q.text.clone());
+            let planned_query = plan
+                .primary_query()
+                .cloned()
+                .ok_or_else(|| "driver returned no executable query".to_string())?;
+            let request = planned_query.into_query_request();
+            let result = c
+                .execute(&request)
+                .map_err(|e| format!("Upsert error: {}", e))?;
+            Ok((result, sql_text))
         })
         .await?;
 
-        Ok(serialize_mutation_result(&result, "upserted", false))
+        let (query_result, sql_text) = result;
+        Ok((
+            serialize_mutation_result(&query_result, "upserted", false),
+            sql_text,
+        ))
     }
 
     fn build_relational_upsert_mutation(
@@ -834,6 +885,123 @@ mod tests {
                     "visits": 3
                 }
             })
+        );
+    }
+
+    #[cfg(feature = "sqlite")]
+    fn build_sqlite_state_write(connection_id: &str, db_path: &std::path::Path) -> ServerState {
+        use crate::connection_cache::ConnectionCache;
+        use dbflux_core::{DbConfig, NoopSecretStore, SecretManager};
+        use dbflux_driver_sqlite::SqliteDriver;
+        use dbflux_mcp::{McpRuntime, TrustedClientDto, builtin_policies, builtin_roles};
+        use dbflux_policy::{ConnectionPolicyAssignment, PolicyBindingScope};
+        use std::collections::HashMap;
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        let audit_path =
+            dbflux_audit::temp_sqlite_path(&format!("write_test_{}.sqlite", uuid::Uuid::new_v4()));
+        let audit_service =
+            dbflux_audit::AuditService::new_sqlite(&audit_path).expect("test audit service");
+
+        let mut runtime = McpRuntime::new(
+            audit_service,
+            Box::new(dbflux_approval::InMemoryPendingExecutionStore::default()),
+        );
+        for role in builtin_roles() {
+            let _ = runtime.upsert_role_mut(role);
+        }
+        for policy in builtin_policies() {
+            let _ = runtime.upsert_policy_mut(policy);
+        }
+        let _ = runtime.upsert_trusted_client_mut(TrustedClientDto {
+            id: "test-client".to_string(),
+            name: "Test".to_string(),
+            issuer: None,
+            active: true,
+        });
+        let _ = runtime.save_connection_policy_assignment_mut(
+            dbflux_mcp::ConnectionPolicyAssignmentDto {
+                connection_id: connection_id.to_string(),
+                assignments: vec![ConnectionPolicyAssignment {
+                    actor_id: "test-client".to_string(),
+                    scope: PolicyBindingScope {
+                        connection_id: connection_id.to_string(),
+                    },
+                    role_ids: vec!["builtin/admin".to_string()],
+                    policy_ids: vec![],
+                }],
+            },
+        );
+        runtime.drain_events();
+
+        let mut profile_manager = dbflux_core::ProfileManager::new_in_memory();
+        let profile_id: uuid::Uuid = connection_id.parse().expect("test connection id");
+        let mut profile = dbflux_core::ConnectionProfile::new(
+            "sqlite-test",
+            DbConfig::SQLite {
+                path: db_path.to_path_buf(),
+                connection_id: None,
+            },
+        );
+        profile.id = profile_id;
+        profile_manager.add(profile);
+
+        let mut driver_registry = HashMap::new();
+        driver_registry.insert(
+            "sqlite".to_string(),
+            Arc::new(SqliteDriver) as Arc<dyn dbflux_core::DbDriver>,
+        );
+
+        ServerState {
+            client_id: "test-client".to_string(),
+            runtime: Arc::new(RwLock::new(runtime)),
+            profile_manager: Arc::new(RwLock::new(profile_manager)),
+            auth_profile_manager: Arc::new(RwLock::new(dbflux_core::AuthProfileManager::default())),
+            driver_registry: Arc::new(driver_registry),
+            auth_provider_registry: Arc::new(HashMap::new()),
+            driver_settings: Arc::new(HashMap::new()),
+            connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
+            connection_setup_lock: Arc::new(tokio::sync::Mutex::new(())),
+            secret_manager: Arc::new(SecretManager::new(Box::new(NoopSecretStore))),
+            mcp_enabled_by_default: true,
+        }
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn update_records_impl_sql_text_is_some_and_contains_update() {
+        let db_file = tempfile::NamedTempFile::new().expect("tempfile");
+        let db_path = db_file.path().to_path_buf();
+        let connection_id = uuid::Uuid::new_v4().to_string();
+
+        {
+            use rusqlite::Connection;
+            let conn = Connection::open(&db_path).expect("open sqlite");
+            conn.execute_batch(
+                "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+                 INSERT INTO users (id, name) VALUES (1, 'Alice');",
+            )
+            .expect("seed table");
+        }
+
+        let state = build_sqlite_state_write(&connection_id, &db_path);
+
+        let filter = serde_json::json!({"id": {"$eq": 1}});
+        let set = serde_json::json!({"name": "Bob"});
+
+        let (_, sql_text) =
+            DbFluxServer::update_records_impl(state, &connection_id, "users", &filter, &set, None)
+                .await
+                .expect("update_records_impl should succeed against a seeded SQLite table");
+
+        let sql = sql_text
+            .expect("update_records_impl must return Some(sql) for a relational SQLite table");
+        assert!(!sql.is_empty(), "audit SQL must not be empty");
+        assert!(
+            sql.to_uppercase().contains("UPDATE"),
+            "audit SQL must contain UPDATE keyword; got: {}",
+            sql
         );
     }
 }
