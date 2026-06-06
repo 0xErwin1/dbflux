@@ -156,10 +156,32 @@ The AUR `PKGBUILD` lives in an **external AUR repository**, not in this repo. It
 
 1. Reads the workspace version from `Cargo.toml`, strips any existing pre-release suffix, and appends `-nightly+<short-sha>` (e.g. `0.7.0-nightly+abc1234`). No `Cargo.toml` commit required.
 2. Calls `build.yml` with `channel: nightly`.
-3. Moves the `nightly` tag to the current `main` HEAD.
-4. Publishes or updates the rolling `nightly` GitHub prerelease with the new artifacts and a git-cliff-generated body covering commits since the last stable tag.
+3. Computes the SHA256 SRI hash of each Linux tarball and regenerates `nix/nightly-info.nix` with the real hashes and the rolling release URLs.
+4. Commits the updated `nix/nightly-info.nix` on top of the current `main` HEAD. This commit is **not pushed to `main`** — it becomes the sole target of the `nightly` tag.
+5. Force-moves the `nightly` tag to the pin commit and pushes the tag. Pushing the tag is sufficient to make the commit reachable on the remote; no branch push is required.
+6. Publishes or updates the rolling `nightly` GitHub prerelease with the new artifacts and a git-cliff-generated body covering commits since the last stable tag. The release's tag points at the pin commit, so `nix/nightly-info.nix` at `nightly` ref always matches the published artifacts.
 
 The nightly tag is force-pushed and the release is replaced on every run. Only the canonical repository (`0xErwin1/dbflux`) runs the schedule.
+
+### Nix nightly package
+
+The workflow pins `nix/nightly-info.nix` at the `nightly` ref on every run. Downstream users get the prebuilt nightly binary without compiling from source:
+
+```bash
+# Run nightly directly
+nix run github:0xErwin1/dbflux/nightly#dbflux-nightly
+
+# Install into a profile
+nix profile install github:0xErwin1/dbflux/nightly#dbflux-nightly
+```
+
+A from-source nightly (no hash pinning required) also works:
+
+```bash
+nix run github:0xErwin1/dbflux/nightly#dbflux-source
+```
+
+**Do not consume `#dbflux-nightly` from `main`.** On `main`, `nix/nightly-info.nix` contains placeholder hashes that will not fetch. Always use the `nightly` ref as shown above.
 
 ## Cherry-Pick Discipline
 
@@ -183,11 +205,11 @@ git log --grep='cherry picked from' release/vX.Y
 
 ## Downstream Channels
 
-| Tag kind        | GitHub Release | AUR         | Nix flake (this repo)                       | nixpkgs (future) |
-|-----------------|----------------|-------------|---------------------------------------------|------------------|
-| nightly         | prerelease     | skip        | skip                                        | skip             |
-| `-rc.N`         | prerelease     | skip        | bump release branch's + main's `release-info` | skip           |
-| Stable `vX.Y.Z` | published      | bump + push | bump release branch's + main's `release-info` | bump + PR      |
+| Tag kind        | GitHub Release | AUR         | Nix flake (this repo)                         | nixpkgs (future) |
+|-----------------|----------------|-------------|-----------------------------------------------|------------------|
+| nightly         | prerelease     | skip        | auto-pinned — `#dbflux-nightly` on nightly ref | skip            |
+| `-rc.N`         | prerelease     | skip        | bump release branch's + main's `release-info` | skip             |
+| Stable `vX.Y.Z` | published      | bump + push | bump release branch's + main's `release-info` | bump + PR        |
 
 ### AUR
 
@@ -197,9 +219,16 @@ AUR `pkgver` does not allow `-` (reserved for `pkgrel`). For stable releases the
 
 ### Nix (this repo's flake)
 
-The flake exposes a prebuilt-binary package (`dbflux-bin`, default) and a from-source build (`dbflux-source`). The prebuilt package reads `nix/release-info.nix`, which pins each supported system to the GitHub Release tarball it should fetch.
+The flake exposes several packages on Linux (x86_64 and aarch64):
 
-`release-info.nix` is per-branch: `main` tracks the newest published tag of any kind; each `release/vX.Y` tracks its own line's newest. After a tag's artifacts publish, refresh `release-info.nix` on every branch whose channel that tag advances.
+| Package           | What it provides                                     |
+|-------------------|------------------------------------------------------|
+| `dbflux` (default) | Prebuilt stable/rc binary when available, source otherwise |
+| `dbflux-bin`      | Explicit prebuilt from `nix/release-info.nix`        |
+| `dbflux-source`   | Source build via crane (all platforms)               |
+| `dbflux-nightly`  | Rolling nightly prebuilt from `nix/nightly-info.nix` (use `nightly` ref) |
+
+**Stable / RC (`nix/release-info.nix`):** per-branch channel pointer. `main` tracks the newest published tag of any kind; each `release/vX.Y` tracks its own line's newest. After a tag's artifacts publish, refresh `release-info.nix` on every branch whose channel that tag advances.
 
 ```bash
 ver=X.Y.Z
@@ -213,6 +242,12 @@ Update `version`, both `url`s, and both `hash`es in `nix/release-info.nix`. Veri
 
 ```bash
 nix build .#dbflux-bin --no-link --print-out-paths
+```
+
+**Nightly (`nix/nightly-info.nix`):** auto-updated by the nightly workflow on the `nightly` ref. Do not update this file manually. Consume via:
+
+```bash
+nix run github:0xErwin1/dbflux/nightly#dbflux-nightly
 ```
 
 ### nixpkgs (future)
