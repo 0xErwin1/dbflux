@@ -2,58 +2,6 @@
 
 All notable changes to DBFlux will be documented in this file.
 
-## [Unreleased]
-
-### Added
-
-* **Persistent MCP approvals (#173)** — Pending MCP execution approvals are
-  now stored in SQLite (migration `018_app_pending_executions`) through a new
-  `PendingExecutionStore` trait with a `SqlitePendingExecutionStore`
-  implementation, so approvals survive an application restart. Rows past their
-  `expires_at` are filtered out at list time. The standalone MCP server keeps
-  the in-memory store (it has no `StorageRuntime`).
-
-### Changed
-
-* **Oversized audit details are truncated, not dropped (#173)** — An audit
-  event whose `details_json` exceeds the 64 KiB cap is now truncated at a valid
-  UTF-8 boundary and wrapped in a `{"__truncated":true,"partial":…}` envelope
-  instead of failing the whole event.
-* **Audit schema has a single source of truth (#173)** — `SqliteAuditStore`
-  and migrations 001/002 now share one `aud_audit_events` DDL helper, removing
-  the parallel column list that could drift between the embedded and standalone
-  paths.
-
-### Fixed
-
-* **No crash when storage I/O fails (#173)** — `StorageRuntime` accessors and
-  the `AppState` / `AppStateEntity` constructors now return `Result` instead of
-  panicking; a failure to open the database surfaces a user-facing error (or a
-  clean startup exit) rather than crashing the app.
-* **Corrupt migration rows surface an error (#173)** — `get_applied_migrations`
-  now propagates per-row decode errors instead of silently re-applying a
-  migration.
-* **Defensive table-name validation (#173)** — `column_exists` rejects table
-  names outside `[A-Za-z0-9_]+` before interpolating into a `pragma_table_info`
-  query.
-
-### Security
-
-* **Auth profile secrets moved to the OS keyring** — Secret-kind auth
-  profile fields (`Password` / `WriteOnly`, such as credentials for
-  external RPC auth providers) are now held in memory as `SecretString`,
-  persisted to the OS keyring, and stored in SQLite only as a keyring
-  reference, never in plaintext. The derived `Debug` and serialization no
-  longer expose secret values. Profiles saved before this change are
-  migrated out of plaintext SQLite into the keyring on first launch.
-  Keyring availability detection now tells a locked keyring apart from an
-  absent one, and a secret write that cannot reach the keyring surfaces a
-  warning (and a toast in the auth profile editor) instead of silently
-  dropping the secret. The AWS file-backed write path carries credentials
-  as `SecretString` up to the point they are written to
-  `~/.aws/credentials`. (Security audit AUTH-1, AUTH-2, AUTH-3, AUTH-4,
-  AUTH-5.)
-
 ## [0.6.0] - 2026-06-04
 
 ### Added
@@ -212,11 +160,25 @@ All notable changes to DBFlux will be documented in this file.
 - Centralized user-facing error reporting (`report_error` / `report_error_async` in `dbflux_ui_base`). Failures across mutations, file save, settings, and workspace actions now surface as a styled toast with a "View in Audit" action, increment a status-bar error badge, and emit a tracing event correlated with the audit row (#156).
 - `EventRecord.correlation_id` is now populated from the `correlation_id` tracing field across all `dbflux` targets, regardless of whether the field is recorded via `%` (Display) or `?` (Debug) sigil (#156).
 - **Tracing-to-audit bridge for centralized log capture (#154)** — A new `tracing-bridge` feature installs an `AuditLayer` subscriber in the `dbflux`, `dbflux_mcp_server`, and `dbflux_driver_host` binaries that funnels `tracing` events into the audit log through a bounded background queue with an atomic drop counter and in-flight gauge. A configurable `log_capture_min_level` audit setting (default `info`, persisted via migration 014) gates capture and updates the shared level atomic immediately. The layer applies a recursion guard, level gate, and summary truncation, and `AuditService::dropped_log_event_count()` exposes overflow drops.
+* **Persistent MCP approvals (#173)** — Pending MCP execution approvals are
+  now stored in SQLite (migration `018_app_pending_executions`) through a new
+  `PendingExecutionStore` trait with a `SqlitePendingExecutionStore`
+  implementation, so approvals survive an application restart. Rows past their
+  `expires_at` are filtered out at list time. The standalone MCP server keeps
+  the in-memory store (it has no `StorageRuntime`).
 
 ### Changed
 
 - Toast host applies a severity-aware throttle (capacity 5, refill 1 token / 2 s) to Warning and Info toasts so connection-storm noise does not bury the UI; Error and Fatal toasts bypass the throttle (#156).
 - **Provider-neutral auth-profile edit seam (#155)** — The auth-profile edit path no longer carries AWS-specific types in the public core API. `dbflux_core::auth::edit` now exposes a provider-neutral `AuthEditSnapshot` (opaque `Arc<dyn Any>`), `AuthEditTarget`, and `AuthSaveOutcome`; the former `AwsEditFile` / `AwsEditSnapshot` / `AwsSectionHash` types moved to a private `dbflux_aws::edit` module, and `AuthProviderCapabilities` gained an optional `edit` field (serde-defaulted for backward compatibility). All three AWS providers were rewired to the neutral types with no behavior change.
+* **Oversized audit details are truncated, not dropped (#173)** — An audit
+  event whose `details_json` exceeds the 64 KiB cap is now truncated at a valid
+  UTF-8 boundary and wrapped in a `{"__truncated":true,"partial":…}` envelope
+  instead of failing the whole event.
+* **Audit schema has a single source of truth (#173)** — `SqliteAuditStore`
+  and migrations 001/002 now share one `aud_audit_events` DDL helper, removing
+  the parallel column list that could drift between the embedded and standalone
+  paths.
 
 ### Fixed
 
@@ -225,6 +187,33 @@ All notable changes to DBFlux will be documented in this file.
 - **NULL rendered as an empty field in CSV export** — CSV export emitted the PostgreSQL `\COPY` sentinel `\N` for NULL, which most CSV consumers (Excel, Sheets, generic parsers) read as the literal string. NULL now exports as an empty field, the de facto CSV convention.
 - **Inactive tab background no longer mismatches the tab bar.**
 - **Multiline UPDATE/DELETE no longer falsely flagged as missing a `WHERE`** — The dangerous-query check matched only the literal substring `" where "`, so a `WHERE` placed on its own line (preceded by a newline rather than a space) was never found and the statement was wrongly reported as affecting all rows. Detection now strips single-quoted string literals (honoring `''` escapes) and matches `where` as a whitespace/paren-delimited token, fixing the false positive for both UPDATE and DELETE while still catching `where` text that only appears inside a value.
+* **No crash when storage I/O fails (#173)** — `StorageRuntime` accessors and
+  the `AppState` / `AppStateEntity` constructors now return `Result` instead of
+  panicking; a failure to open the database surfaces a user-facing error (or a
+  clean startup exit) rather than crashing the app.
+* **Corrupt migration rows surface an error (#173)** — `get_applied_migrations`
+  now propagates per-row decode errors instead of silently re-applying a
+  migration.
+* **Defensive table-name validation (#173)** — `column_exists` rejects table
+  names outside `[A-Za-z0-9_]+` before interpolating into a `pragma_table_info`
+  query.
+
+### Security
+
+* **Auth profile secrets moved to the OS keyring** — Secret-kind auth
+  profile fields (`Password` / `WriteOnly`, such as credentials for
+  external RPC auth providers) are now held in memory as `SecretString`,
+  persisted to the OS keyring, and stored in SQLite only as a keyring
+  reference, never in plaintext. The derived `Debug` and serialization no
+  longer expose secret values. Profiles saved before this change are
+  migrated out of plaintext SQLite into the keyring on first launch.
+  Keyring availability detection now tells a locked keyring apart from an
+  absent one, and a secret write that cannot reach the keyring surfaces a
+  warning (and a toast in the auth profile editor) instead of silently
+  dropping the secret. The AWS file-backed write path carries credentials
+  as `SecretString` up to the point they are written to
+  `~/.aws/credentials`. (Security audit AUTH-1, AUTH-2, AUTH-3, AUTH-4,
+  AUTH-5.)
 
 ## [0.6.0-dev.10] - 2026-05-29
 
