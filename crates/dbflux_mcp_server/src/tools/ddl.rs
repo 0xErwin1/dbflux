@@ -26,7 +26,7 @@ use rmcp::{
     schemars::JsonSchema,
     tool, tool_router,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::HashSet;
 
 fn default_true() -> Option<bool> {
@@ -1437,22 +1437,6 @@ impl DbFluxServer {
             "type": type_ref.qualified_name(),
         }))
     }
-}
-
-// =============================================================================
-// DDL Preview Parameters
-// =============================================================================
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct PreviewDdlParams {
-    #[schemars(description = "Connection ID")]
-    pub connection_id: String,
-
-    #[schemars(description = "Optional database/schema name")]
-    pub database: Option<String>,
-
-    #[schemars(description = "DDL statement to preview (CREATE, ALTER, DROP, etc.)")]
-    pub sql: String,
 }
 
 #[cfg(test)]
