@@ -1379,8 +1379,11 @@ mod tests {
     }
 
     fn runtime_for_governance_tests(file_name: &str) -> McpRuntime {
-        let path = dbflux_audit::temp_sqlite_path(file_name);
-        let _ = std::fs::remove_file(&path);
+        let path = dbflux_audit::temp_sqlite_path(&format!(
+            "{}_{}.sqlite",
+            file_name.trim_end_matches(".sqlite"),
+            uuid::Uuid::new_v4()
+        ));
         let audit =
             dbflux_audit::AuditService::new_sqlite(&path).expect("audit service should initialize");
         McpRuntime::new(
