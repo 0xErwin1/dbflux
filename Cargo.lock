@@ -2745,6 +2745,7 @@ dependencies = [
  "dbflux_core",
  "dirs 5.0.1",
  "interprocess",
+ "secrecy",
  "serde",
  "serde_json",
  "uuid",

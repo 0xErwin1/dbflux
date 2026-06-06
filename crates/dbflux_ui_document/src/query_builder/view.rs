@@ -66,6 +66,8 @@ pub fn render_panel(
         panel.rebuild_assign_inputs(window, cx);
     }
 
+    panel.maybe_refresh_mutation_count(cx);
+
     let theme = cx.theme().clone();
 
     let show_mode_selector = panel.shows_mutation_selector(cx);

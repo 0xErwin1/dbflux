@@ -37,6 +37,23 @@ All notable changes to DBFlux will be documented in this file.
   names outside `[A-Za-z0-9_]+` before interpolating into a `pragma_table_info`
   query.
 
+### Security
+
+* **Auth profile secrets moved to the OS keyring** — Secret-kind auth
+  profile fields (`Password` / `WriteOnly`, such as credentials for
+  external RPC auth providers) are now held in memory as `SecretString`,
+  persisted to the OS keyring, and stored in SQLite only as a keyring
+  reference, never in plaintext. The derived `Debug` and serialization no
+  longer expose secret values. Profiles saved before this change are
+  migrated out of plaintext SQLite into the keyring on first launch.
+  Keyring availability detection now tells a locked keyring apart from an
+  absent one, and a secret write that cannot reach the keyring surfaces a
+  warning (and a toast in the auth profile editor) instead of silently
+  dropping the secret. The AWS file-backed write path carries credentials
+  as `SecretString` up to the point they are written to
+  `~/.aws/credentials`. (Security audit AUTH-1, AUTH-2, AUTH-3, AUTH-4,
+  AUTH-5.)
+
 ## [0.6.0] - 2026-06-04
 
 ### Added

@@ -66,41 +66,60 @@ impl SelectQuery {
     /// - `$N` placeholders (PostgreSQL): each `$N` is replaced by `params[N-1]`.
     /// - `@pN` placeholders (SQL Server): each `@pN` is replaced by `params[N-1]`.
     pub fn materialize_for_editor(&self, dialect: &dyn crate::sql::dialect::SqlDialect) -> String {
-        use crate::sql::dialect::PlaceholderStyle;
+        inline_params(&self.sql, &self.params, dialect)
+    }
+}
 
-        let style = dialect.placeholder_style();
+/// Replace every parameter placeholder in `sql` with its dialect-quoted literal.
+///
+/// This is both the display path (read-only editor tabs, builder preview,
+/// confirmation dialogs) and the execution path for the visual query builder:
+/// drivers in this codebase execute `QueryRequest.sql` verbatim and do not bind
+/// `QueryRequest.params`, so structured mutations/selects must inline their
+/// values before dispatch. The dialect's `value_to_literal` performs the
+/// quoting/escaping, mirroring how every other mutation path executes.
+///
+/// The substitution respects the dialect's placeholder style:
+/// - `?` placeholders (SQLite/MySQL): replaced left-to-right.
+/// - `$N` placeholders (PostgreSQL): each `$N` is replaced by `params[N-1]`.
+/// - `@pN` placeholders (SQL Server): each `@pN` is replaced by `params[N-1]`.
+pub fn inline_params(
+    sql: &str,
+    params: &[crate::Value],
+    dialect: &dyn crate::sql::dialect::SqlDialect,
+) -> String {
+    use crate::sql::dialect::PlaceholderStyle;
 
-        match style {
-            PlaceholderStyle::QuestionMark | PlaceholderStyle::NamedColon => {
-                let mut result = String::with_capacity(self.sql.len());
-                let mut param_iter = self.params.iter();
-                let chars: Vec<char> = self.sql.chars().collect();
-                let mut i = 0;
+    match dialect.placeholder_style() {
+        PlaceholderStyle::QuestionMark | PlaceholderStyle::NamedColon => {
+            let mut result = String::with_capacity(sql.len());
+            let mut param_iter = params.iter();
+            let chars: Vec<char> = sql.chars().collect();
+            let mut i = 0;
 
-                while i < chars.len() {
-                    if chars[i] == '?' {
-                        if let Some(val) = param_iter.next() {
-                            result.push_str(&dialect.value_to_literal(val));
-                        } else {
-                            result.push('?');
-                        }
-                        i += 1;
+            while i < chars.len() {
+                if chars[i] == '?' {
+                    if let Some(val) = param_iter.next() {
+                        result.push_str(&dialect.value_to_literal(val));
                     } else {
-                        result.push(chars[i]);
-                        i += 1;
+                        result.push('?');
                     }
+                    i += 1;
+                } else {
+                    result.push(chars[i]);
+                    i += 1;
                 }
-
-                result
             }
 
-            PlaceholderStyle::DollarNumber => {
-                materialize_numbered_placeholders(&self.sql, &self.params, dialect, '$', "")
-            }
+            result
+        }
 
-            PlaceholderStyle::AtSign => {
-                materialize_numbered_placeholders(&self.sql, &self.params, dialect, '@', "p")
-            }
+        PlaceholderStyle::DollarNumber => {
+            materialize_numbered_placeholders(sql, params, dialect, '$', "")
+        }
+
+        PlaceholderStyle::AtSign => {
+            materialize_numbered_placeholders(sql, params, dialect, '@', "p")
         }
     }
 }
@@ -246,6 +265,19 @@ pub struct GeneratedMutation {
     pub params: Vec<crate::Value>,
     /// True when at least one assignment used `AssignmentValue::Expression`.
     pub used_raw_expression: bool,
+}
+
+impl GeneratedMutation {
+    /// Produces a human-readable SQL string with all parameter placeholders
+    /// replaced by their dialect-quoted literal values.
+    ///
+    /// Intended for display in the visual builder preview and the mutation
+    /// confirmation dialog. It is NOT suitable for execution — execution must
+    /// use `sql` + `params` so values stay bound. See
+    /// [`SelectQuery::materialize_for_editor`] for the SELECT counterpart.
+    pub fn materialize_for_editor(&self, dialect: &dyn crate::sql::dialect::SqlDialect) -> String {
+        inline_params(&self.sql, &self.params, dialect)
+    }
 }
 
 pub trait QueryGenerator: Send + Sync {
@@ -2051,6 +2083,19 @@ mod tests {
         assert_eq!(
             q.materialize_for_editor(&DIALECT),
             "SELECT * FROM t WHERE id = 42"
+        );
+    }
+
+    #[test]
+    fn mutation_materialize_inlines_set_and_where_literals() {
+        let m = super::GeneratedMutation {
+            sql: "UPDATE t\nSET x = ?\nWHERE id = ?".to_string(),
+            params: vec![Value::Text("1".to_string()), Value::Int(7)],
+            used_raw_expression: false,
+        };
+        assert_eq!(
+            m.materialize_for_editor(&DIALECT),
+            "UPDATE t\nSET x = '1'\nWHERE id = 7"
         );
     }
 

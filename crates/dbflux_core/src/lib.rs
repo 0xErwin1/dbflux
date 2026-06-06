@@ -135,9 +135,9 @@ pub use query::{
     VisualAggregateSpec, VisualMutationSpec, VisualQuerySpec, VisualSortDirection,
     classify_query_for_governance, classify_query_for_language, classify_sql_execution,
     classify_visual_mutation, contains_time_macros, detect_dangerous_query, detect_dangerous_sql,
-    infer_column_kind, is_safe_read_query, lower_keyset_predicate, parse_semantic_filter_json,
-    project_aggregate_kinds, render_filter_node_sql, render_semantic_filter_sql,
-    strip_leading_comments, substitute_time_macros,
+    infer_column_kind, inline_params, is_safe_read_query, lower_keyset_predicate,
+    parse_semantic_filter_json, project_aggregate_kinds, render_filter_node_sql,
+    render_semantic_filter_sql, strip_leading_comments, substitute_time_macros,
 };
 
 pub use query::relational_filter::{
@@ -216,7 +216,8 @@ pub use storage::{
     KeyringSecretStore, NoopSecretStore, ProfileStore, ProxyStore, RecentFile, RecentFilesStore,
     SavedQuery, SavedQueryManager, SavedQueryStore, SecretManager, SecretStore, SessionManifest,
     SessionStore, SessionTab, SessionTabKind, SshTunnelStore, UiState, UiStateStore,
-    connection_secret_ref, create_secret_store, proxy_secret_ref, ssh_tunnel_secret_ref,
+    auth_field_secret_ref, connection_secret_ref, create_secret_store, proxy_secret_ref,
+    ssh_tunnel_secret_ref,
 };
 
 pub use observability::{

@@ -6,14 +6,15 @@ use dbflux_components::controls::{
     CompletionProvider, Dropdown, DropdownItem, DropdownSelectionChanged, InputEvent, InputState,
 };
 use dbflux_core::{
-    AggFn, BoolOp, ColumnInfo, ColumnKind, Comparator, FilterNode, GroupByEntry, JoinFilterNode,
-    JoinKind, JoinOn, JoinPredicate, JoinStep, LiteralValue, Predicate, PredicateValue,
-    ProjectedColumn, Projection, SchemaForeignKeyInfo, SelectQuery, SortEntry, SourceTable,
-    VisualAggregateSpec, VisualQuerySpec, VisualSortDirection,
+    AggFn, BoolOp, ColumnInfo, ColumnKind, Comparator, CountSpec, FilterNode, GroupByEntry,
+    JoinFilterNode, JoinKind, JoinOn, JoinPredicate, JoinStep, LiteralValue, Predicate,
+    PredicateValue, ProjectedColumn, Projection, SchemaForeignKeyInfo, SelectQuery, SortEntry,
+    SourceTable, VisualAggregateSpec, VisualQuerySpec, VisualSortDirection, inline_params,
+    render_filter_node_sql,
 };
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Render, Subscription, WeakEntity,
-    Window,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Render, Subscription, Task,
+    WeakEntity, Window,
 };
 use uuid::Uuid;
 
@@ -31,6 +32,29 @@ use crate::query_builder::tree_ops::{
 
 /// Default page limit applied when the builder opens without a prior spec.
 const DEFAULT_LIMIT: u64 = 100;
+
+/// Builds the pre-execution `SELECT COUNT(*)` for a mutation's target rows.
+///
+/// Filter values are inlined into the SQL because drivers in this codebase do
+/// not bind `QueryRequest.params`; without inlining a filtered count fails with
+/// a parameter-count error and the estimate is never produced.
+fn build_mutation_count_sql(spec: &CountSpec, dialect: &dyn dbflux_core::SqlDialect) -> String {
+    let qualified = dialect.qualified_table(spec.from.schema.as_deref(), &spec.from.name);
+
+    let mut params = Vec::new();
+    let mut param_index = 1;
+    let where_clause =
+        render_filter_node_sql(spec.filter.as_ref(), dialect, &mut params, &mut param_index);
+
+    let sql = match where_clause {
+        Some(clause) if !clause.is_empty() => {
+            format!("SELECT COUNT(*) FROM {qualified} WHERE {clause}")
+        }
+        _ => format!("SELECT COUNT(*) FROM {qualified}"),
+    };
+
+    inline_params(&sql, &params, dialect)
+}
 
 /// Maximum nested group depth the UI will allow the user to create.
 ///
@@ -332,6 +356,24 @@ pub struct QueryBuilderPanel {
     /// per-column checklist when projection is not "All columns". Populated
     /// once at panel construction from the data grid's current result.
     pub(crate) available_columns: Vec<String>,
+
+    /// Semantic kind of each source column, keyed by column name. Used to
+    /// promote free-text SET values to a typed `ScalarLiteral` (e.g. integer)
+    /// when building the mutation spec, so a numeric column is not assigned a
+    /// string literal. Empty when no type information is available, in which
+    /// case values stay textual.
+    pub(crate) column_kinds: std::collections::HashMap<String, dbflux_core::ColumnKind>,
+
+    /// Serialized `(table, filter)` signature of the last mutation row-count
+    /// request. Used so the count is recomputed only when the target rows
+    /// actually change, not on every render or assignment edit. `None` while in
+    /// SELECT mode.
+    pub(crate) count_signature: Option<String>,
+
+    /// Debounced background task that runs the pre-execution row count and
+    /// writes the result into `mutation_state.count_state`. Replacing it cancels
+    /// any in-flight count, so rapid filter edits coalesce to the latest spec.
+    pub(crate) _count_debounce: Option<Task<()>>,
 
     /// Shared schema cache for completion providers.
     ///
@@ -710,6 +752,9 @@ impl QueryBuilderPanel {
             join_cond_right_inputs: HashMap::new(),
             join_cond_op_dropdowns: HashMap::new(),
             available_columns,
+            column_kinds: std::collections::HashMap::new(),
+            count_signature: None,
+            _count_debounce: None,
             schema_cache,
             app_state_weak,
             schema_profile_id: profile_id,
@@ -3047,7 +3092,7 @@ impl QueryBuilderPanel {
                     .assignments
                     .iter()
                     .filter(|r| !r.assignment.column.is_empty())
-                    .map(|r| r.assignment.clone())
+                    .map(|r| self.typed_assignment(r))
                     .collect();
                 MutationKind::Update { assignments }
             }
@@ -3060,6 +3105,109 @@ impl QueryBuilderPanel {
         };
 
         Some((spec, state.exec_options.clone()))
+    }
+
+    /// Clones an assignment row into its spec `Assignment`, promoting a free-text
+    /// literal to the target column's typed `ScalarLiteral` when the column kind
+    /// is known. Non-literal values (Expression / Null / Default) and columns
+    /// with unknown kind are left untouched.
+    fn typed_assignment(
+        &self,
+        row: &crate::query_builder::mutation_state::AssignmentRow,
+    ) -> dbflux_core::Assignment {
+        use dbflux_core::{AssignmentValue, ScalarLiteral};
+
+        let mut assignment = row.assignment.clone();
+
+        if let AssignmentValue::Literal(ScalarLiteral::Text(_)) = &assignment.value
+            && let Some(kind) = self.column_kinds.get(&assignment.column)
+        {
+            assignment.value =
+                AssignmentValue::Literal(ScalarLiteral::from_input_for_kind(&row.raw_text, *kind));
+        }
+
+        assignment
+    }
+
+    /// Recomputes the pre-execution row count when the target rows change.
+    ///
+    /// No-op in SELECT mode. The count depends only on `(table, filter)`, so it
+    /// is skipped when that signature is unchanged (assignment edits and the
+    /// Update/Delete toggle do not retrigger it). The query runs on a debounced
+    /// background task with a deadline and its result is written into
+    /// `mutation_state.count_state`; filter values are inlined because drivers
+    /// do not bind `QueryRequest.params`.
+    ///
+    /// Called from the render cycle, which fires after every state change.
+    pub(crate) fn maybe_refresh_mutation_count(&mut self, cx: &mut Context<Self>) {
+        use crate::data_grid_panel::mutation_executor::{CountState, count_with_deadline};
+        use std::time::Duration;
+
+        let in_mutation_mode = self
+            .mutation_state
+            .as_ref()
+            .map(|s| s.mode.is_mutation())
+            .unwrap_or(false);
+
+        if !in_mutation_mode {
+            self.count_signature = None;
+            return;
+        }
+
+        let count_spec = CountSpec {
+            from: dbflux_core::TableRef {
+                schema: self.current_spec.source.schema.clone(),
+                name: self.current_spec.source.table.clone(),
+            },
+            filter: self.current_spec.filter.clone(),
+        };
+
+        let signature = serde_json::to_string(&count_spec).unwrap_or_default();
+        if self.count_signature.as_deref() == Some(signature.as_str()) {
+            return;
+        }
+
+        let Some(app) = self.app_state_weak.upgrade() else {
+            return;
+        };
+        let Some(connection) = app
+            .read(cx)
+            .connections()
+            .get(&self.schema_profile_id)
+            .map(|c| c.connection.clone())
+        else {
+            return;
+        };
+
+        self.count_signature = Some(signature);
+        if let Some(state) = self.mutation_state.as_mut() {
+            state.count_state = CountState::Counting;
+        }
+
+        let count_sql = build_mutation_count_sql(&count_spec, connection.dialect());
+
+        self._count_debounce = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(300))
+                .await;
+
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    count_with_deadline(connection, count_sql, Vec::new(), Duration::from_secs(2))
+                })
+                .await;
+
+            this.update(cx, |panel, cx| {
+                if let Some(state) = panel.mutation_state.as_mut() {
+                    state.count_state = result;
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+
+        cx.notify();
     }
 
     // -----------------------------------------------------------------------
@@ -3684,6 +3832,9 @@ mod tests {
             join_cond_right_inputs: HashMap::new(),
             join_cond_op_dropdowns: HashMap::new(),
             available_columns: Vec::new(),
+            column_kinds: std::collections::HashMap::new(),
+            count_signature: None,
+            _count_debounce: None,
             schema_cache: Rc::new(RefCell::new(SchemaCache::default())),
             app_state_weak: WeakEntity::new_invalid(),
             schema_profile_id: Uuid::nil(),
@@ -5311,6 +5462,102 @@ mod tests {
             first.assignment.value,
             AssignmentValue::Literal(ScalarLiteral::Text("alice@example.com".to_string())),
         );
+    }
+
+    #[test]
+    fn build_mutation_spec_promotes_text_to_integer_for_integer_column() {
+        use crate::query_builder::mutation_state::{AssignmentRow, BuilderMode};
+        use dbflux_core::{Assignment, AssignmentValue, ColumnKind, MutationKind, ScalarLiteral};
+
+        let mut panel = make_panel(make_spec(test_source()));
+        panel
+            .column_kinds
+            .insert("id".to_string(), ColumnKind::Integer);
+        panel.t_switch_builder_mode(BuilderMode::Update);
+
+        panel
+            .mutation_state
+            .as_mut()
+            .unwrap()
+            .assignments
+            .push(AssignmentRow {
+                assignment: Assignment {
+                    column: String::new(),
+                    value: AssignmentValue::Literal(ScalarLiteral::Text(String::new())),
+                },
+                raw_text: String::new(),
+            });
+
+        panel.t_set_assignment_column(0, "id".to_string());
+        panel.t_set_assignment_raw_text(0, "12".to_string());
+
+        let (spec, _opts) = panel
+            .build_mutation_spec_and_opts()
+            .expect("update spec must build");
+
+        match spec.kind {
+            MutationKind::Update { assignments } => {
+                assert_eq!(
+                    assignments[0].value,
+                    AssignmentValue::Literal(ScalarLiteral::Integer(12)),
+                    "an integer column must receive a typed integer literal, not a string"
+                );
+            }
+            other => panic!("expected Update, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_mutation_count_sql_inlines_filter_value() {
+        use dbflux_core::{
+            Comparator, CountSpec, DefaultSqlDialect, FilterNode, LiteralValue, Predicate,
+            PredicateValue, TableRef,
+        };
+
+        let spec = CountSpec {
+            from: TableRef {
+                schema: None,
+                name: "obs".to_string(),
+            },
+            filter: Some(FilterNode::Predicate(Predicate {
+                source_alias: "obs".to_string(),
+                column: "status".to_string(),
+                comparator: Comparator::Eq,
+                value: PredicateValue::Single(LiteralValue::Integer(3)),
+                node_id: 0,
+            })),
+        };
+
+        let sql = build_mutation_count_sql(&spec, &DefaultSqlDialect);
+
+        assert!(sql.starts_with("SELECT COUNT(*) FROM"), "got: {sql}");
+        assert!(
+            sql.contains("WHERE"),
+            "filtered count must have WHERE: {sql}"
+        );
+        assert!(
+            !sql.contains('?'),
+            "filter value must be inlined, not a placeholder: {sql}"
+        );
+        assert!(sql.contains('3'), "inlined filter value missing: {sql}");
+    }
+
+    #[test]
+    fn build_mutation_count_sql_without_filter_has_no_where() {
+        use dbflux_core::{CountSpec, DefaultSqlDialect, TableRef};
+
+        let spec = CountSpec {
+            from: TableRef {
+                schema: None,
+                name: "obs".to_string(),
+            },
+            filter: None,
+        };
+
+        let sql = build_mutation_count_sql(&spec, &DefaultSqlDialect);
+
+        assert!(!sql.contains("WHERE"), "got: {sql}");
+        assert!(!sql.contains('?'), "got: {sql}");
     }
 
     #[test]

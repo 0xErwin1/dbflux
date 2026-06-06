@@ -332,7 +332,7 @@ impl RpcAuthProvider {
             self.secret_dependency_opt_in,
         );
 
-        let profile_json = serde_json::to_string(profile).map_err(|error| {
+        let profile_json = profile_to_wire_json(profile).map_err(|error| {
             FetchFieldOptionsError::Permanent(format!("could not serialize profile: {error}"))
         })?;
 
@@ -442,6 +442,31 @@ pub fn hash_dependencies(dependencies: &HashMap<String, String>) -> u64 {
     hasher.finish()
 }
 
+/// Serialize an auth profile for the IPC wire, re-merging secret-kind field
+/// values back into the flat `fields` map the external provider expects.
+///
+/// This is the single boundary where `AuthProfile::secret_fields` are exposed
+/// in plaintext. The derived `Serialize` skips that map, so without this merge
+/// an external provider would never receive the secret values it needs to
+/// authenticate. The output shape is identical to the legacy
+/// `serde_json::to_string(profile)` that kept secrets inline in `fields`.
+fn profile_to_wire_json(profile: &AuthProfile) -> Result<String, serde_json::Error> {
+    use secrecy::ExposeSecret;
+
+    let mut value = serde_json::to_value(profile)?;
+
+    if let Some(fields) = value.get_mut("fields").and_then(|f| f.as_object_mut()) {
+        for (key, secret) in &profile.secret_fields {
+            fields.insert(
+                key.clone(),
+                serde_json::Value::String(secret.expose_secret().to_string()),
+            );
+        }
+    }
+
+    serde_json::to_string(&value)
+}
+
 #[async_trait::async_trait]
 impl DynAuthProvider for RpcAuthProvider {
     fn provider_id(&self) -> &str {
@@ -461,7 +486,7 @@ impl DynAuthProvider for RpcAuthProvider {
     }
 
     async fn validate_session(&self, profile: &AuthProfile) -> Result<AuthSessionState, DbError> {
-        let profile_json = serde_json::to_string(profile)
+        let profile_json = profile_to_wire_json(profile)
             .map_err(|error| DbError::QueryFailed(error.to_string().into()))?;
 
         let responses = self.send_request(AuthProviderRequestBody::ValidateSession(
@@ -486,7 +511,7 @@ impl DynAuthProvider for RpcAuthProvider {
         profile: &AuthProfile,
         url_callback: UrlCallback,
     ) -> Result<AuthSession, DbError> {
-        let profile_json = serde_json::to_string(profile)
+        let profile_json = profile_to_wire_json(profile)
             .map_err(|error| DbError::QueryFailed(error.to_string().into()))?;
 
         let responses = self.send_request(AuthProviderRequestBody::Login(LoginRequest {
@@ -530,7 +555,7 @@ impl DynAuthProvider for RpcAuthProvider {
         &self,
         profile: &AuthProfile,
     ) -> Result<ResolvedCredentials, DbError> {
-        let profile_json = serde_json::to_string(profile)
+        let profile_json = profile_to_wire_json(profile)
             .map_err(|error| DbError::QueryFailed(error.to_string().into()))?;
 
         let responses = self.send_request(AuthProviderRequestBody::ResolveCredentials(
