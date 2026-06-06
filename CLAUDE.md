@@ -435,8 +435,11 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 
 **Important runtime rules**:
 - `preview_mutation` must stay read-only and must never execute the mutation being previewed
-- `preview_ddl` is intentionally not exposed until DBFlux has a safe non-mutating schema preview path
 - `select_data` rejects unsupported `joins` explicitly instead of ignoring them
+
+**Trust model**:
+
+MCP authentication is process-identity only: presenting `--client-id` is the sole authentication signal. Any local process that knows the client ID can connect. This is not a cryptographic guarantee. Do not expose the MCP server beyond localhost without an additional authentication layer. A cryptographic MCP auth layer is a P3 follow-up item.
 
 **Policy Engine** (`dbflux_policy`):
 - `PolicyEngine::evaluate()` takes actor, connection, tool, and classification
