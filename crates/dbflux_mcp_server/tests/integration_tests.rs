@@ -28,7 +28,10 @@ fn build_runtime_with_role(connection_id: &str, role_id: &str) -> McpRuntime {
     ));
     let audit_service = dbflux_audit::AuditService::new_sqlite(&audit_path)
         .expect("failed to create test audit service");
-    let mut runtime = McpRuntime::new(audit_service);
+    let mut runtime = McpRuntime::new(
+        audit_service,
+        Box::new(dbflux_approval::InMemoryPendingExecutionStore::default()),
+    );
 
     for role in builtin_roles() {
         let _ = runtime.upsert_role_mut(role);

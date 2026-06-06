@@ -823,7 +823,9 @@ mod tests {
     #[test]
     fn test_upsert_writes_through_and_updates_cache() {
         let rt = temp_storage();
-        let conn = rt.viz_connection();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         let repo = Arc::new(SavedChartsRepository::new(Arc::clone(&conn)));
 
         let profile_id = Uuid::new_v4();
@@ -852,7 +854,9 @@ mod tests {
     #[test]
     fn test_empty_database_yields_empty_cache() {
         let rt = temp_storage();
-        let conn = rt.viz_connection();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         let repo = Arc::new(SavedChartsRepository::new(conn));
         let manager = SavedChartManager::new(repo);
         assert!(
@@ -909,7 +913,9 @@ mod tests {
     #[test]
     fn test_rename_chart_updates_name_in_cache() {
         let rt = temp_storage();
-        let conn = rt.viz_connection();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         let repo = Arc::new(SavedChartsRepository::new(Arc::clone(&conn)));
         let profile_id = Uuid::new_v4();
         insert_test_profile(&conn, profile_id);
@@ -931,7 +937,9 @@ mod tests {
     #[test]
     fn test_rename_chart_not_found_returns_err() {
         let rt = temp_storage();
-        let conn = rt.viz_connection();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         let repo = Arc::new(SavedChartsRepository::new(conn));
         let mut mgr = SavedChartManager::new(repo);
         let result = mgr.rename_chart(Uuid::new_v4(), "X".to_string());
@@ -943,7 +951,9 @@ mod tests {
     #[test]
     fn test_delete_chart_removes_from_cache_and_storage() {
         let rt = temp_storage();
-        let conn = rt.viz_connection();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         let repo = Arc::new(SavedChartsRepository::new(Arc::clone(&conn)));
         let profile_id = Uuid::new_v4();
         insert_test_profile(&conn, profile_id);
@@ -969,7 +979,9 @@ mod tests {
     #[test]
     fn test_duplicate_chart_creates_copy_with_copy_of_prefix() {
         let rt = temp_storage();
-        let conn = rt.viz_connection();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         let repo = Arc::new(SavedChartsRepository::new(Arc::clone(&conn)));
         let profile_id = Uuid::new_v4();
         insert_test_profile(&conn, profile_id);
@@ -994,7 +1006,9 @@ mod tests {
     #[test]
     fn test_duplicate_chart_not_found_returns_err() {
         let rt = temp_storage();
-        let conn = rt.viz_connection();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         let repo = Arc::new(SavedChartsRepository::new(conn));
         let mut mgr = SavedChartManager::new(repo);
         let result = mgr.duplicate_chart(Uuid::new_v4());
@@ -1006,7 +1020,9 @@ mod tests {
     #[test]
     fn test_metric_source_roundtrip_via_manager() {
         let rt = temp_storage();
-        let conn = rt.viz_connection();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         let repo = Arc::new(SavedChartsRepository::new(Arc::clone(&conn)));
 
         let profile_id = Uuid::new_v4();
@@ -1050,7 +1066,9 @@ mod tests {
     #[test]
     fn test_saved_chart_instance_metric_source_roundtrip() {
         let rt = temp_storage();
-        let conn = rt.viz_connection();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         let repo = Arc::new(SavedChartsRepository::new(Arc::clone(&conn)));
 
         let profile_id = Uuid::new_v4();

@@ -497,29 +497,78 @@ impl AuditService {
             event = self.apply_redaction(event);
         }
 
-        self.enforce_max_detail_bytes(&event)?;
+        let event = self.enforce_max_detail_bytes(event)?;
 
         Ok(event)
     }
 
-    fn enforce_max_detail_bytes(&self, event: &EventRecord) -> Result<(), AuditError> {
+    fn enforce_max_detail_bytes(&self, mut event: EventRecord) -> Result<EventRecord, AuditError> {
         let Some(details) = event.details_json.as_ref() else {
-            return Ok(());
+            return Ok(event);
         };
 
-        let detail_len = details.len();
-        let max_detail_bytes = self.max_detail_bytes();
+        let max = self.max_detail_bytes();
 
-        if detail_len > max_detail_bytes {
-            return Err(AuditError::EventSink(EventSinkError::Serialization(
-                format!(
-                    "details_json exceeds max_detail_bytes ({} > {})",
-                    detail_len, max_detail_bytes
-                ),
-            )));
+        if details.len() <= max {
+            return Ok(event);
         }
 
-        Ok(())
+        event.details_json = Self::build_truncated_envelope(details, max)?;
+
+        Ok(event)
+    }
+
+    /// Builds a `{"__truncated":true,"partial":"..."}` envelope whose serialized
+    /// form is guaranteed to be at most `max_bytes` in length.
+    ///
+    /// The partial value is the original string sliced to a valid UTF-8 boundary
+    /// and then shrunk until the full JSON-serialized envelope fits the budget.
+    ///
+    /// When `max_bytes` is too small to hold even the minimal
+    /// `{"__truncated":true,"partial":""}` envelope (33 bytes), `None` is returned
+    /// so the caller drops `details_json` entirely rather than storing an
+    /// over-budget string.
+    fn build_truncated_envelope(
+        details: &str,
+        max_bytes: usize,
+    ) -> Result<Option<String>, AuditError> {
+        const MINIMAL_ENVELOPE: &str = r#"{"__truncated":true,"partial":""}"#;
+
+        if max_bytes < MINIMAL_ENVELOPE.len() {
+            return Ok(None);
+        }
+
+        let mut budget = max_bytes;
+        let candidate = details;
+
+        loop {
+            let end = candidate
+                .char_indices()
+                .map(|(i, _)| i)
+                .take_while(|&i| i < budget)
+                .last()
+                .unwrap_or(0);
+
+            let sliced = &candidate[..end];
+
+            let envelope = serde_json::json!({
+                "__truncated": true,
+                "partial": sliced,
+            });
+
+            let serialized = serde_json::to_string(&envelope)
+                .map_err(|e| AuditError::EventSink(EventSinkError::Serialization(e.to_string())))?;
+
+            if serialized.len() <= max_bytes {
+                return Ok(Some(serialized));
+            }
+
+            if budget == 0 {
+                return Ok(Some(MINIMAL_ENVELOPE.to_string()));
+            }
+
+            budget = budget.saturating_sub(serialized.len().saturating_sub(max_bytes) + 1);
+        }
     }
 
     /// Applies redaction for sensitive values in details_json and error_message.
@@ -1153,5 +1202,41 @@ mod tests {
 
         AuditService::validate_event(&event)
             .expect("ExternalAuthProvider Connection events must pass validation");
+    }
+
+    // W1: build_truncated_envelope must never return a string longer than max_bytes.
+    #[test]
+    fn truncated_envelope_never_exceeds_max_bytes_zero() {
+        let result = AuditService::build_truncated_envelope("some long details", 0)
+            .expect("should not error");
+        assert!(
+            result.is_none(),
+            "max_bytes=0 is below the minimal envelope; expected None, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn truncated_envelope_never_exceeds_max_bytes_small() {
+        for max in [0usize, 10, 32] {
+            let result = AuditService::build_truncated_envelope("some long details", max)
+                .expect("should not error");
+            if let Some(s) = &result {
+                assert!(
+                    s.len() <= max,
+                    "max_bytes={max}: envelope length {} exceeds budget",
+                    s.len()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn truncated_envelope_exact_minimal_boundary() {
+        // 33 is the length of the minimal envelope — should succeed and return Some.
+        let result =
+            AuditService::build_truncated_envelope("hello world", 33).expect("should not error");
+        let s = result.expect("33 bytes is exactly enough for minimal envelope");
+        assert!(s.len() <= 33, "envelope length {} exceeds 33", s.len());
     }
 }

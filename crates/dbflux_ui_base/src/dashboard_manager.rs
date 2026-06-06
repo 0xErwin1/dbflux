@@ -1021,7 +1021,9 @@ mod tests {
 
     fn make_manager_with_rt() -> (DashboardManager, StorageRuntime) {
         let rt = StorageRuntime::in_memory().unwrap();
-        let conn = rt.viz_connection();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         let dashboards_repo = Arc::new(DashboardsRepository::new(Arc::clone(&conn)));
         let panels_repo = Arc::new(DashboardPanelsRepository::new(Arc::clone(&conn)));
         let mgr = DashboardManager::new(dashboards_repo, panels_repo);
@@ -1031,7 +1033,9 @@ mod tests {
     /// Inserts a minimal profile row and returns its UUID.
     fn insert_profile(rt: &StorageRuntime) -> Uuid {
         let id = Uuid::new_v4();
-        let conn_guard = rt.viz_connection();
+        let conn_guard = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         let conn = conn_guard.lock().unwrap();
         conn.execute(
             "INSERT INTO cfg_connection_profiles (id, name) VALUES (?1, ?2)",
@@ -1559,7 +1563,9 @@ mod tests {
     #[test]
     fn test_replace_panels_atomic_cache_update() {
         let rt = StorageRuntime::in_memory().unwrap();
-        let conn = rt.viz_connection();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         let dashboards_repo = Arc::new(DashboardsRepository::new(Arc::clone(&conn)));
         let panels_repo = Arc::new(DashboardPanelsRepository::new(Arc::clone(&conn)));
         let mut manager =

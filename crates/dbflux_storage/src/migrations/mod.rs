@@ -14,6 +14,7 @@
 //!
 //! ## Domain Prefix Convention
 //!
+//! - `app_*` — Application runtime domain (pending approvals, transient runtime state)
 //! - `cfg_*` — Config domain (profiles, auth, hooks, services, governance)
 //! - `st_*`  — State domain (sessions, query history, UI state)
 //! - `aud_*` — Audit domain (audit events)
@@ -157,6 +158,7 @@ impl MigrationRegistry {
         registry.register(mod_015_viz_inspector_saved_chart_id_constraint::MigrationImpl);
         registry.register(mod_016_viz_divider_saved_chart_id_constraint::MigrationImpl);
         registry.register(mod_017_qry_saved_queries::MigrationImpl);
+        registry.register(mod_018_app_pending_executions::MigrationImpl);
         registry
     }
 
@@ -283,8 +285,7 @@ impl MigrationRegistry {
         let mut stmt = conn.prepare("SELECT name FROM sys_migrations")?;
         let names: std::collections::HashSet<String> = stmt
             .query_map([], |row| row.get::<_, String>(0))?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Result<std::collections::HashSet<_>, _>>()?;
         Ok(names)
     }
 }
@@ -295,6 +296,7 @@ impl Default for MigrationRegistry {
     }
 }
 
+pub mod aud_schema;
 mod mod_001_initial;
 mod mod_002_audit_extended;
 mod mod_003_audit_settings;
@@ -315,6 +317,7 @@ mod mod_014_viz_inspector_and_instance_metric;
 mod mod_015_viz_inspector_saved_chart_id_constraint;
 mod mod_016_viz_divider_saved_chart_id_constraint;
 mod mod_017_qry_saved_queries;
+mod mod_018_app_pending_executions;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;

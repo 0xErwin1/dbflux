@@ -262,7 +262,18 @@ fn run_gui() {
         dbflux_ui::ui::components::data_table::init(cx);
         dbflux_ui::ui::components::document_tree::init(cx);
 
-        let app_state = cx.new(|_cx| AppStateEntity::new());
+        let app_state_inner = match AppStateEntity::new() {
+            Ok(state) => state,
+            Err(e) => {
+                eprintln!(
+                    "DBFlux: failed to initialize storage — cannot open database: {e}\n\
+                     Check that ~/.local/share/dbflux is accessible and not corrupted."
+                );
+                cx.quit();
+                return;
+            }
+        };
+        let app_state = cx.new(|_cx| app_state_inner);
 
         // Wire the bridge into the audit service before cloning it out.
         // `attach_tracing_bridge` must be called on the owned `AppState`

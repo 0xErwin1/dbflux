@@ -161,7 +161,17 @@ fn add_column_if_not_exists(
 }
 
 /// Checks if a column exists in a table.
+///
+/// Returns `Err` immediately if `table` contains characters outside `[A-Za-z0-9_]`
+/// so the name is never interpolated into raw SQL when it contains injection
+/// characters.
 fn column_exists(tx: &Transaction, table: &str, column: &str) -> SqliteResult<bool> {
+    if !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "invalid table identifier: {table}"
+        )));
+    }
+
     let mut stmt = tx.prepare(&format!(
         "SELECT COUNT(*) FROM pragma_table_info('{}') WHERE name = ?",
         table
@@ -170,4 +180,47 @@ fn column_exists(tx: &Transaction, table: &str, column: &str) -> SqliteResult<bo
     let count: i64 = stmt.query_row([column], |row| row.get(0))?;
 
     Ok(count > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::Connection;
+
+    use super::column_exists;
+
+    fn open_tx(conn: &Connection) -> rusqlite::Transaction {
+        conn.unchecked_transaction().unwrap()
+    }
+
+    #[test]
+    fn column_exists_rejects_injection_table_name() {
+        let conn = Connection::open_in_memory().unwrap();
+        let tx = open_tx(&conn);
+
+        let result = column_exists(&tx, "aud'; DROP TABLE aud_audit_events; --", "name");
+        assert!(
+            result.is_err(),
+            "column_exists must return Err for a table name containing injection characters"
+        );
+
+        let result2 = column_exists(&tx, "aud_audit_events; DROP TABLE x", "severity");
+        assert!(
+            result2.is_err(),
+            "column_exists must return Err for a table name containing a semicolon"
+        );
+    }
+
+    #[test]
+    fn column_exists_valid_table_name_succeeds() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE aud_audit_events (id TEXT PRIMARY KEY, level TEXT)")
+            .unwrap();
+        let tx = open_tx(&conn);
+
+        let result = column_exists(&tx, "aud_audit_events", "level");
+        assert!(
+            result.is_ok(),
+            "column_exists must not error for a valid table name"
+        );
+    }
 }

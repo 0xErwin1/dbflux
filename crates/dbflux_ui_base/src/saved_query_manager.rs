@@ -289,7 +289,9 @@ mod tests {
 
     fn make_manager() -> SavedQueryManager {
         let rt = StorageRuntime::in_memory().unwrap();
-        let conn = rt.viz_connection();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         SavedQueryManager::new(Arc::new(SavedQueryRepo::new(conn)))
     }
 
@@ -358,7 +360,9 @@ mod tests {
     #[test]
     fn test_list_returns_saved_query_after_save() {
         let rt = StorageRuntime::in_memory().unwrap();
-        let conn = rt.viz_connection();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         insert_profile(&conn, "p1");
         let mut mgr = make_manager_from_conn(conn);
 
@@ -373,7 +377,9 @@ mod tests {
     #[test]
     fn test_save_updates_cache_on_success() {
         let rt = StorageRuntime::in_memory().unwrap();
-        let conn = rt.viz_connection();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         insert_profile(&conn, "p1");
         let mut mgr = make_manager_from_conn(conn);
 
@@ -387,7 +393,9 @@ mod tests {
     #[test]
     fn test_save_same_name_overwrites_existing_row() {
         let rt = StorageRuntime::in_memory().unwrap();
-        let conn = rt.viz_connection();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         insert_profile(&conn, "p1");
         let mut mgr = make_manager_from_conn(Arc::clone(&conn));
 
@@ -410,7 +418,9 @@ mod tests {
     #[test]
     fn test_list_order_stable_by_updated_at_desc() {
         let rt = StorageRuntime::in_memory().unwrap();
-        let conn = rt.viz_connection();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         insert_profile(&conn, "p1");
 
         let repo = Arc::new(SavedQueryRepo::new(Arc::clone(&conn)));
@@ -454,7 +464,9 @@ mod tests {
     #[test]
     fn test_delete_removes_from_cache() {
         let rt = StorageRuntime::in_memory().unwrap();
-        let conn = rt.viz_connection();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         insert_profile(&conn, "p1");
         let mut mgr = make_manager_from_conn(conn);
 
@@ -469,7 +481,9 @@ mod tests {
     #[test]
     fn test_rename_updates_cache() {
         let rt = StorageRuntime::in_memory().unwrap();
-        let conn = rt.viz_connection();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         insert_profile(&conn, "p1");
         let mut mgr = make_manager_from_conn(conn);
 
@@ -484,7 +498,9 @@ mod tests {
     #[test]
     fn test_rename_conflict_returns_err_and_cache_unchanged() {
         let rt = StorageRuntime::in_memory().unwrap();
-        let conn = rt.viz_connection();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         insert_profile(&conn, "p1");
         let mut mgr = make_manager_from_conn(conn);
 
@@ -506,7 +522,9 @@ mod tests {
     #[test]
     fn test_fork_creates_new_row_with_copy_suffix() {
         let rt = StorageRuntime::in_memory().unwrap();
-        let conn = rt.viz_connection();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         insert_profile(&conn, "p1");
         let mut mgr = make_manager_from_conn(conn);
 
@@ -525,7 +543,9 @@ mod tests {
     #[test]
     fn test_import_to_succeeds_when_table_exists() {
         let rt = StorageRuntime::in_memory().unwrap();
-        let conn = rt.viz_connection();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         insert_profile(&conn, "source-profile");
         insert_profile(&conn, "target-profile");
         let mut mgr = make_manager_from_conn(conn);
@@ -549,7 +569,9 @@ mod tests {
     #[test]
     fn test_import_to_fails_when_table_absent() {
         let rt = StorageRuntime::in_memory().unwrap();
-        let conn = rt.viz_connection();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         insert_profile(&conn, "source-profile");
         insert_profile(&conn, "target-profile");
         let mut mgr = make_manager_from_conn(conn);
@@ -571,7 +593,9 @@ mod tests {
     #[test]
     fn test_import_to_fails_when_connection_offline() {
         let rt = StorageRuntime::in_memory().unwrap();
-        let conn = rt.viz_connection();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
         insert_profile(&conn, "source-profile");
         insert_profile(&conn, "target-profile");
         let mut mgr = make_manager_from_conn(conn);

@@ -12,7 +12,7 @@
 
 use rusqlite::Transaction;
 
-use crate::migrations::{Migration, MigrationError};
+use crate::migrations::{Migration, MigrationError, aud_schema};
 
 /// The initial unified schema migration.
 pub struct MigrationImpl;
@@ -23,16 +23,33 @@ impl Migration for MigrationImpl {
     }
 
     fn run(&self, tx: &Transaction) -> Result<(), MigrationError> {
-        tx.execute_batch(SCHEMA)
+        tx.execute_batch(SCHEMA_BEFORE_AUD)
             .map_err(|source| MigrationError::Sqlite {
                 path: std::path::PathBuf::from("<unknown>"),
                 source,
             })?;
+
+        aud_schema::create_aud_audit_events(tx, true).map_err(|source| MigrationError::Sqlite {
+            path: std::path::PathBuf::from("<unknown>"),
+            source,
+        })?;
+
+        tx.execute_batch(SCHEMA_AUD_CHILD_TABLES)
+            .map_err(|source| MigrationError::Sqlite {
+                path: std::path::PathBuf::from("<unknown>"),
+                source,
+            })?;
+
         Ok(())
     }
 }
 
-const SCHEMA: &str = r#"
+/// Schema DDL for all domains except `aud_audit_events`.
+///
+/// The `aud_audit_events` table and its 6 base indexes are created by
+/// `aud_schema::create_aud_audit_events` so the schema stays in one
+/// canonical place and is shared with the standalone audit store.
+const SCHEMA_BEFORE_AUD: &str = r#"
 -- ============================================================================
 -- SYSTEM DOMAIN (sys_*) - Must be created first due to FK dependencies
 -- ============================================================================
@@ -794,38 +811,14 @@ CREATE INDEX IF NOT EXISTS idx_st_event_log_actor_created
 CREATE INDEX IF NOT EXISTS idx_st_event_log_tool_created
     ON st_event_log(tool_id, created_at DESC);
 
--- ============================================================================
--- AUDIT DOMAIN (aud_*) - Audit events with enriched schema
--- ============================================================================
+"#;
 
--- Audit events
-CREATE TABLE IF NOT EXISTS aud_audit_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    actor_id TEXT NOT NULL,
-    tool_id TEXT NOT NULL,
-    decision TEXT NOT NULL,
-    reason TEXT,
-    profile_id TEXT,
-    classification TEXT,
-    duration_ms INTEGER,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    created_at_epoch_ms INTEGER NOT NULL,
-    FOREIGN KEY (profile_id) REFERENCES cfg_connection_profiles(id) ON DELETE SET NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_aud_audit_events_actor
-    ON aud_audit_events(actor_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_aud_audit_events_tool
-    ON aud_audit_events(tool_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_aud_audit_events_profile
-    ON aud_audit_events(profile_id);
-CREATE INDEX IF NOT EXISTS idx_aud_audit_events_decision
-    ON aud_audit_events(decision);
-CREATE INDEX IF NOT EXISTS idx_aud_audit_events_created
-    ON aud_audit_events(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_aud_audit_events_created_epoch
-    ON aud_audit_events(created_at_epoch_ms DESC);
-
+/// Child tables for the audit domain.
+///
+/// These tables reference `aud_audit_events` via FK and must be created AFTER
+/// the main events table. They are NOT included in `aud_schema::create_aud_audit_events`
+/// because the standalone store never creates them (it only writes to `aud_audit_events`).
+const SCHEMA_AUD_CHILD_TABLES: &str = r#"
 -- Audit event entities (affected objects)
 CREATE TABLE IF NOT EXISTS aud_audit_event_entities (
     id TEXT PRIMARY KEY,

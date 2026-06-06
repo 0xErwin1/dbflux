@@ -13,6 +13,7 @@ license.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+dbflux_approval.workspace = true
 dbflux_core.workspace = true
 dirs.workspace = true
 rusqlite.workspace = true
@@ -28,7 +29,9 @@ hex.workspace = true
 chrono = "0.4"
 
 [dev-dependencies]
+dbflux_policy.workspace = true
 tempfile = "3"
+uuid.workspace = true
 
 [dev-dependencies.rusqlite]
 version = "0.32"

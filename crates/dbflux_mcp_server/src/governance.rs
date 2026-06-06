@@ -359,7 +359,10 @@ mod tests {
         ));
         let audit_service = dbflux_audit::AuditService::new_sqlite(&temp_path)
             .expect("failed to create test audit service");
-        let mut runtime = McpRuntime::new(audit_service);
+        let mut runtime = McpRuntime::new(
+            audit_service,
+            Box::new(dbflux_approval::InMemoryPendingExecutionStore::default()),
+        );
 
         // Register built-in roles and policies
         for role in builtin_roles() {
