@@ -445,28 +445,44 @@ mod tests {
 
     #[test]
     fn test_drop_index_denied_by_admin_destructive_policy() {
-        // A policy with ceiling=Admin must not satisfy a drop_index request
-        // classified AdminDestructive. We verify this by checking that the
-        // max() of (Admin, AdminDestructive) is AdminDestructive — meaning the
-        // operation requires a stricter level than the ceiling grants.
-        let classification = DbFluxServer::classify_tool("drop_index")
-            .expect("drop_index must have a classification");
-        assert_eq!(
-            classification,
-            ExecutionClassification::AdminDestructive,
-            "drop_index classification must be AdminDestructive for the policy deny to trigger"
+        use dbflux_policy::{
+            ConnectionPolicyAssignment, PolicyBindingScope, PolicyDecision, PolicyDecisionReason,
+            PolicyEngine, PolicyEvaluationRequest, ToolPolicy,
+        };
+
+        let engine = PolicyEngine::new(
+            vec![ConnectionPolicyAssignment {
+                actor_id: "actor".to_string(),
+                scope: PolicyBindingScope {
+                    connection_id: "conn".to_string(),
+                },
+                role_ids: vec![],
+                policy_ids: vec!["admin-only".to_string()],
+            }],
+            vec![],
+            vec![ToolPolicy {
+                id: "admin-only".to_string(),
+                allowed_tools: vec!["drop_index".to_string()],
+                allowed_classes: vec![ExecutionClassification::Admin],
+            }],
         );
 
-        let policy_ceiling = ExecutionClassification::Admin;
+        let classification = DbFluxServer::classify_tool("drop_index")
+            .expect("drop_index must have a classification");
+
+        let decision = engine
+            .evaluate(&PolicyEvaluationRequest {
+                actor_id: "actor".to_string(),
+                connection_id: "conn".to_string(),
+                tool_id: "drop_index".to_string(),
+                classification,
+            })
+            .expect("evaluation must not error");
+
         assert_eq!(
-            policy_ceiling.max(classification),
-            ExecutionClassification::AdminDestructive,
-            "AdminDestructive is more restrictive than Admin — a policy capped at Admin denies it"
-        );
-        assert_ne!(
-            policy_ceiling.max(classification),
-            policy_ceiling,
-            "drop_index should not fit within an Admin-capped policy"
+            decision,
+            PolicyDecision::Deny(PolicyDecisionReason::ClassificationDenied),
+            "an Admin-only policy must not authorize drop_index when it is classified AdminDestructive"
         );
     }
 }
