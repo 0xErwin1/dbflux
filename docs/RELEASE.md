@@ -58,7 +58,7 @@ The workspace version (`Cargo.toml` `[workspace.package].version`) is the source
    - Commit the fix on `main` first (its entry goes under `[0.6.0]`; `main` stays at the `v0.6.0-rc.0` marker).
    - `git cherry-pick -x <sha>` into `release/v0.6`.
    - Bump the release branch to `v0.6.0-rc.1` and tag `v0.6.0-rc.1`.
-4. When clean, drop the suffix on `release/v0.6` → tag `v0.6.0`. This is the stable release.
+4. When clean, **curate `[0.6.0]`** (fold the `[0.6.0-dev.N]` + RC fixes into one user-facing section, drop intra-version churn, remove the dev sections), then drop the suffix on `release/v0.6` → tag `v0.6.0`. This is the stable release.
 5. **Only now** does `main` open the next cycle: bump to `v0.7.0-dev.0`, open a fresh `[Unreleased]`.
 6. Patches (`v0.6.1`, `v0.6.2`, ...) come from the same release branch (cherry-picks from main, which is now on `v0.7.0-dev.N`).
 
@@ -87,14 +87,29 @@ When stabilization begins:
    - Push.
 7. Tag `vX.Y.0-rc.0` on the release branch.
 
-At this point `main` and `release/vX.Y` have identical trees; they diverge only as stabilization fixes are tagged on the branch. When the stable `vX.Y.0` ships, run **Begin Next Dev Cycle** below.
+At this point `main` and `release/vX.Y` have identical trees; they diverge only as stabilization fixes are tagged on the branch. When the stable `vX.Y.0` is ready, run **Promote to Stable** and then **Begin Next Dev Cycle** below.
+
+## Promote to Stable: `release/vX.Y` → `vX.Y.0`
+
+Run on `release/vX.Y` when the RC is clean, **before** tagging the stable. The release workflow extracts `## [X.Y.0]` from the tagged tree, so the curated section must exist in the promotion commit.
+
+1. **Curate `## [X.Y.0]`** into the changelog a user upgrading from the previous stable should read (see *Promoting to stable* under CHANGELOG Discipline):
+   - Fold every user-visible change from all `## [X.Y.0-dev.N]` sections and the RC stabilization fixes into the single `## [X.Y.0]` section.
+   - Drop intra-version churn: an entry that fixes, tweaks, or reverts something first introduced within this same `X.Y.0` cycle does not ship as its own line — describe the feature only in its final state. A bullet survives only if it is a net delta versus the **previous stable**.
+   - Group under `Added` / `Changed` / `Fixed` / `Security` / `Removed`.
+   - Delete the now-folded `## [X.Y.0-dev.N]` sections. Their granular notes remain on the published `-dev.N` GitHub prereleases and in git history.
+2. Set the `## [X.Y.0]` date to the stable release date.
+3. Bump every versioned artifact from `X.Y.0-rc.N` to `X.Y.0` (drop the suffix).
+4. Commit: `chore(release): promote release/vX.Y to vX.Y.0`.
+5. Tag `vX.Y.0` on the release branch and push branch + tag.
 
 ## Begin Next Dev Cycle: after stable `vX.Y.0`
 
 Run this **only after** the stable `vX.Y.0` tag is pushed from `release/vX.Y`. Until then `main` stays on the RC marker.
 
 1. On `main`:
-   - Open a fresh `## [Unreleased]` block in `CHANGELOG.md` above the `## [X.Y.0]` section. If the date on `## [X.Y.0]` is the RC-cut date, correct it to the stable release date to match the release branch.
+   - Replace main's `## [X.Y.0]` **and** its `## [X.Y.0-dev.N]` sections with the single curated `## [X.Y.0]` exactly as it landed on `release/vX.Y` (same content, same date). After this, `main` and the release branch agree on the stable section and `main` carries no `-dev.N` sections for the shipped minor.
+   - Open a fresh `## [Unreleased]` block above `## [X.Y.0]`.
    - Bump every versioned artifact to `X.(Y+1).0-dev.0`.
    - Commit: `chore(version): begin X.(Y+1).0-dev cycle`.
    - Push.
@@ -125,6 +140,8 @@ The discipline differs by phase. The key idea: an entry lives under exactly one 
 **Cutting `release/vX.Y`.** The `[Unreleased]` snapshot becomes `## [X.Y.0] - YYYY-MM-DD` on **both** the release branch and `main` (their trees are identical at the cut). `main` does **not** open a fresh `[Unreleased]` — while the release stabilizes, new fix entries are appended under `## [X.Y.0]`, because those fixes ship in `X.Y.0`.
 
 **During the RC window.** A stabilization fix lands on `main` (entry under `## [X.Y.0]`), then is cherry-picked into `release/vX.Y` (which carries the same `## [X.Y.0]`). No `[Unreleased]`/removal dance is needed here — both branches are the same release line.
+
+**Promoting to stable.** Before tagging `vX.Y.0`, curate `## [X.Y.0]` on the release branch into the notes a user upgrading from the **previous stable** needs. Fold all `## [X.Y.0-dev.N]` entries and the RC fixes into it; collapse intra-version churn — a fix to a feature that was itself introduced within `X.Y.0` describes a state stable users never saw, so it is dropped, not listed; keep only net deltas versus the previous stable. Then delete the `## [X.Y.0-dev.N]` sections (they live on the `-dev.N` GitHub prereleases and in git history). This preserves the *one entry, one header* rule: each shipped change ends under `## [X.Y.0]` and nowhere else.
 
 **After the stable `vX.Y.0` and the next dev cycle opens.** `main` returns to a single `## [Unreleased]` on top. From here, a fix destined for a `vX.Y.(Z+1)` patch lands on main's `[Unreleased]`, is cherry-picked into `release/vX.Y` under `## [X.Y.(Z+1)]`, and **the same entry must then be removed from main's `[Unreleased]`** — once shipped on a release branch it is no longer "unreleased" in main's history. Skipping this is what left main's `[Unreleased]` carrying stale `v0.5.1` content after that release.
 
@@ -218,6 +235,7 @@ Not yet upstream. When it is, only stable tags will get a PR to `NixOS/nixpkgs` 
 - Creating new features (non-fix commits) on a `release/*` branch.
 - Bumping minor or major version inside a `release/*` branch.
 - Opening the next `-dev` cycle on `main` (bumping to `vX.(Y+1).0-dev.0`) before the stable `vX.Y.0` has shipped. During the RC window `main` stays on the `vX.Y.0-rc.0` marker.
+- Tagging stable `vX.Y.0` without curating `## [X.Y.0]` — leaving raw per-dev sections or intra-version fix noise (a "fix" for a feature that never existed in any prior stable) in the published stable notes.
 - Pushing a tag without a clean working tree.
 - Pushing the AUR bump with `pkgver` containing a hyphen.
 - Cherry-picking a commit with a `CHANGELOG.md` entry into a release branch without then removing that entry from main's `[Unreleased]` block.
