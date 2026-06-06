@@ -127,7 +127,7 @@ Per release, update all of the following to the exact same version:
 
 After the GitHub Release artifacts for the tag are published, also update:
 
-- `nix/release-info.nix` — `version` + both prebuilt-tarball `url`s and `hash`es (see "Nix" under "Downstream Channels"). This pins the prebuilt package to the release line the default branch currently serves: each `-dev.N` during development, the `-rc.0` marker at an RC cut, and the stable `vX.Y.Z`. It requires the published artifacts, so it lands as a follow-up commit once the release workflow finishes.
+- `nix/release-info.nix` — `version` + both prebuilt-tarball `url`s and `hash`es (see "Nix" under "Downstream Channels"). This is a per-branch channel pointer: `main` tracks the newest published tag of any kind, each `release/vX.Y` tracks its own line's newest. It requires the published artifacts, so it lands as a follow-up commit (one per affected branch) once the release workflow finishes.
 
 The AUR `PKGBUILD` lives in an **external AUR repository**, not in this repo. It is bumped only for stable tags.
 
@@ -188,11 +188,11 @@ Batch the cleanup into a single commit on `main` once the release branch is tagg
 
 | Tag kind          | GitHub Release | AUR              | Nix flake (this repo)        | nixpkgs (future)  |
 |-------------------|----------------|------------------|------------------------------|-------------------|
-| `-dev.N` (main)   | prerelease     | skip             | bump `release-info` ¹        | skip              |
-| `-rc.N` (release) | prerelease     | skip             | `-rc.0`: bump ¹ · else skip  | skip              |
-| Stable `vX.Y.Z`   | published      | bump + push      | bump `release-info`          | bump + PR         |
+| `-dev.N` (main)   | prerelease     | skip             | bump main's `release-info` ¹             | skip              |
+| `-rc.N` (release) | prerelease     | skip             | bump release branch's + main's `release-info` ¹ | skip       |
+| Stable `vX.Y.Z`   | published      | bump + push      | bump release branch's + main's `release-info` ¹ | bump + PR  |
 
-¹ `nix/release-info.nix` pins the prebuilt package to the version the **default branch** currently serves, so it is refreshed (after the artifacts publish) whenever main's version advances: each `-dev.N`, the `-rc.0` cut marker, and the stable tag. Later `-rc.N` tags live only on the release branch and do not move main, so they don't trigger a `release-info` bump.
+¹ `nix/release-info.nix` is **per-branch**: each branch's flake pins to its own channel (refreshed after that tag's artifacts publish). `main`'s release-info is the **latest** channel — it tracks the newest published tag of any kind (`-dev.N`, `-rc.N`, or stable). `release/vX.Y`'s release-info is that minor's channel — it tracks the branch's newest tag (`-rc.N`, then `vX.Y.0`, then `vX.Y.(Z+1)`). During the RC window both channels point at the same `-rc.N` artifacts; they diverge again once `main` opens the next `-dev` cycle.
 
 ### AUR
 
@@ -205,10 +205,10 @@ The PKGBUILD is maintained in an external AUR repository. AUR `pkgver` does **no
 
 The flake at the root exposes both a prebuilt-binary package (`dbflux-bin`, default) and a from-source build (`dbflux-source`). The prebuilt package reads `nix/release-info.nix`, which pins each supported system to the GitHub Release tarball it should fetch.
 
-Whenever main's served version advances — a `-dev.N`, the `-rc.0` cut marker, or the stable tag — refresh `nix/release-info.nix` once that tag's release artifacts have published. The release publishes a `.sha256` next to each tarball, so you can read the digest without downloading the full artifact:
+`release-info.nix` is per-branch and pins that branch's flake to its channel (see the footnote under the Downstream Channels table). `main` tracks the newest published tag of any kind; each `release/vX.Y` tracks its own line's newest tag. After a tag's artifacts publish, refresh `release-info.nix` on **every** branch whose channel that tag advances — for an `-rc.N` or stable `vX.Y.Z` that means both `release/vX.Y` and `main`. The release publishes a `.sha256` next to each tarball, so you can read the digest without downloading the full artifact:
 
 ```bash
-ver=X.Y.Z          # or X.Y.Z-dev.N / X.Y.Z-rc.0
+ver=X.Y.Z          # or X.Y.Z-dev.N / X.Y.Z-rc.N
 for arch in amd64 arm64; do
   hex=$(curl -fsSL "https://github.com/0xErwin1/dbflux/releases/download/v$ver/dbflux-linux-$arch.tar.gz.sha256" | awk '{print $1}')
   nix-hash --to-sri --type sha256 "$hex"
@@ -221,7 +221,7 @@ Update `version`, both `url`s, and both `hash`es in `nix/release-info.nix`. Veri
 nix build .#dbflux-bin --no-link --print-out-paths
 ```
 
-Do not bump `release-info` for `-rc.N` tags with `N > 0`: those live only on the release branch and do not move main's served version.
+Every `-rc.N` (including `N > 0`) advances both channels: bump `release-info` on `release/vX.Y` (its line's newest) and on `main` (the latest overall). The two land as separate per-branch commits, never as a cherry-pick.
 
 ### nixpkgs (future)
 
