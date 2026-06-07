@@ -67,7 +67,7 @@ The workspace version (`Cargo.toml` `[workspace.package].version`) is the source
 
 **On `main`:**
 
-The manifest version is a `-rc.0` marker for the next minor during the RC stabilization window, and is bumped to the next minor's base (`X.(Y+1).0`) only after the stable `vX.Y.0` ships. Between stable releases, `main` carries whatever the current minor's next version will be.
+The manifest version is `X.(Y+1).0-dev.0`, where `X.Y` is the minor currently being stabilized on `release/vX.Y`. This marker is set when `release/vX.Y` is cut and stays on `main` through the entire stabilization window and beyond, until the next cut. It is a development marker only — no `-dev.N` releases are ever published. The nightly workflow derives `X.(Y+1).0-nightly+<sha>` from it by stripping the pre-release suffix and appending `-nightly+<short-sha>`.
 
 **On `release/vX.Y`:**
 
@@ -79,15 +79,15 @@ The manifest version is a `-rc.0` marker for the next minor during the RC stabil
 
 1. Features land on `main`. No manual changelog entries required.
 2. When ready to stabilize, cut `release/v0.7` from `main` HEAD.
-   - Bump every versioned artifact to `0.7.0-rc.0`.
-   - Commit on the release branch: `chore(release): cut release/v0.7 at v0.7.0-rc.0`.
+   - On `release/v0.7`: bump every versioned artifact to `0.7.0-rc.0`. Commit and push.
+   - On `main`: bump every versioned artifact to `0.8.0-dev.0`. Commit and push. `main` now targets the next minor.
    - Tag `v0.7.0-rc.0` on the release branch. git-cliff renders the unreleased range as the RC body automatically.
 3. A bug is found during RC:
    - Commit the fix on `main`.
    - `git cherry-pick -x <sha>` into `release/v0.7`.
    - Bump to `v0.7.0-rc.1` and tag.
 4. When clean, bump the release branch from `v0.7.0-rc.N` to `v0.7.0`. Tag `v0.7.0`. git-cliff renders the full unreleased range (since `v0.6.0`) as the stable release notes.
-5. On `main`, bump to `v0.8.0-rc.0` and open the next cycle.
+5. `main` is already on `0.8.0-dev.0` — no further bump needed after stable.
 6. Patches (`v0.7.1`, `v0.7.2`, …) come from the same release branch via cherry-picks from `main`.
 
 ## Cut Procedure: `main` → `release/vX.Y`
@@ -118,8 +118,8 @@ The manifest version is a `-rc.0` marker for the next minor during the RC stabil
    - Push: `git push -u origin release/vX.Y`.
 
 5. Back on `main`:
-   - Bump every versioned artifact to `X.Y.0-rc.0` (mirrors the release branch — main stays on the RC marker during the stabilization window).
-   - Commit: `chore(release): align main to vX.Y.0-rc.0`.
+   - Bump every versioned artifact to `X.(Y+1).0-dev.0` (main now targets the next minor).
+   - Commit: `chore(version): move main to X.(Y+1).0-dev.0 marker`.
    - Push.
 
 6. Tag `vX.Y.0-rc.0` on the release branch.
@@ -148,16 +148,9 @@ git-cliff generates the curated release notes from all user-visible commits sinc
 
 > **Optional curation:** if you want to add a human-written intro or editorial note to the stable release body, you can do so directly in the GitHub Release edit UI after the workflow publishes it. This does not touch CHANGELOG.md.
 
-## Begin Next Dev Cycle: after stable `vX.Y.0`
+## Next Dev Cycle
 
-Run this **only after** the stable `vX.Y.0` tag is pushed from `release/vX.Y`.
-
-On `main`:
-- Bump every versioned artifact to `X.(Y+1).0-rc.0`.
-- Commit: `chore(version): begin X.(Y+1).0 cycle`.
-- Push.
-
-`main` now targets the next minor. Nightly builds continue from `main` HEAD automatically.
+`main` is bumped to `X.(Y+1).0-dev.0` **when `release/vX.Y` is cut** (see Cut Procedure, step 5). No further bump to `main` is required after the stable tag. Nightly builds continue from `main` HEAD automatically, producing `X.(Y+1).0-nightly+<sha>` throughout the stabilization window.
 
 ## Files to Bump
 
@@ -178,7 +171,7 @@ The AUR `PKGBUILD` lives in an **external AUR repository**, not in this repo. It
 
 `.github/workflows/nightly.yml` runs daily at 03:17 UTC:
 
-1. Reads the workspace version from `Cargo.toml`, strips any existing pre-release suffix, and appends `-nightly+<short-sha>` (e.g. `0.7.0-nightly+abc1234`). No `Cargo.toml` commit required.
+1. Reads the workspace version from `Cargo.toml`, strips any existing pre-release suffix, and appends `-nightly+<short-sha>` (e.g. `0.8.0-nightly+abc1234` when `main` carries `0.8.0-dev.0`). No `Cargo.toml` commit required. Because `main` tracks the **next** minor from the moment `release/vX.Y` is cut, the nightly version is always clearly ahead of the stabilizing line.
 2. Calls `build.yml` with `channel: nightly`.
 3. Computes the SHA256 SRI hash of each Linux tarball and regenerates `nix/nightly-info.nix` with the real hashes and the rolling release URLs.
 4. Commits the updated `nix/nightly-info.nix` on top of the current `main` HEAD. This commit is **not pushed to `main`** — it becomes the sole target of the `nightly` tag.
