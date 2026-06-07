@@ -110,21 +110,32 @@ stdenv.mkDerivation {
 
     install -Dm755 dbflux $out/bin/dbflux
 
-    # Desktop entry — resolve the templated placeholders. This derivation ships
-    # the stable identity.
+    # Desktop entry. This derivation installs a published release tarball whose
+    # resource layout is fixed at release time, so it must tolerate both the
+    # pre- and post-branding-split layouts. @EXEC_PATH@ is present in every
+    # tarball; the @APP_*@ identity placeholders only exist in newer ones, so
+    # resolve them with sed (a no-op when absent). This derivation ships the
+    # stable identity.
     install -Dm644 resources/desktop/dbflux.desktop \
       $out/share/applications/dbflux.desktop
     substituteInPlace $out/share/applications/dbflux.desktop \
-      --replace-fail '@EXEC_PATH@' "$out/bin/dbflux" \
-      --replace-fail '@APP_NAME@' 'DBFlux' \
-      --replace-fail '@APP_ID@' 'dbflux'
+      --replace-fail '@EXEC_PATH@' "$out/bin/dbflux"
+    sed -i -e 's/@APP_NAME@/DBFlux/g' -e 's/@APP_ID@/dbflux/g' \
+      $out/share/applications/dbflux.desktop
 
-    install -Dm644 resources/branding/stable/mark.svg \
-      $out/share/icons/hicolor/scalable/apps/dbflux.svg
+    # Brand mark. Tarballs before the branding split ship it at
+    # resources/icons/dbflux.svg; newer ones ship per-channel marks.
+    if [ -f resources/branding/stable/mark.svg ]; then
+      install -Dm644 resources/branding/stable/mark.svg \
+        $out/share/icons/hicolor/scalable/apps/dbflux.svg
+    else
+      install -Dm644 resources/icons/dbflux.svg \
+        $out/share/icons/hicolor/scalable/apps/dbflux.svg
+    fi
+
     install -Dm644 resources/mime/dbflux-sql.xml \
       $out/share/mime/packages/dbflux-sql.xml
-    substituteInPlace $out/share/mime/packages/dbflux-sql.xml \
-      --replace-fail '@APP_ID@' 'dbflux'
+    sed -i 's/@APP_ID@/dbflux/g' $out/share/mime/packages/dbflux-sql.xml
 
     install -Dm644 LICENSE-MIT    $out/share/licenses/dbflux/LICENSE-MIT
     install -Dm644 LICENSE-APACHE $out/share/licenses/dbflux/LICENSE-APACHE
