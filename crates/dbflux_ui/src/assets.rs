@@ -7,6 +7,22 @@ pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
+        // Full-color brand marks, served for `img(...)` (which renders the SVG
+        // in color) rather than the monochrome `svg()` icon path.
+        match path {
+            "branding/stable/mark.svg" => {
+                return Ok(Some(Cow::Borrowed(include_bytes!(
+                    "../../../resources/branding/stable/mark.svg"
+                ))));
+            }
+            "branding/nightly/mark.svg" => {
+                return Ok(Some(Cow::Borrowed(include_bytes!(
+                    "../../../resources/branding/nightly/mark.svg"
+                ))));
+            }
+            _ => {}
+        }
+
         if let Some(icon) = ALL_ICONS.iter().find(|icon| icon.path() == path) {
             return Ok(Some(Cow::Borrowed(embedded_bytes(*icon))));
         }

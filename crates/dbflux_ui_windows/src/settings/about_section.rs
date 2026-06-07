@@ -1,6 +1,4 @@
 use super::{SettingsSection, SettingsSectionId};
-use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::Icon;
 use dbflux_components::typography::{Body, FieldLabel, Headline, MonoCaption};
 use gpui::prelude::*;
 use gpui::*;
@@ -35,6 +33,13 @@ impl Render for AboutSection {
         #[cfg(not(debug_assertions))]
         const PROFILE: &str = "release";
 
+        // Rendered through `img` (full color) rather than the monochrome icon
+        // path so the channel-specific mark — including nightly — shows in color.
+        let mark_path = match dbflux_core::ReleaseChannel::current() {
+            dbflux_core::ReleaseChannel::Nightly => "branding/nightly/mark.svg",
+            _ => "branding/stable/mark.svg",
+        };
+
         let issues_url = format!("{}/issues", REPOSITORY);
         let author_name = AUTHORS.split('<').next().unwrap_or(AUTHORS).trim();
         let license_display = LICENSE.replace(" OR ", " and ");
@@ -61,7 +66,7 @@ impl Render for AboutSection {
                                 .flex()
                                 .items_center()
                                 .gap_3()
-                                .child(Icon::new(AppIcon::DbFlux).size(px(65.0)).primary())
+                                .child(img(mark_path).size(px(65.0)))
                                 .child(
                                     div()
                                         .flex()
