@@ -664,6 +664,7 @@ See `docs/DASHBOARDS.md` for the full reference (including instance metrics and 
 - `crates/dbflux_core/src/access/mod.rs` introduces provider-agnostic `AccessKind::Managed { provider, params }` with transparent migration from legacy `method = "ssm"` profile JSON.
 - `crates/dbflux_core/src/pipeline/mod.rs` runs pre-connect stages (`Authenticating` -> `ResolvingValues` -> `OpeningAccess`) and publishes `PipelineState` updates to UI watchers.
 - `crates/dbflux_app/src/access_manager.rs` provides the app-side `AccessManager` implementation for direct and managed access providers (currently `aws-ssm`).
+- **Auth-profile dropdown decoupling (DEC-1)**: the connection manager renders its auth-profile picker from the generic `FormFieldKind::AuthProfileRef { provider_id: Option<String> }` form-field seam, never by matching driver ids. Drivers that want the picker (e.g. DynamoDB, CloudWatch) declare a `profile` field as `AuthProfileRef { provider_id: None }`; a `None` filter enumerates profiles provider-agnostically, so built-in and external RPC-backed providers both appear. The form-field kind is not persisted, so adding/removing it needs no storage migration.
 
 ### Tunnel Infrastructure
 
@@ -734,7 +735,7 @@ See `docs/DASHBOARDS.md` for the full reference (including instance metrics and 
 
 **Storage crate** (`dbflux_storage/`):
 - `bootstrap.rs`: `StorageRuntime` manages the single `dbflux.db` connection with lazy initialization
-- `paths.rs`: `dbflux_db_path()` returns the database path
+- `paths.rs`: `dbflux_db_path()` returns the channel-aware database path (`dbflux.db`, or `dbflux-nightly.db` on the nightly channel unless `nightly_shares_stable_db()` opts back into the stable file via `set_nightly_shares_stable_db`). See § Release Channels & Branding
 - `migrations/`: Trait-based migration system (`Migration` trait with `name()` and `run(&Transaction)`). `MigrationRegistry` holds all migrations and runs them in order, tracking completion in `sys_migrations`. Idempotent — checks `sys_migrations` before running.
 - `repositories/`: All domain repositories implement the `Repository` trait (`all()`, `find_by_id()`, `upsert()`, `delete()`). `AuditRepository` handles audit events with `AuditEventDto`.
 - `legacy.rs`: Imports legacy JSON files into SQLite on first startup (idempotent, tracked in `sys_legacy_imports`)
@@ -752,6 +753,18 @@ See `docs/DASHBOARDS.md` for the full reference (including instance metrics and 
 **Execution context**: `crates/dbflux_core/src/connection/context.rs` tracks per-tab connection, database, schema, and generic driver-declared source context. The current generic source-window shape is `ExecutionSourceContext::CollectionWindow { targets, start_ms, end_ms }`. Only connection/database/schema annotations are serialized into saved file headers.
 
 **History modal**: `crates/dbflux_ui_document/src/history_modal.rs` provides a unified modal for browsing recent queries and saved queries with search, favorites, and rename support.
+
+### Release Channels & Branding
+
+**Channel seam** (`crates/dbflux_core/src/release_channel.rs`): `ReleaseChannel` (`Stable`, `Rc`, `Nightly`) is derived once from the compiled `CARGO_PKG_VERSION` via `ReleaseChannel::current()`. The CI release pipeline stamps the workspace version before building, so the channel is encoded in the binary itself: `-nightly` → `Nightly`, `-rc.N` → `Rc`, plain `MAJOR.MINOR.PATCH` → `Stable` (nightly wins if both markers appear). This single signal feeds the channel-specific identity the runtime needs:
+
+- `app_id()` — GPUI `app_id` (Wayland app id / X11 `WM_CLASS`). Nightly returns `dbflux-nightly` so it coexists with stable instead of sharing its taskbar entry and icon; `Stable`/`Rc` return `dbflux`. Consumed in `crates/dbflux/src/main.rs`.
+- `display_name()` — window title and bundle name (`DBFlux Nightly` vs `DBFlux`).
+- `db_file_name()` — `dbflux-nightly.db` vs `dbflux.db`, so a migration that breaks on a pre-release build cannot corrupt a stable database when both channels run side by side. A nightly build can opt into the stable database through the `set_nightly_shares_stable_db` marker (see § Storage & Configuration).
+
+**Branding assets**: full-color brand marks live under `resources/branding/{stable,nightly}/` (`mark.svg`, `mark-256.png`, `mark-small.svg`, `wordmark.svg`) plus the shared `resources/branding/glyph.svg`. `crates/dbflux_ui/src/assets.rs` serves the pre-rendered PNG mark per channel for `img(...)`. Packaging metadata (`packaging/*.yaml`, `resources/desktop/dbflux.desktop`, `resources/macos/Info.plist`, `resources/windows/installer.iss`) and the Nix build (`nix/binary.nix`, `nix/nightly-info.nix`, `nix/release-info.nix`) substitute channel placeholders so the desktop entry, MIME association, and launcher icon match the running channel.
+
+The channel/branding model is a runtime seam: UI and app code read `ReleaseChannel` accessors; never branch on the raw version string or hardcode `dbflux`/`dbflux-nightly` identifiers. The release/nightly flow itself is documented in `docs/RELEASE.md`.
 
 ### Driver Implementations
 
