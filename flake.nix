@@ -143,7 +143,7 @@
           } // (if hasPrebuilt then {
             dbflux-nightly = flake-utils.lib.mkApp {
               drv = dbfluxNightly;
-              exePath = "/bin/dbflux";
+              exePath = "/bin/dbflux-nightly";
             };
           } else { });
         }

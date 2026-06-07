@@ -5,6 +5,15 @@
 }:
 
 let
+  # Per-channel install identity. Mirrors the runtime `ReleaseChannel` and the
+  # deb/rpm packaging: a nightly build installs under distinct binary/desktop/
+  # icon names so a stable and a nightly package can coexist in one profile
+  # (e.g. a home-manager `buildEnv`) without colliding on `bin/dbflux`.
+  isNightly = pkgs.lib.hasInfix "nightly" version;
+  appId = if isNightly then "dbflux-nightly" else "dbflux";
+  appName = if isNightly then "DBFlux Nightly" else "DBFlux";
+  brandDir = if isNightly then "nightly" else "stable";
+
   # Build inputs needed at runtime
   buildInputs = with pkgs; [
     openssl
@@ -81,20 +90,24 @@ let
     mkdir -p $out/share/mime/packages
     mkdir -p $out/share/dbflux
 
+    # cargo always emits a binary named `dbflux`; rename it for non-stable
+    # channels so two channels can coexist in one profile.
+    ${pkgs.lib.optionalString isNightly "mv $out/bin/dbflux $out/bin/${appId}"}
+
     # Copy desktop file and resolve the templated placeholders
-    install -Dm644 ${fullSrc}/resources/desktop/dbflux.desktop $out/share/applications/dbflux.desktop
-    substituteInPlace $out/share/applications/dbflux.desktop \
-      --replace '@EXEC_PATH@' "$out/bin/dbflux" \
-      --replace '@APP_NAME@' 'DBFlux' \
-      --replace '@APP_ID@' 'dbflux'
+    install -Dm644 ${fullSrc}/resources/desktop/dbflux.desktop $out/share/applications/${appId}.desktop
+    substituteInPlace $out/share/applications/${appId}.desktop \
+      --replace '@EXEC_PATH@' "$out/bin/${appId}" \
+      --replace '@APP_NAME@' '${appName}' \
+      --replace '@APP_ID@' '${appId}'
 
     # Copy icon
-    install -Dm644 ${fullSrc}/resources/branding/stable/mark.svg $out/share/icons/hicolor/scalable/apps/dbflux.svg
+    install -Dm644 ${fullSrc}/resources/branding/${brandDir}/mark.svg $out/share/icons/hicolor/scalable/apps/${appId}.svg
 
     # Copy mime type
-    install -Dm644 ${fullSrc}/resources/mime/dbflux-sql.xml $out/share/mime/packages/dbflux-sql.xml
-    substituteInPlace $out/share/mime/packages/dbflux-sql.xml \
-      --replace '@APP_ID@' 'dbflux'
+    install -Dm644 ${fullSrc}/resources/mime/dbflux-sql.xml $out/share/mime/packages/${appId}-sql.xml
+    substituteInPlace $out/share/mime/packages/${appId}-sql.xml \
+      --replace '@APP_ID@' '${appId}'
 
     # Copy resources (with proper permissions)
     cp -r --no-preserve=mode ${fullSrc}/resources $out/share/dbflux/
@@ -107,7 +120,7 @@ let
 
     # Wrap binary with LD_LIBRARY_PATH for Wayland/Vulkan/X11
     # Include common system paths for GPU drivers on non-NixOS systems
-    wrapProgram $out/bin/dbflux \
+    wrapProgram $out/bin/${appId} \
       --prefix LD_LIBRARY_PATH : "${runtimeLibraryPath}" \
       --suffix LD_LIBRARY_PATH : "/run/opengl-driver/lib:/usr/lib/x86_64-linux-gnu:/usr/lib64:/usr/lib"
   '';
@@ -134,16 +147,17 @@ let
     craneLib.buildPackage (
       commonArgs
       // {
-        pname = "dbflux";
+        pname = appId;
         inherit version cargoArtifacts;
         cargoExtraArgs = "-p dbflux";
         postInstall = postInstallScript;
+        meta.mainProgram = appId;
       }
     );
 
   # Build with rustPlatform (for non-flake usage)
   buildWithRustPlatform = pkgs.rustPlatform.buildRustPackage {
-    pname = "dbflux";
+    pname = appId;
     inherit version;
     src = fullSrc;
 
@@ -168,7 +182,7 @@ let
     postInstall = postInstallScript;
 
     postFixup = ''
-      wrapProgram $out/bin/dbflux \
+      wrapProgram $out/bin/${appId} \
         --prefix LD_LIBRARY_PATH : "${runtimeLibraryPath}" \
         --suffix LD_LIBRARY_PATH : "/run/opengl-driver/lib:/usr/lib/x86_64-linux-gnu:/usr/lib64:/usr/lib"
     '';
@@ -182,7 +196,7 @@ let
       ];
       maintainers = [ ];
       platforms = platforms.linux;
-      mainProgram = "dbflux";
+      mainProgram = appId;
     };
   };
 
