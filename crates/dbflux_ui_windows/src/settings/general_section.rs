@@ -25,6 +25,7 @@ pub(super) enum GeneralFormRow {
     ConfirmDangerous,
     RequiresWhere,
     RequiresPreview,
+    ShareStableDb,
     SaveButton,
 }
 
@@ -33,6 +34,9 @@ pub(super) struct GeneralSection {
     pub(super) gen_settings: GeneralSettings,
     pub(super) gen_form_cursor: usize,
     pub(super) gen_editing_field: bool,
+    /// Nightly-only: whether this build is opted into the stable database.
+    /// Backed by a pre-database marker file, applied on the next launch.
+    pub(super) gen_share_stable_db: bool,
     pub(super) dropdown_theme: Entity<Dropdown>,
     pub(super) dropdown_style: Entity<Dropdown>,
     pub(super) dropdown_default_focus: Entity<Dropdown>,
@@ -194,6 +198,7 @@ impl GeneralSection {
             gen_settings: settings,
             gen_form_cursor: 0,
             gen_editing_field: false,
+            gen_share_stable_db: dbflux_storage::paths::nightly_shares_stable_db(),
             dropdown_theme,
             dropdown_style,
             dropdown_default_focus,
