@@ -3,13 +3,14 @@
 
   # SHA256 SRI hashes of each prebuilt artifact published in the matching
   # GitHub Release. This file is a per-branch channel pointer: on `main` it
-  # tracks the newest published tag of any kind (-dev.N, -rc.N, or stable); on
-  # a release/vX.Y branch it tracks that line's newest tag (-rc.N, then vX.Y.0,
-  # then patches). See docs/RELEASE.md.
+  # tracks the newest published rc or stable tag; on a release/vX.Y branch it
+  # tracks that line's newest tag (-rc.N, then vX.Y.0, then patches). The
+  # rolling nightly channel is separate (see nix/nightly-info.nix). See
+  # docs/RELEASE.md.
   #
   # To refresh after a new release:
   #
-  #   ver=X.Y.Z[-dev.N|-rc.N]
+  #   ver=X.Y.Z[-rc.N]
   #   for arch in amd64 arm64; do
   #     curl -fsSL -o /tmp/dbflux-$arch.tar.gz \
   #       "https://github.com/0xErwin1/dbflux/releases/download/v$ver/dbflux-linux-$arch.tar.gz"
