@@ -156,12 +156,13 @@ jobs:
           cp target/${{ matrix.target }}/release/dbflux AppDir/usr/bin/
           chmod +x AppDir/usr/bin/dbflux
 
-          APP_ID="$APP_ID" APP_NAME="$APP_NAME" envsubst < resources/desktop/dbflux.desktop > "AppDir/usr/share/applications/$APP_ID.desktop"
-          sed -i "s|@EXEC_PATH@|$APP_ID|g" "AppDir/usr/share/applications/$APP_ID.desktop"
+          cp resources/desktop/dbflux.desktop "AppDir/usr/share/applications/$APP_ID.desktop"
+          sed -i -e "s|@EXEC_PATH@|dbflux|g" -e "s|@APP_NAME@|$APP_NAME|g" -e "s|@APP_ID@|$APP_ID|g" "AppDir/usr/share/applications/$APP_ID.desktop"
 
           cp "$BRAND_DIR/mark.svg" "AppDir/usr/share/icons/hicolor/scalable/apps/$APP_ID.svg"
 
           cp resources/mime/dbflux-sql.xml AppDir/usr/share/mime/packages/
+          sed -i "s|@APP_ID@|$APP_ID|g" AppDir/usr/share/mime/packages/dbflux-sql.xml
 
           cp LICENSE-MIT AppDir/usr/share/licenses/dbflux/
           cp LICENSE-APACHE AppDir/usr/share/licenses/dbflux/
@@ -216,7 +217,7 @@ jobs:
           export TARGET=${{ matrix.target }}
           export APP_ID APP_NAME PKG_NAME BUNDLE_ID BRAND_DIR
 
-          envsubst < packaging/dbflux.desktop > packaging/dbflux.desktop.tmp && mv packaging/dbflux.desktop.tmp packaging/dbflux.desktop
+          sed -i -e "s|@APP_NAME@|$APP_NAME|g" -e "s|@APP_ID@|$APP_ID|g" packaging/dbflux.desktop
 
           envsubst < packaging/nfpm.deb.yaml > nfpm.deb.yaml
           ~/go/bin/nfpm package --packager deb --config nfpm.deb.yaml --target ${PKG_NAME}_${VERSION}_linux_${{ matrix.deb_arch }}.deb

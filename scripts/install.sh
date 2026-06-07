@@ -461,8 +461,14 @@ install_files() {
             echo "[DRY-RUN] sed -i 's|@EXEC_PATH@|$PREFIX/bin/dbflux|g' $PREFIX/share/applications/dbflux.desktop"
         else
             cp "$src_dir/resources/desktop/dbflux.desktop" "$PREFIX/share/applications/dbflux.desktop"
-            # Replace @EXEC_PATH@ with the actual binary path
-            sed -i "s|@EXEC_PATH@|$PREFIX/bin/dbflux|g" "$PREFIX/share/applications/dbflux.desktop"
+            # Resolve the binary path and the stable branding placeholders. This
+            # installer ships the stable identity; per-channel coexistence is
+            # provided by the deb/rpm/AppImage artifacts.
+            sed -i \
+                -e "s|@EXEC_PATH@|$PREFIX/bin/dbflux|g" \
+                -e "s|@APP_NAME@|DBFlux|g" \
+                -e "s|@APP_ID@|dbflux|g" \
+                "$PREFIX/share/applications/dbflux.desktop"
             chmod 644 "$PREFIX/share/applications/dbflux.desktop"
         fi
     fi
@@ -478,6 +484,9 @@ install_files() {
     if [[ -f "$src_dir/resources/mime/dbflux-sql.xml" ]]; then
         mkdir_safe "$PREFIX/share/mime/packages"
         cp_safe "$src_dir/resources/mime/dbflux-sql.xml" "$PREFIX/share/mime/packages/dbflux-sql.xml"
+        if [[ "$DRY_RUN" == "false" ]]; then
+            sed -i "s|@APP_ID@|dbflux|g" "$PREFIX/share/mime/packages/dbflux-sql.xml"
+        fi
         chmod_safe "$PREFIX/share/mime/packages/dbflux-sql.xml" 644
 
         if [[ "$DRY_RUN" == "false" ]] && command -v update-mime-database &>/dev/null; then
