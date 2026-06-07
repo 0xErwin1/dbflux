@@ -13,6 +13,7 @@ pub mod keymap_types;
 pub mod observability;
 pub mod pipeline;
 mod query;
+pub mod release_channel;
 mod schema;
 mod sql;
 mod storage;
@@ -21,6 +22,8 @@ pub mod values;
 pub use access::{AccessHandle, AccessKind, AccessManager};
 
 pub use document_id::DocumentId;
+
+pub use release_channel::ReleaseChannel;
 
 pub use auth::{
     AuthEditCapabilities, AuthEditSnapshot, AuthEditTarget, AuthFormDef, AuthProfile,

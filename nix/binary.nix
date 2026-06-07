@@ -116,7 +116,7 @@ stdenv.mkDerivation {
     substituteInPlace $out/share/applications/dbflux.desktop \
       --replace-fail '@EXEC_PATH@' "$out/bin/dbflux"
 
-    install -Dm644 resources/icons/dbflux.svg \
+    install -Dm644 resources/branding/stable/mark.svg \
       $out/share/icons/hicolor/scalable/apps/dbflux.svg
     install -Dm644 resources/mime/dbflux-sql.xml \
       $out/share/mime/packages/dbflux-sql.xml

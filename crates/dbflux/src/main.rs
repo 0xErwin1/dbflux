@@ -308,10 +308,11 @@ fn run_gui() {
         // radius tokens are correct from the very first frame.
         dbflux_ui::ui::theme::init_with_settings(theme_setting, style_setting, cx);
 
+        let channel = dbflux_core::ReleaseChannel::current();
         let mut main_window_options = WindowOptions {
-            app_id: Some("dbflux".into()),
+            app_id: Some(channel.app_id().into()),
             titlebar: Some(TitlebarOptions {
-                title: Some("DBFlux".into()),
+                title: Some(channel.display_name().into()),
                 ..Default::default()
             }),
             // Request client-side decorations on Linux to enable native Wayland support.

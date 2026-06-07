@@ -28,7 +28,12 @@ pub fn data_dir() -> Result<PathBuf, StorageError> {
     Ok(dir)
 }
 
-/// Returns the path for the unified database (`dbflux.db`).
+/// Returns the path for the unified database inside the data directory.
+///
+/// The file name is channel-specific: nightly builds use `dbflux-nightly.db`
+/// so a pre-release migration cannot corrupt the stable `dbflux.db` of a user
+/// who runs both channels side by side.
 pub fn dbflux_db_path() -> Result<PathBuf, StorageError> {
-    Ok(data_dir()?.join("dbflux.db"))
+    let file_name = dbflux_core::ReleaseChannel::current().db_file_name();
+    Ok(data_dir()?.join(file_name))
 }

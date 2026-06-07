@@ -45,7 +45,7 @@ pub fn open_or_focus_settings<S>(
     let bounds = Bounds::centered(None, size(px(950.0), px(700.0)), cx);
 
     let mut options = WindowOptions {
-        app_id: Some("dbflux".into()),
+        app_id: Some(dbflux_core::ReleaseChannel::current().app_id().into()),
         titlebar: Some(TitlebarOptions {
             title: Some("Settings".into()),
             ..Default::default()

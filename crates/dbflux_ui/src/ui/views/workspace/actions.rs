@@ -98,7 +98,7 @@ impl Workspace {
         let bounds = Bounds::centered(None, size(px(700.0), px(650.0)), cx);
 
         let mut options = WindowOptions {
-            app_id: Some("dbflux".into()),
+            app_id: Some(dbflux_core::ReleaseChannel::current().app_id().into()),
             titlebar: Some(TitlebarOptions {
                 title: Some("Connection Manager".into()),
                 ..Default::default()

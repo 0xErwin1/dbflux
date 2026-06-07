@@ -145,7 +145,7 @@ impl Sidebar {
                     });
                     let app_state = app_state.clone();
                     let mut options = WindowOptions {
-                        app_id: Some("dbflux".into()),
+                        app_id: Some(dbflux_core::ReleaseChannel::current().app_id().into()),
                         titlebar: Some(TitlebarOptions {
                             title: Some("Connection Manager".into()),
                             ..Default::default()

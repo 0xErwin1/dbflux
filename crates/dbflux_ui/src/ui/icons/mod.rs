@@ -236,10 +236,23 @@ pub(crate) fn embedded_bytes(icon: AppIcon) -> &'static [u8] {
         AppIcon::BrandInfluxDb => {
             include_bytes!("../../../../../resources/icons/brand/influxdb.svg")
         }
-        AppIcon::DbFlux => include_bytes!("../../../../../resources/icons/dbflux.svg"),
+        AppIcon::DbFlux => dbflux_mark_bytes(),
         AppIcon::BrainCircuit => {
             include_bytes!("../../../../../resources/icons/ui/brain-circuit.svg")
         }
         AppIcon::Bot => include_bytes!("../../../../../resources/icons/ui/bot.svg"),
+    }
+}
+
+/// Returns the DBFlux brand mark for the running release channel. Nightly ships
+/// a visually distinct mark so it can be told apart from stable at a glance.
+fn dbflux_mark_bytes() -> &'static [u8] {
+    match dbflux_core::ReleaseChannel::current() {
+        dbflux_core::ReleaseChannel::Nightly => {
+            include_bytes!("../../../../../resources/branding/nightly/mark.svg")
+        }
+        dbflux_core::ReleaseChannel::Stable | dbflux_core::ReleaseChannel::Rc => {
+            include_bytes!("../../../../../resources/branding/stable/mark.svg")
+        }
     }
 }

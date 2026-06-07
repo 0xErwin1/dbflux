@@ -2353,7 +2353,7 @@ impl ConnectionManagerWindow {
         let bounds = Bounds::centered(None, size(px(720.0), px(620.0)), cx);
 
         let mut options = WindowOptions {
-            app_id: Some("dbflux".into()),
+            app_id: Some(dbflux_core::ReleaseChannel::current().app_id().into()),
             titlebar: Some(TitlebarOptions {
                 title: Some("AWS SSO Wizard".into()),
                 ..Default::default()
