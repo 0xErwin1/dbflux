@@ -783,10 +783,12 @@ impl GeneralSection {
         div()
             .flex()
             .flex_col()
+            .w_full()
             .gap_1()
             .child(FieldLabel::new(label.to_string()))
             .child(
                 div()
+                    .w_full()
                     .rounded(Radii::SM)
                     .border_1()
                     .border_color(if is_focused {
