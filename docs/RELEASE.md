@@ -26,6 +26,10 @@ The changelog is **derived from git history** by [git-cliff](https://git-cliff.o
 - The `[Unreleased]` block closes **only at stable**. When a stable tag is pushed, git-cliff renders the full set of user-visible commits since the previous stable as the release notes for that tag.
 - Do not hand-rename `[Unreleased]` when cutting an RC or a nightly. The RC cut procedure is simpler under this model — see below.
 
+`CHANGELOG.md` is kept in the repository and updated at release time by **prepending** the new version's section with `git-cliff --prepend`. It is never hand-edited and never fully regenerated — a full regeneration (`git-cliff -o CHANGELOG.md`) would collapse all historical sections into one range from the last stable tag, destroying the `## [0.6.0]` and `## [0.6.0-dev.N]` entries.
+
+> **v0.7.0 transition:** git-cliff changelog generation applies from v0.7.0 onward. The `## [0.6.0]` and `## [0.6.0-dev.N]` sections are hand-written baselines committed to `CHANGELOG.md`. They must never be regenerated — doing so would duplicate or collapse them. The prepend workflow begins with the first v0.7.0 RC.
+
 ## Branches
 
 | Branch         | Lifetime  | Accepts                                          | Tags produced            |
@@ -100,6 +104,16 @@ The manifest version is a `-rc.0` marker for the next minor during the RC stabil
 
 4. On `release/vX.Y`:
    - Bump every versioned artifact to `X.Y.0-rc.0` (see [Files to Bump](#files-to-bump)).
+   - Prepend the new RC section to `CHANGELOG.md`:
+
+     ```bash
+     git-cliff --tag vX.Y.0-rc.0 --unreleased --prepend CHANGELOG.md
+     git add CHANGELOG.md
+     # fold into the same chore(release) commit as the version bump
+     ```
+
+     > **Warning:** do NOT use `git-cliff -o CHANGELOG.md`. That fully regenerates the file and collapses all historical sections since the last stable tag into a single block.
+
    - Commit: `chore(release): cut release/vX.Y at vX.Y.0-rc.0`.
    - Push: `git push -u origin release/vX.Y`.
 
@@ -117,8 +131,18 @@ There is **no CHANGELOG rename step** under the git-cliff model. The RC release 
 Run on `release/vX.Y` when the RC is clean:
 
 1. Bump every versioned artifact from `X.Y.0-rc.N` to `X.Y.0`.
-2. Commit: `chore(release): promote release/vX.Y to vX.Y.0`.
-3. Tag `vX.Y.0` on the release branch and push branch + tag.
+2. Prepend the stable section to `CHANGELOG.md`:
+
+   ```bash
+   git-cliff --tag vX.Y.0 --unreleased --prepend CHANGELOG.md
+   git add CHANGELOG.md
+   # fold into the same chore(release) commit as the version bump
+   ```
+
+   > **Warning:** do NOT use `git-cliff -o CHANGELOG.md`. That fully regenerates the file and collapses all historical sections since the last stable tag into a single block.
+
+3. Commit: `chore(release): promote release/vX.Y to vX.Y.0`.
+4. Tag `vX.Y.0` on the release branch and push branch + tag.
 
 git-cliff generates the curated release notes from all user-visible commits since the previous stable tag. There is no manual CHANGELOG curation step.
 
