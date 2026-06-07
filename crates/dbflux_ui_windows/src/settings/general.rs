@@ -789,6 +789,7 @@ impl GeneralSection {
             .child(
                 div()
                     .w_full()
+                    .min_w(px(140.0))
                     .rounded(Radii::SM)
                     .border_1()
                     .border_color(if is_focused {
