@@ -42,8 +42,26 @@ fn auth_profile_needs_login(
         )
 }
 
-fn uses_aws_auth_profile_dropdown(driver_id: Option<&str>) -> bool {
-    matches!(driver_id, Some("dynamodb") | Some("cloudwatch"))
+/// Returns the `id` of the first `AuthProfileRef` field found in a form definition,
+/// or `None` if the form has no such field.
+fn auth_profile_ref_field_id_from_form(form: &DriverFormDef) -> Option<String> {
+    for tab in &form.tabs {
+        for section in &tab.sections {
+            for field in &section.fields {
+                if matches!(&field.kind, FormFieldKind::AuthProfileRef { .. }) {
+                    return Some(field.id.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Returns the `id` of the first `AuthProfileRef` field found in the driver's form
+/// definition, or `None` if the driver is absent or has no such field.
+fn auth_profile_ref_field_id(driver: Option<&Arc<dyn DbDriver>>) -> Option<String> {
+    let driver = driver?;
+    auth_profile_ref_field_id_from_form(driver.form_definition())
 }
 
 /// Extracts the current SSL mode id string from a `DbConfig` for display in the UI segmented
@@ -2573,18 +2591,20 @@ impl ConnectionManagerWindow {
             self.selected_auth_profile_id = selection;
             self.selected_ssm_auth_profile_id = selection;
 
-            self.sync_aws_driver_fields_from_auth_profile(window, cx);
+            self.sync_driver_fields_from_auth_profile(window, cx);
         }
     }
 
-    fn sync_aws_driver_fields_from_auth_profile(
+    fn sync_driver_fields_from_auth_profile(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !uses_aws_auth_profile_dropdown(self.selected_driver_id()) {
-            return;
-        }
+        let auth_profile_ref_field_id =
+            match auth_profile_ref_field_id(self.selected_driver.as_ref()) {
+                Some(id) => id,
+                None => return,
+            };
 
         let Some(auth_profile_id) = self.selected_auth_profile_id else {
             return;
@@ -2607,7 +2627,11 @@ impl ConnectionManagerWindow {
             .cloned()
             .unwrap_or_else(|| profile.name.clone());
 
-        if let Some(input) = self.driver_inputs.get("profile").cloned() {
+        if let Some(input) = self
+            .driver_inputs
+            .get(auth_profile_ref_field_id.as_str())
+            .cloned()
+        {
             input.update(cx, |state, cx| {
                 state.set_value(profile_name, window, cx);
             });
@@ -3174,7 +3198,7 @@ impl EventEmitter<DismissEvent> for ConnectionManagerWindow {}
 mod tests {
     use super::ConnectionManagerWindow;
     use super::auth_profile_needs_login;
-    use super::uses_aws_auth_profile_dropdown;
+    use super::auth_profile_ref_field_id_from_form;
     use dbflux_core::AuthSessionState;
 
     // --- parse_hook_ids ---
@@ -3278,10 +3302,52 @@ mod tests {
     }
 
     #[test]
-    fn aws_auth_profile_dropdown_is_enabled_for_dynamodb_and_cloudwatch() {
-        assert!(uses_aws_auth_profile_dropdown(Some("dynamodb")));
-        assert!(uses_aws_auth_profile_dropdown(Some("cloudwatch")));
-        assert!(!uses_aws_auth_profile_dropdown(Some("postgres")));
-        assert!(!uses_aws_auth_profile_dropdown(None));
+    fn form_has_auth_profile_ref_field_detects_kind() {
+        use dbflux_core::{DriverFormDef, FormFieldDef, FormFieldKind, FormSection, FormTab};
+
+        fn make_form(kind: FormFieldKind) -> DriverFormDef {
+            DriverFormDef {
+                tabs: vec![FormTab {
+                    id: "main".to_string(),
+                    label: "Main".to_string(),
+                    sections: vec![FormSection {
+                        title: "Settings".to_string(),
+                        fields: vec![FormFieldDef {
+                            id: "profile".to_string(),
+                            label: "Profile".to_string(),
+                            kind,
+                            placeholder: String::new(),
+                            required: false,
+                            default_value: String::new(),
+                            enabled_when_checked: None,
+                            enabled_when_unchecked: None,
+                            disabled_when_field_set: None,
+                            help: None,
+                        }],
+                    }],
+                }],
+            }
+        }
+
+        let auth_ref_form = make_form(FormFieldKind::AuthProfileRef { provider_id: None });
+        assert_eq!(
+            auth_profile_ref_field_id_from_form(&auth_ref_form).as_deref(),
+            Some("profile"),
+            "Form with AuthProfileRef field must return the field id"
+        );
+
+        let text_only_form = make_form(FormFieldKind::Text);
+        assert_eq!(
+            auth_profile_ref_field_id_from_form(&text_only_form),
+            None,
+            "Form with only Text fields must return None"
+        );
+
+        let empty_form = DriverFormDef { tabs: vec![] };
+        assert_eq!(
+            auth_profile_ref_field_id_from_form(&empty_form),
+            None,
+            "Empty form must return None"
+        );
     }
 }

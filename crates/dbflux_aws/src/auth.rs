@@ -650,7 +650,7 @@ fn build_aws_sso_form() -> AuthFormDef {
                         id: "sso_session_ref".to_string(),
                         label: "SSO Session".to_string(),
                         kind: FormFieldKind::AuthProfileRef {
-                            provider_id: "aws-sso-session".to_string(),
+                            provider_id: Some("aws-sso-session".to_string()),
                         },
                         placeholder: String::new(),
                         required: false,
