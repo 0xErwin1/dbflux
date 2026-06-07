@@ -115,7 +115,7 @@ mod tests {
                         id: consumer_field_id.to_string(),
                         label: "Session".to_string(),
                         kind: FormFieldKind::AuthProfileRef {
-                            provider_id: ref_provider_id.to_string(),
+                            provider_id: Some(ref_provider_id.to_string()),
                         },
                         placeholder: String::new(),
                         required: false,

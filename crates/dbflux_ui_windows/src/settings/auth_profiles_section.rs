@@ -957,7 +957,7 @@ impl AuthProfilesSection {
         let help = field.help.clone();
 
         let FormFieldKind::AuthProfileRef {
-            provider_id: ref_provider_id,
+            provider_id: Some(ref_provider_id),
         } = &field.kind
         else {
             return div();

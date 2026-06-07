@@ -66,8 +66,8 @@ pub static CLOUDWATCH_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFor
                 field(
                     "profile",
                     "Profile",
-                    FormFieldKind::Text,
-                    "optional AWS profile",
+                    FormFieldKind::AuthProfileRef { provider_id: None },
+                    "",
                 ),
                 field(
                     "endpoint",
@@ -1573,7 +1573,7 @@ mod tests {
     use aws_sdk_cloudwatch::primitives::DateTime;
     use aws_sdk_cloudwatch::types::MetricDataResult;
     use dbflux_core::{
-        ColumnKind, DbConfig, DbDriver, DriverCapabilities, MetricQuerySeries, Value,
+        ColumnKind, DbConfig, DbDriver, DriverCapabilities, FormFieldKind, MetricQuerySeries, Value,
     };
 
     fn series(namespace: &str, metric_name: &str) -> MetricQuerySeries {
@@ -1863,6 +1863,26 @@ mod tests {
                 .capabilities
                 .contains(DriverCapabilities::CHART_AUTHORING),
             "CHART_AUTHORING must be advertised so the sidebar surfaces Dashboards / Saved Charts folders for CW connections"
+        );
+    }
+
+    #[test]
+    fn cloudwatch_profile_field_is_auth_profile_ref_with_none_provider_id() {
+        let profile_field = CLOUDWATCH_FORM
+            .tabs
+            .iter()
+            .flat_map(|t| t.sections.iter())
+            .flat_map(|s| s.fields.iter())
+            .find(|f| f.id == "profile")
+            .expect("CloudWatch form must have a 'profile' field");
+
+        assert!(
+            matches!(
+                &profile_field.kind,
+                FormFieldKind::AuthProfileRef { provider_id: None }
+            ),
+            "CloudWatch 'profile' field must be AuthProfileRef {{ provider_id: None }}, got {:?}",
+            profile_field.kind
         );
     }
 }

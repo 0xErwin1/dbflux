@@ -152,7 +152,12 @@ mod style_guardrails {
     /// - `match driver_id` — match arm switching on driver ID string
     #[test]
     fn document_has_no_driver_id_branching() {
-        let forbidden: &[&str] = &["driver_id ==", "driver_id !=", "match driver_id"];
+        let forbidden: &[&str] = &[
+            "driver_id ==",
+            "driver_id !=",
+            "match driver_id",
+            "matches!(driver_id",
+        ];
         let violations = check_violations(forbidden);
         assert!(
             violations.is_empty(),
