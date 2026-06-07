@@ -7,6 +7,7 @@ use dbflux_components::typography::{Body, FieldLabel, SubSectionLabel};
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
@@ -54,7 +55,7 @@ impl GeneralSection {
     }
 
     pub(super) fn gen_form_rows(&self) -> Vec<GeneralFormRow> {
-        vec![
+        let mut rows = vec![
             GeneralFormRow::Theme,
             GeneralFormRow::Style,
             GeneralFormRow::RestoreSession,
@@ -70,8 +71,32 @@ impl GeneralSection {
             GeneralFormRow::ConfirmDangerous,
             GeneralFormRow::RequiresWhere,
             GeneralFormRow::RequiresPreview,
-            GeneralFormRow::SaveButton,
-        ]
+        ];
+
+        // The shared-database toggle only makes sense on nightly, which is the
+        // only channel that uses a separate database by default.
+        if Self::is_nightly() {
+            rows.push(GeneralFormRow::ShareStableDb);
+        }
+
+        rows.push(GeneralFormRow::SaveButton);
+        rows
+    }
+
+    fn is_nightly() -> bool {
+        dbflux_core::ReleaseChannel::current() == dbflux_core::ReleaseChannel::Nightly
+    }
+
+    /// Toggles whether this nightly build shares the stable database. The change
+    /// is persisted to the pre-database marker immediately and applies on the
+    /// next launch; a write failure is logged and leaves the toggle unchanged.
+    fn set_share_stable_db(&mut self, value: bool) {
+        match dbflux_storage::paths::set_nightly_shares_stable_db(value) {
+            Ok(()) => self.gen_share_stable_db = value,
+            Err(error) => {
+                log::error!("Failed to update the shared-database setting: {error}")
+            }
+        }
     }
 
     fn gen_current_row(&self) -> Option<GeneralFormRow> {
@@ -158,6 +183,10 @@ impl GeneralSection {
             Some(GeneralFormRow::RequiresPreview) => {
                 self.gen_settings.dangerous_requires_preview =
                     !self.gen_settings.dangerous_requires_preview;
+                cx.notify();
+            }
+            Some(GeneralFormRow::ShareStableDb) => {
+                self.set_share_stable_db(!self.gen_share_stable_db);
                 cx.notify();
             }
             Some(GeneralFormRow::MaxHistory)
@@ -583,7 +612,30 @@ impl GeneralSection {
                     GeneralFormRow::RequiresPreview,
                     |this, value| this.gen_settings.dangerous_requires_preview = value,
                     cx,
-                )),
+                ))
+                .when(Self::is_nightly(), |column| {
+                    column
+                        .child(self.render_gen_group_header("Storage", border, muted_fg))
+                        .child(self.render_gen_checkbox(
+                            "share-stable-db",
+                            "Use the stable database",
+                            self.gen_share_stable_db,
+                            is_at(GeneralFormRow::ShareStableDb),
+                            GeneralFormRow::ShareStableDb,
+                            |this, value| this.set_share_stable_db(value),
+                            cx,
+                        ))
+                        .child(
+                            div().px_2().child(
+                                Body::new(
+                                    "Applied on next launch. Shares the stable database \
+                                     (dbflux.db) instead of this nightly build's \
+                                     dbflux-nightly.db.",
+                                )
+                                .color(muted_fg),
+                            ),
+                        )
+                }),
         )
     }
 

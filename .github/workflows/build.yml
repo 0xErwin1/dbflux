@@ -196,7 +196,7 @@ jobs:
           convert "$BRAND_DIR/mark.svg" -resize 256x256 packaging/icons/256x256/apps/dbflux.png
           convert "$BRAND_DIR/mark.svg" -resize 128x128 packaging/icons/128x128/apps/dbflux.png
           convert "$BRAND_DIR/mark.svg" -resize 64x64 packaging/icons/64x64/apps/dbflux.png
-          convert "$BRAND_DIR/mark.svg" -resize 48x48 packaging/icons/48x48/apps/dbflux.png
+          convert "$BRAND_DIR/mark-small.svg" -resize 48x48 packaging/icons/48x48/apps/dbflux.png
           convert "$BRAND_DIR/mark-small.svg" -resize 32x32 packaging/icons/32x32/apps/dbflux.png
           convert "$BRAND_DIR/mark-small.svg" -resize 16x16 packaging/icons/16x16/apps/dbflux.png
 
@@ -495,7 +495,7 @@ jobs:
           magick convert -background none -resize 256x256 "$BrandDir/mark.svg" dbflux-256.png
           magick convert -background none -resize 128x128 "$BrandDir/mark.svg" dbflux-128.png
           magick convert -background none -resize 64x64 "$BrandDir/mark.svg" dbflux-64.png
-          magick convert -background none -resize 48x48 "$BrandDir/mark.svg" dbflux-48.png
+          magick convert -background none -resize 48x48 "$BrandDir/mark-small.svg" dbflux-48.png
           magick convert -background none -resize 32x32 "$BrandDir/mark-small.svg" dbflux-32.png
           magick convert -background none -resize 16x16 "$BrandDir/mark-small.svg" dbflux-16.png
           magick convert dbflux-16.png dbflux-32.png dbflux-48.png dbflux-64.png dbflux-128.png dbflux-256.png dbflux.ico
