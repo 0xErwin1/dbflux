@@ -1,0 +1,496 @@
+name: Build
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version string without leading v (e.g. 0.7.0 or 0.7.0-rc.1 or 0.7.0-nightly+abc1234)'
+        required: true
+        type: string
+      channel:
+        description: 'Release channel: stable | rc | nightly'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as prerelease on GitHub'
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      GPG_PRIVATE_KEY:
+        required: true
+      GPG_PASSPHRASE:
+        required: true
+
+env:
+  FEATURES: "sqlite,postgres,mysql,mongodb,redis,influxdb"
+
+jobs:
+  build-linux:
+    name: Build Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runs_on }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runs_on: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            deb_arch: amd64
+            rpm_arch: x86_64
+          - arch: arm64
+            runs_on: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            deb_arch: arm64
+            rpm_arch: aarch64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: rust-src
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            mold \
+            pkg-config \
+            libssl-dev \
+            libdbus-1-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev
+
+          if apt-cache show libfuse2 >/dev/null 2>&1; then
+            sudo apt-get install -y libfuse2
+          else
+            sudo apt-get install -y libfuse2t64
+          fi
+
+          sudo apt-get install -y gettext imagemagick
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v0-rust"
+          shared-key: linux-${{ matrix.arch }}
+          cache-targets: true
+          cache-on-failure: true
+
+      - name: Build DBFlux
+        run: cargo build --release --features "$FEATURES" --target ${{ matrix.target }}
+
+      - name: Create package
+        run: |
+          mkdir -p pkg/resources/icons
+          mkdir -p pkg/resources/desktop
+          mkdir -p pkg/resources/mime
+          mkdir -p pkg/scripts
+
+          cp target/${{ matrix.target }}/release/dbflux pkg/dbflux
+          chmod +x pkg/dbflux
+
+          cp resources/icons/dbflux.svg pkg/resources/icons/
+          cp resources/desktop/dbflux.desktop pkg/resources/desktop/
+          cp resources/mime/dbflux-sql.xml pkg/resources/mime/
+
+          cp LICENSE-MIT pkg/
+          cp LICENSE-APACHE pkg/
+
+          cp scripts/install.sh pkg/scripts/
+          cp scripts/uninstall.sh pkg/scripts/
+          chmod +x pkg/scripts/*.sh
+
+      - name: Create tar archive
+        run: |
+          cd pkg
+          tar -czf ../dbflux-linux-${{ matrix.arch }}.tar.gz .
+
+      - name: Download appimagetool
+        run: |
+          ARCH=$(echo "${{ matrix.arch }}" | sed 's/amd64/x86_64/' | sed 's/arm64/aarch64/')
+          curl -LO https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${ARCH}.AppImage
+          chmod +x appimagetool-${ARCH}.AppImage
+          echo "APPIMAGE_ARCH=$ARCH" >> $GITHUB_ENV
+
+      - name: Create AppImage
+        run: |
+          VERSION="${{ inputs.version }}"
+
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/scalable/apps
+          mkdir -p AppDir/usr/share/mime/packages
+          mkdir -p AppDir/usr/share/licenses/dbflux
+
+          cp target/${{ matrix.target }}/release/dbflux AppDir/usr/bin/
+          chmod +x AppDir/usr/bin/dbflux
+
+          cp resources/desktop/dbflux.desktop AppDir/usr/share/applications/
+          sed -i 's|@EXEC_PATH@|dbflux|g' AppDir/usr/share/applications/dbflux.desktop
+
+          cp resources/icon.svg AppDir/usr/share/icons/hicolor/scalable/apps/dbflux.svg
+
+          cp resources/mime/dbflux-sql.xml AppDir/usr/share/mime/packages/
+
+          cp LICENSE-MIT AppDir/usr/share/licenses/dbflux/
+          cp LICENSE-APACHE AppDir/usr/share/licenses/dbflux/
+
+          ln -sf usr/bin/dbflux AppDir/AppRun
+          ln -sf usr/share/applications/dbflux.desktop AppDir/dbflux.desktop
+          ln -sf usr/share/icons/hicolor/scalable/apps/dbflux.svg AppDir/dbflux.svg
+
+          APPIMAGE_EXTRACT_AND_RUN=1 VERSION="$VERSION" ./appimagetool-${{ env.APPIMAGE_ARCH }}.AppImage AppDir
+
+          APPIMAGE_FILE=$(find . -maxdepth 1 -name "*.AppImage" ! -name "appimagetool-*.AppImage" | head -n 1)
+          if [ -z "$APPIMAGE_FILE" ]; then
+            echo "AppImage output not found"
+            exit 1
+          fi
+
+          mv "$APPIMAGE_FILE" dbflux-linux-${{ matrix.arch }}.AppImage
+
+      - name: Generate PNG icons
+        run: |
+          mkdir -p packaging/icons/256x256/apps
+          mkdir -p packaging/icons/128x128/apps
+          mkdir -p packaging/icons/64x64/apps
+          mkdir -p packaging/icons/48x48/apps
+          mkdir -p packaging/icons/32x32/apps
+          mkdir -p packaging/icons/16x16/apps
+
+          convert resources/icon.svg -resize 256x256 packaging/icons/256x256/apps/dbflux.png
+          convert resources/icon.svg -resize 128x128 packaging/icons/128x128/apps/dbflux.png
+          convert resources/icon.svg -resize 64x64 packaging/icons/64x64/apps/dbflux.png
+          convert resources/icon.svg -resize 48x48 packaging/icons/48x48/apps/dbflux.png
+          convert resources/icon-small.svg -resize 32x32 packaging/icons/32x32/apps/dbflux.png
+          convert resources/icon-small.svg -resize 16x16 packaging/icons/16x16/apps/dbflux.png
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Install nfpm
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+
+      - name: Generate packages
+        run: |
+          VERSION="${{ inputs.version }}"
+
+          export VERSION
+          export ARCH=${{ matrix.deb_arch }}
+          export TARGET=${{ matrix.target }}
+
+          envsubst < packaging/nfpm.deb.yaml > nfpm.deb.yaml
+          ~/go/bin/nfpm package --packager deb --config nfpm.deb.yaml --target dbflux_${VERSION}_linux_${{ matrix.deb_arch }}.deb
+          export ARCH=${{ matrix.rpm_arch }}
+          envsubst < packaging/nfpm.rpm.yaml > nfpm.rpm.yaml
+          ~/go/bin/nfpm package --packager rpm --config nfpm.rpm.yaml --target dbflux-${VERSION}-1.${{ matrix.rpm_arch }}.rpm
+
+      - name: Install signing tools
+        run: sudo apt-get install -y rpm debsigs
+
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: Sign .deb packages
+        run: |
+          GPG_KEY_ID=$(gpg --list-keys --keyid-format long | grep -A1 'pub' | tail -1 | awk '{print $1}')
+          for deb in dbflux_*.deb; do
+            debsigs --sign=origin -k "$GPG_KEY_ID" "$deb"
+          done
+
+      - name: Configure RPM signing
+        run: |
+          GPG_KEY_ID=$(gpg --list-keys --keyid-format long | grep -A1 'pub' | tail -1 | awk '{print $1}')
+          {
+            echo "%_gpg_name $GPG_KEY_ID"
+            echo "%__gpg /usr/bin/gpg"
+            echo "%__gpg_sign_cmd %{__gpg} gpg --batch --no-armor --passphrase-fd 3 --no-secmem-warning -u '%{_gpg_name}' -sbo %{__signature_filename} %{__plaintext_filename}"
+          } > ~/.rpmmacros
+
+      - name: Sign .rpm packages
+        run: |
+          for rpm in dbflux-*.rpm; do
+            rpm --addsign "$rpm" 3< <(echo "${{ secrets.GPG_PASSPHRASE }}")
+          done
+
+      - name: Sign artifacts
+        run: |
+          gpg --armor --detach-sign dbflux-linux-${{ matrix.arch }}.tar.gz
+          gpg --armor --detach-sign dbflux-linux-${{ matrix.arch }}.AppImage
+          gpg --armor --detach-sign dbflux_*.deb
+          gpg --armor --detach-sign dbflux-*.rpm
+
+      - name: Generate checksums
+        run: |
+          sha256sum dbflux-linux-${{ matrix.arch }}.tar.gz > dbflux-linux-${{ matrix.arch }}.tar.gz.sha256
+          sha256sum dbflux-linux-${{ matrix.arch }}.AppImage > dbflux-linux-${{ matrix.arch }}.AppImage.sha256
+          sha256sum dbflux_*.deb > dbflux_${{ matrix.arch }}.deb.sha256
+          sha256sum dbflux-*.rpm > dbflux_${{ matrix.arch }}.rpm.sha256
+
+      - name: Upload artifacts
+        if: env.ACT != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: |
+            dbflux-linux-${{ matrix.arch }}.tar.gz
+            dbflux-linux-${{ matrix.arch }}.tar.gz.sha256
+            dbflux-linux-${{ matrix.arch }}.tar.gz.asc
+            dbflux-linux-${{ matrix.arch }}.AppImage
+            dbflux-linux-${{ matrix.arch }}.AppImage.sha256
+            dbflux-linux-${{ matrix.arch }}.AppImage.asc
+            dbflux_*.deb
+            dbflux_*.deb.asc
+            dbflux_${{ matrix.arch }}.deb.sha256
+            dbflux-*.rpm
+            dbflux-*.rpm.asc
+            dbflux_${{ matrix.arch }}.rpm.sha256
+          retention-days: 90
+
+      - name: (act) Store artifacts locally
+        if: env.ACT == 'true'
+        run: |
+          mkdir -p /tmp/artifacts/linux-${{ matrix.arch }}
+          cp dbflux-linux-${{ matrix.arch }}.tar.gz /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-linux-${{ matrix.arch }}.tar.gz.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-linux-${{ matrix.arch }}.tar.gz.asc /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-linux-${{ matrix.arch }}.AppImage /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-linux-${{ matrix.arch }}.AppImage.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-linux-${{ matrix.arch }}.AppImage.asc /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux_*.deb /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux_*.deb.asc /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux_${{ matrix.arch }}.deb.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-*.rpm /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-*.rpm.asc /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux_${{ matrix.arch }}.rpm.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
+
+  build-macos:
+    name: Build macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.runs_on }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Build the x86_64 target on the Apple Silicon runner via cross
+          # compilation. GitHub's Intel macOS runner is ~5x slower; arm64 ->
+          # x86_64 is a trivial same-OS cross (universal SDK, shared linker),
+          # so this cuts the Intel build from ~1h to the arm64 build's time.
+          - arch: amd64
+            runs_on: macos-14
+            target: x86_64-apple-darwin
+          - arch: arm64
+            runs_on: macos-14
+            target: aarch64-apple-darwin
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: rust-src
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v0-rust"
+          shared-key: macos-${{ matrix.arch }}
+          cache-targets: true
+          cache-on-failure: true
+
+      - name: Build DBFlux
+        # vendored-openssl makes ssh2/libssh2 compile OpenSSL from source for the
+        # target instead of linking the runner's system OpenSSL. Required to
+        # cross-compile x86_64 on the Apple Silicon runner (no x86_64 OpenSSL is
+        # present), and keeps both macOS binaries self-contained at runtime.
+        run: cargo build --release --features "$FEATURES,vendored-openssl" --target ${{ matrix.target }}
+
+      - name: Create app bundle
+        run: |
+          VERSION="${{ inputs.version }}"
+
+          mkdir -p DBFlux.app/Contents/MacOS
+          mkdir -p DBFlux.app/Contents/Resources
+
+          cp target/${{ matrix.target }}/release/dbflux DBFlux.app/Contents/MacOS/
+          chmod +x DBFlux.app/Contents/MacOS/dbflux
+
+          cp resources/icons/dbflux.svg DBFlux.app/Contents/Resources/
+
+          sed -e "s/\${VERSION}/$VERSION/g" resources/macos/Info.plist > DBFlux.app/Contents/Info.plist
+
+          chmod +x DBFlux.app/Contents/MacOS/dbflux
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Create DMG
+        run: |
+          VERSION="${{ inputs.version }}"
+
+          create-dmg \
+            --volname "DBFlux" \
+            --window-pos 200 120 \
+            --window-size 800 450 \
+            --icon-size 100 \
+            --icon "DBFlux.app" 200 190 \
+            --hide-extension "DBFlux.app" \
+            --app-drop-link 600 185 \
+            --no-internet-enable \
+            --skip-jenkins \
+            dbflux-macos-${{ matrix.arch }}.dmg \
+            DBFlux.app
+
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: Sign artifacts
+        run: |
+          gpg --armor --detach-sign dbflux-macos-${{ matrix.arch }}.dmg
+
+      - name: Generate checksum
+        run: shasum -a 256 dbflux-macos-${{ matrix.arch }}.dmg > dbflux-macos-${{ matrix.arch }}.dmg.sha256
+
+      - name: Upload artifacts
+        if: env.ACT != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: |
+            dbflux-macos-${{ matrix.arch }}.dmg
+            dbflux-macos-${{ matrix.arch }}.dmg.sha256
+            dbflux-macos-${{ matrix.arch }}.dmg.asc
+          retention-days: 90
+
+      - name: (act) Store artifacts locally
+        if: env.ACT == 'true'
+        run: |
+          mkdir -p /tmp/artifacts/macos-${{ matrix.arch }}
+          cp dbflux-macos-${{ matrix.arch }}.dmg /tmp/artifacts/macos-${{ matrix.arch }}/
+          cp dbflux-macos-${{ matrix.arch }}.dmg.sha256 /tmp/artifacts/macos-${{ matrix.arch }}/
+          cp dbflux-macos-${{ matrix.arch }}.dmg.asc /tmp/artifacts/macos-${{ matrix.arch }}/
+
+  build-windows:
+    name: Build Windows amd64
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: rust-src
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v0-rust"
+          shared-key: windows-amd64
+          cache-targets: true
+          cache-on-failure: true
+
+      - name: Build DBFlux
+        run: cargo build --release --features "$env:FEATURES" --target x86_64-pc-windows-msvc
+
+      - name: Install ImageMagick
+        run: choco install imagemagick -y
+
+      - name: Create ICO from SVG
+        run: |
+          magick convert -background none -resize 256x256 resources/icons/dbflux.svg dbflux-256.png
+          magick convert -background none -resize 128x128 resources/icons/dbflux.svg dbflux-128.png
+          magick convert -background none -resize 64x64 resources/icons/dbflux.svg dbflux-64.png
+          magick convert -background none -resize 48x48 resources/icons/dbflux.svg dbflux-48.png
+          magick convert -background none -resize 32x32 resources/icons/dbflux.svg dbflux-32.png
+          magick convert -background none -resize 16x16 resources/icons/dbflux.svg dbflux-16.png
+          magick convert dbflux-16.png dbflux-32.png dbflux-48.png dbflux-64.png dbflux-128.png dbflux-256.png dbflux.ico
+
+      - name: Create portable package
+        run: |
+          New-Item -Path pkg -ItemType Directory -Force | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/dbflux.exe pkg/dbflux.exe
+          Copy-Item dbflux.ico pkg/dbflux.ico
+          Compress-Archive -Path pkg/* -DestinationPath dbflux-windows-amd64.zip -Force
+
+      - name: Prepare installer files
+        run: |
+          New-Item -Path installer -ItemType Directory -Force | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/dbflux.exe installer/dbflux.exe
+          Copy-Item dbflux.ico installer/dbflux.ico
+          Copy-Item resources/windows/installer.iss installer/installer.iss
+          Copy-Item LICENSE-MIT installer/LICENSE-MIT
+          Copy-Item LICENSE-APACHE installer/LICENSE-APACHE
+
+      - name: Build installer
+        uses: Minionguyjpro/Inno-Setup-Action@v1.2.2
+        with:
+          path: installer/installer.iss
+          options: /DMyAppVersion=${{ inputs.version }}
+
+      - name: Move installer
+        run: Move-Item installer/output/dbflux-windows-amd64-setup.exe dbflux-windows-amd64-setup.exe -Force
+
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: Sign artifacts
+        run: |
+          gpg --armor --detach-sign dbflux-windows-amd64.zip
+          gpg --armor --detach-sign dbflux-windows-amd64-setup.exe
+
+      - name: Generate checksums
+        run: |
+          $hashZip = (Get-FileHash -Algorithm SHA256 dbflux-windows-amd64.zip).Hash.ToLower()
+          "$hashZip  dbflux-windows-amd64.zip" | Out-File -FilePath dbflux-windows-amd64.zip.sha256 -Encoding ascii
+
+          $hashExe = (Get-FileHash -Algorithm SHA256 dbflux-windows-amd64-setup.exe).Hash.ToLower()
+          "$hashExe  dbflux-windows-amd64-setup.exe" | Out-File -FilePath dbflux-windows-amd64-setup.exe.sha256 -Encoding ascii
+
+      - name: Upload artifacts
+        if: env.ACT != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-amd64
+          path: |
+            dbflux-windows-amd64.zip
+            dbflux-windows-amd64.zip.sha256
+            dbflux-windows-amd64.zip.asc
+            dbflux-windows-amd64-setup.exe
+            dbflux-windows-amd64-setup.exe.sha256
+            dbflux-windows-amd64-setup.exe.asc
+          retention-days: 90
+
+      - name: (act) Store artifacts locally
+        if: env.ACT == 'true'
+        shell: pwsh
+        run: |
+          New-Item -Path C:\tmp\artifacts\windows-amd64 -ItemType Directory -Force | Out-Null
+          Copy-Item dbflux-windows-amd64.zip C:\tmp\artifacts\windows-amd64\
+          Copy-Item dbflux-windows-amd64.zip.sha256 C:\tmp\artifacts\windows-amd64\
+          Copy-Item dbflux-windows-amd64.zip.asc C:\tmp\artifacts\windows-amd64\
+          Copy-Item dbflux-windows-amd64-setup.exe C:\tmp\artifacts\windows-amd64\
+          Copy-Item dbflux-windows-amd64-setup.exe.sha256 C:\tmp\artifacts\windows-amd64\
+          Copy-Item dbflux-windows-amd64-setup.exe.asc C:\tmp\artifacts\windows-amd64\

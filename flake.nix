@@ -67,6 +67,15 @@
             else
               null;
 
+          # Rolling nightly prebuilt — pinned on the `nightly` ref.
+          # On `main` the hashes in nightly-info.nix are placeholders; always
+          # consume this via `github:0xErwin1/dbflux/nightly#dbflux-nightly`.
+          dbfluxNightly =
+            if hasPrebuilt then
+              pkgs.callPackage ./nix/binary.nix { infoFile = ./nix/nightly-info.nix; }
+            else
+              null;
+
           # Default package: prefer the prebuilt binary when available
           # (fast install for end users), fall back to the source build.
           dbfluxDefault = if hasPrebuilt then dbfluxBin else dbfluxSource;
@@ -104,28 +113,39 @@
           };
 
           # Packages:
-          #   .default       -> prebuilt when available, source otherwise
-          #   .dbflux        -> alias for .default
-          #   .dbflux-bin    -> explicit prebuilt (only on supported systems)
-          #   .dbflux-source -> explicit source build
+          #   .default         -> prebuilt when available, source otherwise
+          #   .dbflux          -> alias for .default
+          #   .dbflux-bin      -> explicit prebuilt (only on supported systems)
+          #   .dbflux-source   -> explicit source build
+          #   .dbflux-nightly  -> rolling nightly prebuilt (pin to nightly ref)
           packages = {
             default = dbfluxDefault;
             dbflux = dbfluxDefault;
             dbflux-source = dbfluxSource;
-          } // (if hasPrebuilt then { dbflux-bin = dbfluxBin; } else { });
+          } // (if hasPrebuilt then {
+            dbflux-bin = dbfluxBin;
+            dbflux-nightly = dbfluxNightly;
+          } else { });
 
           formatter = pkgs.nixpkgs-fmt;
 
           # Apps
-          apps.default = flake-utils.lib.mkApp {
-            drv = dbfluxDefault;
-            exePath = "/bin/dbflux";
-          };
+          apps = {
+            default = flake-utils.lib.mkApp {
+              drv = dbfluxDefault;
+              exePath = "/bin/dbflux";
+            };
 
-          apps.dbflux = flake-utils.lib.mkApp {
-            drv = dbfluxDefault;
-            exePath = "/bin/dbflux";
-          };
+            dbflux = flake-utils.lib.mkApp {
+              drv = dbfluxDefault;
+              exePath = "/bin/dbflux";
+            };
+          } // (if hasPrebuilt then {
+            dbflux-nightly = flake-utils.lib.mkApp {
+              drv = dbfluxNightly;
+              exePath = "/bin/dbflux";
+            };
+          } else { });
         }
       );
     in

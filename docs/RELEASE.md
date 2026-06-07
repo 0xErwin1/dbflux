@@ -1,33 +1,46 @@
 # Release Process
 
-DBFlux uses **trunk-based development with short-lived release branches**. This is the same model used by Rust, Chromium, Node, and VSCode: one long-lived branch (`main`) plus an ephemeral `release/vX.Y` branch per minor while it is being stabilized.
+DBFlux uses **trunk-based development with short-lived release branches**. One long-lived branch (`main`) is the integration target; a `release/vX.Y` branch is cut per minor during stabilization and discarded after EOL.
 
 This document is the human-facing reference. The automated `dbflux-release` skill (`skills/dbflux-release/SKILL.md`) follows these same rules.
 
+## Channels
+
+| Channel     | Source branch   | Tag pattern             | GitHub release kind | Built by          |
+|-------------|-----------------|-------------------------|---------------------|-------------------|
+| **nightly** | `main` HEAD     | `nightly` (rolling)     | prerelease          | Cron — daily      |
+| **rc**      | `release/vX.Y`  | `vX.Y.Z-rc.N`           | prerelease          | Tag push          |
+| **stable**  | `release/vX.Y`  | `vX.Y.Z`                | published           | Tag push          |
+
+The `-dev.N` channel is **retired**. Nightly replaces it. Old `-dev.N` tags remain on GitHub but no new ones are created.
+
+Per-channel application icons are tracked in [issue #183](https://github.com/0xErwin1/dbflux/issues/183). Do not implement them here.
+
+## Changelog Model (git-cliff, Model B)
+
+The changelog is **derived from git history** by [git-cliff](https://git-cliff.org). Do not hand-edit `[Unreleased]`.
+
+- `cliff.toml` at the repo root configures the generator.
+- `[Unreleased]` means "every user-visible conventional commit since the last **stable** tag." rc and nightly tags are transparent: they do not close the `[Unreleased]` window (`skip_tags` in `cliff.toml`).
+- **Commit messages are load-bearing.** A `feat`, `fix`, or `perf` commit surfaces in the changelog; a `chore`, `ci`, `docs`, `test`, `refactor`, or `style` commit is dropped. Security-relevant changes use `fix(security):` or a `Security:` footer.
+- The `[Unreleased]` block closes **only at stable**. When a stable tag is pushed, git-cliff renders the full set of user-visible commits since the previous stable as the release notes for that tag.
+- Do not hand-rename `[Unreleased]` when cutting an RC or a nightly. The RC cut procedure is simpler under this model — see below.
+
 ## Branches
 
-| Branch          | Lifetime    | Accepts                                       | Tags produced                          |
-|-----------------|-------------|-----------------------------------------------|----------------------------------------|
-| `main`          | permanent   | every new commit (features, fixes, refactors) | `vX.Y.Z-dev.N`                         |
-| `release/vX.Y`  | until EOL   | cherry-picked fixes only (no new features)    | `vX.Y.Z-rc.N`, `vX.Y.Z`, `vX.Y.(Z+1)`  |
+| Branch         | Lifetime  | Accepts                                          | Tags produced            |
+|----------------|-----------|--------------------------------------------------|--------------------------|
+| `main`         | permanent | every new commit (features, fixes, refactors)    | (none — nightly rolling) |
+| `release/vX.Y` | until EOL | cherry-picked fixes only (no new features)       | `vX.Y.Z-rc.N`, `vX.Y.Z`, `vX.Y.(Z+1)` |
 
 ### Inviolable rules
 
-- A commit is **never** authored on a release branch. It always lands on `main` first and is then `git cherry-pick -x <sha>` into the release branch.
+- A commit is **never** authored on a release branch. It always lands on `main` first, then is `git cherry-pick -x <sha>` into the release branch.
 - A release branch is **never** merged back into `main`.
-- **No new features** on a release branch once cut. Only bugfixes and the release's own version/changelog bumps.
-- During normal development `main` carries the next minor's `-dev` version (`vX.(Y+1).0-dev.N`). **Exception — the RC stabilization window:** from the moment `release/vX.Y` is cut until `vX.Y.0` ships stable, `main` stays on the `vX.Y.0-rc.0` marker and tracks the release line. Stabilization fixes land on `main` first and are cherry-picked into the release branch; no new `-dev` is cut while a release is stabilizing. `main` opens the next `-dev` cycle only **after** the stable `vX.Y.0` tag. The release branch carries the exact version it is stabilizing (`-rc.N`, then `vX.Y.0`).
+- **No new features** on a release branch once cut. Only bugfixes and the release's own version-artifact bumps.
+- `main` is always open for development. There is no manual CHANGELOG entry required on `main` — commit messages carry the information.
 
 ## Tags
-
-The release workflow (`.github/workflows/release.yml`) classifies tags automatically:
-
-| Tag pattern    | Allowed source branch | GitHub release kind |
-|----------------|-----------------------|---------------------|
-| `vX.Y.Z-dev.N` | `main`                | prerelease          |
-| `vX.Y.Z-rc.N`  | `release/vX.Y`        | prerelease          |
-| `vX.Y.Z`       | `release/vX.Y`        | stable (published)  |
-| anything else  | (refuse)              | draft (safety net)  |
 
 Tags must be annotated:
 
@@ -36,84 +49,91 @@ git tag -a vX.Y.Z[-suffix.N] -m "vX.Y.Z[-suffix.N]"
 git push origin vX.Y.Z[-suffix.N]
 ```
 
+The release workflow (`.github/workflows/release.yml`) classifies tags automatically:
+
+| Tag pattern    | Allowed source branch | GitHub release kind |
+|----------------|-----------------------|---------------------|
+| `vX.Y.Z-rc.N`  | `release/vX.Y`        | prerelease          |
+| `vX.Y.Z`       | `release/vX.Y`        | stable (published)  |
+| anything else  | (safety net)          | draft               |
+
 ## Versioning Rules
 
 The workspace version (`Cargo.toml` `[workspace.package].version`) is the source of truth. All other manifests must stay in lockstep.
 
 **On `main`:**
-- Outside an RC window, the manifest version is a `-dev.N` of the next minor (e.g. `0.7.0-dev.5`).
-- Next dev bump: if last main tag is `vX.Y.Z-dev.N` → `vX.Y.Z-dev.(N+1)`. If the previous tag was stable → start at `vX.(Y+1).0-dev.0`.
-- **Inside an RC window** (a `release/vX.Y` exists and `vX.Y.0` has not shipped): `main` holds the `vX.Y.0-rc.0` marker. It is **not** re-bumped as new RCs are tagged — `-rc.N` tags live only on the release branch. `main` leaves this marker only when it opens `vX.(Y+1).0-dev.0` after the stable release.
+
+The manifest version is a `-rc.0` marker for the next minor during the RC stabilization window, and is bumped to the next minor's base (`X.(Y+1).0`) only after the stable `vX.Y.0` ships. Between stable releases, `main` carries whatever the current minor's next version will be.
 
 **On `release/vX.Y`:**
-- Next RC: if last tag on the branch is `vX.Y.Z-rc.N` → `-rc.(N+1)`. If none → `-rc.0`.
-- Promote to stable: drop the `-rc.N` suffix → `vX.Y.0`.
-- Patch: increment `Z` → `vX.Y.(Z+1)`. **Never bump the minor on a release branch.**
 
-## Cycle Example: `0.6.0`
+- Next RC: if the last tag is `vX.Y.Z-rc.N` → `-rc.(N+1)`. If none → `-rc.0`.
+- Promote to stable: drop the RC suffix → `vX.Y.0`.
+- Patch: increment `Z` → `vX.Y.(Z+1)`. Never bump the minor on a release branch.
 
-1. Features keep landing on `main` (carrying `v0.6.0-dev.N`). Every so often, tag `v0.6.0-dev.N` directly from main's HEAD.
-2. When ready to stabilize, cut `release/v0.6` from the chosen main commit at `v0.6.0-rc.0`, and set `main` to the same `v0.6.0-rc.0` marker (close `[Unreleased]` as `[0.6.0]`). Tag `v0.6.0-rc.0` on the release branch.
-3. A bug appears during RC:
-   - Commit the fix on `main` first (its entry goes under `[0.6.0]`; `main` stays at the `v0.6.0-rc.0` marker).
-   - `git cherry-pick -x <sha>` into `release/v0.6`.
-   - Bump the release branch to `v0.6.0-rc.1` and tag `v0.6.0-rc.1`.
-4. When clean, **curate `[0.6.0]`** (fold the `[0.6.0-dev.N]` + RC fixes into one user-facing section, drop intra-version churn, remove the dev sections), then drop the suffix on `release/v0.6` → tag `v0.6.0`. This is the stable release.
-5. **Only now** does `main` open the next cycle: bump to `v0.7.0-dev.0`, open a fresh `[Unreleased]`.
-6. Patches (`v0.6.1`, `v0.6.2`, ...) come from the same release branch (cherry-picks from main, which is now on `v0.7.0-dev.N`).
+## Cycle Example: `0.7.0`
+
+1. Features land on `main`. No manual changelog entries required.
+2. When ready to stabilize, cut `release/v0.7` from `main` HEAD.
+   - Bump every versioned artifact to `0.7.0-rc.0`.
+   - Commit on the release branch: `chore(release): cut release/v0.7 at v0.7.0-rc.0`.
+   - Tag `v0.7.0-rc.0` on the release branch. git-cliff renders the unreleased range as the RC body automatically.
+3. A bug is found during RC:
+   - Commit the fix on `main`.
+   - `git cherry-pick -x <sha>` into `release/v0.7`.
+   - Bump to `v0.7.0-rc.1` and tag.
+4. When clean, bump the release branch from `v0.7.0-rc.N` to `v0.7.0`. Tag `v0.7.0`. git-cliff renders the full unreleased range (since `v0.6.0`) as the stable release notes.
+5. On `main`, bump to `v0.8.0-rc.0` and open the next cycle.
+6. Patches (`v0.7.1`, `v0.7.2`, …) come from the same release branch via cherry-picks from `main`.
 
 ## Cut Procedure: `main` → `release/vX.Y`
 
-When stabilization begins:
-
 1. Verify you are on `main`, clean tree, up to date with `origin/main`.
-2. Verify `.github/workflows/release.yml` on `main` contains the `Classify release` step. Without it, stable tags from the new release branch will publish as drafts (this happened to `v0.5.1`). If the step is missing, fix on `main` first.
-3. Confirm the target minor `vX.Y`.
-4. Create the branch (in a dedicated worktree if you use the bare-repo + worktrees layout, so `main` stays checked out):
+2. Verify `.github/workflows/release.yml` on `main` contains the `Classify release` job. If missing, fix on `main` first — otherwise stable tags will publish as drafts.
+3. Create the branch (use a dedicated worktree if you use the bare-repo layout so `main` stays checked out):
+
    ```bash
    git worktree add ../release-vX.Y -b release/vX.Y main
-   # or, in a single-checkout repo:
+   # or in a single-checkout repo:
    git checkout -b release/vX.Y
    ```
-5. On `release/vX.Y`:
-   - In `CHANGELOG.md`, rename `## [Unreleased]` to `## [X.Y.0] - YYYY-MM-DD`. The release branch carries **no** `[Unreleased]` block.
-   - Bump every versioned artifact to `X.Y.0-rc.0` (see below).
+
+4. On `release/vX.Y`:
+   - Bump every versioned artifact to `X.Y.0-rc.0` (see [Files to Bump](#files-to-bump)).
    - Commit: `chore(release): cut release/vX.Y at vX.Y.0-rc.0`.
    - Push: `git push -u origin release/vX.Y`.
-6. Back on `main` (it stays on the release line during the RC window):
-   - In `CHANGELOG.md`, close `## [Unreleased]` as `## [X.Y.0] - YYYY-MM-DD` (same content as the release branch). Do **not** open a fresh `[Unreleased]` or bump to `-dev` yet — that happens only after the stable release.
-   - Bump every versioned artifact to `X.Y.0-rc.0` (mirrors the release branch).
+
+5. Back on `main`:
+   - Bump every versioned artifact to `X.Y.0-rc.0` (mirrors the release branch — main stays on the RC marker during the stabilization window).
    - Commit: `chore(release): align main to vX.Y.0-rc.0`.
    - Push.
-7. Tag `vX.Y.0-rc.0` on the release branch.
 
-At this point `main` and `release/vX.Y` have identical trees; they diverge only as stabilization fixes are tagged on the branch. When the stable `vX.Y.0` is ready, run **Promote to Stable** and then **Begin Next Dev Cycle** below.
+6. Tag `vX.Y.0-rc.0` on the release branch.
+
+There is **no CHANGELOG rename step** under the git-cliff model. The RC release body is generated from conventional commits automatically.
 
 ## Promote to Stable: `release/vX.Y` → `vX.Y.0`
 
-Run on `release/vX.Y` when the RC is clean, **before** tagging the stable. The release workflow extracts `## [X.Y.0]` from the tagged tree, so the curated section must exist in the promotion commit.
+Run on `release/vX.Y` when the RC is clean:
 
-1. **Curate `## [X.Y.0]`** into the changelog a user upgrading from the previous stable should read (see *Promoting to stable* under CHANGELOG Discipline):
-   - Fold every user-visible change from all `## [X.Y.0-dev.N]` sections and the RC stabilization fixes into the single `## [X.Y.0]` section.
-   - Drop intra-version churn: an entry that fixes, tweaks, or reverts something first introduced within this same `X.Y.0` cycle does not ship as its own line — describe the feature only in its final state. A bullet survives only if it is a net delta versus the **previous stable**.
-   - Group under `Added` / `Changed` / `Fixed` / `Security` / `Removed`.
-   - Delete the now-folded `## [X.Y.0-dev.N]` sections. Their granular notes remain on the published `-dev.N` GitHub prereleases and in git history.
-2. Set the `## [X.Y.0]` date to the stable release date.
-3. Bump every versioned artifact from `X.Y.0-rc.N` to `X.Y.0` (drop the suffix).
-4. Commit: `chore(release): promote release/vX.Y to vX.Y.0`.
-5. Tag `vX.Y.0` on the release branch and push branch + tag.
+1. Bump every versioned artifact from `X.Y.0-rc.N` to `X.Y.0`.
+2. Commit: `chore(release): promote release/vX.Y to vX.Y.0`.
+3. Tag `vX.Y.0` on the release branch and push branch + tag.
+
+git-cliff generates the curated release notes from all user-visible commits since the previous stable tag. There is no manual CHANGELOG curation step.
+
+> **Optional curation:** if you want to add a human-written intro or editorial note to the stable release body, you can do so directly in the GitHub Release edit UI after the workflow publishes it. This does not touch CHANGELOG.md.
 
 ## Begin Next Dev Cycle: after stable `vX.Y.0`
 
-Run this **only after** the stable `vX.Y.0` tag is pushed from `release/vX.Y`. Until then `main` stays on the RC marker.
+Run this **only after** the stable `vX.Y.0` tag is pushed from `release/vX.Y`.
 
-1. On `main`:
-   - Replace main's `## [X.Y.0]` **and** its `## [X.Y.0-dev.N]` sections with the single curated `## [X.Y.0]` exactly as it landed on `release/vX.Y` (same content, same date). After this, `main` and the release branch agree on the stable section and `main` carries no `-dev.N` sections for the shipped minor.
-   - Open a fresh `## [Unreleased]` block above `## [X.Y.0]`.
-   - Bump every versioned artifact to `X.(Y+1).0-dev.0`.
-   - Commit: `chore(version): begin X.(Y+1).0-dev cycle`.
-   - Push.
-2. `main` now produces `vX.(Y+1).0-dev.N`; the standard cherry-pick + `[Unreleased]` discipline (below) resumes for any further `vX.Y.Z` patches.
+On `main`:
+- Bump every versioned artifact to `X.(Y+1).0-rc.0`.
+- Commit: `chore(version): begin X.(Y+1).0 cycle`.
+- Push.
+
+`main` now targets the next minor. Nightly builds continue from `main` HEAD automatically.
 
 ## Files to Bump
 
@@ -122,38 +142,52 @@ Per release, update all of the following to the exact same version:
 - `Cargo.toml` — `[workspace.package].version`. Workspace crates inherit via `version.workspace = true`.
 - `flake.nix`
 - `resources/windows/installer.iss`
-- `CHANGELOG.md` — header for the version and entries.
 - Manual review (does not inherit): `examples/custom_driver/Cargo.toml`.
 
 After the GitHub Release artifacts for the tag are published, also update:
 
-- `nix/release-info.nix` — `version` + both prebuilt-tarball `url`s and `hash`es (see "Nix" under "Downstream Channels"). This is a per-branch channel pointer: `main` tracks the newest published tag of any kind, each `release/vX.Y` tracks its own line's newest. It requires the published artifacts, so it lands as a follow-up commit (one per affected branch) once the release workflow finishes.
+- `nix/release-info.nix` — `version` + both prebuilt-tarball `url`s and `hash`es (see [Nix](#nix-this-repos-flake) below). This is a per-branch channel pointer. It requires the published artifacts, so it lands as a follow-up commit once the release workflow finishes.
 
 The AUR `PKGBUILD` lives in an **external AUR repository**, not in this repo. It is bumped only for stable tags.
 
-## CHANGELOG Discipline
+## How Nightly Works
 
-The discipline differs by phase. The key idea: an entry lives under exactly one header, and the header reflects the version that ships it.
+`.github/workflows/nightly.yml` runs daily at 03:17 UTC:
 
-**Normal development (no active RC window).** `main` carries a single `## [Unreleased]` block; every commit with user-visible behavior appends an entry to it.
+1. Reads the workspace version from `Cargo.toml`, strips any existing pre-release suffix, and appends `-nightly+<short-sha>` (e.g. `0.7.0-nightly+abc1234`). No `Cargo.toml` commit required.
+2. Calls `build.yml` with `channel: nightly`.
+3. Computes the SHA256 SRI hash of each Linux tarball and regenerates `nix/nightly-info.nix` with the real hashes and the rolling release URLs.
+4. Commits the updated `nix/nightly-info.nix` on top of the current `main` HEAD. This commit is **not pushed to `main`** — it becomes the sole target of the `nightly` tag.
+5. Force-moves the `nightly` tag to the pin commit and pushes the tag. Pushing the tag is sufficient to make the commit reachable on the remote; no branch push is required.
+6. Publishes or updates the rolling `nightly` GitHub prerelease with the new artifacts and a git-cliff-generated body covering commits since the last stable tag. The release's tag points at the pin commit, so `nix/nightly-info.nix` at `nightly` ref always matches the published artifacts.
 
-**Cutting `release/vX.Y`.** The `[Unreleased]` snapshot becomes `## [X.Y.0] - YYYY-MM-DD` on **both** the release branch and `main` (their trees are identical at the cut). `main` does **not** open a fresh `[Unreleased]` — while the release stabilizes, new fix entries are appended under `## [X.Y.0]`, because those fixes ship in `X.Y.0`.
+The nightly tag is force-pushed and the release is replaced on every run. Only the canonical repository (`0xErwin1/dbflux`) runs the schedule.
 
-**During the RC window.** A stabilization fix lands on `main` (entry under `## [X.Y.0]`), then is cherry-picked into `release/vX.Y` (which carries the same `## [X.Y.0]`). No `[Unreleased]`/removal dance is needed here — both branches are the same release line.
+**Skip when `main` has not advanced.** A scheduled run first compares the current `main` HEAD against the commit the last nightly was built from (`git rev-parse nightly^`, the pin commit's first parent). If they match, the run skips entirely: no rebuild, no tag move, no release churn. This avoids republishing an identical build under a fresh, non-reproducible hash that would needlessly break Nix pins. A manual `workflow_dispatch` run always builds, even with no new commits.
 
-**Promoting to stable.** Before tagging `vX.Y.0`, curate `## [X.Y.0]` on the release branch into the notes a user upgrading from the **previous stable** needs. Fold all `## [X.Y.0-dev.N]` entries and the RC fixes into it; collapse intra-version churn — a fix to a feature that was itself introduced within `X.Y.0` describes a state stable users never saw, so it is dropped, not listed; keep only net deltas versus the previous stable. Then delete the `## [X.Y.0-dev.N]` sections (they live on the `-dev.N` GitHub prereleases and in git history). This preserves the *one entry, one header* rule: each shipped change ends under `## [X.Y.0]` and nowhere else.
+### Nix nightly package
 
-**After the stable `vX.Y.0` and the next dev cycle opens.** `main` returns to a single `## [Unreleased]` on top. From here, a fix destined for a `vX.Y.(Z+1)` patch lands on main's `[Unreleased]`, is cherry-picked into `release/vX.Y` under `## [X.Y.(Z+1)]`, and **the same entry must then be removed from main's `[Unreleased]`** — once shipped on a release branch it is no longer "unreleased" in main's history. Skipping this is what left main's `[Unreleased]` carrying stale `v0.5.1` content after that release.
+The workflow pins `nix/nightly-info.nix` at the `nightly` ref on every run. Downstream users get the prebuilt nightly binary without compiling from source:
 
-**Always:**
-- The release workflow's `Extract changelog section` step matches the **exact tag version** as the header (`## [X.Y.Z-suffix]`, with the leading `v` stripped). Keep that header format exactly.
-  - `-dev.N` releases carry their own dated `## [X.Y.Z-dev.N]` section, so they match and surface their curated notes.
-  - An `-rc.N` tag looks up `## [X.Y.0-rc.N]`, which the cut procedure does **not** create (it uses the shared `## [X.Y.0]`). So RC release bodies omit the curated changelog and fall back to the installation template plus auto-generated contributor notes. The curated `## [X.Y.0]` section surfaces on the **stable** `vX.Y.0` release, whose tag matches the header exactly. (To also surface it on RC bodies, the extractor would need a fallback from `## [X.Y.0-rc.N]` to `## [X.Y.0]` — not yet implemented.)
-- Invariant after every stable release: no entry present in `[X.Y.Z]` (on the release branch) should still appear in main's `[Unreleased]`.
+```bash
+# Run nightly directly
+nix run github:0xErwin1/dbflux/nightly#dbflux-nightly
+
+# Install into a profile
+nix profile install github:0xErwin1/dbflux/nightly#dbflux-nightly
+```
+
+A from-source nightly (no hash pinning required) also works:
+
+```bash
+nix run github:0xErwin1/dbflux/nightly#dbflux-source
+```
+
+**Do not consume `#dbflux-nightly` from `main`.** On `main`, `nix/nightly-info.nix` contains placeholder hashes that will not fetch. Always use the `nightly` ref as shown above.
 
 ## Cherry-Pick Discipline
 
-A release branch should never contain commits absent from `main`, except the release-only commits (`chore(release): ...`, `chore(version): ...`).
+A release branch should never contain commits absent from `main`, except release-only commits (`chore(release): ...`, `chore(version): ...`).
 
 ```bash
 # On main: land the fix.
@@ -171,44 +205,35 @@ Audit: every non-release commit on `release/vX.Y` since branch-off should mentio
 git log --grep='cherry picked from' release/vX.Y
 ```
 
-### CHANGELOG cleanup after cherry-pick (MANDATORY)
-
-When the cherry-picked commit carries a `CHANGELOG.md` entry, finish the cherry-pick with a follow-up commit on `main` that **removes the same entry from `[Unreleased]`**:
-
-```bash
-git checkout main
-# edit CHANGELOG.md: delete the matching bullet(s) under [Unreleased]
-git commit -am "chore(changelog): move <short summary> to vX.Y.(Z+1)"
-git push
-```
-
-Batch the cleanup into a single commit on `main` once the release branch is tagged if several entries cherry-picked together.
-
 ## Downstream Channels
 
-| Tag kind          | GitHub Release | AUR              | Nix flake (this repo)        | nixpkgs (future)  |
-|-------------------|----------------|------------------|------------------------------|-------------------|
-| `-dev.N` (main)   | prerelease     | skip             | bump main's `release-info` ¹             | skip              |
-| `-rc.N` (release) | prerelease     | skip             | bump release branch's + main's `release-info` ¹ | skip       |
-| Stable `vX.Y.Z`   | published      | bump + push      | bump release branch's + main's `release-info` ¹ | bump + PR  |
-
-¹ `nix/release-info.nix` is **per-branch**: each branch's flake pins to its own channel (refreshed after that tag's artifacts publish). `main`'s release-info is the **latest** channel — it tracks the newest published tag of any kind (`-dev.N`, `-rc.N`, or stable). `release/vX.Y`'s release-info is that minor's channel — it tracks the branch's newest tag (`-rc.N`, then `vX.Y.0`, then `vX.Y.(Z+1)`). During the RC window both channels point at the same `-rc.N` artifacts; they diverge again once `main` opens the next `-dev` cycle.
+| Tag kind        | GitHub Release | AUR         | Nix flake (this repo)                         | nixpkgs (future) |
+|-----------------|----------------|-------------|-----------------------------------------------|------------------|
+| nightly         | prerelease     | skip        | auto-pinned — `#dbflux-nightly` on nightly ref | skip            |
+| `-rc.N`         | prerelease     | skip        | bump release branch's + main's `release-info` | skip             |
+| Stable `vX.Y.Z` | published      | bump + push | bump release branch's + main's `release-info` | bump + PR        |
 
 ### AUR
 
-The PKGBUILD is maintained in an external AUR repository. AUR `pkgver` does **not** allow `-` (hyphens are reserved for `pkgrel`). For stable releases the translation is a no-op (`pkgver=X.Y.Z`). For hypothetical AUR prereleases:
+AUR `pkgver` does not allow `-` (reserved for `pkgrel`). For stable releases the translation is a no-op (`pkgver=X.Y.Z`). For hypothetical AUR prereleases:
 
-- `vX.Y.Z-dev.N` → `pkgver=X.Y.Z.dev.N`
-- `vX.Y.Z-rc.N`  → `pkgver=X.Y.Z.rc.N`
+- `vX.Y.Z-rc.N` → `pkgver=X.Y.Z.rc.N`
 
 ### Nix (this repo's flake)
 
-The flake at the root exposes both a prebuilt-binary package (`dbflux-bin`, default) and a from-source build (`dbflux-source`). The prebuilt package reads `nix/release-info.nix`, which pins each supported system to the GitHub Release tarball it should fetch.
+The flake exposes several packages on Linux (x86_64 and aarch64):
 
-`release-info.nix` is per-branch and pins that branch's flake to its channel (see the footnote under the Downstream Channels table). `main` tracks the newest published tag of any kind; each `release/vX.Y` tracks its own line's newest tag. After a tag's artifacts publish, refresh `release-info.nix` on **every** branch whose channel that tag advances — for an `-rc.N` or stable `vX.Y.Z` that means both `release/vX.Y` and `main`. The release publishes a `.sha256` next to each tarball, so you can read the digest without downloading the full artifact:
+| Package           | What it provides                                     |
+|-------------------|------------------------------------------------------|
+| `dbflux` (default) | Prebuilt stable/rc binary when available, source otherwise |
+| `dbflux-bin`      | Explicit prebuilt from `nix/release-info.nix`        |
+| `dbflux-source`   | Source build via crane (all platforms)               |
+| `dbflux-nightly`  | Rolling nightly prebuilt from `nix/nightly-info.nix` (use `nightly` ref) |
+
+**Stable / RC (`nix/release-info.nix`):** per-branch channel pointer. `main` tracks the newest published tag of any kind; each `release/vX.Y` tracks its own line's newest. After a tag's artifacts publish, refresh `release-info.nix` on every branch whose channel that tag advances.
 
 ```bash
-ver=X.Y.Z          # or X.Y.Z-dev.N / X.Y.Z-rc.N
+ver=X.Y.Z
 for arch in amd64 arm64; do
   hex=$(curl -fsSL "https://github.com/0xErwin1/dbflux/releases/download/v$ver/dbflux-linux-$arch.tar.gz.sha256" | awk '{print $1}')
   nix-hash --to-sri --type sha256 "$hex"
@@ -221,25 +246,27 @@ Update `version`, both `url`s, and both `hash`es in `nix/release-info.nix`. Veri
 nix build .#dbflux-bin --no-link --print-out-paths
 ```
 
-Every `-rc.N` (including `N > 0`) advances both channels: bump `release-info` on `release/vX.Y` (its line's newest) and on `main` (the latest overall). The two land as separate per-branch commits, never as a cherry-pick.
+**Nightly (`nix/nightly-info.nix`):** auto-updated by the nightly workflow on the `nightly` ref. Do not update this file manually. Consume via:
+
+```bash
+nix run github:0xErwin1/dbflux/nightly#dbflux-nightly
+```
 
 ### nixpkgs (future)
 
-Not yet upstream. When it is, only stable tags will get a PR to `NixOS/nixpkgs` with `version`, `src.hash`, and (if `buildRustPackage`) `cargoHash` bumped. PR title convention: `dbflux: A -> B`.
+Not yet upstream. When it is, only stable tags will get a PR to `NixOS/nixpkgs`. PR title convention: `dbflux: A -> B`.
 
 ## Anti-Patterns (refuse these)
 
 - Tagging `vX.Y.Z` or `vX.Y.Z-rc.N` while HEAD is on `main`.
-- Tagging `vX.Y.Z-dev.N` while HEAD is on a `release/*` branch.
+- Tagging an RC while HEAD is on `main`.
 - Merging `release/vX.Y` back into `main`.
 - Creating new features (non-fix commits) on a `release/*` branch.
 - Bumping minor or major version inside a `release/*` branch.
-- Opening the next `-dev` cycle on `main` (bumping to `vX.(Y+1).0-dev.0`) before the stable `vX.Y.0` has shipped. During the RC window `main` stays on the `vX.Y.0-rc.0` marker.
-- Tagging stable `vX.Y.0` without curating `## [X.Y.0]` — leaving raw per-dev sections or intra-version fix noise (a "fix" for a feature that never existed in any prior stable) in the published stable notes.
 - Pushing a tag without a clean working tree.
 - Pushing the AUR bump with `pkgver` containing a hyphen.
-- Cherry-picking a commit with a `CHANGELOG.md` entry into a release branch without then removing that entry from main's `[Unreleased]` block.
-- Cutting `release/vX.Y` from a `main` HEAD that does not contain the `Classify release` step in `release.yml` (stable tags from that branch will publish as drafts).
+- Cutting `release/vX.Y` from a `main` HEAD that does not contain the `Classify release` job in `release.yml`.
+- Creating new `-dev.N` tags (the channel is retired; use nightly instead).
 
 ## Local Validation Before Tagging
 
@@ -253,6 +280,8 @@ cargo test --workspace
 ## Related
 
 - `.github/workflows/release.yml` — classification logic and artifact publishing
+- `.github/workflows/nightly.yml` — daily nightly build
+- `.github/workflows/build.yml` — reusable build jobs (called by release and nightly)
 - `.github/release-template.md` — installation section appended to every release body
-- `CHANGELOG.md` — release notes source
+- `cliff.toml` — git-cliff configuration for changelog generation
 - `skills/dbflux-release/SKILL.md` — agent-facing skill that automates this process
