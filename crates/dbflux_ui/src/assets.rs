@@ -7,17 +7,19 @@ pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
-        // Full-color brand marks, served for `img(...)` (which renders the SVG
-        // in color) rather than the monochrome `svg()` icon path.
+        // Full-color brand marks, served for `img(...)`. Pre-rendered PNGs are
+        // used rather than the SVG because gpui's `img` SVG path does not apply
+        // the display scale factor, so a runtime-rasterized SVG looks blurry on
+        // HiDPI; a high-resolution PNG downscales crisply.
         match path {
-            "branding/stable/mark.svg" => {
+            "branding/stable/mark-256.png" => {
                 return Ok(Some(Cow::Borrowed(include_bytes!(
-                    "../../../resources/branding/stable/mark.svg"
+                    "../../../resources/branding/stable/mark-256.png"
                 ))));
             }
-            "branding/nightly/mark.svg" => {
+            "branding/nightly/mark-256.png" => {
                 return Ok(Some(Cow::Borrowed(include_bytes!(
-                    "../../../resources/branding/nightly/mark.svg"
+                    "../../../resources/branding/nightly/mark-256.png"
                 ))));
             }
             _ => {}
