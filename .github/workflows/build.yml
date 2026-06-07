@@ -82,6 +82,9 @@ jobs:
           cache-targets: true
           cache-on-failure: true
 
+      - name: Stamp workspace version
+        run: sed -i 's/^version = ".*"/version = "${{ inputs.version }}"/' Cargo.toml
+
       - name: Build DBFlux
         run: cargo build --release --features "$FEATURES" --target ${{ matrix.target }}
 
@@ -312,6 +315,9 @@ jobs:
           cache-targets: true
           cache-on-failure: true
 
+      - name: Stamp workspace version
+        run: sed -i.bak 's/^version = ".*"/version = "${{ inputs.version }}"/' Cargo.toml
+
       - name: Build DBFlux
         # vendored-openssl makes ssh2/libssh2 compile OpenSSL from source for the
         # target instead of linking the runner's system OpenSSL. Required to
@@ -408,6 +414,11 @@ jobs:
           shared-key: windows-amd64
           cache-targets: true
           cache-on-failure: true
+
+      - name: Stamp workspace version
+        shell: pwsh
+        run: |
+          (Get-Content Cargo.toml) -replace '^version = ".*"', 'version = "${{ inputs.version }}"' | Set-Content Cargo.toml
 
       - name: Build DBFlux
         run: cargo build --release --features "$env:FEATURES" --target x86_64-pc-windows-msvc

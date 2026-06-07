@@ -155,17 +155,26 @@
       #   nixpkgs.overlays = [ inputs.dbflux.overlays.default ];
       #   environment.systemPackages = [ pkgs.dbflux ];
       #
-      # `pkgs.dbflux`        -> prebuilt binary (fast)
-      # `pkgs.dbflux-source` -> built from source via crane
+      # `pkgs.dbflux`         -> prebuilt binary (fast)
+      # `pkgs.dbflux-source`  -> built from source via crane
+      # `pkgs.dbflux-bin`     -> explicit prebuilt (only on prebuilt systems)
+      # `pkgs.dbflux-nightly` -> rolling nightly prebuilt (only on prebuilt systems)
       overlays.default = final: prev:
         let
           system = prev.stdenv.hostPlatform.system;
           hasSystem = perSystem.packages ? ${system};
+          sysPkgs = perSystem.packages.${system};
         in
         if hasSystem then
           {
-            dbflux = perSystem.packages.${system}.dbflux;
-            dbflux-source = perSystem.packages.${system}.dbflux-source;
+            dbflux = sysPkgs.dbflux;
+            dbflux-source = sysPkgs.dbflux-source;
+          }
+          // nixpkgs.lib.optionalAttrs (sysPkgs ? dbflux-nightly) {
+            dbflux-nightly = sysPkgs.dbflux-nightly;
+          }
+          // nixpkgs.lib.optionalAttrs (sysPkgs ? dbflux-bin) {
+            dbflux-bin = sysPkgs.dbflux-bin;
           }
         else
           { };
