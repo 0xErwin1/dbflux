@@ -73,7 +73,10 @@ mod tests {
 
     #[test]
     fn classifies_versions() {
-        assert_eq!(ReleaseChannel::from_version("0.7.0"), ReleaseChannel::Stable);
+        assert_eq!(
+            ReleaseChannel::from_version("0.7.0"),
+            ReleaseChannel::Stable
+        );
         assert_eq!(
             ReleaseChannel::from_version("0.7.0-rc.2"),
             ReleaseChannel::Rc
@@ -96,10 +99,7 @@ mod tests {
 
     #[test]
     fn rc_shares_stable_identity() {
-        assert_eq!(
-            ReleaseChannel::Rc.app_id(),
-            ReleaseChannel::Stable.app_id()
-        );
+        assert_eq!(ReleaseChannel::Rc.app_id(), ReleaseChannel::Stable.app_id());
         assert_eq!(
             ReleaseChannel::Rc.db_file_name(),
             ReleaseChannel::Stable.db_file_name()
