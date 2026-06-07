@@ -77,16 +77,22 @@ pub enum FormFieldKind {
         allow_freeform: bool,
     },
     /// A dropdown that references another `AuthProfile`. The UI populates
-    /// options by listing AuthProfiles whose `provider_id` equals
-    /// `provider_id`. The stored value is the referenced profile's UUID.
+    /// options based on the `provider_id` filter.
+    ///
+    /// - `None` — all eligible auth profiles are listed regardless of their
+    ///   provider origin (built-in or external/RPC). Used by driver forms.
+    /// - `Some(id)` — only AuthProfiles whose `provider_id` equals `id` are
+    ///   shown. Used by auth-provider forms that reference a specific provider
+    ///   (e.g. an SSO-session reference on an SSO profile).
     ///
     /// When `expand_auth_profile_refs` runs, it follows this reference and
     /// merges the referenced profile's fields into the consumer profile so
     /// downstream code (login, validation, dynamic options) sees a single
     /// flat field map.
     AuthProfileRef {
-        /// Filter: only AuthProfiles with this `provider_id` are shown.
-        provider_id: String,
+        /// Optional filter: `None` lists all eligible auth profiles;
+        /// `Some(id)` filters to profiles whose `provider_id` equals `id`.
+        provider_id: Option<String>,
     },
 }
 

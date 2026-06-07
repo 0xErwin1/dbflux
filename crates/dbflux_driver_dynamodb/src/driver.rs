@@ -52,8 +52,8 @@ pub static DYNAMODB_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormD
                     field(
                         "profile",
                         "Profile",
-                        FormFieldKind::Text,
-                        "optional AWS profile",
+                        FormFieldKind::AuthProfileRef { provider_id: None },
+                        "",
                     ),
                 ],
             },
@@ -4204,11 +4204,11 @@ pub fn unsupported_mvp_message(flow: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        DYNAMODB_DEFAULT_DATABASE, DYNAMODB_METADATA, DynamoDriver, DynamoErrorFormatter,
-        DynamoFilterFallbackPolicy, DynamoIndexKind, DynamoKeyComponent, DynamoKeyRole,
-        DynamoLanguageService, DynamoProfileConfig, DynamoReadStrategy, DynamoTableKeySchema,
-        append_window_items, apply_item_filter, attribute_value_to_value, build_item_batches,
-        build_table_info_from_description, build_update_expression_from_json,
+        DYNAMODB_DEFAULT_DATABASE, DYNAMODB_FORM, DYNAMODB_METADATA, DynamoDriver,
+        DynamoErrorFormatter, DynamoFilterFallbackPolicy, DynamoIndexKind, DynamoKeyComponent,
+        DynamoKeyRole, DynamoLanguageService, DynamoProfileConfig, DynamoReadStrategy,
+        DynamoTableKeySchema, append_window_items, apply_item_filter, attribute_value_to_value,
+        build_item_batches, build_table_info_from_description, build_update_expression_from_json,
         classify_connection_error, classify_query_error, decide_read_strategy,
         dynamo_filter_json_from_semantic, ensure_default_database,
         ensure_item_contains_required_keys, extract_key_map_from_filter,
@@ -4225,8 +4225,8 @@ mod tests {
     use dbflux_core::{
         CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ConnectionProfile,
         DangerousQueryKind, DatabaseCategory, DbConfig, DbDriver, DbError, DocumentFilter,
-        DocumentUpdate, DriverCapabilities, FormValues, IndexData, LanguageService, QueryLanguage,
-        SemanticFilter, SemanticPlanKind, SemanticRequest, Value, WhereOperator,
+        DocumentUpdate, DriverCapabilities, FormFieldKind, FormValues, IndexData, LanguageService,
+        QueryLanguage, SemanticFilter, SemanticPlanKind, SemanticRequest, Value, WhereOperator,
     };
     use serde_json::json;
     use std::collections::HashMap;
@@ -5274,5 +5274,25 @@ mod tests {
 
         assert!(matches!(error, DbError::NotSupported(_)));
         assert!(error.to_string().contains("aggregate requests"));
+    }
+
+    #[test]
+    fn dynamodb_profile_field_is_auth_profile_ref_with_none_provider_id() {
+        let profile_field = DYNAMODB_FORM
+            .tabs
+            .iter()
+            .flat_map(|t| t.sections.iter())
+            .flat_map(|s| s.fields.iter())
+            .find(|f| f.id == "profile")
+            .expect("DynamoDB form must have a 'profile' field");
+
+        assert!(
+            matches!(
+                &profile_field.kind,
+                FormFieldKind::AuthProfileRef { provider_id: None }
+            ),
+            "DynamoDB 'profile' field must be AuthProfileRef {{ provider_id: None }}, got {:?}",
+            profile_field.kind
+        );
     }
 }

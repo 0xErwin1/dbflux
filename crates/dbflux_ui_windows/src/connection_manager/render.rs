@@ -20,10 +20,7 @@ use gpui_component::checkbox::Checkbox;
 /// Label column width for horizontal field rows (matches design spec).
 const FIELD_LABEL_WIDTH: Pixels = px(140.0);
 
-use super::{
-    ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus, View,
-    uses_aws_auth_profile_dropdown,
-};
+use super::{ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus, View};
 
 impl ConnectionManagerWindow {
     /// Build a standard horizontal form row: 140 px label column on the left, flex-1 control
@@ -477,34 +474,6 @@ impl ConnectionManagerWindow {
         ring_color: Hsla,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        if !is_ssh_tab
-            && field_def.id == "profile"
-            && uses_aws_auth_profile_dropdown(self.selected_driver_id())
-        {
-            let field_enabled = self.is_field_enabled(field_def);
-
-            let dropdown = div()
-                .when(!field_enabled, |d| d.opacity(0.5))
-                .when(field_enabled, |d| {
-                    d.on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            this.begin_inline_editor_interaction(cx);
-                        }),
-                    )
-                })
-                .child(self.auth_profile_dropdown.clone());
-
-            return Self::field_row_cm(
-                field_def.label.clone(),
-                field_def.required && field_enabled,
-                dropdown,
-                None::<&str>,
-                cx,
-            )
-            .into_any_element();
-        }
-
         let field_focus = Self::field_id_to_focus(&field_def.id, is_ssh_tab);
         let focused = show_focus && field_focus == Some(self.form_focus);
 
@@ -802,11 +771,33 @@ impl ConnectionManagerWindow {
                 }
             }
 
-            // DynamicSelect and AuthProfileRef are not used in driver connection forms;
-            // they are rendered by the auth-provider settings UI.
-            FormFieldKind::DynamicSelect { .. } | FormFieldKind::AuthProfileRef { .. } => {
-                div().into_any_element()
+            FormFieldKind::AuthProfileRef { .. } => {
+                let field_enabled = self.is_field_enabled(field_def);
+
+                let dropdown = div()
+                    .when(!field_enabled, |d| d.opacity(0.5))
+                    .when(field_enabled, |d| {
+                        d.on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _, cx| {
+                                this.begin_inline_editor_interaction(cx);
+                            }),
+                        )
+                    })
+                    .child(self.auth_profile_dropdown.clone());
+
+                Self::field_row_cm(
+                    field_def.label.clone(),
+                    field_def.required && field_enabled,
+                    dropdown,
+                    None::<&str>,
+                    cx,
+                )
+                .into_any_element()
             }
+
+            // DynamicSelect is not used in driver connection forms.
+            FormFieldKind::DynamicSelect { .. } => div().into_any_element(),
         }
     }
 

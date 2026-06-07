@@ -139,4 +139,27 @@ mod style_guardrails {
             violations.join("\n")
         );
     }
+
+    /// Connection Manager code must not branch on driver IDs. Use
+    /// `FormFieldKind`, `DriverCapabilities`, or `DatabaseCategory` instead.
+    ///
+    /// Heuristic patterns checked:
+    /// - `driver_id ==` or `driver_id !=` — string equality on driver ID
+    /// - `match driver_id` — match arm switching on driver ID string
+    /// - `matches!(driver_id` — macro matching on driver ID string
+    #[test]
+    fn connection_manager_has_no_driver_id_branching() {
+        let forbidden: &[&str] = &[
+            "driver_id ==",
+            "driver_id !=",
+            "match driver_id",
+            "matches!(driver_id",
+        ];
+        let violations = check_violations(forbidden);
+        assert!(
+            violations.is_empty(),
+            "Connection Manager code must not branch on driver_id strings (use FormFieldKind, DriverCapabilities, or DatabaseCategory instead):\n{}",
+            violations.join("\n")
+        );
+    }
 }

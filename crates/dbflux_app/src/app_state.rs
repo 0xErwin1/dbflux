@@ -3232,7 +3232,10 @@ impl AppState {
             for tab in &form.tabs {
                 for section in &tab.sections {
                     for field in &section.fields {
-                        if let FormFieldKind::AuthProfileRef { provider_id } = &field.kind {
+                        if let FormFieldKind::AuthProfileRef {
+                            provider_id: Some(provider_id),
+                        } = &field.kind
+                        {
                             ids.insert(provider_id.clone());
                         }
                     }
@@ -4293,6 +4296,73 @@ mod tests {
             !state.saved_charts_repo.list().unwrap().is_empty()
                 || state.saved_charts_repo.list().unwrap().is_empty(),
             "fresh in-memory DB list is empty — but call must not panic"
+        );
+    }
+
+    // --- reference_only_auth_provider_ids ---
+
+    /// Scans `form` the same way `reference_only_auth_provider_ids` does and
+    /// returns collected ids. Used to unit-test the scanning logic in isolation.
+    fn collect_ref_ids_from_form(form: &dbflux_core::DriverFormDef) -> HashSet<String> {
+        use dbflux_core::FormFieldKind;
+        let mut ids = HashSet::new();
+        for tab in &form.tabs {
+            for section in &tab.sections {
+                for field in &section.fields {
+                    if let FormFieldKind::AuthProfileRef {
+                        provider_id: Some(provider_id),
+                    } = &field.kind
+                    {
+                        ids.insert(provider_id.clone());
+                    }
+                }
+            }
+        }
+        ids
+    }
+
+    fn make_form_with_auth_profile_ref(provider_id: Option<String>) -> dbflux_core::DriverFormDef {
+        use dbflux_core::{FormFieldDef, FormFieldKind, FormSection, FormTab};
+        dbflux_core::DriverFormDef {
+            tabs: vec![FormTab {
+                id: "main".to_string(),
+                label: "Main".to_string(),
+                sections: vec![FormSection {
+                    title: "Auth".to_string(),
+                    fields: vec![FormFieldDef {
+                        id: "ref_field".to_string(),
+                        label: "Ref".to_string(),
+                        kind: FormFieldKind::AuthProfileRef { provider_id },
+                        placeholder: String::new(),
+                        required: false,
+                        default_value: String::new(),
+                        enabled_when_checked: None,
+                        enabled_when_unchecked: None,
+                        disabled_when_field_set: None,
+                        help: None,
+                    }],
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn reference_only_auth_provider_ids_ignores_none_filter() {
+        let form = make_form_with_auth_profile_ref(None);
+        let ids = collect_ref_ids_from_form(&form);
+        assert!(
+            ids.is_empty(),
+            "AuthProfileRef with provider_id: None must not contribute any id to the reference-only set"
+        );
+    }
+
+    #[test]
+    fn reference_only_auth_provider_ids_inserts_some_filter() {
+        let form = make_form_with_auth_profile_ref(Some("aws-sso-session".to_string()));
+        let ids = collect_ref_ids_from_form(&form);
+        assert!(
+            ids.contains("aws-sso-session"),
+            "AuthProfileRef with Some(provider_id) must contribute that id to the reference-only set"
         );
     }
 }
