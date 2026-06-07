@@ -89,6 +89,10 @@ Working tree must be clean before any tag.
 
 Source-of-truth for the workspace version is `Cargo.toml` (`[workspace.package].version`). All other manifests must be kept in lockstep.
 
+**On `main`:**
+
+`main` always carries `X.(Y+1).0-dev.0`, where `X.Y` is the minor currently being stabilized on `release/vX.Y`. This marker is set when `release/vX.Y` is cut and stays until the next release branch is cut. The nightly workflow derives the nightly version from it: `X.(Y+1).0-nightly+<sha>`. No `-dev.N` releases are published — the marker is development-only.
+
 **On `release/vX.Y`:**
 
 - Next RC: if last tag on the branch is `vX.Y.Z-rc.N` → `-rc.(N+1)`. If none → `-rc.0`.
@@ -124,8 +128,8 @@ When stabilization for a minor begins:
    - Push: `git push -u origin release/vX.Y`.
 
 6. Back on `main`:
-   - Bump every versioned artifact to `X.Y.0-rc.0` (mirrors the release branch during the stabilization window).
-   - Commit: `chore(release): align main to vX.Y.0-rc.0`.
+   - Bump every versioned artifact to `X.(Y+1).0-dev.0` (main now targets the next minor).
+   - Commit: `chore(version): move main to X.(Y+1).0-dev.0 marker`.
    - Push.
 
 7. Tag `vX.Y.0-rc.0` on the release branch (see "Tag Procedure").
@@ -153,12 +157,9 @@ Run on `release/vX.Y` when the RC is clean:
 
 After the GitHub Release publishes, run post-release steps (see "Post-Release Channels").
 
-## Begin Next Dev Cycle: after stable `vX.Y.0`
+## Next Dev Cycle
 
-On `main`:
-- Bump every versioned artifact to `X.(Y+1).0-rc.0`.
-- Commit: `chore(version): begin X.(Y+1).0 cycle`.
-- Push.
+`main` is bumped to `X.(Y+1).0-dev.0` when `release/vX.Y` is cut (step 6 of the Cut Procedure). No further bump to `main` is needed after the stable tag ships. `main` has already been targeting the next minor throughout stabilization.
 
 ## Tag Procedure (any tag)
 
