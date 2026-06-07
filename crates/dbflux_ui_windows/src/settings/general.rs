@@ -782,38 +782,42 @@ impl GeneralSection {
     ) -> impl IntoElement {
         div()
             .flex()
-            .flex_col()
-            .w_full()
-            .gap_1()
-            .child(FieldLabel::new(label.to_string()))
             .child(
                 div()
-                    .w_full()
-                    .min_w(px(140.0))
-                    .rounded(Radii::SM)
-                    .border_1()
-                    .border_color(if is_focused {
-                        primary
-                    } else {
-                        gpui::transparent_black()
-                    })
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, window, cx| {
-                            this.switching_input = true;
-                            this.content_focused = true;
-                            if let Some(position) = this
-                                .gen_form_rows()
-                                .iter()
-                                .position(|candidate| *candidate == row)
-                            {
-                                this.gen_form_cursor = position;
-                            }
-                            this.gen_focus_current_input(window, cx);
-                            cx.notify();
-                        }),
-                    )
-                    .child(Input::new(input).small().w_full()),
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(FieldLabel::new(label.to_string()))
+                    .child(
+                        div()
+                            .w_full()
+                            .rounded(Radii::SM)
+                            .border_1()
+                            .border_color(if is_focused {
+                                primary
+                            } else {
+                                gpui::transparent_black()
+                            })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, window, cx| {
+                                    this.switching_input = true;
+                                    this.content_focused = true;
+                                    if let Some(position) = this
+                                        .gen_form_rows()
+                                        .iter()
+                                        .position(|candidate| *candidate == row)
+                                    {
+                                        this.gen_form_cursor = position;
+                                    }
+                                    this.gen_focus_current_input(window, cx);
+                                    cx.notify();
+                                }),
+                            )
+                            .child(Input::new(input).small().w_full()),
+                    ),
             )
     }
 }
