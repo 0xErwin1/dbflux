@@ -36,8 +36,8 @@ impl Render for AboutSection {
         // Rendered through `img` (full color) rather than the monochrome icon
         // path so the channel-specific mark — including nightly — shows in color.
         let mark_path = match dbflux_core::ReleaseChannel::current() {
-            dbflux_core::ReleaseChannel::Nightly => "branding/nightly/mark.svg",
-            _ => "branding/stable/mark.svg",
+            dbflux_core::ReleaseChannel::Nightly => "branding/nightly/mark-256.png",
+            _ => "branding/stable/mark-256.png",
         };
 
         let issues_url = format!("{}/issues", REPOSITORY);
