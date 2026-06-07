@@ -812,7 +812,7 @@ impl GeneralSection {
                             cx.notify();
                         }),
                     )
-                    .child(Input::new(input).small()),
+                    .child(Input::new(input).small().w_full()),
             )
     }
 }
