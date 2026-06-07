@@ -3,11 +3,11 @@
   <mime-type type="text/x-sql">
     <comment>SQL Database Query</comment>
     <glob pattern="*.sql"/>
-    <icon name="${APP_ID}"/>
+    <icon name="@APP_ID@"/>
   </mime-type>
   <mime-type type="application/sql">
     <comment>SQL Database Query</comment>
     <glob pattern="*.sql"/>
-    <icon name="${APP_ID}"/>
+    <icon name="@APP_ID@"/>
   </mime-type>
 </mime-info>

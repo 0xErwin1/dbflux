@@ -110,16 +110,21 @@ stdenv.mkDerivation {
 
     install -Dm755 dbflux $out/bin/dbflux
 
-    # Desktop entry — substitute the placeholder used by the release tarball.
+    # Desktop entry — resolve the templated placeholders. This derivation ships
+    # the stable identity.
     install -Dm644 resources/desktop/dbflux.desktop \
       $out/share/applications/dbflux.desktop
     substituteInPlace $out/share/applications/dbflux.desktop \
-      --replace-fail '@EXEC_PATH@' "$out/bin/dbflux"
+      --replace-fail '@EXEC_PATH@' "$out/bin/dbflux" \
+      --replace-fail '@APP_NAME@' 'DBFlux' \
+      --replace-fail '@APP_ID@' 'dbflux'
 
     install -Dm644 resources/branding/stable/mark.svg \
       $out/share/icons/hicolor/scalable/apps/dbflux.svg
     install -Dm644 resources/mime/dbflux-sql.xml \
       $out/share/mime/packages/dbflux-sql.xml
+    substituteInPlace $out/share/mime/packages/dbflux-sql.xml \
+      --replace-fail '@APP_ID@' 'dbflux'
 
     install -Dm644 LICENSE-MIT    $out/share/licenses/dbflux/LICENSE-MIT
     install -Dm644 LICENSE-APACHE $out/share/licenses/dbflux/LICENSE-APACHE

@@ -81,16 +81,20 @@ let
     mkdir -p $out/share/mime/packages
     mkdir -p $out/share/dbflux
 
-    # Copy desktop file and set correct Exec path
+    # Copy desktop file and resolve the templated placeholders
     install -Dm644 ${fullSrc}/resources/desktop/dbflux.desktop $out/share/applications/dbflux.desktop
     substituteInPlace $out/share/applications/dbflux.desktop \
-      --replace '@EXEC_PATH@' "$out/bin/dbflux"
+      --replace '@EXEC_PATH@' "$out/bin/dbflux" \
+      --replace '@APP_NAME@' 'DBFlux' \
+      --replace '@APP_ID@' 'dbflux'
 
     # Copy icon
     install -Dm644 ${fullSrc}/resources/branding/stable/mark.svg $out/share/icons/hicolor/scalable/apps/dbflux.svg
 
     # Copy mime type
     install -Dm644 ${fullSrc}/resources/mime/dbflux-sql.xml $out/share/mime/packages/dbflux-sql.xml
+    substituteInPlace $out/share/mime/packages/dbflux-sql.xml \
+      --replace '@APP_ID@' 'dbflux'
 
     # Copy resources (with proper permissions)
     cp -r --no-preserve=mode ${fullSrc}/resources $out/share/dbflux/
