@@ -87,7 +87,7 @@ let
       --replace '@EXEC_PATH@' "$out/bin/dbflux"
 
     # Copy icon
-    install -Dm644 ${fullSrc}/resources/icons/dbflux.svg $out/share/icons/hicolor/scalable/apps/dbflux.svg
+    install -Dm644 ${fullSrc}/resources/branding/stable/mark.svg $out/share/icons/hicolor/scalable/apps/dbflux.svg
 
     # Copy mime type
     install -Dm644 ${fullSrc}/resources/mime/dbflux-sql.xml $out/share/mime/packages/dbflux-sql.xml

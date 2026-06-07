@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 128" width="560" height="128" role="img" aria-label="DBFlux nightly">
+  <defs>
+    <linearGradient id="bolt-wm-nightly" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#CCEB6E"></stop>
+      <stop offset="100%" stop-color="#8FBD2E"></stop>
+    </linearGradient>
+  </defs>
+  <g>
+    <rect x="0" y="0" width="128" height="128" rx="26" ry="26" fill="#0A0E14"></rect>
+    <circle cx="64" cy="64" r="42" fill="none" stroke="#AAD94C" stroke-width="2.5" stroke-dasharray="5 3"></circle>
+    <g stroke="#AAD94C" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <ellipse cx="64" cy="40" rx="20" ry="5.5"></ellipse>
+      <path d="M44 40 V58"></path><path d="M84 40 V58"></path>
+      <path d="M44 58 a20 5.5 0 0 0 40 0"></path>
+      <path d="M44 58 V76"></path><path d="M84 58 V76"></path>
+      <path d="M44 76 a20 5.5 0 0 0 40 0"></path>
+      <path d="M44 76 V92"></path><path d="M84 76 V92"></path>
+      <path d="M44 92 a20 5.5 0 0 0 40 0"></path>
+    </g>
+    <path d="M74 28 L48 66 L60 66 L54 100 L80 62 L68 62 Z" fill="url(#bolt-wm-nightly)" stroke="#0A0E14" stroke-width="2.5" stroke-linejoin="round"></path>
+    <g>
+      <circle cx="98" cy="97" r="17" fill="#0A0E14"></circle>
+      <circle cx="98" cy="97" r="13" fill="#AAD94C"></circle>
+      <circle cx="104.5" cy="90.5" r="13" fill="#0A0E14"></circle>
+    </g>
+  </g>
+  <text x="152" y="82" font-family="JetBrains Mono, ui-monospace, monospace" font-size="56" font-weight="700" fill="#AAD94C" letter-spacing="-1">dbflux</text>
+  <g transform="translate(388 50)">
+    <rect x="0" y="0" width="96" height="28" rx="2" fill="none" stroke="#AAD94C" stroke-width="2"></rect>
+    <text x="48" y="20" text-anchor="middle" font-family="JetBrains Mono, ui-monospace, monospace" font-size="16" font-weight="700" fill="#AAD94C" letter-spacing="1">NIGHTLY</text>
+  </g>
+</svg>

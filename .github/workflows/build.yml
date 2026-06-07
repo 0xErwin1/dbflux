@@ -87,6 +87,9 @@ jobs:
 
       - name: Create package
         run: |
+          BRAND_DIR="resources/branding/${{ inputs.channel }}"
+          [ -d "$BRAND_DIR" ] || BRAND_DIR="resources/branding/stable"
+
           mkdir -p pkg/resources/icons
           mkdir -p pkg/resources/desktop
           mkdir -p pkg/resources/mime
@@ -95,7 +98,7 @@ jobs:
           cp target/${{ matrix.target }}/release/dbflux pkg/dbflux
           chmod +x pkg/dbflux
 
-          cp resources/icons/dbflux.svg pkg/resources/icons/
+          cp "$BRAND_DIR/mark.svg" pkg/resources/icons/dbflux.svg
           cp resources/desktop/dbflux.desktop pkg/resources/desktop/
           cp resources/mime/dbflux-sql.xml pkg/resources/mime/
 
@@ -121,6 +124,8 @@ jobs:
       - name: Create AppImage
         run: |
           VERSION="${{ inputs.version }}"
+          BRAND_DIR="resources/branding/${{ inputs.channel }}"
+          [ -d "$BRAND_DIR" ] || BRAND_DIR="resources/branding/stable"
 
           mkdir -p AppDir/usr/bin
           mkdir -p AppDir/usr/share/applications
@@ -134,7 +139,7 @@ jobs:
           cp resources/desktop/dbflux.desktop AppDir/usr/share/applications/
           sed -i 's|@EXEC_PATH@|dbflux|g' AppDir/usr/share/applications/dbflux.desktop
 
-          cp resources/icon.svg AppDir/usr/share/icons/hicolor/scalable/apps/dbflux.svg
+          cp "$BRAND_DIR/mark.svg" AppDir/usr/share/icons/hicolor/scalable/apps/dbflux.svg
 
           cp resources/mime/dbflux-sql.xml AppDir/usr/share/mime/packages/
 
@@ -157,6 +162,9 @@ jobs:
 
       - name: Generate PNG icons
         run: |
+          BRAND_DIR="resources/branding/${{ inputs.channel }}"
+          [ -d "$BRAND_DIR" ] || BRAND_DIR="resources/branding/stable"
+
           mkdir -p packaging/icons/256x256/apps
           mkdir -p packaging/icons/128x128/apps
           mkdir -p packaging/icons/64x64/apps
@@ -164,12 +172,12 @@ jobs:
           mkdir -p packaging/icons/32x32/apps
           mkdir -p packaging/icons/16x16/apps
 
-          convert resources/icon.svg -resize 256x256 packaging/icons/256x256/apps/dbflux.png
-          convert resources/icon.svg -resize 128x128 packaging/icons/128x128/apps/dbflux.png
-          convert resources/icon.svg -resize 64x64 packaging/icons/64x64/apps/dbflux.png
-          convert resources/icon.svg -resize 48x48 packaging/icons/48x48/apps/dbflux.png
-          convert resources/icon-small.svg -resize 32x32 packaging/icons/32x32/apps/dbflux.png
-          convert resources/icon-small.svg -resize 16x16 packaging/icons/16x16/apps/dbflux.png
+          convert "$BRAND_DIR/mark.svg" -resize 256x256 packaging/icons/256x256/apps/dbflux.png
+          convert "$BRAND_DIR/mark.svg" -resize 128x128 packaging/icons/128x128/apps/dbflux.png
+          convert "$BRAND_DIR/mark.svg" -resize 64x64 packaging/icons/64x64/apps/dbflux.png
+          convert "$BRAND_DIR/mark.svg" -resize 48x48 packaging/icons/48x48/apps/dbflux.png
+          convert "$BRAND_DIR/mark-small.svg" -resize 32x32 packaging/icons/32x32/apps/dbflux.png
+          convert "$BRAND_DIR/mark-small.svg" -resize 16x16 packaging/icons/16x16/apps/dbflux.png
 
       - name: Install Go
         uses: actions/setup-go@v5
@@ -322,6 +330,8 @@ jobs:
       - name: Create app bundle
         run: |
           VERSION="${{ inputs.version }}"
+          BRAND_DIR="resources/branding/${{ inputs.channel }}"
+          [ -d "$BRAND_DIR" ] || BRAND_DIR="resources/branding/stable"
 
           mkdir -p DBFlux.app/Contents/MacOS
           mkdir -p DBFlux.app/Contents/Resources
@@ -329,7 +339,7 @@ jobs:
           cp target/${{ matrix.target }}/release/dbflux DBFlux.app/Contents/MacOS/
           chmod +x DBFlux.app/Contents/MacOS/dbflux
 
-          cp resources/icons/dbflux.svg DBFlux.app/Contents/Resources/
+          cp "$BRAND_DIR/mark.svg" DBFlux.app/Contents/Resources/dbflux.svg
 
           sed -e "s/\${VERSION}/$VERSION/g" resources/macos/Info.plist > DBFlux.app/Contents/Info.plist
 
@@ -417,12 +427,15 @@ jobs:
 
       - name: Create ICO from SVG
         run: |
-          magick convert -background none -resize 256x256 resources/icons/dbflux.svg dbflux-256.png
-          magick convert -background none -resize 128x128 resources/icons/dbflux.svg dbflux-128.png
-          magick convert -background none -resize 64x64 resources/icons/dbflux.svg dbflux-64.png
-          magick convert -background none -resize 48x48 resources/icons/dbflux.svg dbflux-48.png
-          magick convert -background none -resize 32x32 resources/icons/dbflux.svg dbflux-32.png
-          magick convert -background none -resize 16x16 resources/icons/dbflux.svg dbflux-16.png
+          $BrandDir = "resources/branding/${{ inputs.channel }}"
+          if (-Not (Test-Path $BrandDir)) { $BrandDir = "resources/branding/stable" }
+
+          magick convert -background none -resize 256x256 "$BrandDir/mark.svg" dbflux-256.png
+          magick convert -background none -resize 128x128 "$BrandDir/mark.svg" dbflux-128.png
+          magick convert -background none -resize 64x64 "$BrandDir/mark.svg" dbflux-64.png
+          magick convert -background none -resize 48x48 "$BrandDir/mark.svg" dbflux-48.png
+          magick convert -background none -resize 32x32 "$BrandDir/mark-small.svg" dbflux-32.png
+          magick convert -background none -resize 16x16 "$BrandDir/mark-small.svg" dbflux-16.png
           magick convert dbflux-16.png dbflux-32.png dbflux-48.png dbflux-64.png dbflux-128.png dbflux-256.png dbflux.ico
 
       - name: Create portable package
