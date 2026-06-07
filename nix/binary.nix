@@ -57,6 +57,7 @@ let
   isNightly = lib.hasInfix "nightly" releaseInfo.version;
   appId = if isNightly then "dbflux-nightly" else "dbflux";
   appName = if isNightly then "DBFlux Nightly" else "DBFlux";
+  brandDir = if isNightly then "nightly" else "stable";
 in
 stdenv.mkDerivation {
   pname = appId;
@@ -131,14 +132,22 @@ stdenv.mkDerivation {
     sed -i -e 's/@APP_NAME@/${appName}/g' -e 's/@APP_ID@/${appId}/g' \
       $out/share/applications/${appId}.desktop
 
-    # Brand mark. Tarballs before the branding split ship it at
-    # resources/icons/dbflux.svg; newer ones ship per-channel marks.
-    if [ -f resources/branding/${if isNightly then "nightly" else "stable"}/mark.svg ]; then
-      install -Dm644 resources/branding/${if isNightly then "nightly" else "stable"}/mark.svg \
-        $out/share/icons/hicolor/scalable/apps/${appId}.svg
+    # Brand mark. The mark layout inside a published tarball varies by release:
+    # the channel packaging writes the active channel's mark to
+    # resources/branding/stable/mark.svg (the channel dir name is not preserved),
+    # and tarballs from before the branding split shipped resources/icons/dbflux.svg.
+    # Probe each known location and install the first that exists so the build
+    # never breaks on a layout this derivation did not author.
+    icon_dst=$out/share/icons/hicolor/scalable/apps/${appId}.svg
+    if [ -f resources/branding/${brandDir}/mark.svg ]; then
+      install -Dm644 resources/branding/${brandDir}/mark.svg "$icon_dst"
+    elif [ -f resources/branding/stable/mark.svg ]; then
+      install -Dm644 resources/branding/stable/mark.svg "$icon_dst"
+    elif [ -f resources/icons/dbflux.svg ]; then
+      install -Dm644 resources/icons/dbflux.svg "$icon_dst"
     else
-      install -Dm644 resources/icons/dbflux.svg \
-        $out/share/icons/hicolor/scalable/apps/${appId}.svg
+      echo "dbflux: no brand mark found in the release tarball" >&2
+      exit 1
     fi
 
     install -Dm644 resources/mime/dbflux-sql.xml \
