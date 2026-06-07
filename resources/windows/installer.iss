@@ -1,4 +1,9 @@
+#ifndef MyAppName
 #define MyAppName "DBFlux"
+#endif
+#ifndef MyAppId
+#define MyAppId "{{D8A3E981-6A8D-4B8F-9E09-86D8DEB7A6F1}"
+#endif
 #ifndef MyAppVersion
 #define MyAppVersion "0.6.0-rc.1"
 #endif
@@ -7,7 +12,7 @@
 #define MyAppExeName "dbflux.exe"
 
 [Setup]
-AppId={{D8A3E981-6A8D-4B8F-9E09-86D8DEB7A6F1}
+AppId={#MyAppId}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}

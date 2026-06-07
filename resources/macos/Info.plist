@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>DBFlux</string>
+    <string>${APP_NAME}</string>
     <key>CFBundleDisplayName</key>
-    <string>DBFlux</string>
+    <string>${APP_NAME}</string>
     <key>CFBundleIdentifier</key>
-    <string>dev.iperez.dbflux</string>
+    <string>${BUNDLE_ID}</string>
     <key>CFBundleVersion</key>
     <string>${VERSION}</string>
     <key>CFBundleShortVersionString</key>

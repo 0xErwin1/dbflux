@@ -390,7 +390,7 @@ build_from_source() {
     cargo build --release --features sqlite,postgres,mysql
 
     # Create package structure in tmp_dir
-    mkdir -p "$tmp_dir/pkg/resources/icons"
+    mkdir -p "$tmp_dir/pkg/resources/branding/stable"
     mkdir -p "$tmp_dir/pkg/resources/desktop"
     mkdir -p "$tmp_dir/pkg/resources/mime"
     mkdir -p "$tmp_dir/pkg/scripts"
@@ -398,8 +398,8 @@ build_from_source() {
     cp "$repo_dir/target/release/dbflux" "$tmp_dir/pkg/dbflux"
     chmod +x "$tmp_dir/pkg/dbflux"
 
-    if [[ -f "$repo_dir/resources/icons/dbflux.svg" ]]; then
-        cp "$repo_dir/resources/icons/dbflux.svg" "$tmp_dir/pkg/resources/icons/"
+    if [[ -f "$repo_dir/resources/branding/stable/mark.svg" ]]; then
+        cp "$repo_dir/resources/branding/stable/mark.svg" "$tmp_dir/pkg/resources/branding/stable/mark.svg"
     fi
     if [[ -f "$repo_dir/resources/desktop/dbflux.desktop" ]]; then
         cp "$repo_dir/resources/desktop/dbflux.desktop" "$tmp_dir/pkg/resources/desktop/"
@@ -468,9 +468,9 @@ install_files() {
     fi
 
     # Icon
-    if [[ -f "$src_dir/resources/icons/dbflux.svg" ]]; then
+    if [[ -f "$src_dir/resources/branding/stable/mark.svg" ]]; then
         mkdir_safe "$PREFIX/share/icons/hicolor/scalable/apps"
-        cp_safe "$src_dir/resources/icons/dbflux.svg" "$PREFIX/share/icons/hicolor/scalable/apps/dbflux.svg"
+        cp_safe "$src_dir/resources/branding/stable/mark.svg" "$PREFIX/share/icons/hicolor/scalable/apps/dbflux.svg"
         chmod_safe "$PREFIX/share/icons/hicolor/scalable/apps/dbflux.svg" 644
     fi
 

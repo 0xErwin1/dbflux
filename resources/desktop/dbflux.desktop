@@ -1,14 +1,14 @@
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=DBFlux
+Name=${APP_NAME}
 GenericName=Database Client
 Comment=A fast, keyboard-first database client for SQL databases
 Exec=@EXEC_PATH@ %F
-Icon=dbflux
+Icon=${APP_ID}
 Terminal=false
 StartupNotify=true
-StartupWMClass=dbflux
+StartupWMClass=${APP_ID}
 Categories=Development;Database;IDE;
 Keywords=database;sql;query;postgres;sqlite;mysql;
 MimeType=text/x-sql;application/sql;

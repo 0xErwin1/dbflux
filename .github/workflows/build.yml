@@ -49,6 +49,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Resolve channel identity
+        run: |
+          if [ "${{ inputs.channel }}" = "nightly" ]; then
+            echo "APP_ID=dbflux-nightly"            >> "$GITHUB_ENV"
+            echo "APP_NAME=DBFlux Nightly"          >> "$GITHUB_ENV"
+            echo "PKG_NAME=dbflux-nightly"          >> "$GITHUB_ENV"
+            echo "BUNDLE_ID=dev.iperez.dbflux.nightly" >> "$GITHUB_ENV"
+          else
+            echo "APP_ID=dbflux"            >> "$GITHUB_ENV"
+            echo "APP_NAME=DBFlux"          >> "$GITHUB_ENV"
+            echo "PKG_NAME=dbflux"          >> "$GITHUB_ENV"
+            echo "BUNDLE_ID=dev.iperez.dbflux" >> "$GITHUB_ENV"
+          fi
+          BRAND_DIR="resources/branding/${{ inputs.channel }}"
+          [ -d "$BRAND_DIR" ] || BRAND_DIR="resources/branding/stable"
+          echo "BRAND_DIR=$BRAND_DIR" >> "$GITHUB_ENV"
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -90,7 +107,7 @@ jobs:
           BRAND_DIR="resources/branding/${{ inputs.channel }}"
           [ -d "$BRAND_DIR" ] || BRAND_DIR="resources/branding/stable"
 
-          mkdir -p pkg/resources/icons
+          mkdir -p pkg/resources/branding/stable
           mkdir -p pkg/resources/desktop
           mkdir -p pkg/resources/mime
           mkdir -p pkg/scripts
@@ -98,7 +115,7 @@ jobs:
           cp target/${{ matrix.target }}/release/dbflux pkg/dbflux
           chmod +x pkg/dbflux
 
-          cp "$BRAND_DIR/mark.svg" pkg/resources/icons/dbflux.svg
+          cp "$BRAND_DIR/mark.svg" pkg/resources/branding/stable/mark.svg
           cp resources/desktop/dbflux.desktop pkg/resources/desktop/
           cp resources/mime/dbflux-sql.xml pkg/resources/mime/
 
@@ -136,10 +153,10 @@ jobs:
           cp target/${{ matrix.target }}/release/dbflux AppDir/usr/bin/
           chmod +x AppDir/usr/bin/dbflux
 
-          cp resources/desktop/dbflux.desktop AppDir/usr/share/applications/
-          sed -i 's|@EXEC_PATH@|dbflux|g' AppDir/usr/share/applications/dbflux.desktop
+          APP_ID="$APP_ID" APP_NAME="$APP_NAME" envsubst < resources/desktop/dbflux.desktop > "AppDir/usr/share/applications/$APP_ID.desktop"
+          sed -i "s|@EXEC_PATH@|$APP_ID|g" "AppDir/usr/share/applications/$APP_ID.desktop"
 
-          cp "$BRAND_DIR/mark.svg" AppDir/usr/share/icons/hicolor/scalable/apps/dbflux.svg
+          cp "$BRAND_DIR/mark.svg" "AppDir/usr/share/icons/hicolor/scalable/apps/$APP_ID.svg"
 
           cp resources/mime/dbflux-sql.xml AppDir/usr/share/mime/packages/
 
@@ -147,8 +164,8 @@ jobs:
           cp LICENSE-APACHE AppDir/usr/share/licenses/dbflux/
 
           ln -sf usr/bin/dbflux AppDir/AppRun
-          ln -sf usr/share/applications/dbflux.desktop AppDir/dbflux.desktop
-          ln -sf usr/share/icons/hicolor/scalable/apps/dbflux.svg AppDir/dbflux.svg
+          ln -sf "usr/share/applications/$APP_ID.desktop" "AppDir/$APP_ID.desktop"
+          ln -sf "usr/share/icons/hicolor/scalable/apps/$APP_ID.svg" "AppDir/$APP_ID.svg"
 
           APPIMAGE_EXTRACT_AND_RUN=1 VERSION="$VERSION" ./appimagetool-${{ env.APPIMAGE_ARCH }}.AppImage AppDir
 
@@ -194,12 +211,15 @@ jobs:
           export VERSION
           export ARCH=${{ matrix.deb_arch }}
           export TARGET=${{ matrix.target }}
+          export APP_ID APP_NAME PKG_NAME BUNDLE_ID BRAND_DIR
+
+          envsubst < packaging/dbflux.desktop > packaging/dbflux.desktop.tmp && mv packaging/dbflux.desktop.tmp packaging/dbflux.desktop
 
           envsubst < packaging/nfpm.deb.yaml > nfpm.deb.yaml
-          ~/go/bin/nfpm package --packager deb --config nfpm.deb.yaml --target dbflux_${VERSION}_linux_${{ matrix.deb_arch }}.deb
+          ~/go/bin/nfpm package --packager deb --config nfpm.deb.yaml --target ${PKG_NAME}_${VERSION}_linux_${{ matrix.deb_arch }}.deb
           export ARCH=${{ matrix.rpm_arch }}
           envsubst < packaging/nfpm.rpm.yaml > nfpm.rpm.yaml
-          ~/go/bin/nfpm package --packager rpm --config nfpm.rpm.yaml --target dbflux-${VERSION}-1.${{ matrix.rpm_arch }}.rpm
+          ~/go/bin/nfpm package --packager rpm --config nfpm.rpm.yaml --target ${PKG_NAME}-${VERSION}-1.${{ matrix.rpm_arch }}.rpm
 
       - name: Install signing tools
         run: sudo apt-get install -y rpm debsigs
@@ -213,7 +233,7 @@ jobs:
       - name: Sign .deb packages
         run: |
           GPG_KEY_ID=$(gpg --list-keys --keyid-format long | grep -A1 'pub' | tail -1 | awk '{print $1}')
-          for deb in dbflux_*.deb; do
+          for deb in *.deb; do
             debsigs --sign=origin -k "$GPG_KEY_ID" "$deb"
           done
 
@@ -228,7 +248,7 @@ jobs:
 
       - name: Sign .rpm packages
         run: |
-          for rpm in dbflux-*.rpm; do
+          for rpm in *.rpm; do
             rpm --addsign "$rpm" 3< <(echo "${{ secrets.GPG_PASSPHRASE }}")
           done
 
@@ -236,15 +256,15 @@ jobs:
         run: |
           gpg --armor --detach-sign dbflux-linux-${{ matrix.arch }}.tar.gz
           gpg --armor --detach-sign dbflux-linux-${{ matrix.arch }}.AppImage
-          gpg --armor --detach-sign dbflux_*.deb
-          gpg --armor --detach-sign dbflux-*.rpm
+          gpg --armor --detach-sign *.deb
+          gpg --armor --detach-sign *.rpm
 
       - name: Generate checksums
         run: |
           sha256sum dbflux-linux-${{ matrix.arch }}.tar.gz > dbflux-linux-${{ matrix.arch }}.tar.gz.sha256
           sha256sum dbflux-linux-${{ matrix.arch }}.AppImage > dbflux-linux-${{ matrix.arch }}.AppImage.sha256
-          sha256sum dbflux_*.deb > dbflux_${{ matrix.arch }}.deb.sha256
-          sha256sum dbflux-*.rpm > dbflux_${{ matrix.arch }}.rpm.sha256
+          sha256sum *.deb > dbflux_${{ matrix.arch }}.deb.sha256
+          sha256sum *.rpm > dbflux_${{ matrix.arch }}.rpm.sha256
 
       - name: Upload artifacts
         if: env.ACT != 'true'
@@ -258,11 +278,11 @@ jobs:
             dbflux-linux-${{ matrix.arch }}.AppImage
             dbflux-linux-${{ matrix.arch }}.AppImage.sha256
             dbflux-linux-${{ matrix.arch }}.AppImage.asc
-            dbflux_*.deb
-            dbflux_*.deb.asc
+            *.deb
+            *.deb.asc
             dbflux_${{ matrix.arch }}.deb.sha256
-            dbflux-*.rpm
-            dbflux-*.rpm.asc
+            *.rpm
+            *.rpm.asc
             dbflux_${{ matrix.arch }}.rpm.sha256
           retention-days: 90
 
@@ -276,11 +296,11 @@ jobs:
           cp dbflux-linux-${{ matrix.arch }}.AppImage /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux-linux-${{ matrix.arch }}.AppImage.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux-linux-${{ matrix.arch }}.AppImage.asc /tmp/artifacts/linux-${{ matrix.arch }}/
-          cp dbflux_*.deb /tmp/artifacts/linux-${{ matrix.arch }}/
-          cp dbflux_*.deb.asc /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp *.deb /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp *.deb.asc /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux_${{ matrix.arch }}.deb.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
-          cp dbflux-*.rpm /tmp/artifacts/linux-${{ matrix.arch }}/
-          cp dbflux-*.rpm.asc /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp *.rpm /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp *.rpm.asc /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux_${{ matrix.arch }}.rpm.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
 
   build-macos:
@@ -305,6 +325,23 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Resolve channel identity
+        run: |
+          if [ "${{ inputs.channel }}" = "nightly" ]; then
+            echo "APP_ID=dbflux-nightly"            >> "$GITHUB_ENV"
+            echo "APP_NAME=DBFlux Nightly"          >> "$GITHUB_ENV"
+            echo "PKG_NAME=dbflux-nightly"          >> "$GITHUB_ENV"
+            echo "BUNDLE_ID=dev.iperez.dbflux.nightly" >> "$GITHUB_ENV"
+          else
+            echo "APP_ID=dbflux"            >> "$GITHUB_ENV"
+            echo "APP_NAME=DBFlux"          >> "$GITHUB_ENV"
+            echo "PKG_NAME=dbflux"          >> "$GITHUB_ENV"
+            echo "BUNDLE_ID=dev.iperez.dbflux" >> "$GITHUB_ENV"
+          fi
+          BRAND_DIR="resources/branding/${{ inputs.channel }}"
+          [ -d "$BRAND_DIR" ] || BRAND_DIR="resources/branding/stable"
+          echo "BRAND_DIR=$BRAND_DIR" >> "$GITHUB_ENV"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -332,18 +369,19 @@ jobs:
           VERSION="${{ inputs.version }}"
           BRAND_DIR="resources/branding/${{ inputs.channel }}"
           [ -d "$BRAND_DIR" ] || BRAND_DIR="resources/branding/stable"
+          APP_BUNDLE="$APP_NAME.app"
 
-          mkdir -p DBFlux.app/Contents/MacOS
-          mkdir -p DBFlux.app/Contents/Resources
+          mkdir -p "$APP_BUNDLE/Contents/MacOS"
+          mkdir -p "$APP_BUNDLE/Contents/Resources"
 
-          cp target/${{ matrix.target }}/release/dbflux DBFlux.app/Contents/MacOS/
-          chmod +x DBFlux.app/Contents/MacOS/dbflux
+          cp target/${{ matrix.target }}/release/dbflux "$APP_BUNDLE/Contents/MacOS/"
+          chmod +x "$APP_BUNDLE/Contents/MacOS/dbflux"
 
-          cp "$BRAND_DIR/mark.svg" DBFlux.app/Contents/Resources/dbflux.svg
+          cp "$BRAND_DIR/mark.svg" "$APP_BUNDLE/Contents/Resources/dbflux.svg"
 
-          sed -e "s/\${VERSION}/$VERSION/g" resources/macos/Info.plist > DBFlux.app/Contents/Info.plist
+          sed -e "s/\${VERSION}/$VERSION/g" -e "s/\${APP_NAME}/$APP_NAME/g" -e "s/\${BUNDLE_ID}/$BUNDLE_ID/g" resources/macos/Info.plist > "$APP_BUNDLE/Contents/Info.plist"
 
-          chmod +x DBFlux.app/Contents/MacOS/dbflux
+          chmod +x "$APP_BUNDLE/Contents/MacOS/dbflux"
 
       - name: Install create-dmg
         run: brew install create-dmg
@@ -351,19 +389,20 @@ jobs:
       - name: Create DMG
         run: |
           VERSION="${{ inputs.version }}"
+          APP_BUNDLE="$APP_NAME.app"
 
           create-dmg \
-            --volname "DBFlux" \
+            --volname "$APP_NAME" \
             --window-pos 200 120 \
             --window-size 800 450 \
             --icon-size 100 \
-            --icon "DBFlux.app" 200 190 \
-            --hide-extension "DBFlux.app" \
+            --icon "$APP_BUNDLE" 200 190 \
+            --hide-extension "$APP_BUNDLE" \
             --app-drop-link 600 185 \
             --no-internet-enable \
             --skip-jenkins \
             dbflux-macos-${{ matrix.arch }}.dmg \
-            DBFlux.app
+            "$APP_BUNDLE"
 
       - name: Import GPG key
         uses: crazy-max/ghaction-import-gpg@v6
@@ -404,6 +443,17 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Resolve channel identity
+        shell: pwsh
+        run: |
+          if ("${{ inputs.channel }}" -eq "nightly") {
+            "APP_NAME=DBFlux Nightly"   | Out-File -FilePath $env:GITHUB_ENV -Append
+            "MY_APP_ID={{7F1C2A3B-4D5E-6F70-8192-A3B4C5D6E7F8}" | Out-File -FilePath $env:GITHUB_ENV -Append
+          } else {
+            "APP_NAME=DBFlux"   | Out-File -FilePath $env:GITHUB_ENV -Append
+            "MY_APP_ID={{D8A3E981-6A8D-4B8F-9E09-86D8DEB7A6F1}" | Out-File -FilePath $env:GITHUB_ENV -Append
+          }
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -458,7 +508,7 @@ jobs:
         uses: Minionguyjpro/Inno-Setup-Action@v1.2.2
         with:
           path: installer/installer.iss
-          options: /DMyAppVersion=${{ inputs.version }}
+          options: /DMyAppVersion=${{ inputs.version }} /DMyAppName="${{ env.APP_NAME }}" /DMyAppId="${{ env.MY_APP_ID }}"
 
       - name: Move installer
         run: Move-Item installer/output/dbflux-windows-amd64-setup.exe dbflux-windows-amd64-setup.exe -Force
