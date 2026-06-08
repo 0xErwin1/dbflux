@@ -382,7 +382,7 @@ impl Connection for CloudWatchConnection {
 
                             let value = field
                                 .value()
-                                .map(|value| Value::Text(value.to_string()))
+                                .map(|raw| cwli_field_value(&field_name, raw))
                                 .unwrap_or(Value::Null);
                             row_map.insert(field_name, value);
                         }
@@ -998,37 +998,52 @@ fn cloudwatch_column_kind(name: &str) -> ColumnKind {
     }
 }
 
+/// Produce a typed `Value` for a CWLI result field.
+///
+/// Known text/timestamp annotation names keep `Value::Text` so their values
+/// remain consumable by the log-stream viewer unchanged. For all other fields
+/// the raw string is parsed: integer strings become `Value::Int`, finite
+/// floating-point strings become `Value::Float`, and everything else
+/// (non-numeric, NaN, infinite) stays `Value::Text`.
+fn cwli_field_value(name: &str, raw: &str) -> Value {
+    match name {
+        "@timestamp" | "@ingestionTime" | "@message" | "@logStream" | "@log" => {
+            Value::Text(raw.to_string())
+        }
+        _ => {
+            if let Ok(i) = raw.parse::<i64>() {
+                return Value::Int(i);
+            }
+            if let Ok(f) = raw.parse::<f64>()
+                && f.is_finite()
+            {
+                return Value::Float(f);
+            }
+            Value::Text(raw.to_string())
+        }
+    }
+}
+
 /// Determine the `ColumnKind` for a CWLI result column using name-based rules
 /// first, falling back to value sampling across `row_maps` for unknown names.
 ///
-/// For fields not covered by `cloudwatch_column_kind`, samples all non-empty
-/// string values for `name` across `row_maps`. If all non-empty values parse
-/// as `i64` the column is Integer; if all parse as `f64` it is Float;
-/// otherwise Unknown. A column with no non-empty values is Unknown.
+/// Because `cwli_field_value` already emits typed values, this function
+/// samples the first non-null value for `name` and maps its variant:
+/// `Value::Int` → Integer, `Value::Float` → Float, anything else → Unknown.
+/// A column with no non-null values is Unknown.
 fn cwli_column_kind(name: &str, row_maps: &[HashMap<String, Value>]) -> ColumnKind {
     let name_kind = cloudwatch_column_kind(name);
     if name_kind != ColumnKind::Unknown {
         return name_kind;
     }
 
-    let non_empty: Vec<&str> = row_maps
-        .iter()
-        .filter_map(|row| match row.get(name) {
-            Some(Value::Text(s)) if !s.is_empty() => Some(s.as_str()),
-            _ => None,
-        })
-        .collect();
-
-    if non_empty.is_empty() {
-        return ColumnKind::Unknown;
-    }
-
-    if non_empty.iter().all(|s| s.parse::<i64>().is_ok()) {
-        return ColumnKind::Integer;
-    }
-
-    if non_empty.iter().all(|s| s.parse::<f64>().is_ok()) {
-        return ColumnKind::Float;
+    for row in row_maps {
+        match row.get(name) {
+            Some(Value::Int(_)) => return ColumnKind::Integer,
+            Some(Value::Float(_)) => return ColumnKind::Float,
+            Some(Value::Null) | None => continue,
+            Some(_) => return ColumnKind::Unknown,
+        }
     }
 
     ColumnKind::Unknown
@@ -1600,7 +1615,8 @@ fn fetch_log_stream_page(
 mod tests {
     use super::{
         CLOUDWATCH_FORM, CLOUDWATCH_METADATA, CloudWatchCollectionFilter, CloudWatchDriver,
-        cloudwatch_column_kind, cwli_column_kind, metric_data_output_to_multi_series_result,
+        cloudwatch_column_kind, cwli_column_kind, cwli_field_value,
+        metric_data_output_to_multi_series_result,
     };
     use aws_sdk_cloudwatch::operation::get_metric_data::GetMetricDataOutput;
     use aws_sdk_cloudwatch::primitives::DateTime;
@@ -1625,15 +1641,49 @@ mod tests {
         assert_eq!(cloudwatch_column_kind("count"), ColumnKind::Unknown);
     }
 
-    fn row_maps_for(field: &str, values: &[&str]) -> Vec<HashMap<String, Value>> {
-        values
+    fn typed_row_maps_for(field: &str, typed_values: &[Value]) -> Vec<HashMap<String, Value>> {
+        typed_values
             .iter()
             .map(|v| {
                 let mut m = HashMap::new();
-                m.insert(field.to_string(), Value::Text(v.to_string()));
+                m.insert(field.to_string(), v.clone());
                 m
             })
             .collect()
+    }
+
+    #[test]
+    fn cwli_field_value_typed_output() {
+        assert_eq!(cwli_field_value("count", "123"), Value::Int(123));
+        assert_eq!(cwli_field_value("latency", "1.5"), Value::Float(1.5));
+        assert_eq!(
+            cwli_field_value("errorCode", "BadRequest"),
+            Value::Text("BadRequest".to_string())
+        );
+
+        // Annotation names always stay Text regardless of numeric content.
+        assert_eq!(
+            cwli_field_value("@timestamp", "1234567890"),
+            Value::Text("1234567890".to_string())
+        );
+        assert_eq!(
+            cwli_field_value("@message", "42"),
+            Value::Text("42".to_string())
+        );
+
+        // Non-finite floats must not produce Value::Float.
+        assert_eq!(
+            cwli_field_value("ratio", "NaN"),
+            Value::Text("NaN".to_string())
+        );
+        assert_eq!(
+            cwli_field_value("ratio", "inf"),
+            Value::Text("inf".to_string())
+        );
+        assert_eq!(
+            cwli_field_value("ratio", "-inf"),
+            Value::Text("-inf".to_string())
+        );
     }
 
     #[test]
@@ -1648,13 +1698,19 @@ mod tests {
 
     #[test]
     fn cwli_column_kind_value_based_numeric() {
-        let int_rows = row_maps_for("count", &["123", "456", "789"]);
+        let int_rows = typed_row_maps_for("count", &[Value::Int(123), Value::Int(456)]);
         assert_eq!(cwli_column_kind("count", &int_rows), ColumnKind::Integer);
 
-        let float_rows = row_maps_for("latency", &["1.5", "2.3", "0.9"]);
+        let float_rows = typed_row_maps_for("latency", &[Value::Float(1.5), Value::Float(2.3)]);
         assert_eq!(cwli_column_kind("latency", &float_rows), ColumnKind::Float);
 
-        let string_rows = row_maps_for("errorCode", &["500", "BadRequest", "Timeout"]);
+        let string_rows = typed_row_maps_for(
+            "errorCode",
+            &[
+                Value::Text("500".to_string()),
+                Value::Text("BadRequest".to_string()),
+            ],
+        );
         assert_eq!(
             cwli_column_kind("errorCode", &string_rows),
             ColumnKind::Unknown
