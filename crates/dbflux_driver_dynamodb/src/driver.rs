@@ -4322,9 +4322,15 @@ mod tests {
         // Empty items → Unknown
         assert_eq!(infer_field_kind(&[], "count"), ColumnKind::Unknown);
 
-        // Polymorphic: first present sample is Bool (Unknown-mapping), later sample is N → Integer
-        // Proves the scanner skips Unknown-mapping attrs and keeps looking.
-        let poly: Vec<HashMap<String, AttributeValue>> = vec![bool_item, n_int_item];
+        // Polymorphic: both items share the same field "count". The first item
+        // holds a Bool (which maps to Unknown), the second holds an N integer.
+        // The scanner must skip the Unknown-mapping Bool and return Integer from
+        // the second item, proving the skip-Unknown path rather than missing-field.
+        let poly_bool_item: HashMap<String, AttributeValue> =
+            [("count".to_string(), AttributeValue::Bool(true))]
+                .into_iter()
+                .collect();
+        let poly: Vec<HashMap<String, AttributeValue>> = vec![poly_bool_item, n_int_item];
         assert_eq!(infer_field_kind(&poly, "count"), ColumnKind::Integer);
     }
 
