@@ -1656,6 +1656,57 @@ fn plan_mongo_semantic_request(request: &SemanticRequest) -> Result<SemanticPlan
     }
 }
 
+/// Column definitions for the schema field-listing result returned by `describe_table`.
+///
+/// Extracted as a pure function so tests can assert `ColumnKind` values without a
+/// live MongoDB connection. Column order must match the row values built in `describe_table`.
+fn schema_listing_columns() -> Vec<ColumnMeta> {
+    vec![
+        ColumnMeta {
+            name: "field_name".to_string(),
+            type_name: "text".to_string(),
+            kind: ColumnKind::Text,
+            nullable: false,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "common_type".to_string(),
+            type_name: "text".to_string(),
+            kind: ColumnKind::Text,
+            nullable: false,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "occurrence_rate".to_string(),
+            type_name: "float".to_string(),
+            kind: ColumnKind::Float,
+            nullable: true,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "is_indexed".to_string(),
+            type_name: "bool".to_string(),
+            kind: ColumnKind::Integer,
+            nullable: false,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "index_names".to_string(),
+            type_name: "text".to_string(),
+            kind: ColumnKind::Text,
+            nullable: true,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "nested_field_count".to_string(),
+            type_name: "int".to_string(),
+            kind: ColumnKind::Integer,
+            nullable: false,
+            is_primary_key: false,
+        },
+    ]
+}
+
 impl Connection for MongoConnection {
     fn metadata(&self) -> &DriverMetadata {
         &MONGODB_METADATA
@@ -2087,52 +2138,12 @@ impl Connection for MongoConnection {
             })
             .collect();
 
-        let columns = vec![
-            ColumnMeta {
-                name: "field_name".to_string(),
-                type_name: "text".to_string(),
-                kind: ColumnKind::Unknown,
-                nullable: false,
-                is_primary_key: false,
-            },
-            ColumnMeta {
-                name: "common_type".to_string(),
-                type_name: "text".to_string(),
-                kind: ColumnKind::Unknown,
-                nullable: false,
-                is_primary_key: false,
-            },
-            ColumnMeta {
-                name: "occurrence_rate".to_string(),
-                type_name: "float".to_string(),
-                kind: ColumnKind::Float,
-                nullable: true,
-                is_primary_key: false,
-            },
-            ColumnMeta {
-                name: "is_indexed".to_string(),
-                type_name: "bool".to_string(),
-                kind: ColumnKind::Unknown,
-                nullable: false,
-                is_primary_key: false,
-            },
-            ColumnMeta {
-                name: "index_names".to_string(),
-                type_name: "text".to_string(),
-                kind: ColumnKind::Unknown,
-                nullable: true,
-                is_primary_key: false,
-            },
-            ColumnMeta {
-                name: "nested_field_count".to_string(),
-                type_name: "int".to_string(),
-                kind: ColumnKind::Integer,
-                nullable: false,
-                is_primary_key: false,
-            },
-        ];
-
-        Ok(QueryResult::table(columns, rows, None, start.elapsed()))
+        Ok(QueryResult::table(
+            schema_listing_columns(),
+            rows,
+            None,
+            start.elapsed(),
+        ))
     }
 
     fn view_details(
@@ -2746,7 +2757,7 @@ fn execute_mongo_query(
                 columns: vec![ColumnMeta {
                     name: "count".to_string(),
                     type_name: "Int64".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Integer,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -2788,7 +2799,7 @@ fn execute_mongo_query(
                 columns: vec![ColumnMeta {
                     name: "insertedCount".to_string(),
                     type_name: "Int64".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Integer,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -2820,21 +2831,21 @@ fn execute_mongo_query(
                     ColumnMeta {
                         name: "matchedCount".to_string(),
                         type_name: "Int64".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "modifiedCount".to_string(),
                         type_name: "Int64".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "upserted".to_string(),
                         type_name: "Bool".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
@@ -2871,21 +2882,21 @@ fn execute_mongo_query(
                     ColumnMeta {
                         name: "matchedCount".to_string(),
                         type_name: "Int64".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "modifiedCount".to_string(),
                         type_name: "Int64".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "upserted".to_string(),
                         type_name: "Bool".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
@@ -2911,7 +2922,7 @@ fn execute_mongo_query(
                 columns: vec![ColumnMeta {
                     name: "deletedCount".to_string(),
                     type_name: "Int64".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Integer,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -2932,7 +2943,7 @@ fn execute_mongo_query(
                 columns: vec![ColumnMeta {
                     name: "deletedCount".to_string(),
                     type_name: "Int64".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Integer,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -2964,21 +2975,21 @@ fn execute_mongo_query(
                     ColumnMeta {
                         name: "matchedCount".to_string(),
                         type_name: "Int64".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "modifiedCount".to_string(),
                         type_name: "Int64".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "upserted".to_string(),
                         type_name: "Bool".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
@@ -3002,7 +3013,7 @@ fn execute_mongo_query(
                 columns: vec![ColumnMeta {
                     name: "result".to_string(),
                     type_name: "Text".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Text,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3040,7 +3051,7 @@ fn execute_db_operation(
                 columns: vec![ColumnMeta {
                     name: "name".to_string(),
                     type_name: "Text".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Text,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3061,7 +3072,7 @@ fn execute_db_operation(
                 columns: vec![ColumnMeta {
                     name: "collection".to_string(),
                     type_name: "Text".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Text,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3123,7 +3134,7 @@ fn execute_db_operation(
                 columns: vec![ColumnMeta {
                     name: "result".to_string(),
                     type_name: "Text".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Text,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3139,7 +3150,7 @@ fn execute_db_operation(
                 columns: vec![ColumnMeta {
                     name: "result".to_string(),
                     type_name: "Text".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Text,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3179,7 +3190,7 @@ fn execute_db_operation(
                 columns: vec![ColumnMeta {
                     name: "version".to_string(),
                     type_name: "Text".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Text,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3210,6 +3221,45 @@ fn execute_db_operation(
             "Operation requires a collection target".to_string(),
         )),
     }
+}
+
+/// Map a single BSON value to a `ColumnKind`. Returns `Unknown` for types
+/// that have no useful chart representation (arrays, documents, object IDs, etc.).
+///
+/// `Bson::DateTime` maps to `ColumnKind::Timestamp` because `bson_to_value`
+/// converts it to `Value::DateTime`, which the chart engine extracts as epoch-ms.
+/// `Bson::Timestamp` is an oplog logical clock emitted as `Value::Text`; it
+/// carries no wall-clock meaning and remains `Unknown`.
+fn bson_to_column_kind(value: &Bson) -> ColumnKind {
+    match value {
+        Bson::Int32(_) | Bson::Int64(_) => ColumnKind::Integer,
+        Bson::Double(_) | Bson::Decimal128(_) => ColumnKind::Float,
+        // Value::Bool plots as 0/1 in the chart engine (like MSSQL BIT).
+        Bson::Boolean(_) => ColumnKind::Integer,
+        // Bson::DateTime is converted to Value::DateTime by bson_to_value and
+        // can now be plotted on a time axis as epoch-ms.
+        Bson::DateTime(_) => ColumnKind::Timestamp,
+        // Bson::Timestamp is an oplog logical clock, not a wall-clock instant.
+        // bson_to_value renders it as Value::Text("Timestamp(t, i)"), which is
+        // not plottable on a time axis.
+        Bson::Timestamp(_) => ColumnKind::Unknown,
+        Bson::String(_) => ColumnKind::Text,
+        _ => ColumnKind::Unknown,
+    }
+}
+
+/// Infer the `ColumnKind` for `field` by scanning `documents` for the first
+/// value that maps to a known kind, skipping Unknown-mapping values.
+fn infer_document_field_kind(documents: &[Document], field: &str) -> ColumnKind {
+    for doc in documents {
+        if let Some(value) = doc.get(field) {
+            let kind = bson_to_column_kind(value);
+            if kind != ColumnKind::Unknown {
+                return kind;
+            }
+        }
+    }
+    ColumnKind::Unknown
 }
 
 fn documents_to_result(documents: Vec<Document>) -> Result<QueryResultInternal, DbError> {
@@ -3245,7 +3295,7 @@ fn documents_to_result(documents: Vec<Document>) -> Result<QueryResultInternal, 
         .map(|name| ColumnMeta {
             name: name.clone(),
             type_name: "BSON".to_string(),
-            kind: ColumnKind::Unknown,
+            kind: infer_document_field_kind(&documents, name),
             nullable: true,
             is_primary_key: name == "_id",
         })
@@ -3626,10 +3676,52 @@ mod tests {
     use super::*;
     use crate::query_parser::parse_query;
     use dbflux_core::{
-        CollectionBrowseRequest, CollectionCountRequest, CollectionRef, DatabaseCategory, DbDriver,
-        DbError, QueryLanguage, SemanticFilter, SemanticPlanKind, SemanticRequest, Value,
-        WhereOperator,
+        CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ColumnKind,
+        DatabaseCategory, DbDriver, DbError, QueryLanguage, SemanticFilter, SemanticPlanKind,
+        SemanticRequest, Value, WhereOperator,
     };
+
+    #[test]
+    fn schema_listing_column_kinds() {
+        let columns = schema_listing_columns();
+
+        let find = |name: &str| {
+            columns
+                .iter()
+                .find(|c| c.name == name)
+                .unwrap_or_else(|| panic!("column '{name}' not found in schema_listing_columns"))
+        };
+
+        assert_eq!(find("field_name").kind, ColumnKind::Text);
+        assert_eq!(find("common_type").kind, ColumnKind::Text);
+        assert_eq!(find("occurrence_rate").kind, ColumnKind::Float);
+        // Value::Bool plots as 0/1 in the chart engine (like MSSQL BIT).
+        assert_eq!(find("is_indexed").kind, ColumnKind::Integer);
+        assert_eq!(find("index_names").kind, ColumnKind::Text);
+        assert_eq!(find("nested_field_count").kind, ColumnKind::Integer);
+
+        assert_eq!(
+            columns.len(),
+            6,
+            "column count must match describe_table output"
+        );
+
+        // Assert exact column order so any future reordering breaks this test.
+        // Order must match the row values produced in describe_table.
+        let names: Vec<&str> = columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "field_name",
+                "common_type",
+                "occurrence_rate",
+                "is_indexed",
+                "index_names",
+                "nested_field_count",
+            ],
+            "column order must match describe_table row construction"
+        );
+    }
 
     #[test]
     fn build_config_requires_uri_in_uri_mode() {
@@ -4208,6 +4300,45 @@ mod tests {
         if let Value::Document(map) = value {
             assert_eq!(map.len(), 2);
         }
+    }
+
+    #[test]
+    fn documents_to_result_bson_column_kind_inference() {
+        use bson::oid::ObjectId;
+
+        let docs = vec![doc! {
+            "count": Bson::Int64(10),
+            "ratio": Bson::Double(0.5),
+            "label": Bson::String("hello".to_string()),
+            "active": Bson::Boolean(true),
+            "id": Bson::ObjectId(ObjectId::new()),
+            "created_at": Bson::DateTime(bson::DateTime::now()),
+            "oplog_ts": Bson::Timestamp(bson::Timestamp { time: 1, increment: 0 }),
+        }];
+
+        let result = documents_to_result(docs).expect("should succeed");
+
+        let kind_of = |name: &str| {
+            result
+                .columns
+                .iter()
+                .find(|c| c.name == name)
+                .unwrap_or_else(|| panic!("column '{name}' not found"))
+                .kind
+        };
+
+        assert_eq!(kind_of("count"), ColumnKind::Integer);
+        assert_eq!(kind_of("ratio"), ColumnKind::Float);
+        assert_eq!(kind_of("label"), ColumnKind::Text);
+        // Value::Bool plots as 0/1 in the chart engine (like MSSQL BIT).
+        assert_eq!(kind_of("active"), ColumnKind::Integer);
+        assert_eq!(kind_of("id"), ColumnKind::Unknown);
+        // Bson::DateTime maps to Value::DateTime, which the chart engine now
+        // extracts as epoch-ms, so it must be Timestamp.
+        assert_eq!(kind_of("created_at"), ColumnKind::Timestamp);
+        // Bson::Timestamp is an oplog logical clock emitted as Value::Text;
+        // it has no wall-clock meaning and must remain Unknown.
+        assert_eq!(kind_of("oplog_ts"), ColumnKind::Unknown);
     }
 
     #[test]

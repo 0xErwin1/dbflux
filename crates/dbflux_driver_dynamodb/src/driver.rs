@@ -3037,7 +3037,7 @@ fn items_to_query_result(
             ColumnMeta {
                 name: name.clone(),
                 type_name: infer_field_type_label(items, name),
-                kind: ColumnKind::Unknown,
+                kind: infer_field_kind(items, name),
                 nullable: true,
                 is_primary_key,
             }
@@ -3115,6 +3115,35 @@ fn infer_field_type_label(
         }
     }
     String::new()
+}
+
+/// Infer the `ColumnKind` for `field_name` by scanning `items` for the first
+/// attribute that maps to a known kind (Integer, Float, or Text). Bool
+/// attributes map to Integer because `Value::Bool` plots as 0/1 in the chart
+/// engine (mirroring MSSQL BIT). Attributes whose type maps to Unknown are
+/// skipped so a polymorphic column can resolve a kind from a later sample.
+/// Returns `Unknown` when no item yields a known kind.
+fn infer_field_kind(
+    items: &[std::collections::HashMap<String, AttributeValue>],
+    field_name: &str,
+) -> ColumnKind {
+    for item in items {
+        if let Some(attr) = item.get(field_name) {
+            if let Ok(n_str) = attr.as_n() {
+                if n_str.parse::<i64>().is_ok() {
+                    return ColumnKind::Integer;
+                }
+                return ColumnKind::Float;
+            }
+            if attr.as_s().is_ok() {
+                return ColumnKind::Text;
+            }
+            if attr.as_bool().is_ok() {
+                return ColumnKind::Integer;
+            }
+        }
+    }
+    ColumnKind::Unknown
 }
 
 fn attribute_value_to_value(value: &AttributeValue) -> Value {
@@ -4212,10 +4241,10 @@ mod tests {
         classify_connection_error, classify_query_error, decide_read_strategy,
         dynamo_filter_json_from_semantic, ensure_default_database,
         ensure_item_contains_required_keys, extract_key_map_from_filter,
-        extract_non_key_update_attributes, json_value_to_attribute_value, key_components_to_fields,
-        key_components_to_indexes, normalize_table_names, plan_dynamo_semantic_request,
-        resolve_upsert_key_map, strip_key_fields_from_update_payload, unsupported_operation,
-        validate_read_options,
+        extract_non_key_update_attributes, infer_field_kind, json_value_to_attribute_value,
+        key_components_to_fields, key_components_to_indexes, normalize_table_names,
+        plan_dynamo_semantic_request, resolve_upsert_key_map, strip_key_fields_from_update_payload,
+        unsupported_operation, validate_read_options,
     };
     use crate::query_parser::{DynamoFilterFallback, DynamoReadOptions};
     use aws_sdk_dynamodb::types::{
@@ -4223,13 +4252,91 @@ mod tests {
         TableDescription,
     };
     use dbflux_core::{
-        CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ConnectionProfile,
-        DangerousQueryKind, DatabaseCategory, DbConfig, DbDriver, DbError, DocumentFilter,
-        DocumentUpdate, DriverCapabilities, FormFieldKind, FormValues, IndexData, LanguageService,
-        QueryLanguage, SemanticFilter, SemanticPlanKind, SemanticRequest, Value, WhereOperator,
+        CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ColumnKind,
+        ConnectionProfile, DangerousQueryKind, DatabaseCategory, DbConfig, DbDriver, DbError,
+        DocumentFilter, DocumentUpdate, DriverCapabilities, FormFieldKind, FormValues, IndexData,
+        LanguageService, QueryLanguage, SemanticFilter, SemanticPlanKind, SemanticRequest, Value,
+        WhereOperator,
     };
     use serde_json::json;
     use std::collections::HashMap;
+
+    #[test]
+    fn infer_field_kind_cases() {
+        let n_int_item: HashMap<String, AttributeValue> =
+            [("count".to_string(), AttributeValue::N("42".to_string()))]
+                .into_iter()
+                .collect();
+
+        let n_float_item: HashMap<String, AttributeValue> =
+            [("score".to_string(), AttributeValue::N("3.14".to_string()))]
+                .into_iter()
+                .collect();
+
+        let s_item: HashMap<String, AttributeValue> =
+            [("name".to_string(), AttributeValue::S("alice".to_string()))]
+                .into_iter()
+                .collect();
+
+        let bool_item: HashMap<String, AttributeValue> =
+            [("active".to_string(), AttributeValue::Bool(true))]
+                .into_iter()
+                .collect();
+
+        let bin_item: HashMap<String, AttributeValue> = [(
+            "data".to_string(),
+            AttributeValue::B(aws_sdk_dynamodb::primitives::Blob::new(vec![0u8])),
+        )]
+        .into_iter()
+        .collect();
+
+        // Integer N
+        assert_eq!(
+            infer_field_kind(&[n_int_item.clone()], "count"),
+            ColumnKind::Integer
+        );
+
+        // Decimal N
+        assert_eq!(
+            infer_field_kind(&[n_float_item.clone()], "score"),
+            ColumnKind::Float
+        );
+
+        // S → Text
+        assert_eq!(
+            infer_field_kind(&[s_item.clone()], "name"),
+            ColumnKind::Text
+        );
+
+        // Bool → Integer (Value::Bool plots as 0/1 in the chart engine, like MSSQL BIT).
+        assert_eq!(
+            infer_field_kind(&[bool_item.clone()], "active"),
+            ColumnKind::Integer
+        );
+
+        // Binary → Unknown
+        assert_eq!(infer_field_kind(&[bin_item], "data"), ColumnKind::Unknown);
+
+        // Missing field → Unknown
+        assert_eq!(
+            infer_field_kind(&[n_int_item.clone()], "missing"),
+            ColumnKind::Unknown
+        );
+
+        // Empty items → Unknown
+        assert_eq!(infer_field_kind(&[], "count"), ColumnKind::Unknown);
+
+        // Polymorphic: both items share the same field "count". The first item
+        // holds a Null attribute (which matches none of the known-kind checks
+        // and is skipped), the second holds an N integer. The scanner must skip
+        // the Null and return Integer from the second item, proving the skip path.
+        let poly_null_item: HashMap<String, AttributeValue> =
+            [("count".to_string(), AttributeValue::Null(true))]
+                .into_iter()
+                .collect();
+        let poly: Vec<HashMap<String, AttributeValue>> = vec![poly_null_item, n_int_item];
+        assert_eq!(infer_field_kind(&poly, "count"), ColumnKind::Integer);
+    }
 
     #[test]
     fn metadata_uses_document_semantics_with_truthful_phase4_caps() {
