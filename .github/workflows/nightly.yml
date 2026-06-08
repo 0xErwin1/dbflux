@@ -103,6 +103,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # The `nightly` tag (and its pin commit) is needed to scope the
+          # changelog to commits since the previous nightly.
+          fetch-tags: true
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -118,14 +121,32 @@ jobs:
 
       - name: Generate changelog for nightly body
         run: |
-          # Unreleased range: commits since the last STABLE tag.
-          # cliff.toml already skips -rc.N and -nightly tags via skip_tags.
-          git-cliff --config cliff.toml --unreleased \
-            --strip header \
-            -o cliff_notes.md 2>/dev/null || true
+          # Scope the changelog to commits since the previous nightly.
+          #
+          # `nightly^` is the first parent of the previous nightly's pin commit,
+          # i.e. the main HEAD that nightly was built from. At this point the
+          # `nightly` tag still points at the previous run (the force-move
+          # happens in a later step), so `nightly^..HEAD` is exactly "what
+          # changed on main since the last nightly".
+          #
+          # The since-last-STABLE range is deliberately avoided here: no stable
+          # tag is an ancestor of main (stable/rc tags live on release/vX.Y and
+          # are never merged back), so that range is pinned at the last legacy
+          # stable and grows without bound. See docs/RELEASE.md.
+          if PREV_NIGHTLY="$(git rev-parse --verify --quiet nightly^)"; then
+            git-cliff --config cliff.toml "${PREV_NIGHTLY}..HEAD" \
+              --strip header \
+              -o cliff_notes.md 2>/dev/null || true
+          else
+            # First nightly, or the tag is missing: fall back to the unreleased
+            # range so the body is never empty on the initial run.
+            git-cliff --config cliff.toml --unreleased \
+              --strip header \
+              -o cliff_notes.md 2>/dev/null || true
+          fi
 
           if [ ! -s cliff_notes.md ]; then
-            echo "No conventional-commit entries since last stable release." > cliff_notes.md
+            echo "No user-facing changes since the previous nightly." > cliff_notes.md
           fi
 
       - name: Compose nightly release body
@@ -144,7 +165,7 @@ jobs:
           EOF
 
           if [ -s cliff_notes.md ]; then
-            echo "## Changes since last stable release" >> release_body.md
+            echo "## Changes since the previous nightly" >> release_body.md
             echo "" >> release_body.md
             cat cliff_notes.md >> release_body.md
           fi
