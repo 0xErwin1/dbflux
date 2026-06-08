@@ -19,7 +19,7 @@ pub use auth::{
 };
 pub use auth_provider_client::{
     IpcServiceLaunchConfig, RpcAuthProvider, build_fetch_dependencies, hash_dependencies,
-    negotiate_auth_provider_version,
+    negotiate_auth_provider_version, shutdown_managed_auth_provider_hosts,
 };
 pub use auth_provider_protocol::{
     AuthProviderHelloRequest, AuthProviderHelloResponse, AuthProviderHelloResponseV1_1,

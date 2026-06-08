@@ -18,3 +18,4 @@ dirs.workspace = true
 serde_json.workspace = true
 secrecy = "0.10"
 async-trait = "0.1"
+log.workspace = true
