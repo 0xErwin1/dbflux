@@ -320,7 +320,7 @@ fn default_inherit_env() -> bool {
 /// Denylist entries are matched case-insensitively.
 fn is_denied_env_key(key: &str, denylist: &[String]) -> bool {
     let upper = key.to_ascii_uppercase();
-    const PATTERNS: [&str; 4] = ["SECRET", "TOKEN", "PASSWORD", "KEY"];
+    const PATTERNS: [&str; 4] = ["SECRET", "TOKEN", "PASSWORD", "_KEY"];
     if PATTERNS.iter().any(|p| upper.contains(p)) {
         return true;
     }
@@ -1828,7 +1828,7 @@ mod tests {
     }
 
     // =========================================================================
-    // PROC-1: cancellation latency
+    // Cancellation latency
     // =========================================================================
 
     #[cfg(unix)]
@@ -1874,7 +1874,7 @@ mod tests {
     }
 
     // =========================================================================
-    // PROC-3: HookResult.detached
+    // HookResult detached flag
     // =========================================================================
 
     #[test]
@@ -1933,7 +1933,7 @@ mod tests {
     }
 
     // =========================================================================
-    // PROC-2: env secret stripping
+    // Environment secret stripping
     // =========================================================================
 
     #[cfg(unix)]
@@ -2065,7 +2065,7 @@ mod tests {
     }
 
     // =========================================================================
-    // PROC-7: Unix process-group kill behavior
+    // Unix process-group kill behavior
     // =========================================================================
 
     #[cfg(unix)]

@@ -1135,7 +1135,7 @@ mod tests {
     }
 
     // =========================================================================
-    // PROC-8: single RpcClientInner mutex — concurrent calls
+    // Single RpcClientInner mutex — concurrent call correctness
     // =========================================================================
 
     #[test]

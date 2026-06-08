@@ -1376,7 +1376,7 @@ mod tests {
     }
 
     // =========================================================================
-    // PROC-5: dispatch_request_loop frame cap
+    // dispatch_request_loop frame cap
     // =========================================================================
 
     /// Builds a stream containing `count` non-done EmitAuditEvent frames with no
@@ -1440,7 +1440,7 @@ mod tests {
     }
 
     // =========================================================================
-    // PROC-6: shutdown_managed_auth_provider_hosts
+    // Managed auth provider host shutdown
     // =========================================================================
 
     #[test]
