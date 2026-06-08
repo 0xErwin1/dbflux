@@ -21,8 +21,11 @@ use uuid::Uuid;
 /// `next_request_id()` releasing the old ID lock and `send_raw()` acquiring the
 /// stream lock that existed when they were two separate mutexes.
 ///
-/// `session_correlation_ids` is a SEPARATE mutex and is never held while `inner`
-/// is acquired (nor vice versa), so there is no lock-ordering cycle.
+/// `session_correlation_ids` is a SEPARATE mutex. The only lock ordering that
+/// occurs at runtime is `inner → session_correlation_ids`: `send_raw` holds
+/// `inner` when it calls `correlation_id_for_session`, which then acquires
+/// `session_correlation_ids`. The reverse order (`session_correlation_ids →
+/// inner`) never occurs, so there is no lock-ordering cycle.
 struct RpcClientInner {
     stream: IpcStream,
     next_id: u64,
@@ -806,9 +809,9 @@ impl RpcClient {
     /// lock is held across the entire send+receive transaction so that ID assignment
     /// and transport are atomic — no other caller can interleave on the stream.
     ///
-    /// `session_correlation_ids` is a SEPARATE mutex consulted inside the loop for
-    /// audit-frame dispatch; it is never held while `inner` is acquired and `inner`
-    /// is never re-acquired while holding it, so there is no lock-ordering cycle.
+    /// `session_correlation_ids` is acquired inside this function while `inner`
+    /// is already held (`inner → session_correlation_ids`). The reverse order never
+    /// occurs anywhere, so the one-directional ordering is deadlock-free.
     fn send_raw(
         &self,
         mut request: DriverRequestEnvelope,
