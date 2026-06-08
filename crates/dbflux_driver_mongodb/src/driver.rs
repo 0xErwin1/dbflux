@@ -1686,7 +1686,7 @@ fn schema_listing_columns() -> Vec<ColumnMeta> {
         ColumnMeta {
             name: "is_indexed".to_string(),
             type_name: "bool".to_string(),
-            kind: ColumnKind::Unknown,
+            kind: ColumnKind::Integer,
             nullable: false,
             is_primary_key: false,
         },
@@ -2845,7 +2845,7 @@ fn execute_mongo_query(
                     ColumnMeta {
                         name: "upserted".to_string(),
                         type_name: "Bool".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
@@ -2896,7 +2896,7 @@ fn execute_mongo_query(
                     ColumnMeta {
                         name: "upserted".to_string(),
                         type_name: "Bool".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
@@ -2989,7 +2989,7 @@ fn execute_mongo_query(
                     ColumnMeta {
                         name: "upserted".to_string(),
                         type_name: "Bool".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
@@ -3230,6 +3230,8 @@ fn bson_to_column_kind(value: &Bson) -> ColumnKind {
     match value {
         Bson::Int32(_) | Bson::Int64(_) => ColumnKind::Integer,
         Bson::Double(_) | Bson::Decimal128(_) => ColumnKind::Float,
+        // Value::Bool plots as 0/1 in the chart engine (like MSSQL BIT).
+        Bson::Boolean(_) => ColumnKind::Integer,
         // DateTime is emitted as Value::DateTime and Timestamp as Value::Text;
         // neither is extractable by the chart engine, so leave both Unknown.
         Bson::DateTime(_) | Bson::Timestamp(_) => ColumnKind::Unknown,
@@ -3685,7 +3687,8 @@ mod tests {
         assert_eq!(find("field_name").kind, ColumnKind::Text);
         assert_eq!(find("common_type").kind, ColumnKind::Text);
         assert_eq!(find("occurrence_rate").kind, ColumnKind::Float);
-        assert_eq!(find("is_indexed").kind, ColumnKind::Unknown);
+        // Value::Bool plots as 0/1 in the chart engine (like MSSQL BIT).
+        assert_eq!(find("is_indexed").kind, ColumnKind::Integer);
         assert_eq!(find("index_names").kind, ColumnKind::Text);
         assert_eq!(find("nested_field_count").kind, ColumnKind::Integer);
 
@@ -4318,7 +4321,8 @@ mod tests {
         assert_eq!(kind_of("count"), ColumnKind::Integer);
         assert_eq!(kind_of("ratio"), ColumnKind::Float);
         assert_eq!(kind_of("label"), ColumnKind::Text);
-        assert_eq!(kind_of("active"), ColumnKind::Unknown);
+        // Value::Bool plots as 0/1 in the chart engine (like MSSQL BIT).
+        assert_eq!(kind_of("active"), ColumnKind::Integer);
         assert_eq!(kind_of("id"), ColumnKind::Unknown);
         // DateTime is emitted as Value::DateTime which the chart engine cannot
         // extract, so it must be Unknown rather than Timestamp.

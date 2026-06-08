@@ -33,8 +33,9 @@ fn kind_from_influx_type_name(s: &str) -> ColumnKind {
         "integer" | "int" => ColumnKind::Integer,
         "double" | "float" | "float64" | "unsignedLong" | "long" => ColumnKind::Float,
         "text" | "string" => ColumnKind::Text,
-        // No ColumnKind::Bool variant exists; booleans are intentionally excluded from charts.
-        "boolean" => ColumnKind::Unknown,
+        // Value::Bool plots as 0/1 in the chart engine (like MSSQL BIT), so
+        // Integer is the correct kind.
+        "boolean" => ColumnKind::Integer,
         _ => ColumnKind::Unknown,
     }
 }
@@ -402,8 +403,9 @@ mod tests {
     }
 
     #[test]
-    fn kind_from_influx_type_name_boolean_is_unknown() {
-        assert_eq!(kind_from_influx_type_name("boolean"), ColumnKind::Unknown);
+    fn kind_from_influx_type_name_boolean_is_integer() {
+        // Value::Bool plots as 0/1 (like MSSQL BIT), so boolean maps to Integer.
+        assert_eq!(kind_from_influx_type_name("boolean"), ColumnKind::Integer);
         assert_eq!(
             kind_from_influx_type_name("timestamp"),
             ColumnKind::Timestamp

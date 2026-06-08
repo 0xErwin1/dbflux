@@ -3118,10 +3118,11 @@ fn infer_field_type_label(
 }
 
 /// Infer the `ColumnKind` for `field_name` by scanning `items` for the first
-/// attribute that maps to a known kind (Integer, Float, or Text). Attributes
-/// whose type maps to Unknown are skipped so that a polymorphic column whose
-/// early samples are Bool can still resolve Integer or Float from a later
-/// sample. Returns `Unknown` when no item yields a known kind.
+/// attribute that maps to a known kind (Integer, Float, or Text). Bool
+/// attributes map to Integer because `Value::Bool` plots as 0/1 in the chart
+/// engine (mirroring MSSQL BIT). Attributes whose type maps to Unknown are
+/// skipped so a polymorphic column can resolve a kind from a later sample.
+/// Returns `Unknown` when no item yields a known kind.
 fn infer_field_kind(
     items: &[std::collections::HashMap<String, AttributeValue>],
     field_name: &str,
@@ -3136,6 +3137,9 @@ fn infer_field_kind(
             }
             if attr.as_s().is_ok() {
                 return ColumnKind::Text;
+            }
+            if attr.as_bool().is_ok() {
+                return ColumnKind::Integer;
             }
         }
     }
@@ -4304,10 +4308,10 @@ mod tests {
             ColumnKind::Text
         );
 
-        // Bool → Unknown
+        // Bool → Integer (Value::Bool plots as 0/1 in the chart engine, like MSSQL BIT).
         assert_eq!(
             infer_field_kind(&[bool_item.clone()], "active"),
-            ColumnKind::Unknown
+            ColumnKind::Integer
         );
 
         // Binary → Unknown
@@ -4323,14 +4327,14 @@ mod tests {
         assert_eq!(infer_field_kind(&[], "count"), ColumnKind::Unknown);
 
         // Polymorphic: both items share the same field "count". The first item
-        // holds a Bool (which maps to Unknown), the second holds an N integer.
-        // The scanner must skip the Unknown-mapping Bool and return Integer from
-        // the second item, proving the skip-Unknown path rather than missing-field.
-        let poly_bool_item: HashMap<String, AttributeValue> =
-            [("count".to_string(), AttributeValue::Bool(true))]
+        // holds a Null attribute (which maps to Unknown), the second holds an N
+        // integer. The scanner must skip the Unknown-mapping Null and return
+        // Integer from the second item, proving the skip-Unknown path.
+        let poly_null_item: HashMap<String, AttributeValue> =
+            [("count".to_string(), AttributeValue::Null(true))]
                 .into_iter()
                 .collect();
-        let poly: Vec<HashMap<String, AttributeValue>> = vec![poly_bool_item, n_int_item];
+        let poly: Vec<HashMap<String, AttributeValue>> = vec![poly_null_item, n_int_item];
         assert_eq!(infer_field_kind(&poly, "count"), ColumnKind::Integer);
     }
 
