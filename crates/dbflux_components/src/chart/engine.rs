@@ -2439,6 +2439,17 @@ fn extract_f64(value: &Value, is_time: bool) -> Option<f64> {
                 None
             }
         }
+        // A DateTime<Utc> is always an absolute instant; convert to epoch-ms
+        // unconditionally so time-axis and numeric-axis charts both receive a
+        // plottable value (mirrors how Int/Float extract regardless of is_time).
+        Value::DateTime(dt) => Some(dt.timestamp_millis() as f64),
+        // Date maps to midnight UTC so it lands on a consistent, unambiguous
+        // epoch-ms value. and_hms_opt(0,0,0) always succeeds for a valid date.
+        Value::Date(d) => d
+            .and_hms_opt(0, 0, 0)
+            .map(|ndt| ndt.and_utc().timestamp_millis() as f64),
+        // Time is a wall-clock time-of-day with no date component; there is no
+        // meaningful epoch origin to assign, so it cannot be placed on a time axis.
         Value::Null => None,
         _ => None,
     }
@@ -2811,6 +2822,37 @@ mod tests {
     fn extract_f64_maps_bool_to_zero_or_one() {
         assert_eq!(extract_f64(&Value::Bool(true), false), Some(1.0));
         assert_eq!(extract_f64(&Value::Bool(false), false), Some(0.0));
+    }
+
+    #[test]
+    fn extract_f64_datetime_yields_epoch_ms() {
+        use dbflux_core::chrono::{DateTime, TimeZone, Utc};
+        let dt: DateTime<Utc> = Utc.with_ymd_and_hms(2024, 3, 15, 12, 0, 0).unwrap();
+        let expected = dt.timestamp_millis() as f64;
+        assert_eq!(extract_f64(&Value::DateTime(dt), true), Some(expected));
+        // Unconditional: is_time=false should also extract.
+        let dt2: DateTime<Utc> = Utc.with_ymd_and_hms(2024, 3, 15, 12, 0, 0).unwrap();
+        assert_eq!(extract_f64(&Value::DateTime(dt2), false), Some(expected));
+    }
+
+    #[test]
+    fn extract_f64_date_yields_midnight_utc_epoch_ms() {
+        use dbflux_core::chrono::NaiveDate;
+        let date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let expected = date
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis() as f64;
+        assert_eq!(extract_f64(&Value::Date(date), false), Some(expected));
+    }
+
+    #[test]
+    fn extract_f64_time_returns_none() {
+        use dbflux_core::chrono::NaiveTime;
+        let t = NaiveTime::from_hms_opt(10, 30, 0).unwrap();
+        assert_eq!(extract_f64(&Value::Time(t), true), None);
+        assert_eq!(extract_f64(&Value::Time(t), false), None);
     }
 
     #[test]
