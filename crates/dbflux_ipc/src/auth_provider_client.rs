@@ -1428,8 +1428,15 @@ mod tests {
             }),
         );
 
-        assert!(result.is_ok(), "loop must terminate normally on done=true frame");
-        assert_eq!(result.unwrap().len(), 1, "must return exactly one terminal frame");
+        assert!(
+            result.is_ok(),
+            "loop must terminate normally on done=true frame"
+        );
+        assert_eq!(
+            result.unwrap().len(),
+            1,
+            "must return exactly one terminal frame"
+        );
     }
 
     // =========================================================================

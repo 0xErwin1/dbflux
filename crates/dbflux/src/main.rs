@@ -398,7 +398,10 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
             }
             let auth_stopped = shutdown_managed_auth_provider_hosts();
             if auth_stopped > 0 {
-                info!("Stopped {} managed auth-provider host process(es)", auth_stopped);
+                info!(
+                    "Stopped {} managed auth-provider host process(es)",
+                    auth_stopped
+                );
             }
             let _ = cx.update(|cx| cx.quit());
             return;
@@ -442,7 +445,10 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
             }
             let auth_stopped = shutdown_managed_auth_provider_hosts();
             if auth_stopped > 0 {
-                info!("Stopped {} managed auth-provider host process(es)", auth_stopped);
+                info!(
+                    "Stopped {} managed auth-provider host process(es)",
+                    auth_stopped
+                );
             }
             let _ = cx.update(|cx| cx.quit());
             return;
@@ -510,7 +516,10 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
 
     let auth_stopped = shutdown_managed_auth_provider_hosts();
     if auth_stopped > 0 {
-        info!("Stopped {} managed auth-provider host process(es)", auth_stopped);
+        info!(
+            "Stopped {} managed auth-provider host process(es)",
+            auth_stopped
+        );
     }
 
     let _ = cx.update(|cx| {

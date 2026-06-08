@@ -665,6 +665,7 @@ impl HooksSection {
             } else {
                 self.hook_inherit_env
             },
+            env_denylist: Vec::new(),
             timeout_ms,
             execution_mode: if selected_kind == HookKindSelection::Lua {
                 HookExecutionMode::Blocking

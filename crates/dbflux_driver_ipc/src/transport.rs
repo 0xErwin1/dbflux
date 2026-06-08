@@ -1156,9 +1156,8 @@ mod tests {
         .expect("fake driver server must start");
 
         let socket_name = driver_socket_name(&socket_id).expect("socket name");
-        let client = Arc::new(
-            RpcClient::connect(socket_name.borrow()).expect("connect must succeed"),
-        );
+        let client =
+            Arc::new(RpcClient::connect(socket_name.borrow()).expect("connect must succeed"));
 
         let handles: Vec<_> = (0..THREAD_COUNT)
             .map(|_| {

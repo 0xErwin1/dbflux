@@ -444,6 +444,7 @@ mod tests {
         .unwrap();
         options.set("args", args).unwrap();
         options.set("stream", true).unwrap();
+        options.set("timeout_ms", 5000_i64).unwrap();
 
         let cancel_token = state.cancel_token.clone();
         thread::spawn(move || {

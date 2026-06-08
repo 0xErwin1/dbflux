@@ -1511,6 +1511,7 @@ impl CodeDocument {
             cwd: None,
             env: std::collections::HashMap::new(),
             inherit_env: true,
+            env_denylist: Vec::new(),
             timeout_ms: Some(30_000),
             execution_mode: HookExecutionMode::Blocking,
             ready_signal: None,

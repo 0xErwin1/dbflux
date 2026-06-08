@@ -372,7 +372,7 @@ mod tests {
             .execute_hook(
                 &lua_hook_with_capabilities(
                     &format!(
-                        "local result = dbflux.process.run({{ program = '{python}', allowlist = 'python_cli', args = {{'-c', 'print(\"hello-process\")'}} }})\nif not result.ok then hook.fail(result.stderr) end"
+                        "local result = dbflux.process.run({{ program = '{python}', allowlist = 'python_cli', timeout_ms = 5000, args = {{'-c', 'print(\"hello-process\")'}} }})\nif not result.ok then hook.fail(result.stderr) end"
                     ),
                     LuaCapabilities {
                         process_run: true,
@@ -496,7 +496,7 @@ mod tests {
 
         let hook = lua_hook_with_capabilities(
             &format!(
-                "dbflux.log.info('hello-log')\nlocal result = dbflux.process.run({{ program = '{python}', allowlist = 'python_cli', stream = true, args = {{'-c', 'print(\"hello-stream\")'}} }})\nif not result.ok then hook.fail(result.stderr) end"
+                "dbflux.log.info('hello-log')\nlocal result = dbflux.process.run({{ program = '{python}', allowlist = 'python_cli', timeout_ms = 5000, stream = true, args = {{'-c', 'print(\"hello-stream\")'}} }})\nif not result.ok then hook.fail(result.stderr) end"
             ),
             LuaCapabilities {
                 process_run: true,
@@ -540,7 +540,7 @@ mod tests {
 
         let hook = lua_hook_with_capabilities(
             &format!(
-                "dbflux.log.info('hello-log')\nlocal result = dbflux.process.run({{ program = '{python}', allowlist = 'python_cli', args = {{'-c', 'print(\"hello-buffered\")'}} }})\nif not result.ok then hook.fail(result.stderr) end"
+                "dbflux.log.info('hello-log')\nlocal result = dbflux.process.run({{ program = '{python}', allowlist = 'python_cli', timeout_ms = 5000, args = {{'-c', 'print(\"hello-buffered\")'}} }})\nif not result.ok then hook.fail(result.stderr) end"
             ),
             LuaCapabilities {
                 process_run: true,

@@ -992,9 +992,8 @@ impl ConnectionHook {
         command.env_clear();
 
         if self.inherit_env {
-            command.envs(
-                std::env::vars().filter(|(k, _)| !is_denied_env_key(k, &self.env_denylist)),
-            );
+            command
+                .envs(std::env::vars().filter(|(k, _)| !is_denied_env_key(k, &self.env_denylist)));
         }
 
         command.envs(self.context_env(context));
@@ -1848,9 +1847,7 @@ mod tests {
         let token = CancelToken::new();
         let token_clone = token.clone();
 
-        let handle = std::thread::spawn(move || {
-            hook.execute(&test_context(), &token_clone, None)
-        });
+        let handle = std::thread::spawn(move || hook.execute(&test_context(), &token_clone, None));
 
         let start = Instant::now();
         token.cancel();
@@ -1894,7 +1891,12 @@ mod tests {
         assert!(result.detached);
         assert_eq!(result.exit_code, None);
         assert!(!result.is_success());
-        assert!(result.warnings.iter().any(|w| w.contains("detached: outcome not monitored")));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("detached: outcome not monitored"))
+        );
     }
 
     #[test]
@@ -1924,7 +1926,10 @@ mod tests {
             warnings: Vec::new(),
         };
 
-        assert!(!result.is_success(), "detached result must never be success regardless of exit_code");
+        assert!(
+            !result.is_success(),
+            "detached result must never be success regardless of exit_code"
+        );
     }
 
     // =========================================================================
@@ -1939,7 +1944,10 @@ mod tests {
         let hook = ConnectionHook {
             kind: HookKind::Command {
                 command: "sh".to_string(),
-                args: vec!["-c".to_string(), "echo ${AWS_SECRET_ACCESS_KEY:-MISSING}".to_string()],
+                args: vec![
+                    "-c".to_string(),
+                    "echo ${AWS_SECRET_ACCESS_KEY:-MISSING}".to_string(),
+                ],
             },
             inherit_env: true,
             env_denylist: Vec::new(),
@@ -1965,7 +1973,10 @@ mod tests {
         let hook = ConnectionHook {
             kind: HookKind::Command {
                 command: "sh".to_string(),
-                args: vec!["-c".to_string(), "echo ${MY_PLAIN_VAR_PROC2:-MISSING}".to_string()],
+                args: vec![
+                    "-c".to_string(),
+                    "echo ${MY_PLAIN_VAR_PROC2:-MISSING}".to_string(),
+                ],
             },
             inherit_env: true,
             env_denylist: Vec::new(),
@@ -1991,7 +2002,10 @@ mod tests {
         let hook = ConnectionHook {
             kind: HookKind::Command {
                 command: "sh".to_string(),
-                args: vec!["-c".to_string(), "echo ${AWS_SECRET_ACCESS_KEY:-MISSING}".to_string()],
+                args: vec![
+                    "-c".to_string(),
+                    "echo ${AWS_SECRET_ACCESS_KEY:-MISSING}".to_string(),
+                ],
             },
             inherit_env: true,
             env: HashMap::from([("AWS_SECRET_ACCESS_KEY".to_string(), "EXPLICIT".to_string())]),
@@ -2018,7 +2032,10 @@ mod tests {
         let hook = ConnectionHook {
             kind: HookKind::Command {
                 command: "sh".to_string(),
-                args: vec!["-c".to_string(), "echo ${MY_CUSTOM_PROC2_VAR:-MISSING}".to_string()],
+                args: vec![
+                    "-c".to_string(),
+                    "echo ${MY_CUSTOM_PROC2_VAR:-MISSING}".to_string(),
+                ],
             },
             inherit_env: true,
             env_denylist: vec!["MY_CUSTOM_PROC2_VAR".to_string()],
@@ -2041,7 +2058,10 @@ mod tests {
         let hook: ConnectionHook =
             serde_json::from_str(r#"{"command": "echo", "args": ["test"]}"#).unwrap();
 
-        assert!(hook.env_denylist.is_empty(), "env_denylist must default to empty vec");
+        assert!(
+            hook.env_denylist.is_empty(),
+            "env_denylist must default to empty vec"
+        );
     }
 
     // =========================================================================
@@ -2068,9 +2088,7 @@ mod tests {
         let token = CancelToken::new();
         let token_clone = token.clone();
 
-        let handle = std::thread::spawn(move || {
-            hook.execute(&test_context(), &token_clone, None)
-        });
+        let handle = std::thread::spawn(move || hook.execute(&test_context(), &token_clone, None));
 
         // Give the grandchild a moment to start
         std::thread::sleep(Duration::from_millis(50));
