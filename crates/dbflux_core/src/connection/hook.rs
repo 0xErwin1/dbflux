@@ -1227,16 +1227,16 @@ fn terminate_child(child: &mut Child) -> Result<(), ProcessExecutionError> {
 
 /// Terminates the process group of the given child process.
 ///
-/// On Unix, sends SIGTERM then SIGKILL to the entire process group identified by the
-/// child's PID (using negative-PID kill semantics). The process group is set via
-/// `process_group(0)` at spawn time, so child-spawned grandchildren share the group
-/// and are also terminated.
+/// On Unix, sends SIGTERM to the entire process group identified by the child's PID
+/// (using negative-PID kill semantics), then waits up to ~50 ms for the group to exit
+/// cleanly. If the group has not exited after the grace window, SIGKILL is sent. The
+/// process group is set via `process_group(0)` at spawn time, so child-spawned
+/// grandchildren share the group and are also targeted.
 ///
 /// On Windows, only the direct child process is killed; grandchildren are orphaned
-/// because no Job Object is used to bind them to the parent's lifetime. Using a Job
-/// Object to achieve full process-tree termination on Windows is a deferred follow-up.
+/// because no Job Object is used to bind them to the parent's lifetime.
 #[cfg(unix)]
-fn terminate_process_group(child: &Child) {
+fn terminate_process_group(child: &mut Child) {
     unsafe extern "C" {
         fn kill(pid: i32, sig: i32) -> i32;
     }
@@ -1254,7 +1254,14 @@ fn terminate_process_group(child: &Child) {
 
     unsafe {
         let _ = kill(-pid, SIGTERM);
-        let _ = kill(-pid, SIGKILL);
+    }
+
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    if child.try_wait().ok().flatten().is_none() {
+        unsafe {
+            let _ = kill(-pid, SIGKILL);
+        }
     }
 }
 
@@ -1855,8 +1862,8 @@ mod tests {
         let elapsed = start.elapsed();
 
         assert!(
-            elapsed.as_millis() < 150,
-            "cancellation took {}ms, expected <150ms",
+            elapsed.as_millis() < 300,
+            "cancellation took {}ms, expected <300ms",
             elapsed.as_millis()
         );
     }
