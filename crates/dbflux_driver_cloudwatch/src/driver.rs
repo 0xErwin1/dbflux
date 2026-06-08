@@ -395,7 +395,7 @@ impl Connection for CloudWatchConnection {
                         .map(|name| ColumnMeta {
                             name: name.clone(),
                             type_name: "text".to_string(),
-                            kind: cloudwatch_column_kind(name),
+                            kind: cwli_column_kind(name, &row_maps),
                             nullable: true,
                             is_primary_key: false,
                         })
@@ -985,17 +985,53 @@ impl dbflux_core::LanguageService for CloudWatchLanguageService {
     }
 }
 
-/// Classify a CloudWatch Insights column name to a semantic `ColumnKind`.
-///
-/// Known annotation fields map to Timestamp or Text. All other names return
-/// Unknown because CWLI constructs field values as `Value::Text`; the stats/metrics
-/// code path sets Float directly on its own columns and is unaffected by this function.
+/// Classify a CloudWatch Insights column name to a semantic `ColumnKind` using
+/// name-based rules only. Known annotation fields are authoritative: timestamp
+/// fields map to Timestamp, message/stream/log fields map to Text. All other
+/// names return Unknown; callers that have row data should use
+/// `cwli_column_kind` instead.
 fn cloudwatch_column_kind(name: &str) -> ColumnKind {
     match name {
         "@timestamp" | "@ingestionTime" => ColumnKind::Timestamp,
         "@message" | "@logStream" | "@log" => ColumnKind::Text,
         _ => ColumnKind::Unknown,
     }
+}
+
+/// Determine the `ColumnKind` for a CWLI result column using name-based rules
+/// first, falling back to value sampling across `row_maps` for unknown names.
+///
+/// For fields not covered by `cloudwatch_column_kind`, samples all non-empty
+/// string values for `name` across `row_maps`. If all non-empty values parse
+/// as `i64` the column is Integer; if all parse as `f64` it is Float;
+/// otherwise Unknown. A column with no non-empty values is Unknown.
+fn cwli_column_kind(name: &str, row_maps: &[HashMap<String, Value>]) -> ColumnKind {
+    let name_kind = cloudwatch_column_kind(name);
+    if name_kind != ColumnKind::Unknown {
+        return name_kind;
+    }
+
+    let non_empty: Vec<&str> = row_maps
+        .iter()
+        .filter_map(|row| match row.get(name) {
+            Some(Value::Text(s)) if !s.is_empty() => Some(s.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    if non_empty.is_empty() {
+        return ColumnKind::Unknown;
+    }
+
+    if non_empty.iter().all(|s| s.parse::<i64>().is_ok()) {
+        return ColumnKind::Integer;
+    }
+
+    if non_empty.iter().all(|s| s.parse::<f64>().is_ok()) {
+        return ColumnKind::Float;
+    }
+
+    ColumnKind::Unknown
 }
 
 fn cloudwatch_query_modes() -> Vec<SourceQueryMode> {
@@ -1564,7 +1600,7 @@ fn fetch_log_stream_page(
 mod tests {
     use super::{
         CLOUDWATCH_FORM, CLOUDWATCH_METADATA, CloudWatchCollectionFilter, CloudWatchDriver,
-        cloudwatch_column_kind, metric_data_output_to_multi_series_result,
+        cloudwatch_column_kind, cwli_column_kind, metric_data_output_to_multi_series_result,
     };
     use aws_sdk_cloudwatch::operation::get_metric_data::GetMetricDataOutput;
     use aws_sdk_cloudwatch::primitives::DateTime;
@@ -1572,9 +1608,10 @@ mod tests {
     use dbflux_core::{
         ColumnKind, DbConfig, DbDriver, DriverCapabilities, FormFieldKind, MetricQuerySeries, Value,
     };
+    use std::collections::HashMap;
 
     #[test]
-    fn cloudwatch_column_kind_unknown_default() {
+    fn cloudwatch_column_kind_name_based() {
         assert_eq!(cloudwatch_column_kind("@timestamp"), ColumnKind::Timestamp);
         assert_eq!(
             cloudwatch_column_kind("@ingestionTime"),
@@ -1586,6 +1623,57 @@ mod tests {
         assert_eq!(cloudwatch_column_kind("avg_latency"), ColumnKind::Unknown);
         assert_eq!(cloudwatch_column_kind("p99"), ColumnKind::Unknown);
         assert_eq!(cloudwatch_column_kind("count"), ColumnKind::Unknown);
+    }
+
+    fn row_maps_for(field: &str, values: &[&str]) -> Vec<HashMap<String, Value>> {
+        values
+            .iter()
+            .map(|v| {
+                let mut m = HashMap::new();
+                m.insert(field.to_string(), Value::Text(v.to_string()));
+                m
+            })
+            .collect()
+    }
+
+    #[test]
+    fn cwli_column_kind_name_authoritative() {
+        let empty: Vec<HashMap<String, Value>> = vec![];
+        assert_eq!(
+            cwli_column_kind("@timestamp", &empty),
+            ColumnKind::Timestamp
+        );
+        assert_eq!(cwli_column_kind("@message", &empty), ColumnKind::Text);
+    }
+
+    #[test]
+    fn cwli_column_kind_value_based_numeric() {
+        let int_rows = row_maps_for("count", &["123", "456", "789"]);
+        assert_eq!(cwli_column_kind("count", &int_rows), ColumnKind::Integer);
+
+        let float_rows = row_maps_for("latency", &["1.5", "2.3", "0.9"]);
+        assert_eq!(cwli_column_kind("latency", &float_rows), ColumnKind::Float);
+
+        let string_rows = row_maps_for("errorCode", &["500", "BadRequest", "Timeout"]);
+        assert_eq!(
+            cwli_column_kind("errorCode", &string_rows),
+            ColumnKind::Unknown
+        );
+    }
+
+    #[test]
+    fn cwli_column_kind_empty_or_missing_values() {
+        let empty: Vec<HashMap<String, Value>> = vec![];
+        assert_eq!(cwli_column_kind("count", &empty), ColumnKind::Unknown);
+
+        let null_rows: Vec<HashMap<String, Value>> = vec![
+            {
+                let mut m = HashMap::new();
+                m.insert("count".to_string(), Value::Null);
+                m
+            },
+        ];
+        assert_eq!(cwli_column_kind("count", &null_rows), ColumnKind::Unknown);
     }
 
     fn series(namespace: &str, metric_name: &str) -> MetricQuerySeries {
