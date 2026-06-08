@@ -7,20 +7,20 @@ All notable changes to DBFlux will be documented in this file.
 ### Fixed
 
 * **Chart auto-detection across four drivers (#204)** — Drivers now assign
-  `ColumnKind` honestly so the chart engine includes genuine numeric and
-  timestamp columns and excludes non-numeric ones. CloudWatch CWL Insights
-  fields that are not recognized timestamps/text fall back to `Unknown`
-  instead of `Float` (their values are built as `Value::Text`), so string
-  fields like `errorCode` are no longer offered as chart Y axes; the
-  stats/metrics path that already sets `Float` is untouched. DynamoDB infers
-  column kind from the `AttributeValue` type (`N` → `Float`, `S` → `Text`,
-  otherwise `Unknown`), making numeric scans chart-able. MongoDB
-  operation-result integer columns (`count`, `insertedCount`,
-  `matchedCount`, `modifiedCount`, `deletedCount`) are now `Integer` and the
-  schema-listing text columns (`field_name`, `common_type`, `index_names`)
-  are `Text`. InfluxDB Flux and InfluxQL kind mappers gain an explicit,
-  documented `boolean → Unknown` arm. No `ColumnKind::Bool` variant is
-  introduced; the chart engine and UI remain driver-agnostic.
+  `ColumnKind` honestly so the chart engine includes genuine numeric columns
+  and excludes non-plottable ones. CloudWatch CWL Insights numeric fields are
+  now emitted as typed `Value::Int` or `Value::Float` (parsed from the raw
+  string at result-construction time), making them genuinely chart-able;
+  non-numeric and annotation fields stay `Value::Text` / `Unknown`. DynamoDB
+  infers column kind from `AttributeValue` (`N` → `Integer` when the string
+  parses as `i64`, else `Float`; `S` → `Text`; anything else → `Unknown`),
+  making numeric scans chart-able. MongoDB document and query results infer
+  column kinds from BSON value types (Int32/Int64 → Integer,
+  Double/Decimal128 → Float, String → Text); date and timestamp columns are
+  left `Unknown` because the chart engine cannot yet plot `Value::DateTime`
+  or the textual `Timestamp(…)` representation. InfluxDB Flux and InfluxQL
+  kind mappers gain an explicit `boolean → Unknown` arm. No `ColumnKind::Bool`
+  variant is introduced; the chart engine and UI remain driver-agnostic.
 
 ## [0.6.0] - 2026-06-04
 
