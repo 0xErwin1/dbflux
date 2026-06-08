@@ -4235,8 +4235,8 @@ mod tests {
         ensure_item_contains_required_keys, extract_key_map_from_filter,
         extract_non_key_update_attributes, infer_field_kind, json_value_to_attribute_value,
         key_components_to_fields, key_components_to_indexes, normalize_table_names,
-        plan_dynamo_semantic_request, resolve_upsert_key_map,
-        strip_key_fields_from_update_payload, unsupported_operation, validate_read_options,
+        plan_dynamo_semantic_request, resolve_upsert_key_map, strip_key_fields_from_update_payload,
+        unsupported_operation, validate_read_options,
     };
     use crate::query_parser::{DynamoFilterFallback, DynamoReadOptions};
     use aws_sdk_dynamodb::types::{
@@ -4244,36 +4244,31 @@ mod tests {
         TableDescription,
     };
     use dbflux_core::{
-        CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ColumnKind, ConnectionProfile,
-        DangerousQueryKind, DatabaseCategory, DbConfig, DbDriver, DbError, DocumentFilter,
-        DocumentUpdate, DriverCapabilities, FormFieldKind, FormValues, IndexData, LanguageService,
-        QueryLanguage, SemanticFilter, SemanticPlanKind, SemanticRequest, Value, WhereOperator,
+        CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ColumnKind,
+        ConnectionProfile, DangerousQueryKind, DatabaseCategory, DbConfig, DbDriver, DbError,
+        DocumentFilter, DocumentUpdate, DriverCapabilities, FormFieldKind, FormValues, IndexData,
+        LanguageService, QueryLanguage, SemanticFilter, SemanticPlanKind, SemanticRequest, Value,
+        WhereOperator,
     };
     use serde_json::json;
     use std::collections::HashMap;
 
     #[test]
     fn infer_field_kind_cases() {
-        let n_item: HashMap<String, AttributeValue> = [(
-            "score".to_string(),
-            AttributeValue::N("42.5".to_string()),
-        )]
-        .into_iter()
-        .collect();
+        let n_item: HashMap<String, AttributeValue> =
+            [("score".to_string(), AttributeValue::N("42.5".to_string()))]
+                .into_iter()
+                .collect();
 
-        let s_item: HashMap<String, AttributeValue> = [(
-            "name".to_string(),
-            AttributeValue::S("alice".to_string()),
-        )]
-        .into_iter()
-        .collect();
+        let s_item: HashMap<String, AttributeValue> =
+            [("name".to_string(), AttributeValue::S("alice".to_string()))]
+                .into_iter()
+                .collect();
 
-        let bool_item: HashMap<String, AttributeValue> = [(
-            "active".to_string(),
-            AttributeValue::Bool(true),
-        )]
-        .into_iter()
-        .collect();
+        let bool_item: HashMap<String, AttributeValue> =
+            [("active".to_string(), AttributeValue::Bool(true))]
+                .into_iter()
+                .collect();
 
         let bin_item: HashMap<String, AttributeValue> = [(
             "data".to_string(),
@@ -4282,13 +4277,25 @@ mod tests {
         .into_iter()
         .collect();
 
-        assert_eq!(infer_field_kind(&[n_item.clone()], "score"), ColumnKind::Float);
-        assert_eq!(infer_field_kind(&[s_item.clone()], "name"), ColumnKind::Text);
-        assert_eq!(infer_field_kind(&[bool_item], "active"), ColumnKind::Unknown);
+        assert_eq!(
+            infer_field_kind(&[n_item.clone()], "score"),
+            ColumnKind::Float
+        );
+        assert_eq!(
+            infer_field_kind(&[s_item.clone()], "name"),
+            ColumnKind::Text
+        );
+        assert_eq!(
+            infer_field_kind(&[bool_item], "active"),
+            ColumnKind::Unknown
+        );
         assert_eq!(infer_field_kind(&[bin_item], "data"), ColumnKind::Unknown);
 
         // Missing field → Unknown
-        assert_eq!(infer_field_kind(&[n_item.clone()], "missing"), ColumnKind::Unknown);
+        assert_eq!(
+            infer_field_kind(&[n_item.clone()], "missing"),
+            ColumnKind::Unknown
+        );
 
         // Empty items → Unknown
         assert_eq!(infer_field_kind(&[], "score"), ColumnKind::Unknown);

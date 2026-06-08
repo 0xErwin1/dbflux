@@ -1576,7 +1576,10 @@ mod tests {
     #[test]
     fn cloudwatch_column_kind_unknown_default() {
         assert_eq!(cloudwatch_column_kind("@timestamp"), ColumnKind::Timestamp);
-        assert_eq!(cloudwatch_column_kind("@ingestionTime"), ColumnKind::Timestamp);
+        assert_eq!(
+            cloudwatch_column_kind("@ingestionTime"),
+            ColumnKind::Timestamp
+        );
         assert_eq!(cloudwatch_column_kind("@message"), ColumnKind::Text);
         assert_eq!(cloudwatch_column_kind("@logStream"), ColumnKind::Text);
         assert_eq!(cloudwatch_column_kind("@log"), ColumnKind::Text);

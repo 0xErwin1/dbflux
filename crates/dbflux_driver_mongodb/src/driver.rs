@@ -2138,7 +2138,12 @@ impl Connection for MongoConnection {
             })
             .collect();
 
-        Ok(QueryResult::table(schema_listing_columns(), rows, None, start.elapsed()))
+        Ok(QueryResult::table(
+            schema_listing_columns(),
+            rows,
+            None,
+            start.elapsed(),
+        ))
     }
 
     fn view_details(
@@ -3632,9 +3637,9 @@ mod tests {
     use super::*;
     use crate::query_parser::parse_query;
     use dbflux_core::{
-        CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ColumnKind, DatabaseCategory,
-        DbDriver, DbError, QueryLanguage, SemanticFilter, SemanticPlanKind, SemanticRequest, Value,
-        WhereOperator,
+        CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ColumnKind,
+        DatabaseCategory, DbDriver, DbError, QueryLanguage, SemanticFilter, SemanticPlanKind,
+        SemanticRequest, Value, WhereOperator,
     };
 
     #[test]
@@ -3655,7 +3660,11 @@ mod tests {
         assert_eq!(find("index_names").kind, ColumnKind::Text);
         assert_eq!(find("nested_field_count").kind, ColumnKind::Integer);
 
-        assert_eq!(columns.len(), 6, "column count must match describe_table output");
+        assert_eq!(
+            columns.len(),
+            6,
+            "column count must match describe_table output"
+        );
     }
 
     #[test]

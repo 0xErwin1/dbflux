@@ -404,7 +404,10 @@ mod tests {
     #[test]
     fn kind_from_influx_type_name_boolean_is_unknown() {
         assert_eq!(kind_from_influx_type_name("boolean"), ColumnKind::Unknown);
-        assert_eq!(kind_from_influx_type_name("timestamp"), ColumnKind::Timestamp);
+        assert_eq!(
+            kind_from_influx_type_name("timestamp"),
+            ColumnKind::Timestamp
+        );
         assert_eq!(kind_from_influx_type_name("double"), ColumnKind::Float);
     }
 }
