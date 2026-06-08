@@ -603,24 +603,34 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract changelog section
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+
+      - name: Generate changelog section
         id: changelog
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          VERSION="${VERSION#v}"
 
-          # Extract the section between this version's header and the next (or EOF),
-          # then strip trailing blank lines and --- separators.
-          awk -v ver="$VERSION" '
-            /^## \[/ {
-              if (found) exit
-              if (index($0, "[" ver "]")) { found=1; next }
-            }
-            found { print }
-          ' CHANGELOG.md | sed '/^---$/d' | sed '1{/^[[:space:]]*$/d}' | sed -e :a -e '/^[[:space:]]*$/{ $d; N; ba; }' > changelog_section.md
+          # Derive the changelog from git history instead of a hand-maintained
+          # CHANGELOG.md section. The old awk approach looked for a `## [x.y.z]`
+          # header that never exists for rc tags, leaving the release body empty.
+          #
+          # Stable: notes for exactly this tag (range since the previous stable).
+          # rc/prerelease: unreleased range since the last stable tag. cliff.toml
+          # treats -rc.N / -dev.N as non-boundaries via skip_tags, so the range
+          # is always measured from the last real stable release.
+          if [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            git-cliff --config cliff.toml --current --tag "$VERSION" \
+              --strip header -o changelog_section.md 2>/dev/null || true
+          else
+            git-cliff --config cliff.toml --unreleased --tag "$VERSION" \
+              --strip header -o changelog_section.md 2>/dev/null || true
+          fi
 
           if [ ! -s changelog_section.md ]; then
-            echo "WARNING: No changelog section found for version $VERSION"
+            echo "No conventional-commit entries found for this range." > changelog_section.md
           fi
 
       - name: Compose release body
