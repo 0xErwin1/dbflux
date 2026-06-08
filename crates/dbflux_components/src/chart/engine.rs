@@ -2439,17 +2439,17 @@ fn extract_f64(value: &Value, is_time: bool) -> Option<f64> {
                 None
             }
         }
-        // A DateTime<Utc> is always an absolute instant; convert to epoch-ms
-        // unconditionally so time-axis and numeric-axis charts both receive a
-        // plottable value (mirrors how Int/Float extract regardless of is_time).
-        Value::DateTime(dt) => Some(dt.timestamp_millis() as f64),
-        // Date maps to midnight UTC so it lands on a consistent, unambiguous
-        // epoch-ms value. and_hms_opt(0,0,0) always succeeds for a valid date.
-        Value::Date(d) => d
+        // Temporal values are only meaningful as epoch-ms on a time axis; gated
+        // on is_time (like the Text arm) so a datetime mistakenly placed on a
+        // value axis is dropped rather than blowing the scale up to ~1e12.
+        Value::DateTime(dt) if is_time => Some(dt.timestamp_millis() as f64),
+        // Date maps to midnight UTC for a consistent, unambiguous epoch-ms value.
+        Value::Date(d) if is_time => d
             .and_hms_opt(0, 0, 0)
             .map(|ndt| ndt.and_utc().timestamp_millis() as f64),
         // Time is a wall-clock time-of-day with no date component; there is no
         // meaningful epoch origin to assign, so it cannot be placed on a time axis.
+        Value::Time(_) => None,
         Value::Null => None,
         _ => None,
     }
@@ -2827,24 +2827,26 @@ mod tests {
     #[test]
     fn extract_f64_datetime_yields_epoch_ms() {
         use dbflux_core::chrono::{DateTime, TimeZone, Utc};
-        let dt: DateTime<Utc> = Utc.with_ymd_and_hms(2024, 3, 15, 12, 0, 0).unwrap();
-        let expected = dt.timestamp_millis() as f64;
-        assert_eq!(extract_f64(&Value::DateTime(dt), true), Some(expected));
-        // Unconditional: is_time=false should also extract.
-        let dt2: DateTime<Utc> = Utc.with_ymd_and_hms(2024, 3, 15, 12, 0, 0).unwrap();
-        assert_eq!(extract_f64(&Value::DateTime(dt2), false), Some(expected));
+        // 2024-01-01T00:00:00Z, hardcoded ms to pin the unit (catches a
+        // secs/micros regression that a self-derived expected would mask).
+        let dt: DateTime<Utc> = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        assert_eq!(
+            extract_f64(&Value::DateTime(dt), true),
+            Some(1_704_067_200_000.0)
+        );
+        // Gated on is_time: on a value axis a datetime is dropped, not plotted.
+        assert_eq!(extract_f64(&Value::DateTime(dt), false), None);
     }
 
     #[test]
     fn extract_f64_date_yields_midnight_utc_epoch_ms() {
         use dbflux_core::chrono::NaiveDate;
         let date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
-        let expected = date
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_utc()
-            .timestamp_millis() as f64;
-        assert_eq!(extract_f64(&Value::Date(date), false), Some(expected));
+        assert_eq!(
+            extract_f64(&Value::Date(date), true),
+            Some(1_704_067_200_000.0)
+        );
+        assert_eq!(extract_f64(&Value::Date(date), false), None);
     }
 
     #[test]
