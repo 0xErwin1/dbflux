@@ -3117,22 +3117,26 @@ fn infer_field_type_label(
     String::new()
 }
 
-/// Infer the `ColumnKind` for `field_name` from the first item in `items` that
-/// carries a typed value for it. Returns `Unknown` when no item provides a typed
-/// value or when the type token is not `N` or `S`.
+/// Infer the `ColumnKind` for `field_name` by scanning `items` for the first
+/// attribute that maps to a known kind (Integer, Float, or Text). Attributes
+/// whose type maps to Unknown are skipped so that a polymorphic column whose
+/// early samples are Bool can still resolve Integer or Float from a later
+/// sample. Returns `Unknown` when no item yields a known kind.
 fn infer_field_kind(
     items: &[std::collections::HashMap<String, AttributeValue>],
     field_name: &str,
 ) -> ColumnKind {
     for item in items {
         if let Some(attr) = item.get(field_name) {
-            if attr.as_n().is_ok() {
+            if let Ok(n_str) = attr.as_n() {
+                if n_str.parse::<i64>().is_ok() {
+                    return ColumnKind::Integer;
+                }
                 return ColumnKind::Float;
             }
             if attr.as_s().is_ok() {
                 return ColumnKind::Text;
             }
-            return ColumnKind::Unknown;
         }
     }
     ColumnKind::Unknown
@@ -4255,8 +4259,13 @@ mod tests {
 
     #[test]
     fn infer_field_kind_cases() {
-        let n_item: HashMap<String, AttributeValue> =
-            [("score".to_string(), AttributeValue::N("42.5".to_string()))]
+        let n_int_item: HashMap<String, AttributeValue> =
+            [("count".to_string(), AttributeValue::N("42".to_string()))]
+                .into_iter()
+                .collect();
+
+        let n_float_item: HashMap<String, AttributeValue> =
+            [("score".to_string(), AttributeValue::N("3.14".to_string()))]
                 .into_iter()
                 .collect();
 
@@ -4277,32 +4286,49 @@ mod tests {
         .into_iter()
         .collect();
 
+        // Integer N
         assert_eq!(
-            infer_field_kind(&[n_item.clone()], "score"),
+            infer_field_kind(&[n_int_item.clone()], "count"),
+            ColumnKind::Integer
+        );
+
+        // Decimal N
+        assert_eq!(
+            infer_field_kind(&[n_float_item.clone()], "score"),
             ColumnKind::Float
         );
+
+        // S → Text
         assert_eq!(
             infer_field_kind(&[s_item.clone()], "name"),
             ColumnKind::Text
         );
+
+        // Bool → Unknown
         assert_eq!(
-            infer_field_kind(&[bool_item], "active"),
+            infer_field_kind(&[bool_item.clone()], "active"),
             ColumnKind::Unknown
         );
+
+        // Binary → Unknown
         assert_eq!(infer_field_kind(&[bin_item], "data"), ColumnKind::Unknown);
 
         // Missing field → Unknown
         assert_eq!(
-            infer_field_kind(&[n_item.clone()], "missing"),
+            infer_field_kind(&[n_int_item.clone()], "missing"),
             ColumnKind::Unknown
         );
 
         // Empty items → Unknown
-        assert_eq!(infer_field_kind(&[], "score"), ColumnKind::Unknown);
+        assert_eq!(infer_field_kind(&[], "count"), ColumnKind::Unknown);
 
-        // Polymorphic: first sample wins (S before N)
-        let poly: Vec<HashMap<String, AttributeValue>> = vec![s_item, n_item];
-        assert_eq!(infer_field_kind(&poly, "name"), ColumnKind::Text);
+        // Polymorphic: first present sample is Bool (Unknown-mapping), later sample is N → Integer
+        // Proves the scanner skips Unknown-mapping attrs and keeps looking.
+        let poly: Vec<HashMap<String, AttributeValue>> = vec![
+            bool_item,
+            n_int_item,
+        ];
+        assert_eq!(infer_field_kind(&poly, "count"), ColumnKind::Integer);
     }
 
     #[test]
