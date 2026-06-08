@@ -1226,6 +1226,16 @@ fn terminate_child(child: &mut Child) -> Result<(), ProcessExecutionError> {
         .map_err(|error| ProcessExecutionError::Wait(error.to_string()))
 }
 
+/// Terminates the process group of the given child process.
+///
+/// On Unix, sends SIGTERM then SIGKILL to the entire process group identified by the
+/// child's PID (using negative-PID kill semantics). The process group is set via
+/// `process_group(0)` at spawn time, so child-spawned grandchildren share the group
+/// and are also terminated.
+///
+/// On Windows, only the direct child process is killed; grandchildren are orphaned
+/// because no Job Object is used to bind them to the parent's lifetime. Using a Job
+/// Object to achieve full process-tree termination on Windows is a deferred follow-up.
 #[cfg(unix)]
 fn terminate_process_group(child: &Child) {
     unsafe extern "C" {
@@ -2032,6 +2042,48 @@ mod tests {
             serde_json::from_str(r#"{"command": "echo", "args": ["test"]}"#).unwrap();
 
         assert!(hook.env_denylist.is_empty(), "env_denylist must default to empty vec");
+    }
+
+    // =========================================================================
+    // PROC-7: Unix process-group kill behavior
+    // =========================================================================
+
+    #[cfg(unix)]
+    #[test]
+    fn test_unix_process_group_kill() {
+        use std::time::{Duration, Instant};
+
+        let hook = ConnectionHook {
+            kind: HookKind::Command {
+                command: "sh".to_string(),
+                args: vec![
+                    "-c".to_string(),
+                    // Spawn a grandchild into the same process group, then sleep
+                    "sh -c 'sleep 100' & sleep 100".to_string(),
+                ],
+            },
+            ..echo_hook("")
+        };
+
+        let token = CancelToken::new();
+        let token_clone = token.clone();
+
+        let handle = std::thread::spawn(move || {
+            hook.execute(&test_context(), &token_clone, None)
+        });
+
+        // Give the grandchild a moment to start
+        std::thread::sleep(Duration::from_millis(50));
+
+        let start = Instant::now();
+        token.cancel();
+        let _ = handle.join();
+
+        assert!(
+            start.elapsed().as_millis() < 500,
+            "process group kill took too long: {}ms",
+            start.elapsed().as_millis()
+        );
     }
 
     // =========================================================================
