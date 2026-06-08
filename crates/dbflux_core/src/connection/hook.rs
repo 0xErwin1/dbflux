@@ -1221,16 +1221,6 @@ fn terminate_process_group(child: &Child) {
 
     unsafe {
         let _ = kill(-pid, SIGTERM);
-    }
-
-    let start = Instant::now();
-    let grace = Duration::from_millis(300);
-
-    while start.elapsed() < grace {
-        std::thread::sleep(Duration::from_millis(25));
-    }
-
-    unsafe {
         let _ = kill(-pid, SIGKILL);
     }
 }
@@ -1799,6 +1789,54 @@ mod tests {
         };
 
         assert!(!result.is_success());
+    }
+
+    // =========================================================================
+    // PROC-1: cancellation latency
+    // =========================================================================
+
+    #[cfg(unix)]
+    #[test]
+    fn test_cancellation_latency() {
+        use std::time::Instant;
+
+        let hook = ConnectionHook {
+            kind: HookKind::Command {
+                command: "sleep".to_string(),
+                args: vec!["10".to_string()],
+            },
+            ..echo_hook("")
+        };
+
+        let token = CancelToken::new();
+        let token_clone = token.clone();
+
+        let handle = std::thread::spawn(move || {
+            hook.execute(&test_context(), &token_clone, None)
+        });
+
+        let start = Instant::now();
+        token.cancel();
+        let _ = handle.join();
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed.as_millis() < 150,
+            "cancellation took {}ms, expected <150ms",
+            elapsed.as_millis()
+        );
+    }
+
+    #[test]
+    fn test_normal_exit_unaffected() {
+        let hook = echo_hook("ok");
+        let result = hook
+            .execute(&test_context(), &CancelToken::new(), None)
+            .unwrap();
+
+        assert_eq!(result.exit_code, Some(0));
+        assert!(!result.detached);
+        assert!(!result.timed_out);
     }
 
     // =========================================================================
