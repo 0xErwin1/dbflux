@@ -1656,6 +1656,57 @@ fn plan_mongo_semantic_request(request: &SemanticRequest) -> Result<SemanticPlan
     }
 }
 
+/// Column definitions for the schema field-listing result returned by `describe_table`.
+///
+/// Extracted as a pure function so tests can assert `ColumnKind` values without a
+/// live MongoDB connection. Column order must match the row values built in `describe_table`.
+fn schema_listing_columns() -> Vec<ColumnMeta> {
+    vec![
+        ColumnMeta {
+            name: "field_name".to_string(),
+            type_name: "text".to_string(),
+            kind: ColumnKind::Text,
+            nullable: false,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "common_type".to_string(),
+            type_name: "text".to_string(),
+            kind: ColumnKind::Text,
+            nullable: false,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "occurrence_rate".to_string(),
+            type_name: "float".to_string(),
+            kind: ColumnKind::Float,
+            nullable: true,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "is_indexed".to_string(),
+            type_name: "bool".to_string(),
+            kind: ColumnKind::Unknown,
+            nullable: false,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "index_names".to_string(),
+            type_name: "text".to_string(),
+            kind: ColumnKind::Text,
+            nullable: true,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "nested_field_count".to_string(),
+            type_name: "int".to_string(),
+            kind: ColumnKind::Integer,
+            nullable: false,
+            is_primary_key: false,
+        },
+    ]
+}
+
 impl Connection for MongoConnection {
     fn metadata(&self) -> &DriverMetadata {
         &MONGODB_METADATA
@@ -2087,52 +2138,7 @@ impl Connection for MongoConnection {
             })
             .collect();
 
-        let columns = vec![
-            ColumnMeta {
-                name: "field_name".to_string(),
-                type_name: "text".to_string(),
-                kind: ColumnKind::Unknown,
-                nullable: false,
-                is_primary_key: false,
-            },
-            ColumnMeta {
-                name: "common_type".to_string(),
-                type_name: "text".to_string(),
-                kind: ColumnKind::Unknown,
-                nullable: false,
-                is_primary_key: false,
-            },
-            ColumnMeta {
-                name: "occurrence_rate".to_string(),
-                type_name: "float".to_string(),
-                kind: ColumnKind::Float,
-                nullable: true,
-                is_primary_key: false,
-            },
-            ColumnMeta {
-                name: "is_indexed".to_string(),
-                type_name: "bool".to_string(),
-                kind: ColumnKind::Unknown,
-                nullable: false,
-                is_primary_key: false,
-            },
-            ColumnMeta {
-                name: "index_names".to_string(),
-                type_name: "text".to_string(),
-                kind: ColumnKind::Unknown,
-                nullable: true,
-                is_primary_key: false,
-            },
-            ColumnMeta {
-                name: "nested_field_count".to_string(),
-                type_name: "int".to_string(),
-                kind: ColumnKind::Integer,
-                nullable: false,
-                is_primary_key: false,
-            },
-        ];
-
-        Ok(QueryResult::table(columns, rows, None, start.elapsed()))
+        Ok(QueryResult::table(schema_listing_columns(), rows, None, start.elapsed()))
     }
 
     fn view_details(
@@ -2746,7 +2752,7 @@ fn execute_mongo_query(
                 columns: vec![ColumnMeta {
                     name: "count".to_string(),
                     type_name: "Int64".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Integer,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -2788,7 +2794,7 @@ fn execute_mongo_query(
                 columns: vec![ColumnMeta {
                     name: "insertedCount".to_string(),
                     type_name: "Int64".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Integer,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -2820,14 +2826,14 @@ fn execute_mongo_query(
                     ColumnMeta {
                         name: "matchedCount".to_string(),
                         type_name: "Int64".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "modifiedCount".to_string(),
                         type_name: "Int64".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
@@ -2871,14 +2877,14 @@ fn execute_mongo_query(
                     ColumnMeta {
                         name: "matchedCount".to_string(),
                         type_name: "Int64".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "modifiedCount".to_string(),
                         type_name: "Int64".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
@@ -2911,7 +2917,7 @@ fn execute_mongo_query(
                 columns: vec![ColumnMeta {
                     name: "deletedCount".to_string(),
                     type_name: "Int64".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Integer,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -2932,7 +2938,7 @@ fn execute_mongo_query(
                 columns: vec![ColumnMeta {
                     name: "deletedCount".to_string(),
                     type_name: "Int64".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Integer,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -2964,14 +2970,14 @@ fn execute_mongo_query(
                     ColumnMeta {
                         name: "matchedCount".to_string(),
                         type_name: "Int64".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "modifiedCount".to_string(),
                         type_name: "Int64".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
@@ -3626,10 +3632,31 @@ mod tests {
     use super::*;
     use crate::query_parser::parse_query;
     use dbflux_core::{
-        CollectionBrowseRequest, CollectionCountRequest, CollectionRef, DatabaseCategory, DbDriver,
-        DbError, QueryLanguage, SemanticFilter, SemanticPlanKind, SemanticRequest, Value,
+        CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ColumnKind, DatabaseCategory,
+        DbDriver, DbError, QueryLanguage, SemanticFilter, SemanticPlanKind, SemanticRequest, Value,
         WhereOperator,
     };
+
+    #[test]
+    fn schema_listing_column_kinds() {
+        let columns = schema_listing_columns();
+
+        let find = |name: &str| {
+            columns
+                .iter()
+                .find(|c| c.name == name)
+                .unwrap_or_else(|| panic!("column '{name}' not found in schema_listing_columns"))
+        };
+
+        assert_eq!(find("field_name").kind, ColumnKind::Text);
+        assert_eq!(find("common_type").kind, ColumnKind::Text);
+        assert_eq!(find("occurrence_rate").kind, ColumnKind::Float);
+        assert_eq!(find("is_indexed").kind, ColumnKind::Unknown);
+        assert_eq!(find("index_names").kind, ColumnKind::Text);
+        assert_eq!(find("nested_field_count").kind, ColumnKind::Integer);
+
+        assert_eq!(columns.len(), 6, "column count must match describe_table output");
+    }
 
     #[test]
     fn build_config_requires_uri_in_uri_mode() {
