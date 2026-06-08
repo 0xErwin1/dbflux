@@ -33,6 +33,8 @@ fn kind_from_influx_type_name(s: &str) -> ColumnKind {
         "integer" | "int" => ColumnKind::Integer,
         "double" | "float" | "float64" | "unsignedLong" | "long" => ColumnKind::Float,
         "text" | "string" => ColumnKind::Text,
+        // No ColumnKind::Bool variant exists; booleans are intentionally excluded from charts.
+        "boolean" => ColumnKind::Unknown,
         _ => ColumnKind::Unknown,
     }
 }
@@ -397,5 +399,12 @@ mod tests {
     fn whitespace_only_body_returns_empty_result() {
         let result = parse_flux_csv("   \n\n  ").expect("parse must succeed");
         assert!(result.rows.is_empty());
+    }
+
+    #[test]
+    fn kind_from_influx_type_name_boolean_is_unknown() {
+        assert_eq!(kind_from_influx_type_name("boolean"), ColumnKind::Unknown);
+        assert_eq!(kind_from_influx_type_name("timestamp"), ColumnKind::Timestamp);
+        assert_eq!(kind_from_influx_type_name("double"), ColumnKind::Float);
     }
 }

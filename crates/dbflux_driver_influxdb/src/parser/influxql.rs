@@ -37,6 +37,8 @@ fn kind_from_influx_type_name(s: &str) -> ColumnKind {
         "integer" => ColumnKind::Integer,
         "double" | "float" | "float64" => ColumnKind::Float,
         "text" | "string" => ColumnKind::Text,
+        // No ColumnKind::Bool variant exists; booleans are intentionally excluded from charts.
+        "boolean" => ColumnKind::Unknown,
         _ => ColumnKind::Unknown,
     }
 }
@@ -489,5 +491,12 @@ mod tests {
             }
             other => panic!("expected QueryError, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn kind_from_influx_type_name_boolean_is_unknown() {
+        assert_eq!(kind_from_influx_type_name("boolean"), ColumnKind::Unknown);
+        assert_eq!(kind_from_influx_type_name("timestamp"), ColumnKind::Timestamp);
+        assert_eq!(kind_from_influx_type_name("double"), ColumnKind::Float);
     }
 }
