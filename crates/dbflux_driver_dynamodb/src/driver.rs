@@ -4327,9 +4327,9 @@ mod tests {
         assert_eq!(infer_field_kind(&[], "count"), ColumnKind::Unknown);
 
         // Polymorphic: both items share the same field "count". The first item
-        // holds a Null attribute (which maps to Unknown), the second holds an N
-        // integer. The scanner must skip the Unknown-mapping Null and return
-        // Integer from the second item, proving the skip-Unknown path.
+        // holds a Null attribute (which matches none of the known-kind checks
+        // and is skipped), the second holds an N integer. The scanner must skip
+        // the Null and return Integer from the second item, proving the skip path.
         let poly_null_item: HashMap<String, AttributeValue> =
             [("count".to_string(), AttributeValue::Null(true))]
                 .into_iter()

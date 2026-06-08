@@ -3224,8 +3224,8 @@ fn execute_db_operation(
 }
 
 /// Map a single BSON value to a `ColumnKind`. Returns `Unknown` for types
-/// that have no useful chart representation (arrays, documents, booleans,
-/// object IDs, etc.).
+/// that have no useful chart representation (arrays, documents, object IDs,
+/// dates/timestamps, etc.).
 fn bson_to_column_kind(value: &Bson) -> ColumnKind {
     match value {
         Bson::Int32(_) | Bson::Int64(_) => ColumnKind::Integer,
