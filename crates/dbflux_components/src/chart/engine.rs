@@ -2440,8 +2440,10 @@ fn extract_f64(value: &Value, is_time: bool) -> Option<f64> {
             }
         }
         // Temporal values are only meaningful as epoch-ms on a time axis; gated
-        // on is_time (like the Text arm) so a datetime mistakenly placed on a
-        // value axis is dropped rather than blowing the scale up to ~1e12.
+        // on is_time (like the Text arm). Defensive: the Y pickers never offer
+        // Timestamp columns, so this only drops a non-Timestamp column that
+        // happens to carry a datetime value, instead of blowing the value-axis
+        // scale up to ~1e12.
         Value::DateTime(dt) if is_time => Some(dt.timestamp_millis() as f64),
         // Date maps to midnight UTC for a consistent, unambiguous epoch-ms value.
         Value::Date(d) if is_time => d
