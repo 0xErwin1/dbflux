@@ -17,11 +17,14 @@ All notable changes to DBFlux will be documented in this file.
   `Float`; `S` → `Text`; `Bool` → `Integer`; anything else → `Unknown`).
   MongoDB document and query results infer column kinds from BSON value types
   (Int32/Int64 → Integer, Double/Decimal128 → Float, Boolean → Integer,
-  String → Text); date and timestamp columns are left `Unknown` because the
-  chart engine cannot yet plot `Value::DateTime` or the textual
-  `Timestamp(…)` representation. InfluxDB Flux and InfluxQL kind mappers
-  classify `boolean` as `Integer`. Across all drivers, `Value::Bool` now
-  plots as 0/1, matching MSSQL BIT behaviour.
+  String → Text, DateTime → Timestamp); BSON `Timestamp` (oplog logical
+  clock) stays `Unknown` because it carries no wall-clock meaning. InfluxDB
+  Flux and InfluxQL kind mappers classify `boolean` as `Integer`. Across all
+  drivers, `Value::Bool` now plots as 0/1, matching MSSQL BIT behaviour. The
+  chart engine now extracts `Value::DateTime` and `Value::Date` as
+  epoch-milliseconds (DateTime unconditionally; Date as midnight UTC), so
+  datetime/date columns from any driver can drive a time axis. `Value::Time`
+  has no absolute epoch and remains unplottable.
 
 ## [0.6.0] - 2026-06-04
 
