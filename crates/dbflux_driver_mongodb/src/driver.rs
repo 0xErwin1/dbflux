@@ -3224,17 +3224,25 @@ fn execute_db_operation(
 }
 
 /// Map a single BSON value to a `ColumnKind`. Returns `Unknown` for types
-/// that have no useful chart representation (arrays, documents, object IDs,
-/// dates/timestamps, etc.).
+/// that have no useful chart representation (arrays, documents, object IDs, etc.).
+///
+/// `Bson::DateTime` maps to `ColumnKind::Timestamp` because `bson_to_value`
+/// converts it to `Value::DateTime`, which the chart engine extracts as epoch-ms.
+/// `Bson::Timestamp` is an oplog logical clock emitted as `Value::Text`; it
+/// carries no wall-clock meaning and remains `Unknown`.
 fn bson_to_column_kind(value: &Bson) -> ColumnKind {
     match value {
         Bson::Int32(_) | Bson::Int64(_) => ColumnKind::Integer,
         Bson::Double(_) | Bson::Decimal128(_) => ColumnKind::Float,
         // Value::Bool plots as 0/1 in the chart engine (like MSSQL BIT).
         Bson::Boolean(_) => ColumnKind::Integer,
-        // DateTime is emitted as Value::DateTime and Timestamp as Value::Text;
-        // neither is extractable by the chart engine, so leave both Unknown.
-        Bson::DateTime(_) | Bson::Timestamp(_) => ColumnKind::Unknown,
+        // Bson::DateTime is converted to Value::DateTime by bson_to_value and
+        // can now be plotted on a time axis as epoch-ms.
+        Bson::DateTime(_) => ColumnKind::Timestamp,
+        // Bson::Timestamp is an oplog logical clock, not a wall-clock instant.
+        // bson_to_value renders it as Value::Text("Timestamp(t, i)"), which is
+        // not plottable on a time axis.
+        Bson::Timestamp(_) => ColumnKind::Unknown,
         Bson::String(_) => ColumnKind::Text,
         _ => ColumnKind::Unknown,
     }
@@ -4305,6 +4313,7 @@ mod tests {
             "active": Bson::Boolean(true),
             "id": Bson::ObjectId(ObjectId::new()),
             "created_at": Bson::DateTime(bson::DateTime::now()),
+            "oplog_ts": Bson::Timestamp(bson::Timestamp { time: 1, increment: 0 }),
         }];
 
         let result = documents_to_result(docs).expect("should succeed");
@@ -4324,9 +4333,12 @@ mod tests {
         // Value::Bool plots as 0/1 in the chart engine (like MSSQL BIT).
         assert_eq!(kind_of("active"), ColumnKind::Integer);
         assert_eq!(kind_of("id"), ColumnKind::Unknown);
-        // DateTime is emitted as Value::DateTime which the chart engine cannot
-        // extract, so it must be Unknown rather than Timestamp.
-        assert_eq!(kind_of("created_at"), ColumnKind::Unknown);
+        // Bson::DateTime maps to Value::DateTime, which the chart engine now
+        // extracts as epoch-ms, so it must be Timestamp.
+        assert_eq!(kind_of("created_at"), ColumnKind::Timestamp);
+        // Bson::Timestamp is an oplog logical clock emitted as Value::Text;
+        // it has no wall-clock meaning and must remain Unknown.
+        assert_eq!(kind_of("oplog_ts"), ColumnKind::Unknown);
     }
 
     #[test]
