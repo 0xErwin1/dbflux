@@ -1412,7 +1412,9 @@ fn tiberius_value_to_value(row: &tiberius::Row, idx: usize) -> Value {
 ///
 /// Variants whose semantic category isn't representable (`Guid`, `Xml`, `Udt`,
 /// `BigVarBin`/`BigBinary`/`Image`, `SSVariant`, `Null`) map to `Unknown` so
-/// chart auto-detect excludes them rather than treating them as text.
+/// chart auto-detect excludes them rather than treating them as text. `TIME`
+/// also maps to `Unknown`: it yields a wall-clock `Value::Time` the chart
+/// engine cannot place on a time axis.
 fn tiberius_column_to_kind(column_type: tiberius::ColumnType) -> dbflux_core::ColumnKind {
     use dbflux_core::ColumnKind;
     use tiberius::ColumnType;
@@ -1436,14 +1438,7 @@ fn tiberius_column_to_kind(column_type: tiberius::ColumnType) -> dbflux_core::Co
         | ColumnType::Datetimen
         | ColumnType::Datetime2
         | ColumnType::Daten
-        | ColumnType::Timen
         | ColumnType::DatetimeOffsetn => ColumnKind::Timestamp,
-        ColumnType::BigVarChar
-        | ColumnType::BigChar
-        | ColumnType::NVarchar
-        | ColumnType::NChar
-        | ColumnType::Text
-        | ColumnType::NText => ColumnKind::Text,
         ColumnType::Null
         | ColumnType::Guid
         | ColumnType::Xml
@@ -1451,7 +1446,17 @@ fn tiberius_column_to_kind(column_type: tiberius::ColumnType) -> dbflux_core::Co
         | ColumnType::BigVarBin
         | ColumnType::BigBinary
         | ColumnType::Image
-        | ColumnType::SSVariant => ColumnKind::Unknown,
+        | ColumnType::SSVariant
+        // TIME yields Value::Time (a wall-clock time-of-day with no absolute
+        // instant); the chart engine cannot plot it on a time axis, so it must
+        // not advertise Timestamp.
+        | ColumnType::Timen => ColumnKind::Unknown,
+        ColumnType::BigVarChar
+        | ColumnType::BigChar
+        | ColumnType::NVarchar
+        | ColumnType::NChar
+        | ColumnType::Text
+        | ColumnType::NText => ColumnKind::Text,
     }
 }
 
@@ -3646,6 +3651,33 @@ fn format_mssql_uri_error(e: &tiberius::error::Error, uri: &str) -> DbError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn time_type_is_not_classified_as_timestamp() {
+        use dbflux_core::ColumnKind;
+        use tiberius::ColumnType;
+
+        // TIME emits Value::Time, which the chart engine cannot place on a time
+        // axis (no absolute instant), so it must not advertise Timestamp.
+        assert_eq!(
+            tiberius_column_to_kind(ColumnType::Timen),
+            ColumnKind::Unknown
+        );
+
+        // DATE (Value::Date) and the datetime types stay Timestamp — those plot.
+        assert_eq!(
+            tiberius_column_to_kind(ColumnType::Daten),
+            ColumnKind::Timestamp
+        );
+        assert_eq!(
+            tiberius_column_to_kind(ColumnType::Datetime2),
+            ColumnKind::Timestamp
+        );
+        assert_eq!(
+            tiberius_column_to_kind(ColumnType::DatetimeOffsetn),
+            ColumnKind::Timestamp
+        );
+    }
 
     #[test]
     fn mssql_type_to_routine_kind_mapping() {

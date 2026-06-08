@@ -22,9 +22,11 @@ All notable changes to DBFlux will be documented in this file.
   Flux and InfluxQL kind mappers classify `boolean` as `Integer`. Across all
   drivers, `Value::Bool` now plots as 0/1, matching MSSQL BIT behaviour. The
   chart engine now extracts `Value::DateTime` and `Value::Date` as
-  epoch-milliseconds (DateTime unconditionally; Date as midnight UTC), so
-  datetime/date columns from any driver can drive a time axis. `Value::Time`
-  has no absolute epoch and remains unplottable.
+  epoch-milliseconds on a time axis (Date as midnight UTC), so datetime/date
+  columns from any driver can drive a time axis. `Value::Time` has no absolute
+  epoch and remains unplottable, so SQL Server `TIME` columns are now
+  classified `Unknown` instead of `Timestamp` (they would otherwise be offered
+  as an empty time axis).
 
 ## [0.6.0] - 2026-06-04
 
