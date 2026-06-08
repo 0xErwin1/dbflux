@@ -987,17 +987,14 @@ impl dbflux_core::LanguageService for CloudWatchLanguageService {
 
 /// Classify a CloudWatch Insights column name to a semantic `ColumnKind`.
 ///
-/// CloudWatch Insights uses known annotation fields (@timestamp, @ingestionTime)
-/// and dynamic stats fields. This function maps the driver's own canonical field
-/// names — not a generic heuristic.
+/// Known annotation fields map to Timestamp or Text. All other names return
+/// Unknown because CWLI constructs field values as `Value::Text`; the stats/metrics
+/// code path sets Float directly on its own columns and is unaffected by this function.
 fn cloudwatch_column_kind(name: &str) -> ColumnKind {
     match name {
         "@timestamp" | "@ingestionTime" => ColumnKind::Timestamp,
         "@message" | "@logStream" | "@log" => ColumnKind::Text,
-        _ => {
-            // stats query numeric fields: treat as Float (safest choice for chart)
-            ColumnKind::Float
-        }
+        _ => ColumnKind::Unknown,
     }
 }
 
@@ -1567,7 +1564,7 @@ fn fetch_log_stream_page(
 mod tests {
     use super::{
         CLOUDWATCH_FORM, CLOUDWATCH_METADATA, CloudWatchCollectionFilter, CloudWatchDriver,
-        metric_data_output_to_multi_series_result,
+        cloudwatch_column_kind, metric_data_output_to_multi_series_result,
     };
     use aws_sdk_cloudwatch::operation::get_metric_data::GetMetricDataOutput;
     use aws_sdk_cloudwatch::primitives::DateTime;
@@ -1575,6 +1572,18 @@ mod tests {
     use dbflux_core::{
         ColumnKind, DbConfig, DbDriver, DriverCapabilities, FormFieldKind, MetricQuerySeries, Value,
     };
+
+    #[test]
+    fn cloudwatch_column_kind_unknown_default() {
+        assert_eq!(cloudwatch_column_kind("@timestamp"), ColumnKind::Timestamp);
+        assert_eq!(cloudwatch_column_kind("@ingestionTime"), ColumnKind::Timestamp);
+        assert_eq!(cloudwatch_column_kind("@message"), ColumnKind::Text);
+        assert_eq!(cloudwatch_column_kind("@logStream"), ColumnKind::Text);
+        assert_eq!(cloudwatch_column_kind("@log"), ColumnKind::Text);
+        assert_eq!(cloudwatch_column_kind("avg_latency"), ColumnKind::Unknown);
+        assert_eq!(cloudwatch_column_kind("p99"), ColumnKind::Unknown);
+        assert_eq!(cloudwatch_column_kind("count"), ColumnKind::Unknown);
+    }
 
     fn series(namespace: &str, metric_name: &str) -> MetricQuerySeries {
         MetricQuerySeries {
