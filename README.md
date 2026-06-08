@@ -102,6 +102,15 @@ nix run    github:0xErwin1/dbflux#dbflux-source
 nix build  github:0xErwin1/dbflux#dbflux-source
 ```
 
+Nightly builds track `main` and install side by side with stable (distinct app id, icon, and `dbflux-nightly.db` database). Consume them from the `nightly` ref:
+
+```bash
+nix run github:0xErwin1/dbflux/nightly#dbflux-nightly
+nix profile install github:0xErwin1/dbflux/nightly#dbflux-nightly
+```
+
+See [docs/RELEASE.md](docs/RELEASE.md) for the channel model.
+
 NixOS / nix-darwin via overlay:
 
 ```nix

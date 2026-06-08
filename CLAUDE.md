@@ -331,6 +331,7 @@ Key abstractions for UI adaptation:
 - `CollectionChildInfo`: Declares driver-owned child sources that appear in the sidebar without the UI inferring them from driver-specific conventions
 - `EventStreamTarget`: Lets the workspace/audit viewer open driver-backed event streams without embedding driver-specific routing
 - `SourceContextSpec`: Lets drivers declare extra query-context controls while the UI stays generic
+- `FormFieldKind::AuthProfileRef { provider_id: Option<String> }`: Drives the connection-manager auth-profile dropdown. Drivers that need the picker declare a `profile` field as `AuthProfileRef { provider_id: None }`; the UI renders and field-syncs this arm generically instead of matching driver ids (DEC-1). A `None` filter enumerates built-in and external RPC-backed providers alike.
 
 ### Generic Deduplication Patterns
 
@@ -511,6 +512,13 @@ Full reference: `docs/DASHBOARDS.md`.
 - `apply_window_options()` sets min size so X11 WMs emit `WM_NORMAL_HINTS`
 
 A `pub use dbflux_ui_base::platform::*` shim remains at `crates/dbflux_ui/src/platform.rs` for internal compatibility.
+
+### Release Channels & Branding
+
+- `ReleaseChannel` (`crates/dbflux_core/src/release_channel.rs`) derives the channel (`Stable` / `Rc` / `Nightly`) once from the compiled `CARGO_PKG_VERSION`. CI stamps the version before building, so the channel is baked into the binary.
+- Read channel identity through the accessors — `app_id()`, `display_name()`, `db_file_name()` — never branch on the raw version string and never hardcode `dbflux` / `dbflux-nightly` identifiers. Nightly returns a distinct `app_id` and DB file so it coexists with stable; `Rc` shares stable's identity.
+- The channel-aware DB path lives in `crates/dbflux_storage/src/paths.rs` (`dbflux_db_path`); nightly can opt into the stable DB via `set_nightly_shares_stable_db` / `nightly_shares_stable_db`.
+- Brand assets live under `resources/branding/{stable,nightly}/` (served per channel in `crates/dbflux_ui/src/assets.rs`). Packaging and Nix files substitute channel placeholders. The release/nightly flow is documented in `docs/RELEASE.md`.
 
 ## Common Pitfalls
 
