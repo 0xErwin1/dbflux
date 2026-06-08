@@ -382,7 +382,7 @@ impl Connection for CloudWatchConnection {
 
                             let value = field
                                 .value()
-                                .map(|value| Value::Text(value.to_string()))
+                                .map(|raw| cwli_field_value(&field_name, raw))
                                 .unwrap_or(Value::Null);
                             row_map.insert(field_name, value);
                         }
@@ -395,7 +395,7 @@ impl Connection for CloudWatchConnection {
                         .map(|name| ColumnMeta {
                             name: name.clone(),
                             type_name: "text".to_string(),
-                            kind: cloudwatch_column_kind(name),
+                            kind: cwli_column_kind(name, &row_maps),
                             nullable: true,
                             is_primary_key: false,
                         })
@@ -985,20 +985,80 @@ impl dbflux_core::LanguageService for CloudWatchLanguageService {
     }
 }
 
-/// Classify a CloudWatch Insights column name to a semantic `ColumnKind`.
-///
-/// CloudWatch Insights uses known annotation fields (@timestamp, @ingestionTime)
-/// and dynamic stats fields. This function maps the driver's own canonical field
-/// names — not a generic heuristic.
+/// Classify a CloudWatch Insights column name to a semantic `ColumnKind` using
+/// name-based rules only. Known annotation fields are authoritative: timestamp
+/// fields map to Timestamp, message/stream/log fields map to Text. All other
+/// names return Unknown; callers that have row data should use
+/// `cwli_column_kind` instead.
 fn cloudwatch_column_kind(name: &str) -> ColumnKind {
     match name {
         "@timestamp" | "@ingestionTime" => ColumnKind::Timestamp,
         "@message" | "@logStream" | "@log" => ColumnKind::Text,
+        _ => ColumnKind::Unknown,
+    }
+}
+
+/// Produce a typed `Value` for a CWLI result field.
+///
+/// `@timestamp` and `@ingestionTime` arrive from CWLI in the format
+/// `"YYYY-MM-DD HH:MM:SS.mmm"` (space separator, no timezone, UTC). They are
+/// normalised to RFC3339 (`"...T...+00:00"`) so the chart engine can parse
+/// them as time-axis values. On parse failure the raw string is preserved
+/// unchanged.
+///
+/// `@message`, `@logStream`, and `@log` stay as `Value::Text`. For all other
+/// fields the raw string is parsed: integer strings become `Value::Int`,
+/// finite floating-point strings become `Value::Float`, and everything else
+/// stays `Value::Text`.
+fn cwli_field_value(name: &str, raw: &str) -> Value {
+    use dbflux_core::chrono::{NaiveDateTime, TimeZone, Utc};
+
+    match name {
+        "@timestamp" | "@ingestionTime" => {
+            let parsed = NaiveDateTime::parse_from_str(raw, "%Y-%m-%d %H:%M:%S%.3f")
+                .or_else(|_| NaiveDateTime::parse_from_str(raw, "%Y-%m-%d %H:%M:%S"));
+            match parsed {
+                Ok(naive) => Value::Text(Utc.from_utc_datetime(&naive).to_rfc3339()),
+                Err(_) => Value::Text(raw.to_string()),
+            }
+        }
+        "@message" | "@logStream" | "@log" => Value::Text(raw.to_string()),
         _ => {
-            // stats query numeric fields: treat as Float (safest choice for chart)
-            ColumnKind::Float
+            if let Ok(i) = raw.parse::<i64>() {
+                return Value::Int(i);
+            }
+            if let Ok(f) = raw.parse::<f64>()
+                && f.is_finite()
+            {
+                return Value::Float(f);
+            }
+            Value::Text(raw.to_string())
         }
     }
+}
+
+/// Determine the `ColumnKind` for a CWLI result column using name-based rules
+/// first, falling back to value sampling across `row_maps` for unknown names.
+///
+/// Because `cwli_field_value` already emits typed values, this function
+/// scans rows for the first `Value::Int` (→ Integer) or `Value::Float` (→ Float),
+/// skipping `Null` and `Text` samples. Returns `Unknown` only when no numeric
+/// value is found across all rows.
+fn cwli_column_kind(name: &str, row_maps: &[HashMap<String, Value>]) -> ColumnKind {
+    let name_kind = cloudwatch_column_kind(name);
+    if name_kind != ColumnKind::Unknown {
+        return name_kind;
+    }
+
+    for row in row_maps {
+        match row.get(name) {
+            Some(Value::Int(_)) => return ColumnKind::Integer,
+            Some(Value::Float(_)) => return ColumnKind::Float,
+            _ => continue,
+        }
+    }
+
+    ColumnKind::Unknown
 }
 
 fn cloudwatch_query_modes() -> Vec<SourceQueryMode> {
@@ -1567,6 +1627,7 @@ fn fetch_log_stream_page(
 mod tests {
     use super::{
         CLOUDWATCH_FORM, CLOUDWATCH_METADATA, CloudWatchCollectionFilter, CloudWatchDriver,
+        cloudwatch_column_kind, cwli_column_kind, cwli_field_value,
         metric_data_output_to_multi_series_result,
     };
     use aws_sdk_cloudwatch::operation::get_metric_data::GetMetricDataOutput;
@@ -1575,6 +1636,171 @@ mod tests {
     use dbflux_core::{
         ColumnKind, DbConfig, DbDriver, DriverCapabilities, FormFieldKind, MetricQuerySeries, Value,
     };
+    use std::collections::HashMap;
+
+    #[test]
+    fn cloudwatch_column_kind_name_based() {
+        assert_eq!(cloudwatch_column_kind("@timestamp"), ColumnKind::Timestamp);
+        assert_eq!(
+            cloudwatch_column_kind("@ingestionTime"),
+            ColumnKind::Timestamp
+        );
+        assert_eq!(cloudwatch_column_kind("@message"), ColumnKind::Text);
+        assert_eq!(cloudwatch_column_kind("@logStream"), ColumnKind::Text);
+        assert_eq!(cloudwatch_column_kind("@log"), ColumnKind::Text);
+        assert_eq!(cloudwatch_column_kind("avg_latency"), ColumnKind::Unknown);
+        assert_eq!(cloudwatch_column_kind("p99"), ColumnKind::Unknown);
+        assert_eq!(cloudwatch_column_kind("count"), ColumnKind::Unknown);
+    }
+
+    fn typed_row_maps_for(field: &str, typed_values: &[Value]) -> Vec<HashMap<String, Value>> {
+        typed_values
+            .iter()
+            .map(|v| {
+                let mut m = HashMap::new();
+                m.insert(field.to_string(), v.clone());
+                m
+            })
+            .collect()
+    }
+
+    #[test]
+    fn cwli_field_value_typed_output() {
+        assert_eq!(cwli_field_value("count", "123"), Value::Int(123));
+        assert_eq!(cwli_field_value("latency", "1.5"), Value::Float(1.5));
+        assert_eq!(
+            cwli_field_value("errorCode", "BadRequest"),
+            Value::Text("BadRequest".to_string())
+        );
+
+        // Annotation names always stay Text regardless of numeric content.
+        assert_eq!(
+            cwli_field_value("@timestamp", "1234567890"),
+            Value::Text("1234567890".to_string())
+        );
+        assert_eq!(
+            cwli_field_value("@message", "42"),
+            Value::Text("42".to_string())
+        );
+
+        // Non-finite floats must not produce Value::Float.
+        assert_eq!(
+            cwli_field_value("ratio", "NaN"),
+            Value::Text("NaN".to_string())
+        );
+        assert_eq!(
+            cwli_field_value("ratio", "inf"),
+            Value::Text("inf".to_string())
+        );
+        assert_eq!(
+            cwli_field_value("ratio", "-inf"),
+            Value::Text("-inf".to_string())
+        );
+    }
+
+    #[test]
+    fn cwli_field_value_timestamp_to_rfc3339() {
+        use dbflux_core::chrono::DateTime;
+
+        // CWLI format with milliseconds → must round-trip through parse_from_rfc3339.
+        let v = cwli_field_value("@timestamp", "2023-01-15 12:34:56.789");
+        match &v {
+            Value::Text(s) => {
+                DateTime::parse_from_rfc3339(s)
+                    .unwrap_or_else(|e| panic!("RFC3339 parse failed: {e} — got: {s}"));
+            }
+            other => panic!("expected Value::Text, got {other:?}"),
+        }
+
+        // Same for @ingestionTime.
+        let v = cwli_field_value("@ingestionTime", "2023-01-15 12:34:56.789");
+        match &v {
+            Value::Text(s) => {
+                DateTime::parse_from_rfc3339(s)
+                    .unwrap_or_else(|e| panic!("RFC3339 parse failed: {e} — got: {s}"));
+            }
+            other => panic!("expected Value::Text, got {other:?}"),
+        }
+
+        // Without milliseconds must also parse as RFC3339.
+        let v = cwli_field_value("@timestamp", "2023-01-15 12:34:56");
+        match &v {
+            Value::Text(s) => {
+                DateTime::parse_from_rfc3339(s)
+                    .unwrap_or_else(|e| panic!("RFC3339 parse failed: {e} — got: {s}"));
+            }
+            other => panic!("expected Value::Text, got {other:?}"),
+        }
+
+        // Unparseable raw value falls back to unchanged raw text.
+        let raw = "not-a-timestamp";
+        assert_eq!(
+            cwli_field_value("@timestamp", raw),
+            Value::Text(raw.to_string())
+        );
+    }
+
+    #[test]
+    fn cwli_column_kind_name_authoritative() {
+        let empty: Vec<HashMap<String, Value>> = vec![];
+        assert_eq!(
+            cwli_column_kind("@timestamp", &empty),
+            ColumnKind::Timestamp
+        );
+        assert_eq!(cwli_column_kind("@message", &empty), ColumnKind::Text);
+    }
+
+    #[test]
+    fn cwli_column_kind_value_based_numeric() {
+        let int_rows = typed_row_maps_for("count", &[Value::Int(123), Value::Int(456)]);
+        assert_eq!(cwli_column_kind("count", &int_rows), ColumnKind::Integer);
+
+        let float_rows = typed_row_maps_for("latency", &[Value::Float(1.5), Value::Float(2.3)]);
+        assert_eq!(cwli_column_kind("latency", &float_rows), ColumnKind::Float);
+
+        let string_rows = typed_row_maps_for(
+            "errorCode",
+            &[
+                Value::Text("500".to_string()),
+                Value::Text("BadRequest".to_string()),
+            ],
+        );
+        assert_eq!(
+            cwli_column_kind("errorCode", &string_rows),
+            ColumnKind::Unknown
+        );
+    }
+
+    #[test]
+    fn cwli_column_kind_empty_or_missing_values() {
+        let empty: Vec<HashMap<String, Value>> = vec![];
+        assert_eq!(cwli_column_kind("count", &empty), ColumnKind::Unknown);
+
+        let null_rows: Vec<HashMap<String, Value>> = vec![{
+            let mut m = HashMap::new();
+            m.insert("count".to_string(), Value::Null);
+            m
+        }];
+        assert_eq!(cwli_column_kind("count", &null_rows), ColumnKind::Unknown);
+    }
+
+    #[test]
+    fn cwli_column_kind_skips_text_to_find_numeric() {
+        // Text samples are skipped; a later Int sample resolves Integer.
+        let rows = typed_row_maps_for("field", &[Value::Text("x".to_string()), Value::Int(42)]);
+        assert_eq!(cwli_column_kind("field", &rows), ColumnKind::Integer);
+
+        // Null is skipped; a later Float sample resolves Float.
+        let rows = typed_row_maps_for("field", &[Value::Null, Value::Float(1.5)]);
+        assert_eq!(cwli_column_kind("field", &rows), ColumnKind::Float);
+
+        // All Text samples → Unknown (no numeric found).
+        let rows = typed_row_maps_for(
+            "field",
+            &[Value::Text("a".to_string()), Value::Text("b".to_string())],
+        );
+        assert_eq!(cwli_column_kind("field", &rows), ColumnKind::Unknown);
+    }
 
     fn series(namespace: &str, metric_name: &str) -> MetricQuerySeries {
         MetricQuerySeries {
