@@ -8,19 +8,20 @@ All notable changes to DBFlux will be documented in this file.
 
 * **Chart auto-detection across four drivers (#204)** — Drivers now assign
   `ColumnKind` honestly so the chart engine includes genuine numeric columns
-  and excludes non-plottable ones. CloudWatch CWL Insights numeric fields are
-  now emitted as typed `Value::Int` or `Value::Float` (parsed from the raw
-  string at result-construction time), making them genuinely chart-able;
-  non-numeric and annotation fields stay `Value::Text` / `Unknown`. DynamoDB
-  infers column kind from `AttributeValue` (`N` → `Integer` when the string
-  parses as `i64`, else `Float`; `S` → `Text`; anything else → `Unknown`),
-  making numeric scans chart-able. MongoDB document and query results infer
-  column kinds from BSON value types (Int32/Int64 → Integer,
-  Double/Decimal128 → Float, String → Text); date and timestamp columns are
-  left `Unknown` because the chart engine cannot yet plot `Value::DateTime`
-  or the textual `Timestamp(…)` representation. InfluxDB Flux and InfluxQL
-  kind mappers gain an explicit `boolean → Unknown` arm. No `ColumnKind::Bool`
-  variant is introduced; the chart engine and UI remain driver-agnostic.
+  and excludes non-plottable ones. CloudWatch CWL Insights `@timestamp` and
+  `@ingestionTime` values are normalised from CWLI format (`YYYY-MM-DD
+  HH:MM:SS.mmm`, UTC) to RFC3339 so the time axis can parse them; the kind
+  scanner now skips `Text` samples and keeps scanning for a numeric value,
+  so mixed-type columns resolve correctly. DynamoDB infers column kind from
+  `AttributeValue` (`N` → `Integer` when the string parses as `i64`, else
+  `Float`; `S` → `Text`; `Bool` → `Integer`; anything else → `Unknown`).
+  MongoDB document and query results infer column kinds from BSON value types
+  (Int32/Int64 → Integer, Double/Decimal128 → Float, Boolean → Integer,
+  String → Text); date and timestamp columns are left `Unknown` because the
+  chart engine cannot yet plot `Value::DateTime` or the textual
+  `Timestamp(…)` representation. InfluxDB Flux and InfluxQL kind mappers
+  classify `boolean` as `Integer`. Across all drivers, `Value::Bool` now
+  plots as 0/1, matching MSSQL BIT behaviour.
 
 ## [0.6.0] - 2026-06-04
 
