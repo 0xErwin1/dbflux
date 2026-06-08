@@ -222,6 +222,8 @@ pub struct ConnectionHook {
     pub env: HashMap<String, String>,
     #[serde(default = "default_inherit_env")]
     pub inherit_env: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_denylist: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
     #[serde(default)]
@@ -256,6 +258,9 @@ impl<'de> Deserialize<'de> for ConnectionHook {
         let inherit_env = take_field(&mut object, "inherit_env")
             .map_err(de::Error::custom)?
             .unwrap_or_else(default_inherit_env);
+        let env_denylist = take_field(&mut object, "env_denylist")
+            .map_err(de::Error::custom)?
+            .unwrap_or_default();
         let timeout_ms = take_field(&mut object, "timeout_ms").map_err(de::Error::custom)?;
         let execution_mode = take_field(&mut object, "execution_mode")
             .map_err(de::Error::custom)?
@@ -292,6 +297,7 @@ impl<'de> Deserialize<'de> for ConnectionHook {
             cwd,
             env,
             inherit_env,
+            env_denylist,
             timeout_ms,
             execution_mode,
             ready_signal,
@@ -306,6 +312,22 @@ fn default_enabled() -> bool {
 
 fn default_inherit_env() -> bool {
     true
+}
+
+/// Returns true if a parent-environment key should be stripped before passing to a child process.
+///
+/// Built-in patterns strip secrets, tokens, passwords, API keys, and all AWS_ vars.
+/// Denylist entries are matched case-insensitively.
+fn is_denied_env_key(key: &str, denylist: &[String]) -> bool {
+    let upper = key.to_ascii_uppercase();
+    const PATTERNS: [&str; 4] = ["SECRET", "TOKEN", "PASSWORD", "_KEY"];
+    if PATTERNS.iter().any(|p| upper.contains(p)) {
+        return true;
+    }
+    if upper.starts_with("AWS_") {
+        return true;
+    }
+    denylist.iter().any(|d| d.eq_ignore_ascii_case(key))
 }
 
 fn default_true() -> bool {
@@ -516,6 +538,7 @@ pub struct HookResult {
     pub stdout: String,
     pub stderr: String,
     pub timed_out: bool,
+    pub detached: bool,
     pub warnings: Vec<String>,
 }
 
@@ -656,6 +679,7 @@ impl OutputCollector {
             stdout: self.stdout,
             stderr: self.stderr,
             timed_out,
+            detached: false,
             warnings: Vec::new(),
         }
     }
@@ -663,7 +687,7 @@ impl OutputCollector {
 
 impl HookResult {
     pub fn is_success(&self) -> bool {
-        !self.timed_out && self.exit_code == Some(0)
+        !self.timed_out && !self.detached && self.exit_code == Some(0)
     }
 }
 
@@ -938,11 +962,12 @@ impl ConnectionHook {
             .map_err(|_| "Failed to register detached hook process".to_string())?;
 
         Ok(HookResult {
-            exit_code: Some(0),
+            exit_code: None,
             stdout: String::new(),
             stderr: String::new(),
             timed_out: false,
-            warnings: Vec::new(),
+            detached: true,
+            warnings: vec!["detached: outcome not monitored".to_string()],
         })
     }
 
@@ -964,10 +989,11 @@ impl ConnectionHook {
             command.current_dir(cwd);
         }
 
+        command.env_clear();
+
         if self.inherit_env {
-            command.envs(std::env::vars());
-        } else {
-            command.env_clear();
+            command
+                .envs(std::env::vars().filter(|(k, _)| !is_denied_env_key(k, &self.env_denylist)));
         }
 
         command.envs(self.context_env(context));
@@ -1199,8 +1225,18 @@ fn terminate_child(child: &mut Child) -> Result<(), ProcessExecutionError> {
         .map_err(|error| ProcessExecutionError::Wait(error.to_string()))
 }
 
+/// Terminates the process group of the given child process.
+///
+/// On Unix, sends SIGTERM to the entire process group identified by the child's PID
+/// (using negative-PID kill semantics), then waits up to ~50 ms for the group to exit
+/// cleanly. If the group has not exited after the grace window, SIGKILL is sent. The
+/// process group is set via `process_group(0)` at spawn time, so child-spawned
+/// grandchildren share the group and are also targeted.
+///
+/// On Windows, only the direct child process is killed; grandchildren are orphaned
+/// because no Job Object is used to bind them to the parent's lifetime.
 #[cfg(unix)]
-fn terminate_process_group(child: &Child) {
+fn terminate_process_group(child: &mut Child) {
     unsafe extern "C" {
         fn kill(pid: i32, sig: i32) -> i32;
     }
@@ -1220,15 +1256,12 @@ fn terminate_process_group(child: &Child) {
         let _ = kill(-pid, SIGTERM);
     }
 
-    let start = Instant::now();
-    let grace = Duration::from_millis(300);
+    std::thread::sleep(std::time::Duration::from_millis(50));
 
-    while start.elapsed() < grace {
-        std::thread::sleep(Duration::from_millis(25));
-    }
-
-    unsafe {
-        let _ = kill(-pid, SIGKILL);
+    if child.try_wait().ok().flatten().is_none() {
+        unsafe {
+            let _ = kill(-pid, SIGKILL);
+        }
     }
 }
 
@@ -1356,6 +1389,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             inherit_env: true,
+            env_denylist: Vec::new(),
             timeout_ms: None,
             execution_mode: HookExecutionMode::Blocking,
             ready_signal: None,
@@ -1373,6 +1407,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             inherit_env: true,
+            env_denylist: Vec::new(),
             timeout_ms: None,
             execution_mode: HookExecutionMode::Blocking,
             ready_signal: None,
@@ -1438,6 +1473,7 @@ mod tests {
             cwd: Some(PathBuf::from("/tmp")),
             env: HashMap::from([("PG_COLOR".to_string(), "always".to_string())]),
             inherit_env: false,
+            env_denylist: Vec::new(),
             timeout_ms: Some(5000),
             execution_mode: HookExecutionMode::Blocking,
             ready_signal: None,
@@ -1749,6 +1785,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             timed_out: false,
+            detached: false,
             warnings: Vec::new(),
         };
 
@@ -1762,6 +1799,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             timed_out: false,
+            detached: false,
             warnings: Vec::new(),
         };
 
@@ -1775,6 +1813,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             timed_out: true,
+            detached: false,
             warnings: Vec::new(),
         };
 
@@ -1788,10 +1827,288 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             timed_out: false,
+            detached: false,
             warnings: Vec::new(),
         };
 
         assert!(!result.is_success());
+    }
+
+    // =========================================================================
+    // Cancellation latency
+    // =========================================================================
+
+    #[cfg(unix)]
+    #[test]
+    fn test_cancellation_latency() {
+        use std::time::Instant;
+
+        let hook = ConnectionHook {
+            kind: HookKind::Command {
+                command: "sleep".to_string(),
+                args: vec!["10".to_string()],
+            },
+            ..echo_hook("")
+        };
+
+        let token = CancelToken::new();
+        let token_clone = token.clone();
+
+        let handle = std::thread::spawn(move || hook.execute(&test_context(), &token_clone, None));
+
+        let start = Instant::now();
+        token.cancel();
+        let _ = handle.join();
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed.as_millis() < 300,
+            "cancellation took {}ms, expected <300ms",
+            elapsed.as_millis()
+        );
+    }
+
+    #[test]
+    fn test_normal_exit_unaffected() {
+        let hook = echo_hook("ok");
+        let result = hook
+            .execute(&test_context(), &CancelToken::new(), None)
+            .unwrap();
+
+        assert_eq!(result.exit_code, Some(0));
+        assert!(!result.detached);
+        assert!(!result.timed_out);
+    }
+
+    // =========================================================================
+    // HookResult detached flag
+    // =========================================================================
+
+    #[test]
+    fn test_detached_hook_result_shape() {
+        let result = HookResult {
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            timed_out: false,
+            detached: true,
+            warnings: vec!["detached: outcome not monitored".to_string()],
+        };
+
+        assert!(result.detached);
+        assert_eq!(result.exit_code, None);
+        assert!(!result.is_success());
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("detached: outcome not monitored"))
+        );
+    }
+
+    #[test]
+    fn test_monitored_success_unaffected() {
+        let result = HookResult {
+            exit_code: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+            timed_out: false,
+            detached: false,
+            warnings: Vec::new(),
+        };
+
+        assert!(!result.detached);
+        assert_eq!(result.exit_code, Some(0));
+        assert!(result.is_success());
+    }
+
+    #[test]
+    fn test_failure_policy_on_detached() {
+        let result = HookResult {
+            exit_code: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+            timed_out: false,
+            detached: true,
+            warnings: Vec::new(),
+        };
+
+        assert!(
+            !result.is_success(),
+            "detached result must never be success regardless of exit_code"
+        );
+    }
+
+    // =========================================================================
+    // Environment secret stripping
+    // =========================================================================
+
+    #[cfg(unix)]
+    #[test]
+    fn test_aws_secret_stripped_by_default() {
+        unsafe { std::env::set_var("AWS_SECRET_ACCESS_KEY", "REAL_SECRET") };
+
+        let hook = ConnectionHook {
+            kind: HookKind::Command {
+                command: "sh".to_string(),
+                args: vec![
+                    "-c".to_string(),
+                    "echo ${AWS_SECRET_ACCESS_KEY:-MISSING}".to_string(),
+                ],
+            },
+            inherit_env: true,
+            env_denylist: Vec::new(),
+            ..echo_hook("")
+        };
+
+        let result = hook
+            .execute(&test_context(), &CancelToken::new(), None)
+            .unwrap();
+
+        assert!(
+            result.stdout.trim() == "MISSING",
+            "Expected AWS_SECRET_ACCESS_KEY stripped, got: {:?}",
+            result.stdout
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_plain_env_inherited() {
+        unsafe { std::env::set_var("MY_PLAIN_VAR_PROC2", "plainvalue") };
+
+        let hook = ConnectionHook {
+            kind: HookKind::Command {
+                command: "sh".to_string(),
+                args: vec![
+                    "-c".to_string(),
+                    "echo ${MY_PLAIN_VAR_PROC2:-MISSING}".to_string(),
+                ],
+            },
+            inherit_env: true,
+            env_denylist: Vec::new(),
+            ..echo_hook("")
+        };
+
+        let result = hook
+            .execute(&test_context(), &CancelToken::new(), None)
+            .unwrap();
+
+        assert!(
+            result.stdout.trim() == "plainvalue",
+            "Expected MY_PLAIN_VAR_PROC2 inherited, got: {:?}",
+            result.stdout
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_explicit_env_reinjects_stripped_key() {
+        unsafe { std::env::set_var("AWS_SECRET_ACCESS_KEY", "REAL_SECRET") };
+
+        let hook = ConnectionHook {
+            kind: HookKind::Command {
+                command: "sh".to_string(),
+                args: vec![
+                    "-c".to_string(),
+                    "echo ${AWS_SECRET_ACCESS_KEY:-MISSING}".to_string(),
+                ],
+            },
+            inherit_env: true,
+            env: HashMap::from([("AWS_SECRET_ACCESS_KEY".to_string(), "EXPLICIT".to_string())]),
+            env_denylist: Vec::new(),
+            ..echo_hook("")
+        };
+
+        let result = hook
+            .execute(&test_context(), &CancelToken::new(), None)
+            .unwrap();
+
+        assert!(
+            result.stdout.trim() == "EXPLICIT",
+            "Expected re-injected value, got: {:?}",
+            result.stdout
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_custom_denylist_entry_stripped() {
+        unsafe { std::env::set_var("MY_CUSTOM_PROC2_VAR", "customvalue") };
+
+        let hook = ConnectionHook {
+            kind: HookKind::Command {
+                command: "sh".to_string(),
+                args: vec![
+                    "-c".to_string(),
+                    "echo ${MY_CUSTOM_PROC2_VAR:-MISSING}".to_string(),
+                ],
+            },
+            inherit_env: true,
+            env_denylist: vec!["MY_CUSTOM_PROC2_VAR".to_string()],
+            ..echo_hook("")
+        };
+
+        let result = hook
+            .execute(&test_context(), &CancelToken::new(), None)
+            .unwrap();
+
+        assert!(
+            result.stdout.trim() == "MISSING",
+            "Expected MY_CUSTOM_PROC2_VAR stripped by denylist, got: {:?}",
+            result.stdout
+        );
+    }
+
+    #[test]
+    fn test_deser_backward_compat() {
+        let hook: ConnectionHook =
+            serde_json::from_str(r#"{"command": "echo", "args": ["test"]}"#).unwrap();
+
+        assert!(
+            hook.env_denylist.is_empty(),
+            "env_denylist must default to empty vec"
+        );
+    }
+
+    // =========================================================================
+    // Unix process-group kill behavior
+    // =========================================================================
+
+    #[cfg(unix)]
+    #[test]
+    fn test_unix_process_group_kill() {
+        use std::time::{Duration, Instant};
+
+        let hook = ConnectionHook {
+            kind: HookKind::Command {
+                command: "sh".to_string(),
+                args: vec![
+                    "-c".to_string(),
+                    // Spawn a grandchild into the same process group, then sleep
+                    "sh -c 'sleep 100' & sleep 100".to_string(),
+                ],
+            },
+            ..echo_hook("")
+        };
+
+        let token = CancelToken::new();
+        let token_clone = token.clone();
+
+        let handle = std::thread::spawn(move || hook.execute(&test_context(), &token_clone, None));
+
+        // Give the grandchild a moment to start
+        std::thread::sleep(Duration::from_millis(50));
+
+        let start = Instant::now();
+        token.cancel();
+        let _ = handle.join();
+
+        assert!(
+            start.elapsed().as_millis() < 500,
+            "process group kill took too long: {}ms",
+            start.elapsed().as_millis()
+        );
     }
 
     // =========================================================================
@@ -2185,6 +2502,7 @@ mod tests {
                     stdout: String::new(),
                     stderr: String::new(),
                     timed_out: false,
+                    detached: false,
                     warnings: vec!["be careful".to_string()],
                 })
             }
@@ -2330,6 +2648,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             inherit_env: true,
+            env_denylist: Vec::new(),
             timeout_ms: None,
             execution_mode: HookExecutionMode::Blocking,
             ready_signal: None,
@@ -2364,6 +2683,7 @@ mod tests {
                 cwd: None,
                 env: HashMap::new(),
                 inherit_env: true,
+                env_denylist: Vec::new(),
                 timeout_ms: None,
                 execution_mode: HookExecutionMode::Blocking,
                 ready_signal: None,
@@ -2382,6 +2702,7 @@ mod tests {
                 cwd: None,
                 env: HashMap::new(),
                 inherit_env: true,
+                env_denylist: Vec::new(),
                 timeout_ms: None,
                 execution_mode: HookExecutionMode::Blocking,
                 ready_signal: None,
@@ -2551,6 +2872,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             timed_out: true,
+            detached: false,
             warnings: Vec::new(),
         });
 
@@ -2570,6 +2892,7 @@ mod tests {
             stdout: String::new(),
             stderr: "something went wrong".to_string(),
             timed_out: false,
+            detached: false,
             warnings: Vec::new(),
         });
 
@@ -2629,6 +2952,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             inherit_env: true,
+            env_denylist: Vec::new(),
             timeout_ms: None,
             execution_mode: HookExecutionMode::Blocking,
             ready_signal: None,
@@ -2653,6 +2977,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             inherit_env: true,
+            env_denylist: Vec::new(),
             timeout_ms: None,
             execution_mode: HookExecutionMode::Blocking,
             ready_signal: None,
@@ -2682,6 +3007,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             inherit_env: true,
+            env_denylist: Vec::new(),
             timeout_ms: None,
             execution_mode: HookExecutionMode::Blocking,
             ready_signal: None,
@@ -2720,6 +3046,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             inherit_env: true,
+            env_denylist: Vec::new(),
             timeout_ms: None,
             execution_mode: HookExecutionMode::Blocking,
             ready_signal: None,
@@ -2753,6 +3080,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             inherit_env: true,
+            env_denylist: Vec::new(),
             timeout_ms: Some(100),
             execution_mode: HookExecutionMode::Blocking,
             ready_signal: None,
@@ -2789,6 +3117,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             inherit_env: true,
+            env_denylist: Vec::new(),
             timeout_ms: None,
             execution_mode: HookExecutionMode::Blocking,
             ready_signal: None,

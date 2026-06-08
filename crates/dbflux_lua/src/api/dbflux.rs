@@ -117,6 +117,13 @@ fn run_process(lua: &Lua, state: &LuaRuntimeState, options: Table) -> LuaResult<
 
     ensure_program_allowed(&program, &allowlist)?;
 
+    if !detached && timeout.is_none() && state.hook_timeout.is_none() {
+        return Err(mlua::Error::RuntimeError(
+            "dbflux.process.run requires a timeout_ms when no hook-level timeout is set"
+                .to_string(),
+        ));
+    }
+
     let mut command = Command::new(&program);
     command.args(&args);
     command.stdout(Stdio::piped());
@@ -228,21 +235,42 @@ fn format_process_description(program: &str, args: &[String]) -> String {
     }
 }
 
+/// Checks whether a program name is path-qualified (contains a path separator or leading `~`).
+///
+/// This is a footgun guard: it prevents accidental execution of path-qualified names like
+/// `/usr/bin/aws` or `../aws` before the allowlist is checked. It is NOT a security
+/// isolation boundary — PATH-order manipulation can still substitute a binary, and
+/// resolving that requires `which`-style resolution which is out of scope here.
+fn is_path_qualified(program: &str) -> bool {
+    program.contains('/')
+        || program.contains('\\')
+        || Path::new(program).components().count() > 1
+        || program.starts_with('~')
+}
+
+/// Validates that `program` is a bare command name on the named allowlist.
+///
+/// The allowlist is an ergonomics/footgun guard that prevents typos and unintended
+/// execution of programs not expected by the hook author. It is NOT a security
+/// isolation boundary: a user controlling PATH can still substitute a different
+/// binary under the same name.
 fn ensure_program_allowed(program: &str, allowlist: &str) -> LuaResult<()> {
+    if is_path_qualified(program) {
+        return Err(mlua::Error::RuntimeError(format!(
+            "Program '{program}' must be a bare command name (no path separators); \
+             allowlist '{allowlist}' resolves via PATH"
+        )));
+    }
+
     let Some(allowed_programs) = allowlist_programs(allowlist) else {
         return Err(mlua::Error::RuntimeError(format!(
             "dbflux.process.run allowlist '{allowlist}' is not recognized"
         )));
     };
 
-    let program_name = Path::new(program)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or(program);
-
     if allowed_programs
         .iter()
-        .any(|allowed| allowed.eq_ignore_ascii_case(program_name))
+        .any(|allowed| allowed.eq_ignore_ascii_case(program))
     {
         Ok(())
     } else {
@@ -416,6 +444,7 @@ mod tests {
         .unwrap();
         options.set("args", args).unwrap();
         options.set("stream", true).unwrap();
+        options.set("timeout_ms", 5000_i64).unwrap();
 
         let cancel_token = state.cancel_token.clone();
         thread::spawn(move || {
@@ -433,5 +462,132 @@ mod tests {
         assert!(events.iter().any(|event| {
             event.stream == OutputStreamKind::Stderr && event.text.contains("err")
         }));
+    }
+
+    // =========================================================================
+    // Path-separator rejection
+    // =========================================================================
+
+    #[test]
+    fn test_absolute_path_rejected() {
+        let err = ensure_program_allowed("/usr/bin/aws", "aws_cli").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("bare command name") || msg.contains("path separator"),
+            "expected path-separator error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_relative_path_rejected() {
+        let err = ensure_program_allowed("../aws", "aws_cli").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("bare command name") || msg.contains("path separator"),
+            "expected path-separator error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_bare_allowlisted_passes() {
+        assert!(ensure_program_allowed("aws", "aws_cli").is_ok());
+    }
+
+    #[test]
+    fn test_bare_non_allowlisted_fails_at_allowlist() {
+        let err = ensure_program_allowed("malicious_tool", "aws_cli").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("bare command name") && !msg.contains("path separator"),
+            "expected allowlist error (not path-separator), got: {msg}"
+        );
+    }
+
+    // =========================================================================
+    // Timeout required for non-detached process.run
+    // =========================================================================
+
+    #[test]
+    fn test_no_timeout_and_no_hook_deadline_rejected() {
+        let lua = Lua::new();
+        let options = lua.create_table().unwrap();
+        options.set("program", "aws").unwrap();
+        options.set("allowlist", "aws_cli").unwrap();
+
+        let state = test_state(None, Instant::now(), None);
+
+        let err = run_process(&lua, &state, options).unwrap_err().to_string();
+        assert!(
+            err.contains("requires a timeout_ms"),
+            "expected timeout-required error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_timeout_ms_set_accepted() {
+        let lua = Lua::new();
+        let options = lua.create_table().unwrap();
+        options.set("program", "aws").unwrap();
+        options.set("allowlist", "aws_cli").unwrap();
+        options.set("timeout_ms", 5000_i64).unwrap();
+
+        let state = test_state(None, Instant::now(), None);
+
+        let result = run_process(&lua, &state, options);
+        match result {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    !msg.contains("requires a timeout_ms"),
+                    "unexpected timeout-required error: {msg}"
+                );
+            }
+            Ok(_) => {}
+        }
+    }
+
+    #[test]
+    fn test_hook_deadline_present_accepted() {
+        let lua = Lua::new();
+        let options = lua.create_table().unwrap();
+        options.set("program", "aws").unwrap();
+        options.set("allowlist", "aws_cli").unwrap();
+
+        let state = test_state(Some(Duration::from_secs(60)), Instant::now(), None);
+
+        let result = run_process(&lua, &state, options);
+        match result {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    !msg.contains("requires a timeout_ms"),
+                    "unexpected timeout-required error when hook timeout is set: {msg}"
+                );
+            }
+            Ok(_) => {}
+        }
+    }
+
+    #[test]
+    fn test_detached_exempt() {
+        let lua = Lua::new();
+        let options = lua.create_table().unwrap();
+        options.set("program", "aws").unwrap();
+        options.set("allowlist", "aws_cli").unwrap();
+        options.set("detached", true).unwrap();
+
+        let state = test_state(None, Instant::now(), None);
+
+        let result = run_process(&lua, &state, options);
+        match result {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    !msg.contains("requires a timeout_ms"),
+                    "detached run must not require timeout_ms, got: {msg}"
+                );
+            }
+            Ok(_) => {}
+        }
     }
 }

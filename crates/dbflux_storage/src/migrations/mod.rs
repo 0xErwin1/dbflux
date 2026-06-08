@@ -159,6 +159,7 @@ impl MigrationRegistry {
         registry.register(mod_016_viz_divider_saved_chart_id_constraint::MigrationImpl);
         registry.register(mod_017_qry_saved_queries::MigrationImpl);
         registry.register(mod_018_app_pending_executions::MigrationImpl);
+        registry.register(mod_019_hook_env_denylist::MigrationImpl);
         registry
     }
 
@@ -318,6 +319,7 @@ mod mod_015_viz_inspector_saved_chart_id_constraint;
 mod mod_016_viz_divider_saved_chart_id_constraint;
 mod mod_017_qry_saved_queries;
 mod mod_018_app_pending_executions;
+mod mod_019_hook_env_denylist;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;

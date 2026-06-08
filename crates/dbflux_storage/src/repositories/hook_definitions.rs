@@ -85,7 +85,8 @@ impl HookDefinitionRepository {
                 r#"
                 SELECT id, name, execution_mode, script_ref, cwd,
                        inherit_env, timeout_ms, ready_signal, on_failure,
-                       enabled, created_at, updated_at
+                       enabled, created_at, updated_at,
+                       COALESCE(env_denylist_json, '[]')
                 FROM cfg_hook_definitions
                 ORDER BY name ASC
                 "#,
@@ -97,6 +98,10 @@ impl HookDefinitionRepository {
 
         let hooks = stmt
             .query_map([], |row| {
+                let env_denylist_json: String = row.get(12)?;
+                let env_denylist: Vec<String> =
+                    serde_json::from_str(&env_denylist_json).unwrap_or_default();
+
                 Ok(HookDefinitionDto {
                     id: row.get(0)?,
                     name: row.get(1)?,
@@ -110,6 +115,7 @@ impl HookDefinitionRepository {
                     enabled: row.get::<_, i32>(9)? != 0,
                     created_at: row.get(10)?,
                     updated_at: row.get(11)?,
+                    env_denylist,
                 })
             })
             .map_err(|source| StorageError::Sqlite {
@@ -144,7 +150,8 @@ impl HookDefinitionRepository {
                 r#"
                 SELECT id, name, execution_mode, script_ref, cwd,
                        inherit_env, timeout_ms, ready_signal, on_failure,
-                       enabled, created_at, updated_at
+                       enabled, created_at, updated_at,
+                       COALESCE(env_denylist_json, '[]')
                 FROM cfg_hook_definitions
                 WHERE id = ?1
                 "#,
@@ -155,6 +162,10 @@ impl HookDefinitionRepository {
             })?;
 
         let result = stmt.query_row([id], |row| {
+            let env_denylist_json: String = row.get(12)?;
+            let env_denylist: Vec<String> =
+                serde_json::from_str(&env_denylist_json).unwrap_or_default();
+
             Ok(HookDefinitionDto {
                 id: row.get(0)?,
                 name: row.get(1)?,
@@ -168,6 +179,7 @@ impl HookDefinitionRepository {
                 enabled: row.get::<_, i32>(9)? != 0,
                 created_at: row.get(10)?,
                 updated_at: row.get(11)?,
+                env_denylist,
             })
         });
 
@@ -190,16 +202,19 @@ impl HookDefinitionRepository {
         // 3. This avoids "cannot start a transaction within a transaction" errors
         //    when called from legacy import contexts
 
+        let env_denylist_json =
+            serde_json::to_string(&hook.env_denylist).unwrap_or_else(|_| "[]".to_string());
+
         self.conn()
             .execute(
                 r#"
                 INSERT INTO cfg_hook_definitions (
                     id, name, execution_mode, script_ref, cwd,
                     inherit_env, timeout_ms, ready_signal, on_failure,
-                    enabled, created_at, updated_at
+                    enabled, created_at, updated_at, env_denylist_json
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                    datetime('now'), datetime('now')
+                    datetime('now'), datetime('now'), ?11
                 )
                 "#,
                 params![
@@ -213,6 +228,7 @@ impl HookDefinitionRepository {
                     hook.ready_signal,
                     hook.on_failure,
                     hook.enabled as i32,
+                    env_denylist_json,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -233,16 +249,19 @@ impl HookDefinitionRepository {
         // 3. This avoids "cannot start a transaction within a transaction" errors
         //    when called from legacy import contexts
 
+        let env_denylist_json =
+            serde_json::to_string(&hook.env_denylist).unwrap_or_else(|_| "[]".to_string());
+
         self.conn()
             .execute(
                 r#"
                 INSERT INTO cfg_hook_definitions (
                     id, name, execution_mode, script_ref, cwd,
                     inherit_env, timeout_ms, ready_signal, on_failure,
-                    enabled, created_at, updated_at
+                    enabled, created_at, updated_at, env_denylist_json
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                    datetime('now'), datetime('now')
+                    datetime('now'), datetime('now'), ?11
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     name = excluded.name,
@@ -254,6 +273,7 @@ impl HookDefinitionRepository {
                     ready_signal = excluded.ready_signal,
                     on_failure = excluded.on_failure,
                     enabled = excluded.enabled,
+                    env_denylist_json = excluded.env_denylist_json,
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -267,6 +287,7 @@ impl HookDefinitionRepository {
                     hook.ready_signal,
                     hook.on_failure,
                     hook.enabled as i32,
+                    env_denylist_json,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -287,6 +308,9 @@ impl HookDefinitionRepository {
         // 3. This avoids "cannot start a transaction within a transaction" errors
         //    when called from legacy import contexts
 
+        let env_denylist_json =
+            serde_json::to_string(&hook.env_denylist).unwrap_or_else(|_| "[]".to_string());
+
         let rows_affected = self
             .conn()
             .execute(
@@ -301,6 +325,7 @@ impl HookDefinitionRepository {
                     ready_signal = ?8,
                     on_failure = ?9,
                     enabled = ?10,
+                    env_denylist_json = ?11,
                     updated_at = datetime('now')
                 WHERE id = ?1
                 "#,
@@ -315,6 +340,7 @@ impl HookDefinitionRepository {
                     hook.ready_signal,
                     hook.on_failure,
                     hook.enabled as i32,
+                    env_denylist_json,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -379,6 +405,8 @@ pub struct HookDefinitionDto {
     pub enabled: bool,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_denylist: Vec<String>,
 }
 
 impl HookDefinitionDto {
@@ -397,6 +425,7 @@ impl HookDefinitionDto {
             enabled: true,
             created_at: String::new(),
             updated_at: String::new(),
+            env_denylist: Vec::new(),
         }
     }
 }

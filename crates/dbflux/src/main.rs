@@ -15,7 +15,7 @@ use dbflux_driver_ipc::shutdown_managed_hosts;
 use dbflux_ipc::{
     APP_CONTROL_VERSION, framing, init_process_auth_tokens,
     protocol::{AppControlRequest, AppControlResponse, IpcMessage, IpcResponse},
-    read_app_control_token, socket_name,
+    read_app_control_token, shutdown_managed_auth_provider_hosts, socket_name,
 };
 use dbflux_ui::AppStateEntity;
 use dbflux_ui::assets::Assets;
@@ -395,6 +395,13 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
             if stopped > 0 {
                 info!("Stopped {} managed RPC host process(es)", stopped);
             }
+            let auth_stopped = shutdown_managed_auth_provider_hosts();
+            if auth_stopped > 0 {
+                info!(
+                    "Stopped {} managed auth-provider host process(es)",
+                    auth_stopped
+                );
+            }
             let _ = cx.update(|cx| cx.quit());
             return;
         }
@@ -434,6 +441,13 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
             let stopped = shutdown_managed_hosts();
             if stopped > 0 {
                 info!("Stopped {} managed RPC host process(es)", stopped);
+            }
+            let auth_stopped = shutdown_managed_auth_provider_hosts();
+            if auth_stopped > 0 {
+                info!(
+                    "Stopped {} managed auth-provider host process(es)",
+                    auth_stopped
+                );
             }
             let _ = cx.update(|cx| cx.quit());
             return;
@@ -497,6 +511,14 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
     let stopped = shutdown_managed_hosts();
     if stopped > 0 {
         info!("Stopped {} managed RPC host process(es)", stopped);
+    }
+
+    let auth_stopped = shutdown_managed_auth_provider_hosts();
+    if auth_stopped > 0 {
+        info!(
+            "Stopped {} managed auth-provider host process(es)",
+            auth_stopped
+        );
     }
 
     let _ = cx.update(|cx| {

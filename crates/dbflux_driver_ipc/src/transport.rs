@@ -14,9 +14,25 @@ use dbflux_ipc::{
 use interprocess::local_socket::{Name, Stream as IpcStream, prelude::*};
 use uuid::Uuid;
 
+/// Holds the mutable transport state protected by a single mutex.
+///
+/// Both the stream and the request-ID counter live here so that ID assignment
+/// and the subsequent send happen atomically — eliminating the gap between
+/// `next_request_id()` releasing the old ID lock and `send_raw()` acquiring the
+/// stream lock that existed when they were two separate mutexes.
+///
+/// `session_correlation_ids` is a SEPARATE mutex. The only lock ordering that
+/// occurs at runtime is `inner → session_correlation_ids`: `send_raw` holds
+/// `inner` when it calls `correlation_id_for_session`, which then acquires
+/// `session_correlation_ids`. The reverse order (`session_correlation_ids →
+/// inner`) never occurs, so there is no lock-ordering cycle.
+struct RpcClientInner {
+    stream: IpcStream,
+    next_id: u64,
+}
+
 pub struct RpcClient {
-    stream: Arc<Mutex<IpcStream>>,
-    request_id: Arc<Mutex<u64>>,
+    inner: Arc<Mutex<RpcClientInner>>,
     hello: DriverHelloResponse,
     /// Socket registry ID (`rpc:<socket_id>`) for correlation and logging.
     socket_id: String,
@@ -78,16 +94,13 @@ impl RpcClient {
         let stream =
             IpcStream::connect(name).map_err(|e| RpcError::ConnectionFailed(e.to_string()))?;
 
-        let stream = Arc::new(Mutex::new(stream));
-        let request_id = Arc::new(Mutex::new(0));
-
-        let hello = Self::perform_hello(&stream, &request_id)?;
+        let mut inner = RpcClientInner { stream, next_id: 0 };
+        let hello = Self::perform_hello(&mut inner)?;
 
         let audit_emit_capability = hello.capabilities.contains(&DriverCapability::AuditEmit);
 
         let client = Self {
-            stream,
-            request_id,
+            inner: Arc::new(Mutex::new(inner)),
             hello,
             socket_id,
             audit_emit_capability,
@@ -136,10 +149,7 @@ impl RpcClient {
         }
     }
 
-    fn perform_hello(
-        stream: &Arc<Mutex<IpcStream>>,
-        request_id: &Arc<Mutex<u64>>,
-    ) -> Result<DriverHelloResponse, RpcError> {
+    fn perform_hello(inner: &mut RpcClientInner) -> Result<DriverHelloResponse, RpcError> {
         let auth_token = std::env::var(DRIVER_RPC_AUTH_TOKEN_ENV)
             .ok()
             .filter(|token| !token.is_empty());
@@ -161,7 +171,15 @@ impl RpcClient {
             }),
         );
 
-        let response = Self::send_raw_with(stream, request_id, request)?;
+        framing::send_msg(&mut inner.stream, &request)?;
+        let response: DriverResponseEnvelope = framing::recv_msg(&mut inner.stream)?;
+
+        if response.request_id != request.request_id {
+            return Err(RpcError::Protocol(format!(
+                "Request ID mismatch during hello: sent {}, got {}",
+                request.request_id, response.request_id
+            )));
+        }
 
         match response.body {
             DriverResponseBody::Hello(hello) => {
@@ -180,28 +198,6 @@ impl RpcClient {
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol("Unexpected response to Hello".into())),
         }
-    }
-
-    fn send_raw_with(
-        stream: &Arc<Mutex<IpcStream>>,
-        _request_id: &Arc<Mutex<u64>>,
-        request: DriverRequestEnvelope,
-    ) -> Result<DriverResponseEnvelope, RpcError> {
-        let mut stream_guard = stream
-            .lock()
-            .map_err(|_| RpcError::Protocol("Stream mutex poisoned".into()))?;
-
-        framing::send_msg(&mut *stream_guard, &request)?;
-        let response: DriverResponseEnvelope = framing::recv_msg(&mut *stream_guard)?;
-
-        if response.request_id != request.request_id {
-            return Err(RpcError::Protocol(format!(
-                "Request ID mismatch: sent {}, got {}",
-                request.request_id, response.request_id
-            )));
-        }
-
-        Ok(response)
     }
 
     /// Sends an OpenSession request and returns the full response body (caller
@@ -777,10 +773,8 @@ impl RpcClient {
         session_id: Option<Uuid>,
         body: DriverRequestBody,
     ) -> Result<DriverResponseBody, RpcError> {
-        let request_id = self.next_request_id()?;
-        let envelope =
-            build_call_request_envelope(self.selected_version(), request_id, body, session_id);
-
+        // Pass request_id=0; send_raw assigns the actual ID inside the lock.
+        let envelope = build_call_request_envelope(self.selected_version(), 0, body, session_id);
         let response = self.send_raw(envelope)?;
         Ok(response.body)
     }
@@ -810,23 +804,34 @@ impl RpcClient {
 
     /// Low-level send/receive with request-ID correlation.
     ///
-    /// Intercepts `EmitAuditEvent` intermediate frames (`done=false`) and dispatches
-    /// them to the audit emitter when the driver has the `AuditEmit` capability.
-    /// All other frames (including the terminal frame) are returned to the caller.
-    fn send_raw(&self, request: DriverRequestEnvelope) -> Result<DriverResponseEnvelope, RpcError> {
-        let expected_id = request.request_id;
+    /// Acquires the single `inner` lock, increments `next_id`, assigns it to the
+    /// request envelope, sends, and receives all frames until `done = true`. The
+    /// lock is held across the entire send+receive transaction so that ID assignment
+    /// and transport are atomic — no other caller can interleave on the stream.
+    ///
+    /// `session_correlation_ids` is acquired inside this function while `inner`
+    /// is already held (`inner → session_correlation_ids`). The reverse order never
+    /// occurs anywhere, so the one-directional ordering is deadlock-free.
+    fn send_raw(
+        &self,
+        mut request: DriverRequestEnvelope,
+    ) -> Result<DriverResponseEnvelope, RpcError> {
         let request_session_id = request.session_id;
 
-        let mut stream = self
-            .stream
+        let mut guard = self
+            .inner
             .lock()
-            .map_err(|_| RpcError::Protocol("Stream mutex poisoned".into()))?;
+            .map_err(|_| RpcError::Protocol("RPC client mutex poisoned".into()))?;
 
-        framing::send_msg(&mut *stream, &request).map_err(RpcError::Io)?;
+        guard.next_id += 1;
+        let expected_id = guard.next_id;
+        request.request_id = expected_id;
+
+        framing::send_msg(&mut guard.stream, &request).map_err(RpcError::Io)?;
 
         loop {
             let response: DriverResponseEnvelope =
-                framing::recv_msg(&mut *stream).map_err(RpcError::Io)?;
+                framing::recv_msg(&mut guard.stream).map_err(RpcError::Io)?;
 
             if response.request_id != expected_id {
                 return Err(RpcError::Protocol("Request ID mismatch".into()));
@@ -873,15 +878,6 @@ impl RpcClient {
         map.entry(session_id)
             .or_insert_with(|| Uuid::new_v4().to_string())
             .clone()
-    }
-
-    fn next_request_id(&self) -> Result<u64, RpcError> {
-        let mut id = self
-            .request_id
-            .lock()
-            .map_err(|_| RpcError::Protocol("Request ID mutex poisoned".into()))?;
-        *id += 1;
-        Ok(*id)
     }
 }
 
@@ -1139,6 +1135,48 @@ mod tests {
         assert_eq!(envelope.protocol_version, ProtocolVersion::new(1, 0));
         assert_eq!(envelope.request_id, 8);
         assert_eq!(envelope.session_id, None);
+    }
+
+    // =========================================================================
+    // Single RpcClientInner mutex — concurrent call correctness
+    // =========================================================================
+
+    #[test]
+    fn test_concurrent_calls_correct_correlation() {
+        use dbflux_test_support::{FakeDriverAction, FakeDriverRpcConfig, FakeDriverRpcServer};
+        use std::sync::Arc;
+
+        const THREAD_COUNT: usize = 100;
+
+        let socket_id = format!("test-concurrent-rpc-{}", Uuid::new_v4());
+
+        // Serve exactly 100 Pong responses on one connection.
+        let server = FakeDriverRpcServer::start(
+            FakeDriverRpcConfig::new(&socket_id)
+                .with_actions(vec![FakeDriverAction::Pong; THREAD_COUNT])
+                .with_expected_connections(1),
+        )
+        .expect("fake driver server must start");
+
+        let socket_name = driver_socket_name(&socket_id).expect("socket name");
+        let client =
+            Arc::new(RpcClient::connect(socket_name.borrow()).expect("connect must succeed"));
+
+        let handles: Vec<_> = (0..THREAD_COUNT)
+            .map(|_| {
+                let client = client.clone();
+                std::thread::spawn(move || client.ping(Uuid::nil()))
+            })
+            .collect();
+
+        for handle in handles {
+            handle
+                .join()
+                .expect("thread must not panic")
+                .expect("ping must succeed — no request-ID mismatch under concurrent load");
+        }
+
+        server.wait().expect("server must exit cleanly");
     }
 
     /// IT-07: rate-limit exhausted on a socket, then a subsequent Ping still succeeds.

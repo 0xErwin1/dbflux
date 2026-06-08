@@ -205,6 +205,7 @@ pub fn save_hook_definitions(
             enabled: hook.enabled,
             created_at: String::new(),
             updated_at: String::new(),
+            env_denylist: hook.env_denylist.clone(),
         };
 
         if existing_ids.contains(&dto.id) {
@@ -607,6 +608,7 @@ fn connection_hook_to_dto(
         execution_mode: execution_mode.to_string(),
         ready_signal: hook.ready_signal.clone(),
         on_failure: on_failure.to_string(),
+        env_denylist: hook.env_denylist.clone(),
     };
 
     match &hook.kind {
@@ -1111,6 +1113,7 @@ fn load_hook_definitions(
                 cwd: dto.cwd.as_ref().map(std::path::PathBuf::from),
                 env,
                 inherit_env: dto.inherit_env,
+                env_denylist: dto.env_denylist.clone(),
                 timeout_ms: dto.timeout_ms.map(|v| v as u64),
                 execution_mode,
                 ready_signal: dto.ready_signal.clone(),
@@ -1278,6 +1281,7 @@ fn load_connection_hooks_from_dtos(hooks: &[ConnectionProfileHookDto]) -> Connec
             cwd: hook_dto.cwd.as_ref().map(std::path::PathBuf::from),
             env: Default::default(),
             inherit_env: hook_dto.inherit_env,
+            env_denylist: hook_dto.env_denylist.clone(),
             timeout_ms: hook_dto.timeout_ms.map(|v| v as u64),
             execution_mode,
             ready_signal: hook_dto.ready_signal.clone(),

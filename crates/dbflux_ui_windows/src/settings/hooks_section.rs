@@ -58,6 +58,7 @@ pub(super) enum HookFormField {
     ReadySignal,
     WorkingDirectory,
     Environment,
+    EnvDenylist,
     Timeout,
     Enabled,
     InheritEnv,
@@ -88,6 +89,7 @@ pub(super) struct HooksSection {
     pub(super) input_hook_ready_signal: Entity<InputState>,
     pub(super) input_hook_cwd: Entity<InputState>,
     pub(super) input_hook_env: Entity<InputState>,
+    pub(super) input_hook_env_denylist: Entity<InputState>,
     pub(super) input_hook_timeout: Entity<InputState>,
     pub(super) hook_enabled: bool,
     pub(super) hook_inherit_env: bool,
@@ -205,6 +207,8 @@ impl HooksSection {
             cx.new(|cx| InputState::new(window, cx).placeholder("/path/to/working-dir"));
         let input_hook_env =
             cx.new(|cx| InputState::new(window, cx).placeholder("KEY=value, OTHER=value"));
+        let input_hook_env_denylist =
+            cx.new(|cx| InputState::new(window, cx).placeholder("MY_SECRET, OTHER_KEY"));
         let input_hook_timeout = cx.new(|cx| InputState::new(window, cx).placeholder("30000"));
         let hook_failure_dropdown = cx.new(|_cx| {
             Dropdown::new("hook-failure-mode")
@@ -258,6 +262,7 @@ impl HooksSection {
         let hook_ready_signal_sub = notify_on_input_change(&input_hook_ready_signal, window, cx);
         let hook_cwd_sub = notify_on_input_change(&input_hook_cwd, window, cx);
         let hook_env_sub = notify_on_input_change(&input_hook_env, window, cx);
+        let hook_env_denylist_sub = notify_on_input_change(&input_hook_env_denylist, window, cx);
         let hook_timeout_sub = notify_on_input_change(&input_hook_timeout, window, cx);
 
         let mut section = Self {
@@ -282,6 +287,7 @@ impl HooksSection {
             input_hook_ready_signal,
             input_hook_cwd,
             input_hook_env,
+            input_hook_env_denylist,
             input_hook_timeout,
             hook_enabled: true,
             hook_inherit_env: true,
@@ -312,6 +318,7 @@ impl HooksSection {
                 hook_ready_signal_sub,
                 hook_cwd_sub,
                 hook_env_sub,
+                hook_env_denylist_sub,
                 hook_timeout_sub,
             ],
         };
@@ -462,6 +469,7 @@ impl FormSection for HooksSection {
             }
             rows.push(vec![HookFormField::WorkingDirectory]);
             rows.push(vec![HookFormField::Environment]);
+            rows.push(vec![HookFormField::EnvDenylist]);
         }
 
         rows.push(vec![HookFormField::Timeout]);
@@ -491,6 +499,7 @@ impl FormSection for HooksSection {
                 | HookFormField::ReadySignal
                 | HookFormField::WorkingDirectory
                 | HookFormField::Environment
+                | HookFormField::EnvDenylist
                 | HookFormField::Timeout
         )
     }

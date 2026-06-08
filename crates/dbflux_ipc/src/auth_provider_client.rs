@@ -248,20 +248,63 @@ impl RpcAuthProvider {
         self.dispatch_request_loop(&mut stream, body)
     }
 
+    /// Sends `body` to the provider over `stream` and collects all response frames.
+    ///
+    /// The loop exits on the first frame with `done = true`. To guard against misbehaving
+    /// providers that send frames indefinitely, two circuit breakers are applied:
+    /// - **Frame cap** (`MAX_INTERMEDIATE_FRAMES`): aborts after processing this many frames
+    ///   without a terminal `done = true` frame.
+    /// - **Per-request deadline** (`PER_REQUEST_DEADLINE`): aborts when the wall-clock time
+    ///   since the request started exceeds the limit.
+    ///
+    /// Note: a `recv_msg` call that never returns cannot be interrupted by these guards —
+    /// socket-level read timeouts are not portable for the `interprocess` stream type used here.
     #[allow(clippy::result_large_err)]
     fn dispatch_request_loop<S: std::io::Read + std::io::Write>(
         &self,
         stream: &mut S,
         body: AuthProviderRequestBody,
     ) -> Result<Vec<AuthProviderResponseEnvelope>, DbError> {
+        const MAX_INTERMEDIATE_FRAMES: usize = 1000;
+        const PER_REQUEST_DEADLINE: Duration = Duration::from_secs(60);
+
         let request = AuthProviderRequestEnvelope::new(self.selected_version, 1, body);
         let correlation_id = uuid::Uuid::new_v4().to_string();
 
         framing::send_msg(&mut *stream, &request)?;
 
+        let deadline = Instant::now() + PER_REQUEST_DEADLINE;
+        let mut frame_count: usize = 0;
         let mut responses = Vec::new();
+
         loop {
             let response: AuthProviderResponseEnvelope = framing::recv_msg(&mut *stream)?;
+
+            frame_count += 1;
+
+            if frame_count > MAX_INTERMEDIATE_FRAMES {
+                log::warn!(
+                    "auth-provider '{}' exceeded {} frames in one request; aborting",
+                    self.provider_id,
+                    MAX_INTERMEDIATE_FRAMES
+                );
+                return Err(DbError::connection_failed(format!(
+                    "auth-provider '{}' exceeded frame budget ({} intermediate frames)",
+                    self.provider_id, MAX_INTERMEDIATE_FRAMES
+                )));
+            }
+
+            if Instant::now() > deadline {
+                log::warn!(
+                    "auth-provider '{}' request exceeded {:?} deadline; aborting",
+                    self.provider_id,
+                    PER_REQUEST_DEADLINE
+                );
+                return Err(DbError::connection_failed(format!(
+                    "auth-provider '{}' request exceeded {:?}",
+                    self.provider_id, PER_REQUEST_DEADLINE
+                )));
+            }
 
             if response.request_id != request.request_id {
                 return Err(DbError::connection_failed(format!(
@@ -659,6 +702,58 @@ fn normalize_hello_response(
 fn managed_hosts() -> &'static Mutex<HashMap<String, Child>> {
     static MANAGED_HOSTS: OnceLock<Mutex<HashMap<String, Child>>> = OnceLock::new();
     MANAGED_HOSTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Stops all auth-provider host processes started by DBFlux. Returns count terminated.
+pub fn shutdown_managed_auth_provider_hosts() -> usize {
+    let mut children = {
+        let Ok(mut hosts) = managed_hosts().lock() else {
+            log::error!("Managed auth-provider host registry is poisoned");
+            return 0;
+        };
+        std::mem::take(&mut *hosts)
+    };
+
+    let mut stopped = 0;
+
+    for (socket_id, mut child) in children.drain() {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                log::info!(
+                    "Auth-provider host for '{}' already exited before shutdown ({})",
+                    socket_id,
+                    status
+                );
+            }
+            Ok(None) => {
+                if let Err(error) = child.kill() {
+                    log::warn!(
+                        "Failed to kill auth-provider host '{}': {}",
+                        socket_id,
+                        error
+                    );
+                    continue;
+                }
+                if let Err(error) = child.wait() {
+                    log::warn!(
+                        "Failed to wait for auth-provider host '{}' after kill: {}",
+                        socket_id,
+                        error
+                    );
+                }
+                stopped += 1;
+            }
+            Err(error) => {
+                log::warn!(
+                    "Failed to inspect auth-provider host '{}': {}",
+                    socket_id,
+                    error
+                );
+            }
+        }
+    }
+
+    stopped
 }
 
 #[allow(clippy::result_large_err)]
@@ -1278,6 +1373,110 @@ mod tests {
             ),
             "terminal response must be LoginResult"
         );
+    }
+
+    // =========================================================================
+    // dispatch_request_loop frame cap
+    // =========================================================================
+
+    /// Builds a stream containing `count` non-done EmitAuditEvent frames with no
+    /// terminal frame. Used to verify the iteration cap aborts the loop.
+    fn infinite_emit_stream(count: usize) -> MockStream {
+        let mut response_bytes = Vec::new();
+        for _ in 0..count {
+            response_bytes.extend(encode_response(&emit_audit_frame(1, minimal_emit_dto())));
+        }
+        MockStream::new(response_bytes)
+    }
+
+    #[test]
+    fn test_dispatch_loop_terminates_on_cap() {
+        let provider = RpcAuthProvider::new_for_test("test-sock", "test-auth", true, None);
+
+        // Feed 1001 non-done frames — should abort before processing the 1001st.
+        let mut stream = infinite_emit_stream(1001);
+
+        let result = provider.dispatch_request_loop(
+            &mut stream,
+            AuthProviderRequestBody::Login(crate::auth_provider_protocol::LoginRequest {
+                profile_json: "{}".to_string(),
+            }),
+        );
+
+        assert!(result.is_err(), "loop must abort after exceeding frame cap");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("frame budget") || err_msg.contains("exceeded"),
+            "error must indicate frame cap reached, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_dispatch_loop_terminates_normally() {
+        let provider = RpcAuthProvider::new_for_test("test-sock", "test-auth", false, None);
+
+        let mut response_bytes = Vec::new();
+        response_bytes.extend(encode_response(&emit_audit_frame(1, minimal_emit_dto())));
+        response_bytes.extend(encode_response(&emit_audit_frame(1, minimal_emit_dto())));
+        response_bytes.extend(encode_response(&login_result_frame(1)));
+
+        let mut stream = MockStream::new(response_bytes);
+        let result = provider.dispatch_request_loop(
+            &mut stream,
+            AuthProviderRequestBody::Login(crate::auth_provider_protocol::LoginRequest {
+                profile_json: "{}".to_string(),
+            }),
+        );
+
+        assert!(
+            result.is_ok(),
+            "loop must terminate normally on done=true frame"
+        );
+        assert_eq!(
+            result.unwrap().len(),
+            1,
+            "must return exactly one terminal frame"
+        );
+    }
+
+    // =========================================================================
+    // Managed auth provider host shutdown
+    // =========================================================================
+
+    #[test]
+    fn test_shutdown_kills_tracked_children() {
+        use std::process::Command as StdCommand;
+
+        // Register a sleeping child into the managed hosts registry
+        let child = StdCommand::new("sleep")
+            .arg("100")
+            .spawn()
+            .expect("spawn sleep");
+
+        let child_id = format!("test-auth-provider-{}", child.id());
+        {
+            let mut hosts = managed_hosts().lock().unwrap();
+            hosts.insert(child_id.clone(), child);
+        }
+
+        let stopped = shutdown_managed_auth_provider_hosts();
+
+        assert_eq!(stopped, 1, "must report 1 stopped process");
+
+        let hosts = managed_hosts().lock().unwrap();
+        assert!(hosts.is_empty(), "registry must be empty after shutdown");
+    }
+
+    #[test]
+    fn test_shutdown_returns_zero_on_empty() {
+        // Ensure registry is empty first (may be populated by other tests)
+        {
+            let mut hosts = managed_hosts().lock().unwrap();
+            hosts.clear();
+        }
+
+        let stopped = shutdown_managed_auth_provider_hosts();
+        assert_eq!(stopped, 0, "must return 0 when no children tracked");
     }
 
     /// Scenario B-04-a: Provider has opt-in=false.
