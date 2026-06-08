@@ -1,0 +1,80 @@
+# git-cliff configuration for DBFlux.
+#
+# Generates CHANGELOG.md and GitHub release notes from Conventional Commits.
+# The changelog is DERIVED from git history, not hand-edited: `[Unreleased]`
+# is whatever sits between the last stable tag and HEAD. See docs/RELEASE.md.
+#
+# Commit types map to Keep a Changelog sections; internal-only types
+# (refactor/test/ci/chore/build/style) are skipped so the changelog stays
+# user-facing. Mark a security-relevant change with a `security` scope
+# (e.g. `fix(security): ...`) or a `Security:` footer to land it under Security.
+
+[changelog]
+header = """
+# Changelog
+
+All notable changes to DBFlux will be documented in this file.
+"""
+
+# Tera template. One section per release, grouped by Keep a Changelog category.
+body = """
+{% if version %}\
+## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## [Unreleased]
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+
+### {{ group | striptags | trim | upper_first }}
+{% for commit in commits %}
+* {{ commit.message | upper_first }}\
+{% if commit.remote.pr_number %} (#{{ commit.remote.pr_number }}){% endif %}\
+{% endfor %}
+{% endfor %}\n
+"""
+
+trim = true
+footer = ""
+
+# Fold same-version-line churn at promote time is done by hand; here we only
+# postprocess PR/commit links for the GitHub release body.
+[changelog.remote.github]
+owner = "0xErwin1"
+repo = "dbflux"
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+
+# Order matters: the FIRST matching parser wins.
+commit_parsers = [
+  { message = "^feat",      group = "<!-- 0 -->Added" },
+  { message = "^fix",       group = "<!-- 2 -->Fixed" },
+  { message = "^perf",      group = "<!-- 1 -->Changed" },
+  { message = "^revert",    group = "<!-- 2 -->Fixed" },
+  # Security: opt-in via `(security)` scope or a `Security:` footer.
+  { footer = "^[Ss]ecurity:", group = "<!-- 3 -->Security" },
+  { message = "^\\w+\\(security\\)", group = "<!-- 3 -->Security" },
+  # Internal-only types never reach users — drop them.
+  { message = "^docs",      skip = true },
+  { message = "^test",      skip = true },
+  { message = "^ci",        skip = true },
+  { message = "^chore",     skip = true },
+  { message = "^build",     skip = true },
+  { message = "^style",     skip = true },
+  { message = "^refactor",  skip = true },
+  # Anything else conventional but unmapped: drop rather than mislabel.
+  { message = ".*", skip = true },
+]
+
+# Breaking changes (a `!` after type/scope or a `BREAKING CHANGE:` footer) are
+# surfaced regardless of the type's normal group.
+protect_breaking_commits = true
+filter_commits = false
+tag_pattern = "v[0-9]+\\.[0-9]+\\.[0-9]+"
+# Treat dev/rc prereleases as boundaries too, so `[Unreleased]` means
+# "since the last STABLE tag" — prerelease tags do not close the section.
+skip_tags = "v[0-9]+\\.[0-9]+\\.[0-9]+-(dev|rc|nightly)"
+topo_order = false
+sort_commits = "newest"
