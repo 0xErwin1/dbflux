@@ -521,6 +521,7 @@ impl HooksSection {
                 .is_empty()
             || !self.input_hook_cwd.read(cx).value().trim().is_empty()
             || !self.input_hook_env.read(cx).value().trim().is_empty()
+            || !self.input_hook_env_denylist.read(cx).value().trim().is_empty()
             || !self.input_hook_timeout.read(cx).value().trim().is_empty()
     }
 
@@ -542,6 +543,12 @@ impl HooksSection {
         let script_content_trimmed = script_content.trim().to_string();
         let cwd_text = self.input_hook_cwd.read(cx).value().trim().to_string();
         let env_text = self.input_hook_env.read(cx).value().trim().to_string();
+        let env_denylist_text = self
+            .input_hook_env_denylist
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
         let timeout_text = self.input_hook_timeout.read(cx).value().trim().to_string();
         let ready_signal = self
             .input_hook_ready_signal
@@ -560,6 +567,7 @@ impl HooksSection {
             && interpreter.is_none()
             && cwd_text.is_empty()
             && env_text.is_empty()
+            && env_denylist_text.is_empty()
             && ready_signal.is_empty()
         {
             return Ok(None);
@@ -655,6 +663,8 @@ impl HooksSection {
             }
         };
 
+        let env_denylist = Self::parse_env_denylist(&env_denylist_text);
+
         let hook = ConnectionHook {
             enabled: self.hook_enabled,
             kind,
@@ -665,7 +675,7 @@ impl HooksSection {
             } else {
                 self.hook_inherit_env
             },
-            env_denylist: Vec::new(),
+            env_denylist,
             timeout_ms,
             execution_mode: if selected_kind == HookKindSelection::Lua {
                 HookExecutionMode::Blocking
@@ -738,6 +748,8 @@ impl HooksSection {
         self.input_hook_cwd
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.input_hook_env
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.input_hook_env_denylist
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.input_hook_timeout
             .update(cx, |input, cx| input.set_value("", window, cx));
@@ -888,6 +900,9 @@ impl HooksSection {
         env_pairs.sort();
         self.input_hook_env.update(cx, |input, cx| {
             input.set_value(env_pairs.join(", "), window, cx)
+        });
+        self.input_hook_env_denylist.update(cx, |input, cx| {
+            input.set_value(hook.env_denylist.join(", "), window, cx)
         });
         self.input_hook_timeout.update(cx, |input, cx| {
             input.set_value(
@@ -1051,6 +1066,9 @@ impl HooksSection {
         self.input_hook_env.update(cx, |input, cx| {
             input.set_value(env_pairs.join(", "), window, cx)
         });
+        self.input_hook_env_denylist.update(cx, |input, cx| {
+            input.set_value(hook.env_denylist.join(", "), window, cx)
+        });
         self.input_hook_timeout.update(cx, |input, cx| {
             input.set_value(
                 hook.timeout_ms
@@ -1153,6 +1171,13 @@ impl HooksSection {
     pub(super) fn cancel_delete_hook(&mut self, cx: &mut Context<Self>) {
         self.pending_delete_hook_id = None;
         cx.notify();
+    }
+
+    fn parse_env_denylist(text: &str) -> Vec<String> {
+        text.split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
     }
 
     fn parse_hook_env_pairs(
@@ -1563,6 +1588,17 @@ impl HooksSection {
                             .child(Input::new(&self.input_hook_env).small()),
                     )
                     })
+                    .when(!is_lua, |container| {
+                        container.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(Label::new("Env Denylist"))
+                            .child(Body::new("Comma-separated variable names to strip from inherited env").color(theme.muted_foreground))
+                            .child(Input::new(&self.input_hook_env_denylist).small()),
+                    )
+                    })
                     .child(
                         div()
                             .flex()
@@ -1842,6 +1878,10 @@ impl HooksSection {
             }
             HookFormField::Environment => {
                 self.input_hook_env
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            HookFormField::EnvDenylist => {
+                self.input_hook_env_denylist
                     .update(cx, |state, cx| state.focus(window, cx));
             }
             HookFormField::Timeout => {

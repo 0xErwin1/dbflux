@@ -31,7 +31,8 @@ impl ConnectionProfileHooksRepository {
                        command, script_language, script_source_type, script_content, script_path,
                        lua_source_type, lua_content, lua_path,
                        lua_log, lua_env_read, lua_conn_metadata, lua_process_run,
-                       cwd, inherit_env, timeout_ms, execution_mode, ready_signal, on_failure
+                       cwd, inherit_env, timeout_ms, execution_mode, ready_signal, on_failure,
+                       COALESCE(env_denylist_json, '[]')
                 FROM cfg_connection_profile_hooks
                 WHERE profile_id = ?1
                 ORDER BY phase ASC, order_index ASC
@@ -44,6 +45,10 @@ impl ConnectionProfileHooksRepository {
 
         let hooks = stmt
             .query_map([profile_id], |row| {
+                let env_denylist_json: String = row.get(24)?;
+                let env_denylist: Vec<String> =
+                    serde_json::from_str(&env_denylist_json).unwrap_or_default();
+
                 Ok(ConnectionProfileHookDto {
                     id: row.get(0)?,
                     profile_id: row.get(1)?,
@@ -69,6 +74,7 @@ impl ConnectionProfileHooksRepository {
                     execution_mode: row.get(21)?,
                     ready_signal: row.get(22)?,
                     on_failure: row.get(23)?,
+                    env_denylist,
                 })
             })
             .map_err(|source| StorageError::Sqlite {
@@ -96,6 +102,9 @@ impl ConnectionProfileHooksRepository {
     }
 
     pub fn insert(&self, hook: &ConnectionProfileHookDto) -> Result<(), StorageError> {
+        let env_denylist_json =
+            serde_json::to_string(&hook.env_denylist).unwrap_or_else(|_| "[]".to_string());
+
         self.conn()
             .execute(
                 r#"
@@ -104,10 +113,11 @@ impl ConnectionProfileHooksRepository {
                     command, script_language, script_source_type, script_content, script_path,
                     lua_source_type, lua_content, lua_path,
                     lua_log, lua_env_read, lua_conn_metadata, lua_process_run,
-                    cwd, inherit_env, timeout_ms, execution_mode, ready_signal, on_failure
+                    cwd, inherit_env, timeout_ms, execution_mode, ready_signal, on_failure,
+                    env_denylist_json
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-                    ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24
+                    ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25
                 )
                 "#,
                 params![
@@ -135,6 +145,7 @@ impl ConnectionProfileHooksRepository {
                     hook.execution_mode,
                     hook.ready_signal,
                     hook.on_failure,
+                    env_denylist_json,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -202,6 +213,8 @@ pub struct ConnectionProfileHookDto {
     pub execution_mode: String,
     pub ready_signal: Option<String>,
     pub on_failure: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_denylist: Vec<String>,
 }
 
 impl ConnectionProfileHookDto {
@@ -236,6 +249,7 @@ impl ConnectionProfileHookDto {
             execution_mode: "blocking".to_string(),
             ready_signal: None,
             on_failure: "disconnect".to_string(),
+            env_denylist: Vec::new(),
         }
     }
 }
