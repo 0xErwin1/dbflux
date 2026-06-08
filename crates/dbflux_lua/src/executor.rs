@@ -114,6 +114,7 @@ impl HookExecutor for LuaExecutor {
                 stdout,
                 stderr: String::new(),
                 timed_out: true,
+                detached: false,
                 warnings: Vec::new(),
             }),
             Err(error) => Ok(HookResult {
@@ -121,6 +122,7 @@ impl HookExecutor for LuaExecutor {
                 stdout,
                 stderr: error.to_string(),
                 timed_out: false,
+                detached: false,
                 warnings: Vec::new(),
             }),
         }
@@ -143,6 +145,7 @@ fn map_outcome(stdout: String, outcome: LuaHookOutcome) -> HookResult {
             stdout,
             stderr: String::new(),
             timed_out: false,
+            detached: false,
             warnings: Vec::new(),
         },
         LuaHookOutcome::Warn(message) => HookResult {
@@ -150,6 +153,7 @@ fn map_outcome(stdout: String, outcome: LuaHookOutcome) -> HookResult {
             stdout,
             stderr: String::new(),
             timed_out: false,
+            detached: false,
             warnings: vec![message],
         },
         LuaHookOutcome::Fail(message) => HookResult {
@@ -157,6 +161,7 @@ fn map_outcome(stdout: String, outcome: LuaHookOutcome) -> HookResult {
             stdout,
             stderr: message,
             timed_out: false,
+            detached: false,
             warnings: Vec::new(),
         },
     }
@@ -201,6 +206,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             inherit_env: true,
+            env_denylist: Vec::new(),
             timeout_ms: None,
             execution_mode: HookExecutionMode::Blocking,
             ready_signal: None,
@@ -223,6 +229,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             inherit_env: true,
+            env_denylist: Vec::new(),
             timeout_ms: None,
             execution_mode: HookExecutionMode::Blocking,
             ready_signal: None,
