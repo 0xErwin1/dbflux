@@ -516,6 +516,7 @@ pub struct HookResult {
     pub stdout: String,
     pub stderr: String,
     pub timed_out: bool,
+    pub detached: bool,
     pub warnings: Vec<String>,
 }
 
@@ -656,6 +657,7 @@ impl OutputCollector {
             stdout: self.stdout,
             stderr: self.stderr,
             timed_out,
+            detached: false,
             warnings: Vec::new(),
         }
     }
@@ -663,7 +665,7 @@ impl OutputCollector {
 
 impl HookResult {
     pub fn is_success(&self) -> bool {
-        !self.timed_out && self.exit_code == Some(0)
+        !self.timed_out && !self.detached && self.exit_code == Some(0)
     }
 }
 
@@ -938,11 +940,12 @@ impl ConnectionHook {
             .map_err(|_| "Failed to register detached hook process".to_string())?;
 
         Ok(HookResult {
-            exit_code: Some(0),
+            exit_code: None,
             stdout: String::new(),
             stderr: String::new(),
             timed_out: false,
-            warnings: Vec::new(),
+            detached: true,
+            warnings: vec!["detached: outcome not monitored".to_string()],
         })
     }
 
@@ -1749,6 +1752,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             timed_out: false,
+            detached: false,
             warnings: Vec::new(),
         };
 
@@ -1762,6 +1766,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             timed_out: false,
+            detached: false,
             warnings: Vec::new(),
         };
 
@@ -1775,6 +1780,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             timed_out: true,
+            detached: false,
             warnings: Vec::new(),
         };
 
@@ -1788,10 +1794,62 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             timed_out: false,
+            detached: false,
             warnings: Vec::new(),
         };
 
         assert!(!result.is_success());
+    }
+
+    // =========================================================================
+    // PROC-3: HookResult.detached
+    // =========================================================================
+
+    #[test]
+    fn test_detached_hook_result_shape() {
+        let result = HookResult {
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            timed_out: false,
+            detached: true,
+            warnings: vec!["detached: outcome not monitored".to_string()],
+        };
+
+        assert!(result.detached);
+        assert_eq!(result.exit_code, None);
+        assert!(!result.is_success());
+        assert!(result.warnings.iter().any(|w| w.contains("detached: outcome not monitored")));
+    }
+
+    #[test]
+    fn test_monitored_success_unaffected() {
+        let result = HookResult {
+            exit_code: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+            timed_out: false,
+            detached: false,
+            warnings: Vec::new(),
+        };
+
+        assert!(!result.detached);
+        assert_eq!(result.exit_code, Some(0));
+        assert!(result.is_success());
+    }
+
+    #[test]
+    fn test_failure_policy_on_detached() {
+        let result = HookResult {
+            exit_code: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+            timed_out: false,
+            detached: true,
+            warnings: Vec::new(),
+        };
+
+        assert!(!result.is_success(), "detached result must never be success regardless of exit_code");
     }
 
     // =========================================================================
@@ -2185,6 +2243,7 @@ mod tests {
                     stdout: String::new(),
                     stderr: String::new(),
                     timed_out: false,
+                    detached: false,
                     warnings: vec!["be careful".to_string()],
                 })
             }
@@ -2551,6 +2610,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             timed_out: true,
+            detached: false,
             warnings: Vec::new(),
         });
 
@@ -2570,6 +2630,7 @@ mod tests {
             stdout: String::new(),
             stderr: "something went wrong".to_string(),
             timed_out: false,
+            detached: false,
             warnings: Vec::new(),
         });
 
