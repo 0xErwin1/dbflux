@@ -3013,7 +3013,7 @@ fn execute_mongo_query(
                 columns: vec![ColumnMeta {
                     name: "result".to_string(),
                     type_name: "Text".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Text,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3051,7 +3051,7 @@ fn execute_db_operation(
                 columns: vec![ColumnMeta {
                     name: "name".to_string(),
                     type_name: "Text".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Text,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3072,7 +3072,7 @@ fn execute_db_operation(
                 columns: vec![ColumnMeta {
                     name: "collection".to_string(),
                     type_name: "Text".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Text,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3134,7 +3134,7 @@ fn execute_db_operation(
                 columns: vec![ColumnMeta {
                     name: "result".to_string(),
                     type_name: "Text".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Text,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3150,7 +3150,7 @@ fn execute_db_operation(
                 columns: vec![ColumnMeta {
                     name: "result".to_string(),
                     type_name: "Text".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Text,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3190,7 +3190,7 @@ fn execute_db_operation(
                 columns: vec![ColumnMeta {
                     name: "version".to_string(),
                     type_name: "Text".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Text,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3664,6 +3664,22 @@ mod tests {
             columns.len(),
             6,
             "column count must match describe_table output"
+        );
+
+        // Assert exact column order so any future reordering breaks this test.
+        // Order must match the row values produced in describe_table.
+        let names: Vec<&str> = columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "field_name",
+                "common_type",
+                "occurrence_rate",
+                "is_indexed",
+                "index_names",
+                "nested_field_count",
+            ],
+            "column order must match describe_table row construction"
         );
     }
 
