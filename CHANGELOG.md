@@ -2,6 +2,26 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+* **Chart auto-detection across four drivers (#204)** — Drivers now assign
+  `ColumnKind` honestly so the chart engine includes genuine numeric and
+  timestamp columns and excludes non-numeric ones. CloudWatch CWL Insights
+  fields that are not recognized timestamps/text fall back to `Unknown`
+  instead of `Float` (their values are built as `Value::Text`), so string
+  fields like `errorCode` are no longer offered as chart Y axes; the
+  stats/metrics path that already sets `Float` is untouched. DynamoDB infers
+  column kind from the `AttributeValue` type (`N` → `Float`, `S` → `Text`,
+  otherwise `Unknown`), making numeric scans chart-able. MongoDB
+  operation-result integer columns (`count`, `insertedCount`,
+  `matchedCount`, `modifiedCount`, `deletedCount`) are now `Integer` and the
+  schema-listing text columns (`field_name`, `common_type`, `index_names`)
+  are `Text`. InfluxDB Flux and InfluxQL kind mappers gain an explicit,
+  documented `boolean → Unknown` arm. No `ColumnKind::Bool` variant is
+  introduced; the chart engine and UI remain driver-agnostic.
+
 ## [0.6.0] - 2026-06-04
 
 ### Added
