@@ -3223,6 +3223,33 @@ fn execute_db_operation(
     }
 }
 
+/// Map a single BSON value to a `ColumnKind`. Returns `Unknown` for types
+/// that have no useful chart representation (arrays, documents, booleans,
+/// object IDs, etc.).
+fn bson_to_column_kind(value: &Bson) -> ColumnKind {
+    match value {
+        Bson::Int32(_) | Bson::Int64(_) => ColumnKind::Integer,
+        Bson::Double(_) | Bson::Decimal128(_) => ColumnKind::Float,
+        Bson::DateTime(_) | Bson::Timestamp(_) => ColumnKind::Timestamp,
+        Bson::String(_) => ColumnKind::Text,
+        _ => ColumnKind::Unknown,
+    }
+}
+
+/// Infer the `ColumnKind` for `field` by scanning `documents` for the first
+/// value that maps to a known kind, skipping Unknown-mapping values.
+fn infer_document_field_kind(documents: &[Document], field: &str) -> ColumnKind {
+    for doc in documents {
+        if let Some(value) = doc.get(field) {
+            let kind = bson_to_column_kind(value);
+            if kind != ColumnKind::Unknown {
+                return kind;
+            }
+        }
+    }
+    ColumnKind::Unknown
+}
+
 fn documents_to_result(documents: Vec<Document>) -> Result<QueryResultInternal, DbError> {
     if documents.is_empty() {
         return Ok(QueryResultInternal {
@@ -3256,7 +3283,7 @@ fn documents_to_result(documents: Vec<Document>) -> Result<QueryResultInternal, 
         .map(|name| ColumnMeta {
             name: name.clone(),
             type_name: "BSON".to_string(),
-            kind: ColumnKind::Unknown,
+            kind: infer_document_field_kind(&documents, name),
             nullable: true,
             is_primary_key: name == "_id",
         })
@@ -4260,6 +4287,38 @@ mod tests {
         if let Value::Document(map) = value {
             assert_eq!(map.len(), 2);
         }
+    }
+
+    #[test]
+    fn documents_to_result_bson_column_kind_inference() {
+        use bson::oid::ObjectId;
+
+        let docs = vec![
+            doc! {
+                "count": Bson::Int64(10),
+                "ratio": Bson::Double(0.5),
+                "label": Bson::String("hello".to_string()),
+                "active": Bson::Boolean(true),
+                "id": Bson::ObjectId(ObjectId::new()),
+            },
+        ];
+
+        let result = documents_to_result(docs).expect("should succeed");
+
+        let kind_of = |name: &str| {
+            result
+                .columns
+                .iter()
+                .find(|c| c.name == name)
+                .unwrap_or_else(|| panic!("column '{name}' not found"))
+                .kind
+        };
+
+        assert_eq!(kind_of("count"), ColumnKind::Integer);
+        assert_eq!(kind_of("ratio"), ColumnKind::Float);
+        assert_eq!(kind_of("label"), ColumnKind::Text);
+        assert_eq!(kind_of("active"), ColumnKind::Unknown);
+        assert_eq!(kind_of("id"), ColumnKind::Unknown);
     }
 
     #[test]
