@@ -3230,7 +3230,9 @@ fn bson_to_column_kind(value: &Bson) -> ColumnKind {
     match value {
         Bson::Int32(_) | Bson::Int64(_) => ColumnKind::Integer,
         Bson::Double(_) | Bson::Decimal128(_) => ColumnKind::Float,
-        Bson::DateTime(_) | Bson::Timestamp(_) => ColumnKind::Timestamp,
+        // DateTime is emitted as Value::DateTime and Timestamp as Value::Text;
+        // neither is extractable by the chart engine, so leave both Unknown.
+        Bson::DateTime(_) | Bson::Timestamp(_) => ColumnKind::Unknown,
         Bson::String(_) => ColumnKind::Text,
         _ => ColumnKind::Unknown,
     }
@@ -4299,6 +4301,7 @@ mod tests {
             "label": Bson::String("hello".to_string()),
             "active": Bson::Boolean(true),
             "id": Bson::ObjectId(ObjectId::new()),
+            "created_at": Bson::DateTime(bson::DateTime::now()),
         }];
 
         let result = documents_to_result(docs).expect("should succeed");
@@ -4317,6 +4320,9 @@ mod tests {
         assert_eq!(kind_of("label"), ColumnKind::Text);
         assert_eq!(kind_of("active"), ColumnKind::Unknown);
         assert_eq!(kind_of("id"), ColumnKind::Unknown);
+        // DateTime is emitted as Value::DateTime which the chart engine cannot
+        // extract, so it must be Unknown rather than Timestamp.
+        assert_eq!(kind_of("created_at"), ColumnKind::Unknown);
     }
 
     #[test]
