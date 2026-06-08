@@ -4293,15 +4293,13 @@ mod tests {
     fn documents_to_result_bson_column_kind_inference() {
         use bson::oid::ObjectId;
 
-        let docs = vec![
-            doc! {
-                "count": Bson::Int64(10),
-                "ratio": Bson::Double(0.5),
-                "label": Bson::String("hello".to_string()),
-                "active": Bson::Boolean(true),
-                "id": Bson::ObjectId(ObjectId::new()),
-            },
-        ];
+        let docs = vec![doc! {
+            "count": Bson::Int64(10),
+            "ratio": Bson::Double(0.5),
+            "label": Bson::String("hello".to_string()),
+            "active": Bson::Boolean(true),
+            "id": Bson::ObjectId(ObjectId::new()),
+        }];
 
         let result = documents_to_result(docs).expect("should succeed");
 

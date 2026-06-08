@@ -4324,10 +4324,7 @@ mod tests {
 
         // Polymorphic: first present sample is Bool (Unknown-mapping), later sample is N → Integer
         // Proves the scanner skips Unknown-mapping attrs and keeps looking.
-        let poly: Vec<HashMap<String, AttributeValue>> = vec![
-            bool_item,
-            n_int_item,
-        ];
+        let poly: Vec<HashMap<String, AttributeValue>> = vec![bool_item, n_int_item];
         assert_eq!(infer_field_kind(&poly, "count"), ColumnKind::Integer);
     }
 

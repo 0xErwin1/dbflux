@@ -1666,13 +1666,11 @@ mod tests {
         let empty: Vec<HashMap<String, Value>> = vec![];
         assert_eq!(cwli_column_kind("count", &empty), ColumnKind::Unknown);
 
-        let null_rows: Vec<HashMap<String, Value>> = vec![
-            {
-                let mut m = HashMap::new();
-                m.insert("count".to_string(), Value::Null);
-                m
-            },
-        ];
+        let null_rows: Vec<HashMap<String, Value>> = vec![{
+            let mut m = HashMap::new();
+            m.insert("count".to_string(), Value::Null);
+            m
+        }];
         assert_eq!(cwli_column_kind("count", &null_rows), ColumnKind::Unknown);
     }
 
