@@ -521,7 +521,12 @@ impl HooksSection {
                 .is_empty()
             || !self.input_hook_cwd.read(cx).value().trim().is_empty()
             || !self.input_hook_env.read(cx).value().trim().is_empty()
-            || !self.input_hook_env_denylist.read(cx).value().trim().is_empty()
+            || !self
+                .input_hook_env_denylist
+                .read(cx)
+                .value()
+                .trim()
+                .is_empty()
             || !self.input_hook_timeout.read(cx).value().trim().is_empty()
     }
 

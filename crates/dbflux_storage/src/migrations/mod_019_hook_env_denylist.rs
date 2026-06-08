@@ -27,9 +27,7 @@ impl Migration for MigrationImpl {
 fn add_env_denylist_column(tx: &Transaction, table: &str) -> Result<(), MigrationError> {
     let table_exists: bool = tx
         .query_row(
-            &format!(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='{table}'"
-            ),
+            &format!("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='{table}'"),
             [],
             |row| row.get::<_, i64>(0),
         )
@@ -111,12 +109,13 @@ mod tests {
         .expect("insert profile");
 
         let hooks_repo = profiles_repo.hooks();
-        let mut dto = crate::repositories::connection_profile_hooks::ConnectionProfileHookDto::new_command(
-            profile_id.clone(),
-            "pre_connect".to_string(),
-            0,
-            "my-script.sh".to_string(),
-        );
+        let mut dto =
+            crate::repositories::connection_profile_hooks::ConnectionProfileHookDto::new_command(
+                profile_id.clone(),
+                "pre_connect".to_string(),
+                0,
+                "my-script.sh".to_string(),
+            );
         dto.env_denylist = vec!["MY_SECRET_KEY".to_string(), "INTERNAL_TOKEN".to_string()];
 
         hooks_repo.insert(&dto).expect("insert hook dto");
