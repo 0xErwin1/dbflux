@@ -12,20 +12,30 @@ The long-term goal is to provide a fully open-source alternative to DBeaver, sup
 
 ## Documentation
 
+### User guides
+
 - [Usage Guide](docs/USAGE.md) — getting started: connect, query, chart, export
-- [Architecture](ARCHITECTURE.md) — layered diagrams, query/connection flow, crate map
+- [Connecting — Advanced Setup](docs/CONNECTIONS.md) — SSH tunnels, proxies, AWS SSO auth profiles, value sources
+- [Settings & Hooks](docs/SETTINGS.md) — every Settings section and connection hooks
+- [Data & Privacy](docs/DATA_AND_PRIVACY.md) — where your data and secrets live, backup and reset
+- [Dashboards & Audit — User Guide](docs/DASHBOARDS_AND_AUDIT.md) — charts, dashboards, instance metrics, audit viewer
 - [Drivers Overview](docs/DRIVERS.md) — supported databases, capabilities, limitations
+- [Lua Scripting](docs/LUA.md) — the embedded Lua runtime for hooks
+
+### Reference & internals
+
+- [Architecture](ARCHITECTURE.md) — layered diagrams, query/connection flow, crate map
 - [Charts](docs/CHARTS.md) — chart types, column kinds, axis auto-detection
-- [Contributing](CONTRIBUTING.md)
-- [Release Process](docs/RELEASE.md)
-- [Code Style](CODE_STYLE.md)
-- [Agent Instructions](AGENTS.md)
-- [Claude Instructions](CLAUDE.md)
-- [Audit](docs/AUDIT.md)
+- [Dashboards](docs/DASHBOARDS.md) — dashboards, saved charts, instance metrics and inspectors
+- [Audit](docs/AUDIT.md) — audit event schema and redaction
 - [AI + MCP Integration Guide](docs/MCP_AI_INTEGRATION.md)
 - [Driver RPC Protocol](docs/DRIVER_RPC_PROTOCOL.md)
 - [RPC Services Config](docs/RPC_SERVICES_CONFIG.md)
-- [Lua Scripting](docs/LUA.md)
+- [Release Process](docs/RELEASE.md)
+- [Contributing](CONTRIBUTING.md)
+- [Code Style](CODE_STYLE.md)
+- [Agent Instructions](AGENTS.md)
+- [Claude Instructions](CLAUDE.md)
 
 ## Installation
 

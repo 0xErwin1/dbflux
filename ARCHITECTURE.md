@@ -204,10 +204,14 @@ crates/
       data_grid_panel/      # Data grid with table/document view modes
         mod.rs
         context_menu.rs
+        filter_bar.rs
+        mutation_confirm.rs
+        mutation_executor.rs
         mutations.rs
         navigation.rs
         query.rs
         render.rs
+        row_inspector.rs
         utils.rs
       code/                 # CodeDocument: query/script editor
         mod.rs
@@ -241,6 +245,16 @@ crates/
         filters.rs
         saved_filter.rs
         source_adapter.rs
+      chart/                # ChartShell host for metric/instance charts (distinct from chart_document/)
+        mod.rs
+        shell.rs            # ChartShell host entity
+        host.rs
+        metric_picker.rs
+        metric_picker_render.rs
+        toolbar.rs
+      instance_inspector/   # InstanceInspectorDocument (backs DocumentKey::InstanceInspector)
+        mod.rs
+        pane.rs             # into_pane constructor
   dbflux_ui_sidebar/        # Connections + scripts sidebar tree with folders, drag-drop
     src/
       lib.rs                # SidebarView entity (re-exported by dbflux_ui)
@@ -277,7 +291,9 @@ crates/
         hooks.rs            # Hook definitions CRUD
         drivers.rs          # Per-driver settings overrides
         rpc_services.rs     # RPC services settings UI (Driver/Auth Provider descriptors)
-        mcp_section.rs      # MCP settings (trusted clients, roles, policies, audit)
+        audit_section.rs    # Audit settings section
+        about_section.rs    # About section
+        mcp_section.rs      # MCP settings (trusted clients, roles, policies, audit; feature-gated)
       connection_manager/   # Connection manager window
         mod.rs
         access_tab.rs       # Unified access mode editor (Direct/SSH/Proxy/SSM)
@@ -287,7 +303,7 @@ crates/
         render_driver_select.rs
         render_tabs.rs
         hooks_tab.rs        # Per-profile hook bindings
-  dbflux_ui/                # Thin integrator (~11.5k LOC): wires the six UI crates together
+  dbflux_ui/                # Thin integrator (~13.5k LOC): wires the six UI crates together
     src/                    # Re-exports moved subsystems via pub use shims at old module paths
       lib.rs                # Crate root; re-exports via shim modules
       app.rs                # GPUI app bootstrap
@@ -335,11 +351,11 @@ crates/
       hook_executor.rs       # Composite hook executor routing
       proxy.rs               # create_proxy_tunnel callback for CreateTunnelFn
       config_loader.rs       # SQLite-backed configuration persistence
-      rpc_services.rs        # RPC service discovery/adaptation seam for runtime bootstrap
+      rpc_services/          # RPC service discovery/adaptation seam for runtime bootstrap (external_audit, ...)
       history_manager_sqlite.rs # SQLite-backed query history
       mcp_command.rs         # MCP subcommand integration and arg parsing
       keymap/                # Keyboard system (pure domain types)
-        command.rs           # Command enum (pure domain)
+        mod.rs               # Re-exports Command/ContextId from dbflux_core::keymap_types
         focus.rs             # FocusTarget enum (pure domain)
   dbflux_core/              # Traits, core types, storage, errors
     src/access/             # AccessKind, AccessManager, and managed-access serialization
@@ -563,6 +579,8 @@ User-triggered failures route through a single seam in `crates/dbflux_ui_base/sr
 - `CodeDocument` (`crates/dbflux_ui_document/src/code/`) — multi-tab editor. Each result tab wraps its `DataGridPanel` in its own `ResultPanel`. Outer chrome (editor, context bar, tab strip) is self-rendered.
 - `KeyValueDocument` (`crates/dbflux_ui_document/src/key_value/`) — self-renders. `KeyValueView` is a file-level boundary struct (not a separate GPUI entity) grouping render helpers extracted from `key_value/render.rs`.
 - `AuditDocument` (`crates/dbflux_ui_document/src/audit/`) — self-renders. `LogStreamView` is a file-level boundary struct. Body extracted to `audit/render.rs` and `audit/commands.rs` as sibling `impl AuditDocument` files.
+- `InstanceInspectorDocument` (`crates/dbflux_ui_document/src/instance_inspector/`) — tabular instance-inspector snapshot tab, keyed by `DocumentKey::InstanceInspector`.
+- `chart/` (`crates/dbflux_ui_document/src/chart/`) — the `ChartShell` host (`shell.rs`, `host.rs`) plus metric picker (`metric_picker*.rs`) and `toolbar.rs`, distinct from `chart_document/`; it backs metric/instance charts.
 
 **Adding a new document type** (no changes required outside the new module):
 1. Create `crates/dbflux_ui_document/src/<name>/mod.rs` with the entity.
@@ -608,7 +626,7 @@ See `docs/DASHBOARDS.md` for the full reference and `docs/CHARTS.md` for the cha
 - Driver-owned child resources under collections/containers are published through generic `CollectionChildInfo` metadata. The sidebar must not infer driver-specific children from names, field types, or driver IDs.
 - Routines (functions, procedures, aggregates, window functions) appear as a per-schema "Routines" folder when the driver sets the `ROUTINES` capability and populates the `schema_routines` seam. The UI renders the folder generically; it does not special-case any driver.
 - Sidebar dock: `crates/dbflux_ui/src/ui/dock/sidebar_dock.rs` provides collapsible, resizable sidebar with ToggleSidebar command (Ctrl+B).
-- Connection tree: `crates/dbflux_core/src/connection/tree.rs` models folders and connections as a tree structure with persistence via `connection_tree_store.rs`.
+- Connection tree: `crates/dbflux_core/src/connection/tree.rs` models folders and connections as a tree structure with persistence via `tree_store.rs`.
 
 ### Driver System
 
@@ -667,7 +685,7 @@ See `docs/DASHBOARDS.md` for the full reference and `docs/CHARTS.md` for the cha
 
 ### Settings Window
 
-- Settings is organized into 8 sections: General, Keybindings, Auth Profiles, Proxies, SSH Tunnels, Services, Hooks, Drivers.
+- Settings is organized into the following sections: General, Keybindings, Auth Profiles, Proxies, SSH Tunnels, Services, Hooks, Drivers, Audit, and About. MCP sections (trusted clients, roles, policies) are feature-gated under the `mcp` feature.
 - Sidebar uses `TreeNav` component with collapsible Network/Connection categories.
 - `UiStateStore` persists sidebar collapse state to `st_ui_state` table in `~/.local/share/dbflux/dbflux.db`.
 - Auth Profiles section is provider-driven (`DynAuthProvider::form_def`) and supports importing provider-discovered profiles (for AWS, from `~/.aws/config`).
@@ -862,7 +880,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 
 ## Keyboard & Focus Architecture
 
-- Keymap system: `crates/dbflux_ui/src/keymap/` (stays in `dbflux_ui`) defines keymap glue (`actions.rs`, `dispatcher.rs`). Keymap helpers (`default_keymap`, `key_chord_from_gpui`) live in `crates/dbflux_ui_base/src/keymap.rs`. Domain command types live in `crates/dbflux_app/src/keymap/`.
+- Keymap system: `crates/dbflux_ui/src/keymap/` (stays in `dbflux_ui`) defines keymap glue (`actions.rs`, `dispatcher.rs`). Keymap helpers (`default_keymap`, `key_chord_from_gpui`) live in `crates/dbflux_ui_base/src/keymap.rs`. Domain command types (`Command`, `ContextId`) are defined in `dbflux_core::keymap_types` and re-exported through `crates/dbflux_app/src/keymap/`.
 - Command dispatch: `Workspace` implements `CommandDispatcher` trait; `dispatch()` in `views/workspace/dispatch.rs` routes commands based on `focus_target` (Document, Sidebar, BackgroundTasks).
 - Document-focused design: FocusTarget was simplified from Editor/Results/Sidebar/BackgroundTasks to Document/Sidebar/BackgroundTasks, letting documents manage their own internal focus state.
 - Focus layers: Each context has its own keymap layer with vim-style bindings (j/k/h/l navigation).
@@ -888,7 +906,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 ## Configuration
 
 - Workspace settings: `Cargo.toml` defines workspace members and shared dependencies.
-- App features: `crates/dbflux/Cargo.toml` gates `sqlite`, `postgres`, `mysql`, `mongodb`, `redis`, `dynamodb`, `lua`, and `aws` (enabled by default in this branch).
+- App features: `crates/dbflux/Cargo.toml` gates `sqlite`, `postgres`, `mysql`, `mongodb`, `redis`, `dynamodb`, `cloudwatch`, `influxdb`, `mssql`, `lua`, `aws`, and `mcp` (enabled by default in this branch).
 - Runtime data: All runtime configuration is stored in `~/.local/share/dbflux/dbflux.db` (single SQLite file).
   - `cfg_connection_profiles` + child tables (auth, proxy, SSH bindings)
   - `cfg_auth_profiles` (provider-agnostic auth profile storage)

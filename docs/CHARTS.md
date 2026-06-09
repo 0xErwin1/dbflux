@@ -131,9 +131,12 @@ When the engine extracts a numeric value from a cell (`extract_f64` in
 ## Saved charts
 
 A persisted chart is a `SavedChart` record, defined in
-`crates/dbflux_components/src/saved_chart.rs`. Saved charts are stored as JSON
-in `~/.config/dbflux/saved_charts.json` through `SavedChartStore` (a
-`JsonStore<SavedChart>` type alias) and managed by `SavedChartManager`.
+`crates/dbflux_components/src/saved_chart.rs`. Saved charts are stored in the
+unified SQLite database — the `viz_saved_charts` table and its related
+`viz_saved_chart_*` tables — through `SavedChartsRepository`, with an in-memory
+cache managed by `SavedChartManager`
+(`crates/dbflux_ui_base/src/saved_chart_manager.rs`). Writes go to the
+repository first; the cache updates only on success.
 
 A `SavedChart` persists:
 
