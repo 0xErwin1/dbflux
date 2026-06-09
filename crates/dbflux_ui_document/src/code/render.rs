@@ -780,8 +780,7 @@ impl Render for CodeDocument {
         if let Some((start_value, end_value)) = self.pending.source_input_values.take() {
             // Each `set_value` emits an `InputEvent::Change`; mark both as
             // seed-originated so the subscription handler skips them.
-            self.source.source_seed_suppress =
-                self.source.source_seed_suppress.saturating_add(2);
+            self.source.source_seed_suppress = self.source.source_seed_suppress.saturating_add(2);
 
             self.source
                 .source_start_input

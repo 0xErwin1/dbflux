@@ -1510,104 +1510,68 @@ fn build_named_db_children(
         let is_pending = state.is_operation_pending(profile_id, Some(&db.name));
         let is_active_db = connected.active_database.as_deref() == Some(&db.name);
 
-        let db_children = if uses_lazy_loading {
-            if let Some(db_schema) = connected.database_schemas.get(&db.name) {
-                if is_document_db {
-                    Sidebar::build_document_db_content(
-                        profile_id,
-                        &db.name,
-                        db_schema,
-                        &connected.table_details,
-                        &connected.collection_children,
-                        conn_capabilities,
-                        conn_category,
-                        Some(metric_cache),
-                        metric_fetch_errors,
-                    )
-                } else if is_time_series_db {
-                    // Time-series lazy schemas are stored in database_schemas
-                    // as a DbSchemaInfo whose tables carry measurement names.
-                    // Route through the time-series builder the same way document
-                    // databases route through build_document_db_content.
-                    Sidebar::build_time_series_db_content(profile_id, &db.name, schema)
-                } else {
-                    Sidebar::build_db_schema_content(
-                        profile_id,
-                        &db.name,
-                        None,
-                        db_schema,
-                        &connected.table_details,
-                        &connected.schema_types,
-                        &connected.schema_indexes,
-                        &connected.schema_foreign_keys,
-                        &connected.schema_routines,
-                        supports_routines,
-                        &connected.dependents_cache,
-                    )
-                }
-            } else if is_pending {
-                vec![TreeItem::new(
-                    SchemaNodeId::Loading {
-                        profile_id,
-                        database: db.name.clone(),
-                    }
-                    .to_string(),
-                    "Loading...".to_string(),
-                )]
-            } else {
-                Vec::new()
-            }
-        } else if let Some(db_conn) = connected.database_connections.get(&db.name) {
-            if let Some(ref db_schema) = db_conn.schema {
-                Sidebar::build_schema_children(
-                    profile_id,
-                    &db.name,
-                    Some(&db.name),
-                    db_schema,
-                    &connected.table_details,
-                    &connected.schema_types,
-                    &connected.schema_indexes,
-                    &connected.schema_foreign_keys,
-                    &connected.schema_routines,
-                    supports_routines,
-                    &connected.dependents_cache,
-                )
-            } else {
-                Vec::new()
-            }
-        } else if db.is_current {
+        let db_children = resolve_db_children(
+            profile_id,
+            connected,
+            schema,
+            conn_capabilities,
+            conn_category,
+            metric_cache,
+            metric_fetch_errors,
+            supports_routines,
+            is_document_db,
+            is_time_series_db,
+            uses_lazy_loading,
+            is_pending,
+            &db.name,
+            db.is_current,
+        );
+
+        named_db_items.push(build_named_db_item(
+            profile_id,
+            &db.name,
+            is_pending,
+            is_active_db,
+            uses_lazy_loading,
+            connected.database_connections.contains_key(&db.name),
+            db.is_current,
+            db_children,
+        ));
+    }
+
+    named_db_items
+}
+
+/// Resolve the child `TreeItem`s for a single named database entry.
+///
+/// Applies the three-way schema strategy (document / time-series / relational)
+/// and the two-way loading strategy (lazy vs. per-database connection) to
+/// produce the correct children vector. Returns an empty vec when no schema
+/// data is available and the database is not the current one.
+#[allow(clippy::too_many_arguments)]
+fn resolve_db_children(
+    profile_id: Uuid,
+    connected: &dbflux_core::ConnectedProfile,
+    schema: &dbflux_core::SchemaSnapshot,
+    conn_capabilities: DriverCapabilities,
+    conn_category: dbflux_core::DatabaseCategory,
+    metric_cache: &dbflux_app::MetricCatalogCache,
+    metric_fetch_errors: &HashMap<String, String>,
+    supports_routines: bool,
+    is_document_db: bool,
+    is_time_series_db: bool,
+    uses_lazy_loading: bool,
+    is_pending: bool,
+    db_name: &str,
+    is_current: bool,
+) -> Vec<TreeItem> {
+    if uses_lazy_loading {
+        if let Some(db_schema) = connected.database_schemas.get(db_name) {
             if is_document_db {
-                let tables = schema
-                    .collections()
-                    .iter()
-                    .filter(|collection| {
-                        collection.database.as_deref().is_none()
-                            || collection.database.as_deref() == Some(db.name.as_str())
-                    })
-                    .map(|collection| TableInfo {
-                        name: collection.name.clone(),
-                        schema: Some(db.name.clone()),
-                        columns: None,
-                        indexes: collection.indexes.clone().map(IndexData::Document),
-                        foreign_keys: None,
-                        constraints: None,
-                        sample_fields: collection.sample_fields.clone(),
-                        presentation: collection.presentation,
-                        child_items: collection.child_items.clone(),
-                    })
-                    .collect::<Vec<_>>();
-
-                let db_schema = dbflux_core::DbSchemaInfo {
-                    name: db.name.clone(),
-                    tables,
-                    views: Vec::new(),
-                    custom_types: None,
-                };
-
                 Sidebar::build_document_db_content(
                     profile_id,
-                    &db.name,
-                    &db_schema,
+                    db_name,
+                    db_schema,
                     &connected.table_details,
                     &connected.collection_children,
                     conn_capabilities,
@@ -1616,15 +1580,17 @@ fn build_named_db_children(
                     metric_fetch_errors,
                 )
             } else if is_time_series_db {
-                // InfluxDB uses SingleDatabase loading: the connection-level
-                // schema already contains all measurements for this bucket.
-                Sidebar::build_time_series_db_content(profile_id, &db.name, schema)
+                // Time-series lazy schemas are stored in database_schemas
+                // as a DbSchemaInfo whose tables carry measurement names.
+                // Route through the time-series builder the same way document
+                // databases route through build_document_db_content.
+                Sidebar::build_time_series_db_content(profile_id, db_name, schema)
             } else {
-                Sidebar::build_schema_children(
+                Sidebar::build_db_schema_content(
                     profile_id,
-                    &db.name,
-                    Some(&db.name),
-                    schema,
+                    db_name,
+                    None,
+                    db_schema,
                     &connected.table_details,
                     &connected.schema_types,
                     &connected.schema_indexes,
@@ -1638,43 +1604,143 @@ fn build_named_db_children(
             vec![TreeItem::new(
                 SchemaNodeId::Loading {
                     profile_id,
-                    database: db.name.clone(),
+                    database: db_name.to_owned(),
                 }
                 .to_string(),
                 "Loading...".to_string(),
             )]
         } else {
             Vec::new()
-        };
-
-        let db_label = if is_pending {
-            format!("{} (loading...)", db.name)
-        } else {
-            db.name.clone()
-        };
-
-        let has_per_db_conn = connected.database_connections.contains_key(&db.name);
-        let is_expanded = if uses_lazy_loading {
-            is_active_db
-        } else {
-            db.is_current || has_per_db_conn
-        };
-
-        named_db_items.push(
-            TreeItem::new(
-                SchemaNodeId::Database {
-                    profile_id,
-                    name: db.name.clone(),
-                }
-                .to_string(),
-                db_label,
+        }
+    } else if let Some(db_conn) = connected.database_connections.get(db_name) {
+        if let Some(ref db_schema) = db_conn.schema {
+            Sidebar::build_schema_children(
+                profile_id,
+                db_name,
+                Some(db_name),
+                db_schema,
+                &connected.table_details,
+                &connected.schema_types,
+                &connected.schema_indexes,
+                &connected.schema_foreign_keys,
+                &connected.schema_routines,
+                supports_routines,
+                &connected.dependents_cache,
             )
-            .expanded(is_expanded)
-            .children(db_children),
-        );
-    }
+        } else {
+            Vec::new()
+        }
+    } else if is_current {
+        if is_document_db {
+            let tables = schema
+                .collections()
+                .iter()
+                .filter(|collection| {
+                    collection.database.as_deref().is_none()
+                        || collection.database.as_deref() == Some(db_name)
+                })
+                .map(|collection| TableInfo {
+                    name: collection.name.clone(),
+                    schema: Some(db_name.to_owned()),
+                    columns: None,
+                    indexes: collection.indexes.clone().map(IndexData::Document),
+                    foreign_keys: None,
+                    constraints: None,
+                    sample_fields: collection.sample_fields.clone(),
+                    presentation: collection.presentation,
+                    child_items: collection.child_items.clone(),
+                })
+                .collect::<Vec<_>>();
 
-    named_db_items
+            let db_schema = dbflux_core::DbSchemaInfo {
+                name: db_name.to_owned(),
+                tables,
+                views: Vec::new(),
+                custom_types: None,
+            };
+
+            Sidebar::build_document_db_content(
+                profile_id,
+                db_name,
+                &db_schema,
+                &connected.table_details,
+                &connected.collection_children,
+                conn_capabilities,
+                conn_category,
+                Some(metric_cache),
+                metric_fetch_errors,
+            )
+        } else if is_time_series_db {
+            // InfluxDB uses SingleDatabase loading: the connection-level
+            // schema already contains all measurements for this bucket.
+            Sidebar::build_time_series_db_content(profile_id, db_name, schema)
+        } else {
+            Sidebar::build_schema_children(
+                profile_id,
+                db_name,
+                Some(db_name),
+                schema,
+                &connected.table_details,
+                &connected.schema_types,
+                &connected.schema_indexes,
+                &connected.schema_foreign_keys,
+                &connected.schema_routines,
+                supports_routines,
+                &connected.dependents_cache,
+            )
+        }
+    } else if is_pending {
+        vec![TreeItem::new(
+            SchemaNodeId::Loading {
+                profile_id,
+                database: db_name.to_owned(),
+            }
+            .to_string(),
+            "Loading...".to_string(),
+        )]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Assemble a single database `TreeItem` from its pre-resolved label parts
+/// and children.
+///
+/// The label, expansion state, and node identity are all derived here so that
+/// `build_named_db_children` can stay focused on the three-way schema dispatch.
+#[allow(clippy::too_many_arguments)]
+fn build_named_db_item(
+    profile_id: Uuid,
+    db_name: &str,
+    is_pending: bool,
+    is_active_db: bool,
+    uses_lazy_loading: bool,
+    has_per_db_conn: bool,
+    is_current: bool,
+    db_children: Vec<TreeItem>,
+) -> TreeItem {
+    let db_label = if is_pending {
+        format!("{} (loading...)", db_name)
+    } else {
+        db_name.to_owned()
+    };
+
+    let is_expanded = if uses_lazy_loading {
+        is_active_db
+    } else {
+        is_current || has_per_db_conn
+    };
+
+    TreeItem::new(
+        SchemaNodeId::Database {
+            profile_id,
+            name: db_name.to_owned(),
+        }
+        .to_string(),
+        db_label,
+    )
+    .expanded(is_expanded)
+    .children(db_children)
 }
 
 /// Build the instance overview leaf and any instance metric / inspector folder

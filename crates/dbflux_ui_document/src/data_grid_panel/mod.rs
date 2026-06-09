@@ -362,13 +362,13 @@ enum SqlGenerateKind {
 /// Callback type for providing row-level inspector actions (e.g. kill/cancel).
 type RowActionProvider = Arc<dyn Fn(&str) -> Vec<dbflux_core::InspectorRowAction> + Send + Sync>;
 
-/// Render-drained pending state (Class-A fields).
+/// Pending intents drained at the top of each render cycle via `process_pending_actions`.
 ///
-/// Each field is set by a producer and consumed exactly once by
-/// `process_pending_actions` during the next render cycle. Class-B fields
-/// (`pending_delete_confirm`, `pending_batch_remaining`, `pending_mutation_exec`,
-/// `pending_collection_chart_save`) are mid-flow state machines and remain as
-/// direct fields on `DataGridPanel`.
+/// Each field is set by a producer and consumed exactly once per cycle.
+/// Fields that are mid-flow state machines (`pending_delete_confirm`,
+/// `pending_batch_remaining`, `pending_mutation_exec`,
+/// `pending_collection_chart_save`) are not included here; they are read
+/// mid-render and remain as direct fields on `DataGridPanel`.
 #[derive(Default)]
 struct PendingActions {
     requery: Option<PendingRequery>,

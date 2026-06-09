@@ -191,8 +191,8 @@ impl Render for DataGridPanel {
 }
 
 impl DataGridPanel {
-    /// Drains all Class-A pending fields in the same order as the pre-refactor
-    /// render drain block. Must stay on `DataGridPanel` because the drain calls
+    /// Drains pending actions in the exact order the render entry expects; order
+    /// is load-bearing. Must stay on `DataGridPanel` because the drain calls
     /// methods that require `&mut self` and GPUI's single-Context borrow model.
     pub(super) fn process_pending_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(pending) = self.pending.total_count.take() {
@@ -1464,9 +1464,13 @@ impl DataGridPanel {
                 .child(tree.clone())
         } else {
             let entity = _cx.entity();
-            let list_state = self.document_view.document_card_list.clone().unwrap_or_else(|| {
-                ListState::new(self.result.rows.len(), ListAlignment::Top, px(400.0))
-            });
+            let list_state = self
+                .document_view
+                .document_card_list
+                .clone()
+                .unwrap_or_else(|| {
+                    ListState::new(self.result.rows.len(), ListAlignment::Top, px(400.0))
+                });
 
             let card_list = list(list_state, move |row_idx, _window, cx: &mut App| {
                 let theme = cx.theme().clone();
