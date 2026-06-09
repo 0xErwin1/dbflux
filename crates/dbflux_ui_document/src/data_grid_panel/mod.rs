@@ -423,6 +423,52 @@ struct RefreshState {
     state: GridState,
 }
 
+/// Document/JSON view widgets: tree entity, tree state, its subscription,
+/// the document-preview modal, and the cell-editor modal.
+///
+/// All five are created at construction time and live for the panel's lifetime.
+/// They form the full MongoDB-document presentation path.
+struct DocumentViewState {
+    document_tree: Option<Entity<DocumentTree>>,
+    document_tree_state: Option<Entity<DocumentTreeState>>,
+    document_tree_subscription: Option<Subscription>,
+
+    /// Virtualized state for the document-card fallback view (used when no
+    /// `document_tree` is built). Cards have variable height, so this relies on
+    /// `gpui::list` rather than `uniform_list`. Rebuilt with the row count on
+    /// every `rebuild_table`.
+    document_card_list: Option<ListState>,
+
+    document_preview_modal: Entity<DocumentPreviewModal>,
+    cell_editor: Entity<CellEditorModal>,
+}
+
+/// Chart shell and source time-range panel.
+///
+/// Both are lazy / optional: the shell is created on first chartable result;
+/// the time-range panel is injected by `CodeDocument` after construction.
+struct ChartState {
+    /// Lazily-created chart shell entity. Created the first time the result
+    /// passes chart detection (or when the user is already in chart mode).
+    /// `None` for sources that have never produced a chartable result.
+    chart_shell: Option<Entity<crate::chart::ChartShell>>,
+
+    /// Time-range panel from the source-context bar, set by `CodeDocument`
+    /// after the panel is built. `None` for non-TimeSeries sources.
+    chart_source_time_range_panel:
+        Option<Entity<dbflux_components::common::time_range::view::TimeRangePanel>>,
+}
+
+/// Mutation confirmation modal pair (light + hard variants).
+struct MutationConfirmState {
+    /// Light variant for small row counts.
+    pub(crate) mutation_confirm_light:
+        Entity<dbflux_components::modals::ModalMutationConfirm>,
+    /// Hard variant for large row counts / DELETE.
+    pub(crate) mutation_confirm_hard:
+        Entity<dbflux_components::modals::ModalMutationConfirmHard>,
+}
+
 /// Reusable data grid panel with filter bar, grid, toolbar, and status bar.
 /// Used both embedded in ScriptDocument and as standalone DataDocument.
 pub struct DataGridPanel {
@@ -434,6 +480,9 @@ pub struct DataGridPanel {
     grid_table: GridTableState,
     filter_bar: FilterBarState,
     refresh: RefreshState,
+    document_view: DocumentViewState,
+    chart: ChartState,
+    mutation_confirm: MutationConfirmState,
 
     // Primary key columns for row editing
     pk_columns: Vec<String>,
@@ -460,9 +509,6 @@ pub struct DataGridPanel {
     context_menu: Option<TableContextMenu>,
     context_menu_focus: FocusHandle,
 
-    // Modal editor for JSON/long text
-    cell_editor: Entity<CellEditorModal>,
-
     // Panel origin in window coordinates (for context menu positioning)
     panel_origin: Point<Pixels>,
 
@@ -473,20 +519,6 @@ pub struct DataGridPanel {
     result_view_mode: ResultViewMode,
     derived_json: Option<String>,
     derived_text: Option<String>,
-
-    // Document tree for MongoDB document view
-    document_tree: Option<Entity<DocumentTree>>,
-    document_tree_state: Option<Entity<DocumentTreeState>>,
-    document_tree_subscription: Option<Subscription>,
-
-    // Virtualized state for the document-card fallback view (used when no
-    // `document_tree` is built). Cards have variable height, so this relies on
-    // `gpui::list` rather than `uniform_list`. Rebuilt with the row count on
-    // every `rebuild_table`.
-    document_card_list: Option<ListState>,
-
-    // Document preview modal for viewing/editing full documents
-    document_preview_modal: Entity<DocumentPreviewModal>,
 
     // Row inspector content entity (workspace owns the chrome/lifecycle).
     row_inspector_content: Option<Entity<row_inspector::RowInspectorContent>>,
@@ -515,19 +547,6 @@ pub struct DataGridPanel {
     /// Set by `DataGridPanel::into_view_handle` after the `ViewHandle` is
     /// built. Defaults to `false` (grid renders its own toolbar).
     toolbar_in_chrome_row: bool,
-
-    // Chart subsystem
-    /// Lazily-created chart shell entity. Created the first time the result
-    /// passes chart detection (or when the user is already in chart mode).
-    /// `None` for sources that have never produced a chartable result.
-    chart_shell: Option<Entity<crate::chart::ChartShell>>,
-
-    /// Time-range panel from the source-context bar, set by CodeDocument after
-    /// the panel is built. Used by the chart toolbar RANGE chips to read/write
-    /// the active preset. `None` for non-TimeSeries sources or before the panel
-    /// has been created.
-    chart_source_time_range_panel:
-        Option<Entity<dbflux_components::common::time_range::view::TimeRangePanel>>,
 
     /// Pending "Save chart from collection" state.
     ///
@@ -584,12 +603,6 @@ pub struct DataGridPanel {
     ///
     /// Cleared when the user confirms (executor is dispatched) or cancels.
     pub(crate) pending_mutation_exec: Option<PendingMutationExec>,
-
-    /// Mutation confirmation modal (light variant) for small row counts.
-    pub(crate) mutation_confirm_light: Entity<dbflux_components::modals::ModalMutationConfirm>,
-
-    /// Mutation confirmation modal (hard variant) for large row counts / DELETE.
-    pub(crate) mutation_confirm_hard: Entity<dbflux_components::modals::ModalMutationConfirmHard>,
 
     /// Editable-safety binding for the last successfully executed builder SELECT.
     ///
@@ -1108,6 +1121,22 @@ impl DataGridPanel {
                 _refresh_subscriptions: vec![refresh_policy_sub],
                 state: GridState::Ready,
             },
+            document_view: DocumentViewState {
+                document_tree: None,
+                document_tree_state: None,
+                document_tree_subscription: None,
+                document_card_list: None,
+                document_preview_modal,
+                cell_editor,
+            },
+            chart: ChartState {
+                chart_shell: None,
+                chart_source_time_range_panel: None,
+            },
+            mutation_confirm: MutationConfirmState {
+                mutation_confirm_light,
+                mutation_confirm_hard,
+            },
             pk_columns,
             runner,
             pending: PendingActions::default(),
@@ -1123,24 +1152,16 @@ impl DataGridPanel {
             is_maximized: false,
             context_menu: None,
             context_menu_focus,
-            cell_editor,
             panel_origin: Point::default(),
             view_config,
             result_view_mode,
             derived_json: None,
             derived_text: None,
-            document_tree: None,
-            document_tree_state: None,
-            document_tree_subscription: None,
-            document_card_list: None,
-            document_preview_modal,
             row_inspector_content: None,
             inspector_row: None,
             export_menu_open: false,
             row_action_provider: None,
             toolbar_in_chrome_row: false,
-            chart_shell: None,
-            chart_source_time_range_panel: None,
             pending_collection_chart_save: None,
             fk_cache: FkLoadState::Loading,
             relational_filter_state: filter_bar::RelationalFilterState::Inactive,
@@ -1151,8 +1172,6 @@ impl DataGridPanel {
             _builder_subscriptions: Vec::new(),
             filter_input_hidden: false,
             pending_mutation_exec: None,
-            mutation_confirm_light,
-            mutation_confirm_hard,
             builder_editable_binding: None,
         }
     }
@@ -1225,7 +1244,7 @@ impl DataGridPanel {
             return;
         }
 
-        let Some(shell) = &self.chart_shell else {
+        let Some(shell) = &self.chart.chart_shell else {
             return;
         };
 
@@ -1425,7 +1444,7 @@ impl DataGridPanel {
     /// Returns `true` when the current result has a `Timestamp` column and at
     /// least one numeric column — i.e., chart mode is available.
     pub(super) fn chart_available(&self, cx: &App) -> bool {
-        self.chart_shell
+        self.chart.chart_shell
             .as_ref()
             .is_some_and(|s| s.read(cx).chart_available())
     }
@@ -1439,7 +1458,7 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) -> Option<Entity<ChartView>> {
         let result = self.result.clone();
-        self.chart_shell
+        self.chart.chart_shell
             .as_ref()?
             .update(cx, |shell, cx| shell.ensure_chart_view(&result, cx))
     }
@@ -1448,7 +1467,7 @@ impl DataGridPanel {
     ///
     /// Delegates to `ChartShell::toggle_chart_series_hidden`.
     pub(super) fn toggle_chart_series_hidden(&mut self, idx: usize, cx: &mut Context<Self>) {
-        if let Some(shell) = &self.chart_shell {
+        if let Some(shell) = &self.chart.chart_shell {
             shell.update(cx, |s, cx| s.toggle_chart_series_hidden(idx, cx));
         }
     }
@@ -1462,7 +1481,7 @@ impl DataGridPanel {
         panel: Option<Entity<dbflux_components::common::time_range::view::TimeRangePanel>>,
         cx: &mut Context<Self>,
     ) {
-        self.chart_source_time_range_panel = panel;
+        self.chart.chart_source_time_range_panel = panel;
 
         let enabled = self.supports_auto_refresh();
         self.filter_bar.refresh_dropdown.update(cx, |dd, cx| {
@@ -1481,7 +1500,7 @@ impl DataGridPanel {
     #[allow(dead_code)]
     pub(super) fn prime_chart_rail_picker_from_spec(&mut self, cx: &mut Context<Self>) {
         let result = self.result.clone();
-        if let Some(shell) = &self.chart_shell {
+        if let Some(shell) = &self.chart.chart_shell {
             shell.update(cx, |s, _cx| s.prime_rail_picker_from_spec(&result));
         }
     }
@@ -1493,7 +1512,7 @@ impl DataGridPanel {
     #[allow(dead_code)]
     pub(super) fn apply_chart_rail_selection(&mut self, cx: &mut Context<Self>) {
         let result = self.result.clone();
-        if let Some(shell) = &self.chart_shell {
+        if let Some(shell) = &self.chart.chart_shell {
             shell.update(cx, |s, cx| s.apply_rail_selection(&result, cx));
         }
     }
@@ -1505,7 +1524,7 @@ impl DataGridPanel {
     #[allow(dead_code)]
     pub(super) fn reset_chart_rail_to_auto(&mut self, cx: &mut Context<Self>) {
         let result = self.result.clone();
-        if let Some(shell) = &self.chart_shell {
+        if let Some(shell) = &self.chart.chart_shell {
             shell.update(cx, |s, cx| s.reset_rail_to_auto(&result, cx));
         }
     }
@@ -1591,7 +1610,7 @@ impl DataGridPanel {
             self.source,
             DataSource::Table { .. } | DataSource::Collection { .. }
         ) || matches!(self.source, DataSource::QueryResult { .. })
-            && self.chart_source_time_range_panel.is_some()
+            && self.chart.chart_source_time_range_panel.is_some()
     }
 
     pub fn set_active_tab(&mut self, active: bool, cx: &mut Context<Self>) {
@@ -1679,7 +1698,7 @@ impl DataGridPanel {
                         }
 
                         if matches!(panel.source, DataSource::QueryResult { .. }) {
-                            if let Some(trp) = panel.chart_source_time_range_panel.clone() {
+                            if let Some(trp) = panel.chart.chart_source_time_range_panel.clone() {
                                 trp.update(cx, |p, cx| p.emit_initial(cx));
                             }
                         } else {
@@ -1721,8 +1740,8 @@ impl DataGridPanel {
         };
 
         // Update or create the chart shell for this result.
-        if detection_ok || self.chart_shell.is_some() {
-            if let Some(shell) = &self.chart_shell {
+        if detection_ok || self.chart.chart_shell.is_some() {
+            if let Some(shell) = &self.chart.chart_shell {
                 let was_chart = was_chart_mode;
                 shell.update(cx, |s, cx| s.set_result(&result, was_chart, cx));
             } else {
@@ -1733,7 +1752,7 @@ impl DataGridPanel {
                     shell.set_result(&result, false, cx);
                     shell
                 });
-                self.chart_shell = Some(shell);
+                self.chart.chart_shell = Some(shell);
             }
 
             // Pre-populate bindings for the first TimeSeries Collection result so the
@@ -1749,7 +1768,7 @@ impl DataGridPanel {
             {
                 let bindings =
                     default_bindings_for_time_series(time_col, numeric_cols, &result.columns);
-                if let Some(shell) = &self.chart_shell {
+                if let Some(shell) = &self.chart.chart_shell {
                     shell.update(cx, |s, cx| s.apply_bindings(bindings, cx));
                 }
             }
@@ -1800,7 +1819,7 @@ impl DataGridPanel {
         self.edit_state = EditState::Navigating;
 
         if self.view_config.mode == super::data_view::DataViewMode::Document {
-            if let Some(tree_state) = &self.document_tree_state {
+            if let Some(tree_state) = &self.document_view.document_tree_state {
                 tree_state.update(cx, |state, _| state.focus(window));
             } else {
                 self.focus_handle.focus(window);
@@ -2062,7 +2081,7 @@ impl DataGridPanel {
         // Reset the variable-height card-list state to match the new row count.
         // Only the document-card fallback (no tree) consumes it, but building it
         // unconditionally keeps the row count in sync with `self.result`.
-        self.document_card_list = Some(ListState::new(
+        self.document_view.document_card_list = Some(ListState::new(
             self.result.rows.len(),
             ListAlignment::Top,
             px(400.0),
@@ -2145,9 +2164,9 @@ impl DataGridPanel {
             },
         );
 
-        self.document_tree_state = Some(tree_state);
-        self.document_tree = Some(tree);
-        self.document_tree_subscription = Some(subscription);
+        self.document_view.document_tree_state = Some(tree_state);
+        self.document_view.document_tree = Some(tree);
+        self.document_view.document_tree_subscription = Some(subscription);
     }
 
     // === Panel Events ===
@@ -2392,7 +2411,7 @@ impl DataGridPanel {
         &self,
         _cx: &App,
     ) -> Option<Entity<dbflux_components::common::time_range::view::TimeRangePanel>> {
-        self.chart_source_time_range_panel.clone()
+        self.chart.chart_source_time_range_panel.clone()
     }
 
     /// Returns the refresh-policy dropdown entity.
@@ -2426,7 +2445,7 @@ impl DataGridPanel {
     pub(crate) fn chart_host_request_reexecute(&mut self, cx: &mut Context<Self>) {
         match &self.source {
             DataSource::QueryResult { .. } => {
-                if let Some(trp) = self.chart_source_time_range_panel.clone() {
+                if let Some(trp) = self.chart.chart_source_time_range_panel.clone() {
                     trp.update(cx, |p, cx| p.emit_initial(cx));
                 }
             }
@@ -2448,7 +2467,7 @@ impl DataGridPanel {
         point: DataPointRef,
         cx: &App,
     ) -> Option<SourceRowRef> {
-        let shell = self.chart_shell.as_ref()?.read(cx);
+        let shell = self.chart.chart_shell.as_ref()?.read(cx);
         let chart_entity = shell.chart_view()?.clone();
         let chart = chart_entity.read(cx);
 

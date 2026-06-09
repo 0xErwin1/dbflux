@@ -40,7 +40,7 @@ impl DataGridPanel {
         self.edit_state = EditState::Navigating;
 
         if is_document_view {
-            if let Some(tree_state) = &self.document_tree_state {
+            if let Some(tree_state) = &self.document_view.document_tree_state {
                 tree_state.update(cx, |state, _| state.focus(window));
             } else {
                 self.focus_handle.focus(window);
@@ -146,7 +146,7 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(tree_state) = &self.document_tree_state else {
+        let Some(tree_state) = &self.document_view.document_tree_state else {
             return;
         };
 
@@ -534,8 +534,8 @@ impl DataGridPanel {
     /// Returns true if the context menu is currently open.
     /// Returns the active context for keyboard handling.
     pub fn active_context(&self, cx: &App) -> ContextId {
-        if self.cell_editor.read(cx).is_visible()
-            || self.document_preview_modal.read(cx).is_visible()
+        if self.document_view.cell_editor.read(cx).is_visible()
+            || self.document_view.document_preview_modal.read(cx).is_visible()
         {
             return ContextId::TextInput;
         }
@@ -880,7 +880,7 @@ impl DataGridPanel {
     fn has_context_menu_row_target(&self, row: usize, is_document_view: bool, cx: &App) -> bool {
         if is_document_view {
             return self
-                .document_tree_state
+                .document_view.document_tree_state
                 .as_ref()
                 .and_then(|state| state.read(cx).get_raw_document(row))
                 .is_some();
@@ -2943,7 +2943,7 @@ impl DataGridPanel {
 
     /// Copy entire document as JSON (for document view).
     pub(super) fn handle_copy_document(&self, doc_index: usize, cx: &mut Context<Self>) {
-        let Some(tree_state) = &self.document_tree_state else {
+        let Some(tree_state) = &self.document_view.document_tree_state else {
             return;
         };
 
@@ -2957,7 +2957,7 @@ impl DataGridPanel {
 
     /// Open document preview modal for viewing/editing (for document view).
     pub(super) fn handle_view_document(&mut self, doc_index: usize, cx: &mut Context<Self>) {
-        let Some(tree_state) = &self.document_tree_state else {
+        let Some(tree_state) = &self.document_view.document_tree_state else {
             return;
         };
 
@@ -3560,7 +3560,7 @@ impl DataGridPanel {
         // In document view, open the modal with the source document pre-filled but
         // with a fresh PK so the user can review and confirm before inserting.
         if is_document_view && is_collection {
-            if let Some(tree_state) = &self.document_tree_state
+            if let Some(tree_state) = &self.document_view.document_tree_state
                 && let Some(raw_doc) = tree_state.read(cx).get_raw_document(visual_row)
             {
                 let mut doc_json = value_to_json(raw_doc);

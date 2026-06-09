@@ -163,17 +163,17 @@ impl Render for DataGridPanel {
             .when(self.pending_delete_confirm.is_some(), |d| {
                 d.child(self.render_delete_confirm_modal(&st.theme, cx))
             })
-            .when(self.cell_editor.read(cx).is_visible(), |d| {
-                d.child(self.cell_editor.clone())
+            .when(self.document_view.cell_editor.read(cx).is_visible(), |d| {
+                d.child(self.document_view.cell_editor.clone())
             })
-            .when(self.document_preview_modal.read(cx).is_visible(), |d| {
-                d.child(self.document_preview_modal.clone())
+            .when(self.document_view.document_preview_modal.read(cx).is_visible(), |d| {
+                d.child(self.document_view.document_preview_modal.clone())
             })
-            .when(self.mutation_confirm_light.read(cx).is_visible(), |d| {
-                d.child(self.mutation_confirm_light.clone())
+            .when(self.mutation_confirm.mutation_confirm_light.read(cx).is_visible(), |d| {
+                d.child(self.mutation_confirm.mutation_confirm_light.clone())
             })
-            .when(self.mutation_confirm_hard.read(cx).is_visible(), |d| {
-                d.child(self.mutation_confirm_hard.clone())
+            .when(self.mutation_confirm.mutation_confirm_hard.read(cx).is_visible(), |d| {
+                d.child(self.mutation_confirm.mutation_confirm_hard.clone())
             })
     }
 }
@@ -224,13 +224,13 @@ impl DataGridPanel {
         }
 
         if let Some(modal) = self.pending.modal_open.take() {
-            self.cell_editor.update(cx, |editor, cx| {
+            self.document_view.cell_editor.update(cx, |editor, cx| {
                 editor.open(modal.row, modal.col, modal.value, modal.is_json, window, cx);
             });
         }
 
         if let Some(preview) = self.pending.document_preview.take() {
-            self.document_preview_modal.update(cx, |modal, cx| {
+            self.document_view.document_preview_modal.update(cx, |modal, cx| {
                 modal.open(preview.doc_index, preview.document_json, window, cx);
             });
         }
@@ -239,12 +239,12 @@ impl DataGridPanel {
             use crate::data_grid_panel::mutation_confirm::PendingMutationModal;
             match pending_modal {
                 PendingMutationModal::Light(req) => {
-                    self.mutation_confirm_light.update(cx, |modal, cx| {
+                    self.mutation_confirm.mutation_confirm_light.update(cx, |modal, cx| {
                         modal.open(req, cx);
                     });
                 }
                 PendingMutationModal::Hard(req) => {
-                    self.mutation_confirm_hard.update(cx, |modal, cx| {
+                    self.mutation_confirm.mutation_confirm_hard.update(cx, |modal, cx| {
                         modal.open(req, window, cx);
                     });
                 }
@@ -1436,14 +1436,14 @@ impl DataGridPanel {
         _theme: &gpui_component::theme::Theme,
         _cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        if let Some(tree) = &self.document_tree {
+        if let Some(tree) = &self.document_view.document_tree {
             div()
                 .id("document-view-container")
                 .size_full()
                 .child(tree.clone())
         } else {
             let entity = _cx.entity();
-            let list_state = self.document_card_list.clone().unwrap_or_else(|| {
+            let list_state = self.document_view.document_card_list.clone().unwrap_or_else(|| {
                 ListState::new(self.result.rows.len(), ListAlignment::Top, px(400.0))
             });
 
@@ -1627,7 +1627,7 @@ impl DataGridPanel {
         use std::sync::Arc;
 
         // The shell is required for chart mode; fall back gracefully if absent.
-        let Some(chart_shell) = self.chart_shell.clone() else {
+        let Some(chart_shell) = self.chart.chart_shell.clone() else {
             return div().into_any_element();
         };
 
@@ -1642,7 +1642,7 @@ impl DataGridPanel {
         let shell_for_kind = chart_shell.clone();
 
         let dropdown_time_range = self
-            .chart_source_time_range_panel
+            .chart.chart_source_time_range_panel
             .as_ref()
             .map(|p| p.read(cx).dropdown_time_range.clone());
 
@@ -1716,7 +1716,7 @@ impl DataGridPanel {
         // The Apply button calls `panel.apply_custom_range`; the parent
         // CodeDocument's `TimeRangeChanged` subscription handles re-execution.
         let custom_picker_row: Option<AnyElement> = self
-            .chart_source_time_range_panel
+            .chart.chart_source_time_range_panel
             .as_ref()
             .and_then(|panel_entity| {
                 use dbflux_components::common::time_range::state::TimeRange;
@@ -1762,7 +1762,7 @@ impl DataGridPanel {
         // AxisBar row: shown below the main toolbar when a chart view is live.
         // Reads bindings and open-pill state from the shell.
         let (bindings, open_pill, columns) = self
-            .chart_shell
+            .chart.chart_shell
             .as_ref()
             .map(|s| {
                 let shell = s.read(cx);
@@ -1780,11 +1780,11 @@ impl DataGridPanel {
                 )
             });
 
-        let shell_for_pill = self.chart_shell.clone();
-        let shell_for_x = self.chart_shell.clone();
-        let shell_for_y = self.chart_shell.clone();
-        let shell_for_group = self.chart_shell.clone();
-        let shell_for_agg = self.chart_shell.clone();
+        let shell_for_pill = self.chart.chart_shell.clone();
+        let shell_for_x = self.chart.chart_shell.clone();
+        let shell_for_y = self.chart.chart_shell.clone();
+        let shell_for_group = self.chart.chart_shell.clone();
+        let shell_for_agg = self.chart.chart_shell.clone();
 
         let chart_colors = ChartColors::for_current(cx);
 
@@ -1881,7 +1881,7 @@ impl DataGridPanel {
                 let _ = self.ensure_chart_view(cx);
 
                 let (has_chart_view, rail_open, chart_view_entity, hovered_point) = self
-                    .chart_shell
+                    .chart.chart_shell
                     .as_ref()
                     .map_or((false, false, None, None), |s| {
                         let shell = s.read(cx);
@@ -2033,19 +2033,19 @@ impl DataGridPanel {
         };
 
         let focused_series_idx = self
-            .chart_shell
+            .chart.chart_shell
             .as_ref()
             .map_or(0, |s| s.read(cx).chart_focused_series_idx);
 
         let series_name = self
-            .chart_shell
+            .chart.chart_shell
             .as_ref()
             .and_then(|s| s.read(cx).chart_view().cloned())
             .map(|cv| cv.read(cx).series_label(focused_series_idx).to_string())
             .unwrap_or_default();
 
         let (hovered_x, hovered_y) = self
-            .chart_shell
+            .chart.chart_shell
             .as_ref()
             .and_then(|s| {
                 let shell = s.read(cx);
@@ -2108,7 +2108,7 @@ impl DataGridPanel {
         _theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let Some(shell_entity) = self.chart_shell.as_ref() else {
+        let Some(shell_entity) = self.chart.chart_shell.as_ref() else {
             return div().into_any_element();
         };
 
@@ -2226,7 +2226,7 @@ impl DataGridPanel {
         let chart_colors = ChartColors::for_current(cx);
 
         let (detection, picker_open) = self
-            .chart_shell
+            .chart.chart_shell
             .as_ref()
             .map(|s| {
                 let shell = s.read(cx);
@@ -2400,7 +2400,7 @@ impl DataGridPanel {
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(|this, _, _, cx| {
-                                        if let Some(shell) = &this.chart_shell {
+                                        if let Some(shell) = &this.chart.chart_shell {
                                             shell.update(cx, |s, _| {
                                                 s.chart_picker_overlay_open =
                                                     !s.chart_picker_overlay_open;
@@ -2466,7 +2466,7 @@ impl DataGridPanel {
             .collect();
 
         let (selected_x_col, y_checked) = self
-            .chart_shell
+            .chart.chart_shell
             .as_ref()
             .map(|s| {
                 let shell = s.read(cx);
@@ -2525,7 +2525,7 @@ impl DataGridPanel {
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |this, _, _, cx| {
-                                            if let Some(shell) = &this.chart_shell {
+                                            if let Some(shell) = &this.chart.chart_shell {
                                                 shell.update(cx, |s, _| {
                                                     s.chart_picker_x_col = col_idx;
                                                 });
@@ -2567,7 +2567,7 @@ impl DataGridPanel {
                                 .label(label)
                                 .on_click(cx.listener(
                                     move |this, &new_checked, _, cx| {
-                                        if let Some(shell) = &this.chart_shell {
+                                        if let Some(shell) = &this.chart.chart_shell {
                                             shell.update(cx, |s, _| {
                                                 if let Some(slot) =
                                                     s.chart_picker_y_checked.get_mut(candidate_idx)
@@ -2614,7 +2614,7 @@ impl DataGridPanel {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _, _, cx| {
-                            if let Some(shell) = &this.chart_shell {
+                            if let Some(shell) = &this.chart.chart_shell {
                                 let selection = ManualChartSelection {
                                     x_col: x_col_snapshot,
                                     y_cols: y_col_indices.clone(),
@@ -2756,7 +2756,7 @@ impl DataGridPanel {
             .collect();
 
         let (selected_x, y_checked, stats, active_y_cols, detection_ok, has_manual) =
-            self.chart_shell.as_ref().map_or_else(
+            self.chart.chart_shell.as_ref().map_or_else(
                 || (0usize, vec![], vec![], vec![], false, false),
                 |s| {
                     let shell = s.read(cx);
@@ -2857,7 +2857,7 @@ impl DataGridPanel {
                                 .on_mouse_down(
                                     gpui::MouseButton::Left,
                                     cx.listener(move |this, _, _, cx| {
-                                        if let Some(shell) = &this.chart_shell {
+                                        if let Some(shell) = &this.chart.chart_shell {
                                             shell.update(cx, |s, _| {
                                                 s.chart_rail_picker_x_col = cand_idx;
                                             });
@@ -2908,7 +2908,7 @@ impl DataGridPanel {
                                     .label(label)
                                     .on_click(cx.listener(
                                         move |this, &new_checked, _, cx| {
-                                            if let Some(shell) = &this.chart_shell {
+                                            if let Some(shell) = &this.chart.chart_shell {
                                                 shell.update(cx, |s, _| {
                                                     if let Some(slot) = s
                                                         .chart_rail_picker_y_checked
@@ -3049,7 +3049,7 @@ impl DataGridPanel {
         // the chart entity is not yet built keeps the Reset/rebuild path
         // working without flicker.
         let (focused_idx, chart_view_opt) = self
-            .chart_shell
+            .chart.chart_shell
             .as_ref()
             .map(|s| {
                 let shell = s.read(cx);
