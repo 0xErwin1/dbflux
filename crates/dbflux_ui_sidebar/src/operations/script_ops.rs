@@ -1,4 +1,13 @@
 use crate::*;
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
+
+fn report_reveal_failure(error: std::io::Error, cx: &mut App) {
+    report_error(
+        UserFacingError::new(ErrorKind::User, "Failed to reveal in file manager")
+            .with_cause(error.to_string()),
+        cx,
+    );
+}
 
 impl Sidebar {
     fn selected_scripts_parent_dir(&self, cx: &App) -> Option<std::path::PathBuf> {
@@ -397,7 +406,7 @@ impl Sidebar {
         }
     }
 
-    pub(crate) fn reveal_in_file_manager(&self, item_id: &str) {
+    pub(crate) fn reveal_in_file_manager(&self, item_id: &str, cx: &mut Context<Self>) {
         let Some(path) = Self::resolve_script_path(item_id) else {
             return;
         };
@@ -410,10 +419,10 @@ impl Sidebar {
                     .arg(&path)
                     .spawn()
                 {
-                    log::error!("Failed to reveal in file manager: {}", e);
+                    report_reveal_failure(e, cx);
                 }
             } else if let Err(e) = std::process::Command::new("open").arg(&path).spawn() {
-                log::error!("Failed to reveal in file manager: {}", e);
+                report_reveal_failure(e, cx);
             }
         }
 
@@ -425,10 +434,10 @@ impl Sidebar {
                     .arg(&select_arg)
                     .spawn()
                 {
-                    log::error!("Failed to reveal in file manager: {}", e);
+                    report_reveal_failure(e, cx);
                 }
             } else if let Err(e) = std::process::Command::new("explorer").arg(&path).spawn() {
-                log::error!("Failed to reveal in file manager: {}", e);
+                report_reveal_failure(e, cx);
             }
         }
 
@@ -446,7 +455,7 @@ impl Sidebar {
                     .arg(&target)
                     .spawn()
             {
-                log::error!("Failed to reveal in file manager: {}", e);
+                report_reveal_failure(e, cx);
             }
         }
     }

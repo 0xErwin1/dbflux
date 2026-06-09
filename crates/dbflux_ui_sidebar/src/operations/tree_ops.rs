@@ -103,7 +103,11 @@ impl Sidebar {
 
                 if let Some(db_conn) = conn.database_connections.remove(&db_name) {
                     std::thread::spawn(move || {
-                        let _ = db_conn.connection.cancel_active();
+                        if let Err(error) = db_conn.connection.cancel_active() {
+                            log::warn!(
+                                "Failed to cancel active query while closing database: {error}"
+                            );
+                        }
                         drop(db_conn);
                     });
                 }

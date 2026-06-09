@@ -14,6 +14,7 @@ use dbflux_core::{
 use dbflux_ssh::is_passphrase_required_error_str;
 use dbflux_ui_base::platform;
 use dbflux_ui_base::toast::PendingToast;
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -1897,7 +1898,11 @@ impl Sidebar {
             .cloned();
 
         let Some(profile) = profile else {
-            log::error!("Profile not found: {}", profile_id);
+            report_error(
+                UserFacingError::new(ErrorKind::User, "Profile not found")
+                    .with_cause(format!("profile id {profile_id}")),
+                cx,
+            );
             return;
         };
 
