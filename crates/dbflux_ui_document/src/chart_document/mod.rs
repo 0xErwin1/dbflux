@@ -935,6 +935,7 @@ impl ChartDocument {
                 let display_clone = display_result.clone();
                 self.chart_shell.update(cx, |shell, cx| {
                     shell.set_result(&display_clone, was_chart_mode, cx);
+                    shell.ensure_chart_view(&display_clone, cx);
                 });
 
                 self.last_result = Some(display_result);
@@ -1233,6 +1234,21 @@ impl ChartDocument {
     ) {
         self.chart_shell
             .update(cx, |shell, cx| shell.apply_bindings(bindings, cx));
+        self.rebuild_chart_view(cx);
+    }
+
+    /// Rebuild the `ChartView` entity from the current `last_result`.
+    ///
+    /// Called after any chart-config mutation that clears `chart_view`
+    /// (binding changes, fresh query results) so the view is constructed at
+    /// event time rather than inside the render pass. No-op when there is no
+    /// result to chart.
+    fn rebuild_chart_view(&mut self, cx: &mut Context<Self>) {
+        if let Some(result) = self.last_result.clone() {
+            self.chart_shell.update(cx, |shell, cx| {
+                shell.ensure_chart_view(&result, cx);
+            });
+        }
     }
 
     /// Toggle the stats rail on the underlying `ChartShell`. Mirrors the

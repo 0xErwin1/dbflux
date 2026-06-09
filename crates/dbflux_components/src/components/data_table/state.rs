@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::controls::{InputEvent, InputState};
 use gpui::{
     AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Pixels, Point, ScrollHandle,
-    Size, UniformListScrollHandle, Window, px,
+    Size, Subscription, UniformListScrollHandle, Window, px,
 };
 
 use super::clipboard;
@@ -56,6 +56,13 @@ pub struct DataTableState {
 
     /// Dropdown for editing enum/set columns inline.
     enum_dropdown: Option<Entity<Dropdown>>,
+
+    /// Subscriptions for the currently active inline editor (cell input or
+    /// enum dropdown). Held so a new `start_editing` drops the previous
+    /// editor's subscriptions before installing its own — otherwise a stale
+    /// `Blur` from the old input would arrive after the new edit started and
+    /// silently cancel it.
+    _editing_subs: Vec<Subscription>,
 
     /// Buffer for tracking local edits before committing.
     edit_buffer: EditBuffer,
@@ -118,6 +125,7 @@ impl DataTableState {
             editing_cell: None,
             cell_input: None,
             enum_dropdown: None,
+            _editing_subs: Vec::new(),
             edit_buffer,
             pk_columns: Vec::new(),
             fk_columns: HashSet::new(),
@@ -681,22 +689,22 @@ impl DataTableState {
             // GPUI may deliver dismissal before selection, and `cancel_enum_edit`
             // would otherwise clear `editing_cell` and cause the selection to
             // be silently discarded.
-            cx.subscribe(
+            self._editing_subs.clear();
+
+            self._editing_subs.push(cx.subscribe(
                 &dropdown,
                 move |this, _dropdown, event: &DropdownSelectionChanged, cx| {
                     let value = event.item.value.to_string();
                     this.apply_enum_selection_at(coord, &value, cx);
                 },
-            )
-            .detach();
+            ));
 
-            cx.subscribe(
+            self._editing_subs.push(cx.subscribe(
                 &dropdown,
                 |this, _dropdown, _event: &DropdownDismissed, cx| {
                     this.cancel_enum_edit(cx);
                 },
-            )
-            .detach();
+            ));
 
             self.editing_cell = Some(coord);
             self.enum_dropdown = Some(dropdown);
@@ -716,12 +724,15 @@ impl DataTableState {
             state.focus(window, cx);
         });
 
-        cx.subscribe(&input, |this, _input, event: &InputEvent, cx| match event {
-            InputEvent::PressEnter { .. } => this.stop_editing(true, cx),
-            InputEvent::Blur => this.stop_editing(false, cx),
-            _ => {}
-        })
-        .detach();
+        self._editing_subs.clear();
+
+        self._editing_subs.push(
+            cx.subscribe(&input, |this, _input, event: &InputEvent, cx| match event {
+                InputEvent::PressEnter { .. } => this.stop_editing(true, cx),
+                InputEvent::Blur => this.stop_editing(false, cx),
+                _ => {}
+            }),
+        );
 
         self.editing_cell = Some(coord);
         self.cell_input = Some(input);
@@ -1063,6 +1074,39 @@ mod tests {
         std::sync::Arc::new(TableModel::new(columns, rows))
     }
 
+    fn two_row_model() -> std::sync::Arc<super::super::model::TableModel> {
+        use crate::components::data_table::model::{
+            CellValue, ColumnKind, ColumnSpec, RowData, TableModel,
+        };
+        use gpui::TextAlign;
+
+        let columns = vec![
+            ColumnSpec {
+                id: "id".into(),
+                title: "id".into(),
+                kind: ColumnKind::Integer,
+                align: TextAlign::Left,
+                type_name: "int4".into(),
+            },
+            ColumnSpec {
+                id: "name".into(),
+                title: "name".into(),
+                kind: ColumnKind::Text,
+                align: TextAlign::Left,
+                type_name: "text".into(),
+            },
+        ];
+        let rows = vec![
+            RowData {
+                cells: vec![CellValue::int(1), CellValue::text("alice")],
+            },
+            RowData {
+                cells: vec![CellValue::int(2), CellValue::text("bob")],
+            },
+        ];
+        std::sync::Arc::new(TableModel::new(columns, rows))
+    }
+
     /// Negative: start_editing on a column in readonly_columns returns false.
     #[gpui::test]
     fn start_editing_blocked_by_readonly_column(cx: &mut gpui::TestAppContext) {
@@ -1151,6 +1195,66 @@ mod tests {
             editing_cell,
             Some(CellCoord::new(0, 1)),
             "editing_cell must be set to the requested coord after successful start_editing"
+        );
+    }
+
+    /// Regression: switching the inline editor to another cell must drop the
+    /// previous editor's subscriptions. Otherwise a late `Blur` from the old
+    /// input is delivered to its still-live subscription and calls
+    /// `stop_editing`, which clears `editing_cell` and silently cancels the
+    /// freshly opened edit.
+    #[gpui::test]
+    fn rapid_cell_switch_ignores_stale_blur(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+        use crate::controls::InputEvent;
+        use std::collections::HashSet;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let model = two_row_model();
+            let state = cx.new(|cx| {
+                let mut s = super::DataTableState::new(model, cx);
+                s.set_pk_columns(vec![0]);
+                s.set_readonly_columns(HashSet::new());
+                s
+            });
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("state entity must be created");
+
+        // Open the editor on (0,1) and capture its input entity.
+        let input_a = window.update(|window, app| {
+            state.update(app, |s, cx| {
+                assert!(s.start_editing(CellCoord::new(0, 1), window, cx));
+                s.cell_input().cloned().expect("cell input for (0,1)")
+            })
+        });
+
+        // Switch the editor to (1,1): installs new subscriptions and drops the
+        // ones bound to input_a.
+        window.update(|window, app| {
+            state.update(app, |s, cx| {
+                assert!(s.start_editing(CellCoord::new(1, 1), window, cx));
+            })
+        });
+
+        // A late Blur from the previous input must be ignored.
+        window.update(|_window, app| {
+            input_a.update(app, |_input, cx| cx.emit(InputEvent::Blur));
+        });
+
+        let editing_cell = window.update(|_, app| state.read(app).editing_cell());
+        assert_eq!(
+            editing_cell,
+            Some(CellCoord::new(1, 1)),
+            "a stale Blur from the previous input must not cancel the new edit"
         );
     }
 }
