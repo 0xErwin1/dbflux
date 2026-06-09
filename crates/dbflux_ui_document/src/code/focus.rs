@@ -12,7 +12,8 @@ impl CodeDocument {
         self.focus_handle.focus(window);
 
         if self.focus_mode == SqlQueryFocus::Editor {
-            self.editor.input_state
+            self.editor
+                .input_state
                 .update(cx, |state, cx| state.focus(window, cx));
         }
     }

@@ -462,11 +462,9 @@ struct ChartState {
 /// Mutation confirmation modal pair (light + hard variants).
 struct MutationConfirmState {
     /// Light variant for small row counts.
-    pub(crate) mutation_confirm_light:
-        Entity<dbflux_components::modals::ModalMutationConfirm>,
+    pub(crate) mutation_confirm_light: Entity<dbflux_components::modals::ModalMutationConfirm>,
     /// Hard variant for large row counts / DELETE.
-    pub(crate) mutation_confirm_hard:
-        Entity<dbflux_components::modals::ModalMutationConfirmHard>,
+    pub(crate) mutation_confirm_hard: Entity<dbflux_components::modals::ModalMutationConfirmHard>,
 }
 
 /// Keyboard and toolbar focus state machine.
@@ -1411,13 +1409,15 @@ impl DataGridPanel {
     }
 
     fn uses_result_view(&self) -> bool {
-        matches!(self.source, DataSource::QueryResult { .. }) && !self.chrome.result_view_mode.is_table()
+        matches!(self.source, DataSource::QueryResult { .. })
+            && !self.chrome.result_view_mode.is_table()
     }
 
     /// Returns `true` when the current result has a `Timestamp` column and at
     /// least one numeric column — i.e., chart mode is available.
     pub(super) fn chart_available(&self, cx: &App) -> bool {
-        self.chart.chart_shell
+        self.chart
+            .chart_shell
             .as_ref()
             .is_some_and(|s| s.read(cx).chart_available())
     }
@@ -1431,7 +1431,8 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) -> Option<Entity<ChartView>> {
         let result = self.result.clone();
-        self.chart.chart_shell
+        self.chart
+            .chart_shell
             .as_ref()?
             .update(cx, |shell, cx| shell.ensure_chart_view(&result, cx))
     }
@@ -1662,7 +1663,9 @@ impl DataGridPanel {
 
                         let settings = panel.app_state.read(cx).general_settings();
 
-                        if settings.auto_refresh_pause_on_error && panel.refresh.state == GridState::Error {
+                        if settings.auto_refresh_pause_on_error
+                            && panel.refresh.state == GridState::Error
+                        {
                             return;
                         }
 
@@ -1845,7 +1848,8 @@ impl DataGridPanel {
         // When a builder binding is present, respect its `insertable` flag to
         // prevent INSERT on join results (column origin is ambiguous).
         let binding_insertable = self
-            .builder.builder_editable_binding
+            .builder
+            .builder_editable_binding
             .as_ref()
             .map(|b| b.insertable)
             .unwrap_or(true);
@@ -1961,13 +1965,13 @@ impl DataGridPanel {
                         // Gather any driver-supplied row actions (e.g. Kill, Cancel).
                         // They are injected as extra menu items at the bottom rather
                         // than bypassing the context menu entirely.
-                        let row_actions = if let Some(provider) = this.inspector.row_action_provider.as_ref()
-                        {
-                            let metric_id = this.row_action_metric_id();
-                            provider(metric_id.as_deref().unwrap_or(""))
-                        } else {
-                            Vec::new()
-                        };
+                        let row_actions =
+                            if let Some(provider) = this.inspector.row_action_provider.as_ref() {
+                                let metric_id = this.row_action_metric_id();
+                                provider(metric_id.as_deref().unwrap_or(""))
+                            } else {
+                                Vec::new()
+                            };
 
                         this.context_menu = Some(TableContextMenu {
                             row: *row,
@@ -2576,7 +2580,8 @@ impl DataGridPanel {
     /// previous successful spec is retained, which keeps this method consistent
     /// with what the user can actually see and interact with.
     pub fn is_grouped_result(&self) -> bool {
-        self.builder.current_visual_spec
+        self.builder
+            .current_visual_spec
             .as_ref()
             .is_some_and(|s| s.is_grouped())
     }
@@ -3294,7 +3299,8 @@ impl DataGridPanel {
         match event {
             BuilderEvent::RunRequested => {
                 if let Some(spec) = self.builder.builder_draft_spec.clone().or_else(|| {
-                    self.builder.builder_panel
+                    self.builder
+                        .builder_panel
                         .as_ref()
                         .map(|p| p.read(cx).current_spec().clone())
                 }) {
@@ -4336,7 +4342,8 @@ mod tests {
         let (filter_value, has_table, row_count, col_count) = window.update(|_, app| {
             let panel = panel.read(app);
             let table_state = panel
-                .grid_table.table_state
+                .grid_table
+                .table_state
                 .as_ref()
                 .expect("filtered empty table should still build table state");
             let table_state = table_state.read(app);
@@ -4420,7 +4427,8 @@ mod tests {
         let (filter_value, pending_inserts) = window.update(|_, app| {
             let panel = panel.read(app);
             let pending_inserts = panel
-                .grid_table.table_state
+                .grid_table
+                .table_state
                 .as_ref()
                 .map(|state| state.read(app).edit_buffer().pending_insert_rows().len())
                 .unwrap_or_default();
@@ -4444,7 +4452,8 @@ mod tests {
         let (row_count, col_count, has_table) = window.update(|_, app| {
             let panel = panel.read(app);
             let table_state = panel
-                .grid_table.table_state
+                .grid_table
+                .table_state
                 .as_ref()
                 .expect("post-refresh filtered result should still build table state");
             let table_state = table_state.read(app);
@@ -4774,8 +4783,14 @@ mod tests {
             panel.update(app, |panel, cx| {
                 panel.apply_builder_draft_spec(spec.clone(), cx);
 
-                assert!(panel.builder.filter_input_hidden, "should be hidden after apply");
-                assert!(panel.builder.builder_draft_spec.is_some(), "spec should be stored");
+                assert!(
+                    panel.builder.filter_input_hidden,
+                    "should be hidden after apply"
+                );
+                assert!(
+                    panel.builder.builder_draft_spec.is_some(),
+                    "spec should be stored"
+                );
 
                 panel.clear_builder_draft_spec(cx);
 
@@ -5845,7 +5860,11 @@ mod tests {
 
         let (amount_col_ix, is_insertable, amount_is_readonly) = window.update(|_, app| {
             let panel = panel.read(app);
-            let ts = panel.grid_table.table_state.as_ref().expect("table state must exist");
+            let ts = panel
+                .grid_table
+                .table_state
+                .as_ref()
+                .expect("table state must exist");
             let ts = ts.read(app);
 
             let amount_col_ix = panel
@@ -5928,7 +5947,8 @@ mod tests {
         let is_editable = window.update(|_, app| {
             let panel = panel.read(app);
             let ts = panel
-                .grid_table.table_state
+                .grid_table
+                .table_state
                 .as_ref()
                 .expect("table state must exist after rebuild");
             ts.read(app).is_editable()
@@ -6094,7 +6114,12 @@ mod tests {
         // Verify binding is None before details arrive (cold cache).
         let cold_binding = window.update(|_, app| {
             let p = panel.read(app);
-            p.compute_builder_binding(p.builder.current_visual_spec.as_ref(), profile_id, Some("app"), app)
+            p.compute_builder_binding(
+                p.builder.current_visual_spec.as_ref(),
+                profile_id,
+                Some("app"),
+                app,
+            )
         });
         assert!(cold_binding.is_none(), "cold cache must yield None binding");
 
@@ -6141,7 +6166,12 @@ mod tests {
         // handler makes before setting pending_rebuild = true.
         let warm_binding = window.update(|_, app| {
             let p = panel.read(app);
-            p.compute_builder_binding(p.builder.current_visual_spec.as_ref(), profile_id, Some("app"), app)
+            p.compute_builder_binding(
+                p.builder.current_visual_spec.as_ref(),
+                profile_id,
+                Some("app"),
+                app,
+            )
         });
 
         let binding = warm_binding
@@ -6414,7 +6444,8 @@ mod tests {
         // Confirm table_state is editable (PK column was found).
         let is_editable = window.update(|_, app| {
             let p = panel.read(app);
-            p.grid_table.table_state
+            p.grid_table
+                .table_state
                 .as_ref()
                 .expect("table_state must exist after rebuild_table")
                 .read(app)

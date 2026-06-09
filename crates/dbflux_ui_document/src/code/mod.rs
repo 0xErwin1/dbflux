@@ -952,7 +952,8 @@ impl CodeDocument {
     pub fn set_content(&mut self, sql: &str, window: &mut Window, cx: &mut Context<Self>) {
         let sql_owned = sql.to_string();
         self.editor.suppress_dirty = true;
-        self.editor.input_state
+        self.editor
+            .input_state
             .update(cx, |state, cx| state.set_value(&sql_owned, window, cx));
         self.editor.original_content = sql_owned;
         self.editor.is_dirty = false;
@@ -1246,46 +1247,56 @@ impl CodeDocument {
     ) -> bool {
         match cmd {
             Command::Cancel => {
-                self.history.history_modal.update(cx, |modal, cx| modal.close(cx));
+                self.history
+                    .history_modal
+                    .update(cx, |modal, cx| modal.close(cx));
                 true
             }
             Command::SelectNext => {
-                self.history.history_modal
+                self.history
+                    .history_modal
                     .update(cx, |modal, cx| modal.select_next(cx));
                 true
             }
             Command::SelectPrev => {
-                self.history.history_modal
+                self.history
+                    .history_modal
                     .update(cx, |modal, cx| modal.select_prev(cx));
                 true
             }
             Command::Execute => {
-                self.history.history_modal
+                self.history
+                    .history_modal
                     .update(cx, |modal, cx| modal.execute_selected(window, cx));
                 true
             }
             Command::Delete => {
-                self.history.history_modal
+                self.history
+                    .history_modal
                     .update(cx, |modal, cx| modal.delete_selected(cx));
                 true
             }
             Command::ToggleFavorite => {
-                self.history.history_modal
+                self.history
+                    .history_modal
                     .update(cx, |modal, cx| modal.toggle_favorite_selected(cx));
                 true
             }
             Command::Rename => {
-                self.history.history_modal
+                self.history
+                    .history_modal
                     .update(cx, |modal, cx| modal.start_rename_selected(window, cx));
                 true
             }
             Command::FocusSearch => {
-                self.history.history_modal
+                self.history
+                    .history_modal
                     .update(cx, |modal, cx| modal.focus_search(window, cx));
                 true
             }
             Command::SaveQuery => {
-                self.history.history_modal
+                self.history
+                    .history_modal
                     .update(cx, |modal, cx| modal.save_selected_history(window, cx));
                 true
             }
@@ -1329,7 +1340,8 @@ impl CodeDocument {
             // Special handling for FocusUp to exit results
             if cmd == Command::FocusUp {
                 self.focus_mode = SqlQueryFocus::Editor;
-                self.editor.input_state
+                self.editor
+                    .input_state
                     .update(cx, |state, cx| state.focus(window, cx));
                 cx.notify();
                 return true;
@@ -1369,7 +1381,8 @@ impl CodeDocument {
             }
 
             Command::FocusDown
-                if self.focus_mode == SqlQueryFocus::Editor && !self.result_tabs.result_tabs.is_empty() =>
+                if self.focus_mode == SqlQueryFocus::Editor
+                    && !self.result_tabs.result_tabs.is_empty() =>
             {
                 self.focus_mode = SqlQueryFocus::Results;
                 if let Some(grid) = self.active_result_grid() {
@@ -1402,15 +1415,19 @@ impl CodeDocument {
             Command::ToggleHistoryDropdown => {
                 let is_open = self.history.history_modal.read(cx).is_visible();
                 if is_open {
-                    self.history.history_modal.update(cx, |modal, cx| modal.close(cx));
+                    self.history
+                        .history_modal
+                        .update(cx, |modal, cx| modal.close(cx));
                 } else {
-                    self.history.history_modal
+                    self.history
+                        .history_modal
                         .update(cx, |modal, cx| modal.open(window, cx));
                 }
                 true
             }
             Command::OpenSavedQueries => {
-                self.history.history_modal
+                self.history
+                    .history_modal
                     .update(cx, |modal, cx| modal.open_saved_tab(window, cx));
                 true
             }
@@ -1460,7 +1477,12 @@ impl CodeDocument {
                 .connections()
                 .get(&conn_id)
                 .map(|c| {
-                    let db = self.source.exec_ctx.database.clone().or(c.active_database.clone());
+                    let db = self
+                        .source
+                        .exec_ctx
+                        .database
+                        .clone()
+                        .or(c.active_database.clone());
                     (Some(db.unwrap_or_default()), Some(c.profile.driver_id()))
                 })
                 .unwrap_or((None, None));
@@ -1544,7 +1566,12 @@ impl CodeDocument {
             .connections()
             .get(&conn_id)
             .map(|c| {
-                let db = self.source.exec_ctx.database.clone().or(c.active_database.clone());
+                let db = self
+                    .source
+                    .exec_ctx
+                    .database
+                    .clone()
+                    .or(c.active_database.clone());
                 (db.unwrap_or_default(), c.profile.driver_id())
             })
             .unwrap_or_default();
@@ -1652,7 +1679,11 @@ mod tests {
         // Verify the document is still in its expected read-only, clean state.
         let (is_ro, has_task, is_dirty) = window.update(|_, app| {
             let d = doc.read(app);
-            (d.read_only, d.execution.active_query_task.is_none(), d.editor.is_dirty)
+            (
+                d.read_only,
+                d.execution.active_query_task.is_none(),
+                d.editor.is_dirty,
+            )
         });
 
         assert!(is_ro, "document must remain read-only");
@@ -1717,7 +1748,10 @@ mod tests {
         // document must not be dirty.
         let (content, is_dirty) = window.update(|_, app| {
             let d = doc.read(app);
-            (d.editor.input_state.read(app).value().to_string(), d.editor.is_dirty)
+            (
+                d.editor.input_state.read(app).value().to_string(),
+                d.editor.is_dirty,
+            )
         });
 
         assert_eq!(

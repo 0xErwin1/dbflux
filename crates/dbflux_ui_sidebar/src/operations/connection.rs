@@ -8,8 +8,8 @@ use dbflux_core::observability::actions::{
 use dbflux_core::{
     CancelToken, ConnectionHook, DatabaseConnection, DbSchemaInfo, DetachedProcessHandle,
     HookContext, HookExecutor, HookKind, HookPhase, HookResult, OutputReceiver,
-    PrepareConnectError, ProcessExecutionError, TaskId, TaskKind,
-    detached_process_channel, execute_streaming_process, output_channel,
+    PrepareConnectError, ProcessExecutionError, TaskId, TaskKind, detached_process_channel,
+    execute_streaming_process, output_channel,
 };
 use dbflux_ssh::is_passphrase_required_error_str;
 use dbflux_ui_base::platform;

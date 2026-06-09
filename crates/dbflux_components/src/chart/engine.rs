@@ -1260,10 +1260,11 @@ impl Render for ChartView {
                                 } else {
                                     ticks_numeric(y_min_canvas, y_max_canvas, y_tick_target)
                                 };
-                                let y_tick_labels_dynamic: Vec<(f64, SharedString)> = y_ticks_dynamic
-                                    .iter()
-                                    .map(|t| (t.value, SharedString::from(t.label.clone())))
-                                    .collect();
+                                let y_tick_labels_dynamic: Vec<(f64, SharedString)> =
+                                    y_ticks_dynamic
+                                        .iter()
+                                        .map(|t| (t.value, SharedString::from(t.label.clone())))
+                                        .collect();
 
                                 let x_pad = plot_w * bar_x_inset_canvas;
                                 let usable_w = (plot_w - 2.0 * x_pad).max(1.0);
@@ -1273,7 +1274,14 @@ impl Render for ChartView {
                                         + ((dx - x_min) / x_range * usable_w as f64) as f32
                                 };
                                 let data_to_screen_y = |dy: f64| -> f32 {
-                                    project_y_to_screen(dy, plot_y0, plot_h, y_log_min, y_log_range, y_is_log)
+                                    project_y_to_screen(
+                                        dy,
+                                        plot_y0,
+                                        plot_h,
+                                        y_log_min,
+                                        y_log_range,
+                                        y_is_log,
+                                    )
                                 };
 
                                 paint_gridlines(
@@ -1421,12 +1429,7 @@ fn bar_layout_params(
     };
 
     let bar_x_inset_fraction: f32 = if needs_bar_layout {
-        let max_points = decimated
-            .iter()
-            .map(|s| s.len())
-            .max()
-            .unwrap_or(1)
-            .max(1);
+        let max_points = decimated.iter().map(|s| s.len()).max().unwrap_or(1).max(1);
         0.5 / max_points as f32
     } else {
         0.0
@@ -1516,17 +1519,9 @@ fn paint_gridlines(
 ) {
     use crate::chart::spec::ChartKind;
 
-    for tick in y_ticks
-        .iter()
-        .filter(|_| !matches!(kind, ChartKind::Pie))
-    {
-        let sy = project_y_proj_space_to_screen(
-            tick.value,
-            plot_y0,
-            plot_h,
-            y_log_min,
-            y_log_range,
-        );
+    for tick in y_ticks.iter().filter(|_| !matches!(kind, ChartKind::Pie)) {
+        let sy =
+            project_y_proj_space_to_screen(tick.value, plot_y0, plot_h, y_log_min, y_log_range);
         window.paint_quad(fill(
             gpui::Bounds {
                 origin: point(gpui::px(plot_x0), gpui::px(sy - 0.5)),
@@ -1539,10 +1534,7 @@ fn paint_gridlines(
         ));
     }
 
-    for tick in x_ticks
-        .iter()
-        .filter(|_| !matches!(kind, ChartKind::Pie))
-    {
+    for tick in x_ticks.iter().filter(|_| !matches!(kind, ChartKind::Pie)) {
         let sx = data_to_screen_x(tick.value);
         window.paint_quad(fill(
             gpui::Bounds {
@@ -1575,10 +1567,7 @@ fn paint_line_series(
     data_to_screen_x: impl Fn(f64) -> f32,
     data_to_screen_y: impl Fn(f64) -> f32,
 ) {
-    let paint_series = |pts: &[(f64, f64)],
-                        color: Hsla,
-                        stroke_w: f32,
-                        window: &mut Window| {
+    let paint_series = |pts: &[(f64, f64)], color: Hsla, stroke_w: f32, window: &mut Window| {
         if pts.is_empty() {
             return;
         }
@@ -1789,7 +1778,15 @@ fn paint_hover_overlay(
         a: 0.7,
         ..theme.primary
     };
-    paint_dashed_vline(window, sx, plot_y0, plot_y0 + plot_h, crosshair_color, 2.0, 3.0);
+    paint_dashed_vline(
+        window,
+        sx,
+        plot_y0,
+        plot_y0 + plot_h,
+        crosshair_color,
+        2.0,
+        3.0,
+    );
 
     let cursor_data_x = x_min + ((sx - plot_x0) as f64 / plot_w as f64) * x_range;
 
@@ -1801,9 +1798,7 @@ fn paint_hover_overlay(
             continue;
         }
 
-        let Some(y_data) =
-            crate::chart::stats::interpolate_y_at_x(pts, cursor_data_x)
-        else {
+        let Some(y_data) = crate::chart::stats::interpolate_y_at_x(pts, cursor_data_x) else {
             continue;
         };
 
@@ -3745,7 +3740,14 @@ mod tests {
         fn bar_layout_params_stacked_uses_stacked_y_max() {
             let decimated = vec![vec![(0.0, 1.0)], vec![(0.0, 2.0)]];
             let stacked_max = 50.0;
-            let p = bar_layout_params(ChartKind::StackedBar, 0.0, 10.0, 10.0, stacked_max, &decimated);
+            let p = bar_layout_params(
+                ChartKind::StackedBar,
+                0.0,
+                10.0,
+                10.0,
+                stacked_max,
+                &decimated,
+            );
             assert_eq!(
                 p.y_max_adjusted, stacked_max,
                 "StackedBar y_max_adjusted must equal stacked_y_max"

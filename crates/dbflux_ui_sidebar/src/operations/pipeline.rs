@@ -1,8 +1,8 @@
+use super::connection::{HookPhaseState, run_hook_phase};
 use crate::*;
 use dbflux_core::observability::actions::{CONNECTION_CONNECT, CONNECTION_CONNECT_FAILED};
 use dbflux_core::{CancelToken, HookContext, HookPhase, PipelineState, TaskId, TaskKind};
 use dbflux_ui_base::toast::PendingToast;
-use super::connection::{run_hook_phase, HookPhaseState};
 
 fn pipeline_stage_task_description(state: &PipelineState) -> Option<String> {
     match state {

@@ -1,5 +1,5 @@
-use crate::*;
 use super::{HeldDatabaseConnection, try_close_held_database_connection};
+use crate::*;
 use dbflux_core::{Connection, SchemaDropTarget, SchemaObjectKind, TaskKind, TaskTarget};
 use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_ui_base::toast::PendingToast;

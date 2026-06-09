@@ -307,7 +307,9 @@ impl DataGridPanel {
                             panel.runner.complete_mutation(task_id, cx);
                             panel.apply_inline_value_to_result(&node_id, &inline_value);
 
-                            if let Some(tree_state) = panel.document_view.document_tree_state.clone() {
+                            if let Some(tree_state) =
+                                panel.document_view.document_tree_state.clone()
+                            {
                                 tree_state.update(cx, |state, cx| {
                                     state.apply_inline_edit_value(
                                         &node_id,

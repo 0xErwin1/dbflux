@@ -856,17 +856,19 @@ impl Sidebar {
         }
 
         if capabilities.contains(DriverCapabilities::METRIC_CATALOG)
-            && let Some(folder) =
-                build_metrics_folder(profile_id, database_name, metric_catalog_cache, metric_fetch_errors)
+            && let Some(folder) = build_metrics_folder(
+                profile_id,
+                database_name,
+                metric_catalog_cache,
+                metric_fetch_errors,
+            )
         {
             content.push(folder);
         }
 
-        if let Some(folder) = build_db_collection_indexes_folder(
-            profile_id,
-            database_name,
-            &db_schema.tables,
-        ) {
+        if let Some(folder) =
+            build_db_collection_indexes_folder(profile_id, database_name, &db_schema.tables)
+        {
             content.push(folder);
         }
 
@@ -1207,12 +1209,9 @@ impl Sidebar {
             content.push(folder);
         }
 
-        if let Some(folder) = build_schema_views_folder(
-            profile_id,
-            schema_name,
-            target_database,
-            &db_schema.views,
-        ) {
+        if let Some(folder) =
+            build_schema_views_folder(profile_id, schema_name, target_database, &db_schema.views)
+        {
             content.push(folder);
         }
 
@@ -1382,12 +1381,8 @@ impl Sidebar {
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
 
-        let dependents_folder = build_table_dependents_folder(
-            profile_id,
-            schema_name,
-            &table.name,
-            deps,
-        );
+        let dependents_folder =
+            build_table_dependents_folder(profile_id, schema_name, &table.name, deps);
 
         let table_sections = build_table_sections(
             profile_id,
@@ -1832,8 +1827,7 @@ fn build_db_collection_indexes_folder(
                 doc_indexes
                     .iter()
                     .map(|idx| {
-                        let label =
-                            format!("{}.{}", coll.name, format_collection_index_label(idx));
+                        let label = format!("{}.{}", coll.name, format_collection_index_label(idx));
                         TreeItem::new(
                             SchemaNodeId::CollectionIndex {
                                 profile_id,

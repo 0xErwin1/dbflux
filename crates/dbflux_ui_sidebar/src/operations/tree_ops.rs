@@ -1,7 +1,7 @@
-use crate::*;
 use super::{
     HeldDatabaseConnection, retain_database_cache_entries, try_close_held_database_connection,
 };
+use crate::*;
 use dbflux_core::{
     CancelToken, Connection, DbSchemaInfo, FetchTableDetailsParams, FetchTableDetailsResult,
     TaskKind, TaskTarget,

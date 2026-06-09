@@ -166,15 +166,27 @@ impl Render for DataGridPanel {
             .when(self.document_view.cell_editor.read(cx).is_visible(), |d| {
                 d.child(self.document_view.cell_editor.clone())
             })
-            .when(self.document_view.document_preview_modal.read(cx).is_visible(), |d| {
-                d.child(self.document_view.document_preview_modal.clone())
-            })
-            .when(self.mutation_confirm.mutation_confirm_light.read(cx).is_visible(), |d| {
-                d.child(self.mutation_confirm.mutation_confirm_light.clone())
-            })
-            .when(self.mutation_confirm.mutation_confirm_hard.read(cx).is_visible(), |d| {
-                d.child(self.mutation_confirm.mutation_confirm_hard.clone())
-            })
+            .when(
+                self.document_view
+                    .document_preview_modal
+                    .read(cx)
+                    .is_visible(),
+                |d| d.child(self.document_view.document_preview_modal.clone()),
+            )
+            .when(
+                self.mutation_confirm
+                    .mutation_confirm_light
+                    .read(cx)
+                    .is_visible(),
+                |d| d.child(self.mutation_confirm.mutation_confirm_light.clone()),
+            )
+            .when(
+                self.mutation_confirm
+                    .mutation_confirm_hard
+                    .read(cx)
+                    .is_visible(),
+                |d| d.child(self.mutation_confirm.mutation_confirm_hard.clone()),
+            )
     }
 }
 
@@ -182,11 +194,7 @@ impl DataGridPanel {
     /// Drains all Class-A pending fields in the same order as the pre-refactor
     /// render drain block. Must stay on `DataGridPanel` because the drain calls
     /// methods that require `&mut self` and GPUI's single-Context borrow model.
-    pub(super) fn process_pending_actions(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn process_pending_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(pending) = self.pending.total_count.take() {
             self.apply_total_count(pending.source_qualified, pending.total, cx);
         }
@@ -208,7 +216,8 @@ impl DataGridPanel {
 
         if std::mem::take(&mut self.pending.rebuild) {
             let sort = self
-                .grid_table.local_sort_state
+                .grid_table
+                .local_sort_state
                 .map(|s| TableSortState::new(s.column_ix, s.direction));
             self.rebuild_table(sort, cx);
         }
@@ -230,23 +239,29 @@ impl DataGridPanel {
         }
 
         if let Some(preview) = self.pending.document_preview.take() {
-            self.document_view.document_preview_modal.update(cx, |modal, cx| {
-                modal.open(preview.doc_index, preview.document_json, window, cx);
-            });
+            self.document_view
+                .document_preview_modal
+                .update(cx, |modal, cx| {
+                    modal.open(preview.doc_index, preview.document_json, window, cx);
+                });
         }
 
         if let Some(pending_modal) = self.pending.mutation_modal.take() {
             use crate::data_grid_panel::mutation_confirm::PendingMutationModal;
             match pending_modal {
                 PendingMutationModal::Light(req) => {
-                    self.mutation_confirm.mutation_confirm_light.update(cx, |modal, cx| {
-                        modal.open(req, cx);
-                    });
+                    self.mutation_confirm
+                        .mutation_confirm_light
+                        .update(cx, |modal, cx| {
+                            modal.open(req, cx);
+                        });
                 }
                 PendingMutationModal::Hard(req) => {
-                    self.mutation_confirm.mutation_confirm_hard.update(cx, |modal, cx| {
-                        modal.open(req, window, cx);
-                    });
+                    self.mutation_confirm
+                        .mutation_confirm_hard
+                        .update(cx, |modal, cx| {
+                            modal.open(req, window, cx);
+                        });
                 }
             }
         }
@@ -311,7 +326,8 @@ impl DataGridPanel {
         let shows_content_controls = has_data || shows_table_content;
 
         let (is_editable, has_pending_changes, dirty_count, can_undo, can_redo) = self
-            .grid_table.table_state
+            .grid_table
+            .table_state
             .as_ref()
             .map(|ts| {
                 let state = ts.read(cx);
@@ -445,10 +461,8 @@ impl DataGridPanel {
                         .border_color(st.theme.warning.opacity(0.3))
                         .child(Icon::new(AppIcon::TriangleAlert).small().warning())
                         .child(
-                            Text::caption(
-                                "This table has no primary key - editing is disabled",
-                            )
-                            .warning(),
+                            Text::caption("This table has no primary key - editing is disabled")
+                                .warning(),
                         ),
                 )
             })
@@ -596,13 +610,15 @@ impl DataGridPanel {
                     |d| d.child(self.render_result_view(result_view_mode, &theme, cx)),
                 );
 
-                let content =
-                    content.when(matches!(content_mode, DataGridContentMode::Document), |d| {
+                let content = content
+                    .when(matches!(content_mode, DataGridContentMode::Document), |d| {
                         d.child(self.render_document_view(&theme, cx))
                     });
 
                 content.when(matches!(content_mode, DataGridContentMode::Table), |d| {
-                    d.when_some(self.grid_table.data_table.clone(), |d, data_table| d.child(data_table))
+                    d.when_some(self.grid_table.data_table.clone(), |d, data_table| {
+                        d.child(data_table)
+                    })
                 })
             })
     }
@@ -978,7 +994,8 @@ impl DataGridPanel {
             "Refresh"
         };
 
-        let toolbar_has_filter_error = filter_input_has_error(&self.builder.relational_filter_state);
+        let toolbar_has_filter_error =
+            filter_input_has_error(&self.builder.relational_filter_state);
         let toolbar_chip = render_relational_chip(
             &self.builder.relational_filter_state,
             cx,
@@ -990,7 +1007,8 @@ impl DataGridPanel {
             })),
         );
 
-        let toolbar_resolving = render_resolving_indicator(&self.builder.relational_filter_state, cx);
+        let toolbar_resolving =
+            render_resolving_indicator(&self.builder.relational_filter_state, cx);
 
         let toolbar_error = render_relational_error(
             &self.builder.relational_filter_state,
@@ -1078,9 +1096,12 @@ impl DataGridPanel {
                                                 d.bg(theme.secondary).text_color(theme.foreground)
                                             })
                                             .on_click(cx.listener(|this, _, window, cx| {
-                                                this.filter_bar.filter_input.update(cx, |input, cx| {
-                                                    input.set_value("", window, cx);
-                                                });
+                                                this.filter_bar.filter_input.update(
+                                                    cx,
+                                                    |input, cx| {
+                                                        input.set_value("", window, cx);
+                                                    },
+                                                );
                                                 this.refresh(window, cx);
                                             }))
                                             .child("\u{00d7}"),
@@ -1642,7 +1663,8 @@ impl DataGridPanel {
         let shell_for_kind = chart_shell.clone();
 
         let dropdown_time_range = self
-            .chart.chart_source_time_range_panel
+            .chart
+            .chart_source_time_range_panel
             .as_ref()
             .map(|p| p.read(cx).dropdown_time_range.clone());
 
@@ -1716,7 +1738,8 @@ impl DataGridPanel {
         // The Apply button calls `panel.apply_custom_range`; the parent
         // CodeDocument's `TimeRangeChanged` subscription handles re-execution.
         let custom_picker_row: Option<AnyElement> = self
-            .chart.chart_source_time_range_panel
+            .chart
+            .chart_source_time_range_panel
             .as_ref()
             .and_then(|panel_entity| {
                 use dbflux_components::common::time_range::state::TimeRange;
@@ -1762,7 +1785,8 @@ impl DataGridPanel {
         // AxisBar row: shown below the main toolbar when a chart view is live.
         // Reads bindings and open-pill state from the shell.
         let (bindings, open_pill, columns) = self
-            .chart.chart_shell
+            .chart
+            .chart_shell
             .as_ref()
             .map(|s| {
                 let shell = s.read(cx);
@@ -1874,14 +1898,16 @@ impl DataGridPanel {
 
         match mode {
             ResultViewMode::Table => {
-                container = container.when_some(self.grid_table.data_table.clone(), |d, dt| d.child(dt));
+                container =
+                    container.when_some(self.grid_table.data_table.clone(), |d, dt| d.child(dt));
             }
             ResultViewMode::Chart => {
                 // Build chart_view on first render before checking whether it exists.
                 let _ = self.ensure_chart_view(cx);
 
                 let (has_chart_view, rail_open, chart_view_entity, hovered_point) = self
-                    .chart.chart_shell
+                    .chart
+                    .chart_shell
                     .as_ref()
                     .map_or((false, false, None, None), |s| {
                         let shell = s.read(cx);
@@ -2033,19 +2059,22 @@ impl DataGridPanel {
         };
 
         let focused_series_idx = self
-            .chart.chart_shell
+            .chart
+            .chart_shell
             .as_ref()
             .map_or(0, |s| s.read(cx).chart_focused_series_idx);
 
         let series_name = self
-            .chart.chart_shell
+            .chart
+            .chart_shell
             .as_ref()
             .and_then(|s| s.read(cx).chart_view().cloned())
             .map(|cv| cv.read(cx).series_label(focused_series_idx).to_string())
             .unwrap_or_default();
 
         let (hovered_x, hovered_y) = self
-            .chart.chart_shell
+            .chart
+            .chart_shell
             .as_ref()
             .and_then(|s| {
                 let shell = s.read(cx);
@@ -2226,7 +2255,8 @@ impl DataGridPanel {
         let chart_colors = ChartColors::for_current(cx);
 
         let (detection, picker_open) = self
-            .chart.chart_shell
+            .chart
+            .chart_shell
             .as_ref()
             .map(|s| {
                 let shell = s.read(cx);
@@ -2466,7 +2496,8 @@ impl DataGridPanel {
             .collect();
 
         let (selected_x_col, y_checked) = self
-            .chart.chart_shell
+            .chart
+            .chart_shell
             .as_ref()
             .map(|s| {
                 let shell = s.read(cx);
@@ -3049,7 +3080,8 @@ impl DataGridPanel {
         // the chart entity is not yet built keeps the Reset/rebuild path
         // working without flicker.
         let (focused_idx, chart_view_opt) = self
-            .chart.chart_shell
+            .chart
+            .chart_shell
             .as_ref()
             .map(|s| {
                 let shell = s.read(cx);

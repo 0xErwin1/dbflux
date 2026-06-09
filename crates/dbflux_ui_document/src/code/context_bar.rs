@@ -168,7 +168,8 @@ impl CodeDocument {
     pub(super) fn current_source_query_mode_value(&self, cx: &App) -> Option<String> {
         let spec = self.current_source_context_spec(cx)?;
 
-        self.source.source_query_mode_dropdown
+        self.source
+            .source_query_mode_dropdown
             .read(cx)
             .selected_value()
             .map(|value| value.to_string())
@@ -204,7 +205,8 @@ impl CodeDocument {
         };
 
         let schema = self
-            .source.exec_ctx
+            .source
+            .exec_ctx
             .database
             .as_deref()
             .and_then(|database| connected.schema_for_target_database(database))
@@ -241,7 +243,8 @@ impl CodeDocument {
     }
 
     pub(super) fn current_source_targets(&self, cx: &App) -> Vec<String> {
-        self.source.source_targets
+        self.source
+            .source_targets
             .read(cx)
             .selected_values()
             .iter()
@@ -278,8 +281,20 @@ impl CodeDocument {
             return;
         }
 
-        let start_blank = self.source.source_start_input.read(cx).value().trim().is_empty();
-        let end_blank = self.source.source_end_input.read(cx).value().trim().is_empty();
+        let start_blank = self
+            .source
+            .source_start_input
+            .read(cx)
+            .value()
+            .trim()
+            .is_empty();
+        let end_blank = self
+            .source
+            .source_end_input
+            .read(cx)
+            .value()
+            .trim()
+            .is_empty();
 
         if start_blank && end_blank {
             // Time bounds not entered yet: keep any existing window, but sync its
@@ -341,7 +356,8 @@ impl CodeDocument {
         // silently reset the dropdown to the spec default — which is what
         // happened to Flux on InfluxDB v2, whose default mode is InfluxQL.
         let current_dropdown_mode = self
-            .source.source_query_mode_dropdown
+            .source
+            .source_query_mode_dropdown
             .read(cx)
             .selected_value()
             .map(|value| value.to_string());
@@ -375,10 +391,12 @@ impl CodeDocument {
                 .position(|item| item.value.as_ref() == selected)
         });
 
-        self.source.source_query_mode_dropdown.update(cx, |dropdown, cx| {
-            dropdown.set_items(query_mode_items, cx);
-            dropdown.set_selected_index(selected_query_mode_index, cx);
-        });
+        self.source
+            .source_query_mode_dropdown
+            .update(cx, |dropdown, cx| {
+                dropdown.set_items(query_mode_items, cx);
+                dropdown.set_selected_index(selected_query_mode_index, cx);
+            });
 
         // Derive the initial selection: prefer an explicit exec_ctx source, then fall
         // back to the spec's default target so the driver's connected bucket/database
@@ -528,11 +546,17 @@ impl CodeDocument {
                     did_change = true;
                 }
 
-                if self.source.exec_ctx.database.as_ref().is_some_and(|database| {
-                    !database_items
-                        .iter()
-                        .any(|item| item.value.as_ref() == database)
-                }) {
+                if self
+                    .source
+                    .exec_ctx
+                    .database
+                    .as_ref()
+                    .is_some_and(|database| {
+                        !database_items
+                            .iter()
+                            .any(|item| item.value.as_ref() == database)
+                    })
+                {
                     self.source.exec_ctx.database =
                         Self::default_database_for_connection(&self.app_state, connection_id, cx);
                     did_change = true;
@@ -552,11 +576,12 @@ impl CodeDocument {
 
                 let schema_items =
                     Self::schema_items_for_connection(&self.app_state, &self.source.exec_ctx, cx);
-                let selected_schema_index = self.source.exec_ctx.schema.as_ref().and_then(|schema| {
-                    schema_items
-                        .iter()
-                        .position(|item| item.value.as_ref() == schema)
-                });
+                let selected_schema_index =
+                    self.source.exec_ctx.schema.as_ref().and_then(|schema| {
+                        schema_items
+                            .iter()
+                            .position(|item| item.value.as_ref() == schema)
+                    });
 
                 let next_schema = if selected_schema_index.is_some() {
                     self.source.exec_ctx.schema.clone()
@@ -746,7 +771,8 @@ impl CodeDocument {
 
     /// Refresh the schema dropdown and pre-select the default schema ("public" for PG).
     fn refresh_schema_dropdown_with_default(&mut self, cx: &mut Context<Self>) {
-        let schema_items = Self::schema_items_for_connection(&self.app_state, &self.source.exec_ctx, cx);
+        let schema_items =
+            Self::schema_items_for_connection(&self.app_state, &self.source.exec_ctx, cx);
 
         let selected_index = self.source.exec_ctx.schema.as_ref().and_then(|schema| {
             schema_items
@@ -863,8 +889,11 @@ impl CodeDocument {
         self.source.exec_ctx.database = prev_database.clone();
         self.source.exec_ctx.schema = prev_schema;
 
-        let db_items =
-            Self::database_items_for_connection(&self.app_state, self.source.exec_ctx.connection_id, cx);
+        let db_items = Self::database_items_for_connection(
+            &self.app_state,
+            self.source.exec_ctx.connection_id,
+            cx,
+        );
 
         let db_selected = prev_database
             .as_ref()
@@ -1066,7 +1095,8 @@ impl CodeDocument {
     fn exit_context_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.clear_context_bar_focus_rings(cx);
         self.focus_mode = SqlQueryFocus::Editor;
-        self.editor.input_state
+        self.editor
+            .input_state
             .update(cx, |state, cx| state.focus(window, cx));
         cx.notify();
     }
@@ -1137,19 +1167,23 @@ impl CodeDocument {
             Command::Execute => {
                 match self.context_bar_slot {
                     ContextBarSlot::SourceQueryMode => {
-                        self.source.source_query_mode_dropdown
+                        self.source
+                            .source_query_mode_dropdown
                             .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
                     }
                     ContextBarSlot::SourceTargets => {
-                        self.source.source_targets
+                        self.source
+                            .source_targets
                             .update(cx, |multi_select, cx| multi_select.toggle_open(cx));
                     }
                     ContextBarSlot::SourceStart => {
-                        self.source.source_start_input
+                        self.source
+                            .source_start_input
                             .update(cx, |state, cx| state.focus(window, cx));
                     }
                     ContextBarSlot::SourceEnd => {
-                        self.source.source_end_input
+                        self.source
+                            .source_end_input
                             .update(cx, |state, cx| state.focus(window, cx));
                     }
                     _ => {
@@ -1226,7 +1260,8 @@ impl CodeDocument {
         // When the active result grid is in Chart mode the chart toolbar
         // renders its own RANGE chips; hide the time-range widget here.
         let is_chart_mode = self
-            .result_tabs.active_result_index
+            .result_tabs
+            .active_result_index
             .and_then(|i| self.result_tabs.result_tabs.get(i))
             .map(|t| t.grid.read(cx).result_view_mode() == ResultViewMode::Chart)
             .unwrap_or(false);
@@ -1301,7 +1336,10 @@ impl CodeDocument {
                                         ContextBarSlot::SourceQueryMode,
                                     ),
                                     Some(theme.ring),
-                                    control_shell(self.source.source_query_mode_dropdown.clone(), cx),
+                                    control_shell(
+                                        self.source.source_query_mode_dropdown.clone(),
+                                        cx,
+                                    ),
                                     cx,
                                 )),
                             )

@@ -539,7 +539,8 @@ impl CodeDocument {
             };
 
             let active_database = self
-                .source.exec_ctx
+                .source
+                .exec_ctx
                 .database
                 .clone()
                 .or_else(|| connected.active_database.clone());
@@ -810,7 +811,12 @@ impl CodeDocument {
         cx: &mut Context<Self>,
     ) {
         // Determine if this is a script execution by looking up the record
-        let is_script = match self.execution.execution_history.iter().find(|r| r.id == exec_id) {
+        let is_script = match self
+            .execution
+            .execution_history
+            .iter()
+            .find(|r| r.id == exec_id)
+        {
             Some(r) => r.is_script,
             None => {
                 log::warn!(
@@ -822,7 +828,8 @@ impl CodeDocument {
         };
 
         if let Some(record) = self
-            .execution.execution_history
+            .execution
+            .execution_history
             .iter_mut()
             .find(|record| record.id == exec_id)
         {
@@ -830,7 +837,8 @@ impl CodeDocument {
         }
 
         let is_active_task = self
-            .execution.active_query_task
+            .execution
+            .active_query_task
             .as_ref()
             .is_some_and(|task| task.task_id == task_id);
 
@@ -856,7 +864,8 @@ impl CodeDocument {
 
         // Emit audit event for cancelled execution with correct category
         let duration_ms = self
-            .execution.execution_history
+            .execution
+            .execution_history
             .iter()
             .find(|r| r.id == exec_id)
             .and_then(|r| {
@@ -903,7 +912,8 @@ impl CodeDocument {
             return;
         };
 
-        self.editor.input_state
+        self.editor
+            .input_state
             .update(cx, |state, cx| state.set_value(&selected.sql, window, cx));
 
         if let Some(name) = selected.name {
@@ -954,7 +964,8 @@ impl CodeDocument {
         self.state = DocumentState::Clean;
 
         let Some(record) = self
-            .execution.execution_history
+            .execution
+            .execution_history
             .iter_mut()
             .find(|r| r.id == pending.exec_id)
         else {
@@ -991,7 +1002,12 @@ impl CodeDocument {
                     .connection_id
                     .and_then(|id| self.app_state.read(cx).connections().get(&id))
                     .map(|c| {
-                        let db = self.source.exec_ctx.database.clone().or(c.active_database.clone());
+                        let db = self
+                            .source
+                            .exec_ctx
+                            .database
+                            .clone()
+                            .or(c.active_database.clone());
                         (db, Some(c.profile.name.clone()))
                     })
                     .unwrap_or((None, None));
@@ -1020,7 +1036,8 @@ impl CodeDocument {
                 // (l, r, o, x, …) through the Results keymap layer and steals
                 // them from the editor.
                 let input_focused = self
-                    .editor.input_state
+                    .editor
+                    .input_state
                     .read(cx)
                     .focus_handle(cx)
                     .is_focused(window);
@@ -1159,7 +1176,8 @@ impl CodeDocument {
         }
 
         if self
-            .execution.active_query_task
+            .execution
+            .active_query_task
             .as_ref()
             .is_some_and(|task| task.task_id == pending.task_id)
         {
@@ -1347,7 +1365,8 @@ impl CodeDocument {
                 && let Some(connected) = self.app_state.read(cx).connections().get(&conn_id)
             {
                 let active_database = self
-                    .source.exec_ctx
+                    .source
+                    .exec_ctx
                     .database
                     .clone()
                     .or_else(|| connected.active_database.clone());
@@ -1422,7 +1441,12 @@ impl CodeDocument {
     }
 
     pub fn close_result_tab(&mut self, tab_id: Uuid, cx: &mut Context<Self>) {
-        let Some(index) = self.result_tabs.result_tabs.iter().position(|t| t.id == tab_id) else {
+        let Some(index) = self
+            .result_tabs
+            .result_tabs
+            .iter()
+            .position(|t| t.id == tab_id)
+        else {
             return;
         };
 
@@ -1451,7 +1475,8 @@ impl CodeDocument {
     }
 
     pub(super) fn active_result_grid(&self) -> Option<Entity<DataGridPanel>> {
-        self.result_tabs.active_result_index
+        self.result_tabs
+            .active_result_index
             .and_then(|i| self.result_tabs.result_tabs.get(i))
             .map(|tab| tab.grid.clone())
     }
@@ -1461,7 +1486,8 @@ impl CodeDocument {
     /// Used by `render_results` to render through `ResultPanel` rather than
     /// directly rendering the bare `DataGridPanel` entity.
     pub(super) fn active_result_panel(&self) -> Option<Entity<ResultPanel>> {
-        self.result_tabs.active_result_index
+        self.result_tabs
+            .active_result_index
             .and_then(|i| self.result_tabs.result_tabs.get(i))
             .map(|tab| tab.result_panel.clone())
     }

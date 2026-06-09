@@ -525,7 +525,8 @@ impl DataGridPanel {
 
     /// Returns true if the data grid is editable (has primary key info).
     pub(super) fn check_is_editable(&self, cx: &App) -> bool {
-        self.grid_table.table_state
+        self.grid_table
+            .table_state
             .as_ref()
             .map(|ts| ts.read(cx).is_editable())
             .unwrap_or(false)
@@ -535,7 +536,11 @@ impl DataGridPanel {
     /// Returns the active context for keyboard handling.
     pub fn active_context(&self, cx: &App) -> ContextId {
         if self.document_view.cell_editor.read(cx).is_visible()
-            || self.document_view.document_preview_modal.read(cx).is_visible()
+            || self
+                .document_view
+                .document_preview_modal
+                .read(cx)
+                .is_visible()
         {
             return ContextId::TextInput;
         }
@@ -880,13 +885,15 @@ impl DataGridPanel {
     fn has_context_menu_row_target(&self, row: usize, is_document_view: bool, cx: &App) -> bool {
         if is_document_view {
             return self
-                .document_view.document_tree_state
+                .document_view
+                .document_tree_state
                 .as_ref()
                 .and_then(|state| state.read(cx).get_raw_document(row))
                 .is_some();
         }
 
-        self.grid_table.table_state
+        self.grid_table
+            .table_state
             .as_ref()
             .and_then(|state| state.read(cx).edit_buffer().visual_row_source(row))
             .is_some()
@@ -3785,7 +3792,8 @@ impl DataGridPanel {
             format!("({}) AND ({})", current.trim(), expr)
         };
 
-        self.filter_bar.filter_input
+        self.filter_bar
+            .filter_input
             .update(cx, |state, cx| state.set_value(&new_filter, window, cx));
         self.refresh(window, cx);
     }
@@ -3904,7 +3912,8 @@ impl DataGridPanel {
     }
 
     fn handle_remove_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.filter_bar.filter_input
+        self.filter_bar
+            .filter_input
             .update(cx, |state, cx| state.set_value("", window, cx));
         self.refresh(window, cx);
     }
@@ -3999,7 +4008,8 @@ impl DataGridPanel {
 
         let serialized = serde_json::to_string(&composed).unwrap_or_default();
 
-        self.filter_bar.filter_input
+        self.filter_bar
+            .filter_input
             .update(cx, |state, cx| state.set_value(&serialized, window, cx));
         self.refresh(window, cx);
     }

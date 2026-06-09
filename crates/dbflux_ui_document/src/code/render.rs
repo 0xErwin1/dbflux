@@ -48,7 +48,8 @@ impl CodeDocument {
         let fg = theme.foreground;
 
         let execution_time = self
-            .execution.active_execution_index
+            .execution
+            .active_execution_index
             .and_then(|i| self.execution.execution_history.get(i))
             .and_then(|r| {
                 r.finished_at
@@ -147,7 +148,9 @@ impl CodeDocument {
             .when_some(execution_time, |el, duration| {
                 el.child(Text::caption(format!("{:.2}s", duration.as_secs_f64())))
             })
-            .when(self.session.show_saved_label, |el| el.child(Text::caption("Saved")))
+            .when(self.session.show_saved_label, |el| {
+                el.child(Text::caption("Saved"))
+            })
     }
 
     /// Renders the secondary action buttons: Save, Format, History, Explain, Chart.
@@ -197,9 +200,12 @@ impl CodeDocument {
                         .on_click(cx.listener(|this, _, window, cx| {
                             let is_open = this.history.history_modal.read(cx).is_visible();
                             if is_open {
-                                this.history.history_modal.update(cx, |modal, cx| modal.close(cx));
+                                this.history
+                                    .history_modal
+                                    .update(cx, |modal, cx| modal.close(cx));
                             } else {
-                                this.history.history_modal
+                                this.history
+                                    .history_modal
                                     .update(cx, |modal, cx| modal.open(window, cx));
                             }
                         })),
@@ -247,7 +253,8 @@ impl CodeDocument {
                     MouseButton::Left,
                     cx.listener(|this, _, window, cx| {
                         this.enter_editor_mode(cx);
-                        this.editor.input_state
+                        this.editor
+                            .input_state
                             .update(cx, |state, cx| state.focus(window, cx));
                         cx.emit(DocumentEvent::RequestFocus);
                     }),
@@ -306,7 +313,8 @@ impl CodeDocument {
         let is_executing = self.state == DocumentState::Executing;
 
         let error = self
-            .execution.active_execution_index
+            .execution
+            .active_execution_index
             .and_then(|i| self.execution.execution_history.get(i))
             .and_then(|r| r.error.clone());
 
@@ -353,7 +361,8 @@ impl CodeDocument {
     fn render_live_output(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let live_output = self
-            .execution.live_output
+            .execution
+            .live_output
             .as_ref()
             .expect("live output state should exist when rendering");
 
@@ -426,48 +435,54 @@ impl CodeDocument {
                     .gap_1()
                     .overflow_x_hidden()
                     .flex_1()
-                    .children(self.result_tabs.result_tabs.iter().enumerate().map(|(i, tab)| {
-                        let is_active = active_index == Some(i);
-                        let tab_id = tab.id;
+                    .children(
+                        self.result_tabs
+                            .result_tabs
+                            .iter()
+                            .enumerate()
+                            .map(|(i, tab)| {
+                                let is_active = active_index == Some(i);
+                                let tab_id = tab.id;
 
-                        div()
-                            .id(ElementId::Name(format!("result-tab-{}", tab.id).into()))
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .px(Spacing::SM)
-                            .py(Spacing::XS)
-                            .rounded(Radii::SM)
-                            .cursor_pointer()
-                            .when(is_active, |el| el.bg(theme.secondary))
-                            .when(!is_active, |el| {
-                                el.hover(|d| d.bg(theme.secondary.opacity(0.5)))
-                            })
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.activate_result_tab(i, cx);
-                            }))
-                            .child(
-                                Text::caption(tab.title.clone())
-                                    .color(text_color_for_active(is_active, theme)),
-                            )
-                            .child(
                                 div()
-                                    .id(ElementId::Name(
-                                        format!("close-result-tab-{}", tab.id).into(),
-                                    ))
+                                    .id(ElementId::Name(format!("result-tab-{}", tab.id).into()))
                                     .flex()
                                     .items_center()
-                                    .justify_center()
-                                    .size_4()
+                                    .gap_1()
+                                    .px(Spacing::SM)
+                                    .py(Spacing::XS)
                                     .rounded(Radii::SM)
                                     .cursor_pointer()
-                                    .hover(|d| d.bg(theme.danger.opacity(0.2)))
+                                    .when(is_active, |el| el.bg(theme.secondary))
+                                    .when(!is_active, |el| {
+                                        el.hover(|d| d.bg(theme.secondary.opacity(0.5)))
+                                    })
                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.close_result_tab(tab_id, cx);
+                                        this.activate_result_tab(i, cx);
                                     }))
-                                    .child(Icon::new(AppIcon::X).size(px(12.0)).muted()), // guardrail-allow: 12px icon size, no ICON_XS token
-                            )
-                    })),
+                                    .child(
+                                        Text::caption(tab.title.clone())
+                                            .color(text_color_for_active(is_active, theme)),
+                                    )
+                                    .child(
+                                        div()
+                                            .id(ElementId::Name(
+                                                format!("close-result-tab-{}", tab.id).into(),
+                                            ))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .size_4()
+                                            .rounded(Radii::SM)
+                                            .cursor_pointer()
+                                            .hover(|d| d.bg(theme.danger.opacity(0.2)))
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.close_result_tab(tab_id, cx);
+                                            }))
+                                            .child(Icon::new(AppIcon::X).size(px(12.0)).muted()), // guardrail-allow: 12px icon size, no ICON_XS token
+                                    )
+                            }),
+                    ),
             )
             .child(div().flex_1())
             .child(self.render_results_controls(cx))
@@ -611,7 +626,8 @@ impl CodeDocument {
         let entity_close = cx.entity().clone();
 
         let statement_count = self
-            .pending.script_confirm
+            .pending
+            .script_confirm
             .as_ref()
             .map(|p| p.statement_count)
             .unwrap_or(0);
@@ -662,7 +678,8 @@ impl CodeDocument {
         let entity_close = cx.entity().clone();
 
         let (title, message) = self
-            .pending.dangerous_query
+            .pending
+            .dangerous_query
             .as_ref()
             .map(|p| {
                 let title = match p.kind {
@@ -766,9 +783,11 @@ impl Render for CodeDocument {
             self.source.source_seed_suppress =
                 self.source.source_seed_suppress.saturating_add(2);
 
-            self.source.source_start_input
+            self.source
+                .source_start_input
                 .update(cx, |state, cx| state.set_value(&start_value, window, cx));
-            self.source.source_end_input
+            self.source
+                .source_end_input
                 .update(cx, |state, cx| state.set_value(&end_value, window, cx));
         }
 
@@ -792,7 +811,8 @@ impl Render for CodeDocument {
                 // Wire the panel into the active result grid so the chart
                 // toolbar's RANGE chips can drive it.
                 if let Some(grid) = self
-                    .result_tabs.active_result_index
+                    .result_tabs
+                    .active_result_index
                     .and_then(|i| self.result_tabs.result_tabs.get(i))
                     .map(|t| t.grid.clone())
                 {
@@ -812,7 +832,9 @@ impl Render for CodeDocument {
             }
         }
 
-        if std::mem::take(&mut self.pending.chart_reexecute) && !self.result_tabs.result_tabs.is_empty() {
+        if std::mem::take(&mut self.pending.chart_reexecute)
+            && !self.result_tabs.result_tabs.is_empty()
+        {
             self.run_query(window, cx);
         }
 

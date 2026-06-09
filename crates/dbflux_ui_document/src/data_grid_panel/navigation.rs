@@ -529,7 +529,8 @@ impl DataGridPanel {
 
         // When an enum dropdown is open, route navigation to the dropdown
         let editing_enum = self
-            .grid_table.table_state
+            .grid_table
+            .table_state
             .as_ref()
             .map(|ts| ts.read(cx).is_editing_enum())
             .unwrap_or(false);
