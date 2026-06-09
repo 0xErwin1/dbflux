@@ -187,13 +187,13 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(pending) = self.pending_total_count.take() {
+        if let Some(pending) = self.pending.total_count.take() {
             self.apply_total_count(pending.source_qualified, pending.total, cx);
         }
 
-        dbflux_ui_base::toast::flush_pending_toast(self.pending_toast.take(), window, cx);
+        dbflux_ui_base::toast::flush_pending_toast(self.pending.toast.take(), window, cx);
 
-        if let Some(requery) = self.pending_requery.take() {
+        if let Some(requery) = self.pending.requery.take() {
             self.run_table_query(
                 requery.profile_id,
                 requery.database,
@@ -206,39 +206,36 @@ impl DataGridPanel {
             );
         }
 
-        if self.pending_rebuild {
-            self.pending_rebuild = false;
+        if std::mem::take(&mut self.pending.rebuild) {
             let sort = self
                 .local_sort_state
                 .map(|s| TableSortState::new(s.column_ix, s.direction));
             self.rebuild_table(sort, cx);
         }
 
-        if self.pending_refresh {
-            self.pending_refresh = false;
+        if std::mem::take(&mut self.pending.refresh) {
             self.refresh(window, cx);
         }
 
         if self.context_menu.is_none() {
-            self.pending_context_menu_focus = false;
-        } else if self.pending_context_menu_focus {
-            self.pending_context_menu_focus = false;
+            self.pending.context_menu_focus = false;
+        } else if std::mem::take(&mut self.pending.context_menu_focus) {
             self.context_menu_focus.focus(window);
         }
 
-        if let Some(modal) = self.pending_modal_open.take() {
+        if let Some(modal) = self.pending.modal_open.take() {
             self.cell_editor.update(cx, |editor, cx| {
                 editor.open(modal.row, modal.col, modal.value, modal.is_json, window, cx);
             });
         }
 
-        if let Some(preview) = self.pending_document_preview.take() {
+        if let Some(preview) = self.pending.document_preview.take() {
             self.document_preview_modal.update(cx, |modal, cx| {
                 modal.open(preview.doc_index, preview.document_json, window, cx);
             });
         }
 
-        if let Some(pending_modal) = self.pending_mutation_modal.take() {
+        if let Some(pending_modal) = self.pending.mutation_modal.take() {
             use crate::data_grid_panel::mutation_confirm::PendingMutationModal;
             match pending_modal {
                 PendingMutationModal::Light(req) => {
@@ -1668,7 +1665,7 @@ impl DataGridPanel {
             on_refresh: Arc::new(move |_window, cx| {
                 if let Some(panel) = weak_panel_for_refresh.upgrade() {
                     panel.update(cx, |this, cx| {
-                        this.pending_refresh = true;
+                        this.pending.refresh = true;
                         cx.notify();
                     });
                 }
@@ -1687,7 +1684,7 @@ impl DataGridPanel {
             on_png_export: Arc::new(move |_window, cx| {
                 if let Some(panel) = weak_panel.upgrade() {
                     panel.update(cx, |this, _cx| {
-                        this.pending_toast = Some(dbflux_ui_base::toast::PendingToast {
+                        this.pending.toast = Some(dbflux_ui_base::toast::PendingToast {
                             message: format!(
                                 "PNG export coming in v0.7 — {}",
                                 dbflux_ui_base::toast::now_hms()

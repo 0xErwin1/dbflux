@@ -273,7 +273,7 @@ impl DataGridPanel {
                         entity.update(cx, |panel, cx| {
                             panel.runner.fail_primary(task_id, e.to_string(), cx);
                             panel.state = GridState::Error;
-                            panel.pending_toast = Some(PendingToast {
+                            panel.pending.toast = Some(PendingToast {
                                 message: format!("Query failed: {}", e),
                                 is_error: true,
                             });
@@ -412,7 +412,7 @@ impl DataGridPanel {
                                 .map(|b| b.pk_columns.clone())
                                 .unwrap_or_default();
                             panel.builder_editable_binding = binding;
-                            panel.pending_rebuild = true;
+                            panel.pending.rebuild = true;
 
                             cx.notify();
                         });
@@ -423,7 +423,7 @@ impl DataGridPanel {
                         entity.update(cx, |panel, cx| {
                             panel.runner.fail_primary(task_id, e.to_string(), cx);
                             panel.state = GridState::Error;
-                            panel.pending_toast = Some(PendingToast {
+                            panel.pending.toast = Some(PendingToast {
                                 message: format!("Query failed: {}", e),
                                 is_error: true,
                             });
@@ -586,7 +586,7 @@ impl DataGridPanel {
                         entity.update(cx, |panel, cx| {
                             panel.runner.fail_primary(task_id, e.to_string(), cx);
                             panel.state = GridState::Error;
-                            panel.pending_toast = Some(PendingToast {
+                            panel.pending.toast = Some(PendingToast {
                                 message: format!("Query failed: {}", e),
                                 is_error: true,
                             });
@@ -724,7 +724,7 @@ impl DataGridPanel {
             if let Err(error) = cx.update(|cx| {
                 if let Ok(total) = result {
                     entity.update(cx, |panel, cx| {
-                        panel.pending_total_count = Some(PendingTotalCount {
+                        panel.pending.total_count = Some(PendingTotalCount {
                             source_qualified: qualified,
                             total,
                         });
@@ -803,7 +803,7 @@ impl DataGridPanel {
             if let Err(error) = cx.update(|cx| {
                 if let Ok(total) = result {
                     entity.update(cx, |panel, cx| {
-                        panel.pending_total_count = Some(PendingTotalCount {
+                        panel.pending.total_count = Some(PendingTotalCount {
                             source_qualified: qualified,
                             total,
                         });
@@ -1045,7 +1045,7 @@ impl DataGridPanel {
                     };
                     if let Some(total) = count_opt {
                         entity.update(cx, |panel, cx| {
-                            panel.pending_total_count = Some(PendingTotalCount {
+                            panel.pending.total_count = Some(PendingTotalCount {
                                 source_qualified: table_name,
                                 total,
                             });
@@ -1110,7 +1110,7 @@ impl DataGridPanel {
                     && let Some(dbflux_core::Value::Int(count)) = row.first()
                 {
                     entity.update(cx, |panel, cx| {
-                        panel.pending_total_count = Some(PendingTotalCount {
+                        panel.pending.total_count = Some(PendingTotalCount {
                             source_qualified: table_name,
                             total: *count as u64,
                         });

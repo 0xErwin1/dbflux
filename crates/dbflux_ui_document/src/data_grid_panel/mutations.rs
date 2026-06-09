@@ -144,7 +144,7 @@ impl DataGridPanel {
         if self.pending_batch_remaining.is_some() {
             self.process_next_batch_op(cx);
         } else {
-            self.pending_refresh = true;
+            self.pending.refresh = true;
         }
     }
 
@@ -317,7 +317,7 @@ impl DataGridPanel {
                                 });
                             }
 
-                            panel.pending_toast = Some(PendingToast {
+                            panel.pending.toast = Some(PendingToast {
                                 message: "Document updated".to_string(),
                                 is_error: false,
                             });
@@ -700,7 +700,7 @@ impl DataGridPanel {
                     state.edit_buffer_mut().clear_row(row_idx);
                     cx.notify();
                 });
-                self.pending_toast = Some(PendingToast {
+                self.pending.toast = Some(PendingToast {
                     message: "Saved".to_string(),
                     is_error: false,
                 });
@@ -837,7 +837,7 @@ impl DataGridPanel {
                                     .remove_pending_insert_by_idx(insert_idx);
                                 cx.notify();
                             });
-                            panel.pending_toast = Some(PendingToast {
+                            panel.pending.toast = Some(PendingToast {
                                 message: "Document inserted".to_string(),
                                 is_error: false,
                             });
@@ -976,7 +976,7 @@ impl DataGridPanel {
                                     .remove_pending_insert_by_idx(insert_idx);
                                 cx.notify();
                             });
-                            panel.pending_toast = Some(PendingToast {
+                            panel.pending.toast = Some(PendingToast {
                                 message: "Row inserted".to_string(),
                                 is_error: false,
                             });
@@ -1177,11 +1177,11 @@ impl DataGridPanel {
                                 state.edit_buffer_mut().unmark_delete(row_idx);
                                 cx.notify();
                             });
-                            panel.pending_toast = Some(PendingToast {
+                            panel.pending.toast = Some(PendingToast {
                                 message: "Document deleted".to_string(),
                                 is_error: false,
                             });
-                            panel.pending_refresh = true;
+                            panel.pending.refresh = true;
                         }
                         Err(e) => {
                             panel.runner.fail_mutation(task_id, e.to_string(), cx);
@@ -1311,11 +1311,11 @@ impl DataGridPanel {
                                 state.edit_buffer_mut().unmark_delete(row_idx);
                                 cx.notify();
                             });
-                            panel.pending_toast = Some(PendingToast {
+                            panel.pending.toast = Some(PendingToast {
                                 message: "Row deleted".to_string(),
                                 is_error: false,
                             });
-                            panel.pending_refresh = true;
+                            panel.pending.refresh = true;
                         }
                         Err(e) => {
                             panel.runner.fail_mutation(task_id, e.to_string(), cx);
@@ -1405,7 +1405,7 @@ impl DataGridPanel {
     /// intermediate refresh that would destroy the edit buffer.
     pub(super) fn process_next_batch_op(&mut self, cx: &mut Context<Self>) {
         let Some(mut remaining) = self.pending_batch_remaining.take() else {
-            self.pending_refresh = true;
+            self.pending.refresh = true;
             cx.notify();
             return;
         };
@@ -1429,7 +1429,7 @@ impl DataGridPanel {
         }
 
         // All batch operations complete
-        self.pending_refresh = true;
+        self.pending.refresh = true;
         cx.notify();
     }
 
@@ -1596,7 +1596,7 @@ impl DataGridPanel {
                             cx.notify();
                         });
 
-                        panel.pending_toast = Some(PendingToast {
+                        panel.pending.toast = Some(PendingToast {
                             message: format!("{} row(s) deleted", success_count),
                             is_error: false,
                         });
@@ -1604,7 +1604,7 @@ impl DataGridPanel {
                         if panel.pending_batch_remaining.is_some() {
                             panel.process_next_batch_op(cx);
                         } else {
-                            panel.pending_refresh = true;
+                            panel.pending.refresh = true;
                         }
                     }
                     cx.notify();
@@ -1774,7 +1774,7 @@ impl DataGridPanel {
                             cx.notify();
                         });
 
-                        panel.pending_toast = Some(PendingToast {
+                        panel.pending.toast = Some(PendingToast {
                             message: format!("{} document(s) deleted", success_count),
                             is_error: false,
                         });
@@ -1782,7 +1782,7 @@ impl DataGridPanel {
                         if panel.pending_batch_remaining.is_some() {
                             panel.process_next_batch_op(cx);
                         } else {
-                            panel.pending_refresh = true;
+                            panel.pending.refresh = true;
                         }
                     }
                     cx.notify();

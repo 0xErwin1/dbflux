@@ -66,7 +66,7 @@ impl DataGridPanel {
             };
 
             // Queue re-query
-            self.pending_requery = Some(PendingRequery {
+            self.pending.requery = Some(PendingRequery {
                 profile_id,
                 database,
                 table,
@@ -128,7 +128,7 @@ impl DataGridPanel {
                 total_rows,
             };
 
-            self.pending_requery = Some(PendingRequery {
+            self.pending.requery = Some(PendingRequery {
                 profile_id,
                 database,
                 table,
@@ -157,7 +157,7 @@ impl DataGridPanel {
             }
 
             self.local_sort_state = None;
-            self.pending_rebuild = true;
+            self.pending.rebuild = true;
             cx.notify();
         }
     }
@@ -208,7 +208,7 @@ impl DataGridPanel {
             column_ix: col_ix,
             direction,
         });
-        self.pending_rebuild = true;
+        self.pending.rebuild = true;
         cx.notify();
     }
 

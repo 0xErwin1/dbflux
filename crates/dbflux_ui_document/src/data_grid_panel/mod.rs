@@ -362,6 +362,26 @@ enum SqlGenerateKind {
 /// Callback type for providing row-level inspector actions (e.g. kill/cancel).
 type RowActionProvider = Arc<dyn Fn(&str) -> Vec<dbflux_core::InspectorRowAction> + Send + Sync>;
 
+/// Render-drained pending state (Class-A fields).
+///
+/// Each field is set by a producer and consumed exactly once by
+/// `process_pending_actions` during the next render cycle. Class-B fields
+/// (`pending_delete_confirm`, `pending_batch_remaining`, `pending_mutation_exec`,
+/// `pending_collection_chart_save`) are mid-flow state machines and remain as
+/// direct fields on `DataGridPanel`.
+#[derive(Default)]
+struct PendingActions {
+    requery: Option<PendingRequery>,
+    total_count: Option<PendingTotalCount>,
+    rebuild: bool,
+    refresh: bool,
+    toast: Option<PendingToast>,
+    modal_open: Option<PendingModalOpen>,
+    document_preview: Option<PendingDocumentPreview>,
+    context_menu_focus: bool,
+    mutation_modal: Option<crate::data_grid_panel::mutation_confirm::PendingMutationModal>,
+}
+
 /// Reusable data grid panel with filter bar, grid, toolbar, and status bar.
 /// Used both embedded in ScriptDocument and as standalone DataDocument.
 pub struct DataGridPanel {
@@ -400,11 +420,7 @@ pub struct DataGridPanel {
     _refresh_timer: Option<Task<()>>,
     _refresh_subscriptions: Vec<Subscription>,
     state: GridState,
-    pending_requery: Option<PendingRequery>,
-    pending_total_count: Option<PendingTotalCount>,
-    pending_rebuild: bool,
-    pending_refresh: bool,
-    pending_toast: Option<PendingToast>,
+    pending: PendingActions,
     pending_delete_confirm: Option<PendingDeleteConfirm>,
     pending_batch_remaining: Option<PendingBatchRemaining>,
     is_active_tab: bool,
@@ -423,11 +439,9 @@ pub struct DataGridPanel {
     // Context menu
     context_menu: Option<TableContextMenu>,
     context_menu_focus: FocusHandle,
-    pending_context_menu_focus: bool,
 
     // Modal editor for JSON/long text
     cell_editor: Entity<CellEditorModal>,
-    pending_modal_open: Option<PendingModalOpen>,
 
     // Panel origin in window coordinates (for context menu positioning)
     panel_origin: Point<Pixels>,
@@ -453,7 +467,6 @@ pub struct DataGridPanel {
 
     // Document preview modal for viewing/editing full documents
     document_preview_modal: Entity<DocumentPreviewModal>,
-    pending_document_preview: Option<PendingDocumentPreview>,
 
     // Row inspector content entity (workspace owns the chrome/lifecycle).
     row_inspector_content: Option<Entity<row_inspector::RowInspectorContent>>,
@@ -546,12 +559,6 @@ pub struct DataGridPanel {
     /// When `true`, the raw filter input row is hidden in the toolbar because
     /// the builder is open and owns query composition for this panel.
     pub(crate) filter_input_hidden: bool,
-
-    /// Controls which mutation confirmation modal to open on the next render cycle.
-    ///
-    /// Set by `on_mutation_run_requested`; read and taken by the render cycle.
-    pub(crate) pending_mutation_modal:
-        Option<crate::data_grid_panel::mutation_confirm::PendingMutationModal>,
 
     /// Spec + opts held while the confirmation modal is open.
     ///
@@ -777,7 +784,7 @@ impl DataGridPanel {
                         }
                     }
 
-                    panel.pending_rebuild = true;
+                    panel.pending.rebuild = true;
                     cx.notify();
                 });
             })
@@ -1077,11 +1084,7 @@ impl DataGridPanel {
             _refresh_timer: None,
             _refresh_subscriptions: vec![refresh_policy_sub],
             state: GridState::Ready,
-            pending_requery: None,
-            pending_total_count: None,
-            pending_rebuild: false,
-            pending_refresh: false,
-            pending_toast: None,
+            pending: PendingActions::default(),
             pending_delete_confirm: None,
             pending_batch_remaining: None,
             is_active_tab: true,
@@ -1094,9 +1097,7 @@ impl DataGridPanel {
             is_maximized: false,
             context_menu: None,
             context_menu_focus,
-            pending_context_menu_focus: false,
             cell_editor,
-            pending_modal_open: None,
             panel_origin: Point::default(),
             view_config,
             result_view_mode,
@@ -1107,7 +1108,6 @@ impl DataGridPanel {
             document_tree_subscription: None,
             document_card_list: None,
             document_preview_modal,
-            pending_document_preview: None,
             row_inspector_content: None,
             inspector_row: None,
             export_menu_open: false,
@@ -1124,7 +1124,6 @@ impl DataGridPanel {
             builder_panel: None,
             _builder_subscriptions: Vec::new(),
             filter_input_hidden: false,
-            pending_mutation_modal: None,
             pending_mutation_exec: None,
             mutation_confirm_light,
             mutation_confirm_hard,
@@ -1267,7 +1266,7 @@ impl DataGridPanel {
                 ..
             } => {
                 let Some(profile_id) = profile_id else {
-                    self.pending_toast = Some(dbflux_ui_base::toast::PendingToast {
+                    self.pending.toast = Some(dbflux_ui_base::toast::PendingToast {
                         message: "Cannot save chart: query has no profile binding".into(),
                         is_error: true,
                     });
@@ -1298,7 +1297,7 @@ impl DataGridPanel {
             })
         });
 
-        self.pending_toast = Some(match persist_result {
+        self.pending.toast = Some(match persist_result {
             Ok(_) => dbflux_ui_base::toast::PendingToast {
                 message: format!("Chart \"{}\" saved", name),
                 is_error: false,
@@ -1658,7 +1657,7 @@ impl DataGridPanel {
                                 trp.update(cx, |p, cx| p.emit_initial(cx));
                             }
                         } else {
-                            panel.pending_refresh = true;
+                            panel.pending.refresh = true;
                             cx.notify();
                         }
                     });
@@ -1967,7 +1966,7 @@ impl DataGridPanel {
                             doc_field_value: None,
                             row_actions,
                         });
-                        this.pending_context_menu_focus = true;
+                        this.pending.context_menu_focus = true;
                         cx.emit(DataGridEvent::Focused);
                         cx.notify();
                     }
@@ -1993,7 +1992,7 @@ impl DataGridPanel {
                         value,
                         is_json,
                     } => {
-                        this.pending_modal_open = Some(PendingModalOpen {
+                        this.pending.modal_open = Some(PendingModalOpen {
                             row: *row,
                             col: *col,
                             value: value.clone(),
@@ -2066,7 +2065,7 @@ impl DataGridPanel {
                     doc_index,
                     document_json,
                 } => {
-                    this.pending_document_preview = Some(PendingDocumentPreview {
+                    this.pending.document_preview = Some(PendingDocumentPreview {
                         doc_index: *doc_index,
                         document_json: document_json.clone(),
                     });
@@ -2108,7 +2107,7 @@ impl DataGridPanel {
                         doc_field_value: node_value.clone(),
                         row_actions: Vec::new(),
                     });
-                    this.pending_context_menu_focus = true;
+                    this.pending.context_menu_focus = true;
                     cx.emit(DataGridEvent::Focused);
                     cx.notify();
                 }
@@ -2406,7 +2405,7 @@ impl DataGridPanel {
                 }
             }
             _ => {
-                self.pending_refresh = true;
+                self.pending.refresh = true;
                 cx.notify();
             }
         }
@@ -2533,7 +2532,7 @@ impl DataGridPanel {
         self.builder_draft_spec = Some(spec);
         self.visual_select = select;
         self.filter_input_hidden = true;
-        self.pending_refresh = true;
+        self.pending.refresh = true;
 
         cx.notify();
     }
@@ -2825,7 +2824,7 @@ impl DataGridPanel {
             self.relational_filter_state,
             filter_bar::RelationalFilterState::Resolving
         ) {
-            self.pending_refresh = true;
+            self.pending.refresh = true;
         }
 
         cx.notify();
@@ -3602,7 +3601,7 @@ impl DataGridPanel {
             opts,
             profile_id,
         });
-        self.pending_mutation_modal = Some(modal);
+        self.pending.mutation_modal = Some(modal);
         cx.notify();
     }
 
@@ -4394,7 +4393,7 @@ mod tests {
             panel.update(app, |panel, cx| {
                 panel.handle_add_row(0, false, cx);
                 panel.queue_refresh_after_mutation_success(cx);
-                let refresh_was_queued = panel.pending_refresh;
+                let refresh_was_queued = panel.pending.refresh;
                 panel.set_result(zero_row_result(), cx);
                 refresh_was_queued
             })
@@ -4816,7 +4815,7 @@ mod tests {
                 panel.apply_builder_draft_spec(spec.clone(), cx);
 
                 assert!(
-                    panel.pending_refresh,
+                    panel.pending.refresh,
                     "apply_builder_draft_spec should queue a refresh"
                 );
             });
@@ -5291,7 +5290,7 @@ mod tests {
                 panel.relational_filter_state = RelationalFilterState::Resolving;
 
                 assert!(
-                    !panel.pending_refresh,
+                    !panel.pending.refresh,
                     "pending_refresh should be false before FK result arrives"
                 );
 
@@ -5313,7 +5312,7 @@ mod tests {
                     "fk_cache should be Ready after apply_fk_result"
                 );
                 assert!(
-                    panel.pending_refresh,
+                    panel.pending.refresh,
                     "pending_refresh should be set when FK result arrives while Resolving"
                 );
             });
@@ -5686,7 +5685,7 @@ mod tests {
         });
 
         let pending_modal_is_none =
-            window.update(|_, app| panel.read(app).pending_mutation_modal.is_none());
+            window.update(|_, app| panel.read(app).pending.mutation_modal.is_none());
 
         assert!(
             pending_modal_is_none,
@@ -6182,7 +6181,7 @@ mod tests {
                     column_origin: Default::default(),
                     insertable: true,
                 });
-                panel.pending_refresh = false;
+                panel.pending.refresh = false;
                 panel
             });
 
@@ -6200,21 +6199,21 @@ mod tests {
         window.update(|_, app| {
             panel.update(app, |p, cx| {
                 // Baseline: pending_refresh starts false, visual_select is set.
-                assert!(!p.pending_refresh, "pending_refresh must start false");
+                assert!(!p.pending.refresh, "pending_refresh must start false");
                 assert!(
                     p.visual_select.is_some(),
                     "visual_select must be set for the builder-result path"
                 );
 
                 // Simulate what the mutation success closure does.
-                p.pending_refresh = true;
+                p.pending.refresh = true;
                 cx.notify();
 
                 // After mutation: pending_refresh=true AND visual_select is still set.
                 // This is the exact state that causes refresh() → run_visual_query
                 // (not run_table_query) on the next render tick, completing the S7-A loop.
                 assert!(
-                    p.pending_refresh,
+                    p.pending.refresh,
                     "pending_refresh must be true after mutation to trigger re-query"
                 );
                 assert_eq!(

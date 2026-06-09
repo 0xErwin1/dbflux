@@ -982,7 +982,7 @@ impl DataGridPanel {
                         );
                         cx.update(|cx| {
                             entity.update(cx, |panel, cx| {
-                                panel.pending_toast =
+                                panel.pending.toast =
                                     Some(PendingToast { message, is_error: true });
                                 cx.notify();
                             });
@@ -1029,7 +1029,7 @@ impl DataGridPanel {
 
             cx.update(|cx| {
                 entity.update(cx, |panel, cx| {
-                    panel.pending_toast = Some(PendingToast { message, is_error });
+                    panel.pending.toast = Some(PendingToast { message, is_error });
                     cx.notify();
                 });
             })
@@ -1047,7 +1047,7 @@ impl DataGridPanel {
         self.export_menu_open = false;
 
         if matches!(format, ExportFormat::Binary) {
-            self.pending_toast = Some(PendingToast {
+            self.pending.toast = Some(PendingToast {
                 message:
                     "Raw binary cannot be copied to the clipboard — choose Hex or Base64 instead."
                         .to_string(),
@@ -1069,7 +1069,7 @@ impl DataGridPanel {
                     let byte_len = text.len();
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                     record_clipboard_audit(&audit_service, format_name, Some(byte_len), None);
-                    self.pending_toast = Some(PendingToast {
+                    self.pending.toast = Some(PendingToast {
                         message: format!(
                             "Copied {} ({} bytes) to clipboard",
                             format_name, byte_len
@@ -1081,7 +1081,7 @@ impl DataGridPanel {
                 Err(e) => {
                     let err_text = format!("Cannot copy non-UTF8 output: {}", e);
                     record_clipboard_audit(&audit_service, format_name, None, Some(&err_text));
-                    self.pending_toast = Some(PendingToast {
+                    self.pending.toast = Some(PendingToast {
                         message: err_text,
                         is_error: true,
                     });
@@ -1091,7 +1091,7 @@ impl DataGridPanel {
             Err(e) => {
                 let err_text = e.to_string();
                 record_clipboard_audit(&audit_service, format_name, None, Some(&err_text));
-                self.pending_toast = Some(PendingToast {
+                self.pending.toast = Some(PendingToast {
                     message: format!("Copy failed: {}", err_text),
                     is_error: true,
                 });
@@ -2966,7 +2966,7 @@ impl DataGridPanel {
             let json_str =
                 serde_json::to_string_pretty(&json_value).unwrap_or_else(|_| "{}".to_string());
 
-            self.pending_document_preview = Some(PendingDocumentPreview {
+            self.pending.document_preview = Some(PendingDocumentPreview {
                 doc_index,
                 document_json: json_str,
             });
@@ -3107,7 +3107,7 @@ impl DataGridPanel {
             None => return,
         };
 
-        self.pending_modal_open = Some(PendingModalOpen {
+        self.pending.modal_open = Some(PendingModalOpen {
             row,
             col,
             value,
@@ -3288,14 +3288,14 @@ impl DataGridPanel {
                     entity.update(cx, |panel, cx| {
                         match result {
                             Ok(_) => {
-                                panel.pending_toast = Some(PendingToast {
+                                panel.pending.toast = Some(PendingToast {
                                     message: "Document inserted".to_string(),
                                     is_error: false,
                                 });
-                                panel.pending_refresh = true;
+                                panel.pending.refresh = true;
                             }
                             Err(e) => {
-                                panel.pending_toast = Some(PendingToast {
+                                panel.pending.toast = Some(PendingToast {
                                     message: format!("Failed to insert document: {}", e),
                                     is_error: true,
                                 });
@@ -3403,14 +3403,14 @@ impl DataGridPanel {
                 entity.update(cx, |panel, cx| {
                     match result {
                         Ok(_) => {
-                            panel.pending_toast = Some(PendingToast {
+                            panel.pending.toast = Some(PendingToast {
                                 message: "Document updated".to_string(),
                                 is_error: false,
                             });
-                            panel.pending_refresh = true;
+                            panel.pending.refresh = true;
                         }
                         Err(e) => {
-                            panel.pending_toast = Some(PendingToast {
+                            panel.pending.toast = Some(PendingToast {
                                 message: format!("Failed to update document: {}", e),
                                 is_error: true,
                             });
@@ -3445,7 +3445,7 @@ impl DataGridPanel {
         // which routes to insert_document instead of update_document.
         if is_document_view && is_collection {
             let new_doc = self.build_new_document_template();
-            self.pending_document_preview = Some(PendingDocumentPreview {
+            self.pending.document_preview = Some(PendingDocumentPreview {
                 doc_index: DOC_INDEX_NEW,
                 document_json: new_doc,
             });
@@ -3582,7 +3582,7 @@ impl DataGridPanel {
                 let json_str =
                     serde_json::to_string_pretty(&doc_json).unwrap_or_else(|_| "{}".to_string());
 
-                self.pending_document_preview = Some(PendingDocumentPreview {
+                self.pending.document_preview = Some(PendingDocumentPreview {
                     doc_index: DOC_INDEX_NEW,
                     document_json: json_str,
                 });
