@@ -431,6 +431,13 @@ impl CodeDocument {
     }
 
     pub(super) fn on_source_time_range_changed(&mut self, cx: &mut Context<Self>) {
+        // Ignore the `Change` events produced by programmatically seeding the
+        // inputs; only genuine user edits should re-derive the exec context.
+        if self.source_seed_suppress > 0 {
+            self.source_seed_suppress -= 1;
+            return;
+        }
+
         self.sync_source_exec_context(cx);
         cx.emit(DocumentEvent::MetaChanged);
         cx.notify();

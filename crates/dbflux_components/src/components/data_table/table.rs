@@ -8,7 +8,7 @@ use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, InteractiveElement, IntoElement, KeyBinding,
-    ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, ScrollWheelEvent,
+    ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, ScrollWheelEvent, SharedString,
     StatefulInteractiveElement, Styled, Window, actions, canvas, div, px, uniform_list,
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarShow};
@@ -711,7 +711,7 @@ impl DataTable {
                 let is_pk = pk_cols.contains(&col_ix);
                 let is_fk = fk_cols.contains(&col_ix);
 
-                let type_label: String = col_spec.type_name.as_ref().to_string();
+                let type_label: SharedString = col_spec.type_name.clone().into();
 
                 let state_for_click = state_entity.clone();
                 let resize_drag_for_down = resize_drag.clone();
@@ -771,7 +771,7 @@ impl DataTable {
                             // It pushes the (secondary) type label out of the cell
                             // before its own characters get truncated.
                             .child(div().flex_shrink_0().whitespace_nowrap().child(
-                                Text::label_sm(col_spec.title.to_string()).color(if is_sorted {
+                                Text::label_sm(col_spec.title.clone()).color(if is_sorted {
                                     theme.primary
                                 } else {
                                     theme.foreground

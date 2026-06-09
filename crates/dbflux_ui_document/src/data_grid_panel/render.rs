@@ -1338,23 +1338,32 @@ impl DataGridPanel {
                 .size_full()
                 .child(tree.clone())
         } else {
-            let rows = &self.result.rows;
-            let columns = &self.result.columns;
+            let entity = _cx.entity();
+            let list_state = self.document_card_list.clone().unwrap_or_else(|| {
+                ListState::new(self.result.rows.len(), ListAlignment::Top, px(400.0))
+            });
 
-            let cards: Vec<_> = rows
-                .iter()
-                .enumerate()
-                .map(|(row_idx, row)| self.render_document_card(row_idx, row, columns, _theme))
-                .collect();
+            let card_list = list(list_state, move |row_idx, _window, cx: &mut App| {
+                let theme = cx.theme().clone();
+                let this = entity.read(cx);
+                let Some(row) = this.result.rows.get(row_idx) else {
+                    return div().into_any_element();
+                };
+
+                // Variable-height cards: each gets bottom spacing instead of the
+                // container `gap`, which a virtualized list cannot apply.
+                div()
+                    .pb(Spacing::MD)
+                    .child(this.render_document_card(row_idx, row, &this.result.columns, &theme))
+                    .into_any_element()
+            })
+            .size_full();
 
             div()
                 .id("document-view-container")
-                .flex()
-                .flex_col()
                 .size_full()
                 .p(Spacing::MD)
-                .gap(Spacing::MD)
-                .children(cards)
+                .child(card_list)
         }
     }
 

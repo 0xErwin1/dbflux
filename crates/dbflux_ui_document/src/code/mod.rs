@@ -241,6 +241,13 @@ pub struct CodeDocument {
     source_start_input: Entity<InputState>,
     source_end_input: Entity<InputState>,
     pending_source_input_values: Option<(String, String)>,
+    /// Number of upcoming `InputEvent::Change` emissions from the source
+    /// start/end inputs that originate from a programmatic seed rather than a
+    /// user edit, and must therefore be ignored. `InputState::set_value` always
+    /// emits `Change`, so seeding both inputs while draining
+    /// `pending_source_input_values` queues two handler calls that would
+    /// otherwise re-derive the exec context from the values just written.
+    source_seed_suppress: usize,
     /// Present when the active connection's `SourceContextSpec` declares both
     /// a non-empty `start_label` and `end_label`. The panel replaces the raw
     /// RFC3339 text inputs and forwards epoch-ms bounds into `exec_ctx.source`.
@@ -761,6 +768,7 @@ impl CodeDocument {
             source_start_input,
             source_end_input,
             pending_source_input_values: None,
+            source_seed_suppress: 0,
             source_time_range_panel: None,
             _source_time_range_sub: None,
             _context_subscriptions: vec![
