@@ -2,6 +2,7 @@ use crate::*;
 
 mod connection;
 mod dnd;
+mod pipeline;
 mod script_ops;
 mod tree_edit;
 mod tree_ops;
