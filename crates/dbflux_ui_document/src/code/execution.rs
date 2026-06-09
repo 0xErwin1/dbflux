@@ -86,7 +86,7 @@ fn task_target_for_execution(
 impl CodeDocument {
     /// Returns selected text when a non-empty selection exists.
     fn selected_query(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<String> {
-        self.input_state.update(cx, |state, cx| {
+        self.editor.input_state.update(cx, |state, cx| {
             let sel = state.selected_text_range(false, window, cx)?;
 
             if sel.range.is_empty() {
@@ -104,7 +104,7 @@ impl CodeDocument {
     /// Returns the selected text if a selection exists, otherwise the full editor content.
     fn selected_or_full_query(&self, window: &mut Window, cx: &mut Context<Self>) -> String {
         self.selected_query(window, cx)
-            .unwrap_or_else(|| self.input_state.read(cx).value().to_string())
+            .unwrap_or_else(|| self.editor.input_state.read(cx).value().to_string())
     }
 
     fn clear_live_output(&mut self) {
@@ -153,7 +153,7 @@ impl CodeDocument {
         if self.read_only {
             return;
         }
-        if !self.query_language.supports_connection_context() {
+        if !self.editor.query_language.supports_connection_context() {
             self.run_script(window, cx);
             return;
         }
@@ -168,7 +168,7 @@ impl CodeDocument {
             return;
         };
 
-        if !self.query_language.supports_connection_context() {
+        if !self.editor.query_language.supports_connection_context() {
             self.run_script(window, cx);
             return;
         }
@@ -183,7 +183,7 @@ impl CodeDocument {
             return;
         }
 
-        let query = self.input_state.read(cx).value().to_string();
+        let query = self.editor.input_state.read(cx).value().to_string();
 
         // No selection means the whole buffer runs. When it holds more than one
         // statement and the driver can execute batches, confirm before running
@@ -207,7 +207,7 @@ impl CodeDocument {
     /// Returns `None` for a single statement or a driver that cannot execute
     /// batches, in which case no confirmation is shown.
     fn script_statement_count(&self, query: &str, cx: &Context<Self>) -> Option<usize> {
-        let count = self.query_language.statement_count(query);
+        let count = self.editor.query_language.statement_count(query);
         if count <= 1 {
             return None;
         }
@@ -599,7 +599,7 @@ impl CodeDocument {
             query.clone(),
             active_database,
             &self.source.exec_ctx,
-            self.query_language.clone(),
+            self.editor.query_language.clone(),
         );
 
         // Capture audit_service, task_target, and started_at before spawning so we can emit
@@ -903,14 +903,14 @@ impl CodeDocument {
             return;
         };
 
-        self.input_state
+        self.editor.input_state
             .update(cx, |state, cx| state.set_value(&selected.sql, window, cx));
 
         if let Some(name) = selected.name {
             self.title = name;
         }
 
-        self.saved_query_id = selected.saved_query_id;
+        self.editor.saved_query_id = selected.saved_query_id;
 
         self.focus_mode = SqlQueryFocus::Editor;
 
@@ -1020,7 +1020,7 @@ impl CodeDocument {
                 // (l, r, o, x, …) through the Results keymap layer and steals
                 // them from the editor.
                 let input_focused = self
-                    .input_state
+                    .editor.input_state
                     .read(cx)
                     .focus_handle(cx)
                     .is_focused(window);
@@ -1390,7 +1390,7 @@ impl CodeDocument {
         if self.read_only {
             return;
         }
-        if !self.query_language.supports_connection_context() {
+        if !self.editor.query_language.supports_connection_context() {
             self.run_script(window, cx);
             return;
         }
@@ -1402,7 +1402,7 @@ impl CodeDocument {
     /// Uses the selected text when a selection exists, otherwise the full buffer.
     /// The result appears in the same Results panel as a regular query.
     pub fn run_explain(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.query_language.supports_connection_context() {
+        if !self.editor.query_language.supports_connection_context() {
             Toast::warning("Explain is not available for scripts")
                 .meta_right(now_hms())
                 .push(cx);
@@ -1473,7 +1473,7 @@ impl CodeDocument {
             HookFailureMode, HookKind, LuaCapabilities, ScriptLanguage, ScriptSource,
         };
 
-        let content = self.input_state.read(cx).value().to_string();
+        let content = self.editor.input_state.read(cx).value().to_string();
         if content.trim().is_empty() {
             Toast::warning("Enter script content to run")
                 .meta_right(now_hms())
@@ -1481,7 +1481,7 @@ impl CodeDocument {
             return;
         }
 
-        let kind = match &self.query_language {
+        let kind = match &self.editor.query_language {
             QueryLanguage::Lua => HookKind::Lua {
                 source: ScriptSource::Inline {
                     content: content.clone(),
@@ -1528,7 +1528,7 @@ impl CodeDocument {
             phase: None,
         };
 
-        let description = format!("Run {} script", self.query_language.display_name());
+        let description = format!("Run {} script", self.editor.query_language.display_name());
         let (output_sender, output_receiver) = dbflux_core::output_channel();
         let (task_id, cancel_token) =
             self.runner

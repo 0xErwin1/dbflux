@@ -227,6 +227,25 @@ pub(super) struct SourceContext {
     pub(super) _context_subscriptions: Vec<Subscription>,
 }
 
+/// Text editor entity, file-backing metadata, language mode, and diagnostic debounce.
+///
+/// Groups the `InputState` entity and its subscription together with the fields
+/// that track editor-lifecycle concerns: content dirtiness, file path, language,
+/// and the incremental diagnostic refresh debounce.
+pub(super) struct EditorState {
+    pub(super) input_state: Entity<InputState>,
+    pub(super) _input_subscriptions: Vec<Subscription>,
+    pub(super) original_content: String,
+    pub(super) saved_query_id: Option<Uuid>,
+    pub(super) current_editor_mode: &'static str,
+    pub(super) diagnostic_request_id: u64,
+    pub(super) _diagnostic_debounce: Option<Task<()>>,
+    pub(super) path: Option<PathBuf>,
+    pub(super) is_dirty: bool,
+    pub(super) suppress_dirty: bool,
+    pub(super) query_language: QueryLanguage,
+}
+
 /// Auto-save-to-disk machinery and saved-label UI feedback.
 pub(super) struct SessionPersistence {
     pub(super) scratch_path: Option<PathBuf>,
@@ -316,17 +335,8 @@ pub struct CodeDocument {
     // Dependencies
     app_state: Entity<AppStateEntity>,
 
-    // Editor
-    input_state: Entity<InputState>,
-    _input_subscriptions: Vec<Subscription>,
-    original_content: String,
-    saved_query_id: Option<Uuid>,
-
-    // File backing
-    path: Option<PathBuf>,
-    is_dirty: bool,
-    suppress_dirty: bool,
-    query_language: QueryLanguage,
+    // Editor: text input, file-backing, language mode, and diagnostics.
+    editor: EditorState,
 
     // Execution context and associated source-control widgets.
     source: SourceContext,
@@ -352,23 +362,11 @@ pub struct CodeDocument {
 
     is_active_tab: bool,
 
-    // Diagnostic debounce: incremental request id to discard stale results.
-    diagnostic_request_id: u64,
-    _diagnostic_debounce: Option<Task<()>>,
-
     // Pending file I/O
     _pending_save: Option<Task<()>>,
 
     // Session persistence (auto-save to disk).
     session: SessionPersistence,
-
-    /// Last editor_mode pushed to `InputState::set_highlighter`. Tracked so
-    /// `sync_editor_language` only resets the highlighter when the mode
-    /// actually changes — `set_highlighter` nukes the cached highlighter to
-    /// `None` and gpui-component only rebuilds it on text edits, so calling
-    /// it on every `AppStateChanged` would silently strip syntax colors
-    /// until the next keystroke.
-    current_editor_mode: &'static str,
 
     /// Deferred action slots drained at the top of each render cycle.
     pending: PendingActions,
@@ -493,18 +491,18 @@ impl CodeDocument {
             window,
             |this, _input, event: &InputEvent, _window, cx| match event {
                 InputEvent::Change => {
-                    if this.suppress_dirty {
+                    if this.editor.suppress_dirty {
                         // Programmatic change (set_content, initial load, or revert):
                         // consume the flag and do nothing else. This prevents an
                         // infinite loop where a revert set_content emits another
                         // Change, which would trigger another revert, ad infinitum.
-                        this.suppress_dirty = false;
+                        this.editor.suppress_dirty = false;
                     } else if this.read_only {
                         // Genuine user edit on a read-only document: revert once.
                         // suppress_dirty = true ensures the Change emitted by the
                         // revert's own set_content is consumed by the branch above.
-                        let original = this.original_content.clone();
-                        this.suppress_dirty = true;
+                        let original = this.editor.original_content.clone();
+                        this.editor.suppress_dirty = true;
                         this.set_content(&original, _window, cx);
                     } else {
                         this.mark_dirty(cx);
@@ -776,14 +774,19 @@ impl CodeDocument {
             routine_dedup: None,
             routine_definition_pending: false,
             app_state,
-            input_state,
-            _input_subscriptions: vec![input_change_sub],
-            original_content: String::new(),
-            saved_query_id: None,
-            path: None,
-            is_dirty: false,
-            suppress_dirty: false,
-            query_language,
+            editor: EditorState {
+                input_state,
+                _input_subscriptions: vec![input_change_sub],
+                original_content: String::new(),
+                saved_query_id: None,
+                current_editor_mode: editor_mode,
+                diagnostic_request_id: 0,
+                _diagnostic_debounce: None,
+                path: None,
+                is_dirty: false,
+                suppress_dirty: false,
+                query_language,
+            },
             source: SourceContext {
                 exec_ctx,
                 connection_dropdown,
@@ -846,8 +849,6 @@ impl CodeDocument {
                 ],
                 preflight_running: false,
             },
-            diagnostic_request_id: 0,
-            _diagnostic_debounce: None,
             _pending_save: None,
             session: SessionPersistence {
                 scratch_path,
@@ -856,7 +857,6 @@ impl CodeDocument {
                 show_saved_label: false,
                 _saved_label_timer: None,
             },
-            current_editor_mode: editor_mode,
             pending: PendingActions::default(),
         };
 
@@ -865,14 +865,14 @@ impl CodeDocument {
     }
 
     pub fn can_auto_refresh(&self, cx: &App) -> bool {
-        dbflux_core::is_safe_read_query(&self.input_state.read(cx).value())
+        dbflux_core::is_safe_read_query(&self.editor.input_state.read(cx).value())
     }
 
     /// Returns the full editor content trimmed, or `None` when blank.
     ///
     /// Used by the "New chart from current query" command to seed a new `ChartDocument`.
     pub fn current_query_text(&self, cx: &App) -> Option<String> {
-        let text = self.input_state.read(cx).value().trim().to_string();
+        let text = self.editor.input_state.read(cx).value().trim().to_string();
         if text.is_empty() { None } else { Some(text) }
     }
 
@@ -951,11 +951,11 @@ impl CodeDocument {
     /// Sets the document content (without marking dirty).
     pub fn set_content(&mut self, sql: &str, window: &mut Window, cx: &mut Context<Self>) {
         let sql_owned = sql.to_string();
-        self.suppress_dirty = true;
-        self.input_state
+        self.editor.suppress_dirty = true;
+        self.editor.input_state
             .update(cx, |state, cx| state.set_value(&sql_owned, window, cx));
-        self.original_content = sql_owned;
-        self.is_dirty = false;
+        self.editor.original_content = sql_owned;
+        self.editor.is_dirty = false;
         self.refresh_editor_diagnostics(window, cx);
     }
 
@@ -967,7 +967,7 @@ impl CodeDocument {
 
     /// Attach a file path (used after opening or "Save As").
     pub fn with_path(mut self, path: PathBuf) -> Self {
-        self.path = Some(path);
+        self.editor.path = Some(path);
         self
     }
 
@@ -981,7 +981,7 @@ impl CodeDocument {
         // when the user focuses or types (which would otherwise happen because
         // the Input component receives key events before the disabled guard
         // blocks the actual text insertion).
-        self.input_state.update(cx, |state, _cx| {
+        self.editor.input_state.update(cx, |state, _cx| {
             state.lsp.completion_provider = None;
         });
 
@@ -1093,26 +1093,26 @@ impl CodeDocument {
     // === File backing ===
 
     pub fn path(&self) -> Option<&PathBuf> {
-        self.path.as_ref()
+        self.editor.path.as_ref()
     }
 
     pub fn is_file_backed(&self) -> bool {
-        self.path.is_some()
+        self.editor.path.is_some()
     }
 
     #[allow(dead_code)]
     pub fn query_language(&self) -> QueryLanguage {
-        self.query_language.clone()
+        self.editor.query_language.clone()
     }
 
     /// Returns true if the editor content is empty or whitespace-only.
     pub fn is_content_empty(&self, cx: &App) -> bool {
-        self.input_state.read(cx).value().trim().is_empty()
+        self.editor.input_state.read(cx).value().trim().is_empty()
     }
 
     fn mark_dirty(&mut self, cx: &mut Context<Self>) {
-        if !self.is_dirty {
-            self.is_dirty = true;
+        if !self.editor.is_dirty {
+            self.editor.is_dirty = true;
 
             if self.is_file_backed() && self.session.shadow_path.is_none() {
                 self.session.shadow_path =
@@ -1125,9 +1125,9 @@ impl CodeDocument {
     }
 
     fn mark_clean(&mut self, cx: &mut Context<Self>) {
-        if self.is_dirty {
-            self.is_dirty = false;
-            self.original_content = self.input_state.read(cx).value().to_string();
+        if self.editor.is_dirty {
+            self.editor.is_dirty = false;
+            self.editor.original_content = self.editor.input_state.read(cx).value().to_string();
             self.session._auto_save_debounce = None;
 
             if let Some(shadow) = self.session.shadow_path.take() {
@@ -1146,13 +1146,13 @@ impl CodeDocument {
     }
 
     pub fn title(&self) -> String {
-        if let Some(path) = &self.path {
+        if let Some(path) = &self.editor.path {
             let name = path
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("Untitled");
 
-            if self.is_dirty {
+            if self.editor.is_dirty {
                 format!("{}*", name)
             } else {
                 name.to_string()
@@ -1196,8 +1196,8 @@ impl CodeDocument {
     /// Mark the document as dirty without assigning a new shadow path.
     /// Used during session restore when we already have the shadow from the manifest.
     pub fn restore_dirty(&mut self, cx: &mut Context<Self>) {
-        if !self.is_dirty {
-            self.is_dirty = true;
+        if !self.editor.is_dirty {
+            self.editor.is_dirty = true;
             cx.emit(DocumentEvent::MetaChanged);
             cx.notify();
         }
@@ -1209,17 +1209,17 @@ impl CodeDocument {
 
     pub fn has_unsaved_changes(&self, cx: &App) -> bool {
         if self.is_file_backed() {
-            return self.is_dirty;
+            return self.editor.is_dirty;
         }
 
-        let current = self.input_state.read(cx).value();
-        current != self.original_content
+        let current = self.editor.input_state.read(cx).value();
+        current != self.editor.original_content
     }
 
     /// Counts lines added and removed relative to `original_content`.
     pub fn diff_stats(&self, cx: &App) -> (usize, usize) {
-        let current = self.input_state.read(cx).value().to_string();
-        diff_stats_from_pair(&self.original_content, &current)
+        let current = self.editor.input_state.read(cx).value().to_string();
+        diff_stats_from_pair(&self.editor.original_content, &current)
     }
 
     /// Short summary of pending edits for the dirty-dot tooltip.
@@ -1329,7 +1329,7 @@ impl CodeDocument {
             // Special handling for FocusUp to exit results
             if cmd == Command::FocusUp {
                 self.focus_mode = SqlQueryFocus::Editor;
-                self.input_state
+                self.editor.input_state
                     .update(cx, |state, cx| state.focus(window, cx));
                 cx.notify();
                 return true;
@@ -1652,7 +1652,7 @@ mod tests {
         // Verify the document is still in its expected read-only, clean state.
         let (is_ro, has_task, is_dirty) = window.update(|_, app| {
             let d = doc.read(app);
-            (d.read_only, d.execution.active_query_task.is_none(), d.is_dirty)
+            (d.read_only, d.execution.active_query_task.is_none(), d.editor.is_dirty)
         });
 
         assert!(is_ro, "document must remain read-only");
@@ -1707,7 +1707,7 @@ mod tests {
         // The subscription must detect `read_only` and revert the change.
         window.update(|window, cx| {
             doc.update(cx, |d, cx| {
-                d.input_state.update(cx, |state, cx| {
+                d.editor.input_state.update(cx, |state, cx| {
                     state.set_value("DROP TABLE x;", window, cx);
                 });
             });
@@ -1717,7 +1717,7 @@ mod tests {
         // document must not be dirty.
         let (content, is_dirty) = window.update(|_, app| {
             let d = doc.read(app);
-            (d.input_state.read(app).value().to_string(), d.is_dirty)
+            (d.editor.input_state.read(app).value().to_string(), d.editor.is_dirty)
         });
 
         assert_eq!(

@@ -136,10 +136,10 @@ impl CodeDocument {
             QueryCompletionProvider::new(query_language, self.app_state.clone(), connection_id),
         );
 
-        let editor_mode_changed = editor_mode != self.current_editor_mode;
-        self.current_editor_mode = editor_mode;
+        let editor_mode_changed = editor_mode != self.editor.current_editor_mode;
+        self.editor.current_editor_mode = editor_mode;
 
-        self.input_state.update(cx, |state, cx| {
+        self.editor.input_state.update(cx, |state, cx| {
             state.lsp.completion_provider = Some(completion_provider);
 
             // `set_highlighter` resets the cached SyntaxHighlighter to `None`
@@ -178,7 +178,7 @@ impl CodeDocument {
 
     pub(super) fn effective_query_language(&self, cx: &App) -> QueryLanguage {
         let Some(spec) = self.current_source_context_spec(cx) else {
-            return self.query_language.clone();
+            return self.editor.query_language.clone();
         };
 
         let selected_mode = self.current_source_query_mode_value(cx);
@@ -187,7 +187,7 @@ impl CodeDocument {
             .into_iter()
             .find(|mode| Some(mode.value.as_str()) == selected_mode.as_deref())
             .map(|mode| mode.query_language)
-            .unwrap_or_else(|| self.query_language.clone())
+            .unwrap_or_else(|| self.editor.query_language.clone())
     }
 
     pub(super) fn should_show_source_controls(&self, cx: &App) -> bool {
@@ -993,7 +993,7 @@ impl CodeDocument {
 
     /// Returns the visible context-bar slots for the current document.
     fn visible_context_bar_slots(&self, cx: &App) -> Vec<ContextBarSlot> {
-        if !self.query_language.supports_connection_context() {
+        if !self.editor.query_language.supports_connection_context() {
             return Vec::new();
         }
 
@@ -1066,7 +1066,7 @@ impl CodeDocument {
     fn exit_context_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.clear_context_bar_focus_rings(cx);
         self.focus_mode = SqlQueryFocus::Editor;
-        self.input_state
+        self.editor.input_state
             .update(cx, |state, cx| state.focus(window, cx));
         cx.notify();
     }
@@ -1212,7 +1212,7 @@ impl CodeDocument {
     // === Render the context bar ===
 
     pub(super) fn render_context_bar(&self, cx: &mut Context<Self>) -> AnyElement {
-        if !self.query_language.supports_connection_context() {
+        if !self.editor.query_language.supports_connection_context() {
             return div().id("exec-context-bar").into_any_element();
         }
 
@@ -1430,7 +1430,7 @@ impl CodeDocument {
                     )
             })
             .child(div().flex_1())
-            .when_some(self.path.as_ref(), |el, path| {
+            .when_some(self.editor.path.as_ref(), |el, path| {
                 el.child(
                     div()
                         .overflow_x_hidden()

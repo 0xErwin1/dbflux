@@ -22,7 +22,7 @@ fn build_file_content_for_language(
 impl CodeDocument {
     /// Save to the current path. If no path is set, redirects to Save As.
     pub fn save_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(path) = self.path.clone() else {
+        let Some(path) = self.editor.path.clone() else {
             self.save_file_as(window, cx);
             return;
         };
@@ -61,10 +61,10 @@ impl CodeDocument {
     /// Open a "Save As" dialog and save to the chosen path.
     pub fn save_file_as(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let content = self.build_file_content(cx);
-        let default_ext = self.query_language.default_extension().to_string();
-        let language_name = self.query_language.display_name().to_string();
+        let default_ext = self.editor.query_language.default_extension().to_string();
+        let language_name = self.editor.query_language.display_name().to_string();
 
-        let suggested_name = if let Some(path) = &self.path {
+        let suggested_name = if let Some(path) = &self.editor.path {
             path.file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("untitled")
@@ -133,7 +133,7 @@ impl CodeDocument {
                                 let _ = std::fs::remove_file(&scratch);
                             }
 
-                            doc.path = Some(path_for_update.clone());
+                            doc.editor.path = Some(path_for_update.clone());
                             doc.mark_clean(cx);
                         });
 
@@ -276,12 +276,12 @@ impl CodeDocument {
 
     /// Build the full file content, prepending execution context metadata.
     pub fn build_file_content(&self, cx: &App) -> String {
-        let editor_content = self.input_state.read(cx).value().to_string();
+        let editor_content = self.editor.input_state.read(cx).value().to_string();
 
         build_file_content_for_language(
             &editor_content,
             &self.source.exec_ctx,
-            self.query_language.clone(),
+            self.editor.query_language.clone(),
         )
     }
 

@@ -19,7 +19,7 @@ impl CodeDocument {
         let theme = cx.theme().clone();
         let is_executing = self.state == DocumentState::Executing;
         let is_preflight = self.drift.preflight_running;
-        let is_db_language = self.query_language.supports_connection_context();
+        let is_db_language = self.editor.query_language.supports_connection_context();
         let is_read_only = self.read_only;
 
         let auto_refresh_enabled = self.refresh.refresh_policy.is_auto();
@@ -158,7 +158,7 @@ impl CodeDocument {
         is_read_only: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let is_db_language = self.query_language.supports_connection_context();
+        let is_db_language = self.editor.query_language.supports_connection_context();
 
         div()
             .flex()
@@ -247,7 +247,7 @@ impl CodeDocument {
                     MouseButton::Left,
                     cx.listener(|this, _, window, cx| {
                         this.enter_editor_mode(cx);
-                        this.input_state
+                        this.editor.input_state
                             .update(cx, |state, cx| state.focus(window, cx));
                         cx.emit(DocumentEvent::RequestFocus);
                     }),
@@ -271,7 +271,7 @@ impl CodeDocument {
                     if this.focus_mode != SqlQueryFocus::Editor {
                         return;
                     }
-                    let input = this.input_state.clone();
+                    let input = this.editor.input_state.clone();
                     cx.spawn_in(window, async move |_this, cx| {
                         cx.update(|window, cx| {
                             input.update(cx, |state, cx| state.focus(window, cx));
@@ -282,7 +282,7 @@ impl CodeDocument {
                 }))
                 .child(
                     div().flex_1().min_h_0().overflow_hidden().child(
-                        Input::new(&self.input_state)
+                        Input::new(&self.editor.input_state)
                             .appearance(false)
                             .w_full()
                             .h_full()
