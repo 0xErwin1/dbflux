@@ -220,7 +220,7 @@ impl DataGridPanel {
         if self.context_menu.is_none() {
             self.pending.context_menu_focus = false;
         } else if std::mem::take(&mut self.pending.context_menu_focus) {
-            self.context_menu_focus.focus(window);
+            self.focus.context_menu_focus.focus(window);
         }
 
         if let Some(modal) = self.pending.modal_open.take() {
@@ -260,7 +260,7 @@ impl DataGridPanel {
         let exec_time = format!("{}ms", self.result.execution_time.as_millis());
 
         let is_table_view = self.source.is_table();
-        let show_data_toolbar = !self.toolbar_in_chrome_row
+        let show_data_toolbar = !self.chrome.toolbar_in_chrome_row
             && matches!(
                 self.source,
                 DataSource::Table { .. } | DataSource::Collection { .. }
@@ -273,7 +273,7 @@ impl DataGridPanel {
         };
         let (source_query_prefix, raw_filter_keyword) =
             DataGridPanel::filter_labels_for_source(&self.source, &self.app_state, cx);
-        let filter_keyword = if self.filter_input_hidden {
+        let filter_keyword = if self.builder.filter_input_hidden {
             String::new()
         } else {
             raw_filter_keyword.to_string()
@@ -288,9 +288,9 @@ impl DataGridPanel {
         let can_next = self.can_go_next();
         let sort_info = self.current_sort_info();
 
-        let focus_mode = self.focus_mode;
-        let toolbar_focus = self.toolbar_focus;
-        let edit_state = self.edit_state;
+        let focus_mode = self.focus.focus_mode;
+        let toolbar_focus = self.focus.toolbar_focus;
+        let edit_state = self.focus.edit_state;
         let show_toolbar_focus =
             focus_mode == GridFocusMode::Toolbar && edit_state == EditState::Navigating;
         let focus_handle = self.focus_handle.clone();
@@ -302,8 +302,8 @@ impl DataGridPanel {
         let is_loading = self.refresh.state == GridState::Loading;
         let view_mode = self.view_config.mode;
 
-        let show_panel_controls = self.show_panel_controls;
-        let is_maximized = self.is_maximized;
+        let show_panel_controls = self.chrome.show_panel_controls;
+        let is_maximized = self.chrome.is_maximized;
         let uses_result_view = self.uses_result_view();
         let content_mode =
             content_mode_for_result(uses_result_view, view_mode, has_columns, has_data);
@@ -339,15 +339,15 @@ impl DataGridPanel {
             && shows_table_content
             && !is_editable
             && !is_grouped_result
-            && self.current_visual_spec.is_none();
+            && self.builder.current_visual_spec.is_none();
         let show_builder_readonly_hint = is_table_view
             && shows_table_content
             && !is_editable
             && !is_grouped_result
-            && self.current_visual_spec.is_some()
-            && self.builder_editable_binding.is_none();
+            && self.builder.current_visual_spec.is_some()
+            && self.builder.builder_editable_binding.is_none();
         let show_edit_toolbar = is_table_view && has_columns && is_editable;
-        let result_view_mode = self.result_view_mode;
+        let result_view_mode = self.chrome.result_view_mode;
 
         RenderState {
             theme,
@@ -559,7 +559,7 @@ impl DataGridPanel {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
-                    if this.focus_mode != GridFocusMode::Table {
+                    if this.focus.focus_mode != GridFocusMode::Table {
                         this.focus_table(window, cx);
                     }
                 }),
@@ -635,7 +635,7 @@ pub(super) fn render_filter_bar_as_segment(
 
     let (source_query_prefix, raw_filter_keyword) =
         DataGridPanel::filter_labels_for_source(&g.source, &g.app_state, cx);
-    let filter_keyword = if g.filter_input_hidden {
+    let filter_keyword = if g.builder.filter_input_hidden {
         String::new()
     } else {
         raw_filter_keyword.to_string()
@@ -650,9 +650,9 @@ pub(super) fn render_filter_bar_as_segment(
     let filter_input = g.filter_bar.filter_input.clone();
     let filter_has_value = !g.filter_bar.filter_input.read(cx).value().is_empty();
     let limit_input = g.filter_bar.limit_input.clone();
-    let focus_mode = g.focus_mode;
-    let toolbar_focus = g.toolbar_focus;
-    let edit_state = g.edit_state;
+    let focus_mode = g.focus.focus_mode;
+    let toolbar_focus = g.focus.toolbar_focus;
+    let edit_state = g.focus.edit_state;
     let refresh_policy = g.refresh.refresh_policy;
     let is_runner_active = g.runner.is_primary_active();
     let refresh_dropdown = g.filter_bar.refresh_dropdown.clone();
@@ -669,7 +669,7 @@ pub(super) fn render_filter_bar_as_segment(
     };
 
     let can_open_builder = g.can_open_builder(cx);
-    let relational_filter_state = g.relational_filter_state.clone();
+    let relational_filter_state = g.builder.relational_filter_state.clone();
     let has_filter_error = filter_input_has_error(&relational_filter_state);
 
     let grid_for_filter = grid.clone();
@@ -692,7 +692,7 @@ pub(super) fn render_filter_bar_as_segment(
             let grid = grid_for_chip.clone();
             move |_, window, cx| {
                 grid.update(cx, |this, cx| {
-                    if let Some(spec) = this.builder_draft_spec.clone() {
+                    if let Some(spec) = this.builder.builder_draft_spec.clone() {
                         this.apply_builder_draft_spec(spec, cx);
                     }
                     this.open_query_builder(window, cx);
@@ -714,7 +714,7 @@ pub(super) fn render_filter_bar_as_segment(
                     let partial_spec = if let super::filter_bar::RelationalFilterState::Error {
                         partial_spec,
                         ..
-                    } = &this.relational_filter_state
+                    } = &this.builder.relational_filter_state
                     {
                         Some(*partial_spec.clone())
                     } else {
@@ -790,10 +790,10 @@ pub(super) fn render_filter_bar_as_segment(
                                 let grid = grid_for_filter_event.clone();
                                 move |_, _, cx| {
                                     grid.update(cx, |this, cx| {
-                                        this.switching_input = true;
-                                        this.focus_mode = GridFocusMode::Toolbar;
-                                        this.toolbar_focus = ToolbarFocus::Filter;
-                                        this.edit_state = EditState::Editing;
+                                        this.focus.switching_input = true;
+                                        this.focus.focus_mode = GridFocusMode::Toolbar;
+                                        this.focus.toolbar_focus = ToolbarFocus::Filter;
+                                        this.focus.edit_state = EditState::Editing;
                                         cx.notify();
                                     });
                                 }
@@ -863,10 +863,10 @@ pub(super) fn render_filter_bar_as_segment(
                             let grid = grid_for_limit.clone();
                             move |_, _, cx| {
                                 grid.update(cx, |this, cx| {
-                                    this.switching_input = true;
-                                    this.focus_mode = GridFocusMode::Toolbar;
-                                    this.toolbar_focus = ToolbarFocus::Limit;
-                                    this.edit_state = EditState::Editing;
+                                    this.focus.switching_input = true;
+                                    this.focus.focus_mode = GridFocusMode::Toolbar;
+                                    this.focus.toolbar_focus = ToolbarFocus::Limit;
+                                    this.focus.edit_state = EditState::Editing;
                                     cx.notify();
                                 });
                             }
@@ -978,28 +978,28 @@ impl DataGridPanel {
             "Refresh"
         };
 
-        let toolbar_has_filter_error = filter_input_has_error(&self.relational_filter_state);
+        let toolbar_has_filter_error = filter_input_has_error(&self.builder.relational_filter_state);
         let toolbar_chip = render_relational_chip(
-            &self.relational_filter_state,
+            &self.builder.relational_filter_state,
             cx,
             Box::new(cx.listener(|this, _, window, cx| {
-                if let Some(spec) = this.builder_draft_spec.clone() {
+                if let Some(spec) = this.builder.builder_draft_spec.clone() {
                     this.apply_builder_draft_spec(spec, cx);
                 }
                 this.open_query_builder(window, cx);
             })),
         );
 
-        let toolbar_resolving = render_resolving_indicator(&self.relational_filter_state, cx);
+        let toolbar_resolving = render_resolving_indicator(&self.builder.relational_filter_state, cx);
 
         let toolbar_error = render_relational_error(
-            &self.relational_filter_state,
+            &self.builder.relational_filter_state,
             cx,
             Box::new(cx.listener(|this, _, window, cx| {
                 let partial_spec = if let super::filter_bar::RelationalFilterState::Error {
                     partial_spec,
                     ..
-                } = &this.relational_filter_state
+                } = &this.builder.relational_filter_state
                 {
                     Some(*partial_spec.clone())
                 } else {
@@ -1048,10 +1048,10 @@ impl DataGridPanel {
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(|this, _, _, cx| {
-                                        this.switching_input = true;
-                                        this.focus_mode = GridFocusMode::Toolbar;
-                                        this.toolbar_focus = ToolbarFocus::Filter;
-                                        this.edit_state = EditState::Editing;
+                                        this.focus.switching_input = true;
+                                        this.focus.focus_mode = GridFocusMode::Toolbar;
+                                        this.focus.toolbar_focus = ToolbarFocus::Filter;
+                                        this.focus.edit_state = EditState::Editing;
                                         cx.notify();
                                     }),
                                 )
@@ -1109,10 +1109,10 @@ impl DataGridPanel {
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|this, _, _, cx| {
-                                    this.switching_input = true;
-                                    this.focus_mode = GridFocusMode::Toolbar;
-                                    this.toolbar_focus = ToolbarFocus::Limit;
-                                    this.edit_state = EditState::Editing;
+                                    this.focus.switching_input = true;
+                                    this.focus.focus_mode = GridFocusMode::Toolbar;
+                                    this.focus.toolbar_focus = ToolbarFocus::Limit;
+                                    this.focus.edit_state = EditState::Editing;
                                     cx.notify();
                                 }),
                             )
@@ -3342,7 +3342,7 @@ impl DataGridPanel {
         } else {
             vec![]
         };
-        let current_result_mode = self.result_view_mode;
+        let current_result_mode = self.chrome.result_view_mode;
 
         div()
             .flex()
@@ -3554,7 +3554,7 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let formats = dbflux_export::available_formats(&self.result.shape);
-        let menu_open = self.export_menu_open;
+        let menu_open = self.chrome.export_menu_open;
 
         div()
             .id("export-trigger")
@@ -3692,7 +3692,7 @@ impl DataGridPanel {
                     cx.stop_propagation();
                 })
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                    this.export_menu_open = false;
+                    this.chrome.export_menu_open = false;
                     cx.notify();
                 }))
                 .children(items),

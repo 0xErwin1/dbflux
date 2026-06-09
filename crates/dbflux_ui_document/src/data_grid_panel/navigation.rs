@@ -400,57 +400,57 @@ impl DataGridPanel {
 
     #[allow(dead_code)]
     pub(super) fn focus_mode(&self) -> GridFocusMode {
-        self.focus_mode
+        self.focus.focus_mode
     }
 
     pub fn focus_toolbar(&mut self, cx: &mut Context<Self>) {
         if !self.source.is_table() {
             return;
         }
-        self.focus_mode = GridFocusMode::Toolbar;
-        self.toolbar_focus = ToolbarFocus::Filter;
-        self.edit_state = EditState::Navigating;
+        self.focus.focus_mode = GridFocusMode::Toolbar;
+        self.focus.toolbar_focus = ToolbarFocus::Filter;
+        self.focus.edit_state = EditState::Navigating;
         cx.notify();
     }
 
     pub fn focus_table(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.focus_mode = GridFocusMode::Table;
-        self.edit_state = EditState::Navigating;
+        self.focus.focus_mode = GridFocusMode::Table;
+        self.focus.edit_state = EditState::Navigating;
         window.focus(&self.focus_handle);
         cx.notify();
     }
 
     pub fn toolbar_left(&mut self, cx: &mut Context<Self>) {
-        if self.focus_mode != GridFocusMode::Toolbar {
+        if self.focus.focus_mode != GridFocusMode::Toolbar {
             return;
         }
-        self.toolbar_focus = self.toolbar_focus.left();
+        self.focus.toolbar_focus = self.focus.toolbar_focus.left();
         cx.notify();
     }
 
     pub fn toolbar_right(&mut self, cx: &mut Context<Self>) {
-        if self.focus_mode != GridFocusMode::Toolbar {
+        if self.focus.focus_mode != GridFocusMode::Toolbar {
             return;
         }
-        self.toolbar_focus = self.toolbar_focus.right();
+        self.focus.toolbar_focus = self.focus.toolbar_focus.right();
         cx.notify();
     }
 
     pub fn toolbar_execute(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.focus_mode != GridFocusMode::Toolbar {
+        if self.focus.focus_mode != GridFocusMode::Toolbar {
             return;
         }
 
-        match self.toolbar_focus {
+        match self.focus.toolbar_focus {
             ToolbarFocus::Filter => {
-                self.edit_state = EditState::Editing;
+                self.focus.edit_state = EditState::Editing;
                 self.filter_bar.filter_input.update(cx, |input, cx| {
                     input.focus(window, cx);
                 });
                 cx.notify();
             }
             ToolbarFocus::Limit => {
-                self.edit_state = EditState::Editing;
+                self.focus.edit_state = EditState::Editing;
                 self.filter_bar.limit_input.update(cx, |input, cx| {
                     input.focus(window, cx);
                 });
@@ -464,13 +464,13 @@ impl DataGridPanel {
     }
 
     pub fn exit_edit_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.switching_input {
-            self.switching_input = false;
+        if self.focus.switching_input {
+            self.focus.switching_input = false;
             return;
         }
 
-        if self.edit_state == EditState::Editing {
-            self.edit_state = EditState::Navigating;
+        if self.focus.edit_state == EditState::Editing {
+            self.focus.edit_state = EditState::Navigating;
             window.focus(&self.focus_handle);
             cx.notify();
         }
@@ -505,7 +505,7 @@ impl DataGridPanel {
         }
 
         // Handle toolbar mode commands
-        if self.focus_mode == GridFocusMode::Toolbar {
+        if self.focus.focus_mode == GridFocusMode::Toolbar {
             match cmd {
                 Command::Cancel | Command::FocusUp => {
                     self.focus_table(window, cx);

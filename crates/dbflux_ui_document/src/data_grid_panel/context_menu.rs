@@ -36,8 +36,8 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.focus_mode = super::GridFocusMode::Table;
-        self.edit_state = EditState::Navigating;
+        self.focus.focus_mode = super::GridFocusMode::Table;
+        self.focus.edit_state = EditState::Navigating;
 
         if is_document_view {
             if let Some(tree_state) = &self.document_view.document_tree_state {
@@ -105,7 +105,7 @@ impl DataGridPanel {
         });
 
         // Focus the context menu to receive keyboard events
-        self.context_menu_focus.focus(window);
+        self.focus.context_menu_focus.focus(window);
         cx.emit(DataGridEvent::Focused);
         cx.notify();
     }
@@ -135,7 +135,7 @@ impl DataGridPanel {
             row_actions: Vec::new(),
         });
 
-        self.context_menu_focus.focus(window);
+        self.focus.context_menu_focus.focus(window);
         cx.emit(DataGridEvent::Focused);
         cx.notify();
     }
@@ -192,7 +192,7 @@ impl DataGridPanel {
             row_actions: Vec::new(),
         });
 
-        self.context_menu_focus.focus(window);
+        self.focus.context_menu_focus.focus(window);
         cx.emit(DataGridEvent::Focused);
         cx.notify();
     }
@@ -542,7 +542,7 @@ impl DataGridPanel {
 
         if self.context_menu.is_some() {
             ContextId::ContextMenu
-        } else if self.edit_state == EditState::Editing {
+        } else if self.focus.edit_state == EditState::Editing {
             ContextId::TextInput
         } else {
             ContextId::Results
@@ -929,7 +929,7 @@ impl DataGridPanel {
         let _ = window;
         let _formats = dbflux_export::available_formats(&self.result.shape);
 
-        self.export_menu_open = !self.export_menu_open;
+        self.chrome.export_menu_open = !self.chrome.export_menu_open;
         cx.notify();
     }
 
@@ -939,7 +939,7 @@ impl DataGridPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.export_menu_open = false;
+        self.chrome.export_menu_open = false;
 
         let result = self.result.clone();
         let base_name = self.export_base_name();
@@ -1044,7 +1044,7 @@ impl DataGridPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.export_menu_open = false;
+        self.chrome.export_menu_open = false;
 
         if matches!(format, ExportFormat::Binary) {
             self.pending.toast = Some(PendingToast {
@@ -2436,7 +2436,7 @@ impl DataGridPanel {
                 .top_0()
                 .left_0()
                 .size_full()
-                .track_focus(&self.context_menu_focus)
+                .track_focus(&self.focus.context_menu_focus)
                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                     use dbflux_app::keymap::KeyChord;
                     use dbflux_ui_base::keymap::{default_keymap, key_chord_from_gpui};
@@ -2646,8 +2646,8 @@ impl DataGridPanel {
         // the result. Drop the cached state and hide the rail rather than
         // showing a phantom row of nulls.
         if row >= model.row_count() {
-            self.inspector_row = None;
-            self.row_inspector_content = None;
+            self.inspector.inspector_row = None;
+            self.inspector.row_inspector_content = None;
             cx.emit(DataGridEvent::CloseInspector);
             return;
         }
@@ -2700,7 +2700,7 @@ impl DataGridPanel {
         let has_fk_lookups = !fk_references.is_empty();
 
         // Reuse the existing content entity or create a new one.
-        let content = match &self.row_inspector_content {
+        let content = match &self.inspector.row_inspector_content {
             Some(existing) => {
                 existing.update(cx, |c, cx| c.open(snapshot, cx));
                 existing.clone()
@@ -2710,7 +2710,7 @@ impl DataGridPanel {
                 if !has_fk_lookups {
                     new_content.update(cx, |c, cx| c.set_references(Vec::new(), cx));
                 }
-                self.row_inspector_content = Some(new_content.clone());
+                self.inspector.row_inspector_content = Some(new_content.clone());
                 new_content
             }
         };
@@ -2720,7 +2720,7 @@ impl DataGridPanel {
 
         // Remember the active coordinates so refresh / tab activation /
         // selection navigation can rebuild the snapshot from fresh data.
-        self.inspector_row = Some((row, col));
+        self.inspector.inspector_row = Some((row, col));
 
         // Tell the workspace to mount/replace the inspector rail.
         let title = SharedString::from(row_label);

@@ -469,13 +469,90 @@ struct MutationConfirmState {
         Entity<dbflux_components::modals::ModalMutationConfirmHard>,
 }
 
+/// Keyboard and toolbar focus state machine.
+///
+/// Tracks the current navigation mode, which toolbar element is focused,
+/// the edit state, input-switch flag, and the context-menu focus handle.
+struct FocusState {
+    focus_mode: GridFocusMode,
+    toolbar_focus: ToolbarFocus,
+    edit_state: EditState,
+    switching_input: bool,
+    context_menu_focus: FocusHandle,
+}
+
+/// Panel chrome flags and result-view text caches.
+///
+/// Presentation toggles for the embedded-panel shell, the current
+/// result-view mode, and the lazily-populated derived text/JSON caches.
+struct ChromeState {
+    show_panel_controls: bool,
+    is_maximized: bool,
+    /// When `true`, the toolbar has been hoisted into the hosting
+    /// `ResultPanel`'s chrome row; `DataGridPanel` suppresses its own row.
+    toolbar_in_chrome_row: bool,
+    export_menu_open: bool,
+    result_view_mode: ResultViewMode,
+    derived_json: Option<String>,
+    derived_text: Option<String>,
+}
+
+/// Row inspector rail integration.
+///
+/// Holds the inspector content entity, the last inspected (row, col), and
+/// an optional provider for row-level kill/cancel actions.
+struct InspectorState {
+    row_inspector_content: Option<Entity<row_inspector::RowInspectorContent>>,
+
+    /// Last `(row, col)` opened in the row inspector. `Some` means the inspector
+    /// is logically "on" for this panel — it should reappear when the panel's
+    /// tab is re-activated, follow the user's cursor on `SelectionChanged`, and
+    /// re-snapshot itself after a refresh. Cleared when the user dismisses the
+    /// rail explicitly (via `DataGridPanel::clear_inspector_state`) or when the
+    /// stored row falls outside the new result.
+    inspector_row: Option<(usize, usize)>,
+
+    /// Optional provider for row-level kill/cancel actions.
+    ///
+    /// When set, right-clicking a row emits `DataGridEvent::RowActionRequested`
+    /// for the first destructive action the provider returns, instead of the
+    /// normal context menu.
+    row_action_provider: Option<RowActionProvider>,
+}
+
+/// Visual Query Builder cluster.
+///
+/// All nine fields are `pub(crate)` — external crates in the same workspace
+/// read or update them (e.g. the builder panel subscription in `mod.rs`).
+pub(crate) struct BuilderState {
+    /// FK metadata for the current (connection, database, schema).
+    pub(crate) fk_cache: FkLoadState,
+    /// Current state of the relational filter bar chip and inline error area.
+    pub(crate) relational_filter_state: filter_bar::RelationalFilterState,
+    /// The spec currently being edited in the `QueryBuilderPanel` (in-flight
+    /// draft, not the last-committed spec).
+    pub(crate) builder_draft_spec: Option<VisualQuerySpec>,
+    /// Pre-computed `SelectQuery` for the current `builder_draft_spec`.
+    pub(crate) visual_select: Option<SelectQuery>,
+    /// The `VisualQuerySpec` last successfully executed by `run_visual_query`.
+    pub(crate) current_visual_spec: Option<VisualQuerySpec>,
+    /// Builder panel entity, kept alive here to preserve state across sessions.
+    pub(crate) builder_panel: Option<Entity<QueryBuilderPanel>>,
+    /// Subscriptions to `QueryBuilderPanel` events.
+    pub(crate) _builder_subscriptions: Vec<Subscription>,
+    /// When `true`, the raw filter input is hidden because the builder owns
+    /// query composition for this panel.
+    pub(crate) filter_input_hidden: bool,
+    /// Editable-safety binding for the last successfully executed builder SELECT.
+    pub(crate) builder_editable_binding: Option<dbflux_core::EditableBinding>,
+}
+
 /// Reusable data grid panel with filter bar, grid, toolbar, and status bar.
 /// Used both embedded in ScriptDocument and as standalone DataDocument.
+// direct fields: 25
 pub struct DataGridPanel {
     source: DataSource,
     app_state: Entity<AppStateEntity>,
-
-    // Current result data
     result: QueryResult,
     grid_table: GridTableState,
     filter_bar: FilterBarState,
@@ -483,134 +560,23 @@ pub struct DataGridPanel {
     document_view: DocumentViewState,
     chart: ChartState,
     mutation_confirm: MutationConfirmState,
-
-    // Primary key columns for row editing
+    focus: FocusState,
+    chrome: ChromeState,
+    inspector: InspectorState,
+    pub(crate) builder: BuilderState,
     pk_columns: Vec<String>,
-
-    // Async state
     runner: DocumentTaskRunner,
+    focus_handle: FocusHandle,
+    panel_origin: Point<Pixels>,
+    view_config: super::data_view::DataViewConfig,
+    context_menu: Option<TableContextMenu>,
+    is_active_tab: bool,
     pending: PendingActions,
     pending_delete_confirm: Option<PendingDeleteConfirm>,
     pending_batch_remaining: Option<PendingBatchRemaining>,
-    is_active_tab: bool,
-
-    // Focus
-    focus_handle: FocusHandle,
-    focus_mode: GridFocusMode,
-    toolbar_focus: ToolbarFocus,
-    edit_state: EditState,
-    switching_input: bool,
-
-    // Panel controls (shown when embedded in CodeDocument)
-    show_panel_controls: bool,
-    is_maximized: bool,
-
-    // Context menu
-    context_menu: Option<TableContextMenu>,
-    context_menu_focus: FocusHandle,
-
-    // Panel origin in window coordinates (for context menu positioning)
-    panel_origin: Point<Pixels>,
-
-    // View mode configuration
-    view_config: super::data_view::DataViewConfig,
-
-    // Result view mode for QueryResult sources (Text/Json/Raw/Table)
-    result_view_mode: ResultViewMode,
-    derived_json: Option<String>,
-    derived_text: Option<String>,
-
-    // Row inspector content entity (workspace owns the chrome/lifecycle).
-    row_inspector_content: Option<Entity<row_inspector::RowInspectorContent>>,
-
-    /// Last `(row, col)` opened in the row inspector. `Some` means the inspector
-    /// is logically "on" for this panel — it should reappear when the panel's
-    /// tab is re-activated, follow the user's cursor on `SelectionChanged`, and
-    /// re-snapshot itself after a refresh. Cleared when the user dismisses the
-    /// rail explicitly (via [`DataGridPanel::clear_inspector_state`]) or when
-    /// the stored row falls outside the new result.
-    inspector_row: Option<(usize, usize)>,
-
-    export_menu_open: bool,
-
-    /// Optional provider for row-level kill/cancel actions.
-    ///
-    /// When set, right-clicking a row emits `DataGridEvent::RowActionRequested`
-    /// for the first destructive action the provider returns, instead of opening
-    /// the normal context menu. Used by `InspectorPanel` to offer kill actions.
-    row_action_provider: Option<RowActionProvider>,
-
-    /// When `true`, the filter/limit/refresh-button toolbar row is suppressed
-    /// from `DataGridPanel::render` because it has been moved into the hosting
-    /// `ResultPanel`'s chrome row as a `Center` toolbar segment via `ViewHandle`.
-    ///
-    /// Set by `DataGridPanel::into_view_handle` after the `ViewHandle` is
-    /// built. Defaults to `false` (grid renders its own toolbar).
-    toolbar_in_chrome_row: bool,
-
     /// Pending "Save chart from collection" state.
-    ///
-    /// Present when the user clicked "Save chart" from a Collection-source
-    /// DataDocument in chart mode. Holds the input state for the name prompt
-    /// overlay. On confirm, the chart is upserted via `app_state.saved_charts`.
     pub(super) pending_collection_chart_save: Option<CollectionChartSaveState>,
-
-    // ---- Visual Query Builder state ----
-    /// FK metadata for the current (connection, database, schema).
-    ///
-    /// Loaded lazily: triggered on first dotted filter input or when the data
-    /// grid opens for a SQL+Table source. Shared with `QueryBuilderPanel` so
-    /// both surfaces draw from a single fetch.
-    pub(crate) fk_cache: FkLoadState,
-
-    /// Current state of the relational filter bar chip and inline error area.
-    pub(crate) relational_filter_state: filter_bar::RelationalFilterState,
-
-    /// The spec currently being edited in the `QueryBuilderPanel`.
-    ///
-    /// Updated on every `SpecChanged` event (i.e. every builder edit). When
-    /// `Some`, `run_table_query` delegates to `generate_select` instead of
-    /// `TableBrowseRequest`. The name makes clear this is the in-flight draft,
-    /// not the last-committed (Run) spec.
-    pub(crate) builder_draft_spec: Option<VisualQuerySpec>,
-
-    /// Pre-computed `SelectQuery` for the current `builder_draft_spec`.
-    ///
-    /// Stored so the query path does not need to re-generate every refresh.
-    /// Cleared whenever `builder_draft_spec` changes.
-    pub(crate) visual_select: Option<SelectQuery>,
-
-    /// The `VisualQuerySpec` that was last successfully executed by
-    /// `run_visual_query`.
-    ///
-    /// This is the committed spec, not the draft. It is set when the query
-    /// succeeds and is used to determine whether the current result is grouped
-    /// (which gates mutations and pagination subquery selection).
-    pub(crate) current_visual_spec: Option<VisualQuerySpec>,
-
-    /// The builder panel entity; kept alive here so inspector close/re-open
-    /// preserves state across sessions.
-    pub(crate) builder_panel: Option<Entity<QueryBuilderPanel>>,
-
-    /// Subscriptions to `QueryBuilderPanel` events.
-    pub(crate) _builder_subscriptions: Vec<Subscription>,
-
-    /// When `true`, the raw filter input row is hidden in the toolbar because
-    /// the builder is open and owns query composition for this panel.
-    pub(crate) filter_input_hidden: bool,
-
-    /// Spec + opts held while the confirmation modal is open.
-    ///
-    /// Cleared when the user confirms (executor is dispatched) or cancels.
     pub(crate) pending_mutation_exec: Option<PendingMutationExec>,
-
-    /// Editable-safety binding for the last successfully executed builder SELECT.
-    ///
-    /// `Some` when all preconditions hold (non-grouped, PKs projected, schema
-    /// cache warm). `None` when the result is read-only. Updated every time a
-    /// visual query succeeds or when table-details arrive for a previously cold
-    /// source table.
-    pub(crate) builder_editable_binding: Option<dbflux_core::EditableBinding>,
 }
 
 /// Pending mutation execution — holds the spec and options while the
@@ -790,7 +756,7 @@ impl DataGridPanel {
                     // the binding now that details are available. This upgrades a
                     // previously read-only builder result to editable without requiring
                     // the user to re-run the query.
-                    if panel.current_visual_spec.is_some() {
+                    if panel.builder.current_visual_spec.is_some() {
                         let profile_id = match &panel.source {
                             DataSource::Table { profile_id, .. } => Some(*profile_id),
                             _ => None,
@@ -802,7 +768,7 @@ impl DataGridPanel {
                                 }
                                 _ => None,
                             };
-                            let spec = panel.current_visual_spec.clone();
+                            let spec = panel.builder.current_visual_spec.clone();
                             let binding = panel.compute_builder_binding(
                                 spec.as_ref(),
                                 pid,
@@ -813,7 +779,7 @@ impl DataGridPanel {
                                 .as_ref()
                                 .map(|b| b.pk_columns.clone())
                                 .unwrap_or_else(|| panel.pk_columns.clone());
-                            panel.builder_editable_binding = binding;
+                            panel.builder.builder_editable_binding = binding;
                         }
                     }
 
@@ -1138,41 +1104,49 @@ impl DataGridPanel {
                 mutation_confirm_hard,
             },
             pk_columns,
+            focus: FocusState {
+                focus_mode: GridFocusMode::default(),
+                toolbar_focus: ToolbarFocus::default(),
+                edit_state: EditState::default(),
+                switching_input: false,
+                context_menu_focus,
+            },
+            chrome: ChromeState {
+                show_panel_controls: false,
+                is_maximized: false,
+                toolbar_in_chrome_row: false,
+                export_menu_open: false,
+                result_view_mode,
+                derived_json: None,
+                derived_text: None,
+            },
+            inspector: InspectorState {
+                row_inspector_content: None,
+                inspector_row: None,
+                row_action_provider: None,
+            },
+            builder: BuilderState {
+                fk_cache: FkLoadState::Loading,
+                relational_filter_state: filter_bar::RelationalFilterState::Inactive,
+                builder_draft_spec: None,
+                visual_select: None,
+                current_visual_spec: None,
+                builder_panel: None,
+                _builder_subscriptions: Vec::new(),
+                filter_input_hidden: false,
+                builder_editable_binding: None,
+            },
             runner,
+            focus_handle,
+            panel_origin: Point::default(),
+            view_config,
+            context_menu: None,
+            is_active_tab: true,
             pending: PendingActions::default(),
             pending_delete_confirm: None,
             pending_batch_remaining: None,
-            is_active_tab: true,
-            focus_handle,
-            focus_mode: GridFocusMode::default(),
-            toolbar_focus: ToolbarFocus::default(),
-            edit_state: EditState::default(),
-            switching_input: false,
-            show_panel_controls: false,
-            is_maximized: false,
-            context_menu: None,
-            context_menu_focus,
-            panel_origin: Point::default(),
-            view_config,
-            result_view_mode,
-            derived_json: None,
-            derived_text: None,
-            row_inspector_content: None,
-            inspector_row: None,
-            export_menu_open: false,
-            row_action_provider: None,
-            toolbar_in_chrome_row: false,
             pending_collection_chart_save: None,
-            fk_cache: FkLoadState::Loading,
-            relational_filter_state: filter_bar::RelationalFilterState::Inactive,
-            builder_draft_spec: None,
-            visual_select: None,
-            current_visual_spec: None,
-            builder_panel: None,
-            _builder_subscriptions: Vec::new(),
-            filter_input_hidden: false,
             pending_mutation_exec: None,
-            builder_editable_binding: None,
         }
     }
 
@@ -1183,7 +1157,7 @@ impl DataGridPanel {
     /// context menu. Pass `metric_id` as the key; the provider returns the list
     /// of actions from `InstanceCatalog::row_actions`.
     pub fn set_row_action_provider(&mut self, provider: RowActionProvider) {
-        self.row_action_provider = Some(provider);
+        self.inspector.row_action_provider = Some(provider);
     }
 
     /// Returns the metric_id embedded in the `QueryResult` source string, or
@@ -1225,7 +1199,7 @@ impl DataGridPanel {
     /// Enable panel control buttons (hide, maximize) for embedded panels.
     #[allow(dead_code)]
     pub fn with_panel_controls(mut self) -> Self {
-        self.show_panel_controls = true;
+        self.chrome.show_panel_controls = true;
         self
     }
 
@@ -1364,7 +1338,7 @@ impl DataGridPanel {
 
     /// Update the maximized state (called by parent).
     pub fn set_maximized(&mut self, maximized: bool, cx: &mut Context<Self>) {
-        self.is_maximized = maximized;
+        self.chrome.is_maximized = maximized;
         cx.notify();
     }
 
@@ -1393,13 +1367,13 @@ impl DataGridPanel {
     }
 
     pub fn result_view_mode(&self) -> ResultViewMode {
-        self.result_view_mode
+        self.chrome.result_view_mode
     }
 
     /// The mode currently displayed in the result view. Alias of
     /// `result_view_mode` used by `ResultPanel` wiring in `DataDocument`.
     pub fn current_result_view_mode(&self) -> ResultViewMode {
-        self.result_view_mode
+        self.chrome.result_view_mode
     }
 
     /// Modes available for the current result shape and connection category.
@@ -1429,16 +1403,16 @@ impl DataGridPanel {
     }
 
     pub fn set_result_view_mode(&mut self, mode: ResultViewMode, cx: &mut Context<Self>) {
-        if self.result_view_mode == mode {
+        if self.chrome.result_view_mode == mode {
             return;
         }
 
-        self.result_view_mode = mode;
+        self.chrome.result_view_mode = mode;
         cx.notify();
     }
 
     fn uses_result_view(&self) -> bool {
-        matches!(self.source, DataSource::QueryResult { .. }) && !self.result_view_mode.is_table()
+        matches!(self.source, DataSource::QueryResult { .. }) && !self.chrome.result_view_mode.is_table()
     }
 
     /// Returns `true` when the current result has a `Timestamp` column and at
@@ -1530,17 +1504,17 @@ impl DataGridPanel {
     }
 
     pub(super) fn derived_text(&mut self) -> &str {
-        if self.derived_text.is_none() {
-            self.derived_text = Some(self.compute_derived_text());
+        if self.chrome.derived_text.is_none() {
+            self.chrome.derived_text = Some(self.compute_derived_text());
         }
-        self.derived_text.as_deref().unwrap_or("")
+        self.chrome.derived_text.as_deref().unwrap_or("")
     }
 
     pub(super) fn derived_json(&mut self) -> &str {
-        if self.derived_json.is_none() {
-            self.derived_json = Some(self.compute_derived_json());
+        if self.chrome.derived_json.is_none() {
+            self.chrome.derived_json = Some(self.compute_derived_json());
         }
-        self.derived_json.as_deref().unwrap_or("")
+        self.chrome.derived_json.as_deref().unwrap_or("")
     }
 
     fn compute_derived_text(&self) -> String {
@@ -1621,16 +1595,16 @@ impl DataGridPanel {
             // previously open. Builder takes precedence over the row inspector
             // because both share the same rail and the builder is the more
             // recent intentional surface for the user.
-            if let Some(panel) = self.builder_panel.clone() {
+            if let Some(panel) = self.builder.builder_panel.clone() {
                 let view: AnyView = AnyView::from(panel);
                 cx.emit(DataGridEvent::OpenInspector {
                     title: "Query Builder".into(),
                     content: view,
                 });
-            } else if let Some((row, col)) = self.inspector_row {
+            } else if let Some((row, col)) = self.inspector.inspector_row {
                 self.open_row_inspector(row, col, cx);
             }
-        } else if self.builder_panel.is_some() || self.inspector_row.is_some() {
+        } else if self.builder.builder_panel.is_some() || self.inspector.inspector_row.is_some() {
             // Hide the rail (without dropping cached state) so the next
             // active tab can take it over.
             cx.emit(DataGridEvent::CloseInspector);
@@ -1641,8 +1615,8 @@ impl DataGridPanel {
     /// explicitly (× button or ESC fallback). Drops the cached coordinates so
     /// the rail does not re-open on tab activation or refresh.
     pub fn clear_inspector_state(&mut self, _cx: &mut Context<Self>) {
-        self.inspector_row = None;
-        self.row_inspector_content = None;
+        self.inspector.inspector_row = None;
+        self.inspector.row_inspector_content = None;
     }
 
     pub fn refresh_policy(&self) -> RefreshPolicy {
@@ -1713,11 +1687,11 @@ impl DataGridPanel {
 
     /// Update the result data (for QueryResult source or after table fetch).
     pub fn set_result(&mut self, result: QueryResult, cx: &mut Context<Self>) {
-        let was_chart_mode = matches!(self.result_view_mode, ResultViewMode::Chart);
+        let was_chart_mode = matches!(self.chrome.result_view_mode, ResultViewMode::Chart);
 
         self.view_config = super::data_view::DataViewConfig::for_source(&self.source);
-        self.derived_json = None;
-        self.derived_text = None;
+        self.chrome.derived_json = None;
+        self.chrome.derived_text = None;
 
         let detection = detect_chart_columns(&result);
         let detection_ok = matches!(detection, ChartDetection::Ok { .. });
@@ -1733,7 +1707,7 @@ impl DataGridPanel {
             && should_auto_select_chart_for_time_series(&detection))
             || (was_chart_mode && detection_ok);
 
-        self.result_view_mode = if auto_chart {
+        self.chrome.result_view_mode = if auto_chart {
             ResultViewMode::Chart
         } else {
             ResultViewMode::default_for_shape(&result.shape)
@@ -1780,7 +1754,7 @@ impl DataGridPanel {
 
         // Re-snapshot the row inspector against the fresh data so the rail
         // keeps following the same row position across refreshes.
-        if let Some((row, col)) = self.inspector_row {
+        if let Some((row, col)) = self.inspector.inspector_row {
             self.open_row_inspector(row, col, cx);
         }
 
@@ -1815,8 +1789,8 @@ impl DataGridPanel {
     }
 
     pub(super) fn focus_active_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.focus_mode = GridFocusMode::Table;
-        self.edit_state = EditState::Navigating;
+        self.focus.focus_mode = GridFocusMode::Table;
+        self.focus.edit_state = EditState::Navigating;
 
         if self.view_config.mode == super::data_view::DataViewMode::Document {
             if let Some(tree_state) = &self.document_view.document_tree_state {
@@ -1872,7 +1846,7 @@ impl DataGridPanel {
         // When a builder binding is present, respect its `insertable` flag to
         // prevent INSERT on join results (column origin is ambiguous).
         let binding_insertable = self
-            .builder_editable_binding
+            .builder.builder_editable_binding
             .as_ref()
             .map(|b| b.insertable)
             .unwrap_or(true);
@@ -1881,7 +1855,7 @@ impl DataGridPanel {
             self.source,
             DataSource::Table { .. } | DataSource::Collection { .. }
         ) && self.mutations_enabled()
-            && (self.current_visual_spec.is_none() || binding_insertable);
+            && (self.builder.current_visual_spec.is_none() || binding_insertable);
 
         let column_details = self.get_column_details(cx);
 
@@ -1903,7 +1877,7 @@ impl DataGridPanel {
         // Columns tagged Joined are blocked from editing while source-table columns remain
         // editable. This mirrors the FK badge marking pattern above.
         let readonly_indices: std::collections::HashSet<usize> =
-            if let Some(binding) = &self.builder_editable_binding {
+            if let Some(binding) = &self.builder.builder_editable_binding {
                 use dbflux_core::ColumnOrigin;
                 self.result
                     .columns
@@ -1975,7 +1949,7 @@ impl DataGridPanel {
                         // When the row inspector is active, follow the user's
                         // cursor so click / arrow-key navigation updates the
                         // rail in place.
-                        if this.inspector_row.is_some()
+                        if this.inspector.inspector_row.is_some()
                             && let Some(active) = selection.active
                         {
                             this.open_row_inspector(active.row, active.col, cx);
@@ -1988,7 +1962,7 @@ impl DataGridPanel {
                         // Gather any driver-supplied row actions (e.g. Kill, Cancel).
                         // They are injected as extra menu items at the bottom rather
                         // than bypassing the context menu entirely.
-                        let row_actions = if let Some(provider) = this.row_action_provider.as_ref()
+                        let row_actions = if let Some(provider) = this.inspector.row_action_provider.as_ref()
                         {
                             let metric_id = this.row_action_metric_id();
                             provider(metric_id.as_deref().unwrap_or(""))
@@ -2492,7 +2466,7 @@ impl DataGridPanel {
     /// Build a `ViewHandle` that erases the concrete `DataGridPanel` type for
     /// use inside a `ResultPanel`.
     ///
-    /// After calling this method, `self.toolbar_in_chrome_row` is set to `true`
+    /// After calling this method, `self.chrome.toolbar_in_chrome_row` is set to `true`
     /// on the entity, which suppresses `DataGridPanel::render`'s own toolbar row.
     /// The filter bar is instead exposed as a `Center/0` toolbar segment in the
     /// returned `ViewHandle::toolbar_segments` closure.
@@ -2509,7 +2483,7 @@ impl DataGridPanel {
 
         // Suppress the grid's own toolbar — it moves to the chrome row.
         entity.update(cx, |this, _| {
-            this.toolbar_in_chrome_row = true;
+            this.chrome.toolbar_in_chrome_row = true;
         });
 
         let e_render = entity.clone();
@@ -2574,9 +2548,9 @@ impl DataGridPanel {
 
         let select = generator.and_then(|qgen| qgen.generate_select(&spec).ok().flatten());
 
-        self.builder_draft_spec = Some(spec);
-        self.visual_select = select;
-        self.filter_input_hidden = true;
+        self.builder.builder_draft_spec = Some(spec);
+        self.builder.visual_select = select;
+        self.builder.filter_input_hidden = true;
         self.pending.refresh = true;
 
         cx.notify();
@@ -2587,10 +2561,10 @@ impl DataGridPanel {
     /// Called by the builder's Reset action. The next query falls back to
     /// the `TableBrowseRequest` path.
     pub fn clear_builder_draft_spec(&mut self, cx: &mut Context<Self>) {
-        self.builder_draft_spec = None;
-        self.visual_select = None;
-        self.current_visual_spec = None;
-        self.filter_input_hidden = false;
+        self.builder.builder_draft_spec = None;
+        self.builder.visual_select = None;
+        self.builder.current_visual_spec = None;
+        self.builder.filter_input_hidden = false;
 
         cx.notify();
     }
@@ -2603,7 +2577,7 @@ impl DataGridPanel {
     /// previous successful spec is retained, which keeps this method consistent
     /// with what the user can actually see and interact with.
     pub fn is_grouped_result(&self) -> bool {
-        self.current_visual_spec
+        self.builder.current_visual_spec
             .as_ref()
             .is_some_and(|s| s.is_grouped())
     }
@@ -2741,7 +2715,7 @@ impl DataGridPanel {
             alias: table.name.clone(),
         };
 
-        let initial_spec = self.builder_draft_spec.clone();
+        let initial_spec = self.builder.builder_draft_spec.clone();
 
         let weak_self = cx.entity().downgrade();
 
@@ -2795,7 +2769,7 @@ impl DataGridPanel {
             .map(|c| (c.name.clone(), c.kind))
             .collect();
 
-        let panel = if let Some(existing) = &self.builder_panel {
+        let panel = if let Some(existing) = &self.builder.builder_panel {
             existing.update(cx, |p, cx| {
                 if let Some(spec) = initial_spec.clone() {
                     p.set_spec(spec, cx);
@@ -2832,9 +2806,9 @@ impl DataGridPanel {
                 },
             );
 
-            self._builder_subscriptions = vec![run_sub];
-            self.builder_panel = Some(new_panel.clone());
-            self.filter_input_hidden = true;
+            self.builder._builder_subscriptions = vec![run_sub];
+            self.builder.builder_panel = Some(new_panel.clone());
+            self.builder.filter_input_hidden = true;
             new_panel
         };
 
@@ -2857,7 +2831,7 @@ impl DataGridPanel {
         foreign_keys: Vec<dbflux_core::SchemaForeignKeyInfo>,
         cx: &mut Context<Self>,
     ) {
-        self.fk_cache = if foreign_keys.is_empty() {
+        self.builder.fk_cache = if foreign_keys.is_empty() {
             FkLoadState::Unavailable
         } else {
             FkLoadState::Ready(foreign_keys)
@@ -2866,7 +2840,7 @@ impl DataGridPanel {
         self.refresh_filter_fk_links();
 
         if matches!(
-            self.relational_filter_state,
+            self.builder.relational_filter_state,
             filter_bar::RelationalFilterState::Resolving
         ) {
             self.pending.refresh = true;
@@ -2889,7 +2863,7 @@ impl DataGridPanel {
             return;
         };
 
-        let fks = match &self.fk_cache {
+        let fks = match &self.builder.fk_cache {
             FkLoadState::Ready(fks) => fks,
             _ => return,
         };
@@ -3197,7 +3171,7 @@ impl DataGridPanel {
 
     /// Transitions the panel's `fk_cache` to `Unavailable`.
     pub(crate) fn mark_fk_unavailable(&mut self, cx: &mut Context<Self>) {
-        self.fk_cache = FkLoadState::Unavailable;
+        self.builder.fk_cache = FkLoadState::Unavailable;
         cx.notify();
     }
 
@@ -3208,7 +3182,7 @@ impl DataGridPanel {
     /// Must be called from a `DataSource::Table` context; non-Table sources
     /// return immediately.
     pub(crate) fn ensure_fk_cache_loaded(&mut self, cx: &mut Context<Self>) {
-        if !matches!(self.fk_cache, FkLoadState::Loading) {
+        if !matches!(self.builder.fk_cache, FkLoadState::Loading) {
             return;
         }
 
@@ -3320,8 +3294,8 @@ impl DataGridPanel {
     ) {
         match event {
             BuilderEvent::RunRequested => {
-                if let Some(spec) = self.builder_draft_spec.clone().or_else(|| {
-                    self.builder_panel
+                if let Some(spec) = self.builder.builder_draft_spec.clone().or_else(|| {
+                    self.builder.builder_panel
                         .as_ref()
                         .map(|p| p.read(cx).current_spec().clone())
                 }) {
@@ -3331,17 +3305,17 @@ impl DataGridPanel {
             }
 
             BuilderEvent::SpecChanged(spec) => {
-                self.visual_select = self
+                self.builder.visual_select = self
                     .connection_generator(cx)
                     .and_then(|qgen| qgen.generate_select(spec).ok().flatten());
-                self.builder_draft_spec = Some(*spec.clone());
+                self.builder.builder_draft_spec = Some(*spec.clone());
             }
 
             BuilderEvent::ResetRequested => {
                 self.clear_builder_draft_spec(cx);
                 cx.emit(DataGridEvent::CloseInspector);
-                self.builder_panel = None;
-                self._builder_subscriptions.clear();
+                self.builder.builder_panel = None;
+                self.builder._builder_subscriptions.clear();
                 self.refresh(window, cx);
             }
 
@@ -3380,7 +3354,7 @@ impl DataGridPanel {
     /// Produces the editor-ready SQL by inlining literals into the parameterized
     /// query, then opens a new code editor tab with that SQL.
     fn open_builder_in_editor(&mut self, cx: &mut Context<Self>) {
-        let Some(select) = &self.visual_select else {
+        let Some(select) = &self.builder.visual_select else {
             return;
         };
 
@@ -3399,7 +3373,7 @@ impl DataGridPanel {
 
     /// Saves the current builder spec under `name` for the panel's profile.
     fn save_builder_query(&mut self, name: String, cx: &mut Context<Self>) {
-        let Some(spec) = self.builder_draft_spec.clone() else {
+        let Some(spec) = self.builder.builder_draft_spec.clone() else {
             return;
         };
 
@@ -3414,7 +3388,7 @@ impl DataGridPanel {
 
         match result {
             Ok(summary) => {
-                if let Some(panel) = &self.builder_panel {
+                if let Some(panel) = &self.builder.builder_panel {
                     panel.update(cx, |p, _| {
                         p.loaded_id = Some(summary.id);
                     });
@@ -4742,22 +4716,22 @@ mod tests {
         window.update(|_, app| {
             panel.update(app, |panel, cx| {
                 assert!(
-                    !panel.filter_input_hidden,
+                    !panel.builder.filter_input_hidden,
                     "filter input should be visible before builder opens"
                 );
                 assert!(
-                    panel.builder_draft_spec.is_none(),
+                    panel.builder.builder_draft_spec.is_none(),
                     "builder_draft_spec should be None before apply"
                 );
 
                 panel.apply_builder_draft_spec(spec.clone(), cx);
 
                 assert!(
-                    panel.filter_input_hidden,
+                    panel.builder.filter_input_hidden,
                     "filter input should be hidden after apply_builder_draft_spec"
                 );
                 assert!(
-                    panel.builder_draft_spec.is_some(),
+                    panel.builder.builder_draft_spec.is_some(),
                     "builder_draft_spec should be Some after apply"
                 );
             });
@@ -4801,21 +4775,21 @@ mod tests {
             panel.update(app, |panel, cx| {
                 panel.apply_builder_draft_spec(spec.clone(), cx);
 
-                assert!(panel.filter_input_hidden, "should be hidden after apply");
-                assert!(panel.builder_draft_spec.is_some(), "spec should be stored");
+                assert!(panel.builder.filter_input_hidden, "should be hidden after apply");
+                assert!(panel.builder.builder_draft_spec.is_some(), "spec should be stored");
 
                 panel.clear_builder_draft_spec(cx);
 
                 assert!(
-                    !panel.filter_input_hidden,
+                    !panel.builder.filter_input_hidden,
                     "filter input should be visible again after clear"
                 );
                 assert!(
-                    panel.builder_draft_spec.is_none(),
+                    panel.builder.builder_draft_spec.is_none(),
                     "builder_draft_spec should be None after clear"
                 );
                 assert!(
-                    panel.visual_select.is_none(),
+                    panel.builder.visual_select.is_none(),
                     "visual_select should be None after clear"
                 );
             });
@@ -5096,11 +5070,11 @@ mod tests {
 
         window.update(|_, app| {
             panel.update(app, |panel, _cx| {
-                panel.visual_select = Some(pre_select.clone());
+                panel.builder.visual_select = Some(pre_select.clone());
             });
         });
 
-        let stored = window.update(|_, app| panel.read(app).visual_select.clone());
+        let stored = window.update(|_, app| panel.read(app).builder.visual_select.clone());
 
         assert_eq!(
             stored,
@@ -5146,7 +5120,7 @@ mod tests {
         window.update(|_, app| {
             panel.update(app, |panel, cx| {
                 assert!(
-                    matches!(panel.fk_cache, FkLoadState::Loading),
+                    matches!(panel.builder.fk_cache, FkLoadState::Loading),
                     "initial fk_cache should be Loading"
                 );
 
@@ -5164,14 +5138,14 @@ mod tests {
                 panel.apply_fk_result(vec![fk], cx);
 
                 assert!(
-                    matches!(panel.fk_cache, FkLoadState::Ready(_)),
+                    matches!(panel.builder.fk_cache, FkLoadState::Ready(_)),
                     "fk_cache should be Ready after apply_fk_result"
                 );
 
                 panel.mark_fk_unavailable(cx);
 
                 assert!(
-                    matches!(panel.fk_cache, FkLoadState::Unavailable),
+                    matches!(panel.builder.fk_cache, FkLoadState::Unavailable),
                     "fk_cache should be Unavailable after mark_fk_unavailable"
                 );
             });
@@ -5228,7 +5202,7 @@ mod tests {
                 panel.apply_fk_result(vec![fk], cx);
 
                 assert!(
-                    matches!(panel.fk_cache, FkLoadState::Ready(_)),
+                    matches!(panel.builder.fk_cache, FkLoadState::Ready(_)),
                     "cache should be Ready before no-op test"
                 );
 
@@ -5236,7 +5210,7 @@ mod tests {
                 panel.ensure_fk_cache_loaded(cx);
 
                 assert!(
-                    matches!(panel.fk_cache, FkLoadState::Ready(_)),
+                    matches!(panel.builder.fk_cache, FkLoadState::Ready(_)),
                     "ensure_fk_cache_loaded should be a no-op when cache is Ready"
                 );
             });
@@ -5282,14 +5256,14 @@ mod tests {
                 panel.mark_fk_unavailable(cx);
 
                 assert!(
-                    matches!(panel.fk_cache, FkLoadState::Unavailable),
+                    matches!(panel.builder.fk_cache, FkLoadState::Unavailable),
                     "cache should be Unavailable before no-op test"
                 );
 
                 panel.ensure_fk_cache_loaded(cx);
 
                 assert!(
-                    matches!(panel.fk_cache, FkLoadState::Unavailable),
+                    matches!(panel.builder.fk_cache, FkLoadState::Unavailable),
                     "ensure_fk_cache_loaded should be a no-op when cache is Unavailable"
                 );
             });
@@ -5332,7 +5306,7 @@ mod tests {
 
         window.update(|_, app| {
             panel.update(app, |panel, cx| {
-                panel.relational_filter_state = RelationalFilterState::Resolving;
+                panel.builder.relational_filter_state = RelationalFilterState::Resolving;
 
                 assert!(
                     !panel.pending.refresh,
@@ -5353,7 +5327,7 @@ mod tests {
                 panel.apply_fk_result(vec![fk], cx);
 
                 assert!(
-                    matches!(panel.fk_cache, FkLoadState::Ready(_)),
+                    matches!(panel.builder.fk_cache, FkLoadState::Ready(_)),
                     "fk_cache should be Ready after apply_fk_result"
                 );
                 assert!(
@@ -5400,7 +5374,7 @@ mod tests {
             panel.update(app, |panel, _cx| {
                 assert!(
                     matches!(
-                        panel.relational_filter_state,
+                        panel.builder.relational_filter_state,
                         RelationalFilterState::Inactive
                     ),
                     "Collection source should start Inactive"
@@ -5455,7 +5429,7 @@ mod tests {
                 panel.mark_fk_unavailable(cx);
 
                 assert!(
-                    matches!(panel.fk_cache, FkLoadState::Unavailable),
+                    matches!(panel.builder.fk_cache, FkLoadState::Unavailable),
                     "cache should be Unavailable"
                 );
 
@@ -5463,7 +5437,7 @@ mod tests {
                 // Inactive — no error shown for missing FK data (S-11)
                 assert!(
                     matches!(
-                        panel.relational_filter_state,
+                        panel.builder.relational_filter_state,
                         RelationalFilterState::Inactive
                     ),
                     "relational_filter_state must stay Inactive when FK cache is Unavailable"
@@ -5522,7 +5496,7 @@ mod tests {
                 panel.apply_fk_result(vec![fk], cx);
 
                 assert!(
-                    matches!(panel.fk_cache, FkLoadState::Ready(_)),
+                    matches!(panel.builder.fk_cache, FkLoadState::Ready(_)),
                     "cache should be Ready for parse-failure test"
                 );
 
@@ -5552,7 +5526,7 @@ mod tests {
                 // And the panel state should still be Inactive (parse error never modifies state)
                 assert!(
                     matches!(
-                        panel.relational_filter_state,
+                        panel.builder.relational_filter_state,
                         RelationalFilterState::Inactive
                     ),
                     "relational_filter_state must remain Inactive after parse error"
@@ -5839,7 +5813,7 @@ mod tests {
                 let mut origin_map = BTreeMap::new();
                 origin_map.insert("id".to_string(), ColumnOrigin::Source);
                 origin_map.insert("amount".to_string(), ColumnOrigin::Joined);
-                panel.builder_editable_binding = Some(EditableBinding {
+                panel.builder.builder_editable_binding = Some(EditableBinding {
                     table: CoreTableRef {
                         schema: Some("public".to_string()),
                         name: "users".to_string(),
@@ -5849,7 +5823,7 @@ mod tests {
                     insertable: false,
                 });
                 // Simulate a committed visual spec so insert gate applies.
-                panel.current_visual_spec = Some(make_test_spec());
+                panel.builder.current_visual_spec = Some(make_test_spec());
 
                 panel
             });
@@ -5931,8 +5905,8 @@ mod tests {
                     is_primary_key: false,
                 }];
                 panel.result = QueryResult::table(columns, Vec::new(), None, Duration::ZERO);
-                panel.current_visual_spec = Some(make_grouped_spec());
-                panel.builder_editable_binding = None;
+                panel.builder.current_visual_spec = Some(make_grouped_spec());
+                panel.builder.builder_editable_binding = None;
 
                 panel
             });
@@ -6104,8 +6078,8 @@ mod tests {
                 };
                 let mut panel =
                     DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx);
-                panel.current_visual_spec = Some(make_test_spec());
-                panel.builder_editable_binding = None;
+                panel.builder.current_visual_spec = Some(make_test_spec());
+                panel.builder.builder_editable_binding = None;
                 panel
             });
 
@@ -6121,7 +6095,7 @@ mod tests {
         // Verify binding is None before details arrive (cold cache).
         let cold_binding = window.update(|_, app| {
             let p = panel.read(app);
-            p.compute_builder_binding(p.current_visual_spec.as_ref(), profile_id, Some("app"), app)
+            p.compute_builder_binding(p.builder.current_visual_spec.as_ref(), profile_id, Some("app"), app)
         });
         assert!(cold_binding.is_none(), "cold cache must yield None binding");
 
@@ -6168,7 +6142,7 @@ mod tests {
         // handler makes before setting pending_rebuild = true.
         let warm_binding = window.update(|_, app| {
             let p = panel.read(app);
-            p.compute_builder_binding(p.current_visual_spec.as_ref(), profile_id, Some("app"), app)
+            p.compute_builder_binding(p.builder.current_visual_spec.as_ref(), profile_id, Some("app"), app)
         });
 
         let binding = warm_binding
@@ -6215,9 +6189,9 @@ mod tests {
                     DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx);
 
                 // Simulate a committed builder result: spec and pre-built SELECT are in place.
-                panel.current_visual_spec = Some(make_test_spec());
-                panel.visual_select = Some(visual_select.clone());
-                panel.builder_editable_binding = Some(dbflux_core::EditableBinding {
+                panel.builder.current_visual_spec = Some(make_test_spec());
+                panel.builder.visual_select = Some(visual_select.clone());
+                panel.builder.builder_editable_binding = Some(dbflux_core::EditableBinding {
                     table: dbflux_core::TableRef {
                         schema: Some("public".to_string()),
                         name: "users".to_string(),
@@ -6246,7 +6220,7 @@ mod tests {
                 // Baseline: pending_refresh starts false, visual_select is set.
                 assert!(!p.pending.refresh, "pending_refresh must start false");
                 assert!(
-                    p.visual_select.is_some(),
+                    p.builder.visual_select.is_some(),
                     "visual_select must be set for the builder-result path"
                 );
 
@@ -6262,7 +6236,7 @@ mod tests {
                     "pending_refresh must be true after mutation to trigger re-query"
                 );
                 assert_eq!(
-                    p.visual_select.as_ref().map(|s| s.sql.as_str()),
+                    p.builder.visual_select.as_ref().map(|s| s.sql.as_str()),
                     Some("SELECT id, name FROM public.users LIMIT 100"),
                     "visual_select must be preserved so refresh() routes to run_visual_query"
                 );

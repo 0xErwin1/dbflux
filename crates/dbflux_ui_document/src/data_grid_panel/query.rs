@@ -38,10 +38,10 @@ impl DataGridPanel {
                 let order_by = order_by.clone();
                 let total_rows = *total_rows;
 
-                if let Some(select) = self.visual_select.clone() {
+                if let Some(select) = self.builder.visual_select.clone() {
                     self.run_visual_query(profile_id, database.clone(), select, window, cx);
 
-                    if let Some(spec) = self.builder_draft_spec.clone()
+                    if let Some(spec) = self.builder.builder_draft_spec.clone()
                         && spec.is_grouped()
                     {
                         self.fetch_grouped_total_count(profile_id, database, spec, cx);
@@ -134,19 +134,19 @@ impl DataGridPanel {
             } else {
                 // FR-GATE-3: no unquoted dot → clear any stale relational state
                 if !matches!(
-                    self.relational_filter_state,
+                    self.builder.relational_filter_state,
                     RelationalFilterState::Inactive
                 ) {
-                    self.relational_filter_state = RelationalFilterState::Inactive;
+                    self.builder.relational_filter_state = RelationalFilterState::Inactive;
                     cx.notify();
                 }
             }
         } else {
             if !matches!(
-                self.relational_filter_state,
+                self.builder.relational_filter_state,
                 RelationalFilterState::Inactive
             ) {
-                self.relational_filter_state = RelationalFilterState::Inactive;
+                self.builder.relational_filter_state = RelationalFilterState::Inactive;
                 cx.notify();
             }
         }
@@ -365,7 +365,7 @@ impl DataGridPanel {
             request.database = Some(db.clone());
         }
 
-        let committed_spec: Option<VisualQuerySpec> = self.builder_draft_spec.clone();
+        let committed_spec: Option<VisualQuerySpec> = self.builder.builder_draft_spec.clone();
 
         let task = cx
             .background_executor()
@@ -397,7 +397,7 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.complete_primary(task_id, cx);
-                            panel.current_visual_spec = committed_spec.clone();
+                            panel.builder.current_visual_spec = committed_spec.clone();
                             panel.result = query_result;
                             panel.refresh.state = GridState::Ready;
 
@@ -411,7 +411,7 @@ impl DataGridPanel {
                                 .as_ref()
                                 .map(|b| b.pk_columns.clone())
                                 .unwrap_or_default();
-                            panel.builder_editable_binding = binding;
+                            panel.builder.builder_editable_binding = binding;
                             panel.pending.rebuild = true;
 
                             cx.notify();
@@ -857,11 +857,11 @@ impl DataGridPanel {
 
         // Gate 2: Table source (already guaranteed by run_table_query call path)
         // Gate 3: FK cache ready with at least one FK
-        let fks = match &self.fk_cache {
+        let fks = match &self.builder.fk_cache {
             super::FkLoadState::Ready(fks) if !fks.is_empty() => fks.clone(),
             super::FkLoadState::Loading => {
                 // FK fetch in flight — show Resolving state, fall through to raw
-                self.relational_filter_state = RelationalFilterState::Resolving;
+                self.builder.relational_filter_state = RelationalFilterState::Resolving;
                 cx.notify();
                 return false;
             }
@@ -895,7 +895,7 @@ impl DataGridPanel {
 
                 self.apply_builder_draft_spec(lowering.spec.clone(), cx);
 
-                self.relational_filter_state = RelationalFilterState::Active {
+                self.builder.relational_filter_state = RelationalFilterState::Active {
                     join_count,
                     predicate_count,
                 };
@@ -904,7 +904,7 @@ impl DataGridPanel {
                 // Execute via the visual query path
                 let profile_id_for_run = profile_id;
                 let db_for_run = database.clone();
-                if let Some(select) = self.visual_select.clone() {
+                if let Some(select) = self.builder.visual_select.clone() {
                     self.run_visual_query(
                         profile_id_for_run,
                         db_for_run.clone(),
@@ -913,7 +913,7 @@ impl DataGridPanel {
                         cx,
                     );
 
-                    if let Some(spec) = &self.builder_draft_spec {
+                    if let Some(spec) = &self.builder.builder_draft_spec {
                         if spec.is_grouped() {
                             self.fetch_grouped_total_count(profile_id, database, spec.clone(), cx);
                         } else {
@@ -928,10 +928,10 @@ impl DataGridPanel {
             Err(RelationalFilterError::Parse(_)) => {
                 // FR-PARSE-7: parse errors silently fall back to raw filter
                 if !matches!(
-                    self.relational_filter_state,
+                    self.builder.relational_filter_state,
                     RelationalFilterState::Inactive
                 ) {
-                    self.relational_filter_state = RelationalFilterState::Inactive;
+                    self.builder.relational_filter_state = RelationalFilterState::Inactive;
                     cx.notify();
                 }
                 false
@@ -966,7 +966,7 @@ impl DataGridPanel {
                     ),
                 };
 
-                self.relational_filter_state = RelationalFilterState::Error {
+                self.builder.relational_filter_state = RelationalFilterState::Error {
                     message,
                     partial_spec: Box::new(partial_spec),
                 };
