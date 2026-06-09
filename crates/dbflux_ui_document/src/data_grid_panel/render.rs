@@ -27,6 +27,49 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 
+/// Snapshot of derived render state computed once per frame from `&self`.
+///
+/// All fields are cheap to clone (primitives, cloned handles). This struct
+/// keeps the `Render::render` entry point free of inline derivation logic.
+struct RenderState {
+    theme: gpui_component::theme::Theme,
+    row_count: usize,
+    exec_time: String,
+    show_data_toolbar: bool,
+    is_paginated: bool,
+    source_name: String,
+    source_query_prefix: &'static str,
+    filter_keyword: String,
+    filter_input: Entity<InputState>,
+    filter_has_value: bool,
+    limit_input: Entity<InputState>,
+    pagination_info: Option<Pagination>,
+    total_pages: Option<u64>,
+    can_prev: bool,
+    can_next: bool,
+    sort_info: Option<(String, SortDirection, bool)>,
+    show_toolbar_focus: bool,
+    toolbar_focus: ToolbarFocus,
+    focus_handle: FocusHandle,
+    has_data: bool,
+    is_loading: bool,
+    show_panel_controls: bool,
+    is_maximized: bool,
+    uses_result_view: bool,
+    content_mode: DataGridContentMode,
+    shows_content_controls: bool,
+    is_editable: bool,
+    has_pending_changes: bool,
+    dirty_count: usize,
+    can_undo: bool,
+    can_redo: bool,
+    show_grouped_warning: bool,
+    show_pk_warning: bool,
+    show_builder_readonly_hint: bool,
+    show_edit_toolbar: bool,
+    result_view_mode: ResultViewMode,
+}
+
 // Save-row shortcut hint: matches the SaveRow binding in the data-table
 // component (`secondary-enter` — Cmd+Enter on macOS, Ctrl+Enter elsewhere).
 #[cfg(target_os = "macos")]
@@ -61,7 +104,89 @@ fn content_mode_for_result(
 
 impl Render for DataGridPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Process pending state
+        self.process_pending_actions(window, cx);
+        let st = self.derive_render_state(cx);
+
+        div()
+            .track_focus(&st.focus_handle)
+            .flex()
+            .flex_col()
+            .size_full()
+            .child(self.panel_origin_canvas(cx))
+            .when(st.show_data_toolbar, |d| {
+                d.child(self.render_toolbar(
+                    st.source_query_prefix,
+                    &st.filter_keyword,
+                    &st.source_name,
+                    &st.filter_input,
+                    st.filter_has_value,
+                    &st.limit_input,
+                    st.show_toolbar_focus,
+                    st.toolbar_focus,
+                    &st.theme,
+                    cx,
+                ))
+            })
+            .child(self.render_warning_banners(&st))
+            .when(st.show_edit_toolbar, |d| {
+                d.child(self.render_edit_toolbar(
+                    st.dirty_count,
+                    st.has_pending_changes,
+                    st.can_undo,
+                    st.can_redo,
+                    &st.theme,
+                    cx,
+                ))
+            })
+            .when(st.show_panel_controls && st.shows_content_controls, |d| {
+                d.child(self.render_panel_controls_header(&st, cx))
+            })
+            .child(self.render_content_body(&st, cx))
+            .child(self.render_status_bar(
+                st.row_count,
+                &st.exec_time,
+                st.is_paginated,
+                st.pagination_info,
+                st.total_pages,
+                st.can_prev,
+                st.can_next,
+                st.sort_info,
+                st.has_data,
+                st.uses_result_view,
+                st.dirty_count,
+                &st.theme,
+                cx,
+            ))
+            .when_some(self.context_menu.as_ref(), |d, menu| {
+                d.child(self.render_context_menu(menu, st.is_editable, &st.theme, cx))
+            })
+            .when(self.pending_delete_confirm.is_some(), |d| {
+                d.child(self.render_delete_confirm_modal(&st.theme, cx))
+            })
+            .when(self.cell_editor.read(cx).is_visible(), |d| {
+                d.child(self.cell_editor.clone())
+            })
+            .when(self.document_preview_modal.read(cx).is_visible(), |d| {
+                d.child(self.document_preview_modal.clone())
+            })
+            .when(self.mutation_confirm_light.read(cx).is_visible(), |d| {
+                d.child(self.mutation_confirm_light.clone())
+            })
+            .when(self.mutation_confirm_hard.read(cx).is_visible(), |d| {
+                d.child(self.mutation_confirm_hard.clone())
+            })
+    }
+}
+
+impl DataGridPanel {
+    /// Drains all Class-A pending fields in the same order as the pre-refactor
+    /// render drain block. Must stay on `DataGridPanel` because the drain calls
+    /// methods that require `&mut self` and GPUI's single-Context borrow model.
+    pub(super) fn process_pending_actions(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(pending) = self.pending_total_count.take() {
             self.apply_total_count(pending.source_qualified, pending.total, cx);
         }
@@ -128,16 +253,16 @@ impl Render for DataGridPanel {
                 }
             }
         }
+    }
 
-        // Clone theme colors to avoid borrow conflicts with cx
+    /// Derives the per-frame render state from `&self`. Pure read — no mutation.
+    fn derive_render_state(&self, cx: &mut Context<Self>) -> RenderState {
         let theme = cx.theme().clone();
 
         let row_count = self.result.row_count();
         let exec_time = format!("{}ms", self.result.execution_time.as_millis());
 
         let is_table_view = self.source.is_table();
-        // Suppress the toolbar row when it has been moved into the hosting
-        // ResultPanel's chrome row (via ViewHandle::toolbar_segments).
         let show_data_toolbar = !self.toolbar_in_chrome_row
             && matches!(
                 self.source,
@@ -188,10 +313,6 @@ impl Render for DataGridPanel {
         let shows_table_content = matches!(content_mode, DataGridContentMode::Table);
         let shows_content_controls = has_data || shows_table_content;
 
-        // The result-tabs strip (Table | Chart) has been extracted to ResultPanel
-        // which wraps DataDocument. DataGridPanel no longer renders the strip.
-
-        // Get edit state from table
         let (is_editable, has_pending_changes, dirty_count, can_undo, can_redo) = self
             .table_state
             .as_ref()
@@ -199,7 +320,6 @@ impl Render for DataGridPanel {
                 let state = ts.read(cx);
                 let buffer = state.edit_buffer();
 
-                // Count all pending operations: edits, inserts, deletes
                 let edit_count = buffer.dirty_row_count();
                 let insert_count = buffer.pending_insert_rows().len();
                 let delete_count = buffer.pending_delete_rows().len();
@@ -230,43 +350,70 @@ impl Render for DataGridPanel {
             && self.current_visual_spec.is_some()
             && self.builder_editable_binding.is_none();
         let show_edit_toolbar = is_table_view && has_columns && is_editable;
+        let result_view_mode = self.result_view_mode;
 
+        RenderState {
+            theme,
+            row_count,
+            exec_time,
+            show_data_toolbar,
+            is_paginated,
+            source_name,
+            source_query_prefix,
+            filter_keyword,
+            filter_input,
+            filter_has_value,
+            limit_input,
+            pagination_info,
+            total_pages,
+            can_prev,
+            can_next,
+            sort_info,
+            show_toolbar_focus,
+            toolbar_focus,
+            focus_handle,
+            has_data,
+            is_loading,
+            show_panel_controls,
+            is_maximized,
+            uses_result_view,
+            content_mode,
+            shows_content_controls,
+            is_editable,
+            has_pending_changes,
+            dirty_count,
+            can_undo,
+            can_redo,
+            show_grouped_warning,
+            show_pk_warning,
+            show_builder_readonly_hint,
+            show_edit_toolbar,
+            result_view_mode,
+        }
+    }
+
+    /// Invisible full-size canvas that tracks the panel's origin in window
+    /// coordinates, used for context menu positioning.
+    fn panel_origin_canvas(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let this_entity = cx.entity().clone();
+        canvas(
+            move |bounds, _, cx| {
+                this_entity.update(cx, |this, _cx| {
+                    this.panel_origin = bounds.origin;
+                });
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full()
+    }
+
+    /// Renders the three informational banners (grouped-result, no-PK, builder
+    /// read-only). Each banner is conditionally included; the wrapper div is
+    /// always emitted so the call site never needs a conditional.
+    fn render_warning_banners(&self, st: &RenderState) -> impl IntoElement {
         div()
-            .track_focus(&focus_handle)
-            .flex()
-            .flex_col()
-            .size_full()
-            // Track panel origin for context menu positioning
-            .child({
-                let this_entity = cx.entity().clone();
-                canvas(
-                    move |bounds, _, cx| {
-                        this_entity.update(cx, |this, _cx| {
-                            this.panel_origin = bounds.origin;
-                        });
-                    },
-                    |_, _, _, _| {},
-                )
-                .absolute()
-                .size_full()
-            })
-            // Toolbar (Table / Collection sources)
-            .when(show_data_toolbar, |d| {
-                d.child(self.render_toolbar(
-                    source_query_prefix,
-                    &filter_keyword,
-                    &source_name,
-                    &filter_input,
-                    filter_has_value,
-                    &limit_input,
-                    show_toolbar_focus,
-                    toolbar_focus,
-                    &theme,
-                    cx,
-                ))
-            })
-            // Grouped-result banner (when result is from a GROUP BY query)
-            .when(show_grouped_warning, |d| {
+            .when(st.show_grouped_warning, |d| {
                 d.child(
                     div()
                         .flex()
@@ -274,22 +421,21 @@ impl Render for DataGridPanel {
                         .gap(Spacing::SM)
                         .h(Heights::ROW_COMPACT)
                         .px(Spacing::SM)
-                        .bg(theme.muted.opacity(0.15))
+                        .bg(st.theme.muted.opacity(0.15))
                         .border_b_1()
-                        .border_color(theme.border)
+                        .border_color(st.theme.border)
                         .child(
                             Icon::new(AppIcon::TriangleAlert)
                                 .small()
-                                .color(theme.muted_foreground),
+                                .color(st.theme.muted_foreground),
                         )
                         .child(
                             Text::caption("Aggregated results cannot be edited")
-                                .color(theme.muted_foreground),
+                                .color(st.theme.muted_foreground),
                         ),
                 )
             })
-            // PK warning banner (when table has no PK)
-            .when(show_pk_warning, |d| {
+            .when(st.show_pk_warning, |d| {
                 d.child(
                     div()
                         .flex()
@@ -297,18 +443,19 @@ impl Render for DataGridPanel {
                         .gap(Spacing::SM)
                         .h(Heights::ROW_COMPACT)
                         .px(Spacing::SM)
-                        .bg(theme.warning.opacity(0.15))
+                        .bg(st.theme.warning.opacity(0.15))
                         .border_b_1()
-                        .border_color(theme.warning.opacity(0.3))
+                        .border_color(st.theme.warning.opacity(0.3))
                         .child(Icon::new(AppIcon::TriangleAlert).small().warning())
                         .child(
-                            Text::caption("This table has no primary key - editing is disabled")
-                                .warning(),
+                            Text::caption(
+                                "This table has no primary key - editing is disabled",
+                            )
+                            .warning(),
                         ),
                 )
             })
-            // Builder read-only hint (when builder result is not editable-safe)
-            .when(show_builder_readonly_hint, |d| {
+            .when(st.show_builder_readonly_hint, |d| {
                 d.child(
                     div()
                         .flex()
@@ -316,190 +463,150 @@ impl Render for DataGridPanel {
                         .gap(Spacing::SM)
                         .h(Heights::ROW_COMPACT)
                         .px(Spacing::SM)
-                        .bg(theme.muted.opacity(0.15))
+                        .bg(st.theme.muted.opacity(0.15))
                         .border_b_1()
-                        .border_color(theme.border)
+                        .border_color(st.theme.border)
                         .child(
                             Icon::new(AppIcon::TriangleAlert)
                                 .small()
-                                .color(theme.muted_foreground),
+                                .color(st.theme.muted_foreground),
                         )
                         .child(
                             Text::caption(
                                 "Editing disabled: result is not bound to a single table.",
                             )
-                            .color(theme.muted_foreground),
+                            .color(st.theme.muted_foreground),
                         ),
                 )
             })
-            // Edit toolbar (always visible for editable tables)
-            .when(show_edit_toolbar, |d| {
-                d.child(self.render_edit_toolbar(
-                    dirty_count,
-                    has_pending_changes,
-                    can_undo,
-                    can_redo,
-                    &theme,
-                    cx,
-                ))
-            })
-            // Header bar with panel controls (only when embedded)
-            .when(show_panel_controls && shows_content_controls, |d| {
-                d.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_end()
-                        .h(Heights::ROW_COMPACT)
-                        .px(Spacing::SM)
-                        .border_b_1()
-                        .border_color(theme.border)
-                        .child(
-                            div()
-                                .id("toggle-maximize")
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .w(Heights::ICON_LG)
-                                .h(Heights::ICON_LG)
-                                .rounded(Radii::SM)
-                                .cursor_pointer()
-                                .hover(|d| d.bg(theme.secondary))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.request_toggle_maximize(cx);
-                                }))
-                                .child(
-                                    Icon::new(if is_maximized {
-                                        AppIcon::Minimize2
-                                    } else {
-                                        AppIcon::Maximize2
-                                    })
-                                    .small()
-                                    .color(theme.muted_foreground),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .id("hide-panel")
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .w(Heights::ICON_LG)
-                                .h(Heights::ICON_LG)
-                                .rounded(Radii::SM)
-                                .cursor_pointer()
-                                .hover(|d| d.bg(theme.secondary))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.request_hide(cx);
-                                }))
-                                .child(
-                                    Icon::new(AppIcon::PanelBottomClose)
-                                        .small()
-                                        .color(theme.muted_foreground),
-                                ),
-                        ),
-                )
-            })
-            // Grid, Document, or Result View
-            .child({
-                let result_view_mode = self.result_view_mode;
+    }
 
+    /// Renders the maximize/hide header bar shown when the panel is embedded
+    /// and content controls are visible.
+    fn render_panel_controls_header(
+        &self,
+        st: &RenderState,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .flex()
+            .items_center()
+            .justify_end()
+            .h(Heights::ROW_COMPACT)
+            .px(Spacing::SM)
+            .border_b_1()
+            .border_color(st.theme.border)
+            .child(
                 div()
-                    .flex_1()
+                    .id("toggle-maximize")
                     .flex()
-                    .flex_col()
-                    .overflow_hidden()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| {
-                            if this.focus_mode != GridFocusMode::Table {
-                                this.focus_table(window, cx);
-                            }
-                        }),
-                    )
-                    // Content body — fills remaining space.
-                    .child({
-                        let content = div().flex_1().overflow_hidden();
-
-                        let content = content.when(
-                            matches!(content_mode, DataGridContentMode::EmptyFallback),
-                            |d| {
-                                d.flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(if is_loading {
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap(Spacing::SM)
-                                            .child(
-                                                Icon::new(AppIcon::Loader)
-                                                    .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
-                                                    .color(theme.muted_foreground),
-                                            )
-                                            .child(Text::muted("Loading…"))
-                                            .into_any_element()
-                                    } else {
-                                        Text::muted("No data").into_any_element()
-                                    })
-                            },
-                        );
-
-                        let content = content.when(
-                            matches!(content_mode, DataGridContentMode::ResultView),
-                            |d| d.child(self.render_result_view(result_view_mode, &theme, cx)),
-                        );
-
-                        let content = content
-                            .when(matches!(content_mode, DataGridContentMode::Document), |d| {
-                                d.child(self.render_document_view(&theme, cx))
-                            });
-
-                        content.when(matches!(content_mode, DataGridContentMode::Table), |d| {
-                            d.when_some(self.data_table.clone(), |d, data_table| {
-                                d.child(data_table)
-                            })
+                    .items_center()
+                    .justify_center()
+                    .w(Heights::ICON_LG)
+                    .h(Heights::ICON_LG)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .hover(|d| d.bg(st.theme.secondary))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.request_toggle_maximize(cx);
+                    }))
+                    .child(
+                        Icon::new(if st.is_maximized {
+                            AppIcon::Minimize2
+                        } else {
+                            AppIcon::Maximize2
                         })
-                    })
-            })
-            // Status bar
-            .child(self.render_status_bar(
-                row_count,
-                &exec_time,
-                is_paginated,
-                pagination_info,
-                total_pages,
-                can_prev,
-                can_next,
-                sort_info,
-                has_data,
-                uses_result_view,
-                dirty_count,
-                &theme,
-                cx,
-            ))
-            // Context menu overlay
-            .when_some(self.context_menu.as_ref(), |d, menu| {
-                d.child(self.render_context_menu(menu, is_editable, &theme, cx))
-            })
-            // Delete confirmation modal
-            .when(self.pending_delete_confirm.is_some(), |d| {
-                d.child(self.render_delete_confirm_modal(&theme, cx))
-            })
-            // Cell editor modal overlay
-            .when(self.cell_editor.read(cx).is_visible(), |d| {
-                d.child(self.cell_editor.clone())
-            })
-            // Document preview modal overlay
-            .when(self.document_preview_modal.read(cx).is_visible(), |d| {
-                d.child(self.document_preview_modal.clone())
-            })
-            // Mutation confirmation modal overlays
-            .when(self.mutation_confirm_light.read(cx).is_visible(), |d| {
-                d.child(self.mutation_confirm_light.clone())
-            })
-            .when(self.mutation_confirm_hard.read(cx).is_visible(), |d| {
-                d.child(self.mutation_confirm_hard.clone())
+                        .small()
+                        .color(st.theme.muted_foreground),
+                    ),
+            )
+            .child(
+                div()
+                    .id("hide-panel")
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .w(Heights::ICON_LG)
+                    .h(Heights::ICON_LG)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .hover(|d| d.bg(st.theme.secondary))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.request_hide(cx);
+                    }))
+                    .child(
+                        Icon::new(AppIcon::PanelBottomClose)
+                            .small()
+                            .color(st.theme.muted_foreground),
+                    ),
+            )
+    }
+
+    /// Renders the content area: empty fallback, result view, document view, or
+    /// the data table — selected by `st.content_mode`.
+    fn render_content_body(
+        &mut self,
+        st: &RenderState,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let content_mode = st.content_mode;
+        let result_view_mode = st.result_view_mode;
+        let theme = st.theme.clone();
+        let is_loading = st.is_loading;
+
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    if this.focus_mode != GridFocusMode::Table {
+                        this.focus_table(window, cx);
+                    }
+                }),
+            )
+            .child({
+                let content = div().flex_1().overflow_hidden();
+
+                let content = content.when(
+                    matches!(content_mode, DataGridContentMode::EmptyFallback),
+                    |d| {
+                        d.flex()
+                            .items_center()
+                            .justify_center()
+                            .child(if is_loading {
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(Spacing::SM)
+                                    .child(
+                                        Icon::new(AppIcon::Loader)
+                                            .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
+                                            .color(theme.muted_foreground),
+                                    )
+                                    .child(Text::muted("Loading…"))
+                                    .into_any_element()
+                            } else {
+                                Text::muted("No data").into_any_element()
+                            })
+                    },
+                );
+
+                let content = content.when(
+                    matches!(content_mode, DataGridContentMode::ResultView),
+                    |d| d.child(self.render_result_view(result_view_mode, &theme, cx)),
+                );
+
+                let content =
+                    content.when(matches!(content_mode, DataGridContentMode::Document), |d| {
+                        d.child(self.render_document_view(&theme, cx))
+                    });
+
+                content.when(matches!(content_mode, DataGridContentMode::Table), |d| {
+                    d.when_some(self.data_table.clone(), |d, data_table| d.child(data_table))
+                })
             })
     }
 }
