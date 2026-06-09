@@ -1,5 +1,11 @@
 # Code Style
 
+> Note: Since the UI crate split, `crates/dbflux_ui/src/ui/...` paths referenced
+> below are compatibility shims (`pub use` re-exports) at the old module paths.
+> The canonical homes are `dbflux_components`, `dbflux_ui_base`,
+> `dbflux_ui_document`, `dbflux_ui_sidebar`, and `dbflux_ui_windows`. See
+> `ARCHITECTURE.md` for the layered crate map.
+
 ## Naming Conventions
 
 | Element                   | Convention           | Examples                                    | References                                                      |

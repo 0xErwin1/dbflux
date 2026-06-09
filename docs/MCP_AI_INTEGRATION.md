@@ -109,7 +109,7 @@ All six layers run inside the server process on every `tools/call` request. None
 | DDL | `create_table` | admin | Create a table |
 | DDL | `alter_table` | admin_safe / admin / admin_destructive | Alter a table; classification is computed per change kind |
 | DDL | `create_index` | admin | Create an index |
-| DDL | `drop_index` | admin | Drop an index |
+| DDL Destructive | `drop_index` | admin_destructive | Drop an index |
 | DDL | `create_type` | admin | Create a user-defined type |
 | DDL Destructive | `drop_table` | admin_destructive | Drop a table |
 | DDL Destructive | `drop_database` | admin_destructive | Drop a database |
@@ -167,7 +167,7 @@ Three policies and three roles are shipped as immutable built-ins. They are alwa
 | `builtin/write` | `builtin/write` |
 | `builtin/admin` | `builtin/admin` |
 
-Built-ins are injected at startup in both the GUI app (`AppState`) and the MCP server (`bootstrap::init`). They are never written to disk. Any attempt to delete a built-in returns an error.
+Built-ins are injected at startup in both the GUI app (`AppState`) and the MCP server (via the `builtin_policies()` / `builtin_roles()` loops in `dbflux_mcp_server::governance`). They are never written to disk. Any attempt to delete a built-in returns an error.
 
 For most integrations, assign `builtin/read-only` to start and escalate to `builtin/write` or a custom policy only when write access is explicitly needed.
 
@@ -266,7 +266,7 @@ let outcome = authorize_request(
     &AuthorizationRequest {
         identity: RequestIdentity { client_id: "agent-a".into(), issuer: None },
         connection_id: connection_id.to_string(),
-        tool_id: "read_query".to_string(),
+        tool_id: "select_data".to_string(),
         classification: ExecutionClassification::Read,
         mcp_enabled_for_connection: true,
     },
@@ -322,7 +322,7 @@ To avoid polluting developer machines during tests:
 - Confirm the actor has an assignment on that connection scope.
 - Confirm the tool ID is in the assigned policy's allowed tools.
 - Confirm the execution class is in the policy's allowed classes.
-- If using `builtin/read-only`, write tools (`preview_mutation`, `create_script`, etc.) are excluded by design.
+- If using `builtin/read-only`, write tools (`create_script`, etc.) are excluded by design.
 
 ### Approval stuck pending
 
@@ -332,7 +332,7 @@ To avoid polluting developer machines during tests:
 ### Audit export missing events
 
 - Verify filters (`actor_id`, `tool_id`, time range, decision) are not over-restrictive.
-- `export_audit_logs` requires the `admin` execution class.
+- `export_audit_logs` is classified as the `read` execution class.
 
 ### Cannot delete policy or role
 

@@ -146,7 +146,7 @@ ORDER BY category, outcome;
 
 ### Via MCP Tools (AI clients)
 
-The MCP tool surface exposes three audit tools (requires `admin` execution class):
+The MCP tool surface exposes three audit tools (classified as the `read` execution class):
 
 ```
 query_audit_logs    — Filter events by actor, tool, date range, decision
@@ -185,8 +185,8 @@ Use the `EventSink` trait. All components that emit audit events accept an `Arc<
 
 ```rust
 use dbflux_core::observability::{
-    EventRecord, EventSink,
-    types::{EventCategory, EventSeverity, EventOutcome, EventActorType, EventSourceId},
+    EventOrigin, EventRecord, EventSink,
+    types::{EventCategory, EventSeverity, EventOutcome},
     actions,
 };
 
@@ -199,11 +199,11 @@ let event = EventRecord::new(
 )
 .with_typed_action(actions::QUERY_EXECUTE)
 .with_summary("SELECT executed on users table")
-.with_actor(EventActorType::User, None)
-.with_source(EventSourceId::Local)
-.with_connection("my-profile-id", Some("mydb"), Some("postgres"))
-.with_object("table", "users")
-.with_duration(42);
+.with_actor_id("my-actor-id")
+.with_origin(EventOrigin::local())
+.with_connection_context("my-profile-id", "mydb", "postgres")
+.with_object_ref("table", "users")
+.with_duration_ms(42);
 
 // Emit through the sink (injected via constructor or DI)
 event_sink.record(event)?;
@@ -219,14 +219,15 @@ Action strings are defined in `dbflux_core/src/observability/actions.rs`. Use co
 | `QUERY_EXECUTE_FAILED` | `query_execute_failed` | Query |
 | `CONNECTION_CONNECT` | `connection_connect` | Connection |
 | `CONNECTION_DISCONNECT` | `connection_disconnect` | Connection |
-| `HOOK_PRE_CONNECT` | `hook_pre_connect` | Hook |
-| `HOOK_POST_CONNECT` | `hook_post_connect` | Hook |
-| `HOOK_PRE_DISCONNECT` | `hook_pre_disconnect` | Hook |
-| `HOOK_POST_DISCONNECT` | `hook_post_disconnect` | Hook |
+| `HOOK_EXECUTE` | `hook_execute` | Hook |
+| `HOOK_EXECUTE_FAILED` | `hook_execute_failed` | Hook |
 | `SCRIPT_EXECUTE` | `script_execute` | Script |
 | `SCRIPT_EXECUTE_FAILED` | `script_execute_failed` | Script |
-| `MCP_TOOL_CALL` | `mcp_tool_call` | Mcp |
-| `MCP_TOOL_DENIED` | `mcp_tool_denied` | Mcp |
+| `MCP_AUTHORIZE` | `mcp_authorize` | Mcp |
+| `MCP_APPROVE_EXECUTION` | `mcp_approve_execution` | Mcp |
+| `MCP_REJECT_EXECUTION` | `mcp_reject_execution` | Mcp |
+| `MCP_TOOL_EXECUTE` | `mcp_tool_execute` | Mcp |
+| `MCP_TOOL_EXECUTE_FAILED` | `mcp_tool_execute_failed` | Mcp |
 | `SYSTEM_PANIC` | `system_panic` | System |
 
 ### Required Fields Checklist
@@ -278,7 +279,7 @@ tracing::info!("…")  ───────────────────
                                                     AuditLayer::on_event
                                                           │ level gate + recursion guard
                                                           │
-                                                    bounded mpsc::sync_channel (1024)
+                                                    bounded mpsc::sync_channel (512)
                                                           │
                                                     drain thread
                                                           │ AuditService::record()
@@ -320,7 +321,7 @@ Valid values: `trace`, `debug`, `info`, `warn`, `error`.
 
 ### Drop Counter
 
-When the bounded channel is full (1024 events), the bridge drops the incoming event rather than blocking and increments an `Arc<AtomicU64>` drop counter. This prevents the audit path from introducing backpressure into application code. The current drop count is accessible via `BridgeHandle::drop_count()` and is exposed through `AppState::bridge_drop_counter()` for observability, but is not persisted or surfaced in the UI in V1.
+When the bounded channel is full (512 events by default, configurable via `BridgeConfig::queue_capacity`), the bridge drops the incoming event rather than blocking and increments an `Arc<AtomicU64>` drop counter. This prevents the audit path from introducing backpressure into application code. The current drop count is accessible via `BridgeHandle::drop_count()` and is exposed through `AuditService::dropped_log_event_count()` for observability, but is not persisted or surfaced in the UI in V1.
 
 ### Startup Window
 
@@ -414,7 +415,7 @@ handle.install_sink(Arc::new(audit_service));
 | `crates/dbflux_core/src/observability/tracing_bridge/mod.rs` | `init_tracing`, `BridgeHandle`, `BridgeConfig`, `LevelCode` |
 | `crates/dbflux_core/src/observability/tracing_bridge/layer.rs` | `AuditLayer`, `AuditFieldVisitor`, level gate |
 | `crates/dbflux_core/src/observability/tracing_bridge/category.rs` | `PREFIX_CATEGORY_MAP`, `resolve_category`, `BRIDGE_INTERNAL_TARGET` |
-| `crates/dbflux_storage/src/migrations/014_*.sql` | Adds `log_capture_min_level` column to `cfg_audit_settings` |
+| `crates/dbflux_storage/src/migrations/mod_014_audit_settings_log_capture_min_level.rs` | Adds `log_capture_min_level` column to `cfg_audit_settings` |
 
 ## External Audit Emission (RPC drivers and auth providers)
 
