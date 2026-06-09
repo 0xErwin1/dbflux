@@ -165,15 +165,6 @@ impl Render for ChartDocument {
             self.request_reexecute(window, cx);
         }
 
-        // -- Ensure chart view is built for the current result --
-        // Must happen before ViewHandle::render is called so ensure_chart_view
-        // has a chance to construct the ChartView entity.
-        if let Some(result) = self.last_result.clone() {
-            self.chart_shell.update(cx, |shell, cx| {
-                shell.ensure_chart_view(&result, cx);
-            });
-        }
-
         // -- Lazily build ResultPanel on first render --
         // Self-referential construction requires a live entity handle, which
         // is available from within the render closure via cx.entity().
@@ -393,10 +384,10 @@ impl ChartDocument {
         };
 
         let chart_shell_for_pill = self.chart_shell.clone();
-        let chart_shell_for_x = self.chart_shell.clone();
-        let chart_shell_for_y = self.chart_shell.clone();
-        let chart_shell_for_group = self.chart_shell.clone();
-        let chart_shell_for_agg = self.chart_shell.clone();
+        let doc_for_x = cx.entity();
+        let doc_for_y = cx.entity();
+        let doc_for_group = cx.entity();
+        let doc_for_agg = cx.entity();
 
         let chart_colors = ChartColors::for_current(cx);
 
@@ -409,37 +400,49 @@ impl ChartDocument {
                 chart_shell_for_pill.update(cx, |s, cx| s.toggle_axis_pill(pill, cx));
             },
             move |col_idx, _window, cx| {
-                chart_shell_for_x.update(cx, |s, cx| {
-                    let mut b = s.active_bindings();
-                    b.x = col_idx;
-                    s.apply_bindings(b, cx);
+                doc_for_x.update(cx, |this, cx| {
+                    this.chart_shell.update(cx, |s, cx| {
+                        let mut b = s.active_bindings();
+                        b.x = col_idx;
+                        s.apply_bindings(b, cx);
+                    });
+                    this.rebuild_chart_view(cx);
                 });
             },
             move |col_idx, checked, _window, cx| {
-                chart_shell_for_y.update(cx, |s, cx| {
-                    let mut b = s.active_bindings();
-                    if checked {
-                        if !b.y.contains(&col_idx) {
-                            b.y.push(col_idx);
+                doc_for_y.update(cx, |this, cx| {
+                    this.chart_shell.update(cx, |s, cx| {
+                        let mut b = s.active_bindings();
+                        if checked {
+                            if !b.y.contains(&col_idx) {
+                                b.y.push(col_idx);
+                            }
+                        } else {
+                            b.y.retain(|&i| i != col_idx);
                         }
-                    } else {
-                        b.y.retain(|&i| i != col_idx);
-                    }
-                    s.apply_bindings(b, cx);
+                        s.apply_bindings(b, cx);
+                    });
+                    this.rebuild_chart_view(cx);
                 });
             },
             move |group_col, _window, cx| {
-                chart_shell_for_group.update(cx, |s, cx| {
-                    let mut b = s.active_bindings();
-                    b.group_by = group_col;
-                    s.apply_bindings(b, cx);
+                doc_for_group.update(cx, |this, cx| {
+                    this.chart_shell.update(cx, |s, cx| {
+                        let mut b = s.active_bindings();
+                        b.group_by = group_col;
+                        s.apply_bindings(b, cx);
+                    });
+                    this.rebuild_chart_view(cx);
                 });
             },
             move |agg, _window, cx| {
-                chart_shell_for_agg.update(cx, |s, cx| {
-                    let mut b = s.active_bindings();
-                    b.aggregation = agg;
-                    s.apply_bindings(b, cx);
+                doc_for_agg.update(cx, |this, cx| {
+                    this.chart_shell.update(cx, |s, cx| {
+                        let mut b = s.active_bindings();
+                        b.aggregation = agg;
+                        s.apply_bindings(b, cx);
+                    });
+                    this.rebuild_chart_view(cx);
                 });
             },
         );

@@ -445,6 +445,12 @@ pub struct DataGridPanel {
     document_tree_state: Option<Entity<DocumentTreeState>>,
     document_tree_subscription: Option<Subscription>,
 
+    // Virtualized state for the document-card fallback view (used when no
+    // `document_tree` is built). Cards have variable height, so this relies on
+    // `gpui::list` rather than `uniform_list`. Rebuilt with the row count on
+    // every `rebuild_table`.
+    document_card_list: Option<ListState>,
+
     // Document preview modal for viewing/editing full documents
     document_preview_modal: Entity<DocumentPreviewModal>,
     pending_document_preview: Option<PendingDocumentPreview>,
@@ -1099,6 +1105,7 @@ impl DataGridPanel {
             document_tree: None,
             document_tree_state: None,
             document_tree_subscription: None,
+            document_card_list: None,
             document_preview_modal,
             pending_document_preview: None,
             row_inspector_content: None,
@@ -2026,6 +2033,15 @@ impl DataGridPanel {
         if should_build_tree {
             self.rebuild_document_tree(cx);
         }
+
+        // Reset the variable-height card-list state to match the new row count.
+        // Only the document-card fallback (no tree) consumes it, but building it
+        // unconditionally keeps the row count in sync with `self.result`.
+        self.document_card_list = Some(ListState::new(
+            self.result.rows.len(),
+            ListAlignment::Top,
+            px(400.0),
+        ));
     }
 
     fn rebuild_document_tree(&mut self, cx: &mut Context<Self>) {
