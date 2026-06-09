@@ -208,7 +208,7 @@ impl DataGridPanel {
 
         if std::mem::take(&mut self.pending.rebuild) {
             let sort = self
-                .local_sort_state
+                .grid_table.local_sort_state
                 .map(|s| TableSortState::new(s.column_ix, s.direction));
             self.rebuild_table(sort, cx);
         }
@@ -278,9 +278,9 @@ impl DataGridPanel {
         } else {
             raw_filter_keyword.to_string()
         };
-        let filter_input = self.filter_input.clone();
-        let filter_has_value = !self.filter_input.read(cx).value().is_empty();
-        let limit_input = self.limit_input.clone();
+        let filter_input = self.filter_bar.filter_input.clone();
+        let filter_has_value = !self.filter_bar.filter_input.read(cx).value().is_empty();
+        let limit_input = self.filter_bar.limit_input.clone();
 
         let pagination_info = self.source.pagination().cloned();
         let total_pages = self.total_pages();
@@ -299,7 +299,7 @@ impl DataGridPanel {
             || self.result.text_body.is_some()
             || self.result.raw_bytes.is_some();
         let has_columns = !self.result.columns.is_empty();
-        let is_loading = self.state == GridState::Loading;
+        let is_loading = self.refresh.state == GridState::Loading;
         let view_mode = self.view_config.mode;
 
         let show_panel_controls = self.show_panel_controls;
@@ -311,7 +311,7 @@ impl DataGridPanel {
         let shows_content_controls = has_data || shows_table_content;
 
         let (is_editable, has_pending_changes, dirty_count, can_undo, can_redo) = self
-            .table_state
+            .grid_table.table_state
             .as_ref()
             .map(|ts| {
                 let state = ts.read(cx);
@@ -602,7 +602,7 @@ impl DataGridPanel {
                     });
 
                 content.when(matches!(content_mode, DataGridContentMode::Table), |d| {
-                    d.when_some(self.data_table.clone(), |d, data_table| d.child(data_table))
+                    d.when_some(self.grid_table.data_table.clone(), |d, data_table| d.child(data_table))
                 })
             })
     }
@@ -647,15 +647,15 @@ pub(super) fn render_filter_bar_as_segment(
         DataSource::QueryResult { .. } => String::new(),
     };
 
-    let filter_input = g.filter_input.clone();
-    let filter_has_value = !g.filter_input.read(cx).value().is_empty();
-    let limit_input = g.limit_input.clone();
+    let filter_input = g.filter_bar.filter_input.clone();
+    let filter_has_value = !g.filter_bar.filter_input.read(cx).value().is_empty();
+    let limit_input = g.filter_bar.limit_input.clone();
     let focus_mode = g.focus_mode;
     let toolbar_focus = g.toolbar_focus;
     let edit_state = g.edit_state;
-    let refresh_policy = g.refresh_policy;
+    let refresh_policy = g.refresh.refresh_policy;
     let is_runner_active = g.runner.is_primary_active();
-    let refresh_dropdown = g.refresh_dropdown.clone();
+    let refresh_dropdown = g.filter_bar.refresh_dropdown.clone();
 
     let show_toolbar_focus =
         focus_mode == GridFocusMode::Toolbar && edit_state == EditState::Navigating;
@@ -825,7 +825,7 @@ pub(super) fn render_filter_bar_as_segment(
                                         })
                                         .on_click(move |_, window, cx| {
                                             let filter_input_clone =
-                                                grid.read(cx).filter_input.clone();
+                                                grid.read(cx).filter_bar.filter_input.clone();
                                             filter_input_clone.update(cx, |input, cx| {
                                                 input.set_value("", window, cx);
                                             });
@@ -972,8 +972,8 @@ impl DataGridPanel {
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let refresh_label = if self.refresh_policy.is_auto() {
-            self.refresh_policy.label()
+        let refresh_label = if self.refresh.refresh_policy.is_auto() {
+            self.refresh.refresh_policy.label()
         } else {
             "Refresh"
         };
@@ -1078,7 +1078,7 @@ impl DataGridPanel {
                                                 d.bg(theme.secondary).text_color(theme.foreground)
                                             })
                                             .on_click(cx.listener(|this, _, window, cx| {
-                                                this.filter_input.update(cx, |input, cx| {
+                                                this.filter_bar.filter_input.update(cx, |input, cx| {
                                                     input.set_value("", window, cx);
                                                 });
                                                 this.refresh(window, cx);
@@ -1212,7 +1212,7 @@ impl DataGridPanel {
                             .child(
                                 Icon::new(if self.runner.is_primary_active() {
                                     AppIcon::Loader
-                                } else if self.refresh_policy.is_auto() {
+                                } else if self.refresh.refresh_policy.is_auto() {
                                     AppIcon::Clock
                                 } else {
                                     AppIcon::RefreshCcw
@@ -1227,7 +1227,7 @@ impl DataGridPanel {
                         div()
                             .w(px(28.0)) // guardrail-allow: dropdown control width, not a height token
                             .h_full()
-                            .child(self.refresh_dropdown.clone()),
+                            .child(self.filter_bar.refresh_dropdown.clone()),
                     ),
             )
     }
@@ -1287,7 +1287,7 @@ impl DataGridPanel {
                                     .cursor_pointer()
                                     .hover(|d| d.bg(theme.secondary))
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        if let Some(table_state) = &this.table_state {
+                                        if let Some(table_state) = &this.grid_table.table_state {
                                             table_state.update(cx, |state, cx| {
                                                 if state.is_editing() {
                                                     state.stop_editing(false, cx);
@@ -1331,7 +1331,7 @@ impl DataGridPanel {
                                     .cursor_pointer()
                                     .hover(|d| d.bg(theme.secondary))
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        if let Some(table_state) = &this.table_state {
+                                        if let Some(table_state) = &this.grid_table.table_state {
                                             table_state.update(cx, |state, cx| {
                                                 if state.is_editing() {
                                                     state.stop_editing(false, cx);
@@ -1377,7 +1377,7 @@ impl DataGridPanel {
                                     .cursor_pointer()
                                     .hover(|d| d.opacity(0.9))
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        if let Some(table_state) = &this.table_state {
+                                        if let Some(table_state) = &this.grid_table.table_state {
                                             table_state.update(cx, |state, cx| {
                                                 state.request_save_all(cx);
                                             });
@@ -1413,7 +1413,7 @@ impl DataGridPanel {
                                 d.cursor_pointer()
                                     .hover(|d| d.bg(theme.secondary))
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        if let Some(table_state) = &this.table_state {
+                                        if let Some(table_state) = &this.grid_table.table_state {
                                             table_state.update(cx, |state, cx| {
                                                 state.revert_all(cx);
                                             });
@@ -1649,8 +1649,8 @@ impl DataGridPanel {
         let ctx = ChartToolbarContext {
             theme,
             chart_shell,
-            refresh_policy: self.refresh_policy,
-            refresh_dropdown: self.refresh_dropdown.clone(),
+            refresh_policy: self.refresh.refresh_policy,
+            refresh_dropdown: self.filter_bar.refresh_dropdown.clone(),
             dropdown_time_range,
             row_count: self.result.row_count(),
             resolved_window,
@@ -1874,7 +1874,7 @@ impl DataGridPanel {
 
         match mode {
             ResultViewMode::Table => {
-                container = container.when_some(self.data_table.clone(), |d, dt| d.child(dt));
+                container = container.when_some(self.grid_table.data_table.clone(), |d, dt| d.child(dt));
             }
             ResultViewMode::Chart => {
                 // Build chart_view on first render before checking whether it exists.

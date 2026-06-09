@@ -382,6 +382,47 @@ struct PendingActions {
     mutation_modal: Option<crate::data_grid_panel::mutation_confirm::PendingMutationModal>,
 }
 
+/// The rendered table widget and its in-memory sort state.
+///
+/// All five fields describe the current `DataTable` entity instance and the
+/// `QueryResult`-source local sort; they are created and destroyed together in
+/// `rebuild_table`.
+struct GridTableState {
+    data_table: Option<Entity<DataTable>>,
+    table_state: Option<Entity<DataTableState>>,
+    table_subscription: Option<Subscription>,
+    local_sort_state: Option<LocalSortState>,
+    original_row_order: Option<Vec<usize>>,
+}
+
+/// The WHERE/LIMIT inputs and refresh-policy dropdown.
+///
+/// All four fields are consumed by `render_toolbar` /
+/// `render_filter_bar_as_segment`; they are created together at construction
+/// time and are never individually swapped out.
+struct FilterBarState {
+    filter_input: Entity<InputState>,
+    /// Schema cache backing the WHERE filter's autocomplete. `Some` only when
+    /// `source` is `DataSource::Table` and a completion provider was wired.
+    filter_completion_cache: Option<Rc<RefCell<SchemaCache>>>,
+    limit_input: Entity<InputState>,
+    /// Refresh-policy dropdown; rendered both in the embedded toolbar and the
+    /// chart toolbar. Change events are handled via a subscription wired in
+    /// `new_internal`.
+    refresh_dropdown: Entity<Dropdown>,
+}
+
+/// Auto-refresh policy, timer, and grid load state.
+///
+/// The four fields are mutated together in `set_refresh_policy` /
+/// `update_refresh_timer` and are logically inseparable.
+struct RefreshState {
+    refresh_policy: RefreshPolicy,
+    _refresh_timer: Option<Task<()>>,
+    _refresh_subscriptions: Vec<Subscription>,
+    state: GridState,
+}
+
 /// Reusable data grid panel with filter bar, grid, toolbar, and status bar.
 /// Used both embedded in ScriptDocument and as standalone DataDocument.
 pub struct DataGridPanel {
@@ -390,36 +431,15 @@ pub struct DataGridPanel {
 
     // Current result data
     result: QueryResult,
-    data_table: Option<Entity<DataTable>>,
-    table_state: Option<Entity<DataTableState>>,
-    table_subscription: Option<Subscription>,
-
-    // Filter & limit inputs
-    filter_input: Entity<InputState>,
-    /// Schema cache backing the WHERE filter's autocomplete. `Some` only when
-    /// `source` is `DataSource::Table` and a completion provider was wired.
-    filter_completion_cache: Option<Rc<RefCell<SchemaCache>>>,
-    limit_input: Entity<InputState>,
-
-    // In-memory sort state (for QueryResult source)
-    local_sort_state: Option<LocalSortState>,
-    original_row_order: Option<Vec<usize>>,
+    grid_table: GridTableState,
+    filter_bar: FilterBarState,
+    refresh: RefreshState,
 
     // Primary key columns for row editing
     pk_columns: Vec<String>,
 
     // Async state
     runner: DocumentTaskRunner,
-    refresh_policy: RefreshPolicy,
-    /// Refresh-policy dropdown, created at construction time.
-    ///
-    /// Rendered in the filter bar segment (as the chevron half of the split
-    /// button) and also in the chart toolbar. The dropdown's change events are
-    /// handled internally via a subscription set up in `new_internal`.
-    refresh_dropdown: Entity<Dropdown>,
-    _refresh_timer: Option<Task<()>>,
-    _refresh_subscriptions: Vec<Subscription>,
-    state: GridState,
     pending: PendingActions,
     pending_delete_confirm: Option<PendingDeleteConfirm>,
     pending_batch_remaining: Option<PendingBatchRemaining>,
@@ -1034,7 +1054,7 @@ impl DataGridPanel {
                 let policy = RefreshPolicy::from_index(event.index);
 
                 if policy.is_auto() && !this.supports_auto_refresh() {
-                    this.refresh_dropdown.update(cx, |dd, cx| {
+                    this.filter_bar.refresh_dropdown.update(cx, |dd, cx| {
                         dd.set_selected_index(Some(RefreshPolicy::Manual.index()), cx);
                     });
                     dbflux_ui_base::toast::Toast::warning(
@@ -1069,21 +1089,27 @@ impl DataGridPanel {
             source,
             app_state,
             result: QueryResult::empty(),
-            data_table: None,
-            table_state: None,
-            table_subscription: None,
-            filter_input,
-            filter_completion_cache,
-            limit_input,
-            local_sort_state: None,
-            original_row_order: None,
+            grid_table: GridTableState {
+                data_table: None,
+                table_state: None,
+                table_subscription: None,
+                local_sort_state: None,
+                original_row_order: None,
+            },
+            filter_bar: FilterBarState {
+                filter_input,
+                filter_completion_cache,
+                limit_input,
+                refresh_dropdown,
+            },
+            refresh: RefreshState {
+                refresh_policy: default_refresh,
+                _refresh_timer: None,
+                _refresh_subscriptions: vec![refresh_policy_sub],
+                state: GridState::Ready,
+            },
             pk_columns,
             runner,
-            refresh_policy: default_refresh,
-            refresh_dropdown,
-            _refresh_timer: None,
-            _refresh_subscriptions: vec![refresh_policy_sub],
-            state: GridState::Ready,
             pending: PendingActions::default(),
             pending_delete_confirm: None,
             pending_batch_remaining: None,
@@ -1161,7 +1187,7 @@ impl DataGridPanel {
     fn collect_row_values(&self, visual_row: usize, cx: &App) -> Vec<Value> {
         use dbflux_components::components::data_table::model::VisualRowSource;
 
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return Vec::new();
         };
 
@@ -1439,7 +1465,7 @@ impl DataGridPanel {
         self.chart_source_time_range_panel = panel;
 
         let enabled = self.supports_auto_refresh();
-        self.refresh_dropdown.update(cx, |dd, cx| {
+        self.filter_bar.refresh_dropdown.update(cx, |dd, cx| {
             dd.set_disabled(!enabled, cx);
         });
 
@@ -1601,31 +1627,31 @@ impl DataGridPanel {
     }
 
     pub fn refresh_policy(&self) -> RefreshPolicy {
-        self.refresh_policy
+        self.refresh.refresh_policy
     }
 
     pub fn set_refresh_policy(&mut self, policy: RefreshPolicy, cx: &mut Context<Self>) {
-        if self.refresh_policy == policy {
+        if self.refresh.refresh_policy == policy {
             return;
         }
 
-        self.refresh_policy = policy;
+        self.refresh.refresh_policy = policy;
         self.update_refresh_timer(cx);
         cx.notify();
     }
 
     fn update_refresh_timer(&mut self, cx: &mut Context<Self>) {
-        self._refresh_timer = None;
+        self.refresh._refresh_timer = None;
 
         if !self.supports_auto_refresh() {
             return;
         }
 
-        let Some(duration) = self.refresh_policy.duration() else {
+        let Some(duration) = self.refresh.refresh_policy.duration() else {
             return;
         };
 
-        self._refresh_timer = Some(cx.spawn(async move |this, cx| {
+        self.refresh._refresh_timer = Some(cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(duration).await;
 
@@ -1635,7 +1661,7 @@ impl DataGridPanel {
                     };
 
                     entity.update(cx, |panel, cx| {
-                        if !panel.refresh_policy.is_auto()
+                        if !panel.refresh.refresh_policy.is_auto()
                             || !panel.supports_auto_refresh()
                             || panel.runner.is_primary_active()
                         {
@@ -1644,7 +1670,7 @@ impl DataGridPanel {
 
                         let settings = panel.app_state.read(cx).general_settings();
 
-                        if settings.auto_refresh_pause_on_error && panel.state == GridState::Error {
+                        if settings.auto_refresh_pause_on_error && panel.refresh.state == GridState::Error {
                             return;
                         }
 
@@ -1731,7 +1757,7 @@ impl DataGridPanel {
 
         self.result = result;
         self.rebuild_table(None, cx);
-        self.state = GridState::Ready;
+        self.refresh.state = GridState::Ready;
 
         // Re-snapshot the row inspector against the fresh data so the rail
         // keeps following the same row position across refreshes.
@@ -1750,10 +1776,10 @@ impl DataGridPanel {
         profile_id: Option<Uuid>,
         cx: &mut Context<Self>,
     ) {
-        self.refresh_policy = RefreshPolicy::Manual;
-        self._refresh_timer = None;
+        self.refresh.refresh_policy = RefreshPolicy::Manual;
+        self.refresh._refresh_timer = None;
 
-        self.refresh_dropdown.update(cx, |dd, cx| {
+        self.filter_bar.refresh_dropdown.update(cx, |dd, cx| {
             dd.set_selected_index(Some(RefreshPolicy::Manual.index()), cx);
         });
 
@@ -1764,8 +1790,8 @@ impl DataGridPanel {
             original_query: query,
             profile_id,
         };
-        self.local_sort_state = None;
-        self.original_row_order = None;
+        self.grid_table.local_sort_state = None;
+        self.grid_table.original_row_order = None;
         self.set_result((*result).clone(), cx);
     }
 
@@ -2021,9 +2047,9 @@ impl DataGridPanel {
                 }
             });
 
-        self.table_state = Some(table_state);
-        self.data_table = Some(data_table);
-        self.table_subscription = Some(subscription);
+        self.grid_table.table_state = Some(table_state);
+        self.grid_table.data_table = Some(data_table);
+        self.grid_table.table_subscription = Some(subscription);
 
         // Build document tree for collections OR JSON-shaped query results
         let should_build_tree = self.source.is_collection()
@@ -2205,7 +2231,7 @@ impl DataGridPanel {
                 .first()
                 .map(|col| (col.column.name.clone(), col.direction, true)),
             DataSource::Collection { .. } => None,
-            DataSource::QueryResult { .. } => self.local_sort_state.and_then(|state| {
+            DataSource::QueryResult { .. } => self.grid_table.local_sort_state.and_then(|state| {
                 self.result
                     .columns
                     .get(state.column_ix)
@@ -2232,7 +2258,7 @@ impl DataGridPanel {
     ///
     /// Returns `(0, 0, 0)` when the table has no edit state or no pending changes.
     pub fn pending_edit_counts(&self, cx: &App) -> (usize, usize, usize) {
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return (0, 0, 0);
         };
 
@@ -2375,7 +2401,7 @@ impl DataGridPanel {
     /// panel's lifetime. The chart toolbar uses it so the user can change the
     /// policy while viewing a chart.
     pub(crate) fn chart_host_refresh_dropdown(&self, _cx: &App) -> Option<Entity<Dropdown>> {
-        Some(self.refresh_dropdown.clone())
+        Some(self.filter_bar.refresh_dropdown.clone())
     }
 
     /// Returns the current result as a shared `Arc<QueryResult>`.
@@ -2439,7 +2465,7 @@ impl DataGridPanel {
     /// For document-tree sources this is a no-op (document tree manages its own
     /// scroll via `DocumentTreeState`).
     pub(crate) fn chart_host_scroll_to_row(&self, row_idx: usize, cx: &App) {
-        if let Some(table_state) = &self.table_state {
+        if let Some(table_state) = &self.grid_table.table_state {
             table_state.read(cx).scroll_to_row(row_idx);
         }
     }
@@ -2836,7 +2862,7 @@ impl DataGridPanel {
     /// referenced table. Multi-hop traversal (e.g. `created_by.organization.name`)
     /// would require recursive FK metadata and is deferred.
     fn refresh_filter_fk_links(&mut self) {
-        let Some(cache) = self.filter_completion_cache.as_ref() else {
+        let Some(cache) = self.filter_bar.filter_completion_cache.as_ref() else {
             return;
         };
 
@@ -2877,7 +2903,7 @@ impl DataGridPanel {
     /// FK column on the source table, kick off a background fetch of the
     /// referenced table's columns so dotted-path completion has data to show.
     fn ensure_filter_fk_columns_loaded(&mut self, text: &str, cx: &mut Context<Self>) {
-        let Some(cache_rc) = self.filter_completion_cache.clone() else {
+        let Some(cache_rc) = self.filter_bar.filter_completion_cache.clone() else {
             return;
         };
 
@@ -3000,7 +3026,7 @@ impl DataGridPanel {
     /// into the cache so subsequent completion calls have data, and is also
     /// pushed into `AppState` so other panels benefit.
     fn ensure_filter_source_columns_loaded(&mut self, cx: &mut Context<Self>) {
-        let Some(cache_rc) = self.filter_completion_cache.clone() else {
+        let Some(cache_rc) = self.filter_bar.filter_completion_cache.clone() else {
             return;
         };
 
@@ -4299,7 +4325,7 @@ mod tests {
                 );
 
                 panel.set_result(zero_row_result(), cx);
-                panel.filter_input.update(cx, |input, cx| {
+                panel.filter_bar.filter_input.update(cx, |input, cx| {
                     input.set_value("id = 999", window, cx);
                 });
 
@@ -4318,14 +4344,14 @@ mod tests {
         let (filter_value, has_table, row_count, col_count) = window.update(|_, app| {
             let panel = panel.read(app);
             let table_state = panel
-                .table_state
+                .grid_table.table_state
                 .as_ref()
                 .expect("filtered empty table should still build table state");
             let table_state = table_state.read(app);
 
             (
-                panel.filter_input.read(app).value().to_string(),
-                panel.data_table.is_some(),
+                panel.filter_bar.filter_input.read(app).value().to_string(),
+                panel.grid_table.data_table.is_some(),
                 table_state.row_count(),
                 table_state.col_count(),
             )
@@ -4373,7 +4399,7 @@ mod tests {
                 );
 
                 panel.set_result(zero_row_result(), cx);
-                panel.filter_input.update(cx, |input, cx| {
+                panel.filter_bar.filter_input.update(cx, |input, cx| {
                     input.set_value("id = 999", window, cx);
                 });
 
@@ -4402,13 +4428,13 @@ mod tests {
         let (filter_value, pending_inserts) = window.update(|_, app| {
             let panel = panel.read(app);
             let pending_inserts = panel
-                .table_state
+                .grid_table.table_state
                 .as_ref()
                 .map(|state| state.read(app).edit_buffer().pending_insert_rows().len())
                 .unwrap_or_default();
 
             (
-                panel.filter_input.read(app).value().to_string(),
+                panel.filter_bar.filter_input.read(app).value().to_string(),
                 pending_inserts,
             )
         });
@@ -4426,7 +4452,7 @@ mod tests {
         let (row_count, col_count, has_table) = window.update(|_, app| {
             let panel = panel.read(app);
             let table_state = panel
-                .table_state
+                .grid_table.table_state
                 .as_ref()
                 .expect("post-refresh filtered result should still build table state");
             let table_state = table_state.read(app);
@@ -4434,7 +4460,7 @@ mod tests {
             (
                 table_state.row_count(),
                 table_state.col_count(),
-                panel.data_table.is_some(),
+                panel.grid_table.data_table.is_some(),
             )
         });
 
@@ -5827,7 +5853,7 @@ mod tests {
 
         let (amount_col_ix, is_insertable, amount_is_readonly) = window.update(|_, app| {
             let panel = panel.read(app);
-            let ts = panel.table_state.as_ref().expect("table state must exist");
+            let ts = panel.grid_table.table_state.as_ref().expect("table state must exist");
             let ts = ts.read(app);
 
             let amount_col_ix = panel
@@ -5910,7 +5936,7 @@ mod tests {
         let is_editable = window.update(|_, app| {
             let panel = panel.read(app);
             let ts = panel
-                .table_state
+                .grid_table.table_state
                 .as_ref()
                 .expect("table state must exist after rebuild");
             ts.read(app).is_editable()
@@ -6396,7 +6422,7 @@ mod tests {
         // Confirm table_state is editable (PK column was found).
         let is_editable = window.update(|_, app| {
             let p = panel.read(app);
-            p.table_state
+            p.grid_table.table_state
                 .as_ref()
                 .expect("table_state must exist after rebuild_table")
                 .read(app)

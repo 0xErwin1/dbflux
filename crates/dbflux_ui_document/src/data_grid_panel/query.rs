@@ -85,14 +85,14 @@ impl DataGridPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let filter_value = self.filter_input.read(cx).value();
+        let filter_value = self.filter_bar.filter_input.read(cx).value();
         let filter = if filter_value.trim().is_empty() {
             None
         } else {
             Some(filter_value.to_string())
         };
 
-        let limit_value = self.limit_input.read(cx).value();
+        let limit_value = self.filter_bar.limit_input.read(cx).value();
         let limit_str = limit_value.trim();
         let pagination = match limit_str.parse::<u32>() {
             Ok(0) => {
@@ -220,7 +220,7 @@ impl DataGridPanel {
             cx,
         );
 
-        self.state = GridState::Loading;
+        self.refresh.state = GridState::Loading;
         cx.notify();
 
         let entity = cx.entity().clone();
@@ -272,7 +272,7 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.fail_primary(task_id, e.to_string(), cx);
-                            panel.state = GridState::Error;
+                            panel.refresh.state = GridState::Error;
                             panel.pending.toast = Some(PendingToast {
                                 message: format!("Query failed: {}", e),
                                 is_error: true,
@@ -353,7 +353,7 @@ impl DataGridPanel {
             cx,
         );
 
-        self.state = GridState::Loading;
+        self.refresh.state = GridState::Loading;
         cx.notify();
 
         let entity = cx.entity().clone();
@@ -399,7 +399,7 @@ impl DataGridPanel {
                             panel.runner.complete_primary(task_id, cx);
                             panel.current_visual_spec = committed_spec.clone();
                             panel.result = query_result;
-                            panel.state = GridState::Ready;
+                            panel.refresh.state = GridState::Ready;
 
                             let binding = panel.compute_builder_binding(
                                 committed_spec.as_ref(),
@@ -422,7 +422,7 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.fail_primary(task_id, e.to_string(), cx);
-                            panel.state = GridState::Error;
+                            panel.refresh.state = GridState::Error;
                             panel.pending.toast = Some(PendingToast {
                                 message: format!("Query failed: {}", e),
                                 is_error: true,
@@ -450,7 +450,7 @@ impl DataGridPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let limit_value = self.limit_input.read(cx).value();
+        let limit_value = self.filter_bar.limit_input.read(cx).value();
         let limit_str = limit_value.trim();
         let pagination = match limit_str.parse::<u32>() {
             Ok(0) => {
@@ -492,7 +492,7 @@ impl DataGridPanel {
             return;
         };
 
-        let filter_value = self.filter_input.read(cx).value();
+        let filter_value = self.filter_bar.filter_input.read(cx).value();
         let filter_str = filter_value.trim();
         let filter: Option<serde_json::Value> = if filter_str.is_empty() {
             None
@@ -536,7 +536,7 @@ impl DataGridPanel {
             cx,
         );
 
-        self.state = GridState::Loading;
+        self.refresh.state = GridState::Loading;
         cx.notify();
 
         let entity = cx.entity().clone();
@@ -585,7 +585,7 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.fail_primary(task_id, e.to_string(), cx);
-                            panel.state = GridState::Error;
+                            panel.refresh.state = GridState::Error;
                             panel.pending.toast = Some(PendingToast {
                                 message: format!("Query failed: {}", e),
                                 is_error: true,
@@ -632,10 +632,10 @@ impl DataGridPanel {
         };
 
         self.result = result;
-        self.local_sort_state = None;
-        self.original_row_order = None;
+        self.grid_table.local_sort_state = None;
+        self.grid_table.original_row_order = None;
         self.rebuild_table(None, cx);
-        self.state = GridState::Ready;
+        self.refresh.state = GridState::Ready;
         cx.notify();
     }
 
@@ -679,10 +679,10 @@ impl DataGridPanel {
         };
 
         self.result = result;
-        self.local_sort_state = None;
-        self.original_row_order = None;
+        self.grid_table.local_sort_state = None;
+        self.grid_table.original_row_order = None;
         self.rebuild_table(initial_sort, cx);
-        self.state = GridState::Ready;
+        self.refresh.state = GridState::Ready;
         cx.notify();
     }
 

@@ -342,7 +342,7 @@ impl DataGridPanel {
     }
 
     pub(super) fn handle_save_row(&mut self, row_idx: usize, cx: &mut Context<Self>) {
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -408,7 +408,7 @@ impl DataGridPanel {
         )],
         cx: &mut Context<Self>,
     ) {
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -556,7 +556,7 @@ impl DataGridPanel {
         )],
         cx: &mut Context<Self>,
     ) {
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -647,7 +647,7 @@ impl DataGridPanel {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
 
-                        if let Some(table_state) = &panel.table_state {
+                        if let Some(table_state) = &panel.grid_table.table_state {
                             table_state.update(cx, |state, cx| {
                                 state.edit_buffer_mut().set_row_state(
                                     row_idx,
@@ -687,7 +687,7 @@ impl DataGridPanel {
         result: Result<dbflux_core::CrudResult, dbflux_core::DbError>,
         cx: &mut Context<Self>,
     ) {
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -761,7 +761,7 @@ impl DataGridPanel {
         insert_idx: usize,
         cx: &mut Context<Self>,
     ) {
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -870,7 +870,7 @@ impl DataGridPanel {
         insert_idx: usize,
         cx: &mut Context<Self>,
     ) {
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -1081,7 +1081,7 @@ impl DataGridPanel {
         row_idx: usize,
         cx: &mut Context<Self>,
     ) {
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -1211,7 +1211,7 @@ impl DataGridPanel {
         row_idx: usize,
         cx: &mut Context<Self>,
     ) {
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -1444,7 +1444,7 @@ impl DataGridPanel {
         row_indices: Vec<usize>,
         cx: &mut Context<Self>,
     ) {
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -1623,7 +1623,7 @@ impl DataGridPanel {
         row_indices: Vec<usize>,
         cx: &mut Context<Self>,
     ) {
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 

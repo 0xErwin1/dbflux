@@ -58,7 +58,7 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -525,7 +525,7 @@ impl DataGridPanel {
 
     /// Returns true if the data grid is editable (has primary key info).
     pub(super) fn check_is_editable(&self, cx: &App) -> bool {
-        self.table_state
+        self.grid_table.table_state
             .as_ref()
             .map(|ts| ts.read(cx).is_editable())
             .unwrap_or(false)
@@ -886,7 +886,7 @@ impl DataGridPanel {
                 .is_some();
         }
 
-        self.table_state
+        self.grid_table.table_state
             .as_ref()
             .and_then(|state| state.read(cx).edit_buffer().visual_row_source(row))
             .is_some()
@@ -2635,7 +2635,7 @@ impl DataGridPanel {
         use super::row_inspector::{InspectorCell, InspectorSnapshot, RowInspectorContent};
         use dbflux_components::components::data_table::model::ColumnKind;
 
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -2933,7 +2933,7 @@ impl DataGridPanel {
     }
 
     pub(super) fn handle_copy(&self, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(table_state) = &self.table_state {
+        if let Some(table_state) = &self.grid_table.table_state {
             let text = table_state.read(cx).copy_selection();
             if let Some(text) = text {
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -2978,7 +2978,7 @@ impl DataGridPanel {
     pub(super) fn handle_copy_row(&self, row: usize, cx: &mut Context<Self>) {
         use dbflux_components::components::data_table::model::VisualRowSource;
 
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -3023,7 +3023,7 @@ impl DataGridPanel {
     }
 
     pub(super) fn handle_paste(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -3054,7 +3054,7 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(table_state) = &self.table_state {
+        if let Some(table_state) = &self.grid_table.table_state {
             table_state.update(cx, |state, cx| {
                 let coord =
                     dbflux_components::components::data_table::selection::CellCoord::new(row, col);
@@ -3066,7 +3066,7 @@ impl DataGridPanel {
     pub(super) fn handle_edit_in_modal(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
         use dbflux_components::components::data_table::model::{ColumnKind, VisualRowSource};
 
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -3122,7 +3122,7 @@ impl DataGridPanel {
         // Get column default value from table details
         let default_value = self.get_column_default(col, cx);
 
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -3153,7 +3153,7 @@ impl DataGridPanel {
     pub(super) fn handle_set_null(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
         use dbflux_components::components::data_table::model::VisualRowSource;
 
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -3186,7 +3186,7 @@ impl DataGridPanel {
     ) {
         use dbflux_components::components::data_table::model::VisualRowSource;
 
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -3328,7 +3328,7 @@ impl DataGridPanel {
             }
         } else {
             // Extract PK values from the current row
-            let Some(table_state) = &self.table_state else {
+            let Some(table_state) = &self.grid_table.table_state else {
                 Toast::error("Table state not available")
                     .meta_right(now_hms())
                     .action(copy_action("Table state not available"))
@@ -3453,7 +3453,7 @@ impl DataGridPanel {
             return;
         }
 
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -3591,7 +3591,7 @@ impl DataGridPanel {
             return;
         }
 
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -3724,7 +3724,7 @@ impl DataGridPanel {
             return;
         }
 
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -3756,7 +3756,7 @@ impl DataGridPanel {
     fn resolve_cell_value(&self, visual_row: usize, col: usize, cx: &App) -> Option<Value> {
         use dbflux_components::components::data_table::model::VisualRowSource;
 
-        let table_state = self.table_state.as_ref()?;
+        let table_state = self.grid_table.table_state.as_ref()?;
         let ts = table_state.read(cx);
         let buffer = ts.edit_buffer();
         let visual_order = buffer.compute_visual_order();
@@ -3777,7 +3777,7 @@ impl DataGridPanel {
     /// Appends `expr` to the WHERE filter input and refreshes.
     /// Wraps with parentheses — `(old) AND (new)` — to avoid precedence bugs.
     fn apply_filter_expression(&mut self, expr: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let current = self.filter_input.read(cx).value().to_string();
+        let current = self.filter_bar.filter_input.read(cx).value().to_string();
 
         let new_filter = if current.trim().is_empty() {
             expr.to_string()
@@ -3785,7 +3785,7 @@ impl DataGridPanel {
             format!("({}) AND ({})", current.trim(), expr)
         };
 
-        self.filter_input
+        self.filter_bar.filter_input
             .update(cx, |state, cx| state.set_value(&new_filter, window, cx));
         self.refresh(window, cx);
     }
@@ -3904,7 +3904,7 @@ impl DataGridPanel {
     }
 
     fn handle_remove_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.filter_input
+        self.filter_bar.filter_input
             .update(cx, |state, cx| state.set_value("", window, cx));
         self.refresh(window, cx);
     }
@@ -3985,7 +3985,7 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let current = self.filter_input.read(cx).value().to_string();
+        let current = self.filter_bar.filter_input.read(cx).value().to_string();
         let current_trimmed = current.trim();
 
         let composed = if current_trimmed.is_empty() {
@@ -3999,7 +3999,7 @@ impl DataGridPanel {
 
         let serialized = serde_json::to_string(&composed).unwrap_or_default();
 
-        self.filter_input
+        self.filter_bar.filter_input
             .update(cx, |state, cx| state.set_value(&serialized, window, cx));
         self.refresh(window, cx);
     }
@@ -4086,7 +4086,7 @@ impl DataGridPanel {
             DataSource::QueryResult { .. } => return,
         };
 
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -4292,7 +4292,7 @@ impl DataGridPanel {
     ) -> Option<MutationRequest> {
         use dbflux_components::components::data_table::model::VisualRowSource;
 
-        let table_state = self.table_state.as_ref()?;
+        let table_state = self.grid_table.table_state.as_ref()?;
         let state = table_state.read(cx);
         let model = state.model();
         let buffer = state.edit_buffer();
@@ -4491,7 +4491,7 @@ impl DataGridPanel {
     ) -> Option<MutationRequest> {
         use dbflux_components::components::data_table::model::VisualRowSource;
 
-        let table_state = self.table_state.as_ref()?;
+        let table_state = self.grid_table.table_state.as_ref()?;
         let state = table_state.read(cx);
         let buffer = state.edit_buffer();
         let visual_order = buffer.compute_visual_order();
