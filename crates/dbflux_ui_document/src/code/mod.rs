@@ -227,6 +227,27 @@ pub(super) struct SourceContext {
     pub(super) _context_subscriptions: Vec<Subscription>,
 }
 
+/// History modal entity and its event subscription.
+pub(super) struct HistoryState {
+    pub(super) history_modal: Entity<HistoryModal>,
+    pub(super) _history_subscriptions: Vec<Subscription>,
+}
+
+/// Auto-refresh policy, timer, and dropdown control.
+pub(super) struct RefreshState {
+    pub(super) refresh_policy: RefreshPolicy,
+    pub(super) refresh_dropdown: Entity<Dropdown>,
+    pub(super) _refresh_timer: Option<Task<()>>,
+    pub(super) _refresh_subscriptions: Vec<Subscription>,
+}
+
+/// Schema-drift modal entity, its subscriptions, and the in-flight preflight flag.
+pub(super) struct DriftState {
+    pub(super) schema_drift_modal: Entity<ModalSchemaDrift>,
+    pub(super) _schema_drift_subscriptions: Vec<Subscription>,
+    pub(super) preflight_running: bool,
+}
+
 /// In-flight and historical query execution state.
 pub(super) struct Execution {
     pub(super) execution_history: Vec<ExecutionRecord>,
@@ -305,9 +326,10 @@ pub struct CodeDocument {
     execution: Execution,
     result_tabs: ResultTabs,
 
-    // History modal
-    history_modal: Entity<HistoryModal>,
-    _history_subscriptions: Vec<Subscription>,
+    // History modal, refresh timer, and schema drift modal.
+    history: HistoryState,
+    refresh: RefreshState,
+    drift: DriftState,
 
     // Layout/focus
     layout: SqlQueryLayout,
@@ -318,18 +340,8 @@ pub struct CodeDocument {
 
     // Task runner (query execution)
     runner: DocumentTaskRunner,
-    refresh_policy: RefreshPolicy,
-    refresh_dropdown: Entity<Dropdown>,
-    _refresh_timer: Option<Task<()>>,
-    _refresh_subscriptions: Vec<Subscription>,
 
     is_active_tab: bool,
-
-    // Schema drift detection
-    schema_drift_modal: Entity<ModalSchemaDrift>,
-    _schema_drift_subscriptions: Vec<Subscription>,
-    /// True while the drift preflight I/O task is in flight.
-    drift_preflight_running: bool,
 
     // Diagnostic debounce: incremental request id to discard stale results.
     diagnostic_request_id: u64,
@@ -635,7 +647,7 @@ impl CodeDocument {
                 let policy = RefreshPolicy::from_index(event.index);
 
                 if policy.is_auto() && !this.can_auto_refresh(cx) {
-                    this.refresh_dropdown.update(cx, |dd, cx| {
+                    this.refresh.refresh_dropdown.update(cx, |dd, cx| {
                         dd.set_selected_index(Some(RefreshPolicy::Manual.index()), cx);
                     });
                     Toast::warning("Auto-refresh blocked: query modifies data")
@@ -803,26 +815,32 @@ impl CodeDocument {
                 result_tab_counter: 0,
                 run_in_new_tab: false,
             },
-            history_modal,
-            _history_subscriptions: vec![query_selected_sub, history_closed_sub],
+            history: HistoryState {
+                history_modal,
+                _history_subscriptions: vec![query_selected_sub, history_closed_sub],
+            },
             layout: SqlQueryLayout::EditorOnly,
             focus_handle: cx.focus_handle(),
             focus_mode: SqlQueryFocus::Editor,
             context_bar_slot: ContextBarSlot::Connection,
             results_maximized: false,
             runner,
-            refresh_policy,
-            refresh_dropdown,
-            _refresh_timer: None,
-            _refresh_subscriptions: vec![refresh_policy_sub],
+            refresh: RefreshState {
+                refresh_policy,
+                refresh_dropdown,
+                _refresh_timer: None,
+                _refresh_subscriptions: vec![refresh_policy_sub],
+            },
             is_active_tab: true,
-            schema_drift_modal,
-            _schema_drift_subscriptions: vec![
-                drift_refresh_sub,
-                drift_continue_sub,
-                drift_dismissed_sub,
-            ],
-            drift_preflight_running: false,
+            drift: DriftState {
+                schema_drift_modal,
+                _schema_drift_subscriptions: vec![
+                    drift_refresh_sub,
+                    drift_continue_sub,
+                    drift_dismissed_sub,
+                ],
+                preflight_running: false,
+            },
             diagnostic_request_id: 0,
             _diagnostic_debounce: None,
             _pending_save: None,
@@ -874,23 +892,23 @@ impl CodeDocument {
     }
 
     pub fn set_refresh_policy(&mut self, policy: RefreshPolicy, cx: &mut Context<Self>) {
-        if self.refresh_policy == policy {
+        if self.refresh.refresh_policy == policy {
             return;
         }
 
-        self.refresh_policy = policy;
+        self.refresh.refresh_policy = policy;
         self.update_refresh_timer(cx);
         cx.notify();
     }
 
     fn update_refresh_timer(&mut self, cx: &mut Context<Self>) {
-        self._refresh_timer = None;
+        self.refresh._refresh_timer = None;
 
-        let Some(duration) = self.refresh_policy.duration() else {
+        let Some(duration) = self.refresh.refresh_policy.duration() else {
             return;
         };
 
-        self._refresh_timer = Some(cx.spawn(async move |this, cx| {
+        self.refresh._refresh_timer = Some(cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(duration).await;
 
@@ -900,7 +918,7 @@ impl CodeDocument {
                     };
 
                     entity.update(cx, |doc, cx| {
-                        if !doc.refresh_policy.is_auto() || doc.runner.is_primary_active() {
+                        if !doc.refresh.refresh_policy.is_auto() || doc.runner.is_primary_active() {
                             return;
                         }
 
@@ -1142,7 +1160,7 @@ impl CodeDocument {
     }
 
     pub fn refresh_policy(&self) -> RefreshPolicy {
-        self.refresh_policy
+        self.refresh.refresh_policy
     }
 
     pub fn connection_id(&self) -> Option<Uuid> {
@@ -1221,46 +1239,46 @@ impl CodeDocument {
     ) -> bool {
         match cmd {
             Command::Cancel => {
-                self.history_modal.update(cx, |modal, cx| modal.close(cx));
+                self.history.history_modal.update(cx, |modal, cx| modal.close(cx));
                 true
             }
             Command::SelectNext => {
-                self.history_modal
+                self.history.history_modal
                     .update(cx, |modal, cx| modal.select_next(cx));
                 true
             }
             Command::SelectPrev => {
-                self.history_modal
+                self.history.history_modal
                     .update(cx, |modal, cx| modal.select_prev(cx));
                 true
             }
             Command::Execute => {
-                self.history_modal
+                self.history.history_modal
                     .update(cx, |modal, cx| modal.execute_selected(window, cx));
                 true
             }
             Command::Delete => {
-                self.history_modal
+                self.history.history_modal
                     .update(cx, |modal, cx| modal.delete_selected(cx));
                 true
             }
             Command::ToggleFavorite => {
-                self.history_modal
+                self.history.history_modal
                     .update(cx, |modal, cx| modal.toggle_favorite_selected(cx));
                 true
             }
             Command::Rename => {
-                self.history_modal
+                self.history.history_modal
                     .update(cx, |modal, cx| modal.start_rename_selected(window, cx));
                 true
             }
             Command::FocusSearch => {
-                self.history_modal
+                self.history.history_modal
                     .update(cx, |modal, cx| modal.focus_search(window, cx));
                 true
             }
             Command::SaveQuery => {
-                self.history_modal
+                self.history.history_modal
                     .update(cx, |modal, cx| modal.save_selected_history(window, cx));
                 true
             }
@@ -1291,7 +1309,7 @@ impl CodeDocument {
         }
 
         // When history modal is open, route commands to it first
-        if self.history_modal.read(cx).is_visible()
+        if self.history.history_modal.read(cx).is_visible()
             && self.dispatch_to_history_modal(cmd, window, cx)
         {
             return true;
@@ -1375,17 +1393,17 @@ impl CodeDocument {
 
             // History modal commands
             Command::ToggleHistoryDropdown => {
-                let is_open = self.history_modal.read(cx).is_visible();
+                let is_open = self.history.history_modal.read(cx).is_visible();
                 if is_open {
-                    self.history_modal.update(cx, |modal, cx| modal.close(cx));
+                    self.history.history_modal.update(cx, |modal, cx| modal.close(cx));
                 } else {
-                    self.history_modal
+                    self.history.history_modal
                         .update(cx, |modal, cx| modal.open(window, cx));
                 }
                 true
             }
             Command::OpenSavedQueries => {
-                self.history_modal
+                self.history.history_modal
                     .update(cx, |modal, cx| modal.open_saved_tab(window, cx));
                 true
             }

@@ -23,7 +23,7 @@ impl CodeDocument {
             return ContextId::ConfirmModal;
         }
 
-        if self.history_modal.read(cx).is_visible() {
+        if self.history.history_modal.read(cx).is_visible() {
             return ContextId::HistoryModal;
         }
 

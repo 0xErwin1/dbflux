@@ -18,13 +18,13 @@ impl CodeDocument {
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let is_executing = self.state == DocumentState::Executing;
-        let is_preflight = self.drift_preflight_running;
+        let is_preflight = self.drift.preflight_running;
         let is_db_language = self.query_language.supports_connection_context();
         let is_read_only = self.read_only;
 
-        let auto_refresh_enabled = self.refresh_policy.is_auto();
+        let auto_refresh_enabled = self.refresh.refresh_policy.is_auto();
         let refresh_label = if auto_refresh_enabled {
-            self.refresh_policy.label()
+            self.refresh.refresh_policy.label()
         } else {
             "Refresh"
         };
@@ -139,7 +139,7 @@ impl CodeDocument {
                         .id("sql-refresh-control")
                         .w(px(28.0)) // guardrail-allow: dropdown control width, not a height token
                         .h_full()
-                        .child(self.refresh_dropdown.clone()),
+                        .child(self.refresh.refresh_dropdown.clone()),
                     cx,
                 ))
             })
@@ -195,11 +195,11 @@ impl CodeDocument {
                         .icon(AppIcon::History)
                         .tooltip("Query history")
                         .on_click(cx.listener(|this, _, window, cx| {
-                            let is_open = this.history_modal.read(cx).is_visible();
+                            let is_open = this.history.history_modal.read(cx).is_visible();
                             if is_open {
-                                this.history_modal.update(cx, |modal, cx| modal.close(cx));
+                                this.history.history_modal.update(cx, |modal, cx| modal.close(cx));
                             } else {
-                                this.history_modal
+                                this.history.history_modal
                                     .update(cx, |modal, cx| modal.open(window, cx));
                             }
                         })),
@@ -843,7 +843,7 @@ impl Render for CodeDocument {
         let bg = cx.theme().background;
         let has_collapsed_results =
             self.layout == SqlQueryLayout::EditorOnly && !self.result_tabs.result_tabs.is_empty();
-        let drift_modal_visible = self.schema_drift_modal.read(cx).is_visible();
+        let drift_modal_visible = self.drift.schema_drift_modal.read(cx).is_visible();
 
         div()
             .id(ElementId::Name(format!("sql-doc-{}", self.id.0).into()))
@@ -886,7 +886,7 @@ impl Render for CodeDocument {
             .when(has_collapsed_results, |el| {
                 el.child(self.render_collapsed_results_bar(cx))
             })
-            .child(self.history_modal.clone())
+            .child(self.history.history_modal.clone())
             .when(self.pending.dangerous_query.is_some(), |el| {
                 el.child(self.render_dangerous_query_modal(cx))
             })
@@ -894,7 +894,7 @@ impl Render for CodeDocument {
                 el.child(self.render_script_confirm_modal(cx))
             })
             .when(drift_modal_visible, |el| {
-                el.child(self.schema_drift_modal.clone())
+                el.child(self.drift.schema_drift_modal.clone())
             })
     }
 }

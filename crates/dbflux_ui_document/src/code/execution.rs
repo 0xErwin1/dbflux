@@ -420,7 +420,7 @@ impl CodeDocument {
 
         let default_schema = self.source.exec_ctx.schema.clone();
 
-        self.drift_preflight_running = true;
+        self.drift.preflight_running = true;
         cx.notify();
 
         let query_capture = query.clone();
@@ -439,7 +439,7 @@ impl CodeDocument {
             let outcome = task.await;
 
             let _ = this.update(cx, |doc, cx| {
-                doc.drift_preflight_running = false;
+                doc.drift.preflight_running = false;
 
                 match outcome {
                     DriftOutcome::Skip => {
@@ -501,7 +501,7 @@ impl CodeDocument {
                             cache_updates: all_updates,
                         });
 
-                        doc.schema_drift_modal.update(cx, |modal, cx| {
+                        doc.drift.schema_drift_modal.update(cx, |modal, cx| {
                             modal.open(detected, cx);
                         });
                     }
@@ -930,9 +930,9 @@ impl CodeDocument {
         self.pending.auto_refresh = false;
 
         if !self.can_auto_refresh(cx) {
-            self.refresh_policy = dbflux_core::RefreshPolicy::Manual;
-            self._refresh_timer = None;
-            self.refresh_dropdown.update(cx, |dd, cx| {
+            self.refresh.refresh_policy = dbflux_core::RefreshPolicy::Manual;
+            self.refresh._refresh_timer = None;
+            self.refresh.refresh_dropdown.update(cx, |dd, cx| {
                 dd.set_selected_index(Some(dbflux_core::RefreshPolicy::Manual.index()), cx);
             });
             Toast::warning("Auto-refresh blocked: query modifies data")
@@ -1790,7 +1790,7 @@ impl CodeDocument {
             });
         }
 
-        self.schema_drift_modal.update(cx, |modal, cx| {
+        self.drift.schema_drift_modal.update(cx, |modal, cx| {
             modal.close(cx);
         });
 
@@ -1811,7 +1811,7 @@ impl CodeDocument {
             pending.action = DriftAction::ContinueStale;
         }
 
-        self.schema_drift_modal.update(cx, |modal, cx| {
+        self.drift.schema_drift_modal.update(cx, |modal, cx| {
             modal.close(cx);
         });
 
