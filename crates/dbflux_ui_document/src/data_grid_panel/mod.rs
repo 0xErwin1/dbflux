@@ -549,7 +549,6 @@ pub(crate) struct BuilderState {
 
 /// Reusable data grid panel with filter bar, grid, toolbar, and status bar.
 /// Used both embedded in ScriptDocument and as standalone DataDocument.
-// direct fields: 25
 pub struct DataGridPanel {
     source: DataSource,
     app_state: Entity<AppStateEntity>,
