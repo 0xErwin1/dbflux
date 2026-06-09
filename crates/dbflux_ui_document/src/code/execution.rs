@@ -108,13 +108,13 @@ impl CodeDocument {
     }
 
     fn clear_live_output(&mut self) {
-        self.live_output = None;
-        self._live_output_drain = None;
+        self.execution.live_output = None;
+        self.execution._live_output_drain = None;
     }
 
     fn start_live_output(&mut self, receiver: OutputReceiver, cx: &mut Context<Self>) {
-        self.live_output = Some(LiveOutputState::new(receiver));
-        self._live_output_drain = Some(cx.spawn(async move |this, cx| {
+        self.execution.live_output = Some(LiveOutputState::new(receiver));
+        self.execution._live_output_drain = Some(cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(150))
@@ -127,7 +127,7 @@ impl CodeDocument {
                         };
 
                         entity.update(cx, |doc, cx| {
-                            let Some(live_output) = doc.live_output.as_mut() else {
+                            let Some(live_output) = doc.execution.live_output.as_mut() else {
                                 return false;
                             };
 
@@ -564,7 +564,7 @@ impl CodeDocument {
         };
 
         self.clear_live_output();
-        self.run_in_new_tab = in_new_tab;
+        self.result_tabs.run_in_new_tab = in_new_tab;
 
         let description = dbflux_core::truncate_string_safe(query.trim(), 80);
         let (task_id, cancel_token) = self.runner.start_primary_for_target(
@@ -584,9 +584,9 @@ impl CodeDocument {
             rows_affected: None,
             is_script: false,
         };
-        self.execution_history.push(record);
-        self.active_execution_index = Some(self.execution_history.len() - 1);
-        self.active_query_task = Some(ActiveQueryTask {
+        self.execution.execution_history.push(record);
+        self.execution.active_execution_index = Some(self.execution.execution_history.len() - 1);
+        self.execution.active_query_task = Some(ActiveQueryTask {
             task_id,
             target: task_target.clone(),
         });
@@ -810,7 +810,7 @@ impl CodeDocument {
         cx: &mut Context<Self>,
     ) {
         // Determine if this is a script execution by looking up the record
-        let is_script = match self.execution_history.iter().find(|r| r.id == exec_id) {
+        let is_script = match self.execution.execution_history.iter().find(|r| r.id == exec_id) {
             Some(r) => r.is_script,
             None => {
                 log::warn!(
@@ -822,7 +822,7 @@ impl CodeDocument {
         };
 
         if let Some(record) = self
-            .execution_history
+            .execution.execution_history
             .iter_mut()
             .find(|record| record.id == exec_id)
         {
@@ -830,13 +830,13 @@ impl CodeDocument {
         }
 
         let is_active_task = self
-            .active_query_task
+            .execution.active_query_task
             .as_ref()
             .is_some_and(|task| task.task_id == task_id);
 
         if is_active_task {
             self.runner.clear_primary(task_id);
-            self.active_query_task = None;
+            self.execution.active_query_task = None;
             self.state = DocumentState::Clean;
         }
 
@@ -856,7 +856,7 @@ impl CodeDocument {
 
         // Emit audit event for cancelled execution with correct category
         let duration_ms = self
-            .execution_history
+            .execution.execution_history
             .iter()
             .find(|r| r.id == exec_id)
             .and_then(|r| {
@@ -954,7 +954,7 @@ impl CodeDocument {
         self.state = DocumentState::Clean;
 
         let Some(record) = self
-            .execution_history
+            .execution.execution_history
             .iter_mut()
             .find(|r| r.id == pending.exec_id)
         else {
@@ -1159,11 +1159,11 @@ impl CodeDocument {
         }
 
         if self
-            .active_query_task
+            .execution.active_query_task
             .as_ref()
             .is_some_and(|task| task.task_id == pending.task_id)
         {
-            self.active_query_task = None;
+            self.execution.active_query_task = None;
         }
 
         cx.emit(DocumentEvent::ExecutionFinished);
@@ -1185,16 +1185,16 @@ impl CodeDocument {
             return;
         }
 
-        let should_create_new_tab = self.run_in_new_tab
-            || self.result_tabs.is_empty()
-            || self.active_result_index.is_none();
+        let should_create_new_tab = self.result_tabs.run_in_new_tab
+            || self.result_tabs.result_tabs.is_empty()
+            || self.result_tabs.active_result_index.is_none();
 
-        self.run_in_new_tab = false;
+        self.result_tabs.run_in_new_tab = false;
 
         if should_create_new_tab {
             self.create_result_tab(result, query, window, cx);
-        } else if let Some(index) = self.active_result_index
-            && let Some(tab) = self.result_tabs.get_mut(index)
+        } else if let Some(index) = self.result_tabs.active_result_index
+            && let Some(tab) = self.result_tabs.result_tabs.get_mut(index)
         {
             let profile_id = self.connection_id;
             tab.grid.update(cx, |g, cx| {
@@ -1215,9 +1215,9 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.run_in_new_tab = false;
+        self.result_tabs.run_in_new_tab = false;
 
-        let first_new_index = self.result_tabs.len();
+        let first_new_index = self.result_tabs.result_tabs.len();
 
         for set in result.iter_result_sets() {
             let mut single = set.clone();
@@ -1225,8 +1225,8 @@ impl CodeDocument {
             self.create_result_tab(Arc::new(single), query.clone(), window, cx);
         }
 
-        if first_new_index < self.result_tabs.len() {
-            self.active_result_index = Some(first_new_index);
+        if first_new_index < self.result_tabs.result_tabs.len() {
+            self.result_tabs.active_result_index = Some(first_new_index);
         }
     }
 
@@ -1237,9 +1237,9 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.result_tab_counter += 1;
+        self.result_tabs.result_tab_counter += 1;
         let tab_id = Uuid::new_v4();
-        let title = format!("Result {}", self.result_tab_counter);
+        let title = format!("Result {}", self.result_tabs.result_tab_counter);
 
         let app_state = self.app_state.clone();
         let grid = cx.new(|cx| {
@@ -1326,20 +1326,20 @@ impl CodeDocument {
             _subscription: subscription,
         };
 
-        self.result_tabs.push(tab);
-        self.active_result_index = Some(self.result_tabs.len() - 1);
+        self.result_tabs.result_tabs.push(tab);
+        self.result_tabs.active_result_index = Some(self.result_tabs.result_tabs.len() - 1);
     }
 
     pub fn cancel_query(&mut self, cx: &mut Context<Self>) {
         if self.runner.cancel_primary(cx) {
-            if let Some(index) = self.active_execution_index
-                && let Some(record) = self.execution_history.get_mut(index)
+            if let Some(index) = self.execution.active_execution_index
+                && let Some(record) = self.execution.execution_history.get_mut(index)
                 && record.finished_at.is_none()
             {
                 record.finished_at = Some(Instant::now());
             }
 
-            if let Some(task) = self.active_query_task.as_ref() {
+            if let Some(task) = self.execution.active_query_task.as_ref() {
                 self.app_state
                     .read(cx)
                     .cancel_query_for_target(&task.target);
@@ -1422,21 +1422,21 @@ impl CodeDocument {
     }
 
     pub fn close_result_tab(&mut self, tab_id: Uuid, cx: &mut Context<Self>) {
-        let Some(index) = self.result_tabs.iter().position(|t| t.id == tab_id) else {
+        let Some(index) = self.result_tabs.result_tabs.iter().position(|t| t.id == tab_id) else {
             return;
         };
 
-        self.result_tabs.remove(index);
+        self.result_tabs.result_tabs.remove(index);
 
-        if self.result_tabs.is_empty() {
-            self.active_result_index = None;
+        if self.result_tabs.result_tabs.is_empty() {
+            self.result_tabs.active_result_index = None;
             self.layout = SqlQueryLayout::EditorOnly;
             self.focus_mode = SqlQueryFocus::Editor;
-        } else if let Some(active) = self.active_result_index {
-            if active >= self.result_tabs.len() {
-                self.active_result_index = Some(self.result_tabs.len() - 1);
+        } else if let Some(active) = self.result_tabs.active_result_index {
+            if active >= self.result_tabs.result_tabs.len() {
+                self.result_tabs.active_result_index = Some(self.result_tabs.result_tabs.len() - 1);
             } else if active > index {
-                self.active_result_index = Some(active - 1);
+                self.result_tabs.active_result_index = Some(active - 1);
             }
         }
 
@@ -1444,15 +1444,15 @@ impl CodeDocument {
     }
 
     pub fn activate_result_tab(&mut self, index: usize, cx: &mut Context<Self>) {
-        if index < self.result_tabs.len() {
-            self.active_result_index = Some(index);
+        if index < self.result_tabs.result_tabs.len() {
+            self.result_tabs.active_result_index = Some(index);
             cx.notify();
         }
     }
 
     pub(super) fn active_result_grid(&self) -> Option<Entity<DataGridPanel>> {
-        self.active_result_index
-            .and_then(|i| self.result_tabs.get(i))
+        self.result_tabs.active_result_index
+            .and_then(|i| self.result_tabs.result_tabs.get(i))
             .map(|tab| tab.grid.clone())
     }
 
@@ -1461,8 +1461,8 @@ impl CodeDocument {
     /// Used by `render_results` to render through `ResultPanel` rather than
     /// directly rendering the bare `DataGridPanel` entity.
     pub(super) fn active_result_panel(&self) -> Option<Entity<ResultPanel>> {
-        self.active_result_index
-            .and_then(|i| self.result_tabs.get(i))
+        self.result_tabs.active_result_index
+            .and_then(|i| self.result_tabs.result_tabs.get(i))
             .map(|tab| tab.result_panel.clone())
     }
 
@@ -1544,13 +1544,13 @@ impl CodeDocument {
             rows_affected: None,
             is_script: true,
         };
-        self.execution_history.push(record);
-        self.active_execution_index = Some(self.execution_history.len() - 1);
+        self.execution.execution_history.push(record);
+        self.execution.active_execution_index = Some(self.execution.execution_history.len() - 1);
 
         self.clear_live_output();
         self.start_live_output(output_receiver, cx);
         self.state = DocumentState::Executing;
-        self.run_in_new_tab = false;
+        self.result_tabs.run_in_new_tab = false;
         if self.layout == SqlQueryLayout::EditorOnly {
             self.layout = SqlQueryLayout::Split;
         }

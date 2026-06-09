@@ -472,7 +472,7 @@ impl CodeDocument {
             // `run_query` rebuilds `exec_ctx.source` from them instead.
             self.pending.window_override = Some((start_ms, end_ms));
 
-            if !self.result_tabs.is_empty() {
+            if !self.result_tabs.result_tabs.is_empty() {
                 self.pending.chart_reexecute = true;
             }
         }
@@ -1226,8 +1226,8 @@ impl CodeDocument {
         // When the active result grid is in Chart mode the chart toolbar
         // renders its own RANGE chips; hide the time-range widget here.
         let is_chart_mode = self
-            .active_result_index
-            .and_then(|i| self.result_tabs.get(i))
+            .result_tabs.active_result_index
+            .and_then(|i| self.result_tabs.result_tabs.get(i))
             .map(|t| t.grid.read(cx).result_view_mode() == ResultViewMode::Chart)
             .unwrap_or(false);
 

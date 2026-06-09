@@ -72,7 +72,7 @@ use live_output::LiveOutputState;
 /// bar and chrome row are rendered consistently with `DataDocument` tabs.
 /// The `grid` field is kept for direct access by focus/dispatch/execution
 /// callers that need to call grid-specific methods.
-struct ResultTab {
+pub(super) struct ResultTab {
     id: Uuid,
     title: String,
     grid: Entity<DataGridPanel>,
@@ -227,6 +227,23 @@ pub(super) struct SourceContext {
     pub(super) _context_subscriptions: Vec<Subscription>,
 }
 
+/// In-flight and historical query execution state.
+pub(super) struct Execution {
+    pub(super) execution_history: Vec<ExecutionRecord>,
+    pub(super) active_execution_index: Option<usize>,
+    pub(super) live_output: Option<LiveOutputState>,
+    pub(super) _live_output_drain: Option<Task<()>>,
+    pub(super) active_query_task: Option<ActiveQueryTask>,
+}
+
+/// The result-tab collection and its selection cursor.
+pub(super) struct ResultTabs {
+    pub(super) result_tabs: Vec<ResultTab>,
+    pub(super) active_result_index: Option<usize>,
+    pub(super) result_tab_counter: usize,
+    pub(super) run_in_new_tab: bool,
+}
+
 /// All deferred action slots drained at the top of each render cycle.
 ///
 /// Each field is an individually-addressable typed slot. The drain order
@@ -284,18 +301,9 @@ pub struct CodeDocument {
     // Execution context and associated source-control widgets.
     source: SourceContext,
 
-    // Execution
-    execution_history: Vec<ExecutionRecord>,
-    active_execution_index: Option<usize>,
-    live_output: Option<LiveOutputState>,
-    _live_output_drain: Option<Task<()>>,
-    active_query_task: Option<ActiveQueryTask>,
-
-    // Result tabs
-    result_tabs: Vec<ResultTab>,
-    active_result_index: Option<usize>,
-    result_tab_counter: usize,
-    run_in_new_tab: bool,
+    // Query execution state and result tabs.
+    execution: Execution,
+    result_tabs: ResultTabs,
 
     // History modal
     history_modal: Entity<HistoryModal>,
@@ -359,7 +367,7 @@ struct PendingQueryResult {
     is_script: bool,
 }
 
-struct ActiveQueryTask {
+pub(super) struct ActiveQueryTask {
     task_id: dbflux_core::TaskId,
     target: TaskTarget,
 }
@@ -782,15 +790,19 @@ impl CodeDocument {
                     app_state_sub,
                 ],
             },
-            execution_history: Vec::new(),
-            active_execution_index: None,
-            live_output: None,
-            _live_output_drain: None,
-            active_query_task: None,
-            result_tabs: Vec::new(),
-            active_result_index: None,
-            result_tab_counter: 0,
-            run_in_new_tab: false,
+            execution: Execution {
+                execution_history: Vec::new(),
+                active_execution_index: None,
+                live_output: None,
+                _live_output_drain: None,
+                active_query_task: None,
+            },
+            result_tabs: ResultTabs {
+                result_tabs: Vec::new(),
+                active_result_index: None,
+                result_tab_counter: 0,
+                run_in_new_tab: false,
+            },
             history_modal,
             _history_subscriptions: vec![query_selected_sub, history_closed_sub],
             layout: SqlQueryLayout::EditorOnly,
@@ -1332,7 +1344,7 @@ impl CodeDocument {
             }
 
             Command::FocusDown
-                if self.focus_mode == SqlQueryFocus::Editor && !self.result_tabs.is_empty() =>
+                if self.focus_mode == SqlQueryFocus::Editor && !self.result_tabs.result_tabs.is_empty() =>
             {
                 self.focus_mode = SqlQueryFocus::Results;
                 if let Some(grid) = self.active_result_grid() {
@@ -1615,7 +1627,7 @@ mod tests {
         // Verify the document is still in its expected read-only, clean state.
         let (is_ro, has_task, is_dirty) = window.update(|_, app| {
             let d = doc.read(app);
-            (d.read_only, d.active_query_task.is_none(), d.is_dirty)
+            (d.read_only, d.execution.active_query_task.is_none(), d.is_dirty)
         });
 
         assert!(is_ro, "document must remain read-only");

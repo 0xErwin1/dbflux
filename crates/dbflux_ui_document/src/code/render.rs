@@ -48,8 +48,8 @@ impl CodeDocument {
         let fg = theme.foreground;
 
         let execution_time = self
-            .active_execution_index
-            .and_then(|i| self.execution_history.get(i))
+            .execution.active_execution_index
+            .and_then(|i| self.execution.execution_history.get(i))
             .and_then(|r| {
                 r.finished_at
                     .map(|finished| finished.duration_since(r.started_at))
@@ -306,15 +306,15 @@ impl CodeDocument {
         let is_executing = self.state == DocumentState::Executing;
 
         let error = self
-            .active_execution_index
-            .and_then(|i| self.execution_history.get(i))
+            .execution.active_execution_index
+            .and_then(|i| self.execution.execution_history.get(i))
             .and_then(|r| r.error.clone());
 
         let has_error = error.is_some();
-        let has_live_output = self.live_output.is_some() && !has_error;
+        let has_live_output = self.execution.live_output.is_some() && !has_error;
         let active_panel = self.active_result_panel();
         let has_panel = active_panel.is_some();
-        let has_tabs = !has_live_output && !self.result_tabs.is_empty();
+        let has_tabs = !has_live_output && !self.result_tabs.result_tabs.is_empty();
 
         focus_frame(
             is_focused,
@@ -353,7 +353,7 @@ impl CodeDocument {
     fn render_live_output(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let live_output = self
-            .live_output
+            .execution.live_output
             .as_ref()
             .expect("live output state should exist when rendering");
 
@@ -408,7 +408,7 @@ impl CodeDocument {
 
     fn render_results_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let active_index = self.active_result_index;
+        let active_index = self.result_tabs.active_result_index;
 
         div()
             .id("results-header")
@@ -426,7 +426,7 @@ impl CodeDocument {
                     .gap_1()
                     .overflow_x_hidden()
                     .flex_1()
-                    .children(self.result_tabs.iter().enumerate().map(|(i, tab)| {
+                    .children(self.result_tabs.result_tabs.iter().enumerate().map(|(i, tab)| {
                         let is_active = active_index == Some(i);
                         let tab_id = tab.id;
 
@@ -523,7 +523,7 @@ impl CodeDocument {
 
     fn render_collapsed_results_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let tab_count = self.result_tabs.len();
+        let tab_count = self.result_tabs.result_tabs.len();
 
         div()
             .id("collapsed-results-bar")
@@ -792,8 +792,8 @@ impl Render for CodeDocument {
                 // Wire the panel into the active result grid so the chart
                 // toolbar's RANGE chips can drive it.
                 if let Some(grid) = self
-                    .active_result_index
-                    .and_then(|i| self.result_tabs.get(i))
+                    .result_tabs.active_result_index
+                    .and_then(|i| self.result_tabs.result_tabs.get(i))
                     .map(|t| t.grid.clone())
                 {
                     grid.update(cx, |g, cx| {
@@ -812,7 +812,7 @@ impl Render for CodeDocument {
             }
         }
 
-        if std::mem::take(&mut self.pending.chart_reexecute) && !self.result_tabs.is_empty() {
+        if std::mem::take(&mut self.pending.chart_reexecute) && !self.result_tabs.result_tabs.is_empty() {
             self.run_query(window, cx);
         }
 
@@ -842,7 +842,7 @@ impl Render for CodeDocument {
 
         let bg = cx.theme().background;
         let has_collapsed_results =
-            self.layout == SqlQueryLayout::EditorOnly && !self.result_tabs.is_empty();
+            self.layout == SqlQueryLayout::EditorOnly && !self.result_tabs.result_tabs.is_empty();
         let drift_modal_visible = self.schema_drift_modal.read(cx).is_visible();
 
         div()

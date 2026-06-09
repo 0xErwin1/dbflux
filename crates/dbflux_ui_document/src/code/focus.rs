@@ -29,8 +29,8 @@ impl CodeDocument {
 
         // Check if the active result tab's grid has a modal, context menu, or inline edit open
         if self.focus_mode == SqlQueryFocus::Results
-            && let Some(index) = self.active_result_index
-            && let Some(tab) = self.result_tabs.get(index)
+            && let Some(index) = self.result_tabs.active_result_index
+            && let Some(tab) = self.result_tabs.result_tabs.get(index)
         {
             let grid_context = tab.grid.read(cx).active_context(cx);
 
