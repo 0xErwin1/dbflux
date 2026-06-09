@@ -1095,10 +1095,13 @@ impl Render for ChartView {
 
         let bar_layout = bar_layout_params(
             kind,
-            y_min,
             y_max,
             y_range,
-            self.stacked_y_max(),
+            if matches!(kind, crate::chart::spec::ChartKind::StackedBar) {
+                Some(self.stacked_y_max())
+            } else {
+                None
+            },
             &model.decimated,
         );
         let y_max = bar_layout.y_max_adjusted;
@@ -1379,17 +1382,12 @@ impl Render for ChartView {
 
 /// Pre-computed bar/stacked-bar layout values derived from the data bounds.
 ///
-/// All three values are calculated once in `render` and captured by the canvas
-/// paint closure. Callers must pass `stacked_y_max` pre-computed from `self`
-/// because the free function has no access to `&self`.
+/// Computed once in `render` and captured by the canvas paint closure.
+/// `stacked_y_max` is passed as `Some(...)` only when the chart kind is
+/// `StackedBar`; all other kinds pass `None` to skip the computation.
 struct BarLayoutParams {
     /// Adjusted Y ceiling: bar headroom (y_max + 8 %) or the stacked-bar max.
     y_max_adjusted: f64,
-    /// Y range derived from the adjusted ceiling: `(y_max_adjusted - y_min).max(1.0)`.
-    /// Carried for completeness; the paint closure recomputes the range from
-    /// `y_max_adjusted` and `y_min` dynamically at tick-generation time.
-    #[allow(dead_code)]
-    y_range_adjusted: f64,
     /// Fractional horizontal inset per edge so the first/last bar sits inside the
     /// plot area. Zero for non-bar chart kinds.
     bar_x_inset_fraction: f32,
@@ -1399,33 +1397,28 @@ struct BarLayoutParams {
 ///
 /// Returns [`BarLayoutParams`] with an adjusted Y ceiling and a horizontal
 /// inset fraction. For non-bar kinds (`Line`, `Scatter`, `Area`, `Pie`,
-/// `Number`) all values are the identity: `y_max_adjusted == y_max`,
-/// `y_range_adjusted == y_range`, `bar_x_inset_fraction == 0.0`.
+/// `Number`) the identity applies: `y_max_adjusted == y_max`,
+/// `bar_x_inset_fraction == 0.0`.
 ///
-/// The caller must pre-compute `stacked_y_max` via `self.stacked_y_max()`
-/// before calling this function; the function is a free function with no
-/// access to `ChartView`.
+/// `stacked_y_max` must be `Some(...)` only when `kind` is `StackedBar`; pass
+/// `None` for all other kinds so the computation is skipped at the call site.
 fn bar_layout_params(
     kind: crate::chart::spec::ChartKind,
-    y_min: f64,
     y_max: f64,
     y_range: f64,
-    stacked_y_max: f64,
+    stacked_y_max: Option<f64>,
     decimated: &[Vec<(f64, f64)>],
 ) -> BarLayoutParams {
     use crate::chart::spec::ChartKind;
 
     let needs_bar_layout = matches!(kind, ChartKind::Bar | ChartKind::StackedBar);
 
-    let (y_max_adjusted, y_range_adjusted) = if matches!(kind, ChartKind::StackedBar) {
-        let padded_max = stacked_y_max;
-        let new_range = (padded_max - y_min).max(1.0);
-        (padded_max, new_range)
+    let y_max_adjusted = if let Some(smax) = stacked_y_max {
+        smax
     } else if needs_bar_layout {
-        let padded_max = y_max + y_range * 0.08;
-        (padded_max, (padded_max - y_min).max(1.0))
+        y_max + y_range * 0.08
     } else {
-        (y_max, y_range)
+        y_max
     };
 
     let bar_x_inset_fraction: f32 = if needs_bar_layout {
@@ -1437,7 +1430,6 @@ fn bar_layout_params(
 
     BarLayoutParams {
         y_max_adjusted,
-        y_range_adjusted,
         bar_x_inset_fraction,
     }
 }
@@ -3724,7 +3716,7 @@ mod tests {
         #[test]
         fn bar_layout_params_bar_adds_headroom() {
             let decimated = vec![vec![(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)]];
-            let p = bar_layout_params(ChartKind::Bar, 0.0, 10.0, 10.0, 0.0, &decimated);
+            let p = bar_layout_params(ChartKind::Bar, 10.0, 10.0, None, &decimated);
             assert!(
                 (p.y_max_adjusted - (10.0 + 10.0 * 0.08)).abs() < 1e-10,
                 "Bar y_max_adjusted must be y_max + y_range * 0.08"
@@ -3742,10 +3734,9 @@ mod tests {
             let stacked_max = 50.0;
             let p = bar_layout_params(
                 ChartKind::StackedBar,
-                0.0,
                 10.0,
                 10.0,
-                stacked_max,
+                Some(stacked_max),
                 &decimated,
             );
             assert_eq!(
@@ -3762,7 +3753,7 @@ mod tests {
         #[test]
         fn bar_layout_params_line_is_identity() {
             let decimated = vec![vec![(0.0, 1.0), (1.0, 2.0)]];
-            let p = bar_layout_params(ChartKind::Line, 0.0, 10.0, 10.0, 0.0, &decimated);
+            let p = bar_layout_params(ChartKind::Line, 10.0, 10.0, None, &decimated);
             assert_eq!(
                 p.y_max_adjusted, 10.0,
                 "Line y_max_adjusted must equal y_max unchanged"
