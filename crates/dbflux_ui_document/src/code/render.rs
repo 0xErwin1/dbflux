@@ -147,7 +147,7 @@ impl CodeDocument {
             .when_some(execution_time, |el, duration| {
                 el.child(Text::caption(format!("{:.2}s", duration.as_secs_f64())))
             })
-            .when(self.show_saved_label, |el| el.child(Text::caption("Saved")))
+            .when(self.session.show_saved_label, |el| el.child(Text::caption("Saved")))
     }
 
     /// Renders the secondary action buttons: Save, Format, History, Explain, Chart.

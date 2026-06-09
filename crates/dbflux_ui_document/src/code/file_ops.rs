@@ -129,7 +129,7 @@ impl CodeDocument {
                     let path_for_update = path.clone();
                     cx.update(|cx| {
                         entity.update(cx, |doc, cx| {
-                            if let Some(scratch) = doc.scratch_path.take() {
+                            if let Some(scratch) = doc.session.scratch_path.take() {
                                 let _ = std::fs::remove_file(&scratch);
                             }
 
@@ -171,7 +171,7 @@ impl CodeDocument {
             return;
         }
 
-        let Some(target) = self.scratch_path.as_ref() else {
+        let Some(target) = self.session.scratch_path.as_ref() else {
             return;
         };
 
@@ -185,9 +185,9 @@ impl CodeDocument {
     /// Schedule an auto-save after a 2-second debounce. Resets on each call.
     pub fn schedule_auto_save(&mut self, cx: &mut Context<Self>) {
         let target = if self.is_file_backed() {
-            self.shadow_path.clone()
+            self.session.shadow_path.clone()
         } else {
-            self.scratch_path.clone()
+            self.session.scratch_path.clone()
         };
 
         let Some(target) = target else {
@@ -202,7 +202,7 @@ impl CodeDocument {
             .general_settings()
             .auto_save_interval_ms;
 
-        self._auto_save_debounce = Some(cx.spawn(async move |_this, cx| {
+        self.session._auto_save_debounce = Some(cx.spawn(async move |_this, cx| {
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(auto_save_ms))
                 .await;
@@ -233,10 +233,10 @@ impl CodeDocument {
     }
 
     fn show_saved_label(&mut self, cx: &mut Context<Self>) {
-        self.show_saved_label = true;
+        self.session.show_saved_label = true;
         cx.notify();
 
-        self._saved_label_timer = Some(cx.spawn(async move |this, cx| {
+        self.session._saved_label_timer = Some(cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(std::time::Duration::from_secs(3))
                 .await;
@@ -244,7 +244,7 @@ impl CodeDocument {
             cx.update(|cx| {
                 if let Some(entity) = this.upgrade() {
                     entity.update(cx, |doc, cx| {
-                        doc.show_saved_label = false;
+                        doc.session.show_saved_label = false;
                         cx.notify();
                     });
                 }
@@ -256,9 +256,9 @@ impl CodeDocument {
     /// Flush auto-save content synchronously (called before closing a tab).
     pub fn flush_auto_save(&self, cx: &App) {
         let target = if self.is_file_backed() {
-            self.shadow_path.as_ref()
+            self.session.shadow_path.as_ref()
         } else {
-            self.scratch_path.as_ref()
+            self.session.scratch_path.as_ref()
         };
 
         let Some(target) = target else {

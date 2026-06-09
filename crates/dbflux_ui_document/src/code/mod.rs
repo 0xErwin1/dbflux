@@ -227,6 +227,15 @@ pub(super) struct SourceContext {
     pub(super) _context_subscriptions: Vec<Subscription>,
 }
 
+/// Auto-save-to-disk machinery and saved-label UI feedback.
+pub(super) struct SessionPersistence {
+    pub(super) scratch_path: Option<PathBuf>,
+    pub(super) shadow_path: Option<PathBuf>,
+    pub(super) _auto_save_debounce: Option<Task<()>>,
+    pub(super) show_saved_label: bool,
+    pub(super) _saved_label_timer: Option<Task<()>>,
+}
+
 /// History modal entity and its event subscription.
 pub(super) struct HistoryState {
     pub(super) history_modal: Entity<HistoryModal>,
@@ -350,12 +359,8 @@ pub struct CodeDocument {
     // Pending file I/O
     _pending_save: Option<Task<()>>,
 
-    // Session persistence (auto-save to disk)
-    scratch_path: Option<PathBuf>,
-    shadow_path: Option<PathBuf>,
-    _auto_save_debounce: Option<Task<()>>,
-    show_saved_label: bool,
-    _saved_label_timer: Option<Task<()>>,
+    // Session persistence (auto-save to disk).
+    session: SessionPersistence,
 
     /// Last editor_mode pushed to `InputState::set_highlighter`. Tracked so
     /// `sync_editor_language` only resets the highlighter when the mode
@@ -844,11 +849,13 @@ impl CodeDocument {
             diagnostic_request_id: 0,
             _diagnostic_debounce: None,
             _pending_save: None,
-            scratch_path,
-            shadow_path: None,
-            _auto_save_debounce: None,
-            show_saved_label: false,
-            _saved_label_timer: None,
+            session: SessionPersistence {
+                scratch_path,
+                shadow_path: None,
+                _auto_save_debounce: None,
+                show_saved_label: false,
+                _saved_label_timer: None,
+            },
             current_editor_mode: editor_mode,
             pending: PendingActions::default(),
         };
@@ -1107,8 +1114,8 @@ impl CodeDocument {
         if !self.is_dirty {
             self.is_dirty = true;
 
-            if self.is_file_backed() && self.shadow_path.is_none() {
-                self.shadow_path =
+            if self.is_file_backed() && self.session.shadow_path.is_none() {
+                self.session.shadow_path =
                     Some(self.app_state.read(cx).shadow_path(&self.id.0.to_string()));
             }
 
@@ -1121,9 +1128,9 @@ impl CodeDocument {
         if self.is_dirty {
             self.is_dirty = false;
             self.original_content = self.input_state.read(cx).value().to_string();
-            self._auto_save_debounce = None;
+            self.session._auto_save_debounce = None;
 
-            if let Some(shadow) = self.shadow_path.take() {
+            if let Some(shadow) = self.session.shadow_path.take() {
                 let _ = std::fs::remove_file(&shadow);
             }
 
@@ -1173,17 +1180,17 @@ impl CodeDocument {
     }
 
     pub fn scratch_path(&self) -> Option<&PathBuf> {
-        self.scratch_path.as_ref()
+        self.session.scratch_path.as_ref()
     }
 
     pub fn shadow_path(&self) -> Option<&PathBuf> {
-        self.shadow_path.as_ref()
+        self.session.shadow_path.as_ref()
     }
 
     /// Override session paths (used during session restore).
     pub fn set_session_paths(&mut self, scratch: Option<PathBuf>, shadow: Option<PathBuf>) {
-        self.scratch_path = scratch;
-        self.shadow_path = shadow;
+        self.session.scratch_path = scratch;
+        self.session.shadow_path = shadow;
     }
 
     /// Mark the document as dirty without assigning a new shadow path.
