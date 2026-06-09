@@ -1068,8 +1068,8 @@ impl Render for ChartView {
         // Number charts have no axes/gridlines/series geometry — short-circuit
         // and render each visible series' latest value as a large stat tile.
         // Re-using the full chart frame for a single-value display would force
-        // every match arm in this 3k-line function to handle a degenerate
-        // ChartKind that doesn't share its plot/hit-test contract.
+        // every match arm to handle a degenerate ChartKind that doesn't share
+        // its plot/hit-test contract.
         if matches!(kind, ChartKind::Number) {
             return render_number_chart(self, cx).into_any_element();
         }
@@ -1093,43 +1093,16 @@ impl Render for ChartView {
         let y_log_range = (y_log_max - y_log_min).max(1.0);
         let y_is_log = model.y_is_log;
 
-        // Bar-family charts need breathing room the line chart does not: vertical
-        // headroom so the tallest bar never touches the top border, and a
-        // horizontal inset of half a column so the first and last bars sit fully
-        // inside the plot instead of being clipped against its edges. Line keeps
-        // the full range — its points are meant to reach the edges.
-        //
-        // StackedBar also needs the bar layout, but uses a stacked y-range
-        // rather than the individual-series y_max stored in the RenderModel.
-        let needs_bar_layout = matches!(kind, ChartKind::Bar | ChartKind::StackedBar);
-
-        // For StackedBar, compute the true y ceiling by summing visible series
-        // at each shared point index. Baseline = 0 when in range, else y_min.
-        // Y ticks are computed dynamically at render time from plot_h; only the
-        // adjusted y_max (stacked ceiling or bar headroom) needs to be captured.
-        let (y_max, _y_range) = if matches!(kind, ChartKind::StackedBar) {
-            let padded_max = self.stacked_y_max();
-            let new_range = (padded_max - y_min).max(1.0);
-            (padded_max, new_range)
-        } else if needs_bar_layout {
-            let padded_max = y_max + y_range * 0.08;
-            (padded_max, (padded_max - y_min).max(1.0))
-        } else {
-            (y_max, y_range)
-        };
-
-        let bar_x_inset_fraction: f32 = if needs_bar_layout {
-            let max_points = model
-                .decimated
-                .iter()
-                .map(|s| s.len())
-                .max()
-                .unwrap_or(1)
-                .max(1);
-            0.5 / max_points as f32
-        } else {
-            0.0
-        };
+        let bar_layout = bar_layout_params(
+            kind,
+            y_min,
+            y_max,
+            y_range,
+            self.stacked_y_max(),
+            &model.decimated,
+        );
+        let y_max = bar_layout.y_max_adjusted;
+        let bar_x_inset_fraction = bar_layout.bar_x_inset_fraction;
 
         let theme = cx.theme();
         let palette: Vec<Hsla> = model
@@ -1251,16 +1224,13 @@ impl Render for ChartView {
                                 let ox = f32::from(b.origin.x);
                                 let oy = f32::from(b.origin.y);
 
-                                // Resolve theme tokens once at the start of each paint pass.
                                 let theme = cx.theme();
+                                let tick_color = theme.muted_foreground;
+                                let tick_font = font("Zed Mono");
+                                let tick_size = gpui::px(10.0);
+                                let line_height = gpui::px(12.0);
+                                let gridline_color = theme.border;
 
-                                // --- X-tick density and pre-shape pass ---
-                                //
-                                // Provisional plot_w (base margins only) drives the tick-target
-                                // bucket. Tick count only changes on ~120 px boundaries, so a
-                                // few extra pixels of effective padding will not flip buckets in
-                                // the common case. This breaks the chicken-and-egg loop:
-                                // tick count ↔ plot_w ↔ widest label.
                                 let plot_w_provisional = (w - MARGIN_LEFT - MARGIN_RIGHT).max(1.0);
                                 let x_tick_target =
                                     ((plot_w_provisional / 120.0).round() as usize).clamp(3, 16);
@@ -1270,80 +1240,31 @@ impl Render for ChartView {
                                     ticks_numeric(x_min, x_max, x_tick_target)
                                 };
 
-                                // Shared tick font / color for both the pre-shape pass and
-                                // the label render loop below.
-                                let tick_color = theme.muted_foreground;
-                                let tick_font = font("Zed Mono");
-                                let tick_size = gpui::px(10.0);
-                                let line_height = gpui::px(12.0);
+                                let (shaped_x_labels, left_pad, right_pad) = shape_x_ticks(
+                                    kind_canvas,
+                                    &x_ticks_dynamic,
+                                    window,
+                                    tick_font.clone(),
+                                    tick_size,
+                                    tick_color,
+                                );
 
-                                // Pre-shape X-tick labels to measure their widths, then derive
-                                // effective horizontal padding. Pie charts have no X-axis ticks
-                                // — skip the pass and use base margins directly.
-                                let (shaped_x_labels, left_pad, right_pad) =
-                                    if matches!(kind_canvas, ChartKind::Pie) {
-                                        (vec![], MARGIN_LEFT, MARGIN_RIGHT)
-                                    } else {
-                                        let mut shaped: Vec<(f64, ShapedLine)> =
-                                            Vec::with_capacity(x_ticks_dynamic.len());
-                                        let mut widths: Vec<f32> =
-                                            Vec::with_capacity(x_ticks_dynamic.len());
-
-                                        for tick in &x_ticks_dynamic {
-                                            let label = SharedString::from(tick.label.clone());
-                                            let run = TextRun {
-                                                len: label.len(),
-                                                font: tick_font.clone(),
-                                                color: tick_color,
-                                                background_color: None,
-                                                underline: None,
-                                                strikethrough: None,
-                                            };
-                                            let shaped_line = window.text_system().shape_line(
-                                                label,
-                                                tick_size,
-                                                &[run],
-                                                None,
-                                            );
-                                            widths.push(f32::from(shaped_line.width));
-                                            shaped.push((tick.value, shaped_line));
-                                        }
-
-                                        let (lp, rp) = effective_x_label_padding(
-                                            &widths,
-                                            MARGIN_LEFT,
-                                            MARGIN_RIGHT,
-                                        );
-                                        (shaped, lp, rp)
-                                    };
-
-                                // Final plot rect using effective horizontal padding.
                                 let plot_x0 = ox + left_pad;
                                 let plot_y0 = oy + MARGIN_TOP;
                                 let plot_w = (w - left_pad - right_pad).max(1.0);
                                 let plot_h = (h - MARGIN_TOP - MARGIN_BOTTOM).max(1.0);
 
-                                // --- Dynamic Y-tick density ---
-                                //
-                                // Target scales with available plot height: one tick per ~60 px,
-                                // clamped to [3, 12]. This mirrors the dynamic X-tick path.
-                                // y_max_canvas already reflects the StackedBar ceiling or bar
-                                // headroom computed above; y_is_log_canvas selects the generator.
                                 let y_tick_target = ((plot_h / 60.0).round() as usize).clamp(3, 12);
                                 let y_ticks_dynamic = if y_is_log_canvas {
                                     ticks_log(y_min_canvas, y_max_canvas, y_tick_target)
                                 } else {
                                     ticks_numeric(y_min_canvas, y_max_canvas, y_tick_target)
                                 };
-                                let y_tick_labels_dynamic: Vec<(f64, SharedString)> =
-                                    y_ticks_dynamic
-                                        .iter()
-                                        .map(|t| (t.value, SharedString::from(t.label.clone())))
-                                        .collect();
+                                let y_tick_labels_dynamic: Vec<(f64, SharedString)> = y_ticks_dynamic
+                                    .iter()
+                                    .map(|t| (t.value, SharedString::from(t.label.clone())))
+                                    .collect();
 
-                                // Bars inset both edges by half a column so the
-                                // first/last bar fits; Line uses the full width
-                                // (inset fraction is 0).
                                 let x_pad = plot_w * bar_x_inset_canvas;
                                 let usable_w = (plot_w - 2.0 * x_pad).max(1.0);
                                 let data_to_screen_x = |dx: f64| -> f32 {
@@ -1351,397 +1272,84 @@ impl Render for ChartView {
                                         + x_pad
                                         + ((dx - x_min) / x_range * usable_w as f64) as f32
                                 };
-                                // Use the shared projection helper so this closure and
-                                // the hover hit-test always apply the same Y transform.
                                 let data_to_screen_y = |dy: f64| -> f32 {
-                                    project_y_to_screen(
-                                        dy,
-                                        plot_y0,
-                                        plot_h,
-                                        y_log_min,
-                                        y_log_range,
-                                        y_is_log,
-                                    )
+                                    project_y_to_screen(dy, plot_y0, plot_h, y_log_min, y_log_range, y_is_log)
                                 };
 
-                                // --- Horizontal gridlines at each Y tick ---
-                                // Pie has no axes — skip all gridlines and tick labels.
-                                // `tick.value` is in projection space (log1p or linear);
-                                // use the projection-space mapper, not data_to_screen_y.
-                                let gridline_color = theme.border;
-                                for tick in y_ticks_dynamic
-                                    .iter()
-                                    .filter(|_| !matches!(kind_canvas, ChartKind::Pie))
-                                {
-                                    let sy = project_y_proj_space_to_screen(
-                                        tick.value,
-                                        plot_y0,
-                                        plot_h,
-                                        y_log_min,
-                                        y_log_range,
-                                    );
-                                    window.paint_quad(fill(
-                                        gpui::Bounds {
-                                            origin: point(gpui::px(plot_x0), gpui::px(sy - 0.5)),
-                                            size: gpui::Size {
-                                                width: gpui::px(plot_w),
-                                                height: gpui::px(1.0),
-                                            },
-                                        },
-                                        gridline_color,
-                                    ));
-                                }
+                                paint_gridlines(
+                                    window,
+                                    kind_canvas,
+                                    &x_ticks_dynamic,
+                                    &y_ticks_dynamic,
+                                    plot_x0,
+                                    plot_y0,
+                                    plot_w,
+                                    plot_h,
+                                    y_log_min,
+                                    y_log_range,
+                                    gridline_color,
+                                    data_to_screen_x,
+                                );
 
-                                // --- Vertical gridlines at each X tick ---
-                                for tick in x_ticks_dynamic
-                                    .iter()
-                                    .filter(|_| !matches!(kind_canvas, ChartKind::Pie))
-                                {
-                                    let sx = data_to_screen_x(tick.value);
-                                    window.paint_quad(fill(
-                                        gpui::Bounds {
-                                            origin: point(gpui::px(sx - 0.5), gpui::px(plot_y0)),
-                                            size: gpui::Size {
-                                                width: gpui::px(1.0),
-                                                height: gpui::px(plot_h),
-                                            },
-                                        },
-                                        gridline_color,
-                                    ));
-                                }
+                                paint_chart_series(
+                                    window,
+                                    kind_canvas,
+                                    &decimated_canvas,
+                                    &palette_canvas,
+                                    &hidden_canvas,
+                                    focused_idx,
+                                    plot_x0,
+                                    plot_y0,
+                                    plot_w,
+                                    plot_h,
+                                    y_min_canvas,
+                                    y_max_canvas,
+                                    data_to_screen_x,
+                                    data_to_screen_y,
+                                );
 
-                                // --- Series painting ---
-                                //
-                                // Line and Bar share the plot frame painted above
-                                // and differ only in per-series geometry: Line draws
-                                // polylines (focused series composited on top); Bar
-                                // draws grouped vertical bars anchored at the zero
-                                // baseline.
-                                match kind_canvas {
-                                    ChartKind::Line => {
-                                        // Pass 1: non-focused series below the focused
-                                        // line. Pass 2: focused series composited on top.
-                                        let paint_series =
-                                            |pts: &[(f64, f64)],
-                                             color: Hsla,
-                                             stroke_w: f32,
-                                             window: &mut Window| {
-                                                if pts.is_empty() {
-                                                    return;
-                                                }
-                                                if pts.len() == 1 {
-                                                    // Single-point fallback: paint a square
-                                                    // whose side scales with stroke width.
-                                                    let half = stroke_w * 1.5;
-                                                    let sx = data_to_screen_x(pts[0].0);
-                                                    let sy = data_to_screen_y(pts[0].1);
-                                                    window.paint_quad(fill(
-                                                        gpui::Bounds {
-                                                            origin: point(
-                                                                gpui::px(sx - half),
-                                                                gpui::px(sy - half),
-                                                            ),
-                                                            size: gpui::Size {
-                                                                width: gpui::px(half * 2.0),
-                                                                height: gpui::px(half * 2.0),
-                                                            },
-                                                        },
-                                                        color,
-                                                    ));
-                                                } else {
-                                                    let mut builder =
-                                                        PathBuilder::stroke(gpui::px(stroke_w));
-                                                    let (x0, y0) = pts[0];
-                                                    builder.move_to(point(
-                                                        gpui::px(data_to_screen_x(x0)),
-                                                        gpui::px(data_to_screen_y(y0)),
-                                                    ));
-                                                    for &(x, y) in pts.iter().skip(1) {
-                                                        builder.line_to(point(
-                                                            gpui::px(data_to_screen_x(x)),
-                                                            gpui::px(data_to_screen_y(y)),
-                                                        ));
-                                                    }
-                                                    if let Ok(path) = builder.build() {
-                                                        window.paint_path(path, color);
-                                                    }
-                                                }
-                                            };
+                                paint_hover_overlay(
+                                    window,
+                                    cx,
+                                    kind_canvas,
+                                    hover_x_canvas,
+                                    &decimated_canvas,
+                                    &palette_canvas,
+                                    &hidden_canvas,
+                                    plot_x0,
+                                    plot_y0,
+                                    plot_w,
+                                    plot_h,
+                                    x_min,
+                                    x_range,
+                                    data_to_screen_y,
+                                );
 
-                                        // Pass 1 — non-focused, non-hidden series at 1.4 px.
-                                        for (s_idx, pts) in decimated_canvas.iter().enumerate() {
-                                            if s_idx == focused_idx
-                                                || hidden_canvas.contains(&s_idx)
-                                            {
-                                                continue;
-                                            }
-                                            let color = palette_canvas
-                                                .get(s_idx)
-                                                .copied()
-                                                .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
-                                            paint_series(pts, color, 1.4, window);
-                                        }
+                                paint_y_tick_labels(
+                                    window,
+                                    cx,
+                                    kind_canvas,
+                                    &y_tick_labels_dynamic,
+                                    ox,
+                                    plot_y0,
+                                    plot_h,
+                                    left_pad,
+                                    y_log_min,
+                                    y_log_range,
+                                    tick_font,
+                                    tick_size,
+                                    line_height,
+                                    tick_color,
+                                );
 
-                                        // Pass 2 — focused series at 2.2 px on top.
-                                        if !hidden_canvas.contains(&focused_idx)
-                                            && let Some(pts) = decimated_canvas.get(focused_idx)
-                                        {
-                                            let color = palette_canvas
-                                                .get(focused_idx)
-                                                .copied()
-                                                .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
-                                            paint_series(pts, color, 2.2, window);
-                                        }
-                                    }
-                                    ChartKind::Bar => {
-                                        paint_bars(
-                                            window,
-                                            &decimated_canvas,
-                                            &palette_canvas,
-                                            &hidden_canvas,
-                                            focused_idx,
-                                            plot_w,
-                                            y_min,
-                                            y_max,
-                                            &data_to_screen_x,
-                                            &data_to_screen_y,
-                                        );
-                                    }
-                                    ChartKind::Scatter => {
-                                        paint_scatter(
-                                            window,
-                                            &decimated_canvas,
-                                            &palette_canvas,
-                                            &hidden_canvas,
-                                            focused_idx,
-                                            &data_to_screen_x,
-                                            &data_to_screen_y,
-                                        );
-                                    }
-                                    ChartKind::Area => {
-                                        paint_area(
-                                            window,
-                                            &decimated_canvas,
-                                            &palette_canvas,
-                                            &hidden_canvas,
-                                            focused_idx,
-                                            y_min,
-                                            y_max,
-                                            &data_to_screen_x,
-                                            &data_to_screen_y,
-                                        );
-                                    }
-                                    ChartKind::StackedBar => {
-                                        paint_stacked_bars(
-                                            window,
-                                            &decimated_canvas,
-                                            &palette_canvas,
-                                            &hidden_canvas,
-                                            focused_idx,
-                                            plot_w,
-                                            y_min,
-                                            y_max,
-                                            &data_to_screen_x,
-                                            &data_to_screen_y,
-                                        );
-                                    }
-                                    ChartKind::Pie => {
-                                        paint_pie(
-                                            window,
-                                            &decimated_canvas,
-                                            &palette_canvas,
-                                            &hidden_canvas,
-                                            focused_idx,
-                                            plot_x0,
-                                            plot_y0,
-                                            plot_w,
-                                            plot_h,
-                                        );
-                                    }
-                                    // Unreachable: ChartKind::Number is handled by the
-                                    // early-return branch at the top of `render` and
-                                    // never enters the canvas paint closure.
-                                    ChartKind::Number => {}
-                                }
-
-                                // --- Crosshair and hover dots ---
-                                //
-                                // Pie has no X/Y axes, so crosshair and readout are skipped.
-                                // StackedBar and Bar show the crosshair but not hover dots.
-                                // Line and Area show both.
-                                if let Some(hx) = hover_x_canvas
-                                    .filter(|_| !matches!(kind_canvas, ChartKind::Pie))
-                                {
-                                    let sx = f32::from(hx);
-                                    if sx >= plot_x0 && sx <= plot_x0 + plot_w {
-                                        let crosshair_color = Hsla {
-                                            a: 0.7,
-                                            ..theme.primary
-                                        };
-                                        paint_dashed_vline(
-                                            window,
-                                            sx,
-                                            plot_y0,
-                                            plot_y0 + plot_h,
-                                            crosshair_color,
-                                            2.0,
-                                            3.0,
-                                        );
-
-                                        // --- Hover dots per series (Line only) ---
-                                        // Two-pass: fill background first, then stroke series color.
-                                        // Bar charts rely on the crosshair plus the readout
-                                        // overlay; per-point dots would float off the bars.
-                                        let cursor_data_x = x_min
-                                            + ((sx - plot_x0) as f64 / plot_w as f64) * x_range;
-
-                                        for (s_idx, pts) in decimated_canvas.iter().enumerate() {
-                                            // Hover dots are shown for Line and Area only.
-                                            // Bar, StackedBar, and Scatter skip them:
-                                            // bar kinds rely on the crosshair + readout overlay;
-                                            // Scatter paints discrete points that are already
-                                            // their own indicators.
-                                            if !matches!(
-                                                kind_canvas,
-                                                ChartKind::Line | ChartKind::Area
-                                            ) {
-                                                break;
-                                            }
-                                            if hidden_canvas.contains(&s_idx) {
-                                                continue;
-                                            }
-
-                                            let Some(y_data) =
-                                                crate::chart::stats::interpolate_y_at_x(
-                                                    pts,
-                                                    cursor_data_x,
-                                                )
-                                            else {
-                                                continue;
-                                            };
-
-                                            let dot_sx = sx;
-                                            let dot_sy = data_to_screen_y(y_data);
-                                            let series_color = palette_canvas
-                                                .get(s_idx)
-                                                .copied()
-                                                .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
-
-                                            // Filled background disk + stroked series-color ring.
-                                            // Built from two SVG-style arcs (top + bottom semicircle)
-                                            // because GPUI's PathBuilder has no first-class circle.
-                                            let r = 3.5_f32;
-                                            let radii = point(gpui::px(r), gpui::px(r));
-                                            let right =
-                                                point(gpui::px(dot_sx + r), gpui::px(dot_sy));
-                                            let left =
-                                                point(gpui::px(dot_sx - r), gpui::px(dot_sy));
-
-                                            let mut fill_builder = PathBuilder::fill();
-                                            fill_builder.move_to(right);
-                                            fill_builder.arc_to(
-                                                radii,
-                                                gpui::px(0.0),
-                                                false,
-                                                true,
-                                                left,
-                                            );
-                                            fill_builder.arc_to(
-                                                radii,
-                                                gpui::px(0.0),
-                                                false,
-                                                true,
-                                                right,
-                                            );
-                                            fill_builder.close();
-                                            if let Ok(path) = fill_builder.build() {
-                                                window.paint_path(path, theme.background);
-                                            }
-
-                                            let mut stroke_builder =
-                                                PathBuilder::stroke(gpui::px(1.5));
-                                            stroke_builder.move_to(right);
-                                            stroke_builder.arc_to(
-                                                radii,
-                                                gpui::px(0.0),
-                                                false,
-                                                true,
-                                                left,
-                                            );
-                                            stroke_builder.arc_to(
-                                                radii,
-                                                gpui::px(0.0),
-                                                false,
-                                                true,
-                                                right,
-                                            );
-                                            stroke_builder.close();
-                                            if let Ok(path) = stroke_builder.build() {
-                                                window.paint_path(path, series_color);
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // --- In-canvas Y-axis tick labels ---
-                                // Right-aligned against the effective left margin so the
-                                // Y-tick column stays flush with the plot edge even when
-                                // the left guard fires. Pie has no axes — skip all tick labels.
-                                for (value, label) in y_tick_labels_dynamic
-                                    .iter()
-                                    .filter(|_| !matches!(kind_canvas, ChartKind::Pie))
-                                {
-                                    // `value` is in projection space (log1p or linear).
-                                    let sy = project_y_proj_space_to_screen(
-                                        *value,
-                                        plot_y0,
-                                        plot_h,
-                                        y_log_min,
-                                        y_log_range,
-                                    );
-                                    let run = TextRun {
-                                        len: label.len(),
-                                        font: tick_font.clone(),
-                                        color: tick_color,
-                                        background_color: None,
-                                        underline: None,
-                                        strikethrough: None,
-                                    };
-                                    let shaped = window.text_system().shape_line(
-                                        label.clone(),
-                                        tick_size,
-                                        &[run],
-                                        None,
-                                    );
-                                    let label_w = f32::from(shaped.width);
-                                    // Right-align within left_pad minus 4px padding.
-                                    let label_x = ox + (left_pad - 4.0) - label_w;
-                                    let label_y = sy - f32::from(line_height) / 2.0;
-                                    let _ = shaped.paint(
-                                        point(gpui::px(label_x), gpui::px(label_y)),
-                                        line_height,
-                                        window,
-                                        cx,
-                                    );
-                                }
-
-                                // --- In-canvas X-axis tick labels ---
-                                // Centered below each tick, in the MARGIN_BOTTOM band.
-                                // Uses the pre-shaped lines from the width-measurement pass
-                                // above — no second shape_line call needed.
-                                let x_baseline_y = plot_y0 + plot_h + 10.0;
-
-                                for (value, shaped) in &shaped_x_labels {
-                                    let sx = data_to_screen_x(*value);
-                                    let label_w = f32::from(shaped.width);
-                                    let label_x = sx - label_w / 2.0;
-                                    let _ = shaped.paint(
-                                        point(gpui::px(label_x), gpui::px(x_baseline_y)),
-                                        line_height,
-                                        window,
-                                        cx,
-                                    );
-                                }
+                                paint_x_tick_labels(
+                                    window,
+                                    cx,
+                                    &shaped_x_labels,
+                                    plot_y0 + plot_h + 10.0,
+                                    line_height,
+                                    data_to_screen_x,
+                                );
                             },
                         )
                         .absolute()
@@ -1760,6 +1368,554 @@ impl Render for ChartView {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Pre-computed bar/stacked-bar layout values derived from the data bounds.
+///
+/// All three values are calculated once in `render` and captured by the canvas
+/// paint closure. Callers must pass `stacked_y_max` pre-computed from `self`
+/// because the free function has no access to `&self`.
+struct BarLayoutParams {
+    /// Adjusted Y ceiling: bar headroom (y_max + 8 %) or the stacked-bar max.
+    y_max_adjusted: f64,
+    /// Y range derived from the adjusted ceiling: `(y_max_adjusted - y_min).max(1.0)`.
+    /// Carried for completeness; the paint closure recomputes the range from
+    /// `y_max_adjusted` and `y_min` dynamically at tick-generation time.
+    #[allow(dead_code)]
+    y_range_adjusted: f64,
+    /// Fractional horizontal inset per edge so the first/last bar sits inside the
+    /// plot area. Zero for non-bar chart kinds.
+    bar_x_inset_fraction: f32,
+}
+
+/// Compute bar/stacked-bar layout parameters from data-space bounds.
+///
+/// Returns [`BarLayoutParams`] with an adjusted Y ceiling and a horizontal
+/// inset fraction. For non-bar kinds (`Line`, `Scatter`, `Area`, `Pie`,
+/// `Number`) all values are the identity: `y_max_adjusted == y_max`,
+/// `y_range_adjusted == y_range`, `bar_x_inset_fraction == 0.0`.
+///
+/// The caller must pre-compute `stacked_y_max` via `self.stacked_y_max()`
+/// before calling this function; the function is a free function with no
+/// access to `ChartView`.
+fn bar_layout_params(
+    kind: crate::chart::spec::ChartKind,
+    y_min: f64,
+    y_max: f64,
+    y_range: f64,
+    stacked_y_max: f64,
+    decimated: &[Vec<(f64, f64)>],
+) -> BarLayoutParams {
+    use crate::chart::spec::ChartKind;
+
+    let needs_bar_layout = matches!(kind, ChartKind::Bar | ChartKind::StackedBar);
+
+    let (y_max_adjusted, y_range_adjusted) = if matches!(kind, ChartKind::StackedBar) {
+        let padded_max = stacked_y_max;
+        let new_range = (padded_max - y_min).max(1.0);
+        (padded_max, new_range)
+    } else if needs_bar_layout {
+        let padded_max = y_max + y_range * 0.08;
+        (padded_max, (padded_max - y_min).max(1.0))
+    } else {
+        (y_max, y_range)
+    };
+
+    let bar_x_inset_fraction: f32 = if needs_bar_layout {
+        let max_points = decimated
+            .iter()
+            .map(|s| s.len())
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        0.5 / max_points as f32
+    } else {
+        0.0
+    };
+
+    BarLayoutParams {
+        y_max_adjusted,
+        y_range_adjusted,
+        bar_x_inset_fraction,
+    }
+}
+
+/// Pre-shape X-tick labels, measure their widths, and derive effective
+/// horizontal plot padding.
+///
+/// Returns `(shaped_labels, left_pad, right_pad)` where `shaped_labels` is a
+/// parallel vec of `(data_value, ShapedLine)` ready for the paint pass.
+/// `left_pad` and `right_pad` are the effective horizontal margins; they equal
+/// the base `MARGIN_LEFT` / `MARGIN_RIGHT` constants when no label exceeds the
+/// floor.
+///
+/// Requires a GPUI paint context (`&mut Window`) for text shaping. Cannot be
+/// unit-tested outside a GPUI test harness. For `ChartKind::Pie` the function
+/// skips shaping entirely and returns the base margins with an empty label vec.
+fn shape_x_ticks(
+    kind: crate::chart::spec::ChartKind,
+    ticks: &[crate::chart::axis::TickLabel],
+    window: &mut Window,
+    tick_font: gpui::Font,
+    tick_size: Pixels,
+    tick_color: Hsla,
+) -> (Vec<(f64, ShapedLine)>, f32, f32) {
+    use crate::chart::spec::ChartKind;
+
+    if matches!(kind, ChartKind::Pie) {
+        return (vec![], MARGIN_LEFT, MARGIN_RIGHT);
+    }
+
+    let mut shaped: Vec<(f64, ShapedLine)> = Vec::with_capacity(ticks.len());
+    let mut widths: Vec<f32> = Vec::with_capacity(ticks.len());
+
+    for tick in ticks {
+        let label = SharedString::from(tick.label.clone());
+        let run = TextRun {
+            len: label.len(),
+            font: tick_font.clone(),
+            color: tick_color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let shaped_line = window
+            .text_system()
+            .shape_line(label, tick_size, &[run], None);
+        widths.push(f32::from(shaped_line.width));
+        shaped.push((tick.value, shaped_line));
+    }
+
+    let (lp, rp) = effective_x_label_padding(&widths, MARGIN_LEFT, MARGIN_RIGHT);
+    (shaped, lp, rp)
+}
+
+/// Paint horizontal gridlines at each Y tick and vertical gridlines at each
+/// X tick.
+///
+/// Skips all gridlines for `ChartKind::Pie` which has no axes. Y-tick values
+/// are in projection space (log1p or linear); `project_y_proj_space_to_screen`
+/// maps them to screen coordinates. Vertical gridlines use `data_to_screen_x`
+/// for X positioning.
+///
+/// Requires a GPUI paint context (`&mut Window`). Cannot be unit-tested outside
+/// a GPUI test harness.
+#[allow(clippy::too_many_arguments)]
+fn paint_gridlines(
+    window: &mut Window,
+    kind: crate::chart::spec::ChartKind,
+    x_ticks: &[crate::chart::axis::TickLabel],
+    y_ticks: &[crate::chart::axis::TickLabel],
+    plot_x0: f32,
+    plot_y0: f32,
+    plot_w: f32,
+    plot_h: f32,
+    y_log_min: f64,
+    y_log_range: f64,
+    gridline_color: Hsla,
+    data_to_screen_x: impl Fn(f64) -> f32,
+) {
+    use crate::chart::spec::ChartKind;
+
+    for tick in y_ticks
+        .iter()
+        .filter(|_| !matches!(kind, ChartKind::Pie))
+    {
+        let sy = project_y_proj_space_to_screen(
+            tick.value,
+            plot_y0,
+            plot_h,
+            y_log_min,
+            y_log_range,
+        );
+        window.paint_quad(fill(
+            gpui::Bounds {
+                origin: point(gpui::px(plot_x0), gpui::px(sy - 0.5)),
+                size: gpui::Size {
+                    width: gpui::px(plot_w),
+                    height: gpui::px(1.0),
+                },
+            },
+            gridline_color,
+        ));
+    }
+
+    for tick in x_ticks
+        .iter()
+        .filter(|_| !matches!(kind, ChartKind::Pie))
+    {
+        let sx = data_to_screen_x(tick.value);
+        window.paint_quad(fill(
+            gpui::Bounds {
+                origin: point(gpui::px(sx - 0.5), gpui::px(plot_y0)),
+                size: gpui::Size {
+                    width: gpui::px(1.0),
+                    height: gpui::px(plot_h),
+                },
+            },
+            gridline_color,
+        ));
+    }
+}
+
+/// Paint all `ChartKind::Line` series using a two-pass approach.
+///
+/// Pass 1 renders every non-focused, non-hidden series at 1.4 px stroke width.
+/// Pass 2 renders the focused series at 2.2 px on top. A single-point series
+/// is rendered as a small square instead of a zero-length stroke. Uses the
+/// `paint_series` local closure for polyline/dot geometry.
+///
+/// Requires a GPUI paint context (`&mut Window`). Cannot be unit-tested outside
+/// a GPUI test harness.
+fn paint_line_series(
+    window: &mut Window,
+    decimated: &[Vec<(f64, f64)>],
+    palette: &[Hsla],
+    hidden: &HashSet<usize>,
+    focused_idx: usize,
+    data_to_screen_x: impl Fn(f64) -> f32,
+    data_to_screen_y: impl Fn(f64) -> f32,
+) {
+    let paint_series = |pts: &[(f64, f64)],
+                        color: Hsla,
+                        stroke_w: f32,
+                        window: &mut Window| {
+        if pts.is_empty() {
+            return;
+        }
+        if pts.len() == 1 {
+            let half = stroke_w * 1.5;
+            let sx = data_to_screen_x(pts[0].0);
+            let sy = data_to_screen_y(pts[0].1);
+            window.paint_quad(fill(
+                gpui::Bounds {
+                    origin: point(gpui::px(sx - half), gpui::px(sy - half)),
+                    size: gpui::Size {
+                        width: gpui::px(half * 2.0),
+                        height: gpui::px(half * 2.0),
+                    },
+                },
+                color,
+            ));
+        } else {
+            let mut builder = PathBuilder::stroke(gpui::px(stroke_w));
+            let (x0, y0) = pts[0];
+            builder.move_to(point(
+                gpui::px(data_to_screen_x(x0)),
+                gpui::px(data_to_screen_y(y0)),
+            ));
+            for &(x, y) in pts.iter().skip(1) {
+                builder.line_to(point(
+                    gpui::px(data_to_screen_x(x)),
+                    gpui::px(data_to_screen_y(y)),
+                ));
+            }
+            if let Ok(path) = builder.build() {
+                window.paint_path(path, color);
+            }
+        }
+    };
+
+    for (s_idx, pts) in decimated.iter().enumerate() {
+        if s_idx == focused_idx || hidden.contains(&s_idx) {
+            continue;
+        }
+        let color = palette
+            .get(s_idx)
+            .copied()
+            .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
+        paint_series(pts, color, 1.4, window);
+    }
+
+    if !hidden.contains(&focused_idx)
+        && let Some(pts) = decimated.get(focused_idx)
+    {
+        let color = palette
+            .get(focused_idx)
+            .copied()
+            .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
+        paint_series(pts, color, 2.2, window);
+    }
+}
+
+/// Dispatch series painting for all non-Number chart kinds.
+///
+/// Handles `Line`, `Bar`, `Scatter`, `Area`, `StackedBar`, and `Pie` by
+/// delegating to the appropriate `paint_*` helper. The `ChartKind::Line` arm
+/// retains an internal named local closure (`paint_series`) for polyline and
+/// single-point geometry.
+///
+/// Requires a GPUI paint context (`&mut Window`). Cannot be unit-tested outside
+/// a GPUI test harness.
+#[allow(clippy::too_many_arguments)]
+fn paint_chart_series(
+    window: &mut Window,
+    kind: crate::chart::spec::ChartKind,
+    decimated: &[Vec<(f64, f64)>],
+    palette: &[Hsla],
+    hidden: &HashSet<usize>,
+    focused_idx: usize,
+    plot_x0: f32,
+    plot_y0: f32,
+    plot_w: f32,
+    plot_h: f32,
+    y_min: f64,
+    y_max: f64,
+    data_to_screen_x: impl Fn(f64) -> f32,
+    data_to_screen_y: impl Fn(f64) -> f32,
+) {
+    use crate::chart::spec::ChartKind;
+
+    match kind {
+        ChartKind::Line => {
+            paint_line_series(
+                window,
+                decimated,
+                palette,
+                hidden,
+                focused_idx,
+                data_to_screen_x,
+                data_to_screen_y,
+            );
+        }
+        ChartKind::Bar => {
+            paint_bars(
+                window,
+                decimated,
+                palette,
+                hidden,
+                focused_idx,
+                plot_w,
+                y_min,
+                y_max,
+                &data_to_screen_x,
+                &data_to_screen_y,
+            );
+        }
+        ChartKind::Scatter => {
+            paint_scatter(
+                window,
+                decimated,
+                palette,
+                hidden,
+                focused_idx,
+                &data_to_screen_x,
+                &data_to_screen_y,
+            );
+        }
+        ChartKind::Area => {
+            paint_area(
+                window,
+                decimated,
+                palette,
+                hidden,
+                focused_idx,
+                y_min,
+                y_max,
+                &data_to_screen_x,
+                &data_to_screen_y,
+            );
+        }
+        ChartKind::StackedBar => {
+            paint_stacked_bars(
+                window,
+                decimated,
+                palette,
+                hidden,
+                focused_idx,
+                plot_w,
+                y_min,
+                y_max,
+                &data_to_screen_x,
+                &data_to_screen_y,
+            );
+        }
+        ChartKind::Pie => {
+            paint_pie(
+                window,
+                decimated,
+                palette,
+                hidden,
+                focused_idx,
+                plot_x0,
+                plot_y0,
+                plot_w,
+                plot_h,
+            );
+        }
+        ChartKind::Number => {}
+    }
+}
+
+/// Paint the vertical crosshair and per-series hover dots at the cursor position.
+///
+/// Skips everything for `ChartKind::Pie`. Bar and StackedBar show the crosshair
+/// line only; Line and Area additionally show filled-background dots with a
+/// series-colored stroke ring at the interpolated Y value for each visible
+/// series.
+///
+/// `cx` must be `&App` (read-only) for theme color lookups. Requires a GPUI
+/// paint context (`&mut Window`). Cannot be unit-tested outside a GPUI test
+/// harness.
+#[allow(clippy::too_many_arguments)]
+fn paint_hover_overlay(
+    window: &mut Window,
+    cx: &App,
+    kind: crate::chart::spec::ChartKind,
+    hover_x_screen: Option<Pixels>,
+    decimated: &[Vec<(f64, f64)>],
+    palette: &[Hsla],
+    hidden: &HashSet<usize>,
+    plot_x0: f32,
+    plot_y0: f32,
+    plot_w: f32,
+    plot_h: f32,
+    x_min: f64,
+    x_range: f64,
+    data_to_screen_y: impl Fn(f64) -> f32,
+) {
+    use crate::chart::spec::ChartKind;
+
+    let Some(hx) = hover_x_screen.filter(|_| !matches!(kind, ChartKind::Pie)) else {
+        return;
+    };
+
+    let sx = f32::from(hx);
+    if sx < plot_x0 || sx > plot_x0 + plot_w {
+        return;
+    }
+
+    let theme = cx.theme();
+    let crosshair_color = Hsla {
+        a: 0.7,
+        ..theme.primary
+    };
+    paint_dashed_vline(window, sx, plot_y0, plot_y0 + plot_h, crosshair_color, 2.0, 3.0);
+
+    let cursor_data_x = x_min + ((sx - plot_x0) as f64 / plot_w as f64) * x_range;
+
+    for (s_idx, pts) in decimated.iter().enumerate() {
+        if !matches!(kind, ChartKind::Line | ChartKind::Area) {
+            break;
+        }
+        if hidden.contains(&s_idx) {
+            continue;
+        }
+
+        let Some(y_data) =
+            crate::chart::stats::interpolate_y_at_x(pts, cursor_data_x)
+        else {
+            continue;
+        };
+
+        let dot_sx = sx;
+        let dot_sy = data_to_screen_y(y_data);
+        let series_color = palette
+            .get(s_idx)
+            .copied()
+            .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
+
+        let r = 3.5_f32;
+        let radii = point(gpui::px(r), gpui::px(r));
+        let right = point(gpui::px(dot_sx + r), gpui::px(dot_sy));
+        let left = point(gpui::px(dot_sx - r), gpui::px(dot_sy));
+
+        let mut fill_builder = PathBuilder::fill();
+        fill_builder.move_to(right);
+        fill_builder.arc_to(radii, gpui::px(0.0), false, true, left);
+        fill_builder.arc_to(radii, gpui::px(0.0), false, true, right);
+        fill_builder.close();
+        if let Ok(path) = fill_builder.build() {
+            window.paint_path(path, theme.background);
+        }
+
+        let mut stroke_builder = PathBuilder::stroke(gpui::px(1.5));
+        stroke_builder.move_to(right);
+        stroke_builder.arc_to(radii, gpui::px(0.0), false, true, left);
+        stroke_builder.arc_to(radii, gpui::px(0.0), false, true, right);
+        stroke_builder.close();
+        if let Ok(path) = stroke_builder.build() {
+            window.paint_path(path, series_color);
+        }
+    }
+}
+
+/// Paint Y-axis tick labels right-aligned against the effective left margin.
+///
+/// Label values are in projection space (log1p or linear); `project_y_proj_space_to_screen`
+/// maps them to screen Y. Skips all labels for `ChartKind::Pie`. Requires a GPUI
+/// paint context; `ShapedLine::paint` takes `&mut App`.
+#[allow(clippy::too_many_arguments)]
+fn paint_y_tick_labels(
+    window: &mut Window,
+    cx: &mut App,
+    kind: crate::chart::spec::ChartKind,
+    y_tick_labels: &[(f64, SharedString)],
+    ox: f32,
+    plot_y0: f32,
+    plot_h: f32,
+    left_pad: f32,
+    y_log_min: f64,
+    y_log_range: f64,
+    tick_font: gpui::Font,
+    tick_size: Pixels,
+    line_height: Pixels,
+    tick_color: Hsla,
+) {
+    use crate::chart::spec::ChartKind;
+
+    for (value, label) in y_tick_labels
+        .iter()
+        .filter(|_| !matches!(kind, ChartKind::Pie))
+    {
+        let sy = project_y_proj_space_to_screen(*value, plot_y0, plot_h, y_log_min, y_log_range);
+        let run = TextRun {
+            len: label.len(),
+            font: tick_font.clone(),
+            color: tick_color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let shaped = window
+            .text_system()
+            .shape_line(label.clone(), tick_size, &[run], None);
+        let label_w = f32::from(shaped.width);
+        let label_x = ox + (left_pad - 4.0) - label_w;
+        let label_y = sy - f32::from(line_height) / 2.0;
+        let _ = shaped.paint(
+            point(gpui::px(label_x), gpui::px(label_y)),
+            line_height,
+            window,
+            cx,
+        );
+    }
+}
+
+/// Paint X-axis tick labels centered below each tick mark.
+///
+/// Uses pre-shaped `ShapedLine` values from `shape_x_ticks` — no second
+/// `shape_line` call is needed. Requires a GPUI paint context;
+/// `ShapedLine::paint` takes `&mut App`.
+fn paint_x_tick_labels(
+    window: &mut Window,
+    cx: &mut App,
+    shaped_x_labels: &[(f64, ShapedLine)],
+    x_baseline_y: f32,
+    line_height: Pixels,
+    data_to_screen_x: impl Fn(f64) -> f32,
+) {
+    for (value, shaped) in shaped_x_labels {
+        let sx = data_to_screen_x(*value);
+        let label_w = f32::from(shaped.width);
+        let label_x = sx - label_w / 2.0;
+        let _ = shaped.paint(
+            point(gpui::px(label_x), gpui::px(x_baseline_y)),
+            line_height,
+            window,
+            cx,
+        );
+    }
+}
 
 /// Render a `ChartKind::Number` view: a single-stat / multi-stat tile grid
 /// where each visible series shows its label and the most recent finite Y
@@ -3558,6 +3714,61 @@ mod tests {
             let (left, right) = effective_x_label_padding(&[width], MARGIN_LEFT, MARGIN_RIGHT);
             assert_eq!(left, MARGIN_LEFT);
             assert_eq!(right, MARGIN_RIGHT);
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // T-2: bar_layout_params — unit tests
+    // ---------------------------------------------------------------------------
+
+    mod bar_layout_params_tests {
+        use super::*;
+        use crate::chart::spec::ChartKind;
+
+        /// `ChartKind::Bar` adds 8 % headroom to `y_max` and sets a non-zero inset fraction.
+        #[test]
+        fn bar_layout_params_bar_adds_headroom() {
+            let decimated = vec![vec![(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)]];
+            let p = bar_layout_params(ChartKind::Bar, 0.0, 10.0, 10.0, 0.0, &decimated);
+            assert!(
+                (p.y_max_adjusted - (10.0 + 10.0 * 0.08)).abs() < 1e-10,
+                "Bar y_max_adjusted must be y_max + y_range * 0.08"
+            );
+            assert!(
+                p.bar_x_inset_fraction > 0.0,
+                "Bar bar_x_inset_fraction must be > 0"
+            );
+        }
+
+        /// `ChartKind::StackedBar` uses the pre-computed `stacked_y_max` as the adjusted ceiling.
+        #[test]
+        fn bar_layout_params_stacked_uses_stacked_y_max() {
+            let decimated = vec![vec![(0.0, 1.0)], vec![(0.0, 2.0)]];
+            let stacked_max = 50.0;
+            let p = bar_layout_params(ChartKind::StackedBar, 0.0, 10.0, 10.0, stacked_max, &decimated);
+            assert_eq!(
+                p.y_max_adjusted, stacked_max,
+                "StackedBar y_max_adjusted must equal stacked_y_max"
+            );
+            assert!(
+                p.bar_x_inset_fraction > 0.0,
+                "StackedBar bar_x_inset_fraction must be > 0"
+            );
+        }
+
+        /// `ChartKind::Line` is an identity pass: `y_max_adjusted == y_max`, inset fraction is 0.
+        #[test]
+        fn bar_layout_params_line_is_identity() {
+            let decimated = vec![vec![(0.0, 1.0), (1.0, 2.0)]];
+            let p = bar_layout_params(ChartKind::Line, 0.0, 10.0, 10.0, 0.0, &decimated);
+            assert_eq!(
+                p.y_max_adjusted, 10.0,
+                "Line y_max_adjusted must equal y_max unchanged"
+            );
+            assert_eq!(
+                p.bar_x_inset_fraction, 0.0,
+                "Line bar_x_inset_fraction must be 0.0"
+            );
         }
     }
 }
