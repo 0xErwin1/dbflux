@@ -286,246 +286,37 @@ impl Sidebar {
             let metric_cache = state.metric_catalog_cache().clone();
 
             if schema.is_key_value() {
-                let mut database_names: Vec<String> = schema
-                    .keyspaces()
-                    .iter()
-                    .map(|space| format!("db{}", space.db_index))
-                    .collect();
-
-                if database_names.is_empty() {
-                    if let Some(active_database) = connected.active_database.as_ref() {
-                        database_names.push(active_database.clone());
-                    } else {
-                        database_names.push("db0".to_string());
-                    }
-                }
-
-                let mut kv_db_items: Vec<TreeItem> = Vec::new();
-
-                for database_name in database_names {
-                    let is_pending = state.is_operation_pending(profile_id, Some(&database_name));
-                    let is_active_db = connected.active_database.as_deref() == Some(&database_name);
-
-                    let db_children = if is_pending {
-                        vec![TreeItem::new(
-                            SchemaNodeId::Loading {
-                                profile_id,
-                                database: database_name.clone(),
-                            }
-                            .to_string(),
-                            "Loading...".to_string(),
-                        )]
-                    } else {
-                        Vec::new()
-                    };
-
-                    let db_label = if is_pending {
-                        format!("{} (loading...)", database_name)
-                    } else {
-                        database_name.clone()
-                    };
-
-                    kv_db_items.push(
-                        TreeItem::new(
-                            SchemaNodeId::Database {
-                                profile_id,
-                                name: database_name,
-                            }
-                            .to_string(),
-                            db_label,
-                        )
-                        .expanded(uses_lazy_loading && is_active_db)
-                        .children(db_children),
-                    );
-                }
-
-                profile_children.push(Self::build_databases_folder_item(profile_id, kv_db_items));
+                let kv_items = build_kv_database_children(profile_id, connected, state);
+                profile_children.push(Self::build_databases_folder_item(profile_id, kv_items));
             } else if !schema.databases().is_empty() {
+                let named_items = build_named_db_children(
+                    profile_id,
+                    connected,
+                    state,
+                    schema,
+                    conn_capabilities,
+                    conn_category,
+                    &metric_cache,
+                    metric_fetch_errors,
+                    supports_routines,
+                    is_document_db,
+                    is_time_series_db,
+                    uses_lazy_loading,
+                );
+
                 // See `should_collapse_database_wrapper`: when the connection
-                // exposes a single trivial database (CloudWatch, DynamoDB,
-                // single-DB SQL, etc.) the wrapper adds no information vs the
-                // connection root. Children (Collections, Metrics, Tables)
-                // already embed `database` in their node IDs so routing is
-                // unaffected by the missing intermediate.
+                // exposes a single trivial database the wrapper adds no information.
+                // In that case extend profile_children with the DB's direct children,
+                // not the wrapper node itself.
                 let collapse_single_db = should_collapse_database_wrapper(schema.databases());
-                let mut named_db_items: Vec<TreeItem> = Vec::new();
-                for db in schema.databases() {
-                    let is_pending = state.is_operation_pending(profile_id, Some(&db.name));
-                    let is_active_db = connected.active_database.as_deref() == Some(&db.name);
 
-                    let db_children = if uses_lazy_loading {
-                        if let Some(db_schema) = connected.database_schemas.get(&db.name) {
-                            if is_document_db {
-                                Self::build_document_db_content(
-                                    profile_id,
-                                    &db.name,
-                                    db_schema,
-                                    &connected.table_details,
-                                    &connected.collection_children,
-                                    conn_capabilities,
-                                    conn_category,
-                                    Some(&metric_cache),
-                                    metric_fetch_errors,
-                                )
-                            } else if is_time_series_db {
-                                // Time-series lazy schemas are stored in database_schemas
-                                // as a DbSchemaInfo whose tables carry measurement names.
-                                // Route through the time-series builder the same way document
-                                // databases route through build_document_db_content.
-                                Self::build_time_series_db_content(profile_id, &db.name, schema)
-                            } else {
-                                Self::build_db_schema_content(
-                                    profile_id,
-                                    &db.name,
-                                    None,
-                                    db_schema,
-                                    &connected.table_details,
-                                    &connected.schema_types,
-                                    &connected.schema_indexes,
-                                    &connected.schema_foreign_keys,
-                                    &connected.schema_routines,
-                                    supports_routines,
-                                    &connected.dependents_cache,
-                                )
-                            }
-                        } else if is_pending {
-                            vec![TreeItem::new(
-                                SchemaNodeId::Loading {
-                                    profile_id,
-                                    database: db.name.clone(),
-                                }
-                                .to_string(),
-                                "Loading...".to_string(),
-                            )]
-                        } else {
-                            Vec::new()
-                        }
-                    } else if let Some(db_conn) = connected.database_connections.get(&db.name) {
-                        if let Some(ref db_schema) = db_conn.schema {
-                            Self::build_schema_children(
-                                profile_id,
-                                &db.name,
-                                Some(&db.name),
-                                db_schema,
-                                &connected.table_details,
-                                &connected.schema_types,
-                                &connected.schema_indexes,
-                                &connected.schema_foreign_keys,
-                                &connected.schema_routines,
-                                supports_routines,
-                                &connected.dependents_cache,
-                            )
-                        } else {
-                            Vec::new()
-                        }
-                    } else if db.is_current {
-                        if is_document_db {
-                            let tables = schema
-                                .collections()
-                                .iter()
-                                .filter(|collection| {
-                                    collection.database.as_deref().is_none()
-                                        || collection.database.as_deref() == Some(db.name.as_str())
-                                })
-                                .map(|collection| TableInfo {
-                                    name: collection.name.clone(),
-                                    schema: Some(db.name.clone()),
-                                    columns: None,
-                                    indexes: collection.indexes.clone().map(IndexData::Document),
-                                    foreign_keys: None,
-                                    constraints: None,
-                                    sample_fields: collection.sample_fields.clone(),
-                                    presentation: collection.presentation,
-                                    child_items: collection.child_items.clone(),
-                                })
-                                .collect::<Vec<_>>();
-
-                            let db_schema = dbflux_core::DbSchemaInfo {
-                                name: db.name.clone(),
-                                tables,
-                                views: Vec::new(),
-                                custom_types: None,
-                            };
-
-                            Self::build_document_db_content(
-                                profile_id,
-                                &db.name,
-                                &db_schema,
-                                &connected.table_details,
-                                &connected.collection_children,
-                                conn_capabilities,
-                                conn_category,
-                                Some(&metric_cache),
-                                metric_fetch_errors,
-                            )
-                        } else if is_time_series_db {
-                            // InfluxDB uses SingleDatabase loading: the connection-level
-                            // schema already contains all measurements for this bucket.
-                            Self::build_time_series_db_content(profile_id, &db.name, schema)
-                        } else {
-                            Self::build_schema_children(
-                                profile_id,
-                                &db.name,
-                                Some(&db.name),
-                                schema,
-                                &connected.table_details,
-                                &connected.schema_types,
-                                &connected.schema_indexes,
-                                &connected.schema_foreign_keys,
-                                &connected.schema_routines,
-                                supports_routines,
-                                &connected.dependents_cache,
-                            )
-                        }
-                    } else if is_pending {
-                        vec![TreeItem::new(
-                            SchemaNodeId::Loading {
-                                profile_id,
-                                database: db.name.clone(),
-                            }
-                            .to_string(),
-                            "Loading...".to_string(),
-                        )]
-                    } else {
-                        Vec::new()
-                    };
-
-                    if collapse_single_db {
-                        profile_children.extend(db_children);
-                    } else {
-                        let db_label = if is_pending {
-                            format!("{} (loading...)", db.name)
-                        } else {
-                            db.name.clone()
-                        };
-
-                        let has_per_db_conn = connected.database_connections.contains_key(&db.name);
-                        let is_expanded = if uses_lazy_loading {
-                            is_active_db
-                        } else {
-                            db.is_current || has_per_db_conn
-                        };
-
-                        named_db_items.push(
-                            TreeItem::new(
-                                SchemaNodeId::Database {
-                                    profile_id,
-                                    name: db.name.clone(),
-                                }
-                                .to_string(),
-                                db_label,
-                            )
-                            .expanded(is_expanded)
-                            .children(db_children),
-                        );
+                if collapse_single_db {
+                    for db_item in named_items {
+                        profile_children.extend(db_item.children);
                     }
-                }
-
-                if !named_db_items.is_empty() {
-                    profile_children.push(Self::build_databases_folder_item(
-                        profile_id,
-                        named_db_items,
-                    ));
+                } else if !named_items.is_empty() {
+                    profile_children
+                        .push(Self::build_databases_folder_item(profile_id, named_items));
                 }
             } else {
                 // No databases defined - use active_database or first schema as fallback
@@ -553,34 +344,12 @@ impl Sidebar {
             // Instance overview, metrics, and inspectors — appended after databases.
             // Sidebar order: Instance Overview, Instance Metrics, Instance Inspectors.
             // Capability-gated; no driver_id branching.
-            let has_instance_metrics =
-                conn_capabilities.contains(DriverCapabilities::INSTANCE_METRICS);
-            let has_instance_inspector =
-                conn_capabilities.contains(DriverCapabilities::INSTANCE_INSPECTOR);
-
-            if has_instance_metrics || has_instance_inspector {
-                profile_children.push(Self::build_instance_overview_leaf(profile_id));
-            }
-
-            if has_instance_metrics {
-                let metric_children =
-                    Self::build_instance_metric_leaf_children(profile_id, instance_metrics_cache);
-                profile_children.push(Self::build_instance_metrics_folder_item(
-                    profile_id,
-                    metric_children,
-                ));
-            }
-
-            if has_instance_inspector {
-                let inspector_children = Self::build_instance_inspector_leaf_children(
-                    profile_id,
-                    instance_inspectors_cache,
-                );
-                profile_children.push(Self::build_instance_inspectors_folder_item(
-                    profile_id,
-                    inspector_children,
-                ));
-            }
+            profile_children.extend(build_instance_section(
+                profile_id,
+                conn_capabilities,
+                instance_metrics_cache,
+                instance_inspectors_cache,
+            ));
 
             profile_item = profile_item.expanded(is_active).children(profile_children);
         }
@@ -1075,129 +844,30 @@ impl Sidebar {
     ) -> Vec<TreeItem> {
         let mut content = Vec::new();
 
-        if !db_schema.tables.is_empty() {
-            let collection_children: Vec<TreeItem> = db_schema
-                .tables
-                .iter()
-                .map(|coll| {
-                    Self::build_collection_item(
-                        profile_id,
-                        database_name,
-                        coll,
-                        table_details,
-                        collection_children_cache,
-                    )
-                })
-                .collect();
-
-            content.push(
-                TreeItem::new(
-                    SchemaNodeId::CollectionsFolder {
-                        profile_id,
-                        database: database_name.to_string(),
-                    }
-                    .to_string(),
-                    format!("{} ({})", category.container_name(), db_schema.tables.len()),
-                )
-                .expanded(category.default_expand_container())
-                .children(collection_children),
-            );
+        if let Some(folder) = build_collections_folder(
+            profile_id,
+            database_name,
+            category,
+            db_schema,
+            table_details,
+            collection_children_cache,
+        ) {
+            content.push(folder);
         }
 
-        if capabilities.contains(DriverCapabilities::METRIC_CATALOG) {
-            let parent_id = SchemaNodeId::MetricsFolder {
-                profile_id,
-                database: database_name.to_string(),
-            }
-            .to_string();
-
-            let children = if let Some(err_msg) = metric_fetch_errors.get(&parent_id) {
-                let retry_id = format!("metrics-retry|{}|{}", profile_id, database_name);
-                vec![Self::error_retry_placeholder(&retry_id, err_msg)]
-            } else {
-                Self::build_metric_namespace_children(
-                    profile_id,
-                    database_name,
-                    metric_catalog_cache,
-                )
-            };
-
-            content.push(
-                TreeItem::new(parent_id, "Metrics".to_string())
-                    .expanded(false)
-                    .children(children),
-            );
+        if capabilities.contains(DriverCapabilities::METRIC_CATALOG)
+            && let Some(folder) =
+                build_metrics_folder(profile_id, database_name, metric_catalog_cache, metric_fetch_errors)
+        {
+            content.push(folder);
         }
 
-        let all_index_items: Vec<TreeItem> = db_schema
-            .tables
-            .iter()
-            .filter_map(|coll| {
-                let doc_indexes = match coll.indexes.as_ref()? {
-                    IndexData::Document(v) => v,
-                    IndexData::Relational(v) => {
-                        return Some(
-                            v.iter()
-                                .map(|idx| {
-                                    let unique_marker = if idx.is_unique { " UNIQUE" } else { "" };
-                                    let pk_marker = if idx.is_primary { " PK" } else { "" };
-                                    let cols = idx.columns.join(", ");
-                                    let label = format!(
-                                        "{}.{} ({}){}{}",
-                                        coll.name, idx.name, cols, unique_marker, pk_marker
-                                    );
-
-                                    TreeItem::new(
-                                        SchemaNodeId::CollectionIndex {
-                                            profile_id,
-                                            collection: coll.name.to_string(),
-                                            name: idx.name.clone(),
-                                        }
-                                        .to_string(),
-                                        label,
-                                    )
-                                })
-                                .collect::<Vec<_>>(),
-                        );
-                    }
-                };
-
-                Some(
-                    doc_indexes
-                        .iter()
-                        .map(|idx| {
-                            let label =
-                                format!("{}.{}", coll.name, format_collection_index_label(idx));
-
-                            TreeItem::new(
-                                SchemaNodeId::CollectionIndex {
-                                    profile_id,
-                                    collection: coll.name.to_string(),
-                                    name: idx.name.clone(),
-                                }
-                                .to_string(),
-                                label,
-                            )
-                        })
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .flatten()
-            .collect();
-
-        if !all_index_items.is_empty() {
-            content.push(
-                TreeItem::new(
-                    SchemaNodeId::DatabaseIndexesFolder {
-                        profile_id,
-                        database: database_name.to_string(),
-                    }
-                    .to_string(),
-                    format!("Indexes ({})", all_index_items.len()),
-                )
-                .expanded(false)
-                .children(all_index_items),
-            );
+        if let Some(folder) = build_db_collection_indexes_folder(
+            profile_id,
+            database_name,
+            &db_schema.tables,
+        ) {
+            content.push(folder);
         }
 
         content
@@ -1526,325 +1196,63 @@ impl Sidebar {
         let mut content = Vec::new();
         let schema_name = &db_schema.name;
 
-        if !db_schema.tables.is_empty() {
-            let table_children: Vec<TreeItem> = db_schema
-                .tables
-                .iter()
-                .map(|table| {
-                    let item_schema = table.schema.as_deref().unwrap_or(schema_name);
-                    Self::build_table_item(
-                        profile_id,
-                        target_database,
-                        item_schema,
-                        table,
-                        table_details,
-                        dependents_cache,
-                    )
-                })
-                .collect();
-
-            content.push(
-                TreeItem::new(
-                    SchemaNodeId::TablesFolder {
-                        profile_id,
-                        schema: schema_name.to_string(),
-                    }
-                    .to_string(),
-                    format!("Tables ({})", db_schema.tables.len()),
-                )
-                .expanded(true)
-                .children(table_children),
-            );
+        if let Some(folder) = build_schema_tables_folder(
+            profile_id,
+            schema_name,
+            target_database,
+            &db_schema.tables,
+            table_details,
+            dependents_cache,
+        ) {
+            content.push(folder);
         }
 
-        if !db_schema.views.is_empty() {
-            let view_children: Vec<TreeItem> = db_schema
-                .views
-                .iter()
-                .map(|view| {
-                    let item_schema = view.schema.as_deref().unwrap_or(schema_name);
-                    TreeItem::new(
-                        SchemaNodeId::View {
-                            profile_id,
-                            database: target_database.map(str::to_string),
-                            schema: item_schema.to_string(),
-                            name: view.name.clone(),
-                        }
-                        .to_string(),
-                        view.name.clone(),
-                    )
-                })
-                .collect();
-
-            content.push(
-                TreeItem::new(
-                    SchemaNodeId::ViewsFolder {
-                        profile_id,
-                        schema: schema_name.to_string(),
-                    }
-                    .to_string(),
-                    format!("Views ({})", db_schema.views.len()),
-                )
-                .expanded(true)
-                .children(view_children),
-            );
+        if let Some(folder) = build_schema_views_folder(
+            profile_id,
+            schema_name,
+            target_database,
+            &db_schema.views,
+        ) {
+            content.push(folder);
         }
 
-        // Custom types (enums, domains, composites) - check cache first, then db_schema
+        // Custom types: check cache first, then fall back to what the schema snapshot carries.
         let types_cache_key = SchemaCacheKey::new(database_name, Some(schema_name));
         let cached_types = schema_types.get(&types_cache_key);
+        let custom_types_opt = cached_types.or(db_schema.custom_types.as_ref());
 
-        let custom_types: Option<&Vec<CustomTypeInfo>> =
-            cached_types.or(db_schema.custom_types.as_ref());
-
-        // Item ID format: types_{profile_id}_{database}_{schema}
-        let types_item_id = SchemaNodeId::TypesFolder {
+        content.push(build_schema_types_folder(
             profile_id,
-            database: database_name.to_string(),
-            schema: schema_name.to_string(),
-        }
-        .to_string();
+            database_name,
+            schema_name,
+            custom_types_opt,
+        ));
 
-        if let Some(types) = custom_types {
-            if !types.is_empty() {
-                let type_children: Vec<TreeItem> = types
-                    .iter()
-                    .map(|t| {
-                        let item_schema = t.schema.as_deref().unwrap_or(schema_name);
-                        Self::build_custom_type_item(profile_id, item_schema, t)
-                    })
-                    .collect();
-
-                content.push(
-                    TreeItem::new(types_item_id, format!("Data Types ({})", types.len()))
-                        .expanded(false)
-                        .children(type_children),
-                );
-            } else {
-                // Types loaded but empty - show folder without count
-                content.push(
-                    TreeItem::new(types_item_id, "Data Types (0)".to_string())
-                        .expanded(false)
-                        .children(vec![]),
-                );
-            }
-        } else {
-            // Placeholder so chevron appears; fetch triggers on expand
-            let placeholder = TreeItem::new(
-                SchemaNodeId::TypesLoadingFolder {
-                    profile_id,
-                    database: database_name.to_string(),
-                    schema: schema_name.to_string(),
-                }
-                .to_string(),
-                "Loading...".to_string(),
-            );
-
-            content.push(
-                TreeItem::new(types_item_id, "Data Types".to_string())
-                    .expanded(false)
-                    .children(vec![placeholder]),
-            );
-        }
-
-        // Schema-level Indexes folder
         let indexes_cache_key = SchemaCacheKey::new(database_name, Some(schema_name));
-        let cached_indexes = schema_indexes.get(&indexes_cache_key);
-        let indexes_item_id = SchemaNodeId::SchemaIndexesFolder {
+        let indexes_opt = schema_indexes.get(&indexes_cache_key);
+        content.push(build_schema_indexes_folder(
             profile_id,
-            database: database_name.to_string(),
-            schema: schema_name.to_string(),
-        }
-        .to_string();
+            database_name,
+            schema_name,
+            indexes_opt,
+        ));
 
-        if let Some(indexes) = cached_indexes {
-            if !indexes.is_empty() {
-                let index_children: Vec<TreeItem> = indexes
-                    .iter()
-                    .map(|idx| {
-                        let unique_marker = if idx.is_unique { " UNIQUE" } else { "" };
-                        let pk_marker = if idx.is_primary { " PK" } else { "" };
-                        let label = format!(
-                            "{}.{} ({}){}{}",
-                            idx.table_name,
-                            idx.name,
-                            idx.columns.join(", "),
-                            unique_marker,
-                            pk_marker
-                        );
-                        TreeItem::new(
-                            SchemaNodeId::SchemaIndex {
-                                profile_id,
-                                schema: schema_name.to_string(),
-                                name: idx.name.clone(),
-                            }
-                            .to_string(),
-                            label,
-                        )
-                    })
-                    .collect();
-
-                content.push(
-                    TreeItem::new(indexes_item_id, format!("Indexes ({})", indexes.len()))
-                        .expanded(false)
-                        .children(index_children),
-                );
-            } else {
-                content.push(
-                    TreeItem::new(indexes_item_id, "Indexes (0)".to_string())
-                        .expanded(false)
-                        .children(vec![]),
-                );
-            }
-        } else {
-            let placeholder = TreeItem::new(
-                SchemaNodeId::SchemaIndexesLoadingFolder {
-                    profile_id,
-                    database: database_name.to_string(),
-                    schema: schema_name.to_string(),
-                }
-                .to_string(),
-                "Loading...".to_string(),
-            );
-
-            content.push(
-                TreeItem::new(indexes_item_id, "Indexes".to_string())
-                    .expanded(false)
-                    .children(vec![placeholder]),
-            );
-        }
-
-        // Schema-level Foreign Keys folder
         let fks_cache_key = SchemaCacheKey::new(database_name, Some(schema_name));
-        let cached_fks = schema_foreign_keys.get(&fks_cache_key);
-        let fks_item_id = SchemaNodeId::SchemaForeignKeysFolder {
+        let fks_opt = schema_foreign_keys.get(&fks_cache_key);
+        content.push(build_schema_fks_folder(
             profile_id,
-            database: database_name.to_string(),
-            schema: schema_name.to_string(),
-        }
-        .to_string();
+            database_name,
+            schema_name,
+            fks_opt,
+        ));
 
-        if let Some(fks) = cached_fks {
-            if !fks.is_empty() {
-                let fk_children: Vec<TreeItem> = fks
-                    .iter()
-                    .map(|fk| {
-                        let ref_table = if let Some(ref schema) = fk.referenced_schema {
-                            format!("{}.{}", schema, fk.referenced_table)
-                        } else {
-                            fk.referenced_table.clone()
-                        };
-                        let label = format!(
-                            "{}.{} -> {}",
-                            fk.table_name,
-                            fk.columns.join(", "),
-                            ref_table
-                        );
-                        TreeItem::new(
-                            SchemaNodeId::SchemaForeignKey {
-                                profile_id,
-                                schema: schema_name.to_string(),
-                                name: fk.name.clone(),
-                            }
-                            .to_string(),
-                            label,
-                        )
-                    })
-                    .collect();
-
-                content.push(
-                    TreeItem::new(fks_item_id, format!("Foreign Keys ({})", fks.len()))
-                        .expanded(false)
-                        .children(fk_children),
-                );
-            } else {
-                content.push(
-                    TreeItem::new(fks_item_id, "Foreign Keys (0)".to_string())
-                        .expanded(false)
-                        .children(vec![]),
-                );
-            }
-        } else {
-            let placeholder = TreeItem::new(
-                SchemaNodeId::SchemaForeignKeysLoadingFolder {
-                    profile_id,
-                    database: database_name.to_string(),
-                    schema: schema_name.to_string(),
-                }
-                .to_string(),
-                "Loading...".to_string(),
-            );
-
-            content.push(
-                TreeItem::new(fks_item_id, "Foreign Keys".to_string())
-                    .expanded(false)
-                    .children(vec![placeholder]),
-            );
-        }
-
-        // Schema-level Routines folder (gated on ROUTINES driver capability)
         if supports_routines {
             let routines_cache_key = SchemaCacheKey::new(database_name, Some(schema_name));
-            let cached_routines = schema_routines.get(&routines_cache_key);
-            let routines_item_id = SchemaNodeId::RoutinesFolder {
-                profile_id,
-                database: database_name.to_string(),
-                schema: schema_name.to_string(),
-            }
-            .to_string();
-
-            if let Some(routines) = cached_routines {
-                if !routines.is_empty() {
-                    let routine_children: Vec<TreeItem> = routines
-                        .iter()
-                        .map(|r| {
-                            let kind_label = match r.kind {
-                                dbflux_core::RoutineKind::Function => "fn",
-                                dbflux_core::RoutineKind::Procedure => "proc",
-                                dbflux_core::RoutineKind::Aggregate => "agg",
-                                dbflux_core::RoutineKind::Window => "win",
-                            };
-                            let label = format!("{} ({})", r.name, kind_label);
-                            TreeItem::new(
-                                SchemaNodeId::Routine {
-                                    profile_id,
-                                    schema: schema_name.to_string(),
-                                    specific_name: r.specific_name.clone(),
-                                }
-                                .to_string(),
-                                label,
-                            )
-                        })
-                        .collect();
-
-                    content.push(
-                        TreeItem::new(routines_item_id, format!("Routines ({})", routines.len()))
-                            .expanded(false)
-                            .children(routine_children),
-                    );
-                } else {
-                    content.push(
-                        TreeItem::new(routines_item_id, "Routines (0)".to_string())
-                            .expanded(false)
-                            .children(vec![]),
-                    );
-                }
-            } else {
-                let placeholder = TreeItem::new(
-                    SchemaNodeId::RoutinesLoadingFolder {
-                        profile_id,
-                        database: database_name.to_string(),
-                        schema: schema_name.to_string(),
-                    }
-                    .to_string(),
-                    "Loading...".to_string(),
-                );
-
-                content.push(
-                    TreeItem::new(routines_item_id, "Routines".to_string())
-                        .expanded(false)
-                        .children(vec![placeholder]),
-                );
+            let routines_opt = schema_routines.get(&routines_cache_key);
+            if let Some(folder) =
+                build_schema_routines_folder(profile_id, database_name, schema_name, routines_opt)
+            {
+                content.push(folder);
             }
         }
 
@@ -1931,128 +1339,37 @@ impl Sidebar {
             &[]
         };
 
-        let column_children: Vec<TreeItem> = columns
-            .iter()
-            .map(|col| {
-                let pk_marker = if col.is_primary_key { " PK" } else { "" };
-                let nullable = if col.nullable { "?" } else { "" };
-                let label = format!("{}: {}{}{}", col.name, col.type_name, nullable, pk_marker);
+        let column_children = build_table_column_children(profile_id, &table.name, columns);
 
-                TreeItem::new(
-                    SchemaNodeId::Column {
-                        profile_id,
-                        table: table.name.clone(),
-                        name: col.name.clone(),
-                    }
-                    .to_string(),
-                    label,
-                )
-            })
-            .collect();
-
-        let index_children: Vec<TreeItem> = if details_loaded {
-            match effective_table.indexes.as_ref() {
-                Some(IndexData::Relational(indexes)) => indexes
-                    .iter()
-                    .map(|idx| {
-                        let unique_marker = if idx.is_unique { " UNIQUE" } else { "" };
-                        let pk_marker = if idx.is_primary { " PK" } else { "" };
-                        let cols = idx.columns.join(", ");
-                        let label =
-                            format!("{} ({}){}{}", idx.name, cols, unique_marker, pk_marker);
-
-                        TreeItem::new(
-                            SchemaNodeId::Index {
-                                profile_id,
-                                table: table.name.clone(),
-                                name: idx.name.clone(),
-                            }
-                            .to_string(),
-                            label,
-                        )
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            }
+        let index_children = if details_loaded {
+            let indexes = match effective_table.indexes.as_ref() {
+                Some(IndexData::Relational(v)) => v.as_slice(),
+                _ => &[],
+            };
+            build_table_index_children(profile_id, &table.name, indexes)
         } else {
             Vec::new()
         };
 
-        let fk_children: Vec<TreeItem> = if details_loaded {
-            effective_table
-                .foreign_keys
-                .as_deref()
-                .unwrap_or(&[])
-                .iter()
-                .map(|fk| {
-                    let ref_table = if let Some(ref schema) = fk.referenced_schema {
-                        format!("{}.{}", schema, fk.referenced_table)
-                    } else {
-                        fk.referenced_table.clone()
-                    };
-
-                    let label = format!(
-                        "{} -> {}.{}",
-                        fk.columns.join(", "),
-                        ref_table,
-                        fk.referenced_columns.join(", ")
-                    );
-
-                    TreeItem::new(
-                        SchemaNodeId::ForeignKey {
-                            profile_id,
-                            table: table.name.clone(),
-                            name: fk.name.clone(),
-                        }
-                        .to_string(),
-                        label,
-                    )
-                })
-                .collect()
+        let fk_children = if details_loaded {
+            build_table_fk_children(
+                profile_id,
+                &table.name,
+                effective_table.foreign_keys.as_deref().unwrap_or(&[]),
+            )
         } else {
             Vec::new()
         };
 
-        let constraint_children: Vec<TreeItem> = if details_loaded {
-            effective_table
-                .constraints
-                .as_deref()
-                .unwrap_or(&[])
-                .iter()
-                .map(|c| {
-                    let kind_label = match c.kind {
-                        ConstraintKind::Check => "CHECK",
-                        ConstraintKind::Unique => "UNIQUE",
-                        ConstraintKind::Exclusion => "EXCLUDE",
-                    };
-
-                    let detail = if c.kind == ConstraintKind::Check {
-                        c.check_clause.as_deref().unwrap_or("")
-                    } else {
-                        &c.columns.join(", ")
-                    };
-
-                    let label = format!("{} {} ({})", c.name, kind_label, detail);
-
-                    TreeItem::new(
-                        SchemaNodeId::Constraint {
-                            profile_id,
-                            table: table.name.clone(),
-                            name: c.name.clone(),
-                        }
-                        .to_string(),
-                        label,
-                    )
-                })
-                .collect()
+        let constraint_children = if details_loaded {
+            build_table_constraint_children(
+                profile_id,
+                &table.name,
+                effective_table.constraints.as_deref().unwrap_or(&[]),
+            )
         } else {
             Vec::new()
         };
-
-        let column_count = column_children.len();
-        let index_count = index_children.len();
-        let fk_count = fk_children.len();
-        let constraint_count = constraint_children.len();
 
         // Lookup key must match the cache write path in populate_dependents.
         // The cache key mirrors `table_details`: (database-or-schema, table).
@@ -2065,104 +1382,24 @@ impl Sidebar {
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
 
-        let dependents_section: Option<TreeItem> = if !deps.is_empty() {
-            let dep_items: Vec<TreeItem> = deps
-                .iter()
-                .map(|dep| {
-                    let kind_label = match dep.kind {
-                        dbflux_core::RelationKind::View => "View",
-                        dbflux_core::RelationKind::MaterializedView => "Materialized View",
-                        dbflux_core::RelationKind::ForeignKeyChild => "FK Child",
-                        dbflux_core::RelationKind::Trigger => "Trigger",
-                    };
-                    let label = format!("{} ({})", dep.qualified_name, kind_label);
-
-                    TreeItem::new(
-                        SchemaNodeId::DependentItem {
-                            profile_id,
-                            schema: schema_name.to_string(),
-                            table: table.name.clone(),
-                            name: dep.qualified_name.clone(),
-                        }
-                        .to_string(),
-                        label,
-                    )
-                })
-                .collect();
-
-            Some(
-                TreeItem::new(
-                    SchemaNodeId::DependentsFolder {
-                        profile_id,
-                        schema: schema_name.to_string(),
-                        table: table.name.clone(),
-                    }
-                    .to_string(),
-                    format!("Used by {} objects", deps.len()),
-                )
-                .expanded(false)
-                .children(dep_items),
-            )
-        } else {
-            None
-        };
-
-        let columns_folder_id = SchemaNodeId::ColumnsFolder {
+        let dependents_folder = build_table_dependents_folder(
             profile_id,
-            schema: schema_name.to_string(),
-            table: table.name.clone(),
-        }
-        .to_string();
-        let indexes_folder_id = SchemaNodeId::IndexesFolder {
-            profile_id,
-            schema: schema_name.to_string(),
-            table: table.name.clone(),
-        }
-        .to_string();
-        let fks_folder_id = SchemaNodeId::ForeignKeysFolder {
-            profile_id,
-            schema: schema_name.to_string(),
-            table: table.name.clone(),
-        }
-        .to_string();
-        let constraints_folder_id = SchemaNodeId::ConstraintsFolder {
-            profile_id,
-            schema: schema_name.to_string(),
-            table: table.name.clone(),
-        }
-        .to_string();
+            schema_name,
+            &table.name,
+            deps,
+        );
 
-        // While table details are still loading we render a single Loading row
-        // directly under the table instead of four section folders with stale
-        // "(0)" counts. Once details land, the four sections appear with their
-        // real counts and children.
-        let mut table_sections = if details_loaded {
-            vec![
-                TreeItem::new(columns_folder_id, format!("Columns ({})", column_count))
-                    .expanded(false)
-                    .children(column_children),
-                TreeItem::new(indexes_folder_id, format!("Indexes ({})", index_count))
-                    .expanded(false)
-                    .children(index_children),
-                TreeItem::new(fks_folder_id, format!("Foreign Keys ({})", fk_count))
-                    .expanded(false)
-                    .children(fk_children),
-                TreeItem::new(
-                    constraints_folder_id,
-                    format!("Constraints ({})", constraint_count),
-                )
-                .expanded(false)
-                .children(constraint_children),
-            ]
-        } else {
-            let table_loading_id =
-                format!("T|{}|{}|{}_loading", profile_id, schema_name, table.name);
-            vec![TreeItem::new(table_loading_id, "Loading…".to_string())]
-        };
-
-        if let Some(dep_folder) = dependents_section {
-            table_sections.push(dep_folder);
-        }
+        let table_sections = build_table_sections(
+            profile_id,
+            schema_name,
+            &table.name,
+            details_loaded,
+            column_children,
+            index_children,
+            fk_children,
+            constraint_children,
+            dependents_folder,
+        );
 
         TreeItem::new(
             SchemaNodeId::Table {
@@ -2176,6 +1413,1056 @@ impl Sidebar {
         )
         .expanded(false)
         .children(table_sections)
+    }
+}
+
+fn build_kv_database_children(
+    profile_id: Uuid,
+    connected: &dbflux_core::ConnectedProfile,
+    state: &AppStateEntity,
+) -> Vec<TreeItem> {
+    let strategy = connected.connection.schema_loading_strategy();
+    let uses_lazy_loading = strategy == SchemaLoadingStrategy::LazyPerDatabase;
+
+    let Some(ref schema) = connected.schema else {
+        return Vec::new();
+    };
+
+    let mut database_names: Vec<String> = schema
+        .keyspaces()
+        .iter()
+        .map(|space| format!("db{}", space.db_index))
+        .collect();
+
+    if database_names.is_empty() {
+        if let Some(active_database) = connected.active_database.as_ref() {
+            database_names.push(active_database.clone());
+        } else {
+            database_names.push("db0".to_string());
+        }
+    }
+
+    let mut kv_db_items: Vec<TreeItem> = Vec::new();
+
+    for database_name in database_names {
+        let is_pending = state.is_operation_pending(profile_id, Some(&database_name));
+        let is_active_db = connected.active_database.as_deref() == Some(&database_name);
+
+        let db_children = if is_pending {
+            vec![TreeItem::new(
+                SchemaNodeId::Loading {
+                    profile_id,
+                    database: database_name.clone(),
+                }
+                .to_string(),
+                "Loading...".to_string(),
+            )]
+        } else {
+            Vec::new()
+        };
+
+        let db_label = if is_pending {
+            format!("{} (loading...)", database_name)
+        } else {
+            database_name.clone()
+        };
+
+        kv_db_items.push(
+            TreeItem::new(
+                SchemaNodeId::Database {
+                    profile_id,
+                    name: database_name,
+                }
+                .to_string(),
+                db_label,
+            )
+            .expanded(uses_lazy_loading && is_active_db)
+            .children(db_children),
+        );
+    }
+
+    kv_db_items
+}
+
+/// Build the per-database `TreeItem` nodes for a named-database connection.
+///
+/// Returns one item per database, each carrying the correct children based on
+/// loading strategy and driver type. The three-way dispatch
+/// (document / time-series / relational) stays here per the design decision
+/// "Keep three-way schema dispatch inside build_named_db_children".
+///
+/// The caller is responsible for deciding whether to wrap these in a
+/// `DatabasesFolder` or to flatten their children directly into the profile
+/// when `should_collapse_database_wrapper` returns true.
+#[allow(clippy::too_many_arguments)]
+fn build_named_db_children(
+    profile_id: Uuid,
+    connected: &dbflux_core::ConnectedProfile,
+    state: &AppStateEntity,
+    schema: &dbflux_core::SchemaSnapshot,
+    conn_capabilities: DriverCapabilities,
+    conn_category: dbflux_core::DatabaseCategory,
+    metric_cache: &dbflux_app::MetricCatalogCache,
+    metric_fetch_errors: &HashMap<String, String>,
+    supports_routines: bool,
+    is_document_db: bool,
+    is_time_series_db: bool,
+    uses_lazy_loading: bool,
+) -> Vec<TreeItem> {
+    let mut named_db_items: Vec<TreeItem> = Vec::new();
+
+    for db in schema.databases() {
+        let is_pending = state.is_operation_pending(profile_id, Some(&db.name));
+        let is_active_db = connected.active_database.as_deref() == Some(&db.name);
+
+        let db_children = if uses_lazy_loading {
+            if let Some(db_schema) = connected.database_schemas.get(&db.name) {
+                if is_document_db {
+                    Sidebar::build_document_db_content(
+                        profile_id,
+                        &db.name,
+                        db_schema,
+                        &connected.table_details,
+                        &connected.collection_children,
+                        conn_capabilities,
+                        conn_category,
+                        Some(metric_cache),
+                        metric_fetch_errors,
+                    )
+                } else if is_time_series_db {
+                    // Time-series lazy schemas are stored in database_schemas
+                    // as a DbSchemaInfo whose tables carry measurement names.
+                    // Route through the time-series builder the same way document
+                    // databases route through build_document_db_content.
+                    Sidebar::build_time_series_db_content(profile_id, &db.name, schema)
+                } else {
+                    Sidebar::build_db_schema_content(
+                        profile_id,
+                        &db.name,
+                        None,
+                        db_schema,
+                        &connected.table_details,
+                        &connected.schema_types,
+                        &connected.schema_indexes,
+                        &connected.schema_foreign_keys,
+                        &connected.schema_routines,
+                        supports_routines,
+                        &connected.dependents_cache,
+                    )
+                }
+            } else if is_pending {
+                vec![TreeItem::new(
+                    SchemaNodeId::Loading {
+                        profile_id,
+                        database: db.name.clone(),
+                    }
+                    .to_string(),
+                    "Loading...".to_string(),
+                )]
+            } else {
+                Vec::new()
+            }
+        } else if let Some(db_conn) = connected.database_connections.get(&db.name) {
+            if let Some(ref db_schema) = db_conn.schema {
+                Sidebar::build_schema_children(
+                    profile_id,
+                    &db.name,
+                    Some(&db.name),
+                    db_schema,
+                    &connected.table_details,
+                    &connected.schema_types,
+                    &connected.schema_indexes,
+                    &connected.schema_foreign_keys,
+                    &connected.schema_routines,
+                    supports_routines,
+                    &connected.dependents_cache,
+                )
+            } else {
+                Vec::new()
+            }
+        } else if db.is_current {
+            if is_document_db {
+                let tables = schema
+                    .collections()
+                    .iter()
+                    .filter(|collection| {
+                        collection.database.as_deref().is_none()
+                            || collection.database.as_deref() == Some(db.name.as_str())
+                    })
+                    .map(|collection| TableInfo {
+                        name: collection.name.clone(),
+                        schema: Some(db.name.clone()),
+                        columns: None,
+                        indexes: collection.indexes.clone().map(IndexData::Document),
+                        foreign_keys: None,
+                        constraints: None,
+                        sample_fields: collection.sample_fields.clone(),
+                        presentation: collection.presentation,
+                        child_items: collection.child_items.clone(),
+                    })
+                    .collect::<Vec<_>>();
+
+                let db_schema = dbflux_core::DbSchemaInfo {
+                    name: db.name.clone(),
+                    tables,
+                    views: Vec::new(),
+                    custom_types: None,
+                };
+
+                Sidebar::build_document_db_content(
+                    profile_id,
+                    &db.name,
+                    &db_schema,
+                    &connected.table_details,
+                    &connected.collection_children,
+                    conn_capabilities,
+                    conn_category,
+                    Some(metric_cache),
+                    metric_fetch_errors,
+                )
+            } else if is_time_series_db {
+                // InfluxDB uses SingleDatabase loading: the connection-level
+                // schema already contains all measurements for this bucket.
+                Sidebar::build_time_series_db_content(profile_id, &db.name, schema)
+            } else {
+                Sidebar::build_schema_children(
+                    profile_id,
+                    &db.name,
+                    Some(&db.name),
+                    schema,
+                    &connected.table_details,
+                    &connected.schema_types,
+                    &connected.schema_indexes,
+                    &connected.schema_foreign_keys,
+                    &connected.schema_routines,
+                    supports_routines,
+                    &connected.dependents_cache,
+                )
+            }
+        } else if is_pending {
+            vec![TreeItem::new(
+                SchemaNodeId::Loading {
+                    profile_id,
+                    database: db.name.clone(),
+                }
+                .to_string(),
+                "Loading...".to_string(),
+            )]
+        } else {
+            Vec::new()
+        };
+
+        let db_label = if is_pending {
+            format!("{} (loading...)", db.name)
+        } else {
+            db.name.clone()
+        };
+
+        let has_per_db_conn = connected.database_connections.contains_key(&db.name);
+        let is_expanded = if uses_lazy_loading {
+            is_active_db
+        } else {
+            db.is_current || has_per_db_conn
+        };
+
+        named_db_items.push(
+            TreeItem::new(
+                SchemaNodeId::Database {
+                    profile_id,
+                    name: db.name.clone(),
+                }
+                .to_string(),
+                db_label,
+            )
+            .expanded(is_expanded)
+            .children(db_children),
+        );
+    }
+
+    named_db_items
+}
+
+/// Build the instance overview leaf and any instance metric / inspector folder
+/// items for a connected profile.
+///
+/// Returns an empty vec when the driver advertises neither `INSTANCE_METRICS`
+/// nor `INSTANCE_INSPECTOR`. The caller appends these items after the databases
+/// section.
+fn build_instance_section(
+    profile_id: Uuid,
+    conn_capabilities: DriverCapabilities,
+    instance_metrics_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>>,
+    instance_inspectors_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>>,
+) -> Vec<TreeItem> {
+    let has_instance_metrics = conn_capabilities.contains(DriverCapabilities::INSTANCE_METRICS);
+    let has_instance_inspector = conn_capabilities.contains(DriverCapabilities::INSTANCE_INSPECTOR);
+
+    if !has_instance_metrics && !has_instance_inspector {
+        return Vec::new();
+    }
+
+    let mut items = Vec::new();
+
+    items.push(Sidebar::build_instance_overview_leaf(profile_id));
+
+    if has_instance_metrics {
+        let metric_children =
+            Sidebar::build_instance_metric_leaf_children(profile_id, instance_metrics_cache);
+        items.push(Sidebar::build_instance_metrics_folder_item(
+            profile_id,
+            metric_children,
+        ));
+    }
+
+    if has_instance_inspector {
+        let inspector_children =
+            Sidebar::build_instance_inspector_leaf_children(profile_id, instance_inspectors_cache);
+        items.push(Sidebar::build_instance_inspectors_folder_item(
+            profile_id,
+            inspector_children,
+        ));
+    }
+
+    items
+}
+
+fn build_collections_folder(
+    profile_id: Uuid,
+    database_name: &str,
+    category: dbflux_core::DatabaseCategory,
+    db_schema: &dbflux_core::DbSchemaInfo,
+    table_details: &HashMap<(String, String), TableInfo>,
+    collection_children_cache: &HashMap<(String, String), dbflux_core::CollectionChildrenCache>,
+) -> Option<TreeItem> {
+    if db_schema.tables.is_empty() {
+        return None;
+    }
+
+    let collection_children: Vec<TreeItem> = db_schema
+        .tables
+        .iter()
+        .map(|coll| {
+            Sidebar::build_collection_item(
+                profile_id,
+                database_name,
+                coll,
+                table_details,
+                collection_children_cache,
+            )
+        })
+        .collect();
+
+    Some(
+        TreeItem::new(
+            SchemaNodeId::CollectionsFolder {
+                profile_id,
+                database: database_name.to_string(),
+            }
+            .to_string(),
+            format!("{} ({})", category.container_name(), db_schema.tables.len()),
+        )
+        .expanded(category.default_expand_container())
+        .children(collection_children),
+    )
+}
+
+fn build_metrics_folder(
+    profile_id: Uuid,
+    database_name: &str,
+    metric_catalog_cache: Option<&dbflux_app::MetricCatalogCache>,
+    metric_fetch_errors: &HashMap<String, String>,
+) -> Option<TreeItem> {
+    let parent_id = SchemaNodeId::MetricsFolder {
+        profile_id,
+        database: database_name.to_string(),
+    }
+    .to_string();
+
+    let children = if let Some(err_msg) = metric_fetch_errors.get(&parent_id) {
+        let retry_id = format!("metrics-retry|{}|{}", profile_id, database_name);
+        vec![Sidebar::error_retry_placeholder(&retry_id, err_msg)]
+    } else {
+        Sidebar::build_metric_namespace_children(profile_id, database_name, metric_catalog_cache)
+    };
+
+    Some(
+        TreeItem::new(parent_id, "Metrics".to_string())
+            .expanded(false)
+            .children(children),
+    )
+}
+
+fn build_db_collection_indexes_folder(
+    profile_id: Uuid,
+    database_name: &str,
+    tables: &[TableInfo],
+) -> Option<TreeItem> {
+    let all_index_items: Vec<TreeItem> = tables
+        .iter()
+        .filter_map(|coll| {
+            let doc_indexes = match coll.indexes.as_ref()? {
+                IndexData::Document(v) => v,
+                IndexData::Relational(v) => {
+                    return Some(
+                        v.iter()
+                            .map(|idx| {
+                                let unique_marker = if idx.is_unique { " UNIQUE" } else { "" };
+                                let pk_marker = if idx.is_primary { " PK" } else { "" };
+                                let cols = idx.columns.join(", ");
+                                let label = format!(
+                                    "{}.{} ({}){}{}",
+                                    coll.name, idx.name, cols, unique_marker, pk_marker
+                                );
+                                TreeItem::new(
+                                    SchemaNodeId::CollectionIndex {
+                                        profile_id,
+                                        collection: coll.name.to_string(),
+                                        name: idx.name.clone(),
+                                    }
+                                    .to_string(),
+                                    label,
+                                )
+                            })
+                            .collect::<Vec<_>>(),
+                    );
+                }
+            };
+
+            Some(
+                doc_indexes
+                    .iter()
+                    .map(|idx| {
+                        let label =
+                            format!("{}.{}", coll.name, format_collection_index_label(idx));
+                        TreeItem::new(
+                            SchemaNodeId::CollectionIndex {
+                                profile_id,
+                                collection: coll.name.to_string(),
+                                name: idx.name.clone(),
+                            }
+                            .to_string(),
+                            label,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .flatten()
+        .collect();
+
+    if all_index_items.is_empty() {
+        return None;
+    }
+
+    Some(
+        TreeItem::new(
+            SchemaNodeId::DatabaseIndexesFolder {
+                profile_id,
+                database: database_name.to_string(),
+            }
+            .to_string(),
+            format!("Indexes ({})", all_index_items.len()),
+        )
+        .expanded(false)
+        .children(all_index_items),
+    )
+}
+
+fn build_table_column_children(
+    profile_id: Uuid,
+    table_name: &str,
+    columns: &[dbflux_core::ColumnInfo],
+) -> Vec<TreeItem> {
+    columns
+        .iter()
+        .map(|col| {
+            let pk_marker = if col.is_primary_key { " PK" } else { "" };
+            let nullable = if col.nullable { "?" } else { "" };
+            let label = format!("{}: {}{}{}", col.name, col.type_name, nullable, pk_marker);
+
+            TreeItem::new(
+                SchemaNodeId::Column {
+                    profile_id,
+                    table: table_name.to_string(),
+                    name: col.name.clone(),
+                }
+                .to_string(),
+                label,
+            )
+        })
+        .collect()
+}
+
+fn build_table_index_children(
+    profile_id: Uuid,
+    table_name: &str,
+    indexes: &[dbflux_core::IndexInfo],
+) -> Vec<TreeItem> {
+    indexes
+        .iter()
+        .map(|idx| {
+            let unique_marker = if idx.is_unique { " UNIQUE" } else { "" };
+            let pk_marker = if idx.is_primary { " PK" } else { "" };
+            let cols = idx.columns.join(", ");
+            let label = format!("{} ({}){}{}", idx.name, cols, unique_marker, pk_marker);
+
+            TreeItem::new(
+                SchemaNodeId::Index {
+                    profile_id,
+                    table: table_name.to_string(),
+                    name: idx.name.clone(),
+                }
+                .to_string(),
+                label,
+            )
+        })
+        .collect()
+}
+
+fn build_table_fk_children(
+    profile_id: Uuid,
+    table_name: &str,
+    fks: &[dbflux_core::ForeignKeyInfo],
+) -> Vec<TreeItem> {
+    fks.iter()
+        .map(|fk| {
+            let ref_table = if let Some(ref schema) = fk.referenced_schema {
+                format!("{}.{}", schema, fk.referenced_table)
+            } else {
+                fk.referenced_table.clone()
+            };
+
+            let label = format!(
+                "{} -> {}.{}",
+                fk.columns.join(", "),
+                ref_table,
+                fk.referenced_columns.join(", ")
+            );
+
+            TreeItem::new(
+                SchemaNodeId::ForeignKey {
+                    profile_id,
+                    table: table_name.to_string(),
+                    name: fk.name.clone(),
+                }
+                .to_string(),
+                label,
+            )
+        })
+        .collect()
+}
+
+fn build_table_constraint_children(
+    profile_id: Uuid,
+    table_name: &str,
+    constraints: &[dbflux_core::ConstraintInfo],
+) -> Vec<TreeItem> {
+    constraints
+        .iter()
+        .map(|c| {
+            let kind_label = match c.kind {
+                ConstraintKind::Check => "CHECK",
+                ConstraintKind::Unique => "UNIQUE",
+                ConstraintKind::Exclusion => "EXCLUDE",
+            };
+
+            let detail = if c.kind == ConstraintKind::Check {
+                c.check_clause.as_deref().unwrap_or("")
+            } else {
+                &c.columns.join(", ")
+            };
+
+            let label = format!("{} {} ({})", c.name, kind_label, detail);
+
+            TreeItem::new(
+                SchemaNodeId::Constraint {
+                    profile_id,
+                    table: table_name.to_string(),
+                    name: c.name.clone(),
+                }
+                .to_string(),
+                label,
+            )
+        })
+        .collect()
+}
+
+fn build_table_dependents_folder(
+    profile_id: Uuid,
+    schema_name: &str,
+    table_name: &str,
+    deps: &[RelationRef],
+) -> Option<TreeItem> {
+    if deps.is_empty() {
+        return None;
+    }
+
+    let dep_items: Vec<TreeItem> = deps
+        .iter()
+        .map(|dep| {
+            let kind_label = match dep.kind {
+                dbflux_core::RelationKind::View => "View",
+                dbflux_core::RelationKind::MaterializedView => "Materialized View",
+                dbflux_core::RelationKind::ForeignKeyChild => "FK Child",
+                dbflux_core::RelationKind::Trigger => "Trigger",
+            };
+            let label = format!("{} ({})", dep.qualified_name, kind_label);
+
+            TreeItem::new(
+                SchemaNodeId::DependentItem {
+                    profile_id,
+                    schema: schema_name.to_string(),
+                    table: table_name.to_string(),
+                    name: dep.qualified_name.clone(),
+                }
+                .to_string(),
+                label,
+            )
+        })
+        .collect();
+
+    Some(
+        TreeItem::new(
+            SchemaNodeId::DependentsFolder {
+                profile_id,
+                schema: schema_name.to_string(),
+                table: table_name.to_string(),
+            }
+            .to_string(),
+            format!("Used by {} objects", deps.len()),
+        )
+        .expanded(false)
+        .children(dep_items),
+    )
+}
+
+/// Assemble the section folder children for a table node.
+///
+/// When `details_loaded` is false, emits a single "Loading…" placeholder
+/// instead of four empty section folders. Once details are available the four
+/// folders (Columns, Indexes, Foreign Keys, Constraints) appear with their
+/// real counts; the optional dependents folder is appended last.
+#[allow(clippy::too_many_arguments)]
+fn build_table_sections(
+    profile_id: Uuid,
+    schema_name: &str,
+    table_name: &str,
+    details_loaded: bool,
+    column_children: Vec<TreeItem>,
+    index_children: Vec<TreeItem>,
+    fk_children: Vec<TreeItem>,
+    constraint_children: Vec<TreeItem>,
+    dependents_folder: Option<TreeItem>,
+) -> Vec<TreeItem> {
+    let mut sections = if details_loaded {
+        let columns_folder_id = SchemaNodeId::ColumnsFolder {
+            profile_id,
+            schema: schema_name.to_string(),
+            table: table_name.to_string(),
+        }
+        .to_string();
+        let indexes_folder_id = SchemaNodeId::IndexesFolder {
+            profile_id,
+            schema: schema_name.to_string(),
+            table: table_name.to_string(),
+        }
+        .to_string();
+        let fks_folder_id = SchemaNodeId::ForeignKeysFolder {
+            profile_id,
+            schema: schema_name.to_string(),
+            table: table_name.to_string(),
+        }
+        .to_string();
+        let constraints_folder_id = SchemaNodeId::ConstraintsFolder {
+            profile_id,
+            schema: schema_name.to_string(),
+            table: table_name.to_string(),
+        }
+        .to_string();
+
+        vec![
+            TreeItem::new(
+                columns_folder_id,
+                format!("Columns ({})", column_children.len()),
+            )
+            .expanded(false)
+            .children(column_children),
+            TreeItem::new(
+                indexes_folder_id,
+                format!("Indexes ({})", index_children.len()),
+            )
+            .expanded(false)
+            .children(index_children),
+            TreeItem::new(
+                fks_folder_id,
+                format!("Foreign Keys ({})", fk_children.len()),
+            )
+            .expanded(false)
+            .children(fk_children),
+            TreeItem::new(
+                constraints_folder_id,
+                format!("Constraints ({})", constraint_children.len()),
+            )
+            .expanded(false)
+            .children(constraint_children),
+        ]
+    } else {
+        let table_loading_id = format!("T|{}|{}|{}_loading", profile_id, schema_name, table_name);
+        vec![TreeItem::new(table_loading_id, "Loading…".to_string())]
+    };
+
+    if let Some(dep_folder) = dependents_folder {
+        sections.push(dep_folder);
+    }
+
+    sections
+}
+
+fn build_schema_tables_folder(
+    profile_id: Uuid,
+    schema_name: &str,
+    target_database: Option<&str>,
+    tables: &[TableInfo],
+    table_details: &HashMap<(String, String), TableInfo>,
+    dependents_cache: &HashMap<(String, String), Vec<RelationRef>>,
+) -> Option<TreeItem> {
+    if tables.is_empty() {
+        return None;
+    }
+
+    let table_children: Vec<TreeItem> = tables
+        .iter()
+        .map(|table| {
+            let item_schema = table.schema.as_deref().unwrap_or(schema_name);
+            Sidebar::build_table_item(
+                profile_id,
+                target_database,
+                item_schema,
+                table,
+                table_details,
+                dependents_cache,
+            )
+        })
+        .collect();
+
+    Some(
+        TreeItem::new(
+            SchemaNodeId::TablesFolder {
+                profile_id,
+                schema: schema_name.to_string(),
+            }
+            .to_string(),
+            format!("Tables ({})", tables.len()),
+        )
+        .expanded(true)
+        .children(table_children),
+    )
+}
+
+fn build_schema_views_folder(
+    profile_id: Uuid,
+    schema_name: &str,
+    target_database: Option<&str>,
+    views: &[ViewInfo],
+) -> Option<TreeItem> {
+    if views.is_empty() {
+        return None;
+    }
+
+    let view_children: Vec<TreeItem> = views
+        .iter()
+        .map(|view| {
+            let item_schema = view.schema.as_deref().unwrap_or(schema_name);
+            TreeItem::new(
+                SchemaNodeId::View {
+                    profile_id,
+                    database: target_database.map(str::to_string),
+                    schema: item_schema.to_string(),
+                    name: view.name.clone(),
+                }
+                .to_string(),
+                view.name.clone(),
+            )
+        })
+        .collect();
+
+    Some(
+        TreeItem::new(
+            SchemaNodeId::ViewsFolder {
+                profile_id,
+                schema: schema_name.to_string(),
+            }
+            .to_string(),
+            format!("Views ({})", views.len()),
+        )
+        .expanded(true)
+        .children(view_children),
+    )
+}
+
+/// Build the Data Types folder for a schema node.
+///
+/// Always emits a `TreeItem` (three-state): a populated folder when types are
+/// loaded and non-empty, an empty `(0)` folder when loaded but empty, or a
+/// folder with a loading placeholder when `custom_types_opt` is `None`.
+///
+/// The caller is responsible for merging the cache lookup with the schema
+/// snapshot value before calling: `cached_types.or(db_schema.custom_types.as_ref())`.
+fn build_schema_types_folder(
+    profile_id: Uuid,
+    database_name: &str,
+    schema_name: &str,
+    custom_types_opt: Option<&Vec<CustomTypeInfo>>,
+) -> TreeItem {
+    let types_item_id = SchemaNodeId::TypesFolder {
+        profile_id,
+        database: database_name.to_string(),
+        schema: schema_name.to_string(),
+    }
+    .to_string();
+
+    if let Some(types) = custom_types_opt {
+        if !types.is_empty() {
+            let type_children: Vec<TreeItem> = types
+                .iter()
+                .map(|t| {
+                    let item_schema = t.schema.as_deref().unwrap_or(schema_name);
+                    Sidebar::build_custom_type_item(profile_id, item_schema, t)
+                })
+                .collect();
+
+            TreeItem::new(types_item_id, format!("Data Types ({})", types.len()))
+                .expanded(false)
+                .children(type_children)
+        } else {
+            TreeItem::new(types_item_id, "Data Types (0)".to_string())
+                .expanded(false)
+                .children(vec![])
+        }
+    } else {
+        let placeholder = TreeItem::new(
+            SchemaNodeId::TypesLoadingFolder {
+                profile_id,
+                database: database_name.to_string(),
+                schema: schema_name.to_string(),
+            }
+            .to_string(),
+            "Loading...".to_string(),
+        );
+
+        TreeItem::new(types_item_id, "Data Types".to_string())
+            .expanded(false)
+            .children(vec![placeholder])
+    }
+}
+
+/// Build the schema-level Indexes folder.
+///
+/// Always emits a `TreeItem` (three-state): populated, empty `(0)`, or loading.
+fn build_schema_indexes_folder(
+    profile_id: Uuid,
+    database_name: &str,
+    schema_name: &str,
+    indexes_opt: Option<&Vec<SchemaIndexInfo>>,
+) -> TreeItem {
+    let item_id = SchemaNodeId::SchemaIndexesFolder {
+        profile_id,
+        database: database_name.to_string(),
+        schema: schema_name.to_string(),
+    }
+    .to_string();
+
+    if let Some(indexes) = indexes_opt {
+        if !indexes.is_empty() {
+            let index_children: Vec<TreeItem> = indexes
+                .iter()
+                .map(|idx| {
+                    let unique_marker = if idx.is_unique { " UNIQUE" } else { "" };
+                    let pk_marker = if idx.is_primary { " PK" } else { "" };
+                    let label = format!(
+                        "{}.{} ({}){}{}",
+                        idx.table_name,
+                        idx.name,
+                        idx.columns.join(", "),
+                        unique_marker,
+                        pk_marker
+                    );
+                    TreeItem::new(
+                        SchemaNodeId::SchemaIndex {
+                            profile_id,
+                            schema: schema_name.to_string(),
+                            name: idx.name.clone(),
+                        }
+                        .to_string(),
+                        label,
+                    )
+                })
+                .collect();
+
+            TreeItem::new(item_id, format!("Indexes ({})", indexes.len()))
+                .expanded(false)
+                .children(index_children)
+        } else {
+            TreeItem::new(item_id, "Indexes (0)".to_string())
+                .expanded(false)
+                .children(vec![])
+        }
+    } else {
+        let placeholder = TreeItem::new(
+            SchemaNodeId::SchemaIndexesLoadingFolder {
+                profile_id,
+                database: database_name.to_string(),
+                schema: schema_name.to_string(),
+            }
+            .to_string(),
+            "Loading...".to_string(),
+        );
+
+        TreeItem::new(item_id, "Indexes".to_string())
+            .expanded(false)
+            .children(vec![placeholder])
+    }
+}
+
+/// Build the schema-level Foreign Keys folder.
+///
+/// Always emits a `TreeItem` (three-state): populated, empty `(0)`, or loading.
+fn build_schema_fks_folder(
+    profile_id: Uuid,
+    database_name: &str,
+    schema_name: &str,
+    fks_opt: Option<&Vec<SchemaForeignKeyInfo>>,
+) -> TreeItem {
+    let item_id = SchemaNodeId::SchemaForeignKeysFolder {
+        profile_id,
+        database: database_name.to_string(),
+        schema: schema_name.to_string(),
+    }
+    .to_string();
+
+    if let Some(fks) = fks_opt {
+        if !fks.is_empty() {
+            let fk_children: Vec<TreeItem> = fks
+                .iter()
+                .map(|fk| {
+                    let ref_table = if let Some(ref schema) = fk.referenced_schema {
+                        format!("{}.{}", schema, fk.referenced_table)
+                    } else {
+                        fk.referenced_table.clone()
+                    };
+                    let label = format!(
+                        "{}.{} -> {}",
+                        fk.table_name,
+                        fk.columns.join(", "),
+                        ref_table
+                    );
+                    TreeItem::new(
+                        SchemaNodeId::SchemaForeignKey {
+                            profile_id,
+                            schema: schema_name.to_string(),
+                            name: fk.name.clone(),
+                        }
+                        .to_string(),
+                        label,
+                    )
+                })
+                .collect();
+
+            TreeItem::new(item_id, format!("Foreign Keys ({})", fks.len()))
+                .expanded(false)
+                .children(fk_children)
+        } else {
+            TreeItem::new(item_id, "Foreign Keys (0)".to_string())
+                .expanded(false)
+                .children(vec![])
+        }
+    } else {
+        let placeholder = TreeItem::new(
+            SchemaNodeId::SchemaForeignKeysLoadingFolder {
+                profile_id,
+                database: database_name.to_string(),
+                schema: schema_name.to_string(),
+            }
+            .to_string(),
+            "Loading...".to_string(),
+        );
+
+        TreeItem::new(item_id, "Foreign Keys".to_string())
+            .expanded(false)
+            .children(vec![placeholder])
+    }
+}
+
+/// Build the schema-level Routines folder.
+///
+/// Returns `None` when `routines_opt` is `None` and the caller has not yet
+/// confirmed `supports_routines`; the caller gates this on the capability flag.
+/// When the cache entry is present but empty, emits an empty `(0)` folder.
+fn build_schema_routines_folder(
+    profile_id: Uuid,
+    database_name: &str,
+    schema_name: &str,
+    routines_opt: Option<&Vec<RoutineInfo>>,
+) -> Option<TreeItem> {
+    let item_id = SchemaNodeId::RoutinesFolder {
+        profile_id,
+        database: database_name.to_string(),
+        schema: schema_name.to_string(),
+    }
+    .to_string();
+
+    if let Some(routines) = routines_opt {
+        if !routines.is_empty() {
+            let routine_children: Vec<TreeItem> = routines
+                .iter()
+                .map(|r| {
+                    let kind_label = match r.kind {
+                        dbflux_core::RoutineKind::Function => "fn",
+                        dbflux_core::RoutineKind::Procedure => "proc",
+                        dbflux_core::RoutineKind::Aggregate => "agg",
+                        dbflux_core::RoutineKind::Window => "win",
+                    };
+                    let label = format!("{} ({})", r.name, kind_label);
+                    TreeItem::new(
+                        SchemaNodeId::Routine {
+                            profile_id,
+                            schema: schema_name.to_string(),
+                            specific_name: r.specific_name.clone(),
+                        }
+                        .to_string(),
+                        label,
+                    )
+                })
+                .collect();
+
+            Some(
+                TreeItem::new(item_id, format!("Routines ({})", routines.len()))
+                    .expanded(false)
+                    .children(routine_children),
+            )
+        } else {
+            Some(
+                TreeItem::new(item_id, "Routines (0)".to_string())
+                    .expanded(false)
+                    .children(vec![]),
+            )
+        }
+    } else {
+        let placeholder = TreeItem::new(
+            SchemaNodeId::RoutinesLoadingFolder {
+                profile_id,
+                database: database_name.to_string(),
+                schema: schema_name.to_string(),
+            }
+            .to_string(),
+            "Loading...".to_string(),
+        );
+
+        Some(
+            TreeItem::new(item_id, "Routines".to_string())
+                .expanded(false)
+                .children(vec![placeholder]),
+        )
     }
 }
 
