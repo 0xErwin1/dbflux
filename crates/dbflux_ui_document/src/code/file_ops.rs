@@ -280,7 +280,7 @@ impl CodeDocument {
 
         build_file_content_for_language(
             &editor_content,
-            &self.exec_ctx,
+            &self.source.exec_ctx,
             self.query_language.clone(),
         )
     }

@@ -351,10 +351,10 @@ impl CodeDocument {
             let fallback = self.current_source_context(cx);
             match resolve_source_context(override_bounds, targets, query_mode, fallback) {
                 Ok(source) => {
-                    self.exec_ctx.source = Some(source);
+                    self.source.exec_ctx.source = Some(source);
                 }
                 Err(message) => {
-                    self.exec_ctx.source = None;
+                    self.source.exec_ctx.source = None;
                     let toast_msg = message.to_string();
                     Toast::error(toast_msg.clone())
                         .meta_right(now_hms())
@@ -418,7 +418,7 @@ impl CodeDocument {
             })
             .unwrap_or_else(|| "default".to_string());
 
-        let default_schema = self.exec_ctx.schema.clone();
+        let default_schema = self.source.exec_ctx.schema.clone();
 
         self.drift_preflight_running = true;
         cx.notify();
@@ -539,7 +539,7 @@ impl CodeDocument {
             };
 
             let active_database = self
-                .exec_ctx
+                .source.exec_ctx
                 .database
                 .clone()
                 .or_else(|| connected.active_database.clone());
@@ -598,7 +598,7 @@ impl CodeDocument {
         let request = query_request_for_execution(
             query.clone(),
             active_database,
-            &self.exec_ctx,
+            &self.source.exec_ctx,
             self.query_language.clone(),
         );
 
@@ -991,7 +991,7 @@ impl CodeDocument {
                     .connection_id
                     .and_then(|id| self.app_state.read(cx).connections().get(&id))
                     .map(|c| {
-                        let db = self.exec_ctx.database.clone().or(c.active_database.clone());
+                        let db = self.source.exec_ctx.database.clone().or(c.active_database.clone());
                         (db, Some(c.profile.name.clone()))
                     })
                     .unwrap_or((None, None));
@@ -1253,7 +1253,7 @@ impl CodeDocument {
             )
         });
 
-        if let Some(panel) = self.source_time_range_panel.clone() {
+        if let Some(panel) = self.source.source_time_range_panel.clone() {
             grid.update(cx, |g, cx| {
                 g.set_chart_time_range_panel(Some(panel), cx);
             });
@@ -1347,7 +1347,7 @@ impl CodeDocument {
                 && let Some(connected) = self.app_state.read(cx).connections().get(&conn_id)
             {
                 let active_database = self
-                    .exec_ctx
+                    .source.exec_ctx
                     .database
                     .clone()
                     .or_else(|| connected.active_database.clone());

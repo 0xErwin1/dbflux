@@ -202,6 +202,31 @@ fn query_request_for_execution(
         .with_execution_context(Some(exec_ctx.clone()))
 }
 
+/// Per-document execution-source UI controls and the `ExecutionContext` they populate.
+///
+/// Groups the connection/database/schema dropdowns, source-range inputs, the optional
+/// `TimeRangePanel`, and the subscription vec that keeps them in sync.
+pub(super) struct SourceContext {
+    pub(super) exec_ctx: ExecutionContext,
+    pub(super) connection_dropdown: Entity<Dropdown>,
+    pub(super) database_dropdown: Entity<Dropdown>,
+    pub(super) schema_dropdown: Entity<Dropdown>,
+    pub(super) source_query_mode_dropdown: Entity<Dropdown>,
+    pub(super) source_targets: Entity<MultiSelect>,
+    pub(super) source_start_input: Entity<InputState>,
+    pub(super) source_end_input: Entity<InputState>,
+    /// Number of upcoming `InputEvent::Change` emissions from the source
+    /// start/end inputs that originate from a programmatic seed rather than a
+    /// user edit, and must therefore be ignored. `InputState::set_value` always
+    /// emits `Change`, so seeding both inputs while draining
+    /// `pending.source_input_values` queues two handler calls that would
+    /// otherwise re-derive the exec context from the values just written.
+    pub(super) source_seed_suppress: usize,
+    pub(super) source_time_range_panel: Option<Entity<TimeRangePanel>>,
+    pub(super) _source_time_range_sub: Option<Subscription>,
+    pub(super) _context_subscriptions: Vec<Subscription>,
+}
+
 /// All deferred action slots drained at the top of each render cycle.
 ///
 /// Each field is an individually-addressable typed slot. The drain order
@@ -256,31 +281,8 @@ pub struct CodeDocument {
     suppress_dirty: bool,
     query_language: QueryLanguage,
 
-    // Execution context (per-document, independent of global connection)
-    exec_ctx: ExecutionContext,
-    connection_dropdown: Entity<Dropdown>,
-    database_dropdown: Entity<Dropdown>,
-    schema_dropdown: Entity<Dropdown>,
-    source_query_mode_dropdown: Entity<Dropdown>,
-    source_targets: Entity<MultiSelect>,
-    source_start_input: Entity<InputState>,
-    source_end_input: Entity<InputState>,
-    /// Number of upcoming `InputEvent::Change` emissions from the source
-    /// start/end inputs that originate from a programmatic seed rather than a
-    /// user edit, and must therefore be ignored. `InputState::set_value` always
-    /// emits `Change`, so seeding both inputs while draining
-    /// `pending.source_input_values` queues two handler calls that would
-    /// otherwise re-derive the exec context from the values just written.
-    source_seed_suppress: usize,
-    /// Present when the active connection's `SourceContextSpec` declares both
-    /// a non-empty `start_label` and `end_label`. The panel replaces the raw
-    /// RFC3339 text inputs and forwards epoch-ms bounds into `exec_ctx.source`.
-    /// `None` for connections that use text-based time inputs or have no spec.
-    source_time_range_panel: Option<Entity<TimeRangePanel>>,
-    /// Subscription to `TimeRangeChanged` from `source_time_range_panel`.
-    /// Stored separately so it can be replaced when the panel is recreated.
-    _source_time_range_sub: Option<Subscription>,
-    _context_subscriptions: Vec<Subscription>,
+    // Execution context and associated source-control widgets.
+    source: SourceContext,
 
     // Execution
     execution_history: Vec<ExecutionRecord>,
@@ -757,27 +759,29 @@ impl CodeDocument {
             is_dirty: false,
             suppress_dirty: false,
             query_language,
-            exec_ctx,
-            connection_dropdown,
-            database_dropdown,
-            schema_dropdown,
-            source_query_mode_dropdown,
-            source_targets,
-            source_start_input,
-            source_end_input,
-            source_seed_suppress: 0,
-            source_time_range_panel: None,
-            _source_time_range_sub: None,
-            _context_subscriptions: vec![
-                conn_sub,
-                db_sub,
-                schema_sub,
-                source_query_mode_sub,
-                source_targets_sub,
-                source_start_sub,
-                source_end_sub,
-                app_state_sub,
-            ],
+            source: SourceContext {
+                exec_ctx,
+                connection_dropdown,
+                database_dropdown,
+                schema_dropdown,
+                source_query_mode_dropdown,
+                source_targets,
+                source_start_input,
+                source_end_input,
+                source_seed_suppress: 0,
+                source_time_range_panel: None,
+                _source_time_range_sub: None,
+                _context_subscriptions: vec![
+                    conn_sub,
+                    db_sub,
+                    schema_sub,
+                    source_query_mode_sub,
+                    source_targets_sub,
+                    source_start_sub,
+                    source_end_sub,
+                    app_state_sub,
+                ],
+            },
             execution_history: Vec::new(),
             active_execution_index: None,
             live_output: None,
@@ -1044,7 +1048,7 @@ impl CodeDocument {
             .as_ref()
             .and_then(source_input_values_from_context);
         self.connection_id = ctx.connection_id;
-        self.exec_ctx = ctx;
+        self.source.exec_ctx = ctx;
         self.sync_context_dropdowns(cx);
         self
     }
@@ -1135,7 +1139,7 @@ impl CodeDocument {
 
     #[allow(dead_code)]
     pub fn exec_ctx(&self) -> &ExecutionContext {
-        &self.exec_ctx
+        &self.source.exec_ctx
     }
 
     pub fn scratch_path(&self) -> Option<&PathBuf> {
@@ -1419,7 +1423,7 @@ impl CodeDocument {
                 .connections()
                 .get(&conn_id)
                 .map(|c| {
-                    let db = self.exec_ctx.database.clone().or(c.active_database.clone());
+                    let db = self.source.exec_ctx.database.clone().or(c.active_database.clone());
                     (Some(db.unwrap_or_default()), Some(c.profile.driver_id()))
                 })
                 .unwrap_or((None, None));
@@ -1503,7 +1507,7 @@ impl CodeDocument {
             .connections()
             .get(&conn_id)
             .map(|c| {
-                let db = self.exec_ctx.database.clone().or(c.active_database.clone());
+                let db = self.source.exec_ctx.database.clone().or(c.active_database.clone());
                 (db.unwrap_or_default(), c.profile.driver_id())
             })
             .unwrap_or_default();

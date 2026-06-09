@@ -763,11 +763,12 @@ impl Render for CodeDocument {
         if let Some((start_value, end_value)) = self.pending.source_input_values.take() {
             // Each `set_value` emits an `InputEvent::Change`; mark both as
             // seed-originated so the subscription handler skips them.
-            self.source_seed_suppress = self.source_seed_suppress.saturating_add(2);
+            self.source.source_seed_suppress =
+                self.source.source_seed_suppress.saturating_add(2);
 
-            self.source_start_input
+            self.source.source_start_input
                 .update(cx, |state, cx| state.set_value(&start_value, window, cx));
-            self.source_end_input
+            self.source.source_end_input
                 .update(cx, |state, cx| state.set_value(&end_value, window, cx));
         }
 
@@ -775,7 +776,7 @@ impl Render for CodeDocument {
         // connection with labelled start/end inputs is active.  Panel creation
         // requires a Window reference (for DatePickerState), so it is deferred
         // here from sync_source_controls which runs in a subscription context.
-        if self.source_time_range_panel.is_none() && self.should_show_source_controls(cx) {
+        if self.source.source_time_range_panel.is_none() && self.should_show_source_controls(cx) {
             let spec = self.current_source_context_spec(cx);
             if spec.is_some_and(|s| !s.start_label.is_empty() && !s.end_label.is_empty()) {
                 let panel = cx.new(|cx| {
@@ -785,8 +786,8 @@ impl Render for CodeDocument {
                 let sub = cx.subscribe(&panel, |this, _panel, event: &TimeRangeChanged, cx| {
                     this.on_source_time_range_panel_changed(event.start_ms, event.end_ms, cx);
                 });
-                self.source_time_range_panel = Some(panel.clone());
-                self._source_time_range_sub = Some(sub);
+                self.source.source_time_range_panel = Some(panel.clone());
+                self.source._source_time_range_sub = Some(sub);
 
                 // Wire the panel into the active result grid so the chart
                 // toolbar's RANGE chips can drive it.
@@ -805,7 +806,7 @@ impl Render for CodeDocument {
                 // (e.g. after a transient teardown / connection reload) the
                 // existing exec_ctx.source carries the user's current selection
                 // and must not be overwritten by Last-24h.
-                if self.exec_ctx.source.is_none() {
+                if self.source.exec_ctx.source.is_none() {
                     panel.update(cx, |panel, cx| panel.emit_initial(cx));
                 }
             }
