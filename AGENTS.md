@@ -274,10 +274,10 @@ The UI layer is split into six crates (see `ARCHITECTURE.md` § Layered crate ma
 
 - `dbflux_components` — domain-free leaf: theme, tokens, icons, primitives, composites, controls, data_table, document_tree, result_panel, chart engine, modals. No `dbflux_app` dependency.
 - `dbflux_ui_base` — AppStateEntity, events, keymap helpers, toast, modal_frame, platform detection, sql_preview_modal, sso_wizard.
-- `dbflux_ui_document` — tab/pane system, all document types (CodeDocument, DataDocument, ChartDocument, KeyValueDocument, AuditDocument), data_grid_panel, governance view.
+- `dbflux_ui_document` — tab/pane system, all document types (CodeDocument, DataDocument, ChartDocument, DashboardDocument, KeyValueDocument, AuditDocument, InstanceInspectorDocument), data_grid_panel, governance view.
 - `dbflux_ui_sidebar` — connections + scripts sidebar tree.
 - `dbflux_ui_windows` — settings window and connection manager window.
-- `dbflux_ui` — thin integrator (~11.5k LOC): workspace, status_bar, tasks_panel, dock, remaining overlays (command_palette, login_modal, shutdown_overlay), keymap glue, assets, ipc_server. Re-exports moved subsystems via `pub use` shims at the old module paths so internal call-sites still compile against `crate::ui::...`.
+- `dbflux_ui` — thin integrator (~13.5k LOC): workspace, status_bar, tasks_panel, dock, remaining overlays (command_palette, login_modal, shutdown_overlay), keymap glue, assets, ipc_server. Re-exports moved subsystems via `pub use` shims at the old module paths so internal call-sites still compile against `crate::ui::...`.
 
 `dbflux_ui` has **no per-driver feature flags** and no driver dependencies. Per-driver features live on `dbflux_app` (which registers drivers) and on the `dbflux` binary. The cross-cutting `lua`/`aws`/`mcp` features on UI crates only forward to `dbflux_app` and sibling UI crates.
 
@@ -350,7 +350,7 @@ Key abstractions for UI adaptation:
 - The runtime seam for service discovery/classification lives in `dbflux_app::rpc_services`; extend that boundary for future RPC capabilities instead of hardcoding new driver-only bootstrap logic in `app_state.rs`.
 - Preserve compatibility for external driver registration IDs as `rpc:<socket_id>`.
 - `DynAuthProvider::fetch_dynamic_options` is a real trait method (default implementation returns `Permanent("not supported")`); `RpcAuthProvider` implements it by dispatching `FetchDynamicOptions` requests over IPC.
-- The auth-provider IPC protocol is at v1.2 and gained `FetchDynamicOptions` request / `DynamicOptions` response variants, plus the `secret_dependency_opt_in` manifest flag. Providers advertising v1.2 have `fetch_dynamic_options` available; older providers get `Permanent("not supported")`.
+- The auth-provider IPC protocol is at v1.3. v1.2 added the `FetchDynamicOptions` request / `DynamicOptions` response variants plus the `secret_dependency_opt_in` manifest flag; v1.3 added the `audit_emit_opt_in` manifest flag and audit event emission (`EmitAuditEvent`). Providers advertising v1.2+ have `fetch_dynamic_options` available; older providers get `Permanent("not supported")`.
 - The Settings UI for Auth Profiles is provider-agnostic. To surface dynamic dropdowns a provider must declare `FormFieldKind::DynamicSelect` fields in its manifest. The host strips secret field values from dependency maps unless the provider sets `secret_dependency_opt_in: true`.
 - `AuthSession.data` round-trips opaquely through the IPC DTO via JSON downcast and is never persisted.
 

@@ -122,7 +122,7 @@ Inspectors are the third dashboard panel kind, alongside `Chart` and `Divider`:
 |------------|---------|-------|
 | `Chart` | `SavedChart` reference (`saved_chart_id`) | Time-series chart |
 | `Divider` | Inline markdown | Header strip; no toolbar |
-| `Inspector` | `InstanceInspectorQuery` (`metric_id`) | Tabular snapshot; refreshes on the shared interval |
+| `Inspector` | `DashboardPanelKind::Inspector { metric_id }` | Tabular snapshot; refreshes on the shared interval |
 
 `DashboardPanelKind::Inspector { metric_id }`
 (`crates/dbflux_ui_base/src/dashboard_manager.rs`) carries no chart reference —
@@ -210,7 +210,7 @@ to materialize it locally.
   (`crates/dbflux_core/src/connection/instance_catalog.rs`)
 - **Capabilities**: `DriverCapabilities::INSTANCE_METRICS` (time-series),
   `DriverCapabilities::INSTANCE_INSPECTOR` (tabular snapshots)
-- **Value types**: `InstanceMetric`, `InstanceInspector`,
+- **Value types**: `InstanceMetricDef`, `InstanceInspectorDef`,
   `DefaultInstanceDashboard`, `InspectorRowAction`
 
 Drivers expose live server metrics (e.g. `pg.tps`,

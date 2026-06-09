@@ -6,7 +6,8 @@ and the keyboard model.
 
 DBFlux is keyboard-first. Almost every action has both a mouse affordance and a
 keyboard binding. The keybindings listed in this guide are the application
-defaults; they can be customized from Settings.
+defaults; you can review the full active keymap in **Settings → Keybindings**
+(a read-only viewer — see the [Settings overview](#8-settings-overview)).
 
 ---
 
@@ -537,23 +538,39 @@ stay `Ctrl` on all platforms (to avoid clashing with macOS system shortcuts).
 
 ## 8. Settings Overview
 
-Settings is organized into eight sections:
+Settings has these sections (the MCP sections appear only in builds with AI/MCP
+support, which is the default):
 
-1. **General** — application-wide preferences (including the dangerous-query
-   confirmation behavior).
-2. **Keybindings** — view and customize the keymap.
-3. **Auth Profiles** — provider-driven authentication profiles (for example AWS;
-   supports importing provider-discovered profiles).
-4. **Proxies** — SOCKS5 / HTTP CONNECT proxy profiles.
-5. **SSH Tunnels** — SSH tunnel profiles selectable per connection.
-6. **Services** — externally registered RPC services (drivers and auth
-   providers). See `docs/RPC_SERVICES_CONFIG.md`.
-7. **Hooks** — global connection-hook definitions (Command, Script, and Lua
-   modes). Per-profile phase bindings live in the Connection Manager's Hooks tab.
-8. **Drivers** — per-driver settings overrides.
+- **General** — application-wide preferences: theme, startup/session, refresh
+  defaults, and the dangerous-query confirmation behavior.
+- **Audit** — what the audit log captures (log-capture minimum level) and
+  retention.
+- **MCP Clients / Roles / Policies** — AI client governance (trusted clients,
+  roles, policies). See `docs/MCP_AI_INTEGRATION.md`.
+- **Keybindings** — a **read-only** viewer for the active keymap, with a text
+  filter and conflict warnings. Rebinding from the UI is not available.
+- **Proxies** — SOCKS5 / HTTP CONNECT proxy profiles.
+- **SSH Tunnels** — SSH tunnel profiles selectable per connection.
+- **Auth Profiles** — provider-driven authentication profiles (AWS SSO / shared
+  credentials).
+- **Services** — externally registered RPC services (drivers and auth
+  providers). See `docs/RPC_SERVICES_CONFIG.md`.
+- **Hooks** — global connection-hook definitions (Command, Script, and Lua
+  modes). Per-profile phase bindings live in the Connection Manager's Hooks tab.
+- **Drivers** — per-driver overrides and settings.
+- **About** — version and build information.
+
+For a full per-setting reference and the connection-hooks guide, see
+`docs/SETTINGS.md`.
 
 ### Related documentation
 
+- Advanced connection setup (SSH, proxy, AWS SSO, value sources):
+  `docs/CONNECTIONS.md`
+- Full Settings reference and connection hooks: `docs/SETTINGS.md`
+- Data storage and privacy (where data and secrets live, backup, reset):
+  `docs/DATA_AND_PRIVACY.md`
+- Dashboards, saved charts, and the audit viewer (usage): `docs/DASHBOARDS_AND_AUDIT.md`
 - Connection hooks and the embedded Lua runtime: `docs/LUA.md`
 - AI client integration (MCP): `docs/MCP_AI_INTEGRATION.md`
 - Audit log and event schema: `docs/AUDIT.md`
