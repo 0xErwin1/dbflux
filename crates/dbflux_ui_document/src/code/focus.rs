@@ -19,7 +19,7 @@ impl CodeDocument {
 
     /// Returns the active context for keyboard handling based on internal focus.
     pub fn active_context(&self, cx: &App) -> ContextId {
-        if self.pending_dangerous_query.is_some() {
+        if self.pending.dangerous_query.is_some() {
             return ContextId::ConfirmModal;
         }
 

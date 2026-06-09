@@ -470,10 +470,10 @@ impl CodeDocument {
             // otherwise clobber this window inside `run_query_text` via
             // `current_source_context`. Stash the panel bounds so the next
             // `run_query` rebuilds `exec_ctx.source` from them instead.
-            self.pending_window_override = Some((start_ms, end_ms));
+            self.pending.window_override = Some((start_ms, end_ms));
 
             if !self.result_tabs.is_empty() {
-                self.pending_chart_reexecute = true;
+                self.pending.chart_reexecute = true;
             }
         }
 
@@ -838,7 +838,7 @@ impl CodeDocument {
                         this.update(cx, |doc, cx| {
                             doc.revert_database_selection(prev_database, prev_schema, cx);
 
-                            doc.pending_error = Some(format!(
+                            doc.pending.error = Some(format!(
                                 "Failed to connect to database '{}': {}",
                                 target_db, e
                             ));

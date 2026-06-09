@@ -189,7 +189,7 @@ impl CodeDocument {
         // statement and the driver can execute batches, confirm before running
         // the entire script.
         if let Some(statement_count) = self.script_statement_count(&query, cx) {
-            self.pending_script_confirm = Some(PendingScriptConfirm {
+            self.pending.script_confirm = Some(PendingScriptConfirm {
                 query,
                 in_new_tab,
                 statement_count,
@@ -226,7 +226,7 @@ impl CodeDocument {
     }
 
     pub(super) fn confirm_script_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(pending) = self.pending_script_confirm.take() else {
+        let Some(pending) = self.pending.script_confirm.take() else {
             return;
         };
 
@@ -234,7 +234,7 @@ impl CodeDocument {
     }
 
     pub(super) fn cancel_script_query(&mut self, cx: &mut Context<Self>) {
-        self.pending_script_confirm = None;
+        self.pending.script_confirm = None;
         cx.notify();
     }
 
@@ -292,7 +292,7 @@ impl CodeDocument {
             ) {
                 DangerousAction::Allow => {}
                 DangerousAction::Confirm(kind) => {
-                    self.pending_dangerous_query = Some(PendingDangerousQuery {
+                    self.pending.dangerous_query = Some(PendingDangerousQuery {
                         query,
                         kind,
                         in_new_tab,
@@ -341,7 +341,7 @@ impl CodeDocument {
         }
 
         if self.should_show_source_controls(cx) {
-            let override_bounds = self.pending_window_override.take();
+            let override_bounds = self.pending.window_override.take();
             let targets = self.current_source_targets(cx);
             let query_mode = self.current_source_query_mode_value(cx);
             // Compute the input-driven fallback eagerly so the precedence rule
@@ -381,7 +381,7 @@ impl CodeDocument {
     fn start_drift_preflight(&mut self, query: String, in_new_tab: bool, cx: &mut Context<Self>) {
         let Some(conn_id) = self.connection_id else {
             // No connection — nothing to preflight; execute directly via pending.
-            self.pending_drift_query = Some(PendingDriftQuery {
+            self.pending.drift_query = Some(PendingDriftQuery {
                 query,
                 in_new_tab,
                 action: DriftAction::ExecuteNow,
@@ -394,7 +394,7 @@ impl CodeDocument {
         let state = self.app_state.read(cx);
         let connections = state.connections();
         let Some(connected) = connections.get(&conn_id) else {
-            self.pending_drift_query = Some(PendingDriftQuery {
+            self.pending.drift_query = Some(PendingDriftQuery {
                 query,
                 in_new_tab,
                 action: DriftAction::ExecuteNow,
@@ -444,7 +444,7 @@ impl CodeDocument {
                 match outcome {
                     DriftOutcome::Skip => {
                         // Driver doesn't support table parsing — execute directly.
-                        doc.pending_drift_query = Some(PendingDriftQuery {
+                        doc.pending.drift_query = Some(PendingDriftQuery {
                             query: query_capture,
                             in_new_tab,
                             action: DriftAction::ExecuteNow,
@@ -459,7 +459,7 @@ impl CodeDocument {
                             .map(|((db, tbl), info)| (db, tbl, info))
                             .collect();
 
-                        doc.pending_drift_query = Some(PendingDriftQuery {
+                        doc.pending.drift_query = Some(PendingDriftQuery {
                             query: query_capture,
                             in_new_tab,
                             action: DriftAction::ExecuteNow,
@@ -494,7 +494,7 @@ impl CodeDocument {
                             ));
                         }
 
-                        doc.pending_drift_query = Some(PendingDriftQuery {
+                        doc.pending.drift_query = Some(PendingDriftQuery {
                             query: query_capture,
                             in_new_tab,
                             action: DriftAction::Pending,
@@ -730,7 +730,7 @@ impl CodeDocument {
             let query_text = query.clone();
 
             let inner_result = this.update(cx, |doc, cx| {
-                doc.pending_result = Some(PendingQueryResult {
+                doc.pending.result = Some(PendingQueryResult {
                     task_id,
                     exec_id,
                     query,
@@ -783,7 +783,7 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(pending) = self.pending_dangerous_query.take() else {
+        let Some(pending) = self.pending.dangerous_query.take() else {
             return;
         };
 
@@ -889,7 +889,7 @@ impl CodeDocument {
     }
 
     pub(super) fn cancel_dangerous_query(&mut self, cx: &mut Context<Self>) {
-        self.pending_dangerous_query = None;
+        self.pending.dangerous_query = None;
         cx.notify();
     }
 
@@ -899,7 +899,7 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(selected) = self.pending_set_query.take() else {
+        let Some(selected) = self.pending.set_query.take() else {
             return;
         };
 
@@ -923,11 +923,11 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.pending_auto_refresh {
+        if !self.pending.auto_refresh {
             return;
         }
 
-        self.pending_auto_refresh = false;
+        self.pending.auto_refresh = false;
 
         if !self.can_auto_refresh(cx) {
             self.refresh_policy = dbflux_core::RefreshPolicy::Manual;
@@ -946,7 +946,7 @@ impl CodeDocument {
 
     /// Process pending query result (called from render where we have window access).
     pub(super) fn process_pending_result(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(pending) = self.pending_result.take() else {
+        let Some(pending) = self.pending.result.take() else {
             return;
         };
 
@@ -1723,7 +1723,7 @@ impl CodeDocument {
             let script_content = content.clone();
 
             let inner_result = this.update(cx, |doc, cx| {
-                doc.pending_result = Some(PendingQueryResult {
+                doc.pending.result = Some(PendingQueryResult {
                     task_id,
                     exec_id,
                     query: content,
@@ -1769,7 +1769,7 @@ impl CodeDocument {
     /// The fresh `TableInfo` for both changed and unchanged tables was already
     /// captured during the drift preflight and stored in `pending_drift_query`.
     pub(super) fn on_schema_drift_refresh(&mut self, cx: &mut Context<Self>) {
-        let Some(pending) = self.pending_drift_query.take() else {
+        let Some(pending) = self.pending.drift_query.take() else {
             return;
         };
 
@@ -1794,7 +1794,7 @@ impl CodeDocument {
             modal.close(cx);
         });
 
-        self.pending_drift_query = Some(PendingDriftQuery {
+        self.pending.drift_query = Some(PendingDriftQuery {
             query: pending.query,
             in_new_tab: pending.in_new_tab,
             action: DriftAction::ExecuteNow,
@@ -1807,7 +1807,7 @@ impl CodeDocument {
     /// Handle "Continue with stale schema": mark the pending query so the render
     /// loop picks it up and calls `execute_query_internal` with window access.
     pub(super) fn on_schema_drift_continue(&mut self, cx: &mut Context<Self>) {
-        if let Some(ref mut pending) = self.pending_drift_query {
+        if let Some(ref mut pending) = self.pending.drift_query {
             pending.action = DriftAction::ContinueStale;
         }
 
@@ -1827,14 +1827,14 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(pending) = self.pending_drift_query.take() else {
+        let Some(pending) = self.pending.drift_query.take() else {
             return;
         };
 
         match pending.action {
             DriftAction::Pending => {
                 // Modal not yet answered — put it back and wait.
-                self.pending_drift_query = Some(pending);
+                self.pending.drift_query = Some(pending);
             }
 
             DriftAction::ExecuteNow => {

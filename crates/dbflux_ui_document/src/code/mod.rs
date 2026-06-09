@@ -202,6 +202,31 @@ fn query_request_for_execution(
         .with_execution_context(Some(exec_ctx.clone()))
 }
 
+/// All deferred action slots drained at the top of each render cycle.
+///
+/// Each field is an individually-addressable typed slot. The drain order
+/// in `render` matches the declaration order here and must not be changed.
+/// `pending.drift_query` supports re-entrancy: the drift state machine may
+/// `.take()` the value and then re-store it within the same render pass when
+/// the modal has not yet been answered.
+#[derive(Default)]
+pub(super) struct PendingActions {
+    result: Option<PendingQueryResult>,
+    set_query: Option<HistoryQuerySelected>,
+    auto_refresh: bool,
+    history_focus_restore: bool,
+    drift_query: Option<PendingDriftQuery>,
+    source_input_values: Option<(String, String)>,
+    chart_reexecute: bool,
+    /// Window bounds emitted by the source `TimeRangePanel`. Taken by
+    /// `run_query_text` on the next execution path; bypasses the text inputs.
+    window_override: Option<(i64, i64)>,
+    dangerous_query: Option<PendingDangerousQuery>,
+    script_confirm: Option<PendingScriptConfirm>,
+    routine_definition: Option<String>,
+    error: Option<String>,
+}
+
 pub struct CodeDocument {
     // Identity
     id: DocumentId,
@@ -240,12 +265,11 @@ pub struct CodeDocument {
     source_targets: Entity<MultiSelect>,
     source_start_input: Entity<InputState>,
     source_end_input: Entity<InputState>,
-    pending_source_input_values: Option<(String, String)>,
     /// Number of upcoming `InputEvent::Change` emissions from the source
     /// start/end inputs that originate from a programmatic seed rather than a
     /// user edit, and must therefore be ignored. `InputState::set_value` always
     /// emits `Change`, so seeding both inputs while draining
-    /// `pending_source_input_values` queues two handler calls that would
+    /// `pending.source_input_values` queues two handler calls that would
     /// otherwise re-derive the exec context from the values just written.
     source_seed_suppress: usize,
     /// Present when the active connection's `SourceContextSpec` declares both
@@ -261,7 +285,6 @@ pub struct CodeDocument {
     // Execution
     execution_history: Vec<ExecutionRecord>,
     active_execution_index: Option<usize>,
-    pending_result: Option<PendingQueryResult>,
     live_output: Option<LiveOutputState>,
     _live_output_drain: Option<Task<()>>,
     active_query_task: Option<ActiveQueryTask>,
@@ -275,17 +298,6 @@ pub struct CodeDocument {
     // History modal
     history_modal: Entity<HistoryModal>,
     _history_subscriptions: Vec<Subscription>,
-    pending_set_query: Option<HistoryQuerySelected>,
-    pending_history_focus_restore: bool,
-    /// Set by chart-driven RANGE chip changes or auto-refresh ticks; the next
-    /// render reads it and calls `run_query` so updates land without a manual Run.
-    pending_chart_reexecute: bool,
-    /// Window emitted by the source `TimeRangePanel` that must win over the
-    /// (potentially stale) `source_start_input` / `source_end_input` text fields
-    /// on the very next `run_query`. Taken by `run_query_text`; rebuilds
-    /// `exec_ctx.source` from these epoch-ms bounds and bypasses
-    /// `current_source_context`. Mirrors `ChartDocument::pending_time_window`.
-    pending_window_override: Option<(i64, i64)>,
 
     // Layout/focus
     layout: SqlQueryLayout,
@@ -298,24 +310,14 @@ pub struct CodeDocument {
     runner: DocumentTaskRunner,
     refresh_policy: RefreshPolicy,
     refresh_dropdown: Entity<Dropdown>,
-    pending_auto_refresh: bool,
     _refresh_timer: Option<Task<()>>,
     _refresh_subscriptions: Vec<Subscription>,
 
     is_active_tab: bool,
 
-    // Dangerous query confirmation
-    pending_dangerous_query: Option<PendingDangerousQuery>,
-
-    // Multi-statement script confirmation
-    pending_script_confirm: Option<PendingScriptConfirm>,
-
     // Schema drift detection
     schema_drift_modal: Entity<ModalSchemaDrift>,
     _schema_drift_subscriptions: Vec<Subscription>,
-    /// Query paused while the drift preflight background task is running or
-    /// while the user is responding to the drift modal.
-    pending_drift_query: Option<PendingDriftQuery>,
     /// True while the drift preflight I/O task is in flight.
     drift_preflight_running: bool,
 
@@ -333,13 +335,6 @@ pub struct CodeDocument {
     show_saved_label: bool,
     _saved_label_timer: Option<Task<()>>,
 
-    // Pending error to show as toast (set from async context without window access)
-    pending_error: Option<String>,
-
-    /// Routine definition body fetched from the DB and waiting to be applied in
-    /// the next render cycle (where `Window` is available for `set_content`).
-    pending_routine_definition: Option<String>,
-
     /// Last editor_mode pushed to `InputState::set_highlighter`. Tracked so
     /// `sync_editor_language` only resets the highlighter when the mode
     /// actually changes — `set_highlighter` nukes the cached highlighter to
@@ -347,6 +342,9 @@ pub struct CodeDocument {
     /// it on every `AppStateChanged` would silently strip syntax colors
     /// until the next keystroke.
     current_editor_mode: &'static str,
+
+    /// Deferred action slots drained at the top of each render cycle.
+    pending: PendingActions,
 }
 
 struct PendingQueryResult {
@@ -559,14 +557,14 @@ impl CodeDocument {
         let query_selected_sub = cx.subscribe(
             &history_modal,
             |this, _, event: &HistoryQuerySelected, cx| {
-                this.pending_set_query = Some(event.clone());
+                this.pending.set_query = Some(event.clone());
                 cx.notify();
             },
         );
 
         let history_closed_sub =
             cx.subscribe(&history_modal, |this, _, _: &HistoryModalClosed, cx| {
-                this.pending_history_focus_restore = true;
+                this.pending.history_focus_restore = true;
                 cx.notify();
             });
 
@@ -590,7 +588,7 @@ impl CodeDocument {
         let drift_dismissed_sub = cx.subscribe(
             &schema_drift_modal,
             |this, _, _event: &SchemaDriftDismissed, cx| {
-                this.pending_drift_query = None;
+                this.pending.drift_query = None;
                 cx.notify();
             },
         );
@@ -767,7 +765,6 @@ impl CodeDocument {
             source_targets,
             source_start_input,
             source_end_input,
-            pending_source_input_values: None,
             source_seed_suppress: 0,
             source_time_range_panel: None,
             _source_time_range_sub: None,
@@ -783,7 +780,6 @@ impl CodeDocument {
             ],
             execution_history: Vec::new(),
             active_execution_index: None,
-            pending_result: None,
             live_output: None,
             _live_output_drain: None,
             active_query_task: None,
@@ -793,10 +789,6 @@ impl CodeDocument {
             run_in_new_tab: false,
             history_modal,
             _history_subscriptions: vec![query_selected_sub, history_closed_sub],
-            pending_set_query: None,
-            pending_history_focus_restore: false,
-            pending_chart_reexecute: false,
-            pending_window_override: None,
             layout: SqlQueryLayout::EditorOnly,
             focus_handle: cx.focus_handle(),
             focus_mode: SqlQueryFocus::Editor,
@@ -805,19 +797,15 @@ impl CodeDocument {
             runner,
             refresh_policy,
             refresh_dropdown,
-            pending_auto_refresh: false,
             _refresh_timer: None,
             _refresh_subscriptions: vec![refresh_policy_sub],
             is_active_tab: true,
-            pending_dangerous_query: None,
-            pending_script_confirm: None,
             schema_drift_modal,
             _schema_drift_subscriptions: vec![
                 drift_refresh_sub,
                 drift_continue_sub,
                 drift_dismissed_sub,
             ],
-            pending_drift_query: None,
             drift_preflight_running: false,
             diagnostic_request_id: 0,
             _diagnostic_debounce: None,
@@ -827,9 +815,8 @@ impl CodeDocument {
             _auto_save_debounce: None,
             show_saved_label: false,
             _saved_label_timer: None,
-            pending_error: None,
-            pending_routine_definition: None,
             current_editor_mode: editor_mode,
+            pending: PendingActions::default(),
         };
 
         document.sync_context_dropdowns(cx);
@@ -912,7 +899,7 @@ impl CodeDocument {
                             return;
                         }
 
-                        doc.pending_auto_refresh = true;
+                        doc.pending.auto_refresh = true;
                         cx.notify();
                     });
                 });
@@ -1027,7 +1014,7 @@ impl CodeDocument {
                         Ok(body) => {
                             doc.routine_definition_pending = false;
                             // set_content requires Window, use pending path to defer to render cycle.
-                            doc.pending_routine_definition = Some(body);
+                            doc.pending.routine_definition = Some(body);
                             cx.notify();
                         }
                         Err(e) => {
@@ -1037,7 +1024,7 @@ impl CodeDocument {
                                 e
                             );
                             doc.routine_definition_pending = false;
-                            doc.pending_routine_definition =
+                            doc.pending.routine_definition =
                                 Some(format!("-- Failed to load routine definition:\n-- {}", e));
                             cx.notify();
                         }
@@ -1052,7 +1039,7 @@ impl CodeDocument {
 
     /// Set the execution context (e.g. parsed from file header).
     pub fn with_exec_ctx(mut self, ctx: ExecutionContext, cx: &mut Context<Self>) -> Self {
-        self.pending_source_input_values = ctx
+        self.pending.source_input_values = ctx
             .source
             .as_ref()
             .and_then(source_input_values_from_context);
@@ -1273,7 +1260,7 @@ impl CodeDocument {
         cx: &mut Context<Self>,
     ) -> bool {
         // When dangerous query confirmation is showing, handle only modal commands
-        if self.pending_dangerous_query.is_some() {
+        if self.pending.dangerous_query.is_some() {
             match cmd {
                 Command::Cancel => {
                     self.cancel_dangerous_query(cx);

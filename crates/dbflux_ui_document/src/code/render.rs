@@ -611,7 +611,7 @@ impl CodeDocument {
         let entity_close = cx.entity().clone();
 
         let statement_count = self
-            .pending_script_confirm
+            .pending.script_confirm
             .as_ref()
             .map(|p| p.statement_count)
             .unwrap_or(0);
@@ -662,7 +662,7 @@ impl CodeDocument {
         let entity_close = cx.entity().clone();
 
         let (title, message) = self
-            .pending_dangerous_query
+            .pending.dangerous_query
             .as_ref()
             .map(|p| {
                 let title = match p.kind {
@@ -754,13 +754,13 @@ impl Render for CodeDocument {
 
         self.process_pending_auto_refresh(window, cx);
 
-        if std::mem::take(&mut self.pending_history_focus_restore) {
+        if std::mem::take(&mut self.pending.history_focus_restore) {
             self.focus(window, cx);
         }
 
         self.process_pending_drift_continue(window, cx);
 
-        if let Some((start_value, end_value)) = self.pending_source_input_values.take() {
+        if let Some((start_value, end_value)) = self.pending.source_input_values.take() {
             // Each `set_value` emits an `InputEvent::Change`; mark both as
             // seed-originated so the subscription handler skips them.
             self.source_seed_suppress = self.source_seed_suppress.saturating_add(2);
@@ -811,11 +811,11 @@ impl Render for CodeDocument {
             }
         }
 
-        if std::mem::take(&mut self.pending_chart_reexecute) && !self.result_tabs.is_empty() {
+        if std::mem::take(&mut self.pending.chart_reexecute) && !self.result_tabs.is_empty() {
             self.run_query(window, cx);
         }
 
-        if let Some(error) = self.pending_error.take() {
+        if let Some(error) = self.pending.error.take() {
             let toast_msg = error.to_string();
             Toast::error(toast_msg.clone())
                 .meta_right(now_hms())
@@ -825,7 +825,7 @@ impl Render for CodeDocument {
 
         // Apply a pending routine definition fetched from a background task.
         // `set_content` requires a `Window` reference, so it is deferred here.
-        if let Some(body) = self.pending_routine_definition.take() {
+        if let Some(body) = self.pending.routine_definition.take() {
             self.set_content(&body, window, cx);
         }
 
@@ -886,10 +886,10 @@ impl Render for CodeDocument {
                 el.child(self.render_collapsed_results_bar(cx))
             })
             .child(self.history_modal.clone())
-            .when(self.pending_dangerous_query.is_some(), |el| {
+            .when(self.pending.dangerous_query.is_some(), |el| {
                 el.child(self.render_dangerous_query_modal(cx))
             })
-            .when(self.pending_script_confirm.is_some(), |el| {
+            .when(self.pending.script_confirm.is_some(), |el| {
                 el.child(self.render_script_confirm_modal(cx))
             })
             .when(drift_modal_visible, |el| {
