@@ -136,10 +136,10 @@ impl CodeDocument {
             QueryCompletionProvider::new(query_language, self.app_state.clone(), connection_id),
         );
 
-        let editor_mode_changed = editor_mode != self.current_editor_mode;
-        self.current_editor_mode = editor_mode;
+        let editor_mode_changed = editor_mode != self.editor.current_editor_mode;
+        self.editor.current_editor_mode = editor_mode;
 
-        self.input_state.update(cx, |state, cx| {
+        self.editor.input_state.update(cx, |state, cx| {
             state.lsp.completion_provider = Some(completion_provider);
 
             // `set_highlighter` resets the cached SyntaxHighlighter to `None`
@@ -156,7 +156,7 @@ impl CodeDocument {
         &self,
         cx: &App,
     ) -> Option<dbflux_core::SourceContextSpec> {
-        let connection_id = self.exec_ctx.connection_id.or(self.connection_id)?;
+        let connection_id = self.source.exec_ctx.connection_id.or(self.connection_id)?;
 
         self.app_state
             .read(cx)
@@ -168,7 +168,8 @@ impl CodeDocument {
     pub(super) fn current_source_query_mode_value(&self, cx: &App) -> Option<String> {
         let spec = self.current_source_context_spec(cx)?;
 
-        self.source_query_mode_dropdown
+        self.source
+            .source_query_mode_dropdown
             .read(cx)
             .selected_value()
             .map(|value| value.to_string())
@@ -178,7 +179,7 @@ impl CodeDocument {
 
     pub(super) fn effective_query_language(&self, cx: &App) -> QueryLanguage {
         let Some(spec) = self.current_source_context_spec(cx) else {
-            return self.query_language.clone();
+            return self.editor.query_language.clone();
         };
 
         let selected_mode = self.current_source_query_mode_value(cx);
@@ -187,7 +188,7 @@ impl CodeDocument {
             .into_iter()
             .find(|mode| Some(mode.value.as_str()) == selected_mode.as_deref())
             .map(|mode| mode.query_language)
-            .unwrap_or_else(|| self.query_language.clone())
+            .unwrap_or_else(|| self.editor.query_language.clone())
     }
 
     pub(super) fn should_show_source_controls(&self, cx: &App) -> bool {
@@ -195,7 +196,7 @@ impl CodeDocument {
     }
 
     fn source_target_items(&self, cx: &App) -> Vec<DropdownItem> {
-        let Some(connection_id) = self.exec_ctx.connection_id.or(self.connection_id) else {
+        let Some(connection_id) = self.source.exec_ctx.connection_id.or(self.connection_id) else {
             return Vec::new();
         };
 
@@ -204,6 +205,7 @@ impl CodeDocument {
         };
 
         let schema = self
+            .source
             .exec_ctx
             .database
             .as_deref()
@@ -241,7 +243,8 @@ impl CodeDocument {
     }
 
     pub(super) fn current_source_targets(&self, cx: &App) -> Vec<String> {
-        self.source_targets
+        self.source
+            .source_targets
             .read(cx)
             .selected_values()
             .iter()
@@ -255,13 +258,13 @@ impl CodeDocument {
     ) -> Result<ExecutionSourceContext, &'static str> {
         let query_mode = self.current_source_query_mode_value(cx);
         let targets = self.current_source_targets(cx);
-        let start_input = self.source_start_input.read(cx).value().to_string();
-        let end_input = self.source_end_input.read(cx).value().to_string();
+        let start_input = self.source.source_start_input.read(cx).value().to_string();
+        let end_input = self.source.source_end_input.read(cx).value().to_string();
 
         if start_input.trim().is_empty()
             && end_input.trim().is_empty()
             && let Some(source @ ExecutionSourceContext::CollectionWindow { .. }) =
-                self.exec_ctx.source.clone()
+                self.source.exec_ctx.source.clone()
         {
             return Ok(source);
         }
@@ -274,12 +277,24 @@ impl CodeDocument {
 
     fn sync_source_exec_context(&mut self, cx: &mut Context<Self>) {
         if !self.should_show_source_controls(cx) {
-            self.exec_ctx.source = None;
+            self.source.exec_ctx.source = None;
             return;
         }
 
-        let start_blank = self.source_start_input.read(cx).value().trim().is_empty();
-        let end_blank = self.source_end_input.read(cx).value().trim().is_empty();
+        let start_blank = self
+            .source
+            .source_start_input
+            .read(cx)
+            .value()
+            .trim()
+            .is_empty();
+        let end_blank = self
+            .source
+            .source_end_input
+            .read(cx)
+            .value()
+            .trim()
+            .is_empty();
 
         if start_blank && end_blank {
             // Time bounds not entered yet: keep any existing window, but sync its
@@ -288,14 +303,14 @@ impl CodeDocument {
             // mode stays stale and the query is routed with the old language.
             let mode = self.current_source_query_mode_value(cx);
             if let Some(ExecutionSourceContext::CollectionWindow { query_mode, .. }) =
-                self.exec_ctx.source.as_mut()
+                self.source.exec_ctx.source.as_mut()
             {
                 *query_mode = mode;
             }
             return;
         }
 
-        self.exec_ctx.source = self.current_source_context(cx).ok();
+        self.source.exec_ctx.source = self.current_source_context(cx).ok();
     }
 
     fn sync_source_controls(&mut self, cx: &mut Context<Self>) {
@@ -322,8 +337,8 @@ impl CodeDocument {
         // re-seed of the default preset on the next render — clobbering any
         // custom window the user just applied via the chart toolbar.
         if !wants_panel && source_spec.is_some() {
-            self.source_time_range_panel = None;
-            self._source_time_range_sub = None;
+            self.source.source_time_range_panel = None;
+            self.source._source_time_range_sub = None;
         }
 
         let query_mode_items = source_spec
@@ -341,12 +356,13 @@ impl CodeDocument {
         // silently reset the dropdown to the spec default — which is what
         // happened to Flux on InfluxDB v2, whose default mode is InfluxQL.
         let current_dropdown_mode = self
+            .source
             .source_query_mode_dropdown
             .read(cx)
             .selected_value()
             .map(|value| value.to_string());
 
-        let committed_mode = match self.exec_ctx.source.as_ref() {
+        let committed_mode = match self.source.exec_ctx.source.as_ref() {
             Some(ExecutionSourceContext::CollectionWindow { query_mode, .. }) => query_mode.clone(),
             None => None,
             // MetricQuery sources do not participate in the log-group source controls.
@@ -375,15 +391,17 @@ impl CodeDocument {
                 .position(|item| item.value.as_ref() == selected)
         });
 
-        self.source_query_mode_dropdown.update(cx, |dropdown, cx| {
-            dropdown.set_items(query_mode_items, cx);
-            dropdown.set_selected_index(selected_query_mode_index, cx);
-        });
+        self.source
+            .source_query_mode_dropdown
+            .update(cx, |dropdown, cx| {
+                dropdown.set_items(query_mode_items, cx);
+                dropdown.set_selected_index(selected_query_mode_index, cx);
+            });
 
         // Derive the initial selection: prefer an explicit exec_ctx source, then fall
         // back to the spec's default target so the driver's connected bucket/database
         // is pre-selected instead of showing a blank "Sources" placeholder.
-        let selected_values = match self.exec_ctx.source.as_ref() {
+        let selected_values = match self.source.exec_ctx.source.as_ref() {
             Some(ExecutionSourceContext::CollectionWindow { targets, .. }) => targets.clone(),
             None => source_spec
                 .as_ref()
@@ -399,7 +417,7 @@ impl CodeDocument {
             .map(|spec| spec.targets_placeholder.clone())
             .unwrap_or_else(|| "Sources".to_string());
 
-        self.source_targets.update(cx, |multi_select, cx| {
+        self.source.source_targets.update(cx, |multi_select, cx| {
             multi_select.set_placeholder(targets_placeholder, cx);
             multi_select.set_items(items, cx);
             multi_select.set_selected_values(&selected_values, cx);
@@ -433,8 +451,8 @@ impl CodeDocument {
     pub(super) fn on_source_time_range_changed(&mut self, cx: &mut Context<Self>) {
         // Ignore the `Change` events produced by programmatically seeding the
         // inputs; only genuine user edits should re-derive the exec context.
-        if self.source_seed_suppress > 0 {
-            self.source_seed_suppress -= 1;
+        if self.source.source_seed_suppress > 0 {
+            self.source.source_seed_suppress -= 1;
             return;
         }
 
@@ -459,7 +477,7 @@ impl CodeDocument {
         let targets = self.current_source_targets(cx);
 
         if let (Some(start_ms), Some(end_ms)) = (start_ms, end_ms) {
-            self.exec_ctx.source = Some(ExecutionSourceContext::CollectionWindow {
+            self.source.exec_ctx.source = Some(ExecutionSourceContext::CollectionWindow {
                 targets,
                 start_ms,
                 end_ms,
@@ -470,10 +488,10 @@ impl CodeDocument {
             // otherwise clobber this window inside `run_query_text` via
             // `current_source_context`. Stash the panel bounds so the next
             // `run_query` rebuilds `exec_ctx.source` from them instead.
-            self.pending_window_override = Some((start_ms, end_ms));
+            self.pending.window_override = Some((start_ms, end_ms));
 
-            if !self.result_tabs.is_empty() {
-                self.pending_chart_reexecute = true;
+            if !self.result_tabs.result_tabs.is_empty() {
+                self.pending.chart_reexecute = true;
             }
         }
 
@@ -485,7 +503,7 @@ impl CodeDocument {
         let mut did_change = false;
 
         if self.connection_id.is_none()
-            && self.exec_ctx.connection_id.is_none()
+            && self.source.exec_ctx.connection_id.is_none()
             && let Some(active_connection_id) = self.app_state.read(cx).active_connection_id()
             && self
                 .app_state
@@ -494,7 +512,7 @@ impl CodeDocument {
                 .contains_key(&active_connection_id)
         {
             self.connection_id = Some(active_connection_id);
-            self.exec_ctx.connection_id = Some(active_connection_id);
+            self.source.exec_ctx.connection_id = Some(active_connection_id);
             did_change = true;
         }
 
@@ -510,7 +528,7 @@ impl CodeDocument {
             .connection_id
             .is_some_and(|id| self.app_state.read(cx).connections().contains_key(&id));
 
-        self.connection_dropdown.update(cx, |dd, cx| {
+        self.source.connection_dropdown.update(cx, |dd, cx| {
             dd.set_items(connection_items, cx);
             dd.set_selected_index(selected_connection_index, cx);
         });
@@ -522,44 +540,51 @@ impl CodeDocument {
                 let database_items =
                     Self::database_items_for_connection(&self.app_state, Some(connection_id), cx);
 
-                if self.exec_ctx.database.is_none() {
-                    self.exec_ctx.database =
+                if self.source.exec_ctx.database.is_none() {
+                    self.source.exec_ctx.database =
                         Self::default_database_for_connection(&self.app_state, connection_id, cx);
                     did_change = true;
                 }
 
-                if self.exec_ctx.database.as_ref().is_some_and(|database| {
-                    !database_items
-                        .iter()
-                        .any(|item| item.value.as_ref() == database)
-                }) {
-                    self.exec_ctx.database =
+                if self
+                    .source
+                    .exec_ctx
+                    .database
+                    .as_ref()
+                    .is_some_and(|database| {
+                        !database_items
+                            .iter()
+                            .any(|item| item.value.as_ref() == database)
+                    })
+                {
+                    self.source.exec_ctx.database =
                         Self::default_database_for_connection(&self.app_state, connection_id, cx);
                     did_change = true;
                 }
 
                 let selected_database_index =
-                    self.exec_ctx.database.as_ref().and_then(|database| {
+                    self.source.exec_ctx.database.as_ref().and_then(|database| {
                         database_items
                             .iter()
                             .position(|item| item.value.as_ref() == database)
                     });
 
-                self.database_dropdown.update(cx, |dd, cx| {
+                self.source.database_dropdown.update(cx, |dd, cx| {
                     dd.set_items(database_items, cx);
                     dd.set_selected_index(selected_database_index, cx);
                 });
 
                 let schema_items =
-                    Self::schema_items_for_connection(&self.app_state, &self.exec_ctx, cx);
-                let selected_schema_index = self.exec_ctx.schema.as_ref().and_then(|schema| {
-                    schema_items
-                        .iter()
-                        .position(|item| item.value.as_ref() == schema)
-                });
+                    Self::schema_items_for_connection(&self.app_state, &self.source.exec_ctx, cx);
+                let selected_schema_index =
+                    self.source.exec_ctx.schema.as_ref().and_then(|schema| {
+                        schema_items
+                            .iter()
+                            .position(|item| item.value.as_ref() == schema)
+                    });
 
                 let next_schema = if selected_schema_index.is_some() {
-                    self.exec_ctx.schema.clone()
+                    self.source.exec_ctx.schema.clone()
                 } else if schema_items
                     .iter()
                     .any(|item| item.value.as_ref() == "public")
@@ -569,8 +594,8 @@ impl CodeDocument {
                     None
                 };
 
-                if self.exec_ctx.schema != next_schema {
-                    self.exec_ctx.schema = next_schema.clone();
+                if self.source.exec_ctx.schema != next_schema {
+                    self.source.exec_ctx.schema = next_schema.clone();
                     did_change = true;
                 }
 
@@ -580,7 +605,7 @@ impl CodeDocument {
                         .position(|item| item.value.as_ref() == schema)
                 });
 
-                self.schema_dropdown.update(cx, |dd, cx| {
+                self.source.schema_dropdown.update(cx, |dd, cx| {
                     dd.set_items(schema_items, cx);
                     dd.set_selected_index(selected_schema_index, cx);
                 });
@@ -588,12 +613,12 @@ impl CodeDocument {
         } else {
             self.runner.clear_profile_id();
 
-            self.database_dropdown.update(cx, |dd, cx| {
+            self.source.database_dropdown.update(cx, |dd, cx| {
                 dd.set_items(Vec::new(), cx);
                 dd.set_selected_index(None, cx);
             });
 
-            self.schema_dropdown.update(cx, |dd, cx| {
+            self.source.schema_dropdown.update(cx, |dd, cx| {
                 dd.set_items(Vec::new(), cx);
                 dd.set_selected_index(None, cx);
             });
@@ -686,12 +711,12 @@ impl CodeDocument {
             return;
         };
 
-        self.exec_ctx.connection_id = Some(new_conn_id);
+        self.source.exec_ctx.connection_id = Some(new_conn_id);
         self.connection_id = Some(new_conn_id);
-        self.exec_ctx.database =
+        self.source.exec_ctx.database =
             Self::default_database_for_connection(&self.app_state, new_conn_id, cx);
-        self.exec_ctx.schema = None;
-        self.exec_ctx.container = None;
+        self.source.exec_ctx.schema = None;
+        self.source.exec_ctx.container = None;
 
         self.sync_context_dropdowns(cx);
 
@@ -705,13 +730,13 @@ impl CodeDocument {
         let db_name = item.value.to_string();
 
         // Save previous state so we can revert on connection failure.
-        let prev_database = self.exec_ctx.database.clone();
-        let prev_schema = self.exec_ctx.schema.clone();
+        let prev_database = self.source.exec_ctx.database.clone();
+        let prev_schema = self.source.exec_ctx.schema.clone();
 
-        self.exec_ctx.database = Some(db_name.clone());
-        self.exec_ctx.schema = None;
+        self.source.exec_ctx.database = Some(db_name.clone());
+        self.source.exec_ctx.schema = None;
 
-        if let Some(conn_id) = self.exec_ctx.connection_id {
+        if let Some(conn_id) = self.source.exec_ctx.connection_id {
             let needs_connection = self
                 .app_state
                 .read(cx)
@@ -739,23 +764,24 @@ impl CodeDocument {
     }
 
     fn on_schema_changed(&mut self, item: &DropdownItem, cx: &mut Context<Self>) {
-        self.exec_ctx.schema = Some(item.value.to_string());
+        self.source.exec_ctx.schema = Some(item.value.to_string());
         cx.emit(DocumentEvent::MetaChanged);
         cx.notify();
     }
 
     /// Refresh the schema dropdown and pre-select the default schema ("public" for PG).
     fn refresh_schema_dropdown_with_default(&mut self, cx: &mut Context<Self>) {
-        let schema_items = Self::schema_items_for_connection(&self.app_state, &self.exec_ctx, cx);
+        let schema_items =
+            Self::schema_items_for_connection(&self.app_state, &self.source.exec_ctx, cx);
 
-        let selected_index = self.exec_ctx.schema.as_ref().and_then(|schema| {
+        let selected_index = self.source.exec_ctx.schema.as_ref().and_then(|schema| {
             schema_items
                 .iter()
                 .position(|item| item.value.as_ref() == schema)
         });
 
         let next_schema = if selected_index.is_some() {
-            self.exec_ctx.schema.clone()
+            self.source.exec_ctx.schema.clone()
         } else if schema_items
             .iter()
             .any(|item| item.value.as_ref() == "public")
@@ -765,7 +791,7 @@ impl CodeDocument {
             None
         };
 
-        self.exec_ctx.schema = next_schema.clone();
+        self.source.exec_ctx.schema = next_schema.clone();
 
         let selected_index = next_schema.as_ref().and_then(|schema| {
             schema_items
@@ -773,7 +799,7 @@ impl CodeDocument {
                 .position(|item| item.value.as_ref() == schema)
         });
 
-        self.schema_dropdown.update(cx, |dd, cx| {
+        self.source.schema_dropdown.update(cx, |dd, cx| {
             dd.set_items(schema_items, cx);
             dd.set_selected_index(selected_index, cx);
         });
@@ -838,7 +864,7 @@ impl CodeDocument {
                         this.update(cx, |doc, cx| {
                             doc.revert_database_selection(prev_database, prev_schema, cx);
 
-                            doc.pending_error = Some(format!(
+                            doc.pending.error = Some(format!(
                                 "Failed to connect to database '{}': {}",
                                 target_db, e
                             ));
@@ -860,17 +886,20 @@ impl CodeDocument {
         prev_schema: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        self.exec_ctx.database = prev_database.clone();
-        self.exec_ctx.schema = prev_schema;
+        self.source.exec_ctx.database = prev_database.clone();
+        self.source.exec_ctx.schema = prev_schema;
 
-        let db_items =
-            Self::database_items_for_connection(&self.app_state, self.exec_ctx.connection_id, cx);
+        let db_items = Self::database_items_for_connection(
+            &self.app_state,
+            self.source.exec_ctx.connection_id,
+            cx,
+        );
 
         let db_selected = prev_database
             .as_ref()
             .and_then(|db| db_items.iter().position(|item| item.value.as_ref() == db));
 
-        self.database_dropdown.update(cx, |dd, cx| {
+        self.source.database_dropdown.update(cx, |dd, cx| {
             dd.set_items(db_items, cx);
             dd.set_selected_index(db_selected, cx);
         });
@@ -950,7 +979,7 @@ impl CodeDocument {
             return false;
         }
 
-        let Some(conn_id) = self.exec_ctx.connection_id else {
+        let Some(conn_id) = self.source.exec_ctx.connection_id else {
             return false;
         };
 
@@ -972,7 +1001,7 @@ impl CodeDocument {
             return false;
         }
 
-        let Some(conn_id) = self.exec_ctx.connection_id else {
+        let Some(conn_id) = self.source.exec_ctx.connection_id else {
             return false;
         };
 
@@ -993,7 +1022,7 @@ impl CodeDocument {
 
     /// Returns the visible context-bar slots for the current document.
     fn visible_context_bar_slots(&self, cx: &App) -> Vec<ContextBarSlot> {
-        if !self.query_language.supports_connection_context() {
+        if !self.editor.query_language.supports_connection_context() {
             return Vec::new();
         }
 
@@ -1024,10 +1053,10 @@ impl CodeDocument {
 
     fn dropdown_for_slot(&self, slot: ContextBarSlot) -> Option<&Entity<Dropdown>> {
         match slot {
-            ContextBarSlot::Connection => Some(&self.connection_dropdown),
-            ContextBarSlot::Database => Some(&self.database_dropdown),
-            ContextBarSlot::Schema => Some(&self.schema_dropdown),
-            ContextBarSlot::SourceQueryMode => Some(&self.source_query_mode_dropdown),
+            ContextBarSlot::Connection => Some(&self.source.connection_dropdown),
+            ContextBarSlot::Database => Some(&self.source.database_dropdown),
+            ContextBarSlot::Schema => Some(&self.source.schema_dropdown),
+            ContextBarSlot::SourceQueryMode => Some(&self.source.source_query_mode_dropdown),
             ContextBarSlot::SourceTargets
             | ContextBarSlot::SourceStart
             | ContextBarSlot::SourceEnd => None,
@@ -1066,7 +1095,8 @@ impl CodeDocument {
     fn exit_context_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.clear_context_bar_focus_rings(cx);
         self.focus_mode = SqlQueryFocus::Editor;
-        self.input_state
+        self.editor
+            .input_state
             .update(cx, |state, cx| state.focus(window, cx));
         cx.notify();
     }
@@ -1137,19 +1167,23 @@ impl CodeDocument {
             Command::Execute => {
                 match self.context_bar_slot {
                     ContextBarSlot::SourceQueryMode => {
-                        self.source_query_mode_dropdown
+                        self.source
+                            .source_query_mode_dropdown
                             .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
                     }
                     ContextBarSlot::SourceTargets => {
-                        self.source_targets
+                        self.source
+                            .source_targets
                             .update(cx, |multi_select, cx| multi_select.toggle_open(cx));
                     }
                     ContextBarSlot::SourceStart => {
-                        self.source_start_input
+                        self.source
+                            .source_start_input
                             .update(cx, |state, cx| state.focus(window, cx));
                     }
                     ContextBarSlot::SourceEnd => {
-                        self.source_end_input
+                        self.source
+                            .source_end_input
                             .update(cx, |state, cx| state.focus(window, cx));
                     }
                     _ => {
@@ -1212,7 +1246,7 @@ impl CodeDocument {
     // === Render the context bar ===
 
     pub(super) fn render_context_bar(&self, cx: &mut Context<Self>) -> AnyElement {
-        if !self.query_language.supports_connection_context() {
+        if !self.editor.query_language.supports_connection_context() {
             return div().id("exec-context-bar").into_any_element();
         }
 
@@ -1226,8 +1260,9 @@ impl CodeDocument {
         // When the active result grid is in Chart mode the chart toolbar
         // renders its own RANGE chips; hide the time-range widget here.
         let is_chart_mode = self
+            .result_tabs
             .active_result_index
-            .and_then(|i| self.result_tabs.get(i))
+            .and_then(|i| self.result_tabs.result_tabs.get(i))
             .map(|t| t.grid.read(cx).result_view_mode() == ResultViewMode::Chart)
             .unwrap_or(false);
 
@@ -1239,7 +1274,7 @@ impl CodeDocument {
         // individual sub-entity references via render_custom_picker_row.
         let custom_range_info = (!is_chart_mode)
             .then_some(())
-            .and(self.source_time_range_panel.as_ref())
+            .and(self.source.source_time_range_panel.as_ref())
             .and_then(|p| {
                 let panel = p.read(cx);
                 let is_custom = panel.selected_time_range == Some(TimeRange::Custom);
@@ -1275,7 +1310,7 @@ impl CodeDocument {
                             ContextBarSlot::Connection,
                         ),
                         Some(theme.ring),
-                        control_shell(self.connection_dropdown.clone(), cx),
+                        control_shell(self.source.connection_dropdown.clone(), cx),
                         cx,
                     )),
             )
@@ -1301,7 +1336,10 @@ impl CodeDocument {
                                         ContextBarSlot::SourceQueryMode,
                                     ),
                                     Some(theme.ring),
-                                    control_shell(self.source_query_mode_dropdown.clone(), cx),
+                                    control_shell(
+                                        self.source.source_query_mode_dropdown.clone(),
+                                        cx,
+                                    ),
                                     cx,
                                 )),
                             )
@@ -1319,7 +1357,7 @@ impl CodeDocument {
                             ContextBarSlot::SourceTargets,
                         ),
                         Some(theme.ring),
-                        control_shell(self.source_targets.clone(), cx),
+                        control_shell(self.source.source_targets.clone(), cx),
                         cx,
                     )));
 
@@ -1329,7 +1367,7 @@ impl CodeDocument {
                 // The custom date-range controls are on the second row (below).
                 let el = el.when_some(
                     (!is_chart_mode)
-                        .then_some(self.source_time_range_panel.as_ref())
+                        .then_some(self.source.source_time_range_panel.as_ref())
                         .flatten()
                         .map(|p| {
                             let panel = p.read(cx);
@@ -1354,7 +1392,7 @@ impl CodeDocument {
                 // without start/end labels — not InfluxDB but kept for generality).
                 // Also hidden in Chart mode (chart toolbar covers this).
                 el.when(
-                    !is_chart_mode && self.source_time_range_panel.is_none(),
+                    !is_chart_mode && self.source.source_time_range_panel.is_none(),
                     |el| {
                         el.child(
                             div().flex_none().child(Text::caption(
@@ -1370,7 +1408,7 @@ impl CodeDocument {
                                 ContextBarSlot::SourceStart,
                             ),
                             Some(theme.ring),
-                            control_shell(Input::new(&self.source_start_input), cx),
+                            control_shell(Input::new(&self.source.source_start_input), cx),
                             cx,
                         )))
                         .child(
@@ -1387,7 +1425,7 @@ impl CodeDocument {
                                 ContextBarSlot::SourceEnd,
                             ),
                             Some(theme.ring),
-                            control_shell(Input::new(&self.source_end_input), cx),
+                            control_shell(Input::new(&self.source.source_end_input), cx),
                             cx,
                         )))
                     },
@@ -1406,7 +1444,7 @@ impl CodeDocument {
                                     ContextBarSlot::Database,
                                 ),
                                 Some(theme.ring),
-                                control_shell(self.database_dropdown.clone(), cx),
+                                control_shell(self.source.database_dropdown.clone(), cx),
                                 cx,
                             )),
                     )
@@ -1424,13 +1462,13 @@ impl CodeDocument {
                                     ContextBarSlot::Schema,
                                 ),
                                 Some(theme.ring),
-                                control_shell(self.schema_dropdown.clone(), cx),
+                                control_shell(self.source.schema_dropdown.clone(), cx),
                                 cx,
                             )),
                     )
             })
             .child(div().flex_1())
-            .when_some(self.path.as_ref(), |el, path| {
+            .when_some(self.editor.path.as_ref(), |el, path| {
                 el.child(
                     div()
                         .overflow_x_hidden()

@@ -1,7 +1,7 @@
 use dbflux_core::{OutputEvent, OutputReceiver, OutputStreamKind};
 use std::sync::mpsc::TryRecvError;
 
-pub(super) struct LiveOutputState {
+pub(crate) struct LiveOutputState {
     receiver: OutputReceiver,
     rendered_text: String,
     line_count: usize,

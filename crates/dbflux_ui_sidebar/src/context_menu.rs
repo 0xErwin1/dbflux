@@ -1322,7 +1322,7 @@ impl Sidebar {
                 self.create_script_folder_in(parent, cx);
             }
             ContextMenuAction::RevealInFileManager => {
-                self.reveal_in_file_manager(&item_id);
+                self.reveal_in_file_manager(&item_id, cx);
             }
             ContextMenuAction::CopyPath => {
                 self.copy_path_to_clipboard(&item_id, cx);

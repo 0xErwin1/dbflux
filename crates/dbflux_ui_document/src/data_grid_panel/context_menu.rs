@@ -36,11 +36,11 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.focus_mode = super::GridFocusMode::Table;
-        self.edit_state = EditState::Navigating;
+        self.focus.focus_mode = super::GridFocusMode::Table;
+        self.focus.edit_state = EditState::Navigating;
 
         if is_document_view {
-            if let Some(tree_state) = &self.document_tree_state {
+            if let Some(tree_state) = &self.document_view.document_tree_state {
                 tree_state.update(cx, |state, _| state.focus(window));
             } else {
                 self.focus_handle.focus(window);
@@ -58,7 +58,7 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -105,7 +105,7 @@ impl DataGridPanel {
         });
 
         // Focus the context menu to receive keyboard events
-        self.context_menu_focus.focus(window);
+        self.focus.context_menu_focus.focus(window);
         cx.emit(DataGridEvent::Focused);
         cx.notify();
     }
@@ -135,7 +135,7 @@ impl DataGridPanel {
             row_actions: Vec::new(),
         });
 
-        self.context_menu_focus.focus(window);
+        self.focus.context_menu_focus.focus(window);
         cx.emit(DataGridEvent::Focused);
         cx.notify();
     }
@@ -146,7 +146,7 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(tree_state) = &self.document_tree_state else {
+        let Some(tree_state) = &self.document_view.document_tree_state else {
             return;
         };
 
@@ -192,7 +192,7 @@ impl DataGridPanel {
             row_actions: Vec::new(),
         });
 
-        self.context_menu_focus.focus(window);
+        self.focus.context_menu_focus.focus(window);
         cx.emit(DataGridEvent::Focused);
         cx.notify();
     }
@@ -525,7 +525,8 @@ impl DataGridPanel {
 
     /// Returns true if the data grid is editable (has primary key info).
     pub(super) fn check_is_editable(&self, cx: &App) -> bool {
-        self.table_state
+        self.grid_table
+            .table_state
             .as_ref()
             .map(|ts| ts.read(cx).is_editable())
             .unwrap_or(false)
@@ -534,15 +535,19 @@ impl DataGridPanel {
     /// Returns true if the context menu is currently open.
     /// Returns the active context for keyboard handling.
     pub fn active_context(&self, cx: &App) -> ContextId {
-        if self.cell_editor.read(cx).is_visible()
-            || self.document_preview_modal.read(cx).is_visible()
+        if self.document_view.cell_editor.read(cx).is_visible()
+            || self
+                .document_view
+                .document_preview_modal
+                .read(cx)
+                .is_visible()
         {
             return ContextId::TextInput;
         }
 
         if self.context_menu.is_some() {
             ContextId::ContextMenu
-        } else if self.edit_state == EditState::Editing {
+        } else if self.focus.edit_state == EditState::Editing {
             ContextId::TextInput
         } else {
             ContextId::Results
@@ -880,13 +885,15 @@ impl DataGridPanel {
     fn has_context_menu_row_target(&self, row: usize, is_document_view: bool, cx: &App) -> bool {
         if is_document_view {
             return self
+                .document_view
                 .document_tree_state
                 .as_ref()
                 .and_then(|state| state.read(cx).get_raw_document(row))
                 .is_some();
         }
 
-        self.table_state
+        self.grid_table
+            .table_state
             .as_ref()
             .and_then(|state| state.read(cx).edit_buffer().visual_row_source(row))
             .is_some()
@@ -929,7 +936,7 @@ impl DataGridPanel {
         let _ = window;
         let _formats = dbflux_export::available_formats(&self.result.shape);
 
-        self.export_menu_open = !self.export_menu_open;
+        self.chrome.export_menu_open = !self.chrome.export_menu_open;
         cx.notify();
     }
 
@@ -939,7 +946,7 @@ impl DataGridPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.export_menu_open = false;
+        self.chrome.export_menu_open = false;
 
         let result = self.result.clone();
         let base_name = self.export_base_name();
@@ -982,7 +989,7 @@ impl DataGridPanel {
                         );
                         cx.update(|cx| {
                             entity.update(cx, |panel, cx| {
-                                panel.pending_toast =
+                                panel.pending.toast =
                                     Some(PendingToast { message, is_error: true });
                                 cx.notify();
                             });
@@ -1029,7 +1036,7 @@ impl DataGridPanel {
 
             cx.update(|cx| {
                 entity.update(cx, |panel, cx| {
-                    panel.pending_toast = Some(PendingToast { message, is_error });
+                    panel.pending.toast = Some(PendingToast { message, is_error });
                     cx.notify();
                 });
             })
@@ -1044,10 +1051,10 @@ impl DataGridPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.export_menu_open = false;
+        self.chrome.export_menu_open = false;
 
         if matches!(format, ExportFormat::Binary) {
-            self.pending_toast = Some(PendingToast {
+            self.pending.toast = Some(PendingToast {
                 message:
                     "Raw binary cannot be copied to the clipboard — choose Hex or Base64 instead."
                         .to_string(),
@@ -1069,7 +1076,7 @@ impl DataGridPanel {
                     let byte_len = text.len();
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                     record_clipboard_audit(&audit_service, format_name, Some(byte_len), None);
-                    self.pending_toast = Some(PendingToast {
+                    self.pending.toast = Some(PendingToast {
                         message: format!(
                             "Copied {} ({} bytes) to clipboard",
                             format_name, byte_len
@@ -1081,7 +1088,7 @@ impl DataGridPanel {
                 Err(e) => {
                     let err_text = format!("Cannot copy non-UTF8 output: {}", e);
                     record_clipboard_audit(&audit_service, format_name, None, Some(&err_text));
-                    self.pending_toast = Some(PendingToast {
+                    self.pending.toast = Some(PendingToast {
                         message: err_text,
                         is_error: true,
                     });
@@ -1091,7 +1098,7 @@ impl DataGridPanel {
             Err(e) => {
                 let err_text = e.to_string();
                 record_clipboard_audit(&audit_service, format_name, None, Some(&err_text));
-                self.pending_toast = Some(PendingToast {
+                self.pending.toast = Some(PendingToast {
                     message: format!("Copy failed: {}", err_text),
                     is_error: true,
                 });
@@ -2436,7 +2443,7 @@ impl DataGridPanel {
                 .top_0()
                 .left_0()
                 .size_full()
-                .track_focus(&self.context_menu_focus)
+                .track_focus(&self.focus.context_menu_focus)
                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                     use dbflux_app::keymap::KeyChord;
                     use dbflux_ui_base::keymap::{default_keymap, key_chord_from_gpui};
@@ -2635,7 +2642,7 @@ impl DataGridPanel {
         use super::row_inspector::{InspectorCell, InspectorSnapshot, RowInspectorContent};
         use dbflux_components::components::data_table::model::ColumnKind;
 
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -2646,8 +2653,8 @@ impl DataGridPanel {
         // the result. Drop the cached state and hide the rail rather than
         // showing a phantom row of nulls.
         if row >= model.row_count() {
-            self.inspector_row = None;
-            self.row_inspector_content = None;
+            self.inspector.inspector_row = None;
+            self.inspector.row_inspector_content = None;
             cx.emit(DataGridEvent::CloseInspector);
             return;
         }
@@ -2700,7 +2707,7 @@ impl DataGridPanel {
         let has_fk_lookups = !fk_references.is_empty();
 
         // Reuse the existing content entity or create a new one.
-        let content = match &self.row_inspector_content {
+        let content = match &self.inspector.row_inspector_content {
             Some(existing) => {
                 existing.update(cx, |c, cx| c.open(snapshot, cx));
                 existing.clone()
@@ -2710,7 +2717,7 @@ impl DataGridPanel {
                 if !has_fk_lookups {
                     new_content.update(cx, |c, cx| c.set_references(Vec::new(), cx));
                 }
-                self.row_inspector_content = Some(new_content.clone());
+                self.inspector.row_inspector_content = Some(new_content.clone());
                 new_content
             }
         };
@@ -2720,7 +2727,7 @@ impl DataGridPanel {
 
         // Remember the active coordinates so refresh / tab activation /
         // selection navigation can rebuild the snapshot from fresh data.
-        self.inspector_row = Some((row, col));
+        self.inspector.inspector_row = Some((row, col));
 
         // Tell the workspace to mount/replace the inspector rail.
         let title = SharedString::from(row_label);
@@ -2933,7 +2940,7 @@ impl DataGridPanel {
     }
 
     pub(super) fn handle_copy(&self, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(table_state) = &self.table_state {
+        if let Some(table_state) = &self.grid_table.table_state {
             let text = table_state.read(cx).copy_selection();
             if let Some(text) = text {
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -2943,7 +2950,7 @@ impl DataGridPanel {
 
     /// Copy entire document as JSON (for document view).
     pub(super) fn handle_copy_document(&self, doc_index: usize, cx: &mut Context<Self>) {
-        let Some(tree_state) = &self.document_tree_state else {
+        let Some(tree_state) = &self.document_view.document_tree_state else {
             return;
         };
 
@@ -2957,7 +2964,7 @@ impl DataGridPanel {
 
     /// Open document preview modal for viewing/editing (for document view).
     pub(super) fn handle_view_document(&mut self, doc_index: usize, cx: &mut Context<Self>) {
-        let Some(tree_state) = &self.document_tree_state else {
+        let Some(tree_state) = &self.document_view.document_tree_state else {
             return;
         };
 
@@ -2966,7 +2973,7 @@ impl DataGridPanel {
             let json_str =
                 serde_json::to_string_pretty(&json_value).unwrap_or_else(|_| "{}".to_string());
 
-            self.pending_document_preview = Some(PendingDocumentPreview {
+            self.pending.document_preview = Some(PendingDocumentPreview {
                 doc_index,
                 document_json: json_str,
             });
@@ -2978,7 +2985,7 @@ impl DataGridPanel {
     pub(super) fn handle_copy_row(&self, row: usize, cx: &mut Context<Self>) {
         use dbflux_components::components::data_table::model::VisualRowSource;
 
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -3023,7 +3030,7 @@ impl DataGridPanel {
     }
 
     pub(super) fn handle_paste(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -3054,7 +3061,7 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(table_state) = &self.table_state {
+        if let Some(table_state) = &self.grid_table.table_state {
             table_state.update(cx, |state, cx| {
                 let coord =
                     dbflux_components::components::data_table::selection::CellCoord::new(row, col);
@@ -3066,7 +3073,7 @@ impl DataGridPanel {
     pub(super) fn handle_edit_in_modal(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
         use dbflux_components::components::data_table::model::{ColumnKind, VisualRowSource};
 
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -3107,7 +3114,7 @@ impl DataGridPanel {
             None => return,
         };
 
-        self.pending_modal_open = Some(PendingModalOpen {
+        self.pending.modal_open = Some(PendingModalOpen {
             row,
             col,
             value,
@@ -3122,7 +3129,7 @@ impl DataGridPanel {
         // Get column default value from table details
         let default_value = self.get_column_default(col, cx);
 
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -3153,7 +3160,7 @@ impl DataGridPanel {
     pub(super) fn handle_set_null(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
         use dbflux_components::components::data_table::model::VisualRowSource;
 
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -3186,7 +3193,7 @@ impl DataGridPanel {
     ) {
         use dbflux_components::components::data_table::model::VisualRowSource;
 
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -3288,14 +3295,14 @@ impl DataGridPanel {
                     entity.update(cx, |panel, cx| {
                         match result {
                             Ok(_) => {
-                                panel.pending_toast = Some(PendingToast {
+                                panel.pending.toast = Some(PendingToast {
                                     message: "Document inserted".to_string(),
                                     is_error: false,
                                 });
-                                panel.pending_refresh = true;
+                                panel.pending.refresh = true;
                             }
                             Err(e) => {
-                                panel.pending_toast = Some(PendingToast {
+                                panel.pending.toast = Some(PendingToast {
                                     message: format!("Failed to insert document: {}", e),
                                     is_error: true,
                                 });
@@ -3328,7 +3335,7 @@ impl DataGridPanel {
             }
         } else {
             // Extract PK values from the current row
-            let Some(table_state) = &self.table_state else {
+            let Some(table_state) = &self.grid_table.table_state else {
                 Toast::error("Table state not available")
                     .meta_right(now_hms())
                     .action(copy_action("Table state not available"))
@@ -3403,14 +3410,14 @@ impl DataGridPanel {
                 entity.update(cx, |panel, cx| {
                     match result {
                         Ok(_) => {
-                            panel.pending_toast = Some(PendingToast {
+                            panel.pending.toast = Some(PendingToast {
                                 message: "Document updated".to_string(),
                                 is_error: false,
                             });
-                            panel.pending_refresh = true;
+                            panel.pending.refresh = true;
                         }
                         Err(e) => {
-                            panel.pending_toast = Some(PendingToast {
+                            panel.pending.toast = Some(PendingToast {
                                 message: format!("Failed to update document: {}", e),
                                 is_error: true,
                             });
@@ -3445,7 +3452,7 @@ impl DataGridPanel {
         // which routes to insert_document instead of update_document.
         if is_document_view && is_collection {
             let new_doc = self.build_new_document_template();
-            self.pending_document_preview = Some(PendingDocumentPreview {
+            self.pending.document_preview = Some(PendingDocumentPreview {
                 doc_index: DOC_INDEX_NEW,
                 document_json: new_doc,
             });
@@ -3453,7 +3460,7 @@ impl DataGridPanel {
             return;
         }
 
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -3560,7 +3567,7 @@ impl DataGridPanel {
         // In document view, open the modal with the source document pre-filled but
         // with a fresh PK so the user can review and confirm before inserting.
         if is_document_view && is_collection {
-            if let Some(tree_state) = &self.document_tree_state
+            if let Some(tree_state) = &self.document_view.document_tree_state
                 && let Some(raw_doc) = tree_state.read(cx).get_raw_document(visual_row)
             {
                 let mut doc_json = value_to_json(raw_doc);
@@ -3582,7 +3589,7 @@ impl DataGridPanel {
                 let json_str =
                     serde_json::to_string_pretty(&doc_json).unwrap_or_else(|_| "{}".to_string());
 
-                self.pending_document_preview = Some(PendingDocumentPreview {
+                self.pending.document_preview = Some(PendingDocumentPreview {
                     doc_index: DOC_INDEX_NEW,
                     document_json: json_str,
                 });
@@ -3591,7 +3598,7 @@ impl DataGridPanel {
             return;
         }
 
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -3724,7 +3731,7 @@ impl DataGridPanel {
             return;
         }
 
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -3756,7 +3763,7 @@ impl DataGridPanel {
     fn resolve_cell_value(&self, visual_row: usize, col: usize, cx: &App) -> Option<Value> {
         use dbflux_components::components::data_table::model::VisualRowSource;
 
-        let table_state = self.table_state.as_ref()?;
+        let table_state = self.grid_table.table_state.as_ref()?;
         let ts = table_state.read(cx);
         let buffer = ts.edit_buffer();
         let visual_order = buffer.compute_visual_order();
@@ -3777,7 +3784,7 @@ impl DataGridPanel {
     /// Appends `expr` to the WHERE filter input and refreshes.
     /// Wraps with parentheses — `(old) AND (new)` — to avoid precedence bugs.
     fn apply_filter_expression(&mut self, expr: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let current = self.filter_input.read(cx).value().to_string();
+        let current = self.filter_bar.filter_input.read(cx).value().to_string();
 
         let new_filter = if current.trim().is_empty() {
             expr.to_string()
@@ -3785,7 +3792,8 @@ impl DataGridPanel {
             format!("({}) AND ({})", current.trim(), expr)
         };
 
-        self.filter_input
+        self.filter_bar
+            .filter_input
             .update(cx, |state, cx| state.set_value(&new_filter, window, cx));
         self.refresh(window, cx);
     }
@@ -3904,7 +3912,8 @@ impl DataGridPanel {
     }
 
     fn handle_remove_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.filter_input
+        self.filter_bar
+            .filter_input
             .update(cx, |state, cx| state.set_value("", window, cx));
         self.refresh(window, cx);
     }
@@ -3985,7 +3994,7 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let current = self.filter_input.read(cx).value().to_string();
+        let current = self.filter_bar.filter_input.read(cx).value().to_string();
         let current_trimmed = current.trim();
 
         let composed = if current_trimmed.is_empty() {
@@ -3999,7 +4008,8 @@ impl DataGridPanel {
 
         let serialized = serde_json::to_string(&composed).unwrap_or_default();
 
-        self.filter_input
+        self.filter_bar
+            .filter_input
             .update(cx, |state, cx| state.set_value(&serialized, window, cx));
         self.refresh(window, cx);
     }
@@ -4086,7 +4096,7 @@ impl DataGridPanel {
             DataSource::QueryResult { .. } => return,
         };
 
-        let Some(table_state) = &self.table_state else {
+        let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
@@ -4292,7 +4302,7 @@ impl DataGridPanel {
     ) -> Option<MutationRequest> {
         use dbflux_components::components::data_table::model::VisualRowSource;
 
-        let table_state = self.table_state.as_ref()?;
+        let table_state = self.grid_table.table_state.as_ref()?;
         let state = table_state.read(cx);
         let model = state.model();
         let buffer = state.edit_buffer();
@@ -4491,7 +4501,7 @@ impl DataGridPanel {
     ) -> Option<MutationRequest> {
         use dbflux_components::components::data_table::model::VisualRowSource;
 
-        let table_state = self.table_state.as_ref()?;
+        let table_state = self.grid_table.table_state.as_ref()?;
         let state = table_state.read(cx);
         let buffer = state.edit_buffer();
         let visual_order = buffer.compute_visual_order();

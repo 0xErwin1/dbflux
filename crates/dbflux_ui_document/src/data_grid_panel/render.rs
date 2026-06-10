@@ -27,6 +27,49 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 
+/// Snapshot of derived render state computed once per frame from `&self`.
+///
+/// All fields are cheap to clone (primitives, cloned handles). This struct
+/// keeps the `Render::render` entry point free of inline derivation logic.
+struct RenderState {
+    theme: gpui_component::theme::Theme,
+    row_count: usize,
+    exec_time: String,
+    show_data_toolbar: bool,
+    is_paginated: bool,
+    source_name: String,
+    source_query_prefix: &'static str,
+    filter_keyword: String,
+    filter_input: Entity<InputState>,
+    filter_has_value: bool,
+    limit_input: Entity<InputState>,
+    pagination_info: Option<Pagination>,
+    total_pages: Option<u64>,
+    can_prev: bool,
+    can_next: bool,
+    sort_info: Option<(String, SortDirection, bool)>,
+    show_toolbar_focus: bool,
+    toolbar_focus: ToolbarFocus,
+    focus_handle: FocusHandle,
+    has_data: bool,
+    is_loading: bool,
+    show_panel_controls: bool,
+    is_maximized: bool,
+    uses_result_view: bool,
+    content_mode: DataGridContentMode,
+    shows_content_controls: bool,
+    is_editable: bool,
+    has_pending_changes: bool,
+    dirty_count: usize,
+    can_undo: bool,
+    can_redo: bool,
+    show_grouped_warning: bool,
+    show_pk_warning: bool,
+    show_builder_readonly_hint: bool,
+    show_edit_toolbar: bool,
+    result_view_mode: ResultViewMode,
+}
+
 // Save-row shortcut hint: matches the SaveRow binding in the data-table
 // component (`secondary-enter` — Cmd+Enter on macOS, Ctrl+Enter elsewhere).
 #[cfg(target_os = "macos")]
@@ -61,14 +104,104 @@ fn content_mode_for_result(
 
 impl Render for DataGridPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Process pending state
-        if let Some(pending) = self.pending_total_count.take() {
+        self.process_pending_actions(window, cx);
+        let st = self.derive_render_state(cx);
+
+        div()
+            .track_focus(&st.focus_handle)
+            .flex()
+            .flex_col()
+            .size_full()
+            .child(self.panel_origin_canvas(cx))
+            .when(st.show_data_toolbar, |d| {
+                d.child(self.render_toolbar(
+                    st.source_query_prefix,
+                    &st.filter_keyword,
+                    &st.source_name,
+                    &st.filter_input,
+                    st.filter_has_value,
+                    &st.limit_input,
+                    st.show_toolbar_focus,
+                    st.toolbar_focus,
+                    &st.theme,
+                    cx,
+                ))
+            })
+            .child(self.render_warning_banners(&st))
+            .when(st.show_edit_toolbar, |d| {
+                d.child(self.render_edit_toolbar(
+                    st.dirty_count,
+                    st.has_pending_changes,
+                    st.can_undo,
+                    st.can_redo,
+                    &st.theme,
+                    cx,
+                ))
+            })
+            .when(st.show_panel_controls && st.shows_content_controls, |d| {
+                d.child(self.render_panel_controls_header(&st, cx))
+            })
+            .child(self.render_content_body(&st, cx))
+            .child(self.render_status_bar(
+                st.row_count,
+                &st.exec_time,
+                st.is_paginated,
+                st.pagination_info,
+                st.total_pages,
+                st.can_prev,
+                st.can_next,
+                st.sort_info,
+                st.has_data,
+                st.uses_result_view,
+                st.dirty_count,
+                &st.theme,
+                cx,
+            ))
+            .when_some(self.context_menu.as_ref(), |d, menu| {
+                d.child(self.render_context_menu(menu, st.is_editable, &st.theme, cx))
+            })
+            .when(self.pending_delete_confirm.is_some(), |d| {
+                d.child(self.render_delete_confirm_modal(&st.theme, cx))
+            })
+            .when(self.document_view.cell_editor.read(cx).is_visible(), |d| {
+                d.child(self.document_view.cell_editor.clone())
+            })
+            .when(
+                self.document_view
+                    .document_preview_modal
+                    .read(cx)
+                    .is_visible(),
+                |d| d.child(self.document_view.document_preview_modal.clone()),
+            )
+            .when(
+                self.mutation_confirm
+                    .mutation_confirm_light
+                    .read(cx)
+                    .is_visible(),
+                |d| d.child(self.mutation_confirm.mutation_confirm_light.clone()),
+            )
+            .when(
+                self.mutation_confirm
+                    .mutation_confirm_hard
+                    .read(cx)
+                    .is_visible(),
+                |d| d.child(self.mutation_confirm.mutation_confirm_hard.clone()),
+            )
+    }
+}
+
+impl DataGridPanel {
+    /// Drains pending actions in the exact order the render entry expects; order
+    /// is load-bearing. Must stay on `DataGridPanel` because the drain calls
+    /// methods that require `&mut self` and GPUI's single-Context borrow model.
+    pub(super) fn process_pending_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(pending) = self.pending.total_count.take() {
             self.apply_total_count(pending.source_qualified, pending.total, cx);
         }
 
-        dbflux_ui_base::toast::flush_pending_toast(self.pending_toast.take(), window, cx);
+        dbflux_ui_base::toast::flush_pending_toast(self.pending.toast.take(), window, cx);
 
-        if let Some(requery) = self.pending_requery.take() {
+        if let Some(requery) = self.pending.requery.take() {
             self.run_table_query(
                 requery.profile_id,
                 requery.database,
@@ -81,64 +214,68 @@ impl Render for DataGridPanel {
             );
         }
 
-        if self.pending_rebuild {
-            self.pending_rebuild = false;
+        if std::mem::take(&mut self.pending.rebuild) {
             let sort = self
+                .grid_table
                 .local_sort_state
                 .map(|s| TableSortState::new(s.column_ix, s.direction));
             self.rebuild_table(sort, cx);
         }
 
-        if self.pending_refresh {
-            self.pending_refresh = false;
+        if std::mem::take(&mut self.pending.refresh) {
             self.refresh(window, cx);
         }
 
         if self.context_menu.is_none() {
-            self.pending_context_menu_focus = false;
-        } else if self.pending_context_menu_focus {
-            self.pending_context_menu_focus = false;
-            self.context_menu_focus.focus(window);
+            self.pending.context_menu_focus = false;
+        } else if std::mem::take(&mut self.pending.context_menu_focus) {
+            self.focus.context_menu_focus.focus(window);
         }
 
-        if let Some(modal) = self.pending_modal_open.take() {
-            self.cell_editor.update(cx, |editor, cx| {
+        if let Some(modal) = self.pending.modal_open.take() {
+            self.document_view.cell_editor.update(cx, |editor, cx| {
                 editor.open(modal.row, modal.col, modal.value, modal.is_json, window, cx);
             });
         }
 
-        if let Some(preview) = self.pending_document_preview.take() {
-            self.document_preview_modal.update(cx, |modal, cx| {
-                modal.open(preview.doc_index, preview.document_json, window, cx);
-            });
+        if let Some(preview) = self.pending.document_preview.take() {
+            self.document_view
+                .document_preview_modal
+                .update(cx, |modal, cx| {
+                    modal.open(preview.doc_index, preview.document_json, window, cx);
+                });
         }
 
-        if let Some(pending_modal) = self.pending_mutation_modal.take() {
+        if let Some(pending_modal) = self.pending.mutation_modal.take() {
             use crate::data_grid_panel::mutation_confirm::PendingMutationModal;
             match pending_modal {
                 PendingMutationModal::Light(req) => {
-                    self.mutation_confirm_light.update(cx, |modal, cx| {
-                        modal.open(req, cx);
-                    });
+                    self.mutation_confirm
+                        .mutation_confirm_light
+                        .update(cx, |modal, cx| {
+                            modal.open(req, cx);
+                        });
                 }
                 PendingMutationModal::Hard(req) => {
-                    self.mutation_confirm_hard.update(cx, |modal, cx| {
-                        modal.open(req, window, cx);
-                    });
+                    self.mutation_confirm
+                        .mutation_confirm_hard
+                        .update(cx, |modal, cx| {
+                            modal.open(req, window, cx);
+                        });
                 }
             }
         }
+    }
 
-        // Clone theme colors to avoid borrow conflicts with cx
+    /// Derives the per-frame render state from `&self`. Pure read — no mutation.
+    fn derive_render_state(&self, cx: &mut Context<Self>) -> RenderState {
         let theme = cx.theme().clone();
 
         let row_count = self.result.row_count();
         let exec_time = format!("{}ms", self.result.execution_time.as_millis());
 
         let is_table_view = self.source.is_table();
-        // Suppress the toolbar row when it has been moved into the hosting
-        // ResultPanel's chrome row (via ViewHandle::toolbar_segments).
-        let show_data_toolbar = !self.toolbar_in_chrome_row
+        let show_data_toolbar = !self.chrome.toolbar_in_chrome_row
             && matches!(
                 self.source,
                 DataSource::Table { .. } | DataSource::Collection { .. }
@@ -151,14 +288,14 @@ impl Render for DataGridPanel {
         };
         let (source_query_prefix, raw_filter_keyword) =
             DataGridPanel::filter_labels_for_source(&self.source, &self.app_state, cx);
-        let filter_keyword = if self.filter_input_hidden {
+        let filter_keyword = if self.builder.filter_input_hidden {
             String::new()
         } else {
             raw_filter_keyword.to_string()
         };
-        let filter_input = self.filter_input.clone();
-        let filter_has_value = !self.filter_input.read(cx).value().is_empty();
-        let limit_input = self.limit_input.clone();
+        let filter_input = self.filter_bar.filter_input.clone();
+        let filter_has_value = !self.filter_bar.filter_input.read(cx).value().is_empty();
+        let limit_input = self.filter_bar.limit_input.clone();
 
         let pagination_info = self.source.pagination().cloned();
         let total_pages = self.total_pages();
@@ -166,9 +303,9 @@ impl Render for DataGridPanel {
         let can_next = self.can_go_next();
         let sort_info = self.current_sort_info();
 
-        let focus_mode = self.focus_mode;
-        let toolbar_focus = self.toolbar_focus;
-        let edit_state = self.edit_state;
+        let focus_mode = self.focus.focus_mode;
+        let toolbar_focus = self.focus.toolbar_focus;
+        let edit_state = self.focus.edit_state;
         let show_toolbar_focus =
             focus_mode == GridFocusMode::Toolbar && edit_state == EditState::Navigating;
         let focus_handle = self.focus_handle.clone();
@@ -177,29 +314,25 @@ impl Render for DataGridPanel {
             || self.result.text_body.is_some()
             || self.result.raw_bytes.is_some();
         let has_columns = !self.result.columns.is_empty();
-        let is_loading = self.state == GridState::Loading;
+        let is_loading = self.refresh.state == GridState::Loading;
         let view_mode = self.view_config.mode;
 
-        let show_panel_controls = self.show_panel_controls;
-        let is_maximized = self.is_maximized;
+        let show_panel_controls = self.chrome.show_panel_controls;
+        let is_maximized = self.chrome.is_maximized;
         let uses_result_view = self.uses_result_view();
         let content_mode =
             content_mode_for_result(uses_result_view, view_mode, has_columns, has_data);
         let shows_table_content = matches!(content_mode, DataGridContentMode::Table);
         let shows_content_controls = has_data || shows_table_content;
 
-        // The result-tabs strip (Table | Chart) has been extracted to ResultPanel
-        // which wraps DataDocument. DataGridPanel no longer renders the strip.
-
-        // Get edit state from table
         let (is_editable, has_pending_changes, dirty_count, can_undo, can_redo) = self
+            .grid_table
             .table_state
             .as_ref()
             .map(|ts| {
                 let state = ts.read(cx);
                 let buffer = state.edit_buffer();
 
-                // Count all pending operations: edits, inserts, deletes
                 let edit_count = buffer.dirty_row_count();
                 let insert_count = buffer.pending_insert_rows().len();
                 let delete_count = buffer.pending_delete_rows().len();
@@ -222,51 +355,78 @@ impl Render for DataGridPanel {
             && shows_table_content
             && !is_editable
             && !is_grouped_result
-            && self.current_visual_spec.is_none();
+            && self.builder.current_visual_spec.is_none();
         let show_builder_readonly_hint = is_table_view
             && shows_table_content
             && !is_editable
             && !is_grouped_result
-            && self.current_visual_spec.is_some()
-            && self.builder_editable_binding.is_none();
+            && self.builder.current_visual_spec.is_some()
+            && self.builder.builder_editable_binding.is_none();
         let show_edit_toolbar = is_table_view && has_columns && is_editable;
+        let result_view_mode = self.chrome.result_view_mode;
 
+        RenderState {
+            theme,
+            row_count,
+            exec_time,
+            show_data_toolbar,
+            is_paginated,
+            source_name,
+            source_query_prefix,
+            filter_keyword,
+            filter_input,
+            filter_has_value,
+            limit_input,
+            pagination_info,
+            total_pages,
+            can_prev,
+            can_next,
+            sort_info,
+            show_toolbar_focus,
+            toolbar_focus,
+            focus_handle,
+            has_data,
+            is_loading,
+            show_panel_controls,
+            is_maximized,
+            uses_result_view,
+            content_mode,
+            shows_content_controls,
+            is_editable,
+            has_pending_changes,
+            dirty_count,
+            can_undo,
+            can_redo,
+            show_grouped_warning,
+            show_pk_warning,
+            show_builder_readonly_hint,
+            show_edit_toolbar,
+            result_view_mode,
+        }
+    }
+
+    /// Invisible full-size canvas that tracks the panel's origin in window
+    /// coordinates, used for context menu positioning.
+    fn panel_origin_canvas(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let this_entity = cx.entity().clone();
+        canvas(
+            move |bounds, _, cx| {
+                this_entity.update(cx, |this, _cx| {
+                    this.panel_origin = bounds.origin;
+                });
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full()
+    }
+
+    /// Renders the three informational banners (grouped-result, no-PK, builder
+    /// read-only). Each banner is conditionally included; the wrapper div is
+    /// always emitted so the call site never needs a conditional.
+    fn render_warning_banners(&self, st: &RenderState) -> impl IntoElement {
         div()
-            .track_focus(&focus_handle)
-            .flex()
-            .flex_col()
-            .size_full()
-            // Track panel origin for context menu positioning
-            .child({
-                let this_entity = cx.entity().clone();
-                canvas(
-                    move |bounds, _, cx| {
-                        this_entity.update(cx, |this, _cx| {
-                            this.panel_origin = bounds.origin;
-                        });
-                    },
-                    |_, _, _, _| {},
-                )
-                .absolute()
-                .size_full()
-            })
-            // Toolbar (Table / Collection sources)
-            .when(show_data_toolbar, |d| {
-                d.child(self.render_toolbar(
-                    source_query_prefix,
-                    &filter_keyword,
-                    &source_name,
-                    &filter_input,
-                    filter_has_value,
-                    &limit_input,
-                    show_toolbar_focus,
-                    toolbar_focus,
-                    &theme,
-                    cx,
-                ))
-            })
-            // Grouped-result banner (when result is from a GROUP BY query)
-            .when(show_grouped_warning, |d| {
+            .when(st.show_grouped_warning, |d| {
                 d.child(
                     div()
                         .flex()
@@ -274,22 +434,21 @@ impl Render for DataGridPanel {
                         .gap(Spacing::SM)
                         .h(Heights::ROW_COMPACT)
                         .px(Spacing::SM)
-                        .bg(theme.muted.opacity(0.15))
+                        .bg(st.theme.muted.opacity(0.15))
                         .border_b_1()
-                        .border_color(theme.border)
+                        .border_color(st.theme.border)
                         .child(
                             Icon::new(AppIcon::TriangleAlert)
                                 .small()
-                                .color(theme.muted_foreground),
+                                .color(st.theme.muted_foreground),
                         )
                         .child(
                             Text::caption("Aggregated results cannot be edited")
-                                .color(theme.muted_foreground),
+                                .color(st.theme.muted_foreground),
                         ),
                 )
             })
-            // PK warning banner (when table has no PK)
-            .when(show_pk_warning, |d| {
+            .when(st.show_pk_warning, |d| {
                 d.child(
                     div()
                         .flex()
@@ -297,9 +456,9 @@ impl Render for DataGridPanel {
                         .gap(Spacing::SM)
                         .h(Heights::ROW_COMPACT)
                         .px(Spacing::SM)
-                        .bg(theme.warning.opacity(0.15))
+                        .bg(st.theme.warning.opacity(0.15))
                         .border_b_1()
-                        .border_color(theme.warning.opacity(0.3))
+                        .border_color(st.theme.warning.opacity(0.3))
                         .child(Icon::new(AppIcon::TriangleAlert).small().warning())
                         .child(
                             Text::caption("This table has no primary key - editing is disabled")
@@ -307,8 +466,7 @@ impl Render for DataGridPanel {
                         ),
                 )
             })
-            // Builder read-only hint (when builder result is not editable-safe)
-            .when(show_builder_readonly_hint, |d| {
+            .when(st.show_builder_readonly_hint, |d| {
                 d.child(
                     div()
                         .flex()
@@ -316,190 +474,152 @@ impl Render for DataGridPanel {
                         .gap(Spacing::SM)
                         .h(Heights::ROW_COMPACT)
                         .px(Spacing::SM)
-                        .bg(theme.muted.opacity(0.15))
+                        .bg(st.theme.muted.opacity(0.15))
                         .border_b_1()
-                        .border_color(theme.border)
+                        .border_color(st.theme.border)
                         .child(
                             Icon::new(AppIcon::TriangleAlert)
                                 .small()
-                                .color(theme.muted_foreground),
+                                .color(st.theme.muted_foreground),
                         )
                         .child(
                             Text::caption(
                                 "Editing disabled: result is not bound to a single table.",
                             )
-                            .color(theme.muted_foreground),
+                            .color(st.theme.muted_foreground),
                         ),
                 )
             })
-            // Edit toolbar (always visible for editable tables)
-            .when(show_edit_toolbar, |d| {
-                d.child(self.render_edit_toolbar(
-                    dirty_count,
-                    has_pending_changes,
-                    can_undo,
-                    can_redo,
-                    &theme,
-                    cx,
-                ))
-            })
-            // Header bar with panel controls (only when embedded)
-            .when(show_panel_controls && shows_content_controls, |d| {
-                d.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_end()
-                        .h(Heights::ROW_COMPACT)
-                        .px(Spacing::SM)
-                        .border_b_1()
-                        .border_color(theme.border)
-                        .child(
-                            div()
-                                .id("toggle-maximize")
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .w(Heights::ICON_LG)
-                                .h(Heights::ICON_LG)
-                                .rounded(Radii::SM)
-                                .cursor_pointer()
-                                .hover(|d| d.bg(theme.secondary))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.request_toggle_maximize(cx);
-                                }))
-                                .child(
-                                    Icon::new(if is_maximized {
-                                        AppIcon::Minimize2
-                                    } else {
-                                        AppIcon::Maximize2
-                                    })
-                                    .small()
-                                    .color(theme.muted_foreground),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .id("hide-panel")
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .w(Heights::ICON_LG)
-                                .h(Heights::ICON_LG)
-                                .rounded(Radii::SM)
-                                .cursor_pointer()
-                                .hover(|d| d.bg(theme.secondary))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.request_hide(cx);
-                                }))
-                                .child(
-                                    Icon::new(AppIcon::PanelBottomClose)
-                                        .small()
-                                        .color(theme.muted_foreground),
-                                ),
-                        ),
-                )
-            })
-            // Grid, Document, or Result View
-            .child({
-                let result_view_mode = self.result_view_mode;
+    }
 
+    /// Renders the maximize/hide header bar shown when the panel is embedded
+    /// and content controls are visible.
+    fn render_panel_controls_header(
+        &self,
+        st: &RenderState,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .flex()
+            .items_center()
+            .justify_end()
+            .h(Heights::ROW_COMPACT)
+            .px(Spacing::SM)
+            .border_b_1()
+            .border_color(st.theme.border)
+            .child(
                 div()
-                    .flex_1()
+                    .id("toggle-maximize")
                     .flex()
-                    .flex_col()
-                    .overflow_hidden()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| {
-                            if this.focus_mode != GridFocusMode::Table {
-                                this.focus_table(window, cx);
-                            }
-                        }),
-                    )
-                    // Content body — fills remaining space.
-                    .child({
-                        let content = div().flex_1().overflow_hidden();
-
-                        let content = content.when(
-                            matches!(content_mode, DataGridContentMode::EmptyFallback),
-                            |d| {
-                                d.flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(if is_loading {
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap(Spacing::SM)
-                                            .child(
-                                                Icon::new(AppIcon::Loader)
-                                                    .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
-                                                    .color(theme.muted_foreground),
-                                            )
-                                            .child(Text::muted("Loading…"))
-                                            .into_any_element()
-                                    } else {
-                                        Text::muted("No data").into_any_element()
-                                    })
-                            },
-                        );
-
-                        let content = content.when(
-                            matches!(content_mode, DataGridContentMode::ResultView),
-                            |d| d.child(self.render_result_view(result_view_mode, &theme, cx)),
-                        );
-
-                        let content = content
-                            .when(matches!(content_mode, DataGridContentMode::Document), |d| {
-                                d.child(self.render_document_view(&theme, cx))
-                            });
-
-                        content.when(matches!(content_mode, DataGridContentMode::Table), |d| {
-                            d.when_some(self.data_table.clone(), |d, data_table| {
-                                d.child(data_table)
-                            })
+                    .items_center()
+                    .justify_center()
+                    .w(Heights::ICON_LG)
+                    .h(Heights::ICON_LG)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .hover(|d| d.bg(st.theme.secondary))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.request_toggle_maximize(cx);
+                    }))
+                    .child(
+                        Icon::new(if st.is_maximized {
+                            AppIcon::Minimize2
+                        } else {
+                            AppIcon::Maximize2
                         })
+                        .small()
+                        .color(st.theme.muted_foreground),
+                    ),
+            )
+            .child(
+                div()
+                    .id("hide-panel")
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .w(Heights::ICON_LG)
+                    .h(Heights::ICON_LG)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .hover(|d| d.bg(st.theme.secondary))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.request_hide(cx);
+                    }))
+                    .child(
+                        Icon::new(AppIcon::PanelBottomClose)
+                            .small()
+                            .color(st.theme.muted_foreground),
+                    ),
+            )
+    }
+
+    /// Renders the content area: empty fallback, result view, document view, or
+    /// the data table — selected by `st.content_mode`.
+    fn render_content_body(
+        &mut self,
+        st: &RenderState,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let content_mode = st.content_mode;
+        let result_view_mode = st.result_view_mode;
+        let theme = st.theme.clone();
+        let is_loading = st.is_loading;
+
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    if this.focus.focus_mode != GridFocusMode::Table {
+                        this.focus_table(window, cx);
+                    }
+                }),
+            )
+            .child({
+                let content = div().flex_1().overflow_hidden();
+
+                let content = content.when(
+                    matches!(content_mode, DataGridContentMode::EmptyFallback),
+                    |d| {
+                        d.flex()
+                            .items_center()
+                            .justify_center()
+                            .child(if is_loading {
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(Spacing::SM)
+                                    .child(
+                                        Icon::new(AppIcon::Loader)
+                                            .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
+                                            .color(theme.muted_foreground),
+                                    )
+                                    .child(Text::muted("Loading…"))
+                                    .into_any_element()
+                            } else {
+                                Text::muted("No data").into_any_element()
+                            })
+                    },
+                );
+
+                let content = content.when(
+                    matches!(content_mode, DataGridContentMode::ResultView),
+                    |d| d.child(self.render_result_view(result_view_mode, &theme, cx)),
+                );
+
+                let content = content
+                    .when(matches!(content_mode, DataGridContentMode::Document), |d| {
+                        d.child(self.render_document_view(&theme, cx))
+                    });
+
+                content.when(matches!(content_mode, DataGridContentMode::Table), |d| {
+                    d.when_some(self.grid_table.data_table.clone(), |d, data_table| {
+                        d.child(data_table)
                     })
-            })
-            // Status bar
-            .child(self.render_status_bar(
-                row_count,
-                &exec_time,
-                is_paginated,
-                pagination_info,
-                total_pages,
-                can_prev,
-                can_next,
-                sort_info,
-                has_data,
-                uses_result_view,
-                dirty_count,
-                &theme,
-                cx,
-            ))
-            // Context menu overlay
-            .when_some(self.context_menu.as_ref(), |d, menu| {
-                d.child(self.render_context_menu(menu, is_editable, &theme, cx))
-            })
-            // Delete confirmation modal
-            .when(self.pending_delete_confirm.is_some(), |d| {
-                d.child(self.render_delete_confirm_modal(&theme, cx))
-            })
-            // Cell editor modal overlay
-            .when(self.cell_editor.read(cx).is_visible(), |d| {
-                d.child(self.cell_editor.clone())
-            })
-            // Document preview modal overlay
-            .when(self.document_preview_modal.read(cx).is_visible(), |d| {
-                d.child(self.document_preview_modal.clone())
-            })
-            // Mutation confirmation modal overlays
-            .when(self.mutation_confirm_light.read(cx).is_visible(), |d| {
-                d.child(self.mutation_confirm_light.clone())
-            })
-            .when(self.mutation_confirm_hard.read(cx).is_visible(), |d| {
-                d.child(self.mutation_confirm_hard.clone())
+                })
             })
     }
 }
@@ -531,7 +651,7 @@ pub(super) fn render_filter_bar_as_segment(
 
     let (source_query_prefix, raw_filter_keyword) =
         DataGridPanel::filter_labels_for_source(&g.source, &g.app_state, cx);
-    let filter_keyword = if g.filter_input_hidden {
+    let filter_keyword = if g.builder.filter_input_hidden {
         String::new()
     } else {
         raw_filter_keyword.to_string()
@@ -543,15 +663,15 @@ pub(super) fn render_filter_bar_as_segment(
         DataSource::QueryResult { .. } => String::new(),
     };
 
-    let filter_input = g.filter_input.clone();
-    let filter_has_value = !g.filter_input.read(cx).value().is_empty();
-    let limit_input = g.limit_input.clone();
-    let focus_mode = g.focus_mode;
-    let toolbar_focus = g.toolbar_focus;
-    let edit_state = g.edit_state;
-    let refresh_policy = g.refresh_policy;
+    let filter_input = g.filter_bar.filter_input.clone();
+    let filter_has_value = !g.filter_bar.filter_input.read(cx).value().is_empty();
+    let limit_input = g.filter_bar.limit_input.clone();
+    let focus_mode = g.focus.focus_mode;
+    let toolbar_focus = g.focus.toolbar_focus;
+    let edit_state = g.focus.edit_state;
+    let refresh_policy = g.refresh.refresh_policy;
     let is_runner_active = g.runner.is_primary_active();
-    let refresh_dropdown = g.refresh_dropdown.clone();
+    let refresh_dropdown = g.filter_bar.refresh_dropdown.clone();
 
     let show_toolbar_focus =
         focus_mode == GridFocusMode::Toolbar && edit_state == EditState::Navigating;
@@ -565,7 +685,7 @@ pub(super) fn render_filter_bar_as_segment(
     };
 
     let can_open_builder = g.can_open_builder(cx);
-    let relational_filter_state = g.relational_filter_state.clone();
+    let relational_filter_state = g.builder.relational_filter_state.clone();
     let has_filter_error = filter_input_has_error(&relational_filter_state);
 
     let grid_for_filter = grid.clone();
@@ -588,7 +708,7 @@ pub(super) fn render_filter_bar_as_segment(
             let grid = grid_for_chip.clone();
             move |_, window, cx| {
                 grid.update(cx, |this, cx| {
-                    if let Some(spec) = this.builder_draft_spec.clone() {
+                    if let Some(spec) = this.builder.builder_draft_spec.clone() {
                         this.apply_builder_draft_spec(spec, cx);
                     }
                     this.open_query_builder(window, cx);
@@ -610,7 +730,7 @@ pub(super) fn render_filter_bar_as_segment(
                     let partial_spec = if let super::filter_bar::RelationalFilterState::Error {
                         partial_spec,
                         ..
-                    } = &this.relational_filter_state
+                    } = &this.builder.relational_filter_state
                     {
                         Some(*partial_spec.clone())
                     } else {
@@ -686,10 +806,10 @@ pub(super) fn render_filter_bar_as_segment(
                                 let grid = grid_for_filter_event.clone();
                                 move |_, _, cx| {
                                     grid.update(cx, |this, cx| {
-                                        this.switching_input = true;
-                                        this.focus_mode = GridFocusMode::Toolbar;
-                                        this.toolbar_focus = ToolbarFocus::Filter;
-                                        this.edit_state = EditState::Editing;
+                                        this.focus.switching_input = true;
+                                        this.focus.focus_mode = GridFocusMode::Toolbar;
+                                        this.focus.toolbar_focus = ToolbarFocus::Filter;
+                                        this.focus.edit_state = EditState::Editing;
                                         cx.notify();
                                     });
                                 }
@@ -721,7 +841,7 @@ pub(super) fn render_filter_bar_as_segment(
                                         })
                                         .on_click(move |_, window, cx| {
                                             let filter_input_clone =
-                                                grid.read(cx).filter_input.clone();
+                                                grid.read(cx).filter_bar.filter_input.clone();
                                             filter_input_clone.update(cx, |input, cx| {
                                                 input.set_value("", window, cx);
                                             });
@@ -759,10 +879,10 @@ pub(super) fn render_filter_bar_as_segment(
                             let grid = grid_for_limit.clone();
                             move |_, _, cx| {
                                 grid.update(cx, |this, cx| {
-                                    this.switching_input = true;
-                                    this.focus_mode = GridFocusMode::Toolbar;
-                                    this.toolbar_focus = ToolbarFocus::Limit;
-                                    this.edit_state = EditState::Editing;
+                                    this.focus.switching_input = true;
+                                    this.focus.focus_mode = GridFocusMode::Toolbar;
+                                    this.focus.toolbar_focus = ToolbarFocus::Limit;
+                                    this.focus.edit_state = EditState::Editing;
                                     cx.notify();
                                 });
                             }
@@ -868,34 +988,36 @@ impl DataGridPanel {
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let refresh_label = if self.refresh_policy.is_auto() {
-            self.refresh_policy.label()
+        let refresh_label = if self.refresh.refresh_policy.is_auto() {
+            self.refresh.refresh_policy.label()
         } else {
             "Refresh"
         };
 
-        let toolbar_has_filter_error = filter_input_has_error(&self.relational_filter_state);
+        let toolbar_has_filter_error =
+            filter_input_has_error(&self.builder.relational_filter_state);
         let toolbar_chip = render_relational_chip(
-            &self.relational_filter_state,
+            &self.builder.relational_filter_state,
             cx,
             Box::new(cx.listener(|this, _, window, cx| {
-                if let Some(spec) = this.builder_draft_spec.clone() {
+                if let Some(spec) = this.builder.builder_draft_spec.clone() {
                     this.apply_builder_draft_spec(spec, cx);
                 }
                 this.open_query_builder(window, cx);
             })),
         );
 
-        let toolbar_resolving = render_resolving_indicator(&self.relational_filter_state, cx);
+        let toolbar_resolving =
+            render_resolving_indicator(&self.builder.relational_filter_state, cx);
 
         let toolbar_error = render_relational_error(
-            &self.relational_filter_state,
+            &self.builder.relational_filter_state,
             cx,
             Box::new(cx.listener(|this, _, window, cx| {
                 let partial_spec = if let super::filter_bar::RelationalFilterState::Error {
                     partial_spec,
                     ..
-                } = &this.relational_filter_state
+                } = &this.builder.relational_filter_state
                 {
                     Some(*partial_spec.clone())
                 } else {
@@ -944,10 +1066,10 @@ impl DataGridPanel {
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(|this, _, _, cx| {
-                                        this.switching_input = true;
-                                        this.focus_mode = GridFocusMode::Toolbar;
-                                        this.toolbar_focus = ToolbarFocus::Filter;
-                                        this.edit_state = EditState::Editing;
+                                        this.focus.switching_input = true;
+                                        this.focus.focus_mode = GridFocusMode::Toolbar;
+                                        this.focus.toolbar_focus = ToolbarFocus::Filter;
+                                        this.focus.edit_state = EditState::Editing;
                                         cx.notify();
                                     }),
                                 )
@@ -974,9 +1096,12 @@ impl DataGridPanel {
                                                 d.bg(theme.secondary).text_color(theme.foreground)
                                             })
                                             .on_click(cx.listener(|this, _, window, cx| {
-                                                this.filter_input.update(cx, |input, cx| {
-                                                    input.set_value("", window, cx);
-                                                });
+                                                this.filter_bar.filter_input.update(
+                                                    cx,
+                                                    |input, cx| {
+                                                        input.set_value("", window, cx);
+                                                    },
+                                                );
                                                 this.refresh(window, cx);
                                             }))
                                             .child("\u{00d7}"),
@@ -1005,10 +1130,10 @@ impl DataGridPanel {
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|this, _, _, cx| {
-                                    this.switching_input = true;
-                                    this.focus_mode = GridFocusMode::Toolbar;
-                                    this.toolbar_focus = ToolbarFocus::Limit;
-                                    this.edit_state = EditState::Editing;
+                                    this.focus.switching_input = true;
+                                    this.focus.focus_mode = GridFocusMode::Toolbar;
+                                    this.focus.toolbar_focus = ToolbarFocus::Limit;
+                                    this.focus.edit_state = EditState::Editing;
                                     cx.notify();
                                 }),
                             )
@@ -1108,7 +1233,7 @@ impl DataGridPanel {
                             .child(
                                 Icon::new(if self.runner.is_primary_active() {
                                     AppIcon::Loader
-                                } else if self.refresh_policy.is_auto() {
+                                } else if self.refresh.refresh_policy.is_auto() {
                                     AppIcon::Clock
                                 } else {
                                     AppIcon::RefreshCcw
@@ -1123,7 +1248,7 @@ impl DataGridPanel {
                         div()
                             .w(px(28.0)) // guardrail-allow: dropdown control width, not a height token
                             .h_full()
-                            .child(self.refresh_dropdown.clone()),
+                            .child(self.filter_bar.refresh_dropdown.clone()),
                     ),
             )
     }
@@ -1183,7 +1308,7 @@ impl DataGridPanel {
                                     .cursor_pointer()
                                     .hover(|d| d.bg(theme.secondary))
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        if let Some(table_state) = &this.table_state {
+                                        if let Some(table_state) = &this.grid_table.table_state {
                                             table_state.update(cx, |state, cx| {
                                                 if state.is_editing() {
                                                     state.stop_editing(false, cx);
@@ -1227,7 +1352,7 @@ impl DataGridPanel {
                                     .cursor_pointer()
                                     .hover(|d| d.bg(theme.secondary))
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        if let Some(table_state) = &this.table_state {
+                                        if let Some(table_state) = &this.grid_table.table_state {
                                             table_state.update(cx, |state, cx| {
                                                 if state.is_editing() {
                                                     state.stop_editing(false, cx);
@@ -1273,7 +1398,7 @@ impl DataGridPanel {
                                     .cursor_pointer()
                                     .hover(|d| d.opacity(0.9))
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        if let Some(table_state) = &this.table_state {
+                                        if let Some(table_state) = &this.grid_table.table_state {
                                             table_state.update(cx, |state, cx| {
                                                 state.request_save_all(cx);
                                             });
@@ -1309,7 +1434,7 @@ impl DataGridPanel {
                                 d.cursor_pointer()
                                     .hover(|d| d.bg(theme.secondary))
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        if let Some(table_state) = &this.table_state {
+                                        if let Some(table_state) = &this.grid_table.table_state {
                                             table_state.update(cx, |state, cx| {
                                                 state.revert_all(cx);
                                             });
@@ -1332,16 +1457,20 @@ impl DataGridPanel {
         _theme: &gpui_component::theme::Theme,
         _cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        if let Some(tree) = &self.document_tree {
+        if let Some(tree) = &self.document_view.document_tree {
             div()
                 .id("document-view-container")
                 .size_full()
                 .child(tree.clone())
         } else {
             let entity = _cx.entity();
-            let list_state = self.document_card_list.clone().unwrap_or_else(|| {
-                ListState::new(self.result.rows.len(), ListAlignment::Top, px(400.0))
-            });
+            let list_state = self
+                .document_view
+                .document_card_list
+                .clone()
+                .unwrap_or_else(|| {
+                    ListState::new(self.result.rows.len(), ListAlignment::Top, px(400.0))
+                });
 
             let card_list = list(list_state, move |row_idx, _window, cx: &mut App| {
                 let theme = cx.theme().clone();
@@ -1523,7 +1652,7 @@ impl DataGridPanel {
         use std::sync::Arc;
 
         // The shell is required for chart mode; fall back gracefully if absent.
-        let Some(chart_shell) = self.chart_shell.clone() else {
+        let Some(chart_shell) = self.chart.chart_shell.clone() else {
             return div().into_any_element();
         };
 
@@ -1538,6 +1667,7 @@ impl DataGridPanel {
         let shell_for_kind = chart_shell.clone();
 
         let dropdown_time_range = self
+            .chart
             .chart_source_time_range_panel
             .as_ref()
             .map(|p| p.read(cx).dropdown_time_range.clone());
@@ -1545,8 +1675,8 @@ impl DataGridPanel {
         let ctx = ChartToolbarContext {
             theme,
             chart_shell,
-            refresh_policy: self.refresh_policy,
-            refresh_dropdown: self.refresh_dropdown.clone(),
+            refresh_policy: self.refresh.refresh_policy,
+            refresh_dropdown: self.filter_bar.refresh_dropdown.clone(),
             dropdown_time_range,
             row_count: self.result.row_count(),
             resolved_window,
@@ -1561,7 +1691,7 @@ impl DataGridPanel {
             on_refresh: Arc::new(move |_window, cx| {
                 if let Some(panel) = weak_panel_for_refresh.upgrade() {
                     panel.update(cx, |this, cx| {
-                        this.pending_refresh = true;
+                        this.pending.refresh = true;
                         cx.notify();
                     });
                 }
@@ -1580,7 +1710,7 @@ impl DataGridPanel {
             on_png_export: Arc::new(move |_window, cx| {
                 if let Some(panel) = weak_panel.upgrade() {
                     panel.update(cx, |this, _cx| {
-                        this.pending_toast = Some(dbflux_ui_base::toast::PendingToast {
+                        this.pending.toast = Some(dbflux_ui_base::toast::PendingToast {
                             message: format!(
                                 "PNG export coming in v0.7 — {}",
                                 dbflux_ui_base::toast::now_hms()
@@ -1612,6 +1742,7 @@ impl DataGridPanel {
         // The Apply button calls `panel.apply_custom_range`; the parent
         // CodeDocument's `TimeRangeChanged` subscription handles re-execution.
         let custom_picker_row: Option<AnyElement> = self
+            .chart
             .chart_source_time_range_panel
             .as_ref()
             .and_then(|panel_entity| {
@@ -1658,6 +1789,7 @@ impl DataGridPanel {
         // AxisBar row: shown below the main toolbar when a chart view is live.
         // Reads bindings and open-pill state from the shell.
         let (bindings, open_pill, columns) = self
+            .chart
             .chart_shell
             .as_ref()
             .map(|s| {
@@ -1676,11 +1808,11 @@ impl DataGridPanel {
                 )
             });
 
-        let shell_for_pill = self.chart_shell.clone();
-        let shell_for_x = self.chart_shell.clone();
-        let shell_for_y = self.chart_shell.clone();
-        let shell_for_group = self.chart_shell.clone();
-        let shell_for_agg = self.chart_shell.clone();
+        let shell_for_pill = self.chart.chart_shell.clone();
+        let shell_for_x = self.chart.chart_shell.clone();
+        let shell_for_y = self.chart.chart_shell.clone();
+        let shell_for_group = self.chart.chart_shell.clone();
+        let shell_for_agg = self.chart.chart_shell.clone();
 
         let chart_colors = ChartColors::for_current(cx);
 
@@ -1770,13 +1902,15 @@ impl DataGridPanel {
 
         match mode {
             ResultViewMode::Table => {
-                container = container.when_some(self.data_table.clone(), |d, dt| d.child(dt));
+                container =
+                    container.when_some(self.grid_table.data_table.clone(), |d, dt| d.child(dt));
             }
             ResultViewMode::Chart => {
                 // Build chart_view on first render before checking whether it exists.
                 let _ = self.ensure_chart_view(cx);
 
                 let (has_chart_view, rail_open, chart_view_entity, hovered_point) = self
+                    .chart
                     .chart_shell
                     .as_ref()
                     .map_or((false, false, None, None), |s| {
@@ -1929,11 +2063,13 @@ impl DataGridPanel {
         };
 
         let focused_series_idx = self
+            .chart
             .chart_shell
             .as_ref()
             .map_or(0, |s| s.read(cx).chart_focused_series_idx);
 
         let series_name = self
+            .chart
             .chart_shell
             .as_ref()
             .and_then(|s| s.read(cx).chart_view().cloned())
@@ -1941,6 +2077,7 @@ impl DataGridPanel {
             .unwrap_or_default();
 
         let (hovered_x, hovered_y) = self
+            .chart
             .chart_shell
             .as_ref()
             .and_then(|s| {
@@ -2004,7 +2141,7 @@ impl DataGridPanel {
         _theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let Some(shell_entity) = self.chart_shell.as_ref() else {
+        let Some(shell_entity) = self.chart.chart_shell.as_ref() else {
             return div().into_any_element();
         };
 
@@ -2122,6 +2259,7 @@ impl DataGridPanel {
         let chart_colors = ChartColors::for_current(cx);
 
         let (detection, picker_open) = self
+            .chart
             .chart_shell
             .as_ref()
             .map(|s| {
@@ -2296,7 +2434,7 @@ impl DataGridPanel {
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(|this, _, _, cx| {
-                                        if let Some(shell) = &this.chart_shell {
+                                        if let Some(shell) = &this.chart.chart_shell {
                                             shell.update(cx, |s, _| {
                                                 s.chart_picker_overlay_open =
                                                     !s.chart_picker_overlay_open;
@@ -2362,6 +2500,7 @@ impl DataGridPanel {
             .collect();
 
         let (selected_x_col, y_checked) = self
+            .chart
             .chart_shell
             .as_ref()
             .map(|s| {
@@ -2421,7 +2560,7 @@ impl DataGridPanel {
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |this, _, _, cx| {
-                                            if let Some(shell) = &this.chart_shell {
+                                            if let Some(shell) = &this.chart.chart_shell {
                                                 shell.update(cx, |s, _| {
                                                     s.chart_picker_x_col = col_idx;
                                                 });
@@ -2463,7 +2602,7 @@ impl DataGridPanel {
                                 .label(label)
                                 .on_click(cx.listener(
                                     move |this, &new_checked, _, cx| {
-                                        if let Some(shell) = &this.chart_shell {
+                                        if let Some(shell) = &this.chart.chart_shell {
                                             shell.update(cx, |s, _| {
                                                 if let Some(slot) =
                                                     s.chart_picker_y_checked.get_mut(candidate_idx)
@@ -2510,7 +2649,7 @@ impl DataGridPanel {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _, _, cx| {
-                            if let Some(shell) = &this.chart_shell {
+                            if let Some(shell) = &this.chart.chart_shell {
                                 let selection = ManualChartSelection {
                                     x_col: x_col_snapshot,
                                     y_cols: y_col_indices.clone(),
@@ -2652,7 +2791,7 @@ impl DataGridPanel {
             .collect();
 
         let (selected_x, y_checked, stats, active_y_cols, detection_ok, has_manual) =
-            self.chart_shell.as_ref().map_or_else(
+            self.chart.chart_shell.as_ref().map_or_else(
                 || (0usize, vec![], vec![], vec![], false, false),
                 |s| {
                     let shell = s.read(cx);
@@ -2753,7 +2892,7 @@ impl DataGridPanel {
                                 .on_mouse_down(
                                     gpui::MouseButton::Left,
                                     cx.listener(move |this, _, _, cx| {
-                                        if let Some(shell) = &this.chart_shell {
+                                        if let Some(shell) = &this.chart.chart_shell {
                                             shell.update(cx, |s, _| {
                                                 s.chart_rail_picker_x_col = cand_idx;
                                             });
@@ -2804,7 +2943,7 @@ impl DataGridPanel {
                                     .label(label)
                                     .on_click(cx.listener(
                                         move |this, &new_checked, _, cx| {
-                                            if let Some(shell) = &this.chart_shell {
+                                            if let Some(shell) = &this.chart.chart_shell {
                                                 shell.update(cx, |s, _| {
                                                     if let Some(slot) = s
                                                         .chart_rail_picker_y_checked
@@ -2945,6 +3084,7 @@ impl DataGridPanel {
         // the chart entity is not yet built keeps the Reset/rebuild path
         // working without flicker.
         let (focused_idx, chart_view_opt) = self
+            .chart
             .chart_shell
             .as_ref()
             .map(|s| {
@@ -3238,7 +3378,7 @@ impl DataGridPanel {
         } else {
             vec![]
         };
-        let current_result_mode = self.result_view_mode;
+        let current_result_mode = self.chrome.result_view_mode;
 
         div()
             .flex()
@@ -3450,7 +3590,7 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let formats = dbflux_export::available_formats(&self.result.shape);
-        let menu_open = self.export_menu_open;
+        let menu_open = self.chrome.export_menu_open;
 
         div()
             .id("export-trigger")
@@ -3588,7 +3728,7 @@ impl DataGridPanel {
                     cx.stop_propagation();
                 })
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                    this.export_menu_open = false;
+                    this.chrome.export_menu_open = false;
                     cx.notify();
                 }))
                 .children(items),

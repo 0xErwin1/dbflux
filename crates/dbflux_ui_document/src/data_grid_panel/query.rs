@@ -38,10 +38,10 @@ impl DataGridPanel {
                 let order_by = order_by.clone();
                 let total_rows = *total_rows;
 
-                if let Some(select) = self.visual_select.clone() {
+                if let Some(select) = self.builder.visual_select.clone() {
                     self.run_visual_query(profile_id, database.clone(), select, window, cx);
 
-                    if let Some(spec) = self.builder_draft_spec.clone()
+                    if let Some(spec) = self.builder.builder_draft_spec.clone()
                         && spec.is_grouped()
                     {
                         self.fetch_grouped_total_count(profile_id, database, spec, cx);
@@ -85,14 +85,14 @@ impl DataGridPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let filter_value = self.filter_input.read(cx).value();
+        let filter_value = self.filter_bar.filter_input.read(cx).value();
         let filter = if filter_value.trim().is_empty() {
             None
         } else {
             Some(filter_value.to_string())
         };
 
-        let limit_value = self.limit_input.read(cx).value();
+        let limit_value = self.filter_bar.limit_input.read(cx).value();
         let limit_str = limit_value.trim();
         let pagination = match limit_str.parse::<u32>() {
             Ok(0) => {
@@ -134,19 +134,19 @@ impl DataGridPanel {
             } else {
                 // FR-GATE-3: no unquoted dot → clear any stale relational state
                 if !matches!(
-                    self.relational_filter_state,
+                    self.builder.relational_filter_state,
                     RelationalFilterState::Inactive
                 ) {
-                    self.relational_filter_state = RelationalFilterState::Inactive;
+                    self.builder.relational_filter_state = RelationalFilterState::Inactive;
                     cx.notify();
                 }
             }
         } else {
             if !matches!(
-                self.relational_filter_state,
+                self.builder.relational_filter_state,
                 RelationalFilterState::Inactive
             ) {
-                self.relational_filter_state = RelationalFilterState::Inactive;
+                self.builder.relational_filter_state = RelationalFilterState::Inactive;
                 cx.notify();
             }
         }
@@ -220,7 +220,7 @@ impl DataGridPanel {
             cx,
         );
 
-        self.state = GridState::Loading;
+        self.refresh.state = GridState::Loading;
         cx.notify();
 
         let entity = cx.entity().clone();
@@ -272,8 +272,8 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.fail_primary(task_id, e.to_string(), cx);
-                            panel.state = GridState::Error;
-                            panel.pending_toast = Some(PendingToast {
+                            panel.refresh.state = GridState::Error;
+                            panel.pending.toast = Some(PendingToast {
                                 message: format!("Query failed: {}", e),
                                 is_error: true,
                             });
@@ -353,7 +353,7 @@ impl DataGridPanel {
             cx,
         );
 
-        self.state = GridState::Loading;
+        self.refresh.state = GridState::Loading;
         cx.notify();
 
         let entity = cx.entity().clone();
@@ -365,7 +365,7 @@ impl DataGridPanel {
             request.database = Some(db.clone());
         }
 
-        let committed_spec: Option<VisualQuerySpec> = self.builder_draft_spec.clone();
+        let committed_spec: Option<VisualQuerySpec> = self.builder.builder_draft_spec.clone();
 
         let task = cx
             .background_executor()
@@ -397,9 +397,9 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.complete_primary(task_id, cx);
-                            panel.current_visual_spec = committed_spec.clone();
+                            panel.builder.current_visual_spec = committed_spec.clone();
                             panel.result = query_result;
-                            panel.state = GridState::Ready;
+                            panel.refresh.state = GridState::Ready;
 
                             let binding = panel.compute_builder_binding(
                                 committed_spec.as_ref(),
@@ -411,8 +411,8 @@ impl DataGridPanel {
                                 .as_ref()
                                 .map(|b| b.pk_columns.clone())
                                 .unwrap_or_default();
-                            panel.builder_editable_binding = binding;
-                            panel.pending_rebuild = true;
+                            panel.builder.builder_editable_binding = binding;
+                            panel.pending.rebuild = true;
 
                             cx.notify();
                         });
@@ -422,8 +422,8 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.fail_primary(task_id, e.to_string(), cx);
-                            panel.state = GridState::Error;
-                            panel.pending_toast = Some(PendingToast {
+                            panel.refresh.state = GridState::Error;
+                            panel.pending.toast = Some(PendingToast {
                                 message: format!("Query failed: {}", e),
                                 is_error: true,
                             });
@@ -450,7 +450,7 @@ impl DataGridPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let limit_value = self.limit_input.read(cx).value();
+        let limit_value = self.filter_bar.limit_input.read(cx).value();
         let limit_str = limit_value.trim();
         let pagination = match limit_str.parse::<u32>() {
             Ok(0) => {
@@ -492,7 +492,7 @@ impl DataGridPanel {
             return;
         };
 
-        let filter_value = self.filter_input.read(cx).value();
+        let filter_value = self.filter_bar.filter_input.read(cx).value();
         let filter_str = filter_value.trim();
         let filter: Option<serde_json::Value> = if filter_str.is_empty() {
             None
@@ -536,7 +536,7 @@ impl DataGridPanel {
             cx,
         );
 
-        self.state = GridState::Loading;
+        self.refresh.state = GridState::Loading;
         cx.notify();
 
         let entity = cx.entity().clone();
@@ -585,8 +585,8 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.fail_primary(task_id, e.to_string(), cx);
-                            panel.state = GridState::Error;
-                            panel.pending_toast = Some(PendingToast {
+                            panel.refresh.state = GridState::Error;
+                            panel.pending.toast = Some(PendingToast {
                                 message: format!("Query failed: {}", e),
                                 is_error: true,
                             });
@@ -632,10 +632,10 @@ impl DataGridPanel {
         };
 
         self.result = result;
-        self.local_sort_state = None;
-        self.original_row_order = None;
+        self.grid_table.local_sort_state = None;
+        self.grid_table.original_row_order = None;
         self.rebuild_table(None, cx);
-        self.state = GridState::Ready;
+        self.refresh.state = GridState::Ready;
         cx.notify();
     }
 
@@ -679,10 +679,10 @@ impl DataGridPanel {
         };
 
         self.result = result;
-        self.local_sort_state = None;
-        self.original_row_order = None;
+        self.grid_table.local_sort_state = None;
+        self.grid_table.original_row_order = None;
         self.rebuild_table(initial_sort, cx);
-        self.state = GridState::Ready;
+        self.refresh.state = GridState::Ready;
         cx.notify();
     }
 
@@ -724,7 +724,7 @@ impl DataGridPanel {
             if let Err(error) = cx.update(|cx| {
                 if let Ok(total) = result {
                     entity.update(cx, |panel, cx| {
-                        panel.pending_total_count = Some(PendingTotalCount {
+                        panel.pending.total_count = Some(PendingTotalCount {
                             source_qualified: qualified,
                             total,
                         });
@@ -803,7 +803,7 @@ impl DataGridPanel {
             if let Err(error) = cx.update(|cx| {
                 if let Ok(total) = result {
                     entity.update(cx, |panel, cx| {
-                        panel.pending_total_count = Some(PendingTotalCount {
+                        panel.pending.total_count = Some(PendingTotalCount {
                             source_qualified: qualified,
                             total,
                         });
@@ -857,11 +857,11 @@ impl DataGridPanel {
 
         // Gate 2: Table source (already guaranteed by run_table_query call path)
         // Gate 3: FK cache ready with at least one FK
-        let fks = match &self.fk_cache {
+        let fks = match &self.builder.fk_cache {
             super::FkLoadState::Ready(fks) if !fks.is_empty() => fks.clone(),
             super::FkLoadState::Loading => {
                 // FK fetch in flight — show Resolving state, fall through to raw
-                self.relational_filter_state = RelationalFilterState::Resolving;
+                self.builder.relational_filter_state = RelationalFilterState::Resolving;
                 cx.notify();
                 return false;
             }
@@ -895,7 +895,7 @@ impl DataGridPanel {
 
                 self.apply_builder_draft_spec(lowering.spec.clone(), cx);
 
-                self.relational_filter_state = RelationalFilterState::Active {
+                self.builder.relational_filter_state = RelationalFilterState::Active {
                     join_count,
                     predicate_count,
                 };
@@ -904,7 +904,7 @@ impl DataGridPanel {
                 // Execute via the visual query path
                 let profile_id_for_run = profile_id;
                 let db_for_run = database.clone();
-                if let Some(select) = self.visual_select.clone() {
+                if let Some(select) = self.builder.visual_select.clone() {
                     self.run_visual_query(
                         profile_id_for_run,
                         db_for_run.clone(),
@@ -913,7 +913,7 @@ impl DataGridPanel {
                         cx,
                     );
 
-                    if let Some(spec) = &self.builder_draft_spec {
+                    if let Some(spec) = &self.builder.builder_draft_spec {
                         if spec.is_grouped() {
                             self.fetch_grouped_total_count(profile_id, database, spec.clone(), cx);
                         } else {
@@ -928,10 +928,10 @@ impl DataGridPanel {
             Err(RelationalFilterError::Parse(_)) => {
                 // FR-PARSE-7: parse errors silently fall back to raw filter
                 if !matches!(
-                    self.relational_filter_state,
+                    self.builder.relational_filter_state,
                     RelationalFilterState::Inactive
                 ) {
-                    self.relational_filter_state = RelationalFilterState::Inactive;
+                    self.builder.relational_filter_state = RelationalFilterState::Inactive;
                     cx.notify();
                 }
                 false
@@ -966,7 +966,7 @@ impl DataGridPanel {
                     ),
                 };
 
-                self.relational_filter_state = RelationalFilterState::Error {
+                self.builder.relational_filter_state = RelationalFilterState::Error {
                     message,
                     partial_spec: Box::new(partial_spec),
                 };
@@ -1045,7 +1045,7 @@ impl DataGridPanel {
                     };
                     if let Some(total) = count_opt {
                         entity.update(cx, |panel, cx| {
-                            panel.pending_total_count = Some(PendingTotalCount {
+                            panel.pending.total_count = Some(PendingTotalCount {
                                 source_qualified: table_name,
                                 total,
                             });
@@ -1110,7 +1110,7 @@ impl DataGridPanel {
                     && let Some(dbflux_core::Value::Int(count)) = row.first()
                 {
                     entity.update(cx, |panel, cx| {
-                        panel.pending_total_count = Some(PendingTotalCount {
+                        panel.pending.total_count = Some(PendingTotalCount {
                             source_qualified: table_name,
                             total: *count as u64,
                         });

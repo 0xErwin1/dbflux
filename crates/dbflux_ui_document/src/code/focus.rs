@@ -12,25 +12,26 @@ impl CodeDocument {
         self.focus_handle.focus(window);
 
         if self.focus_mode == SqlQueryFocus::Editor {
-            self.input_state
+            self.editor
+                .input_state
                 .update(cx, |state, cx| state.focus(window, cx));
         }
     }
 
     /// Returns the active context for keyboard handling based on internal focus.
     pub fn active_context(&self, cx: &App) -> ContextId {
-        if self.pending_dangerous_query.is_some() {
+        if self.pending.dangerous_query.is_some() {
             return ContextId::ConfirmModal;
         }
 
-        if self.history_modal.read(cx).is_visible() {
+        if self.history.history_modal.read(cx).is_visible() {
             return ContextId::HistoryModal;
         }
 
         // Check if the active result tab's grid has a modal, context menu, or inline edit open
         if self.focus_mode == SqlQueryFocus::Results
-            && let Some(index) = self.active_result_index
-            && let Some(tab) = self.result_tabs.get(index)
+            && let Some(index) = self.result_tabs.active_result_index
+            && let Some(tab) = self.result_tabs.result_tabs.get(index)
         {
             let grid_context = tab.grid.read(cx).active_context(cx);
 
