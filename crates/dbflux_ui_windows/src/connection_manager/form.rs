@@ -609,6 +609,8 @@ impl ConnectionManagerWindow {
 
             #[cfg(feature = "mcp")]
             {
+                use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
+
                 if let Some(governance) = state
                     .profiles()
                     .iter()
@@ -634,7 +636,13 @@ impl ConnectionManagerWindow {
                             assignments,
                         },
                     ) {
-                        log::error!("Failed to save MCP connection policy assignment: {}", e);
+                        report_error(
+                            UserFacingError::new(
+                                ErrorKind::Config,
+                                format!("Failed to save MCP connection policy assignment: {e}"),
+                            ),
+                            cx,
+                        );
                     }
                 } else if let Err(e) = state.save_mcp_connection_policy_assignment(
                     dbflux_mcp::ConnectionPolicyAssignmentDto {
@@ -642,7 +650,13 @@ impl ConnectionManagerWindow {
                         assignments: Vec::new(),
                     },
                 ) {
-                    log::error!("Failed to clear MCP connection policy assignment: {}", e);
+                    report_error(
+                        UserFacingError::new(
+                            ErrorKind::Config,
+                            format!("Failed to clear MCP connection policy assignment: {e}"),
+                        ),
+                        cx,
+                    );
                 }
 
                 cx.emit(dbflux_ui_base::McpRuntimeEventRaised {
