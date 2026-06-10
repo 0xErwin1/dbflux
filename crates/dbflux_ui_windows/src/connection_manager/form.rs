@@ -628,23 +628,21 @@ impl ConnectionManagerWindow {
                         })
                         .collect();
 
-                    let _ = state.save_mcp_connection_policy_assignment(
+                    if let Err(e) = state.save_mcp_connection_policy_assignment(
                         dbflux_mcp::ConnectionPolicyAssignmentDto {
                             connection_id: saved_profile_id.to_string(),
                             assignments,
                         },
-                    );
-                } else {
-                    let _ = state.save_mcp_connection_policy_assignment(
-                        dbflux_mcp::ConnectionPolicyAssignmentDto {
-                            connection_id: saved_profile_id.to_string(),
-                            assignments: Vec::new(),
-                        },
-                    );
-                }
-
-                if let Err(e) = state.persist_mcp_governance() {
-                    log::error!("Failed to persist MCP governance: {}", e);
+                    ) {
+                        log::error!("Failed to save MCP connection policy assignment: {}", e);
+                    }
+                } else if let Err(e) = state.save_mcp_connection_policy_assignment(
+                    dbflux_mcp::ConnectionPolicyAssignmentDto {
+                        connection_id: saved_profile_id.to_string(),
+                        assignments: Vec::new(),
+                    },
+                ) {
+                    log::error!("Failed to clear MCP connection policy assignment: {}", e);
                 }
 
                 cx.emit(dbflux_ui_base::McpRuntimeEventRaised {
