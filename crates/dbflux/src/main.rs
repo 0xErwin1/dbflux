@@ -61,10 +61,16 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// 3. Always delegates to the previously installed panic hook
 fn install_panic_hook() {
     let prev = std::panic::take_hook();
-    *PREV_PANIC_HOOK.lock().unwrap() = Some(Box::new(prev));
+    *PREV_PANIC_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Box::new(prev));
 
     std::panic::set_hook(Box::new(|panic_info: &std::panic::PanicHookInfo| {
-        if let Some(audit_service) = AUDIT_SERVICE_FOR_PANIC.lock().unwrap().clone() {
+        let audit_guard = AUDIT_SERVICE_FOR_PANIC
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        if let Some(audit_service) = audit_guard.clone() {
             let panic_location = panic_info
                 .location()
                 .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()))
@@ -83,20 +89,23 @@ fn install_panic_hook() {
             match audit_service.record_panic_best_effort(&panic_info_str) {
                 Some(_) => {}
                 None => {
-                    eprintln!("[dbflux_audit] panic hook: record_panic_best_effort returned None");
+                    let _ = std::io::stderr().write_all(
+                        b"[dbflux_audit] panic hook: record_panic_best_effort returned None\n",
+                    );
                 }
             }
         } else {
-            eprintln!(
-                "[dbflux_audit] panic hook: audit service not available, panic at {}",
-                panic_info
-                    .location()
-                    .map(|loc| format!("{}:{}", loc.file(), loc.line()))
-                    .unwrap_or_else(|| "unknown location".to_string())
-            );
+            let _ = std::io::stderr()
+                .write_all(b"[dbflux_audit] panic hook: audit service not available\n");
         }
 
-        if let Some(ref prev_hook) = *PREV_PANIC_HOOK.lock().unwrap() {
+        drop(audit_guard);
+
+        let prev_guard = PREV_PANIC_HOOK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        if let Some(ref prev_hook) = *prev_guard {
             prev_hook(panic_info);
         }
     }));

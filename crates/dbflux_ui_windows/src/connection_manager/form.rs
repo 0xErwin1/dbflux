@@ -609,6 +609,8 @@ impl ConnectionManagerWindow {
 
             #[cfg(feature = "mcp")]
             {
+                use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
+
                 if let Some(governance) = state
                     .profiles()
                     .iter()
@@ -628,23 +630,33 @@ impl ConnectionManagerWindow {
                         })
                         .collect();
 
-                    let _ = state.save_mcp_connection_policy_assignment(
+                    if let Err(e) = state.save_mcp_connection_policy_assignment(
                         dbflux_mcp::ConnectionPolicyAssignmentDto {
                             connection_id: saved_profile_id.to_string(),
                             assignments,
                         },
+                    ) {
+                        report_error(
+                            UserFacingError::new(
+                                ErrorKind::Config,
+                                format!("Failed to save MCP connection policy assignment: {e}"),
+                            ),
+                            cx,
+                        );
+                    }
+                } else if let Err(e) = state.save_mcp_connection_policy_assignment(
+                    dbflux_mcp::ConnectionPolicyAssignmentDto {
+                        connection_id: saved_profile_id.to_string(),
+                        assignments: Vec::new(),
+                    },
+                ) {
+                    report_error(
+                        UserFacingError::new(
+                            ErrorKind::Config,
+                            format!("Failed to clear MCP connection policy assignment: {e}"),
+                        ),
+                        cx,
                     );
-                } else {
-                    let _ = state.save_mcp_connection_policy_assignment(
-                        dbflux_mcp::ConnectionPolicyAssignmentDto {
-                            connection_id: saved_profile_id.to_string(),
-                            assignments: Vec::new(),
-                        },
-                    );
-                }
-
-                if let Err(e) = state.persist_mcp_governance() {
-                    log::error!("Failed to persist MCP governance: {}", e);
                 }
 
                 cx.emit(dbflux_ui_base::McpRuntimeEventRaised {
