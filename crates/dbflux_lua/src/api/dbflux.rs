@@ -34,13 +34,30 @@ pub fn register_logging_api(lua: &Lua, state: LuaRuntimeState) -> LuaResult<()> 
     dbflux.set("log", logging)
 }
 
+/// IPC auth-token env-var names that must never be returned to Lua scripts, even
+/// when env_read is enabled. These map to dbflux_ipc::{DRIVER_RPC_AUTH_TOKEN_ENV,
+/// APP_CONTROL_AUTH_TOKEN_ENV, AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV}.
+const BLOCKED_ENV_VARS: &[&str] = &[
+    "DBFLUX_DRIVER_IPC_TOKEN",
+    "DBFLUX_IPC_TOKEN",
+    "DBFLUX_AUTH_PROVIDER_IPC_TOKEN",
+];
+
 pub fn register_env_api(lua: &Lua) -> LuaResult<()> {
     let dbflux = ensure_dbflux_table(lua)?;
     let env = lua.create_table()?;
 
     env.set(
         "get",
-        lua.create_function(|_, key: String| Ok(std::env::var(key).ok()))?,
+        lua.create_function(|_, key: String| {
+            if BLOCKED_ENV_VARS
+                .iter()
+                .any(|blocked| blocked.eq_ignore_ascii_case(&key))
+            {
+                return Ok(None);
+            }
+            Ok(std::env::var(key).ok())
+        })?,
     )?;
 
     dbflux.set("env", env)
@@ -128,6 +145,10 @@ fn run_process(lua: &Lua, state: &LuaRuntimeState, options: Table) -> LuaResult<
     command.args(&args);
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
+
+    for var in BLOCKED_ENV_VARS {
+        command.env_remove(var);
+    }
 
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
@@ -589,5 +610,75 @@ mod tests {
             }
             Ok(_) => {}
         }
+    }
+
+    // =========================================================================
+    // IPC token blocklist
+    // =========================================================================
+
+    fn make_env_lua() -> Lua {
+        let lua = Lua::new();
+        register_env_api(&lua).expect("register_env_api failed");
+        lua
+    }
+
+    #[test]
+    fn env_get_blocks_driver_ipc_token_exact_case() {
+        // Set the var so it would be readable if not blocked.
+        unsafe { std::env::set_var("DBFLUX_DRIVER_IPC_TOKEN", "should-be-blocked") };
+        let lua = make_env_lua();
+        let value: Option<String> = lua
+            .load("return dbflux.env.get('DBFLUX_DRIVER_IPC_TOKEN')")
+            .eval()
+            .unwrap();
+        unsafe { std::env::remove_var("DBFLUX_DRIVER_IPC_TOKEN") };
+        assert!(
+            value.is_none(),
+            "DBFLUX_DRIVER_IPC_TOKEN must be blocked even when env_read is enabled"
+        );
+    }
+
+    #[test]
+    fn env_get_blocks_ipc_token_case_insensitive() {
+        unsafe { std::env::set_var("DBFLUX_IPC_TOKEN", "should-be-blocked") };
+        let lua = make_env_lua();
+        let lower: Option<String> = lua
+            .load("return dbflux.env.get('dbflux_ipc_token')")
+            .eval()
+            .unwrap();
+        let upper: Option<String> = lua
+            .load("return dbflux.env.get('DBFLUX_IPC_TOKEN')")
+            .eval()
+            .unwrap();
+        unsafe { std::env::remove_var("DBFLUX_IPC_TOKEN") };
+        assert!(lower.is_none(), "lowercase key must be blocked");
+        assert!(upper.is_none(), "uppercase key must be blocked");
+    }
+
+    #[test]
+    fn env_get_blocks_auth_provider_ipc_token() {
+        unsafe { std::env::set_var("DBFLUX_AUTH_PROVIDER_IPC_TOKEN", "should-be-blocked") };
+        let lua = make_env_lua();
+        let value: Option<String> = lua
+            .load("return dbflux.env.get('DBFLUX_AUTH_PROVIDER_IPC_TOKEN')")
+            .eval()
+            .unwrap();
+        unsafe { std::env::remove_var("DBFLUX_AUTH_PROVIDER_IPC_TOKEN") };
+        assert!(
+            value.is_none(),
+            "DBFLUX_AUTH_PROVIDER_IPC_TOKEN must be blocked"
+        );
+    }
+
+    #[test]
+    fn env_get_allows_unrelated_vars() {
+        unsafe { std::env::set_var("DBFLUX_TEST_SAFE_VAR_12345", "visible") };
+        let lua = make_env_lua();
+        let value: Option<String> = lua
+            .load("return dbflux.env.get('DBFLUX_TEST_SAFE_VAR_12345')")
+            .eval()
+            .unwrap();
+        unsafe { std::env::remove_var("DBFLUX_TEST_SAFE_VAR_12345") };
+        assert_eq!(value.as_deref(), Some("visible"));
     }
 }

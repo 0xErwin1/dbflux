@@ -367,6 +367,13 @@ impl IpcDriver {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
+        // Explicit injection prevents the driver host from depending on implicit
+        // env inheritance — belt-and-suspenders alongside the fail-closed check
+        // in dbflux_driver_host::main.
+        if let Ok(token) = std::env::var(dbflux_ipc::DRIVER_RPC_AUTH_TOKEN_ENV) {
+            command.env(dbflux_ipc::DRIVER_RPC_AUTH_TOKEN_ENV, token);
+        }
+
         let mut child = command.spawn().map_err(|e| {
             DbError::ConnectionFailed(
                 format!("Failed to start driver host '{}': {}", launch.program, e).into(),

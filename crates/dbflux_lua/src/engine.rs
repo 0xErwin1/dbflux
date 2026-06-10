@@ -207,7 +207,10 @@ mod tests {
     #[test]
     fn logging_and_env_api_are_available_when_enabled() {
         let context = test_context();
-        let capabilities = LuaCapabilities::default();
+        let capabilities = LuaCapabilities {
+            env_read: true,
+            ..LuaCapabilities::default()
+        };
         let vm = LuaEngine::create_vm(test_vm_config(
             &context,
             HookPhase::PreConnect,
@@ -231,6 +234,29 @@ mod tests {
         assert!(has_logging);
         assert!(has_env);
         assert!(path_value.is_some());
+    }
+
+    #[test]
+    fn env_api_is_hidden_by_default() {
+        let context = test_context();
+        let capabilities = LuaCapabilities::default();
+        let vm = LuaEngine::create_vm(test_vm_config(
+            &context,
+            HookPhase::PreConnect,
+            &capabilities,
+        ))
+        .unwrap();
+
+        let env_is_nil: bool = vm
+            .lua
+            .load("return dbflux == nil or dbflux.env == nil")
+            .eval()
+            .unwrap();
+
+        assert!(
+            env_is_nil,
+            "env_read defaults to false; dbflux.env must be nil"
+        );
     }
 
     #[test]
