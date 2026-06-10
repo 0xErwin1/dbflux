@@ -36,6 +36,14 @@ fn main() {
         .ok()
         .filter(|token| !token.is_empty());
 
+    if auth_token.is_none() {
+        fatal(&format!(
+            "Driver host refuses to start: {} is not set or empty. \
+             The parent process must provision this token before launching driver hosts.",
+            DRIVER_RPC_AUTH_TOKEN_ENV,
+        ));
+    }
+
     let driver = create_driver(&args.driver)
         .unwrap_or_else(|e| fatal(&format!("Failed to create driver '{}': {e}", args.driver)));
 
@@ -74,6 +82,18 @@ fn main() {
     }
 
     log::info!("Driver host shutting down");
+}
+
+/// Returns `true` when the client-supplied token matches the expected token.
+///
+/// `expected_auth_token` must always be `Some` at runtime (the startup guard in
+/// `main` enforces this). The parameter is `Option` so the same helper can be
+/// exercised in tests that validate the reject path without a live socket.
+fn is_hello_authorized(client_token: Option<&str>, expected_auth_token: Option<&str>) -> bool {
+    match expected_auth_token {
+        Some(expected) => client_token == Some(expected),
+        None => false,
+    }
 }
 
 /// Handles one client connection for its entire lifetime.
@@ -144,9 +164,7 @@ fn handle_connection(
 
         let response = match envelope.body {
             DriverRequestBody::Hello(hello_req) => {
-                if let Some(expected_token) = expected_auth_token
-                    && hello_req.auth_token.as_deref() != Some(expected_token)
-                {
+                if !is_hello_authorized(hello_req.auth_token.as_deref(), expected_auth_token) {
                     DriverResponseEnvelope::error(
                         request_version,
                         request_id,
@@ -510,7 +528,7 @@ fn fatal(message: &str) -> ! {
 mod tests {
     use super::{
         choose_negotiated_driver_version, create_driver, hello_version_error_response,
-        negotiate_hello_version, validate_negotiated_request_version,
+        is_hello_authorized, negotiate_hello_version, validate_negotiated_request_version,
     };
     use dbflux_ipc::{
         ProtocolVersion,
@@ -582,6 +600,29 @@ mod tests {
 
         assert_eq!(error.code, DriverRpcErrorCode::VersionMismatch);
         assert!(error.message.contains("No compatible protocol version"));
+    }
+
+    #[test]
+    fn hello_auth_rejects_when_expected_token_is_none() {
+        assert!(
+            !is_hello_authorized(Some("any-token"), None),
+            "Hello must be rejected (fail-closed) when no expected token is configured"
+        );
+        assert!(
+            !is_hello_authorized(None, None),
+            "Hello must be rejected (fail-closed) when no expected token is configured, even without a client token"
+        );
+    }
+
+    #[test]
+    fn hello_auth_rejects_wrong_token() {
+        assert!(!is_hello_authorized(Some("wrong"), Some("correct")));
+        assert!(!is_hello_authorized(None, Some("correct")));
+    }
+
+    #[test]
+    fn hello_auth_accepts_matching_token() {
+        assert!(is_hello_authorized(Some("secret"), Some("secret")));
     }
 
     #[test]
