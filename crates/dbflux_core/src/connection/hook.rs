@@ -123,7 +123,7 @@ impl ScriptSource {
 pub struct LuaCapabilities {
     #[serde(default = "default_true")]
     pub logging: bool,
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub env_read: bool,
     #[serde(default = "default_true")]
     pub connection_metadata: bool,
@@ -135,7 +135,7 @@ impl Default for LuaCapabilities {
     fn default() -> Self {
         Self {
             logging: true,
-            env_read: true,
+            env_read: false,
             connection_metadata: true,
             process_run: false,
         }
@@ -1561,7 +1561,7 @@ mod tests {
         };
 
         assert!(capabilities.logging);
-        assert!(capabilities.env_read);
+        assert!(!capabilities.env_read);
         assert!(capabilities.connection_metadata);
         assert!(!capabilities.process_run);
     }
