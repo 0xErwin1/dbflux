@@ -72,7 +72,7 @@ use live_output::LiveOutputState;
 /// bar and chrome row are rendered consistently with `DataDocument` tabs.
 /// The `grid` field is kept for direct access by focus/dispatch/execution
 /// callers that need to call grid-specific methods.
-struct ResultTab {
+pub(super) struct ResultTab {
     id: Uuid,
     title: String,
     grid: Entity<DataGridPanel>,
@@ -202,6 +202,122 @@ fn query_request_for_execution(
         .with_execution_context(Some(exec_ctx.clone()))
 }
 
+/// Per-document execution-source UI controls and the `ExecutionContext` they populate.
+///
+/// Groups the connection/database/schema dropdowns, source-range inputs, the optional
+/// `TimeRangePanel`, and the subscription vec that keeps them in sync.
+pub(super) struct SourceContext {
+    pub(super) exec_ctx: ExecutionContext,
+    pub(super) connection_dropdown: Entity<Dropdown>,
+    pub(super) database_dropdown: Entity<Dropdown>,
+    pub(super) schema_dropdown: Entity<Dropdown>,
+    pub(super) source_query_mode_dropdown: Entity<Dropdown>,
+    pub(super) source_targets: Entity<MultiSelect>,
+    pub(super) source_start_input: Entity<InputState>,
+    pub(super) source_end_input: Entity<InputState>,
+    /// Number of upcoming `InputEvent::Change` emissions from the source
+    /// start/end inputs that originate from a programmatic seed rather than a
+    /// user edit, and must therefore be ignored. `InputState::set_value` always
+    /// emits `Change`, so seeding both inputs while draining
+    /// `pending.source_input_values` queues two handler calls that would
+    /// otherwise re-derive the exec context from the values just written.
+    pub(super) source_seed_suppress: usize,
+    pub(super) source_time_range_panel: Option<Entity<TimeRangePanel>>,
+    pub(super) _source_time_range_sub: Option<Subscription>,
+    pub(super) _context_subscriptions: Vec<Subscription>,
+}
+
+/// Text editor entity, file-backing metadata, language mode, and diagnostic debounce.
+///
+/// Groups the `InputState` entity and its subscription together with the fields
+/// that track editor-lifecycle concerns: content dirtiness, file path, language,
+/// and the incremental diagnostic refresh debounce.
+pub(super) struct EditorState {
+    pub(super) input_state: Entity<InputState>,
+    pub(super) _input_subscriptions: Vec<Subscription>,
+    pub(super) original_content: String,
+    pub(super) saved_query_id: Option<Uuid>,
+    pub(super) current_editor_mode: &'static str,
+    pub(super) diagnostic_request_id: u64,
+    pub(super) _diagnostic_debounce: Option<Task<()>>,
+    pub(super) path: Option<PathBuf>,
+    pub(super) is_dirty: bool,
+    pub(super) suppress_dirty: bool,
+    pub(super) query_language: QueryLanguage,
+}
+
+/// Auto-save-to-disk machinery and saved-label UI feedback.
+pub(super) struct SessionPersistence {
+    pub(super) scratch_path: Option<PathBuf>,
+    pub(super) shadow_path: Option<PathBuf>,
+    pub(super) _auto_save_debounce: Option<Task<()>>,
+    pub(super) show_saved_label: bool,
+    pub(super) _saved_label_timer: Option<Task<()>>,
+}
+
+/// History modal entity and its event subscription.
+pub(super) struct HistoryState {
+    pub(super) history_modal: Entity<HistoryModal>,
+    pub(super) _history_subscriptions: Vec<Subscription>,
+}
+
+/// Auto-refresh policy, timer, and dropdown control.
+pub(super) struct RefreshState {
+    pub(super) refresh_policy: RefreshPolicy,
+    pub(super) refresh_dropdown: Entity<Dropdown>,
+    pub(super) _refresh_timer: Option<Task<()>>,
+    pub(super) _refresh_subscriptions: Vec<Subscription>,
+}
+
+/// Schema-drift modal entity, its subscriptions, and the in-flight preflight flag.
+pub(super) struct DriftState {
+    pub(super) schema_drift_modal: Entity<ModalSchemaDrift>,
+    pub(super) _schema_drift_subscriptions: Vec<Subscription>,
+    pub(super) preflight_running: bool,
+}
+
+/// In-flight and historical query execution state.
+pub(super) struct Execution {
+    pub(super) execution_history: Vec<ExecutionRecord>,
+    pub(super) active_execution_index: Option<usize>,
+    pub(super) live_output: Option<LiveOutputState>,
+    pub(super) _live_output_drain: Option<Task<()>>,
+    pub(super) active_query_task: Option<ActiveQueryTask>,
+}
+
+/// The result-tab collection and its selection cursor.
+pub(super) struct ResultTabs {
+    pub(super) result_tabs: Vec<ResultTab>,
+    pub(super) active_result_index: Option<usize>,
+    pub(super) result_tab_counter: usize,
+    pub(super) run_in_new_tab: bool,
+}
+
+/// All deferred action slots drained at the top of each render cycle.
+///
+/// Each field is an individually-addressable typed slot. The drain order
+/// in `render` matches the declaration order here and must not be changed.
+/// `pending.drift_query` supports re-entrancy: the drift state machine may
+/// `.take()` the value and then re-store it within the same render pass when
+/// the modal has not yet been answered.
+#[derive(Default)]
+pub(super) struct PendingActions {
+    result: Option<PendingQueryResult>,
+    set_query: Option<HistoryQuerySelected>,
+    auto_refresh: bool,
+    history_focus_restore: bool,
+    drift_query: Option<PendingDriftQuery>,
+    source_input_values: Option<(String, String)>,
+    chart_reexecute: bool,
+    /// Window bounds emitted by the source `TimeRangePanel`. Taken by
+    /// `run_query_text` on the next execution path; bypasses the text inputs.
+    window_override: Option<(i64, i64)>,
+    dangerous_query: Option<PendingDangerousQuery>,
+    script_confirm: Option<PendingScriptConfirm>,
+    routine_definition: Option<String>,
+    error: Option<String>,
+}
+
 pub struct CodeDocument {
     // Identity
     id: DocumentId,
@@ -219,73 +335,20 @@ pub struct CodeDocument {
     // Dependencies
     app_state: Entity<AppStateEntity>,
 
-    // Editor
-    input_state: Entity<InputState>,
-    _input_subscriptions: Vec<Subscription>,
-    original_content: String,
-    saved_query_id: Option<Uuid>,
+    // Editor: text input, file-backing, language mode, and diagnostics.
+    editor: EditorState,
 
-    // File backing
-    path: Option<PathBuf>,
-    is_dirty: bool,
-    suppress_dirty: bool,
-    query_language: QueryLanguage,
+    // Execution context and associated source-control widgets.
+    source: SourceContext,
 
-    // Execution context (per-document, independent of global connection)
-    exec_ctx: ExecutionContext,
-    connection_dropdown: Entity<Dropdown>,
-    database_dropdown: Entity<Dropdown>,
-    schema_dropdown: Entity<Dropdown>,
-    source_query_mode_dropdown: Entity<Dropdown>,
-    source_targets: Entity<MultiSelect>,
-    source_start_input: Entity<InputState>,
-    source_end_input: Entity<InputState>,
-    pending_source_input_values: Option<(String, String)>,
-    /// Number of upcoming `InputEvent::Change` emissions from the source
-    /// start/end inputs that originate from a programmatic seed rather than a
-    /// user edit, and must therefore be ignored. `InputState::set_value` always
-    /// emits `Change`, so seeding both inputs while draining
-    /// `pending_source_input_values` queues two handler calls that would
-    /// otherwise re-derive the exec context from the values just written.
-    source_seed_suppress: usize,
-    /// Present when the active connection's `SourceContextSpec` declares both
-    /// a non-empty `start_label` and `end_label`. The panel replaces the raw
-    /// RFC3339 text inputs and forwards epoch-ms bounds into `exec_ctx.source`.
-    /// `None` for connections that use text-based time inputs or have no spec.
-    source_time_range_panel: Option<Entity<TimeRangePanel>>,
-    /// Subscription to `TimeRangeChanged` from `source_time_range_panel`.
-    /// Stored separately so it can be replaced when the panel is recreated.
-    _source_time_range_sub: Option<Subscription>,
-    _context_subscriptions: Vec<Subscription>,
+    // Query execution state and result tabs.
+    execution: Execution,
+    result_tabs: ResultTabs,
 
-    // Execution
-    execution_history: Vec<ExecutionRecord>,
-    active_execution_index: Option<usize>,
-    pending_result: Option<PendingQueryResult>,
-    live_output: Option<LiveOutputState>,
-    _live_output_drain: Option<Task<()>>,
-    active_query_task: Option<ActiveQueryTask>,
-
-    // Result tabs
-    result_tabs: Vec<ResultTab>,
-    active_result_index: Option<usize>,
-    result_tab_counter: usize,
-    run_in_new_tab: bool,
-
-    // History modal
-    history_modal: Entity<HistoryModal>,
-    _history_subscriptions: Vec<Subscription>,
-    pending_set_query: Option<HistoryQuerySelected>,
-    pending_history_focus_restore: bool,
-    /// Set by chart-driven RANGE chip changes or auto-refresh ticks; the next
-    /// render reads it and calls `run_query` so updates land without a manual Run.
-    pending_chart_reexecute: bool,
-    /// Window emitted by the source `TimeRangePanel` that must win over the
-    /// (potentially stale) `source_start_input` / `source_end_input` text fields
-    /// on the very next `run_query`. Taken by `run_query_text`; rebuilds
-    /// `exec_ctx.source` from these epoch-ms bounds and bypasses
-    /// `current_source_context`. Mirrors `ChartDocument::pending_time_window`.
-    pending_window_override: Option<(i64, i64)>,
+    // History modal, refresh timer, and schema drift modal.
+    history: HistoryState,
+    refresh: RefreshState,
+    drift: DriftState,
 
     // Layout/focus
     layout: SqlQueryLayout,
@@ -296,57 +359,17 @@ pub struct CodeDocument {
 
     // Task runner (query execution)
     runner: DocumentTaskRunner,
-    refresh_policy: RefreshPolicy,
-    refresh_dropdown: Entity<Dropdown>,
-    pending_auto_refresh: bool,
-    _refresh_timer: Option<Task<()>>,
-    _refresh_subscriptions: Vec<Subscription>,
 
     is_active_tab: bool,
-
-    // Dangerous query confirmation
-    pending_dangerous_query: Option<PendingDangerousQuery>,
-
-    // Multi-statement script confirmation
-    pending_script_confirm: Option<PendingScriptConfirm>,
-
-    // Schema drift detection
-    schema_drift_modal: Entity<ModalSchemaDrift>,
-    _schema_drift_subscriptions: Vec<Subscription>,
-    /// Query paused while the drift preflight background task is running or
-    /// while the user is responding to the drift modal.
-    pending_drift_query: Option<PendingDriftQuery>,
-    /// True while the drift preflight I/O task is in flight.
-    drift_preflight_running: bool,
-
-    // Diagnostic debounce: incremental request id to discard stale results.
-    diagnostic_request_id: u64,
-    _diagnostic_debounce: Option<Task<()>>,
 
     // Pending file I/O
     _pending_save: Option<Task<()>>,
 
-    // Session persistence (auto-save to disk)
-    scratch_path: Option<PathBuf>,
-    shadow_path: Option<PathBuf>,
-    _auto_save_debounce: Option<Task<()>>,
-    show_saved_label: bool,
-    _saved_label_timer: Option<Task<()>>,
+    // Session persistence (auto-save to disk).
+    session: SessionPersistence,
 
-    // Pending error to show as toast (set from async context without window access)
-    pending_error: Option<String>,
-
-    /// Routine definition body fetched from the DB and waiting to be applied in
-    /// the next render cycle (where `Window` is available for `set_content`).
-    pending_routine_definition: Option<String>,
-
-    /// Last editor_mode pushed to `InputState::set_highlighter`. Tracked so
-    /// `sync_editor_language` only resets the highlighter when the mode
-    /// actually changes — `set_highlighter` nukes the cached highlighter to
-    /// `None` and gpui-component only rebuilds it on text edits, so calling
-    /// it on every `AppStateChanged` would silently strip syntax colors
-    /// until the next keystroke.
-    current_editor_mode: &'static str,
+    /// Deferred action slots drained at the top of each render cycle.
+    pending: PendingActions,
 }
 
 struct PendingQueryResult {
@@ -359,7 +382,7 @@ struct PendingQueryResult {
     is_script: bool,
 }
 
-struct ActiveQueryTask {
+pub(super) struct ActiveQueryTask {
     task_id: dbflux_core::TaskId,
     target: TaskTarget,
 }
@@ -468,18 +491,18 @@ impl CodeDocument {
             window,
             |this, _input, event: &InputEvent, _window, cx| match event {
                 InputEvent::Change => {
-                    if this.suppress_dirty {
+                    if this.editor.suppress_dirty {
                         // Programmatic change (set_content, initial load, or revert):
                         // consume the flag and do nothing else. This prevents an
                         // infinite loop where a revert set_content emits another
                         // Change, which would trigger another revert, ad infinitum.
-                        this.suppress_dirty = false;
+                        this.editor.suppress_dirty = false;
                     } else if this.read_only {
                         // Genuine user edit on a read-only document: revert once.
                         // suppress_dirty = true ensures the Change emitted by the
                         // revert's own set_content is consumed by the branch above.
-                        let original = this.original_content.clone();
-                        this.suppress_dirty = true;
+                        let original = this.editor.original_content.clone();
+                        this.editor.suppress_dirty = true;
                         this.set_content(&original, _window, cx);
                     } else {
                         this.mark_dirty(cx);
@@ -559,14 +582,14 @@ impl CodeDocument {
         let query_selected_sub = cx.subscribe(
             &history_modal,
             |this, _, event: &HistoryQuerySelected, cx| {
-                this.pending_set_query = Some(event.clone());
+                this.pending.set_query = Some(event.clone());
                 cx.notify();
             },
         );
 
         let history_closed_sub =
             cx.subscribe(&history_modal, |this, _, _: &HistoryModalClosed, cx| {
-                this.pending_history_focus_restore = true;
+                this.pending.history_focus_restore = true;
                 cx.notify();
             });
 
@@ -590,7 +613,7 @@ impl CodeDocument {
         let drift_dismissed_sub = cx.subscribe(
             &schema_drift_modal,
             |this, _, _event: &SchemaDriftDismissed, cx| {
-                this.pending_drift_query = None;
+                this.pending.drift_query = None;
                 cx.notify();
             },
         );
@@ -627,7 +650,7 @@ impl CodeDocument {
                 let policy = RefreshPolicy::from_index(event.index);
 
                 if policy.is_auto() && !this.can_auto_refresh(cx) {
-                    this.refresh_dropdown.update(cx, |dd, cx| {
+                    this.refresh.refresh_dropdown.update(cx, |dd, cx| {
                         dd.set_selected_index(Some(RefreshPolicy::Manual.index()), cx);
                     });
                     Toast::warning("Auto-refresh blocked: query modifies data")
@@ -751,85 +774,90 @@ impl CodeDocument {
             routine_dedup: None,
             routine_definition_pending: false,
             app_state,
-            input_state,
-            _input_subscriptions: vec![input_change_sub],
-            original_content: String::new(),
-            saved_query_id: None,
-            path: None,
-            is_dirty: false,
-            suppress_dirty: false,
-            query_language,
-            exec_ctx,
-            connection_dropdown,
-            database_dropdown,
-            schema_dropdown,
-            source_query_mode_dropdown,
-            source_targets,
-            source_start_input,
-            source_end_input,
-            pending_source_input_values: None,
-            source_seed_suppress: 0,
-            source_time_range_panel: None,
-            _source_time_range_sub: None,
-            _context_subscriptions: vec![
-                conn_sub,
-                db_sub,
-                schema_sub,
-                source_query_mode_sub,
-                source_targets_sub,
-                source_start_sub,
-                source_end_sub,
-                app_state_sub,
-            ],
-            execution_history: Vec::new(),
-            active_execution_index: None,
-            pending_result: None,
-            live_output: None,
-            _live_output_drain: None,
-            active_query_task: None,
-            result_tabs: Vec::new(),
-            active_result_index: None,
-            result_tab_counter: 0,
-            run_in_new_tab: false,
-            history_modal,
-            _history_subscriptions: vec![query_selected_sub, history_closed_sub],
-            pending_set_query: None,
-            pending_history_focus_restore: false,
-            pending_chart_reexecute: false,
-            pending_window_override: None,
+            editor: EditorState {
+                input_state,
+                _input_subscriptions: vec![input_change_sub],
+                original_content: String::new(),
+                saved_query_id: None,
+                current_editor_mode: editor_mode,
+                diagnostic_request_id: 0,
+                _diagnostic_debounce: None,
+                path: None,
+                is_dirty: false,
+                suppress_dirty: false,
+                query_language,
+            },
+            source: SourceContext {
+                exec_ctx,
+                connection_dropdown,
+                database_dropdown,
+                schema_dropdown,
+                source_query_mode_dropdown,
+                source_targets,
+                source_start_input,
+                source_end_input,
+                source_seed_suppress: 0,
+                source_time_range_panel: None,
+                _source_time_range_sub: None,
+                _context_subscriptions: vec![
+                    conn_sub,
+                    db_sub,
+                    schema_sub,
+                    source_query_mode_sub,
+                    source_targets_sub,
+                    source_start_sub,
+                    source_end_sub,
+                    app_state_sub,
+                ],
+            },
+            execution: Execution {
+                execution_history: Vec::new(),
+                active_execution_index: None,
+                live_output: None,
+                _live_output_drain: None,
+                active_query_task: None,
+            },
+            result_tabs: ResultTabs {
+                result_tabs: Vec::new(),
+                active_result_index: None,
+                result_tab_counter: 0,
+                run_in_new_tab: false,
+            },
+            history: HistoryState {
+                history_modal,
+                _history_subscriptions: vec![query_selected_sub, history_closed_sub],
+            },
             layout: SqlQueryLayout::EditorOnly,
             focus_handle: cx.focus_handle(),
             focus_mode: SqlQueryFocus::Editor,
             context_bar_slot: ContextBarSlot::Connection,
             results_maximized: false,
             runner,
-            refresh_policy,
-            refresh_dropdown,
-            pending_auto_refresh: false,
-            _refresh_timer: None,
-            _refresh_subscriptions: vec![refresh_policy_sub],
+            refresh: RefreshState {
+                refresh_policy,
+                refresh_dropdown,
+                _refresh_timer: None,
+                _refresh_subscriptions: vec![refresh_policy_sub],
+            },
             is_active_tab: true,
-            pending_dangerous_query: None,
-            pending_script_confirm: None,
-            schema_drift_modal,
-            _schema_drift_subscriptions: vec![
-                drift_refresh_sub,
-                drift_continue_sub,
-                drift_dismissed_sub,
-            ],
-            pending_drift_query: None,
-            drift_preflight_running: false,
-            diagnostic_request_id: 0,
-            _diagnostic_debounce: None,
+            drift: DriftState {
+                schema_drift_modal,
+                _schema_drift_subscriptions: vec![
+                    drift_refresh_sub,
+                    drift_continue_sub,
+                    drift_dismissed_sub,
+                ],
+                preflight_running: false,
+            },
             _pending_save: None,
-            scratch_path,
-            shadow_path: None,
-            _auto_save_debounce: None,
-            show_saved_label: false,
-            _saved_label_timer: None,
-            pending_error: None,
-            pending_routine_definition: None,
-            current_editor_mode: editor_mode,
+            session: SessionPersistence {
+                scratch_path,
+                shadow_path: None,
+                _auto_save_debounce: None,
+                show_saved_label: false,
+                _saved_label_timer: None,
+            },
+            pending: PendingActions::default(),
         };
 
         document.sync_context_dropdowns(cx);
@@ -837,14 +865,14 @@ impl CodeDocument {
     }
 
     pub fn can_auto_refresh(&self, cx: &App) -> bool {
-        dbflux_core::is_safe_read_query(&self.input_state.read(cx).value())
+        dbflux_core::is_safe_read_query(&self.editor.input_state.read(cx).value())
     }
 
     /// Returns the full editor content trimmed, or `None` when blank.
     ///
     /// Used by the "New chart from current query" command to seed a new `ChartDocument`.
     pub fn current_query_text(&self, cx: &App) -> Option<String> {
-        let text = self.input_state.read(cx).value().trim().to_string();
+        let text = self.editor.input_state.read(cx).value().trim().to_string();
         if text.is_empty() { None } else { Some(text) }
     }
 
@@ -871,23 +899,23 @@ impl CodeDocument {
     }
 
     pub fn set_refresh_policy(&mut self, policy: RefreshPolicy, cx: &mut Context<Self>) {
-        if self.refresh_policy == policy {
+        if self.refresh.refresh_policy == policy {
             return;
         }
 
-        self.refresh_policy = policy;
+        self.refresh.refresh_policy = policy;
         self.update_refresh_timer(cx);
         cx.notify();
     }
 
     fn update_refresh_timer(&mut self, cx: &mut Context<Self>) {
-        self._refresh_timer = None;
+        self.refresh._refresh_timer = None;
 
-        let Some(duration) = self.refresh_policy.duration() else {
+        let Some(duration) = self.refresh.refresh_policy.duration() else {
             return;
         };
 
-        self._refresh_timer = Some(cx.spawn(async move |this, cx| {
+        self.refresh._refresh_timer = Some(cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(duration).await;
 
@@ -897,7 +925,7 @@ impl CodeDocument {
                     };
 
                     entity.update(cx, |doc, cx| {
-                        if !doc.refresh_policy.is_auto() || doc.runner.is_primary_active() {
+                        if !doc.refresh.refresh_policy.is_auto() || doc.runner.is_primary_active() {
                             return;
                         }
 
@@ -912,7 +940,7 @@ impl CodeDocument {
                             return;
                         }
 
-                        doc.pending_auto_refresh = true;
+                        doc.pending.auto_refresh = true;
                         cx.notify();
                     });
                 });
@@ -923,11 +951,12 @@ impl CodeDocument {
     /// Sets the document content (without marking dirty).
     pub fn set_content(&mut self, sql: &str, window: &mut Window, cx: &mut Context<Self>) {
         let sql_owned = sql.to_string();
-        self.suppress_dirty = true;
-        self.input_state
+        self.editor.suppress_dirty = true;
+        self.editor
+            .input_state
             .update(cx, |state, cx| state.set_value(&sql_owned, window, cx));
-        self.original_content = sql_owned;
-        self.is_dirty = false;
+        self.editor.original_content = sql_owned;
+        self.editor.is_dirty = false;
         self.refresh_editor_diagnostics(window, cx);
     }
 
@@ -939,7 +968,7 @@ impl CodeDocument {
 
     /// Attach a file path (used after opening or "Save As").
     pub fn with_path(mut self, path: PathBuf) -> Self {
-        self.path = Some(path);
+        self.editor.path = Some(path);
         self
     }
 
@@ -953,7 +982,7 @@ impl CodeDocument {
         // when the user focuses or types (which would otherwise happen because
         // the Input component receives key events before the disabled guard
         // blocks the actual text insertion).
-        self.input_state.update(cx, |state, _cx| {
+        self.editor.input_state.update(cx, |state, _cx| {
             state.lsp.completion_provider = None;
         });
 
@@ -1027,7 +1056,7 @@ impl CodeDocument {
                         Ok(body) => {
                             doc.routine_definition_pending = false;
                             // set_content requires Window, use pending path to defer to render cycle.
-                            doc.pending_routine_definition = Some(body);
+                            doc.pending.routine_definition = Some(body);
                             cx.notify();
                         }
                         Err(e) => {
@@ -1037,7 +1066,7 @@ impl CodeDocument {
                                 e
                             );
                             doc.routine_definition_pending = false;
-                            doc.pending_routine_definition =
+                            doc.pending.routine_definition =
                                 Some(format!("-- Failed to load routine definition:\n-- {}", e));
                             cx.notify();
                         }
@@ -1052,12 +1081,12 @@ impl CodeDocument {
 
     /// Set the execution context (e.g. parsed from file header).
     pub fn with_exec_ctx(mut self, ctx: ExecutionContext, cx: &mut Context<Self>) -> Self {
-        self.pending_source_input_values = ctx
+        self.pending.source_input_values = ctx
             .source
             .as_ref()
             .and_then(source_input_values_from_context);
         self.connection_id = ctx.connection_id;
-        self.exec_ctx = ctx;
+        self.source.exec_ctx = ctx;
         self.sync_context_dropdowns(cx);
         self
     }
@@ -1065,29 +1094,29 @@ impl CodeDocument {
     // === File backing ===
 
     pub fn path(&self) -> Option<&PathBuf> {
-        self.path.as_ref()
+        self.editor.path.as_ref()
     }
 
     pub fn is_file_backed(&self) -> bool {
-        self.path.is_some()
+        self.editor.path.is_some()
     }
 
     #[allow(dead_code)]
     pub fn query_language(&self) -> QueryLanguage {
-        self.query_language.clone()
+        self.editor.query_language.clone()
     }
 
     /// Returns true if the editor content is empty or whitespace-only.
     pub fn is_content_empty(&self, cx: &App) -> bool {
-        self.input_state.read(cx).value().trim().is_empty()
+        self.editor.input_state.read(cx).value().trim().is_empty()
     }
 
     fn mark_dirty(&mut self, cx: &mut Context<Self>) {
-        if !self.is_dirty {
-            self.is_dirty = true;
+        if !self.editor.is_dirty {
+            self.editor.is_dirty = true;
 
-            if self.is_file_backed() && self.shadow_path.is_none() {
-                self.shadow_path =
+            if self.is_file_backed() && self.session.shadow_path.is_none() {
+                self.session.shadow_path =
                     Some(self.app_state.read(cx).shadow_path(&self.id.0.to_string()));
             }
 
@@ -1097,12 +1126,12 @@ impl CodeDocument {
     }
 
     fn mark_clean(&mut self, cx: &mut Context<Self>) {
-        if self.is_dirty {
-            self.is_dirty = false;
-            self.original_content = self.input_state.read(cx).value().to_string();
-            self._auto_save_debounce = None;
+        if self.editor.is_dirty {
+            self.editor.is_dirty = false;
+            self.editor.original_content = self.editor.input_state.read(cx).value().to_string();
+            self.session._auto_save_debounce = None;
 
-            if let Some(shadow) = self.shadow_path.take() {
+            if let Some(shadow) = self.session.shadow_path.take() {
                 let _ = std::fs::remove_file(&shadow);
             }
 
@@ -1118,13 +1147,13 @@ impl CodeDocument {
     }
 
     pub fn title(&self) -> String {
-        if let Some(path) = &self.path {
+        if let Some(path) = &self.editor.path {
             let name = path
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("Untitled");
 
-            if self.is_dirty {
+            if self.editor.is_dirty {
                 format!("{}*", name)
             } else {
                 name.to_string()
@@ -1139,7 +1168,7 @@ impl CodeDocument {
     }
 
     pub fn refresh_policy(&self) -> RefreshPolicy {
-        self.refresh_policy
+        self.refresh.refresh_policy
     }
 
     pub fn connection_id(&self) -> Option<Uuid> {
@@ -1148,28 +1177,28 @@ impl CodeDocument {
 
     #[allow(dead_code)]
     pub fn exec_ctx(&self) -> &ExecutionContext {
-        &self.exec_ctx
+        &self.source.exec_ctx
     }
 
     pub fn scratch_path(&self) -> Option<&PathBuf> {
-        self.scratch_path.as_ref()
+        self.session.scratch_path.as_ref()
     }
 
     pub fn shadow_path(&self) -> Option<&PathBuf> {
-        self.shadow_path.as_ref()
+        self.session.shadow_path.as_ref()
     }
 
     /// Override session paths (used during session restore).
     pub fn set_session_paths(&mut self, scratch: Option<PathBuf>, shadow: Option<PathBuf>) {
-        self.scratch_path = scratch;
-        self.shadow_path = shadow;
+        self.session.scratch_path = scratch;
+        self.session.shadow_path = shadow;
     }
 
     /// Mark the document as dirty without assigning a new shadow path.
     /// Used during session restore when we already have the shadow from the manifest.
     pub fn restore_dirty(&mut self, cx: &mut Context<Self>) {
-        if !self.is_dirty {
-            self.is_dirty = true;
+        if !self.editor.is_dirty {
+            self.editor.is_dirty = true;
             cx.emit(DocumentEvent::MetaChanged);
             cx.notify();
         }
@@ -1181,17 +1210,17 @@ impl CodeDocument {
 
     pub fn has_unsaved_changes(&self, cx: &App) -> bool {
         if self.is_file_backed() {
-            return self.is_dirty;
+            return self.editor.is_dirty;
         }
 
-        let current = self.input_state.read(cx).value();
-        current != self.original_content
+        let current = self.editor.input_state.read(cx).value();
+        current != self.editor.original_content
     }
 
     /// Counts lines added and removed relative to `original_content`.
     pub fn diff_stats(&self, cx: &App) -> (usize, usize) {
-        let current = self.input_state.read(cx).value().to_string();
-        diff_stats_from_pair(&self.original_content, &current)
+        let current = self.editor.input_state.read(cx).value().to_string();
+        diff_stats_from_pair(&self.editor.original_content, &current)
     }
 
     /// Short summary of pending edits for the dirty-dot tooltip.
@@ -1218,46 +1247,56 @@ impl CodeDocument {
     ) -> bool {
         match cmd {
             Command::Cancel => {
-                self.history_modal.update(cx, |modal, cx| modal.close(cx));
+                self.history
+                    .history_modal
+                    .update(cx, |modal, cx| modal.close(cx));
                 true
             }
             Command::SelectNext => {
-                self.history_modal
+                self.history
+                    .history_modal
                     .update(cx, |modal, cx| modal.select_next(cx));
                 true
             }
             Command::SelectPrev => {
-                self.history_modal
+                self.history
+                    .history_modal
                     .update(cx, |modal, cx| modal.select_prev(cx));
                 true
             }
             Command::Execute => {
-                self.history_modal
+                self.history
+                    .history_modal
                     .update(cx, |modal, cx| modal.execute_selected(window, cx));
                 true
             }
             Command::Delete => {
-                self.history_modal
+                self.history
+                    .history_modal
                     .update(cx, |modal, cx| modal.delete_selected(cx));
                 true
             }
             Command::ToggleFavorite => {
-                self.history_modal
+                self.history
+                    .history_modal
                     .update(cx, |modal, cx| modal.toggle_favorite_selected(cx));
                 true
             }
             Command::Rename => {
-                self.history_modal
+                self.history
+                    .history_modal
                     .update(cx, |modal, cx| modal.start_rename_selected(window, cx));
                 true
             }
             Command::FocusSearch => {
-                self.history_modal
+                self.history
+                    .history_modal
                     .update(cx, |modal, cx| modal.focus_search(window, cx));
                 true
             }
             Command::SaveQuery => {
-                self.history_modal
+                self.history
+                    .history_modal
                     .update(cx, |modal, cx| modal.save_selected_history(window, cx));
                 true
             }
@@ -1273,7 +1312,7 @@ impl CodeDocument {
         cx: &mut Context<Self>,
     ) -> bool {
         // When dangerous query confirmation is showing, handle only modal commands
-        if self.pending_dangerous_query.is_some() {
+        if self.pending.dangerous_query.is_some() {
             match cmd {
                 Command::Cancel => {
                     self.cancel_dangerous_query(cx);
@@ -1288,7 +1327,7 @@ impl CodeDocument {
         }
 
         // When history modal is open, route commands to it first
-        if self.history_modal.read(cx).is_visible()
+        if self.history.history_modal.read(cx).is_visible()
             && self.dispatch_to_history_modal(cmd, window, cx)
         {
             return true;
@@ -1301,7 +1340,8 @@ impl CodeDocument {
             // Special handling for FocusUp to exit results
             if cmd == Command::FocusUp {
                 self.focus_mode = SqlQueryFocus::Editor;
-                self.input_state
+                self.editor
+                    .input_state
                     .update(cx, |state, cx| state.focus(window, cx));
                 cx.notify();
                 return true;
@@ -1341,7 +1381,8 @@ impl CodeDocument {
             }
 
             Command::FocusDown
-                if self.focus_mode == SqlQueryFocus::Editor && !self.result_tabs.is_empty() =>
+                if self.focus_mode == SqlQueryFocus::Editor
+                    && !self.result_tabs.result_tabs.is_empty() =>
             {
                 self.focus_mode = SqlQueryFocus::Results;
                 if let Some(grid) = self.active_result_grid() {
@@ -1372,17 +1413,21 @@ impl CodeDocument {
 
             // History modal commands
             Command::ToggleHistoryDropdown => {
-                let is_open = self.history_modal.read(cx).is_visible();
+                let is_open = self.history.history_modal.read(cx).is_visible();
                 if is_open {
-                    self.history_modal.update(cx, |modal, cx| modal.close(cx));
+                    self.history
+                        .history_modal
+                        .update(cx, |modal, cx| modal.close(cx));
                 } else {
-                    self.history_modal
+                    self.history
+                        .history_modal
                         .update(cx, |modal, cx| modal.open(window, cx));
                 }
                 true
             }
             Command::OpenSavedQueries => {
-                self.history_modal
+                self.history
+                    .history_modal
                     .update(cx, |modal, cx| modal.open_saved_tab(window, cx));
                 true
             }
@@ -1432,7 +1477,12 @@ impl CodeDocument {
                 .connections()
                 .get(&conn_id)
                 .map(|c| {
-                    let db = self.exec_ctx.database.clone().or(c.active_database.clone());
+                    let db = self
+                        .source
+                        .exec_ctx
+                        .database
+                        .clone()
+                        .or(c.active_database.clone());
                     (Some(db.unwrap_or_default()), Some(c.profile.driver_id()))
                 })
                 .unwrap_or((None, None));
@@ -1516,7 +1566,12 @@ impl CodeDocument {
             .connections()
             .get(&conn_id)
             .map(|c| {
-                let db = self.exec_ctx.database.clone().or(c.active_database.clone());
+                let db = self
+                    .source
+                    .exec_ctx
+                    .database
+                    .clone()
+                    .or(c.active_database.clone());
                 (db.unwrap_or_default(), c.profile.driver_id())
             })
             .unwrap_or_default();
@@ -1624,7 +1679,11 @@ mod tests {
         // Verify the document is still in its expected read-only, clean state.
         let (is_ro, has_task, is_dirty) = window.update(|_, app| {
             let d = doc.read(app);
-            (d.read_only, d.active_query_task.is_none(), d.is_dirty)
+            (
+                d.read_only,
+                d.execution.active_query_task.is_none(),
+                d.editor.is_dirty,
+            )
         });
 
         assert!(is_ro, "document must remain read-only");
@@ -1679,7 +1738,7 @@ mod tests {
         // The subscription must detect `read_only` and revert the change.
         window.update(|window, cx| {
             doc.update(cx, |d, cx| {
-                d.input_state.update(cx, |state, cx| {
+                d.editor.input_state.update(cx, |state, cx| {
                     state.set_value("DROP TABLE x;", window, cx);
                 });
             });
@@ -1689,7 +1748,10 @@ mod tests {
         // document must not be dirty.
         let (content, is_dirty) = window.update(|_, app| {
             let d = doc.read(app);
-            (d.input_state.read(app).value().to_string(), d.is_dirty)
+            (
+                d.editor.input_state.read(app).value().to_string(),
+                d.editor.is_dirty,
+            )
         });
 
         assert_eq!(

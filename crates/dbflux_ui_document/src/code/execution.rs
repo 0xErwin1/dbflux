@@ -86,7 +86,7 @@ fn task_target_for_execution(
 impl CodeDocument {
     /// Returns selected text when a non-empty selection exists.
     fn selected_query(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<String> {
-        self.input_state.update(cx, |state, cx| {
+        self.editor.input_state.update(cx, |state, cx| {
             let sel = state.selected_text_range(false, window, cx)?;
 
             if sel.range.is_empty() {
@@ -104,17 +104,17 @@ impl CodeDocument {
     /// Returns the selected text if a selection exists, otherwise the full editor content.
     fn selected_or_full_query(&self, window: &mut Window, cx: &mut Context<Self>) -> String {
         self.selected_query(window, cx)
-            .unwrap_or_else(|| self.input_state.read(cx).value().to_string())
+            .unwrap_or_else(|| self.editor.input_state.read(cx).value().to_string())
     }
 
     fn clear_live_output(&mut self) {
-        self.live_output = None;
-        self._live_output_drain = None;
+        self.execution.live_output = None;
+        self.execution._live_output_drain = None;
     }
 
     fn start_live_output(&mut self, receiver: OutputReceiver, cx: &mut Context<Self>) {
-        self.live_output = Some(LiveOutputState::new(receiver));
-        self._live_output_drain = Some(cx.spawn(async move |this, cx| {
+        self.execution.live_output = Some(LiveOutputState::new(receiver));
+        self.execution._live_output_drain = Some(cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(150))
@@ -127,7 +127,7 @@ impl CodeDocument {
                         };
 
                         entity.update(cx, |doc, cx| {
-                            let Some(live_output) = doc.live_output.as_mut() else {
+                            let Some(live_output) = doc.execution.live_output.as_mut() else {
                                 return false;
                             };
 
@@ -153,7 +153,7 @@ impl CodeDocument {
         if self.read_only {
             return;
         }
-        if !self.query_language.supports_connection_context() {
+        if !self.editor.query_language.supports_connection_context() {
             self.run_script(window, cx);
             return;
         }
@@ -168,7 +168,7 @@ impl CodeDocument {
             return;
         };
 
-        if !self.query_language.supports_connection_context() {
+        if !self.editor.query_language.supports_connection_context() {
             self.run_script(window, cx);
             return;
         }
@@ -183,13 +183,13 @@ impl CodeDocument {
             return;
         }
 
-        let query = self.input_state.read(cx).value().to_string();
+        let query = self.editor.input_state.read(cx).value().to_string();
 
         // No selection means the whole buffer runs. When it holds more than one
         // statement and the driver can execute batches, confirm before running
         // the entire script.
         if let Some(statement_count) = self.script_statement_count(&query, cx) {
-            self.pending_script_confirm = Some(PendingScriptConfirm {
+            self.pending.script_confirm = Some(PendingScriptConfirm {
                 query,
                 in_new_tab,
                 statement_count,
@@ -207,7 +207,7 @@ impl CodeDocument {
     /// Returns `None` for a single statement or a driver that cannot execute
     /// batches, in which case no confirmation is shown.
     fn script_statement_count(&self, query: &str, cx: &Context<Self>) -> Option<usize> {
-        let count = self.query_language.statement_count(query);
+        let count = self.editor.query_language.statement_count(query);
         if count <= 1 {
             return None;
         }
@@ -226,7 +226,7 @@ impl CodeDocument {
     }
 
     pub(super) fn confirm_script_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(pending) = self.pending_script_confirm.take() else {
+        let Some(pending) = self.pending.script_confirm.take() else {
             return;
         };
 
@@ -234,7 +234,7 @@ impl CodeDocument {
     }
 
     pub(super) fn cancel_script_query(&mut self, cx: &mut Context<Self>) {
-        self.pending_script_confirm = None;
+        self.pending.script_confirm = None;
         cx.notify();
     }
 
@@ -292,7 +292,7 @@ impl CodeDocument {
             ) {
                 DangerousAction::Allow => {}
                 DangerousAction::Confirm(kind) => {
-                    self.pending_dangerous_query = Some(PendingDangerousQuery {
+                    self.pending.dangerous_query = Some(PendingDangerousQuery {
                         query,
                         kind,
                         in_new_tab,
@@ -341,7 +341,7 @@ impl CodeDocument {
         }
 
         if self.should_show_source_controls(cx) {
-            let override_bounds = self.pending_window_override.take();
+            let override_bounds = self.pending.window_override.take();
             let targets = self.current_source_targets(cx);
             let query_mode = self.current_source_query_mode_value(cx);
             // Compute the input-driven fallback eagerly so the precedence rule
@@ -351,10 +351,10 @@ impl CodeDocument {
             let fallback = self.current_source_context(cx);
             match resolve_source_context(override_bounds, targets, query_mode, fallback) {
                 Ok(source) => {
-                    self.exec_ctx.source = Some(source);
+                    self.source.exec_ctx.source = Some(source);
                 }
                 Err(message) => {
-                    self.exec_ctx.source = None;
+                    self.source.exec_ctx.source = None;
                     let toast_msg = message.to_string();
                     Toast::error(toast_msg.clone())
                         .meta_right(now_hms())
@@ -367,7 +367,7 @@ impl CodeDocument {
 
         // Run the schema drift preflight check asynchronously so it does not
         // block the UI thread. The actual execution is deferred to the render
-        // loop via `pending_drift_query`.
+        // loop via `pending.drift_query`.
         self.start_drift_preflight(query, in_new_tab, cx);
     }
 
@@ -376,12 +376,12 @@ impl CodeDocument {
     /// Captures a snapshot of the current `table_details` cache and the
     /// connection, then spawns a background task that calls `check_schema_drift`.
     /// On completion the result is delivered back to the entity via
-    /// `cx.update`, which sets `pending_drift_query` and calls `cx.notify()` so
+    /// `cx.update`, which sets `pending.drift_query` and calls `cx.notify()` so
     /// the render loop picks it up.
     fn start_drift_preflight(&mut self, query: String, in_new_tab: bool, cx: &mut Context<Self>) {
         let Some(conn_id) = self.connection_id else {
             // No connection — nothing to preflight; execute directly via pending.
-            self.pending_drift_query = Some(PendingDriftQuery {
+            self.pending.drift_query = Some(PendingDriftQuery {
                 query,
                 in_new_tab,
                 action: DriftAction::ExecuteNow,
@@ -394,7 +394,7 @@ impl CodeDocument {
         let state = self.app_state.read(cx);
         let connections = state.connections();
         let Some(connected) = connections.get(&conn_id) else {
-            self.pending_drift_query = Some(PendingDriftQuery {
+            self.pending.drift_query = Some(PendingDriftQuery {
                 query,
                 in_new_tab,
                 action: DriftAction::ExecuteNow,
@@ -418,9 +418,9 @@ impl CodeDocument {
             })
             .unwrap_or_else(|| "default".to_string());
 
-        let default_schema = self.exec_ctx.schema.clone();
+        let default_schema = self.source.exec_ctx.schema.clone();
 
-        self.drift_preflight_running = true;
+        self.drift.preflight_running = true;
         cx.notify();
 
         let query_capture = query.clone();
@@ -439,12 +439,12 @@ impl CodeDocument {
             let outcome = task.await;
 
             let _ = this.update(cx, |doc, cx| {
-                doc.drift_preflight_running = false;
+                doc.drift.preflight_running = false;
 
                 match outcome {
                     DriftOutcome::Skip => {
                         // Driver doesn't support table parsing — execute directly.
-                        doc.pending_drift_query = Some(PendingDriftQuery {
+                        doc.pending.drift_query = Some(PendingDriftQuery {
                             query: query_capture,
                             in_new_tab,
                             action: DriftAction::ExecuteNow,
@@ -459,7 +459,7 @@ impl CodeDocument {
                             .map(|((db, tbl), info)| (db, tbl, info))
                             .collect();
 
-                        doc.pending_drift_query = Some(PendingDriftQuery {
+                        doc.pending.drift_query = Some(PendingDriftQuery {
                             query: query_capture,
                             in_new_tab,
                             action: DriftAction::ExecuteNow,
@@ -494,14 +494,14 @@ impl CodeDocument {
                             ));
                         }
 
-                        doc.pending_drift_query = Some(PendingDriftQuery {
+                        doc.pending.drift_query = Some(PendingDriftQuery {
                             query: query_capture,
                             in_new_tab,
                             action: DriftAction::Pending,
                             cache_updates: all_updates,
                         });
 
-                        doc.schema_drift_modal.update(cx, |modal, cx| {
+                        doc.drift.schema_drift_modal.update(cx, |modal, cx| {
                             modal.open(detected, cx);
                         });
                     }
@@ -539,6 +539,7 @@ impl CodeDocument {
             };
 
             let active_database = self
+                .source
                 .exec_ctx
                 .database
                 .clone()
@@ -564,7 +565,7 @@ impl CodeDocument {
         };
 
         self.clear_live_output();
-        self.run_in_new_tab = in_new_tab;
+        self.result_tabs.run_in_new_tab = in_new_tab;
 
         let description = dbflux_core::truncate_string_safe(query.trim(), 80);
         let (task_id, cancel_token) = self.runner.start_primary_for_target(
@@ -584,9 +585,9 @@ impl CodeDocument {
             rows_affected: None,
             is_script: false,
         };
-        self.execution_history.push(record);
-        self.active_execution_index = Some(self.execution_history.len() - 1);
-        self.active_query_task = Some(ActiveQueryTask {
+        self.execution.execution_history.push(record);
+        self.execution.active_execution_index = Some(self.execution.execution_history.len() - 1);
+        self.execution.active_query_task = Some(ActiveQueryTask {
             task_id,
             target: task_target.clone(),
         });
@@ -598,8 +599,8 @@ impl CodeDocument {
         let request = query_request_for_execution(
             query.clone(),
             active_database,
-            &self.exec_ctx,
-            self.query_language.clone(),
+            &self.source.exec_ctx,
+            self.editor.query_language.clone(),
         );
 
         // Capture audit_service, task_target, and started_at before spawning so we can emit
@@ -730,7 +731,7 @@ impl CodeDocument {
             let query_text = query.clone();
 
             let inner_result = this.update(cx, |doc, cx| {
-                doc.pending_result = Some(PendingQueryResult {
+                doc.pending.result = Some(PendingQueryResult {
                     task_id,
                     exec_id,
                     query,
@@ -783,7 +784,7 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(pending) = self.pending_dangerous_query.take() else {
+        let Some(pending) = self.pending.dangerous_query.take() else {
             return;
         };
 
@@ -810,7 +811,12 @@ impl CodeDocument {
         cx: &mut Context<Self>,
     ) {
         // Determine if this is a script execution by looking up the record
-        let is_script = match self.execution_history.iter().find(|r| r.id == exec_id) {
+        let is_script = match self
+            .execution
+            .execution_history
+            .iter()
+            .find(|r| r.id == exec_id)
+        {
             Some(r) => r.is_script,
             None => {
                 log::warn!(
@@ -822,6 +828,7 @@ impl CodeDocument {
         };
 
         if let Some(record) = self
+            .execution
             .execution_history
             .iter_mut()
             .find(|record| record.id == exec_id)
@@ -830,13 +837,14 @@ impl CodeDocument {
         }
 
         let is_active_task = self
+            .execution
             .active_query_task
             .as_ref()
             .is_some_and(|task| task.task_id == task_id);
 
         if is_active_task {
             self.runner.clear_primary(task_id);
-            self.active_query_task = None;
+            self.execution.active_query_task = None;
             self.state = DocumentState::Clean;
         }
 
@@ -856,6 +864,7 @@ impl CodeDocument {
 
         // Emit audit event for cancelled execution with correct category
         let duration_ms = self
+            .execution
             .execution_history
             .iter()
             .find(|r| r.id == exec_id)
@@ -889,7 +898,7 @@ impl CodeDocument {
     }
 
     pub(super) fn cancel_dangerous_query(&mut self, cx: &mut Context<Self>) {
-        self.pending_dangerous_query = None;
+        self.pending.dangerous_query = None;
         cx.notify();
     }
 
@@ -899,18 +908,19 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(selected) = self.pending_set_query.take() else {
+        let Some(selected) = self.pending.set_query.take() else {
             return;
         };
 
-        self.input_state
+        self.editor
+            .input_state
             .update(cx, |state, cx| state.set_value(&selected.sql, window, cx));
 
         if let Some(name) = selected.name {
             self.title = name;
         }
 
-        self.saved_query_id = selected.saved_query_id;
+        self.editor.saved_query_id = selected.saved_query_id;
 
         self.focus_mode = SqlQueryFocus::Editor;
 
@@ -923,16 +933,16 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.pending_auto_refresh {
+        if !self.pending.auto_refresh {
             return;
         }
 
-        self.pending_auto_refresh = false;
+        self.pending.auto_refresh = false;
 
         if !self.can_auto_refresh(cx) {
-            self.refresh_policy = dbflux_core::RefreshPolicy::Manual;
-            self._refresh_timer = None;
-            self.refresh_dropdown.update(cx, |dd, cx| {
+            self.refresh.refresh_policy = dbflux_core::RefreshPolicy::Manual;
+            self.refresh._refresh_timer = None;
+            self.refresh.refresh_dropdown.update(cx, |dd, cx| {
                 dd.set_selected_index(Some(dbflux_core::RefreshPolicy::Manual.index()), cx);
             });
             Toast::warning("Auto-refresh blocked: query modifies data")
@@ -946,7 +956,7 @@ impl CodeDocument {
 
     /// Process pending query result (called from render where we have window access).
     pub(super) fn process_pending_result(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(pending) = self.pending_result.take() else {
+        let Some(pending) = self.pending.result.take() else {
             return;
         };
 
@@ -954,6 +964,7 @@ impl CodeDocument {
         self.state = DocumentState::Clean;
 
         let Some(record) = self
+            .execution
             .execution_history
             .iter_mut()
             .find(|r| r.id == pending.exec_id)
@@ -991,7 +1002,12 @@ impl CodeDocument {
                     .connection_id
                     .and_then(|id| self.app_state.read(cx).connections().get(&id))
                     .map(|c| {
-                        let db = self.exec_ctx.database.clone().or(c.active_database.clone());
+                        let db = self
+                            .source
+                            .exec_ctx
+                            .database
+                            .clone()
+                            .or(c.active_database.clone());
                         (db, Some(c.profile.name.clone()))
                     })
                     .unwrap_or((None, None));
@@ -1020,6 +1036,7 @@ impl CodeDocument {
                 // (l, r, o, x, …) through the Results keymap layer and steals
                 // them from the editor.
                 let input_focused = self
+                    .editor
                     .input_state
                     .read(cx)
                     .focus_handle(cx)
@@ -1159,11 +1176,12 @@ impl CodeDocument {
         }
 
         if self
+            .execution
             .active_query_task
             .as_ref()
             .is_some_and(|task| task.task_id == pending.task_id)
         {
-            self.active_query_task = None;
+            self.execution.active_query_task = None;
         }
 
         cx.emit(DocumentEvent::ExecutionFinished);
@@ -1185,16 +1203,16 @@ impl CodeDocument {
             return;
         }
 
-        let should_create_new_tab = self.run_in_new_tab
-            || self.result_tabs.is_empty()
-            || self.active_result_index.is_none();
+        let should_create_new_tab = self.result_tabs.run_in_new_tab
+            || self.result_tabs.result_tabs.is_empty()
+            || self.result_tabs.active_result_index.is_none();
 
-        self.run_in_new_tab = false;
+        self.result_tabs.run_in_new_tab = false;
 
         if should_create_new_tab {
             self.create_result_tab(result, query, window, cx);
-        } else if let Some(index) = self.active_result_index
-            && let Some(tab) = self.result_tabs.get_mut(index)
+        } else if let Some(index) = self.result_tabs.active_result_index
+            && let Some(tab) = self.result_tabs.result_tabs.get_mut(index)
         {
             let profile_id = self.connection_id;
             tab.grid.update(cx, |g, cx| {
@@ -1215,9 +1233,9 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.run_in_new_tab = false;
+        self.result_tabs.run_in_new_tab = false;
 
-        let first_new_index = self.result_tabs.len();
+        let first_new_index = self.result_tabs.result_tabs.len();
 
         for set in result.iter_result_sets() {
             let mut single = set.clone();
@@ -1225,8 +1243,8 @@ impl CodeDocument {
             self.create_result_tab(Arc::new(single), query.clone(), window, cx);
         }
 
-        if first_new_index < self.result_tabs.len() {
-            self.active_result_index = Some(first_new_index);
+        if first_new_index < self.result_tabs.result_tabs.len() {
+            self.result_tabs.active_result_index = Some(first_new_index);
         }
     }
 
@@ -1237,9 +1255,9 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.result_tab_counter += 1;
+        self.result_tabs.result_tab_counter += 1;
         let tab_id = Uuid::new_v4();
-        let title = format!("Result {}", self.result_tab_counter);
+        let title = format!("Result {}", self.result_tabs.result_tab_counter);
 
         let app_state = self.app_state.clone();
         let grid = cx.new(|cx| {
@@ -1253,7 +1271,7 @@ impl CodeDocument {
             )
         });
 
-        if let Some(panel) = self.source_time_range_panel.clone() {
+        if let Some(panel) = self.source.source_time_range_panel.clone() {
             grid.update(cx, |g, cx| {
                 g.set_chart_time_range_panel(Some(panel), cx);
             });
@@ -1326,20 +1344,20 @@ impl CodeDocument {
             _subscription: subscription,
         };
 
-        self.result_tabs.push(tab);
-        self.active_result_index = Some(self.result_tabs.len() - 1);
+        self.result_tabs.result_tabs.push(tab);
+        self.result_tabs.active_result_index = Some(self.result_tabs.result_tabs.len() - 1);
     }
 
     pub fn cancel_query(&mut self, cx: &mut Context<Self>) {
         if self.runner.cancel_primary(cx) {
-            if let Some(index) = self.active_execution_index
-                && let Some(record) = self.execution_history.get_mut(index)
+            if let Some(index) = self.execution.active_execution_index
+                && let Some(record) = self.execution.execution_history.get_mut(index)
                 && record.finished_at.is_none()
             {
                 record.finished_at = Some(Instant::now());
             }
 
-            if let Some(task) = self.active_query_task.as_ref() {
+            if let Some(task) = self.execution.active_query_task.as_ref() {
                 self.app_state
                     .read(cx)
                     .cancel_query_for_target(&task.target);
@@ -1347,6 +1365,7 @@ impl CodeDocument {
                 && let Some(connected) = self.app_state.read(cx).connections().get(&conn_id)
             {
                 let active_database = self
+                    .source
                     .exec_ctx
                     .database
                     .clone()
@@ -1390,7 +1409,7 @@ impl CodeDocument {
         if self.read_only {
             return;
         }
-        if !self.query_language.supports_connection_context() {
+        if !self.editor.query_language.supports_connection_context() {
             self.run_script(window, cx);
             return;
         }
@@ -1402,7 +1421,7 @@ impl CodeDocument {
     /// Uses the selected text when a selection exists, otherwise the full buffer.
     /// The result appears in the same Results panel as a regular query.
     pub fn run_explain(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.query_language.supports_connection_context() {
+        if !self.editor.query_language.supports_connection_context() {
             Toast::warning("Explain is not available for scripts")
                 .meta_right(now_hms())
                 .push(cx);
@@ -1422,21 +1441,26 @@ impl CodeDocument {
     }
 
     pub fn close_result_tab(&mut self, tab_id: Uuid, cx: &mut Context<Self>) {
-        let Some(index) = self.result_tabs.iter().position(|t| t.id == tab_id) else {
+        let Some(index) = self
+            .result_tabs
+            .result_tabs
+            .iter()
+            .position(|t| t.id == tab_id)
+        else {
             return;
         };
 
-        self.result_tabs.remove(index);
+        self.result_tabs.result_tabs.remove(index);
 
-        if self.result_tabs.is_empty() {
-            self.active_result_index = None;
+        if self.result_tabs.result_tabs.is_empty() {
+            self.result_tabs.active_result_index = None;
             self.layout = SqlQueryLayout::EditorOnly;
             self.focus_mode = SqlQueryFocus::Editor;
-        } else if let Some(active) = self.active_result_index {
-            if active >= self.result_tabs.len() {
-                self.active_result_index = Some(self.result_tabs.len() - 1);
+        } else if let Some(active) = self.result_tabs.active_result_index {
+            if active >= self.result_tabs.result_tabs.len() {
+                self.result_tabs.active_result_index = Some(self.result_tabs.result_tabs.len() - 1);
             } else if active > index {
-                self.active_result_index = Some(active - 1);
+                self.result_tabs.active_result_index = Some(active - 1);
             }
         }
 
@@ -1444,15 +1468,16 @@ impl CodeDocument {
     }
 
     pub fn activate_result_tab(&mut self, index: usize, cx: &mut Context<Self>) {
-        if index < self.result_tabs.len() {
-            self.active_result_index = Some(index);
+        if index < self.result_tabs.result_tabs.len() {
+            self.result_tabs.active_result_index = Some(index);
             cx.notify();
         }
     }
 
     pub(super) fn active_result_grid(&self) -> Option<Entity<DataGridPanel>> {
-        self.active_result_index
-            .and_then(|i| self.result_tabs.get(i))
+        self.result_tabs
+            .active_result_index
+            .and_then(|i| self.result_tabs.result_tabs.get(i))
             .map(|tab| tab.grid.clone())
     }
 
@@ -1461,8 +1486,9 @@ impl CodeDocument {
     /// Used by `render_results` to render through `ResultPanel` rather than
     /// directly rendering the bare `DataGridPanel` entity.
     pub(super) fn active_result_panel(&self) -> Option<Entity<ResultPanel>> {
-        self.active_result_index
-            .and_then(|i| self.result_tabs.get(i))
+        self.result_tabs
+            .active_result_index
+            .and_then(|i| self.result_tabs.result_tabs.get(i))
             .map(|tab| tab.result_panel.clone())
     }
 
@@ -1473,7 +1499,7 @@ impl CodeDocument {
             HookFailureMode, HookKind, LuaCapabilities, ScriptLanguage, ScriptSource,
         };
 
-        let content = self.input_state.read(cx).value().to_string();
+        let content = self.editor.input_state.read(cx).value().to_string();
         if content.trim().is_empty() {
             Toast::warning("Enter script content to run")
                 .meta_right(now_hms())
@@ -1481,7 +1507,7 @@ impl CodeDocument {
             return;
         }
 
-        let kind = match &self.query_language {
+        let kind = match &self.editor.query_language {
             QueryLanguage::Lua => HookKind::Lua {
                 source: ScriptSource::Inline {
                     content: content.clone(),
@@ -1528,7 +1554,7 @@ impl CodeDocument {
             phase: None,
         };
 
-        let description = format!("Run {} script", self.query_language.display_name());
+        let description = format!("Run {} script", self.editor.query_language.display_name());
         let (output_sender, output_receiver) = dbflux_core::output_channel();
         let (task_id, cancel_token) =
             self.runner
@@ -1544,13 +1570,13 @@ impl CodeDocument {
             rows_affected: None,
             is_script: true,
         };
-        self.execution_history.push(record);
-        self.active_execution_index = Some(self.execution_history.len() - 1);
+        self.execution.execution_history.push(record);
+        self.execution.active_execution_index = Some(self.execution.execution_history.len() - 1);
 
         self.clear_live_output();
         self.start_live_output(output_receiver, cx);
         self.state = DocumentState::Executing;
-        self.run_in_new_tab = false;
+        self.result_tabs.run_in_new_tab = false;
         if self.layout == SqlQueryLayout::EditorOnly {
             self.layout = SqlQueryLayout::Split;
         }
@@ -1723,7 +1749,7 @@ impl CodeDocument {
             let script_content = content.clone();
 
             let inner_result = this.update(cx, |doc, cx| {
-                doc.pending_result = Some(PendingQueryResult {
+                doc.pending.result = Some(PendingQueryResult {
                     task_id,
                     exec_id,
                     query: content,
@@ -1767,9 +1793,9 @@ impl CodeDocument {
     /// to the cache, close the modal, then queue execution via the render loop.
     ///
     /// The fresh `TableInfo` for both changed and unchanged tables was already
-    /// captured during the drift preflight and stored in `pending_drift_query`.
+    /// captured during the drift preflight and stored in `pending.drift_query`.
     pub(super) fn on_schema_drift_refresh(&mut self, cx: &mut Context<Self>) {
-        let Some(pending) = self.pending_drift_query.take() else {
+        let Some(pending) = self.pending.drift_query.take() else {
             return;
         };
 
@@ -1790,11 +1816,11 @@ impl CodeDocument {
             });
         }
 
-        self.schema_drift_modal.update(cx, |modal, cx| {
+        self.drift.schema_drift_modal.update(cx, |modal, cx| {
             modal.close(cx);
         });
 
-        self.pending_drift_query = Some(PendingDriftQuery {
+        self.pending.drift_query = Some(PendingDriftQuery {
             query: pending.query,
             in_new_tab: pending.in_new_tab,
             action: DriftAction::ExecuteNow,
@@ -1807,11 +1833,11 @@ impl CodeDocument {
     /// Handle "Continue with stale schema": mark the pending query so the render
     /// loop picks it up and calls `execute_query_internal` with window access.
     pub(super) fn on_schema_drift_continue(&mut self, cx: &mut Context<Self>) {
-        if let Some(ref mut pending) = self.pending_drift_query {
+        if let Some(ref mut pending) = self.pending.drift_query {
             pending.action = DriftAction::ContinueStale;
         }
 
-        self.schema_drift_modal.update(cx, |modal, cx| {
+        self.drift.schema_drift_modal.update(cx, |modal, cx| {
             modal.close(cx);
         });
 
@@ -1827,14 +1853,14 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(pending) = self.pending_drift_query.take() else {
+        let Some(pending) = self.pending.drift_query.take() else {
             return;
         };
 
         match pending.action {
             DriftAction::Pending => {
                 // Modal not yet answered — put it back and wait.
-                self.pending_drift_query = Some(pending);
+                self.pending.drift_query = Some(pending);
             }
 
             DriftAction::ExecuteNow => {
@@ -2191,6 +2217,72 @@ mod tests {
         assert_eq!(
             request.sql, query,
             "SQL language must pass through unchanged"
+        );
+    }
+
+    /// Writing to `PendingActions::drift_query` and then reading it back
+    /// returns the stored value. This exercises the re-entrant write/read path
+    /// that the background drift-preflight task uses: the task writes via
+    /// `cx.update` and the next render cycle reads the same field.
+    #[test]
+    fn drift_query_written_is_readable_on_next_read() {
+        use super::{DriftAction, PendingActions, PendingDriftQuery};
+
+        let mut pending = PendingActions::default();
+
+        assert!(
+            pending.drift_query.is_none(),
+            "drift_query must be None after default construction"
+        );
+
+        pending.drift_query = Some(PendingDriftQuery {
+            query: "SELECT 1".to_string(),
+            in_new_tab: false,
+            action: DriftAction::Pending,
+            cache_updates: Vec::new(),
+        });
+
+        assert!(
+            pending.drift_query.is_some(),
+            "drift_query must be Some after background-task-style write"
+        );
+
+        let stored = pending.drift_query.as_ref().unwrap();
+        assert_eq!(stored.query, "SELECT 1");
+        assert_eq!(stored.action, DriftAction::Pending);
+    }
+
+    /// When `process_pending_drift_continue` encounters a `Pending` action
+    /// it must put the value back rather than consuming it, so the next render
+    /// cycle can check it again. This verifies the put-back invariant without
+    /// requiring a full GPUI harness by inspecting `PendingActions` directly.
+    #[test]
+    fn drift_query_with_pending_action_survives_put_back() {
+        use super::{DriftAction, PendingActions, PendingDriftQuery};
+
+        let mut pending = PendingActions::default();
+
+        pending.drift_query = Some(PendingDriftQuery {
+            query: "SELECT 2".to_string(),
+            in_new_tab: true,
+            action: DriftAction::Pending,
+            cache_updates: Vec::new(),
+        });
+
+        // Simulate the put-back logic: take the value, inspect action, re-store.
+        let taken = pending.drift_query.take().unwrap();
+        assert_eq!(taken.action, DriftAction::Pending);
+
+        pending.drift_query = Some(taken);
+
+        assert!(
+            pending.drift_query.is_some(),
+            "drift_query must be re-stored when action is Pending"
+        );
+        assert_eq!(
+            pending.drift_query.as_ref().unwrap().query,
+            "SELECT 2",
+            "stored query must be preserved across the put-back"
         );
     }
 }

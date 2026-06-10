@@ -48,7 +48,7 @@ impl DataGridPanel {
             // Server-side sort: update source and queue re-query
             let new_order_by = vec![OrderByColumn::from_name(&col_name, direction)];
 
-            let filter_value = self.filter_input.read(cx).value();
+            let filter_value = self.filter_bar.filter_input.read(cx).value();
             let filter = if filter_value.trim().is_empty() {
                 None
             } else {
@@ -66,7 +66,7 @@ impl DataGridPanel {
             };
 
             // Queue re-query
-            self.pending_requery = Some(PendingRequery {
+            self.pending.requery = Some(PendingRequery {
                 profile_id,
                 database,
                 table,
@@ -112,7 +112,7 @@ impl DataGridPanel {
         if let Some((profile_id, database, table, new_pagination, total_rows, pk_order)) =
             table_info
         {
-            let filter_value = self.filter_input.read(cx).value();
+            let filter_value = self.filter_bar.filter_input.read(cx).value();
             let filter = if filter_value.trim().is_empty() {
                 None
             } else {
@@ -128,7 +128,7 @@ impl DataGridPanel {
                 total_rows,
             };
 
-            self.pending_requery = Some(PendingRequery {
+            self.pending.requery = Some(PendingRequery {
                 profile_id,
                 database,
                 table,
@@ -141,7 +141,7 @@ impl DataGridPanel {
             cx.notify();
         } else {
             // Restore original row order
-            if let Some(original_order) = self.original_row_order.take() {
+            if let Some(original_order) = self.grid_table.original_row_order.take() {
                 let mut restore_indices: Vec<(usize, usize)> = original_order
                     .iter()
                     .enumerate()
@@ -156,8 +156,8 @@ impl DataGridPanel {
                     .collect();
             }
 
-            self.local_sort_state = None;
-            self.pending_rebuild = true;
+            self.grid_table.local_sort_state = None;
+            self.pending.rebuild = true;
             cx.notify();
         }
     }
@@ -169,8 +169,8 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) {
         // Save original order if this is the first sort
-        if self.original_row_order.is_none() {
-            self.original_row_order = Some((0..self.result.rows.len()).collect());
+        if self.grid_table.original_row_order.is_none() {
+            self.grid_table.original_row_order = Some((0..self.result.rows.len()).collect());
         }
 
         // Sort using indices for tracking
@@ -200,15 +200,15 @@ impl DataGridPanel {
         self.result.rows = sorted_rows;
 
         // Update original_row_order to map new order -> original
-        if let Some(ref mut orig) = self.original_row_order {
+        if let Some(ref mut orig) = self.grid_table.original_row_order {
             *orig = indices.iter().map(|&i| orig[i]).collect();
         }
 
-        self.local_sort_state = Some(LocalSortState {
+        self.grid_table.local_sort_state = Some(LocalSortState {
             column_ix: col_ix,
             direction,
         });
-        self.pending_rebuild = true;
+        self.pending.rebuild = true;
         cx.notify();
     }
 
@@ -334,7 +334,7 @@ impl DataGridPanel {
         if self.result.rows.is_empty() {
             return;
         }
-        if let Some(table_state) = &self.table_state {
+        if let Some(table_state) = &self.grid_table.table_state {
             table_state.update(cx, |state, cx| {
                 state.move_active(Direction::Down, false, cx);
             });
@@ -345,7 +345,7 @@ impl DataGridPanel {
         if self.result.rows.is_empty() {
             return;
         }
-        if let Some(table_state) = &self.table_state {
+        if let Some(table_state) = &self.grid_table.table_state {
             table_state.update(cx, |state, cx| {
                 state.move_active(Direction::Up, false, cx);
             });
@@ -356,7 +356,7 @@ impl DataGridPanel {
         if self.result.rows.is_empty() {
             return;
         }
-        if let Some(table_state) = &self.table_state {
+        if let Some(table_state) = &self.grid_table.table_state {
             table_state.update(cx, |state, cx| {
                 state.move_to_edge(Edge::Home, false, cx);
             });
@@ -367,7 +367,7 @@ impl DataGridPanel {
         if self.result.rows.is_empty() {
             return;
         }
-        if let Some(table_state) = &self.table_state {
+        if let Some(table_state) = &self.grid_table.table_state {
             table_state.update(cx, |state, cx| {
                 state.move_to_edge(Edge::End, false, cx);
             });
@@ -378,7 +378,7 @@ impl DataGridPanel {
         if self.result.columns.is_empty() {
             return;
         }
-        if let Some(table_state) = &self.table_state {
+        if let Some(table_state) = &self.grid_table.table_state {
             table_state.update(cx, |state, cx| {
                 state.move_active(Direction::Left, false, cx);
             });
@@ -389,7 +389,7 @@ impl DataGridPanel {
         if self.result.columns.is_empty() {
             return;
         }
-        if let Some(table_state) = &self.table_state {
+        if let Some(table_state) = &self.grid_table.table_state {
             table_state.update(cx, |state, cx| {
                 state.move_active(Direction::Right, false, cx);
             });
@@ -400,58 +400,58 @@ impl DataGridPanel {
 
     #[allow(dead_code)]
     pub(super) fn focus_mode(&self) -> GridFocusMode {
-        self.focus_mode
+        self.focus.focus_mode
     }
 
     pub fn focus_toolbar(&mut self, cx: &mut Context<Self>) {
         if !self.source.is_table() {
             return;
         }
-        self.focus_mode = GridFocusMode::Toolbar;
-        self.toolbar_focus = ToolbarFocus::Filter;
-        self.edit_state = EditState::Navigating;
+        self.focus.focus_mode = GridFocusMode::Toolbar;
+        self.focus.toolbar_focus = ToolbarFocus::Filter;
+        self.focus.edit_state = EditState::Navigating;
         cx.notify();
     }
 
     pub fn focus_table(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.focus_mode = GridFocusMode::Table;
-        self.edit_state = EditState::Navigating;
+        self.focus.focus_mode = GridFocusMode::Table;
+        self.focus.edit_state = EditState::Navigating;
         window.focus(&self.focus_handle);
         cx.notify();
     }
 
     pub fn toolbar_left(&mut self, cx: &mut Context<Self>) {
-        if self.focus_mode != GridFocusMode::Toolbar {
+        if self.focus.focus_mode != GridFocusMode::Toolbar {
             return;
         }
-        self.toolbar_focus = self.toolbar_focus.left();
+        self.focus.toolbar_focus = self.focus.toolbar_focus.left();
         cx.notify();
     }
 
     pub fn toolbar_right(&mut self, cx: &mut Context<Self>) {
-        if self.focus_mode != GridFocusMode::Toolbar {
+        if self.focus.focus_mode != GridFocusMode::Toolbar {
             return;
         }
-        self.toolbar_focus = self.toolbar_focus.right();
+        self.focus.toolbar_focus = self.focus.toolbar_focus.right();
         cx.notify();
     }
 
     pub fn toolbar_execute(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.focus_mode != GridFocusMode::Toolbar {
+        if self.focus.focus_mode != GridFocusMode::Toolbar {
             return;
         }
 
-        match self.toolbar_focus {
+        match self.focus.toolbar_focus {
             ToolbarFocus::Filter => {
-                self.edit_state = EditState::Editing;
-                self.filter_input.update(cx, |input, cx| {
+                self.focus.edit_state = EditState::Editing;
+                self.filter_bar.filter_input.update(cx, |input, cx| {
                     input.focus(window, cx);
                 });
                 cx.notify();
             }
             ToolbarFocus::Limit => {
-                self.edit_state = EditState::Editing;
-                self.limit_input.update(cx, |input, cx| {
+                self.focus.edit_state = EditState::Editing;
+                self.filter_bar.limit_input.update(cx, |input, cx| {
                     input.focus(window, cx);
                 });
                 cx.notify();
@@ -464,13 +464,13 @@ impl DataGridPanel {
     }
 
     pub fn exit_edit_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.switching_input {
-            self.switching_input = false;
+        if self.focus.switching_input {
+            self.focus.switching_input = false;
             return;
         }
 
-        if self.edit_state == EditState::Editing {
-            self.edit_state = EditState::Navigating;
+        if self.focus.edit_state == EditState::Editing {
+            self.focus.edit_state = EditState::Navigating;
             window.focus(&self.focus_handle);
             cx.notify();
         }
@@ -505,7 +505,7 @@ impl DataGridPanel {
         }
 
         // Handle toolbar mode commands
-        if self.focus_mode == GridFocusMode::Toolbar {
+        if self.focus.focus_mode == GridFocusMode::Toolbar {
             match cmd {
                 Command::Cancel | Command::FocusUp => {
                     self.focus_table(window, cx);
@@ -529,12 +529,13 @@ impl DataGridPanel {
 
         // When an enum dropdown is open, route navigation to the dropdown
         let editing_enum = self
+            .grid_table
             .table_state
             .as_ref()
             .map(|ts| ts.read(cx).is_editing_enum())
             .unwrap_or(false);
 
-        if editing_enum && let Some(table_state) = &self.table_state {
+        if editing_enum && let Some(table_state) = &self.grid_table.table_state {
             match cmd {
                 Command::SelectNext | Command::FocusDown => {
                     table_state.update(cx, |state, cx| state.enum_dropdown_next(cx));
@@ -563,7 +564,7 @@ impl DataGridPanel {
                 true
             }
             Command::Execute => {
-                if let Some(table_state) = &self.table_state {
+                if let Some(table_state) = &self.grid_table.table_state {
                     table_state.update(cx, |state, cx| {
                         if state.is_editing() {
                             state.stop_editing(true, cx);
@@ -575,7 +576,7 @@ impl DataGridPanel {
                 true
             }
             Command::Cancel => {
-                if let Some(table_state) = &self.table_state {
+                if let Some(table_state) = &self.grid_table.table_state {
                     let was_editing = table_state.update(cx, |state, cx| {
                         if state.is_editing() {
                             state.stop_editing(false, cx);
