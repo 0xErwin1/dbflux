@@ -146,6 +146,17 @@ pub struct ConnectionEntry {
     /// Serialized settings_overrides payload (present only when `include_settings_overrides = true`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings_overrides_payload: Option<toml::Value>,
+
+    /// Serialized `DbKind` of the connection profile at export time.
+    ///
+    /// Written as the Rust enum variant name (e.g. `"MySQL"`, `"Postgres"`).
+    /// Import uses this to set the correct `DbConfig::External { kind, .. }` so
+    /// the profile never silently carries the wrong database kind.
+    ///
+    /// `None` in bundles written before this field was introduced; those bundles
+    /// fall back to deriving the kind from `driver_id` via `builtin_driver_id_for_kind`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 /// Connection access binding.
@@ -373,6 +384,7 @@ mod tests {
                 include_settings_overrides: false,
                 hooks_payload: None,
                 settings_overrides_payload: None,
+                kind: None,
             }],
             auth_profiles: vec![],
             ssh_tunnels: vec![SshEntry {

@@ -204,6 +204,8 @@ pub fn export(
 
         driver_refs.push(driver_ref_for(&driver_id));
 
+        let kind = Some(format!("{:?}", profile.kind()));
+
         connection_entries.push(ConnectionEntry {
             local_id: profile.id.to_string(),
             name: profile.name.clone(),
@@ -219,6 +221,7 @@ pub fn export(
             include_settings_overrides,
             hooks_payload,
             settings_overrides_payload,
+            kind,
         });
     }
 

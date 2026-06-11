@@ -517,7 +517,7 @@ pub fn apply(
         })?;
 
         // Rewrite auth_profile_id to the new (or reused/mapped) destination id.
-        let auth_profile_id = resolve_auth_id(conn_entry, &id_map, choices);
+        let auth_profile_id = resolve_auth_id(conn_entry, &id_map, _plan, choices);
 
         // Rewrite access_kind to point at the remapped ssh/proxy ids.
         let access_kind = rewrite_access_kind(conn_entry, &id_map);
@@ -549,19 +549,38 @@ pub fn apply(
             .chain(conn_entry.local_path_fields.iter())
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        let config = dbflux_core::DbConfig::External {
-            kind: dbflux_core::DbKind::Postgres,
-            values,
-        };
+
+        let kind = db_kind_from_bundle(conn_entry);
+
+        let config = dbflux_core::DbConfig::External { kind, values };
         let mut profile = dbflux_core::ConnectionProfile::new(&conn_entry.name, config);
         profile.id = new_conn_id;
         profile.set_driver_id(conn_entry.driver_id.clone());
+        profile.set_kind(kind);
         profile.auth_profile_id = auth_profile_id;
         profile.access_kind = access_kind;
 
         // proxy_profile_id is a legacy field; keep it in sync with access_kind when applicable.
         if let Some(dbflux_core::AccessKind::Proxy { proxy_profile_id }) = &profile.access_kind {
             profile.proxy_profile_id = Some(*proxy_profile_id);
+        }
+
+        // Restore value_refs: deserialize from toml::Value -> serde_json::Value -> ValueRef.
+        // Conversion failures are silently skipped — a single unresolvable ref must not
+        // block the entire import; the user can add missing refs manually after import.
+        profile.value_refs = restore_value_refs(conn_entry);
+
+        // Restore hooks when the bundle included them.
+        if conn_entry.include_hooks {
+            profile.hooks = conn_entry.hooks_payload.as_ref().and_then(restore_hooks);
+        }
+
+        // Restore settings_overrides when the bundle included them.
+        if conn_entry.include_settings_overrides {
+            profile.settings_overrides = conn_entry
+                .settings_overrides_payload
+                .as_ref()
+                .and_then(restore_settings_overrides);
         }
 
         out_connections.push(profile);
@@ -579,6 +598,83 @@ pub fn apply(
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
+
+/// Resolve the `DbKind` for an imported connection.
+///
+/// Prefers the `kind` field serialized by the exporter (as `"{:?}"` of `DbKind`).
+/// Falls back to deriving the kind from `driver_id` via `builtin_driver_id_for_kind`
+/// for bundles written before the `kind` field was introduced.
+fn db_kind_from_bundle(conn: &crate::bundle::ConnectionEntry) -> dbflux_core::DbKind {
+    use dbflux_core::DbKind;
+
+    if let Some(kind_str) = &conn.kind {
+        let parsed = match kind_str.as_str() {
+            "Postgres" => Some(DbKind::Postgres),
+            "SQLite" => Some(DbKind::SQLite),
+            "MySQL" => Some(DbKind::MySQL),
+            "MariaDB" => Some(DbKind::MariaDB),
+            "MongoDB" => Some(DbKind::MongoDB),
+            "Redis" => Some(DbKind::Redis),
+            "DynamoDB" => Some(DbKind::DynamoDB),
+            "CloudWatchLogs" => Some(DbKind::CloudWatchLogs),
+            "InfluxDB" => Some(DbKind::InfluxDB),
+            "SqlServer" => Some(DbKind::SqlServer),
+            _ => None,
+        };
+        if let Some(k) = parsed {
+            return k;
+        }
+    }
+
+    // Fallback: derive from driver_id for legacy bundles without the `kind` field.
+    match conn.driver_id.as_str() {
+        "postgres" => DbKind::Postgres,
+        "sqlite" => DbKind::SQLite,
+        "mysql" => DbKind::MySQL,
+        "mariadb" => DbKind::MariaDB,
+        "mongodb" => DbKind::MongoDB,
+        "redis" => DbKind::Redis,
+        "dynamodb" => DbKind::DynamoDB,
+        "cloudwatch" => DbKind::CloudWatchLogs,
+        "influxdb" => DbKind::InfluxDB,
+        "mssql" => DbKind::SqlServer,
+        _ => DbKind::Postgres,
+    }
+}
+
+/// Deserialize the `value_refs` map from `toml::Value` entries to `ValueRef`.
+///
+/// Conversion is best-effort: entries that cannot be round-tripped through
+/// serde_json are silently skipped so a single unresolvable ref does not
+/// abort the import.
+fn restore_value_refs(
+    conn: &crate::bundle::ConnectionEntry,
+) -> std::collections::HashMap<String, dbflux_core::values::ValueRef> {
+    conn.value_refs
+        .iter()
+        .filter_map(|(field, tv)| {
+            let jv = serde_json::to_value(tv).ok()?;
+            let vref: dbflux_core::values::ValueRef = serde_json::from_value(jv).ok()?;
+            Some((field.clone(), vref))
+        })
+        .collect()
+}
+
+/// Deserialize the `hooks_payload` toml::Value into `ConnectionHooks`.
+///
+/// Returns `None` when the payload is absent or deserialization fails.
+fn restore_hooks(payload: &toml::Value) -> Option<dbflux_core::ConnectionHooks> {
+    let jv = serde_json::to_value(payload).ok()?;
+    serde_json::from_value(jv).ok()
+}
+
+/// Deserialize the `settings_overrides_payload` toml::Value into `GlobalOverrides`.
+///
+/// Returns `None` when the payload is absent or deserialization fails.
+fn restore_settings_overrides(payload: &toml::Value) -> Option<dbflux_core::GlobalOverrides> {
+    let jv = serde_json::to_value(payload).ok()?;
+    serde_json::from_value(jv).ok()
+}
 
 /// Look up the existing destination id for a conflict entry from the plan.
 fn conflict_existing_id(local_id: &str, plan: &ImportPlan) -> Option<Uuid> {
@@ -681,26 +777,41 @@ fn build_proxy_auth(
 /// Resolve the destination auth profile id for a connection entry.
 ///
 /// - Stored auth profile: look up the new id from `id_map` via `auth_profile_local_id`.
-/// - AWS reflected reference: compute the deterministic `aws_profile_uuid` — NOT a
-///   minted UUID — so the connection binds to the reflected profile on the target.
-/// - Auth-profile resolution choice (`choices.auth_profile_choices`): override with
-///   the chosen destination id for unresolved AWS refs.
+/// - AWS reflected reference:
+///   - When the reference was auto-resolved (i.e., NOT present in `plan.required_resolutions`),
+///     the profile exists at the destination; return the deterministic `aws_profile_uuid`.
+///   - When the reference was NOT auto-resolved (present in `plan.required_resolutions`),
+///     return the user's explicit choice, or `None` if no choice was made — never bind a
+///     dangling deterministic UUID to a profile that does not exist at the destination.
 /// - No auth: return `None`.
 fn resolve_auth_id(
     conn: &crate::bundle::ConnectionEntry,
     id_map: &HashMap<String, Uuid>,
+    plan: &ImportPlan,
     choices: &ResolutionChoices,
 ) -> Option<Uuid> {
     if let Some(auth_ref) = &conn.auth_ref {
         use dbflux_core::auth::aws_profile_uuid;
 
-        let deterministic = aws_profile_uuid(&auth_ref.provider_id, &auth_ref.name);
-
-        // User may have provided an override via the required-resolution step.
         let key = (conn.local_id.clone(), "auth_profile".to_string());
         let chosen = choices.auth_profile_choices.get(&key).copied();
 
-        Some(chosen.unwrap_or(deterministic))
+        // Determine whether this reference required a user resolution (not in dest).
+        let requires_resolution = plan.required_resolutions.iter().any(|r| {
+            r.owner_local_id == conn.local_id
+                && r.field == "auth_profile"
+                && matches!(&r.kind, RequiredResolutionKind::AwsReference { .. })
+        });
+
+        if requires_resolution {
+            // Not present at destination: bind only if the user explicitly chose a profile.
+            chosen
+        } else {
+            // Present at destination: auto-resolve to the deterministic UUID, unless
+            // the user overrode it.
+            let deterministic = aws_profile_uuid(&auth_ref.provider_id, &auth_ref.name);
+            Some(chosen.unwrap_or(deterministic))
+        }
     } else if let Some(ref local_auth_id) = conn.auth_profile_local_id {
         id_map.get(local_auth_id).copied()
     } else {
@@ -863,6 +974,7 @@ mod tests {
             include_settings_overrides: false,
             hooks_payload: None,
             settings_overrides_payload: None,
+            kind: None,
         }
     }
 
@@ -1329,9 +1441,11 @@ encryption = "none"
         );
     }
 
+    /// When an AWS reference IS present at the destination (auto-resolved), apply() must
+    /// bind the connection to the deterministic UUID of that profile.
     #[test]
-    fn apply_aws_reference_gets_deterministic_uuid() {
-        use dbflux_core::auth::aws_profile_uuid;
+    fn apply_aws_reference_present_in_dest_gets_deterministic_uuid() {
+        use dbflux_core::auth::{AuthProfile as CoreAuth, aws_profile_uuid};
 
         let local_conn_id = "conn-aws-apply";
         let mut bundle = empty_bundle(EncryptionMode::None);
@@ -1348,7 +1462,25 @@ encryption = "none"
             decrypted_secrets: None,
         };
 
-        let import_plan = plan(&parsed, &empty_dest());
+        // Put the profile at the destination so it auto-resolves.
+        let dest_auth = CoreAuth {
+            id: aws_profile_uuid("aws-sso", "My AWS SSO"),
+            name: "My AWS SSO".to_string(),
+            provider_id: "aws-sso".to_string(),
+            fields: Default::default(),
+            secret_fields: Default::default(),
+            enabled: true,
+            read_only: true,
+            dangling_origin: None,
+        };
+
+        let dest = DestSnapshot {
+            auth_profiles: vec![&dest_auth],
+            ssh_tunnels: vec![],
+            proxies: vec![],
+        };
+
+        let import_plan = plan(&parsed, &dest);
         let choices = ResolutionChoices::default();
 
         let actions = apply(&parsed, &import_plan, &choices).expect("apply");
@@ -1363,7 +1495,7 @@ encryption = "none"
         assert_eq!(
             actual_auth_id,
             Some(expected_auth_id),
-            "AWS reference must resolve to the deterministic UUID"
+            "AWS reference present at dest must resolve to the deterministic UUID"
         );
     }
 
@@ -1725,5 +1857,310 @@ encryption = "none"
         assert_eq!(values.get("port").map(String::as_str), Some("5433"));
         assert_eq!(values.get("user").map(String::as_str), Some("admin"));
         assert_eq!(values.get("database").map(String::as_str), Some("mydb"));
+    }
+
+    // -----------------------------------------------------------------------
+    // apply() — value_refs preserved on import (#1)
+    // -----------------------------------------------------------------------
+
+    /// When a bundle's ConnectionEntry carries value_refs, the imported profile must
+    /// have those value_refs set — they must not be silently dropped.
+    #[test]
+    fn apply_connection_value_refs_are_preserved() {
+        use crate::bundle::EncryptionMode;
+
+        let local_id = "conn-vref-1";
+        let mut entry = make_connection_entry(local_id);
+
+        // Build a toml::Value representing a ValueRef::Env { key: "DB_HOST" }.
+        let vref_toml = toml::Value::Table({
+            let mut t = toml::value::Table::new();
+            t.insert("source".to_string(), toml::Value::String("env".to_string()));
+            t.insert(
+                "key".to_string(),
+                toml::Value::String("DB_HOST".to_string()),
+            );
+            t
+        });
+        entry.value_refs.insert("host".to_string(), vref_toml);
+
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        bundle.connections.push(entry);
+
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: None,
+        };
+
+        let import_plan = plan(&parsed, &empty_dest());
+        let choices = ResolutionChoices::default();
+        let actions = apply(&parsed, &import_plan, &choices).expect("apply");
+
+        let conn = actions.connections.first().expect("one connection");
+
+        assert!(
+            !conn.value_refs.is_empty(),
+            "value_refs must be preserved from the bundle; got empty map"
+        );
+
+        let vref = conn.value_refs.get("host").expect("host value_ref");
+        assert!(
+            matches!(vref, dbflux_core::values::ValueRef::Env { key } if key == "DB_HOST"),
+            "value_ref for 'host' must be Env{{key: DB_HOST}}, got: {:?}",
+            vref
+        );
+    }
+
+    /// A bundle with no value_refs must produce a profile with an empty value_refs map.
+    #[test]
+    fn apply_connection_empty_value_refs_yields_empty_map() {
+        let local_id = "conn-novref-1";
+        let entry = make_connection_entry(local_id);
+
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        bundle.connections.push(entry);
+
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: None,
+        };
+
+        let import_plan = plan(&parsed, &empty_dest());
+        let choices = ResolutionChoices::default();
+        let actions = apply(&parsed, &import_plan, &choices).expect("apply");
+
+        let conn = actions.connections.first().expect("one connection");
+        assert!(
+            conn.value_refs.is_empty(),
+            "no value_refs in bundle => empty map on profile"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // apply() — hooks preserved on import (#2)
+    // -----------------------------------------------------------------------
+
+    /// When a bundle's ConnectionEntry carries a hooks_payload (include_hooks = true),
+    /// the imported profile must have hooks set, not None.
+    #[test]
+    fn apply_connection_hooks_are_preserved_when_included() {
+        let local_id = "conn-hooks-1";
+        let mut entry = make_connection_entry(local_id);
+        entry.include_hooks = true;
+
+        // Build a minimal hooks payload matching ConnectionHooks serde shape.
+        let hooks_toml = toml::Value::Table({
+            let mut t = toml::value::Table::new();
+            t.insert("pre_connect".to_string(), toml::Value::Array(vec![]));
+            t.insert("post_connect".to_string(), toml::Value::Array(vec![]));
+            t.insert("pre_disconnect".to_string(), toml::Value::Array(vec![]));
+            t.insert("post_disconnect".to_string(), toml::Value::Array(vec![]));
+            t
+        });
+        entry.hooks_payload = Some(hooks_toml);
+
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        bundle.connections.push(entry);
+
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: None,
+        };
+
+        let import_plan = plan(&parsed, &empty_dest());
+        let choices = ResolutionChoices::default();
+        let actions = apply(&parsed, &import_plan, &choices).expect("apply");
+
+        let conn = actions.connections.first().expect("one connection");
+        assert!(
+            conn.hooks.is_some(),
+            "hooks must be preserved when include_hooks = true and hooks_payload is present"
+        );
+    }
+
+    /// When include_hooks = false, the imported profile must not have spurious hooks set.
+    #[test]
+    fn apply_connection_hooks_are_none_when_not_included() {
+        let local_id = "conn-nohooks-1";
+        let entry = make_connection_entry(local_id);
+
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        bundle.connections.push(entry);
+
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: None,
+        };
+
+        let import_plan = plan(&parsed, &empty_dest());
+        let choices = ResolutionChoices::default();
+        let actions = apply(&parsed, &import_plan, &choices).expect("apply");
+
+        let conn = actions.connections.first().expect("one connection");
+        assert!(
+            conn.hooks.is_none(),
+            "hooks must be None when include_hooks = false"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // apply() — kind from bundle (#3)
+    // -----------------------------------------------------------------------
+
+    /// A bundle entry with kind = "MySQL" must produce a profile whose kind() is MySQL,
+    /// not Postgres (which was the hardcoded DbConfig::External kind before this fix).
+    #[test]
+    fn apply_connection_kind_matches_bundle_kind() {
+        let local_id = "conn-mysql-kind";
+        let mut entry = make_connection_entry(local_id);
+        entry.driver_id = "mysql".to_string();
+        entry.kind = Some("MySQL".to_string());
+
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        bundle.connections.push(entry);
+
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: None,
+        };
+
+        let import_plan = plan(&parsed, &empty_dest());
+        let choices = ResolutionChoices::default();
+        let actions = apply(&parsed, &import_plan, &choices).expect("apply");
+
+        let conn = actions.connections.first().expect("one connection");
+
+        // The DbConfig::External kind must NOT be Postgres.
+        if let dbflux_core::DbConfig::External { kind, .. } = &conn.config {
+            assert_ne!(
+                *kind,
+                dbflux_core::DbKind::Postgres,
+                "External config kind must not be Postgres for a MySQL bundle entry"
+            );
+            assert_eq!(
+                *kind,
+                dbflux_core::DbKind::MySQL,
+                "External config kind must be MySQL"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // apply() — AWS ref not in dest returns None auth_profile_id (#6)
+    // -----------------------------------------------------------------------
+
+    /// When an AWS reference is NOT present at the destination and the user made
+    /// no choice, the imported connection must have auth_profile_id = None —
+    /// not a dangling deterministic UUID pointing to a non-existent profile.
+    #[test]
+    fn apply_aws_reference_absent_from_dest_and_no_choice_yields_none_auth_id() {
+        let local_conn_id = "conn-aws-absent";
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        let mut conn = make_connection_entry(local_conn_id);
+        conn.auth_ref = Some(AuthRef {
+            kind: AuthRefKind::AwsReference,
+            provider_id: "aws-sso".to_string(),
+            name: "Missing Profile".to_string(),
+        });
+        bundle.connections.push(conn);
+
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: None,
+        };
+
+        // Dest has NO profiles — the AWS reference can't be auto-resolved.
+        let import_plan = plan(&parsed, &empty_dest());
+
+        // Verify that the plan emitted a RequiredResolution for this ref.
+        assert!(
+            import_plan
+                .required_resolutions
+                .iter()
+                .any(|r| matches!(&r.kind, crate::RequiredResolutionKind::AwsReference { .. })),
+            "AWS reference absent from dest must produce a RequiredResolution"
+        );
+
+        // No user choice provided.
+        let choices = ResolutionChoices::default();
+        let actions = apply(&parsed, &import_plan, &choices).expect("apply");
+
+        let actual_auth_id = actions
+            .connections
+            .first()
+            .expect("connection")
+            .auth_profile_id;
+
+        assert_eq!(
+            actual_auth_id, None,
+            "unresolved AWS reference with no user choice must yield auth_profile_id = None, \
+             not a dangling deterministic UUID"
+        );
+    }
+
+    /// When an AWS reference IS present at the destination, auto-resolving to the
+    /// deterministic UUID must still work as before.
+    #[test]
+    fn apply_aws_reference_present_at_dest_still_auto_resolves() {
+        use dbflux_core::auth::{AuthProfile as CoreAuth, aws_profile_uuid};
+
+        let dest_auth = CoreAuth {
+            id: aws_profile_uuid("aws-sso", "Present Profile"),
+            name: "Present Profile".to_string(),
+            provider_id: "aws-sso".to_string(),
+            fields: Default::default(),
+            secret_fields: Default::default(),
+            enabled: true,
+            read_only: true,
+            dangling_origin: None,
+        };
+
+        let local_conn_id = "conn-aws-present";
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        let mut conn = make_connection_entry(local_conn_id);
+        conn.auth_ref = Some(AuthRef {
+            kind: AuthRefKind::AwsReference,
+            provider_id: "aws-sso".to_string(),
+            name: "Present Profile".to_string(),
+        });
+        bundle.connections.push(conn);
+
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: None,
+        };
+
+        let dest = DestSnapshot {
+            auth_profiles: vec![&dest_auth],
+            ssh_tunnels: vec![],
+            proxies: vec![],
+        };
+
+        let import_plan = plan(&parsed, &dest);
+
+        // Verify the plan did NOT emit a RequiredResolution for this ref.
+        assert!(
+            !import_plan
+                .required_resolutions
+                .iter()
+                .any(|r| matches!(&r.kind, crate::RequiredResolutionKind::AwsReference { .. })),
+            "AWS reference present in dest must NOT produce a RequiredResolution"
+        );
+
+        let choices = ResolutionChoices::default();
+        let actions = apply(&parsed, &import_plan, &choices).expect("apply");
+
+        let expected = aws_profile_uuid("aws-sso", "Present Profile");
+        let actual = actions
+            .connections
+            .first()
+            .expect("connection")
+            .auth_profile_id;
+
+        assert_eq!(
+            actual,
+            Some(expected),
+            "AWS reference present in dest must resolve to the deterministic UUID"
+        );
     }
 }

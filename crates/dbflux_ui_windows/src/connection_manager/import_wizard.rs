@@ -64,44 +64,47 @@ impl ImportPersistence for AppStatePersistence<'_> {
 
     /// Insert a connection profile into the app state.
     ///
-    /// # Driver-id invariant
+    /// # Driver-id and config-rebuild invariant
     ///
     /// The portability crate emits `ImportActions::connections` with
     /// `DbConfig::External { values, .. }` so the full form values from the
     /// bundle are carried without loss.  This method looks up the driver by
     /// `profile.driver_id()` and calls `driver.build_config(values)` to produce
-    /// the correct concrete `DbConfig`.  If `build_config` fails the profile is
-    /// still persisted with the `External` config — it will produce a
-    /// connect-time error that the user can fix by editing the connection.
+    /// the correct concrete `DbConfig`.
     ///
-    /// Returns `None` only when the driver is absent from the registry; the
-    /// caller records the connection in `needs_driver` rather than persisting a
-    /// mis-typed placeholder.
-    fn add_connection(&mut self, profile: ConnectionProfile) -> Option<()> {
+    /// Returns `NeedsDriver` when the driver is absent from the registry.
+    /// Returns `ConfigFailed(reason)` when `build_config` returns an error — the
+    /// connection is NOT persisted with a broken placeholder config; the caller
+    /// records a `config_failures` item and skips the insert.
+    fn add_connection(
+        &mut self,
+        profile: ConnectionProfile,
+    ) -> dbflux_app::portability::ConnectionInsertResult {
+        use dbflux_app::portability::ConnectionInsertResult;
+
         let driver_id = profile.driver_id().to_string();
         if !self.registered_drivers.contains(&driver_id) {
-            return None;
+            return ConnectionInsertResult::NeedsDriver;
         }
 
-        let rebuilt = if let Some(driver) = self.state.drivers().get(&driver_id).cloned() {
-            if let dbflux_core::DbConfig::External { values, .. } = &profile.config {
-                match driver.build_config(values) {
-                    Ok(config) => {
-                        let mut rebuilt = profile.clone();
-                        rebuilt.config = config;
-                        rebuilt
-                    }
-                    Err(_) => profile,
-                }
-            } else {
-                profile
-            }
-        } else {
-            profile
+        let Some(driver) = self.state.drivers().get(&driver_id).cloned() else {
+            return ConnectionInsertResult::NeedsDriver;
         };
 
-        self.state.add_profile_in_folder(rebuilt, None);
-        Some(())
+        if let dbflux_core::DbConfig::External { values, .. } = &profile.config {
+            match driver.build_config(values) {
+                Ok(config) => {
+                    let mut rebuilt = profile;
+                    rebuilt.config = config;
+                    self.state.add_profile_in_folder(rebuilt, None);
+                    ConnectionInsertResult::Ok
+                }
+                Err(e) => ConnectionInsertResult::ConfigFailed(e.to_string()),
+            }
+        } else {
+            self.state.add_profile_in_folder(profile, None);
+            ConnectionInsertResult::Ok
+        }
     }
 
     fn write_secret(&self, secret_ref: &str, secret: &SecretString) -> bool {
@@ -262,7 +265,10 @@ impl ImportWizard {
         cx.notify();
 
         cx.spawn(async move |_this, cx| {
-            let result: Result<(ParsedBundle, ImportPlan), String> = cx
+            // The background task returns the bundle's encryption flag alongside
+            // the parsed bundle and plan so the UI can derive bundle_encrypted
+            // from the header rather than relying on the user's manual checkbox.
+            let result: Result<(ParsedBundle, ImportPlan, bool), String> = cx
                 .background_executor()
                 .spawn(async move {
                     let bytes =
@@ -272,18 +278,41 @@ impl ImportWizard {
                         .map_err(|e| format!("Parse error: {e}"))?;
 
                     use dbflux_portability::bundle::EncryptionMode;
+                    let is_encrypted =
+                        parsed.bundle.bundle.encryption == EncryptionMode::AgePassphrase;
+
                     // decrypt() is a no-op for plaintext bundles; always call it
                     // to populate decrypted_secrets from the plaintext section.
-                    let _ = dbflux_portability::import::decrypt(&mut parsed, &passphrase);
+                    if let Err(e) = dbflux_portability::import::decrypt(&mut parsed, &passphrase) {
+                        use dbflux_portability::PortabilityError;
+                        let msg = match &e {
+                            PortabilityError::Decryption(_) => {
+                                "Decryption failed. Check that the passphrase is correct \
+                                 and the bundle has not been corrupted."
+                                    .to_string()
+                            }
+                            other => {
+                                // EncryptionUnavailable is only compiled in when the
+                                // encryption feature is absent; all other variants map here.
+                                let as_str = format!("{other}");
+                                if as_str.contains("encryption support") {
+                                    "This bundle is passphrase-encrypted but the encryption \
+                                     feature is not available in this build of DBFlux."
+                                        .to_string()
+                                } else {
+                                    format!("Decryption error: {other}")
+                                }
+                            }
+                        };
+                        return Err(msg);
+                    }
 
-                    if parsed.bundle.bundle.encryption == EncryptionMode::AgePassphrase
-                        && parsed.decrypted_secrets.is_none()
-                    {
+                    if is_encrypted && parsed.decrypted_secrets.is_none() {
                         return Err("Wrong passphrase or corrupt encrypted bundle.".to_string());
                     }
 
                     let plan = dbflux_portability::import::plan(&parsed, &dest.as_ref_snapshot());
-                    Ok((parsed, plan))
+                    Ok((parsed, plan, is_encrypted))
                 })
                 .await;
 
@@ -291,9 +320,13 @@ impl ImportWizard {
                 this.update(cx, |this, cx| {
                     this.is_parsing = false;
                     match result {
-                        Ok((parsed, plan)) => {
+                        Ok((parsed, plan, is_encrypted)) => {
                             let has_conflicts = !plan.conflicts.is_empty();
                             let has_required = !plan.required_resolutions.is_empty();
+
+                            // Derive bundle_encrypted from the bundle header so the
+                            // passphrase field is shown automatically for encrypted bundles.
+                            this.bundle_encrypted = is_encrypted;
 
                             this.parsed_bundle = Some(parsed);
                             this.import_plan = Some(plan);
@@ -505,7 +538,8 @@ impl ImportWizard {
                         this.update(cx, |this, cx| {
                             this.is_applying = false;
                             let has_failures = !outcome.secret_failures.is_empty()
-                                || !outcome.needs_driver.is_empty();
+                                || !outcome.needs_driver.is_empty()
+                                || !outcome.config_failures.is_empty();
                             this.pending_outcome = Some(Ok(outcome));
                             if has_failures {
                                 this.step = WizardStep::PartialSummary;
@@ -1219,6 +1253,26 @@ impl ImportWizard {
                                 .text_sm()
                                 .text_color(theme.muted_foreground)
                                 .child(format!("- \"{name}\" (driver: {driver})"))
+                        }));
+                }
+
+                // config_failures — driver is registered but build_config failed.
+                if !outcome.config_failures.is_empty() {
+                    col = col
+                        .child(BannerBlock::new(
+                            BannerVariant::Warning,
+                            format!(
+                                "{} connection(s) could not be configured and were not imported. \
+                                 The bundle's field values may be incomplete or incompatible \
+                                 with this version of the driver.",
+                                outcome.config_failures.len()
+                            ),
+                        ))
+                        .children(outcome.config_failures.iter().map(|(name, reason)| {
+                            div()
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .child(format!("- \"{name}\": {reason}"))
                         }));
                 }
 

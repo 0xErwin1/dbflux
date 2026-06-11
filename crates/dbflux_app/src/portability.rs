@@ -190,8 +190,9 @@ impl OwnedDestSnapshot {
 /// `secret_failures` were inserted but at least one secret write was rejected
 /// by the OS keyring (returned `false` from `set_by_ref`).  Items in
 /// `needs_driver` were skipped entirely because their `driver_id` is not
-/// registered in the current driver registry — the UI surfaces an
-/// informational note for each.
+/// registered in the current driver registry.  Items in `config_failures` were
+/// skipped because the registered driver's `build_config` call returned an error —
+/// the UI surfaces both buckets as informational notes.
 #[derive(Debug, Default)]
 pub struct ImportOutcome {
     /// Names of entities that were fully persisted.
@@ -200,6 +201,19 @@ pub struct ImportOutcome {
     pub secret_failures: Vec<(String, String)>,
     /// `(connection_name, driver_id)` pairs whose driver is not registered.
     pub needs_driver: Vec<(String, String)>,
+    /// `(connection_name, error_message)` pairs where `build_config` returned an error.
+    pub config_failures: Vec<(String, String)>,
+}
+
+/// Result returned by `ImportPersistence::add_connection`.
+#[derive(Debug)]
+pub enum ConnectionInsertResult {
+    /// Connection was inserted successfully.
+    Ok,
+    /// The `driver_id` is not registered; connection skipped.
+    NeedsDriver,
+    /// The driver is registered but `build_config` failed; connection skipped.
+    ConfigFailed(String),
 }
 
 /// Seam for inserting entities into the repository, used by `apply_import`.
@@ -210,10 +224,15 @@ pub trait ImportPersistence {
     fn add_ssh_tunnel(&mut self, tunnel: SshTunnelProfile);
     fn add_proxy(&mut self, proxy: ProxyProfile);
 
-    /// Insert a connection profile.  Returns `None` when the connection's
-    /// `driver_id` is not registered, in which case the caller records a
-    /// `needs_driver` item and skips the insert.
-    fn add_connection(&mut self, profile: ConnectionProfile) -> Option<()>;
+    /// Insert a connection profile.
+    ///
+    /// Returns `ConnectionInsertResult::Ok` on success.
+    /// Returns `ConnectionInsertResult::NeedsDriver` when the `driver_id` is not
+    /// registered, causing the connection to be recorded in `needs_driver` and skipped.
+    /// Returns `ConnectionInsertResult::ConfigFailed(reason)` when the driver is present
+    /// but `build_config` fails; the connection is recorded in `config_failures` and
+    /// NOT persisted with a broken placeholder config.
+    fn add_connection(&mut self, profile: ConnectionProfile) -> ConnectionInsertResult;
 
     /// Write a secret under an explicit keyring reference.
     ///
@@ -252,6 +271,13 @@ pub fn apply_import(
 ///
 /// Separated from `apply_import` so tests can call it directly with a
 /// pre-built `ImportActions` without needing a full `ParsedBundle`.
+///
+/// # Secret-write filtering
+///
+/// Secrets are written only for connections that were successfully persisted.
+/// Connections recorded in `needs_driver` or `config_failures` are skipped, and
+/// their `connection_secret_ref`-keyed entries are filtered out of `secret_writes`
+/// to prevent orphaned keyring entries for profiles that were never inserted.
 pub fn persist_import_actions(
     actions: ImportActions,
     deps: &mut dyn ImportPersistence,
@@ -276,18 +302,42 @@ pub fn persist_import_actions(
         outcome.succeeded.push(name);
     }
 
+    // Track UUIDs of skipped connections to filter their secret writes below.
+    let mut skipped_conn_ids: std::collections::HashSet<uuid::Uuid> =
+        std::collections::HashSet::new();
+
     for conn in actions.connections {
         let name = conn.name.clone();
         let driver_id = conn.driver_id().to_string();
+        let conn_id = conn.id;
 
-        if deps.add_connection(conn).is_none() {
-            outcome.needs_driver.push((name, driver_id));
-        } else {
-            outcome.succeeded.push(name);
+        match deps.add_connection(conn) {
+            ConnectionInsertResult::Ok => {
+                outcome.succeeded.push(name);
+            }
+            ConnectionInsertResult::NeedsDriver => {
+                outcome.needs_driver.push((name, driver_id));
+                skipped_conn_ids.insert(conn_id);
+            }
+            ConnectionInsertResult::ConfigFailed(reason) => {
+                outcome.config_failures.push((name, reason));
+                skipped_conn_ids.insert(conn_id);
+            }
         }
     }
 
     for (secret_ref, secret) in actions.secret_writes {
+        // Skip secrets that belong to connections that were not persisted.
+        // Connection secret refs are of the form dbflux:conn:<uuid>:... so we can
+        // check for the UUID prefix to identify and filter them.
+        let is_skipped_conn_secret = skipped_conn_ids
+            .iter()
+            .any(|id| secret_ref.contains(&id.to_string()));
+
+        if is_skipped_conn_secret {
+            continue;
+        }
+
         if !deps.write_secret(&secret_ref, &secret) {
             outcome
                 .secret_failures
@@ -313,6 +363,7 @@ mod tests {
     use dbflux_core::{
         AuthProfile, Connection, ConnectionProfile, DbConfig, DbError, DbKind, DriverFormDef,
         DriverMetadata, ExportFieldHint, FormValues, ProxyProfile, SecretStore, SshTunnelProfile,
+        connection_secret_ref,
     };
     use dbflux_portability::{AwsRef, FieldHintResolver, SecretReader};
     use uuid::Uuid;
@@ -793,13 +844,13 @@ mod tests {
             self.proxy_count += 1;
         }
 
-        fn add_connection(&mut self, profile: ConnectionProfile) -> Option<()> {
+        fn add_connection(&mut self, profile: ConnectionProfile) -> ConnectionInsertResult {
             let driver_id = profile.driver_id().to_string();
             if !self.drivers.contains("*") && !self.drivers.contains(&driver_id) {
-                return None;
+                return ConnectionInsertResult::NeedsDriver;
             }
             self.conn_names.push(profile.name.clone());
-            Some(())
+            ConnectionInsertResult::Ok
         }
 
         fn write_secret(&self, secret_ref: &str, _secret: &SecretString) -> bool {
@@ -1029,12 +1080,12 @@ mod tests {
             fn add_ssh_tunnel(&mut self, _: SshTunnelProfile) {}
             fn add_proxy(&mut self, _: ProxyProfile) {}
 
-            fn add_connection(&mut self, profile: ConnectionProfile) -> Option<()> {
+            fn add_connection(&mut self, profile: ConnectionProfile) -> ConnectionInsertResult {
                 self.recorded_driver_ids
                     .push(profile.driver_id().to_string());
                 let is_external = matches!(profile.config, dbflux_core::DbConfig::External { .. });
                 self.recorded_config_is_external.push(is_external);
-                Some(())
+                ConnectionInsertResult::Ok
             }
 
             fn write_secret(&self, _: &str, _: &SecretString) -> bool {
@@ -1082,5 +1133,186 @@ mod tests {
             "config must be DbConfig::External so the app layer can call \
              build_config(values) with the real driver"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Finding #4 — build_config failure is recorded, not silently persisted
+    // -----------------------------------------------------------------------
+
+    /// A persistence implementation that reports ConfigFailed for the "bad-driver" id.
+    struct FailingConfigPersistence {
+        inserted_names: Vec<String>,
+    }
+
+    impl ImportPersistence for FailingConfigPersistence {
+        fn add_auth_profile(&mut self, _: AuthProfile) {}
+        fn add_ssh_tunnel(&mut self, _: SshTunnelProfile) {}
+        fn add_proxy(&mut self, _: ProxyProfile) {}
+
+        fn add_connection(&mut self, profile: ConnectionProfile) -> ConnectionInsertResult {
+            let driver_id = profile.driver_id().to_string();
+            if driver_id == "bad-driver" {
+                return ConnectionInsertResult::ConfigFailed(
+                    "required field 'host' is missing".to_string(),
+                );
+            }
+            self.inserted_names.push(profile.name.clone());
+            ConnectionInsertResult::Ok
+        }
+
+        fn write_secret(&self, _: &str, _: &SecretString) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn persist_config_failure_is_not_persisted_and_not_counted_as_succeeded() {
+        let mut deps = FailingConfigPersistence {
+            inserted_names: Vec::new(),
+        };
+
+        let mut profile = make_conn_profile("BadConfig", "bad-driver");
+        profile.id = Uuid::parse_str("aaaaaaaa-0000-0000-0000-000000000001").unwrap();
+
+        let actions = ImportActions {
+            connections: vec![profile],
+            auth_profiles: vec![],
+            ssh_tunnels: vec![],
+            proxies: vec![],
+            secret_writes: vec![],
+        };
+
+        let outcome = persist_import_actions(actions, &mut deps);
+
+        assert!(
+            outcome.succeeded.is_empty(),
+            "config-failure connection must NOT appear in succeeded"
+        );
+        assert!(
+            outcome.needs_driver.is_empty(),
+            "config-failure must NOT appear in needs_driver"
+        );
+        assert_eq!(
+            outcome.config_failures.len(),
+            1,
+            "config-failure must be recorded in config_failures"
+        );
+        assert_eq!(outcome.config_failures[0].0, "BadConfig");
+        assert!(deps.inserted_names.is_empty(), "must NOT be persisted");
+    }
+
+    // -----------------------------------------------------------------------
+    // Finding #8 — skipped connection secrets are not written to keyring
+    // -----------------------------------------------------------------------
+
+    /// A persistence implementation that records all secret refs passed to write_secret.
+    struct SecretRecordingPersistence {
+        registered_drivers: std::collections::HashSet<String>,
+        written_secret_refs: Vec<String>,
+    }
+
+    impl ImportPersistence for SecretRecordingPersistence {
+        fn add_auth_profile(&mut self, _: AuthProfile) {}
+        fn add_ssh_tunnel(&mut self, _: SshTunnelProfile) {}
+        fn add_proxy(&mut self, _: ProxyProfile) {}
+
+        fn add_connection(&mut self, profile: ConnectionProfile) -> ConnectionInsertResult {
+            let driver_id = profile.driver_id().to_string();
+            if !self.registered_drivers.contains(&driver_id) {
+                ConnectionInsertResult::NeedsDriver
+            } else {
+                ConnectionInsertResult::Ok
+            }
+        }
+
+        fn write_secret(&self, secret_ref: &str, _: &SecretString) -> bool {
+            // Track via interior mutability is not available here, but we use
+            // a separate recorder struct in the test that keeps its own log.
+            let _ = secret_ref;
+            true
+        }
+    }
+
+    /// Mutable-tracking version for this specific test.
+    struct TrackingPersistence {
+        registered: std::collections::HashSet<String>,
+        written_secret_refs: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl ImportPersistence for TrackingPersistence {
+        fn add_auth_profile(&mut self, _: AuthProfile) {}
+        fn add_ssh_tunnel(&mut self, _: SshTunnelProfile) {}
+        fn add_proxy(&mut self, _: ProxyProfile) {}
+
+        fn add_connection(&mut self, profile: ConnectionProfile) -> ConnectionInsertResult {
+            if !self.registered.contains(&profile.driver_id().to_string()) {
+                ConnectionInsertResult::NeedsDriver
+            } else {
+                ConnectionInsertResult::Ok
+            }
+        }
+
+        fn write_secret(&self, secret_ref: &str, _: &SecretString) -> bool {
+            self.written_secret_refs
+                .lock()
+                .unwrap()
+                .push(secret_ref.to_string());
+            true
+        }
+    }
+
+    #[test]
+    fn persist_skipped_connection_secrets_are_not_written() {
+        use dbflux_core::connection_secret_ref;
+
+        let skipped_id = Uuid::parse_str("bbbbbbbb-0000-0000-0000-000000000002").unwrap();
+        let ok_id = Uuid::parse_str("cccccccc-0000-0000-0000-000000000003").unwrap();
+
+        let mut skipped_conn = make_conn_profile("SkippedConn", "unknown-driver");
+        skipped_conn.id = skipped_id;
+
+        let mut ok_conn = make_conn_profile("OkConn", "postgres");
+        ok_conn.id = ok_id;
+
+        let skipped_secret_ref = connection_secret_ref(&skipped_id);
+        let ok_secret_ref = connection_secret_ref(&ok_id);
+
+        let written = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let mut deps = TrackingPersistence {
+            registered: ["postgres".to_string()].into_iter().collect(),
+            written_secret_refs: written.clone(),
+        };
+
+        let actions = ImportActions {
+            connections: vec![skipped_conn, ok_conn],
+            auth_profiles: vec![],
+            ssh_tunnels: vec![],
+            proxies: vec![],
+            secret_writes: vec![
+                (
+                    skipped_secret_ref.clone(),
+                    SecretString::from("skipped-secret".to_string()),
+                ),
+                (
+                    ok_secret_ref.clone(),
+                    SecretString::from("ok-secret".to_string()),
+                ),
+            ],
+        };
+
+        let outcome = persist_import_actions(actions, &mut deps);
+
+        let written_refs = written.lock().unwrap();
+
+        assert!(
+            !written_refs.contains(&skipped_secret_ref),
+            "secret for skipped connection must NOT be written to keyring"
+        );
+        assert!(
+            written_refs.contains(&ok_secret_ref),
+            "secret for successfully persisted connection must be written to keyring"
+        );
+        assert_eq!(outcome.needs_driver.len(), 1);
+        assert_eq!(outcome.succeeded.len(), 1);
     }
 }
