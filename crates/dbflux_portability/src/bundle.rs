@@ -68,9 +68,22 @@ pub enum EncryptionMode {
 }
 
 /// Informational driver identity. Never used to gate import.
+///
+/// The `reference` field uses one of two prefixes:
+/// - `built-in:<driver>` — a driver compiled into the DBFlux binary (e.g. `built-in:postgres`).
+/// - `external:<socket_id>` — an RPC-backed driver registered under `socket_id`, which is the
+///   user-chosen service name persisted in the RPC service registry (NOT a machine-local socket
+///   path). This name is stable across restarts on the same machine.
+///
+/// Version is intentionally omitted: there is no stable per-driver version source accessible at
+/// export time without over-reaching into driver internals.
+///
+/// This field is INFORMATIONAL. Import never gates on it; it is recorded purely for
+/// human inspection of the bundle. An `external:` reference only resolves on a target that has
+/// registered a service under the same `socket_id`. When the names differ, the detect-and-ask
+/// import flow surfaces the mismatch for the user to resolve manually.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DriverRef {
-    /// Format: `built-in:<driver>` or `external:<socket_id>`.
     pub reference: String,
 }
 

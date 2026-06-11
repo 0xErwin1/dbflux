@@ -5,9 +5,9 @@
 ///
 /// - MCP governance data is NEVER written to any bundle, regardless of options.
 ///   This is a hard security invariant enforced here, not delegated to the caller.
-/// - `value_refs` are always included; `ValueRef::Literal` values are staged into
-///   the encrypted `[secrets]` section and are NOT treated as `RequiredRef` — the
-///   value is present and available to the importer after decryption.
+/// - `value_refs` are always included in the cleartext `value_refs` map. All variants,
+///   including `ValueRef::Literal`, are emitted as cleartext references. A `Literal` is
+///   a static inline value (not a secret locator) and carries no inherent secrecy.
 /// - Hooks and `settings_overrides` are excluded by default; opt-in via
 ///   `ExportOptions::{include_hooks, include_settings_overrides}`.
 /// - Hook `env` entries are NEVER written in cleartext. They are moved to the
@@ -311,42 +311,32 @@ fn build_access_entry(profile: &dbflux_core::ConnectionProfile) -> Option<Access
 
 /// Build the `value_refs` map for a connection entry.
 ///
-/// `ValueRef::Literal` values are staged into `staged_secrets` under
-/// `conn_vref:<profile_id>:<field>` so they land in the encrypted `[secrets]`
-/// section. A `Literal` is NOT a `RequiredRef`: the value is present and will
-/// be available to the importer after decryption. Non-literal variants are
-/// serialized as-is into the cleartext `value_refs` map.
+/// All `ValueRef` variants — including `Literal` — are serialized as cleartext
+/// references in the output map. A `Literal` is a static inline value (not a secret
+/// locator) and carries no inherent secrecy; it belongs in the cleartext section
+/// alongside `Env`, `Parameter`, `Auth`, and `Secret` locators.
 ///
 /// Conversion failures push a warning rather than silently dropping the entry.
 fn build_value_refs(
     profile: &dbflux_core::ConnectionProfile,
-    staged_secrets: &mut HashMap<String, String>,
+    _staged_secrets: &mut HashMap<String, String>,
     report: &mut ExportReport,
 ) -> HashMap<String, toml::Value> {
     let mut out: HashMap<String, toml::Value> = HashMap::new();
 
     for (field_key, vref) in &profile.value_refs {
-        match vref {
-            dbflux_core::values::ValueRef::Literal { value } => {
-                let secrets_key = format!("conn_vref:{}:{}", profile.id, field_key);
-                staged_secrets.insert(secrets_key, value.clone());
+        match serde_json::to_value(vref)
+            .map_err(|e| e.to_string())
+            .and_then(|jv| toml::Value::try_from(jv).map_err(|e| e.to_string()))
+        {
+            Ok(tv) => {
+                out.insert(field_key.clone(), tv);
             }
-
-            other => {
-                match serde_json::to_value(other)
-                    .map_err(|e| e.to_string())
-                    .and_then(|jv| toml::Value::try_from(jv).map_err(|e| e.to_string()))
-                {
-                    Ok(tv) => {
-                        out.insert(field_key.clone(), tv);
-                    }
-                    Err(e) => {
-                        report.warnings.push(format!(
-                            "connection '{}' value_ref '{}' could not be serialized ({e}); skipped",
-                            profile.name, field_key
-                        ));
-                    }
-                }
+            Err(e) => {
+                report.warnings.push(format!(
+                    "connection '{}' value_ref '{}' could not be serialized ({e}); skipped",
+                    profile.name, field_key
+                ));
             }
         }
     }
@@ -1282,17 +1272,19 @@ mod tests {
         );
     }
 
-    // --- Fix #5: ValueRef::Literal must not appear in cleartext ---
+    // --- P3: ValueRef::Literal is a cleartext reference, not a secret ---
+    //
+    // A Literal is a static inline value (username, region, etc.), not a secret locator.
+    // It belongs in the cleartext value_refs map alongside Env/Parameter/Auth/Secret locators.
 
     #[test]
-    fn value_ref_literal_does_not_appear_in_cleartext() {
+    fn value_ref_literal_appears_in_cleartext_value_refs() {
         use dbflux_core::values::ValueRef;
 
         let mut profile = postgres_profile();
-        profile.value_refs.insert(
-            "db_pass".to_string(),
-            ValueRef::literal("super_secret_literal"),
-        );
+        profile
+            .value_refs
+            .insert("db_user".to_string(), ValueRef::literal("readonly_user"));
 
         let values = FormValues::default();
         let graph = simple_graph(&profile, values);
@@ -1307,18 +1299,59 @@ mod tests {
 
         let text = String::from_utf8(bytes).expect("utf8");
 
-        // The literal value must NOT appear in the cleartext portion (before [secrets]).
-        let before_secrets = text.split("[secrets").next().unwrap_or(&text);
+        // The literal value MUST appear in the cleartext value_refs section.
         assert!(
-            !before_secrets.contains("super_secret_literal"),
-            "ValueRef::Literal value must not appear in cleartext: {text}"
+            text.contains("readonly_user"),
+            "ValueRef::Literal value must appear in cleartext value_refs: {text}"
         );
 
-        // A Literal has a present value and must NOT count as a required ref
-        // (the importer finds it in [secrets] after decryption).
+        // It must NOT be in a [secrets] section.
+        assert!(
+            !text.contains("[secrets"),
+            "a bare Literal value_ref must not cause a [secrets] section to appear: {text}"
+        );
+
+        // A Literal is not a required ref.
         assert_eq!(
             report.required_ref_count, 0,
-            "ValueRef::Literal must not be counted as a required_ref: {text}"
+            "ValueRef::Literal must not be counted as a required_ref"
+        );
+    }
+
+    #[test]
+    fn value_ref_literal_plaintext_export_does_not_require_force() {
+        // A Literal value_ref alone must NOT stage anything into [secrets], so
+        // a Plaintext { forced: false } export must fail only on the unconditional
+        // force-gate, not because of the literal staging a secret.
+        //
+        // Conversely, Plaintext { forced: true } must succeed with no secrets section.
+        use dbflux_core::values::ValueRef;
+
+        let mut profile = postgres_profile();
+        profile
+            .value_refs
+            .insert("region".to_string(), ValueRef::literal("us-east-1"));
+
+        let values = FormValues::default();
+        let graph = simple_graph(&profile, values);
+
+        let opts_forced = ExportOptions {
+            include_hooks: false,
+            include_settings_overrides: false,
+            embed_ssh_keys: false,
+            encryption: EncryptionChoice::Plaintext { forced: true },
+        };
+
+        let (bytes, _report) = export(&graph, &opts_forced, &IncludeAllHints, &NoSecrets).expect(
+            "export with forced plaintext must succeed when only Literal value_refs are present",
+        );
+
+        let text = String::from_utf8(bytes).expect("utf8");
+
+        // No [secrets] section: no secret was staged by the Literal.
+        assert!(
+            !text.contains("[secrets"),
+            "no secrets section expected for a Literal-only export: {text}"
         );
     }
 

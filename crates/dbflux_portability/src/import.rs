@@ -936,6 +936,103 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // parse() — rejection-before-persistence (P1 / R-FAIL-2)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_unsupported_version_is_rejected_with_no_partial_state() {
+        // Craft a bundle whose format_version is one beyond the current maximum.
+        // parse() must return UnsupportedVersion and must not return a partial ParsedBundle.
+        let future_version = CURRENT_FORMAT_VERSION + 1;
+        let toml = format!(
+            r#"
+[bundle]
+format_version = {future_version}
+created_at = "2026-01-01T00:00:00Z"
+dbflux_version = "99.0.0"
+encryption = "none"
+"#
+        );
+
+        let result = parse(toml.as_bytes());
+
+        assert!(
+            matches!(
+                result,
+                Err(PortabilityError::UnsupportedVersion { version })
+                    if version == future_version
+            ),
+            "expected UnsupportedVersion({future_version}), got: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn parse_zero_version_is_rejected() {
+        // Version 0 is neither current nor meaningful; must be rejected.
+        let toml = r#"
+[bundle]
+format_version = 0
+created_at = "2026-01-01T00:00:00Z"
+dbflux_version = "0.0.0"
+encryption = "none"
+"#;
+
+        let result = parse(toml.as_bytes());
+
+        assert!(
+            matches!(
+                result,
+                Err(PortabilityError::UnsupportedVersion { version: 0 })
+            ),
+            "version 0 must be rejected as UnsupportedVersion, got: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn parse_truncated_toml_returns_error_not_panic() {
+        // A syntactically broken TOML input must return Parse(error), not panic.
+        let truncated = b"[bundle\nformat_version = 1\ncreated_at = \"2026";
+
+        let result = parse(truncated);
+
+        assert!(
+            matches!(result, Err(PortabilityError::Parse(_))),
+            "truncated TOML must return Parse error, got: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn parse_malformed_but_nonempty_toml_returns_error_not_panic() {
+        // Structurally valid TOML but wrong schema (missing required fields) must return
+        // Parse(error), not panic and not a partial bundle.
+        let malformed = b"this_is = \"not a bundle\"\nrandom_key = 42\n";
+
+        let result = parse(malformed);
+
+        assert!(
+            result.is_err(),
+            "malformed TOML with wrong schema must return an error"
+        );
+    }
+
+    #[test]
+    fn parse_non_utf8_bytes_returns_error_not_panic() {
+        // Non-UTF-8 bytes must return an error (currently Decryption variant for the UTF-8 check),
+        // not panic.
+        let non_utf8: &[u8] = &[0xFF, 0xFE, 0x00, 0x01];
+
+        let result = parse(non_utf8);
+
+        assert!(
+            result.is_err(),
+            "non-UTF-8 input must return an error, not panic"
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // parse() — mode/section cross-validation tests (Follow-up #1)
     // -----------------------------------------------------------------------
 
