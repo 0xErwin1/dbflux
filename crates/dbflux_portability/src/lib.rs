@@ -105,10 +105,13 @@ pub enum EncryptionChoice {
     /// Encrypt with age passphrase mode (default, recommended).
     Passphrase(SecretString),
 
-    /// Write secrets in cleartext. Requires an explicit force toggle at the
-    /// call site plus a prominent user-facing warning. Self-declares
-    /// `encryption = "none"` in the bundle.
-    Plaintext,
+    /// Write secrets in cleartext.
+    ///
+    /// `forced` must be `true`; passing `false` causes `export()` to return
+    /// `PortabilityError::PlaintextForceMissing`. This two-step requirement
+    /// ensures callers consciously acknowledge the security implications of
+    /// writing secrets without encryption.
+    Plaintext { forced: bool },
 }
 
 /// Summary produced by the export pipeline.

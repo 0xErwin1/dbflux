@@ -2957,6 +2957,7 @@ version = "0.7.0-dev.0"
 dependencies = [
  "age",
  "base64 0.22.1",
+ "chrono",
  "dbflux_core",
  "secrecy",
  "serde",

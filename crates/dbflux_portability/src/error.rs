@@ -15,6 +15,13 @@ pub enum PortabilityError {
     #[error("unsupported bundle format version {version}")]
     UnsupportedVersion { version: u32 },
 
+    /// Encryption of the secrets section failed (serialize, armor, or I/O error).
+    ///
+    /// This is distinct from `Decryption`: a caller that catches this error should
+    /// treat it as a hard failure rather than re-prompting for a passphrase.
+    #[error("encryption failed: {0}")]
+    Encryption(String),
+
     /// Decryption failed, most likely due to a wrong passphrase.
     ///
     /// This is a recoverable error: the caller should re-prompt rather than abort.
@@ -46,7 +53,8 @@ pub enum PortabilityError {
 
     /// Plaintext-force export was attempted without explicit opt-in.
     ///
-    /// Callers must set `EncryptionChoice::Plaintext` and accept the warning.
+    /// Callers must pass `EncryptionChoice::Plaintext { forced: true }` to acknowledge
+    /// the security implications of writing secrets in cleartext.
     #[error("plaintext export requires explicit force opt-in")]
     PlaintextForceMissing,
 }

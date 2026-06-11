@@ -28,31 +28,31 @@ pub fn encrypt_secrets(
     use std::io::Write;
 
     let plaintext = serde_json::to_vec(secrets)
-        .map_err(|e| PortabilityError::Decryption(format!("secrets serialize: {e}")))?;
+        .map_err(|e| PortabilityError::Encryption(format!("secrets serialize: {e}")))?;
 
     let encryptor = Encryptor::with_user_passphrase(passphrase.clone());
 
     let mut ciphertext = Vec::new();
     let armored = ArmoredWriter::wrap_output(&mut ciphertext, Format::AsciiArmor)
-        .map_err(|e| PortabilityError::Decryption(e.to_string()))?;
+        .map_err(|e| PortabilityError::Encryption(e.to_string()))?;
 
     let mut writer = encryptor
         .wrap_output(armored)
-        .map_err(|e| PortabilityError::Decryption(e.to_string()))?;
+        .map_err(|e| PortabilityError::Encryption(e.to_string()))?;
 
     writer
         .write_all(&plaintext)
-        .map_err(|e| PortabilityError::Decryption(e.to_string()))?;
+        .map_err(|e| PortabilityError::Encryption(e.to_string()))?;
 
     let armored_writer = writer
         .finish()
-        .map_err(|e| PortabilityError::Decryption(e.to_string()))?;
+        .map_err(|e| PortabilityError::Encryption(e.to_string()))?;
 
     armored_writer
         .finish()
-        .map_err(|e| PortabilityError::Decryption(e.to_string()))?;
+        .map_err(|e| PortabilityError::Encryption(e.to_string()))?;
 
-    String::from_utf8(ciphertext).map_err(|e| PortabilityError::Decryption(e.to_string()))
+    String::from_utf8(ciphertext).map_err(|e| PortabilityError::Encryption(e.to_string()))
 }
 
 /// Decrypt the age-encrypted secrets ciphertext.
