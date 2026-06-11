@@ -147,6 +147,29 @@ pub struct DriverFormDef {
 /// Values collected from a driver form.
 pub type FormValues = HashMap<String, String>;
 
+/// How a connection field value travels in an export bundle.
+///
+/// The default derivation maps `Password`/`WriteOnly` form kinds to `Secret`
+/// and `FilePath` to `LocalPath`; everything else defaults to `Include`.
+/// Drivers override `DbDriver::export_field_hint` only for values whose
+/// semantics cannot be inferred from the field kind alone — for example, a
+/// `Text` or `AuthProfileRef` field that names an environment-local AWS
+/// profile must be marked `RequiredOnImport` explicitly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFieldHint {
+    /// Value travels as-is in the cleartext config section of the bundle.
+    Include,
+    /// Value is a keyring-managed secret and is placed only in the encrypted
+    /// (or force-plaintext) secrets section of the bundle.
+    Secret,
+    /// Value is a filesystem-local path that may not resolve at the destination.
+    /// Included verbatim in the cleartext config with a portability warning.
+    LocalPath,
+    /// Value is omitted from the bundle entirely and recorded as a required
+    /// reference; the importer must supply it before the connection can be used.
+    RequiredOnImport,
+}
+
 // ---------------------------------------------------------------------------
 // Builder helpers — keep form definitions concise
 // ---------------------------------------------------------------------------
@@ -387,5 +410,29 @@ mod tests {
             let deserialized: RefreshTrigger = serde_json::from_str(&serialized).unwrap();
             assert_eq!(trigger, deserialized);
         }
+    }
+
+    #[test]
+    fn export_field_hint_variants_are_eq_debug_clone() {
+        let variants = [
+            ExportFieldHint::Include,
+            ExportFieldHint::Secret,
+            ExportFieldHint::LocalPath,
+            ExportFieldHint::RequiredOnImport,
+        ];
+
+        for hint in &variants {
+            let cloned = hint.clone();
+            assert_eq!(hint, &cloned);
+            let debug_str = format!("{:?}", hint);
+            assert!(!debug_str.is_empty());
+        }
+
+        assert_ne!(ExportFieldHint::Include, ExportFieldHint::Secret);
+        assert_ne!(ExportFieldHint::Secret, ExportFieldHint::LocalPath);
+        assert_ne!(
+            ExportFieldHint::LocalPath,
+            ExportFieldHint::RequiredOnImport
+        );
     }
 }

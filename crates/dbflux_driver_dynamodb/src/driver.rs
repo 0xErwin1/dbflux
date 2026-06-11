@@ -503,6 +503,24 @@ impl DbDriver for DynamoDriver {
         values
     }
 
+    fn export_field_hint(
+        &self,
+        field_id: &str,
+        _values: &FormValues,
+    ) -> dbflux_core::ExportFieldHint {
+        if field_id == "profile" {
+            return dbflux_core::ExportFieldHint::RequiredOnImport;
+        }
+
+        match self.form_definition().field(field_id).map(|f| &f.kind) {
+            Some(dbflux_core::FormFieldKind::Password | dbflux_core::FormFieldKind::WriteOnly) => {
+                dbflux_core::ExportFieldHint::Secret
+            }
+            Some(dbflux_core::FormFieldKind::FilePath) => dbflux_core::ExportFieldHint::LocalPath,
+            _ => dbflux_core::ExportFieldHint::Include,
+        }
+    }
+
     fn connect_with_secrets(
         &self,
         profile: &ConnectionProfile,
@@ -5400,6 +5418,39 @@ mod tests {
             ),
             "DynamoDB 'profile' field must be AuthProfileRef {{ provider_id: None }}, got {:?}",
             profile_field.kind
+        );
+    }
+
+    #[test]
+    fn dynamodb_export_hint_profile_is_required_on_import() {
+        let driver = DynamoDriver::new();
+        let values = FormValues::default();
+        assert_eq!(
+            driver.export_field_hint("profile", &values),
+            dbflux_core::ExportFieldHint::RequiredOnImport,
+            "DynamoDB 'profile' field must be RequiredOnImport on export"
+        );
+    }
+
+    #[test]
+    fn dynamodb_export_hint_non_profile_fields_use_kind_derivation() {
+        let driver = DynamoDriver::new();
+        let values = FormValues::default();
+
+        assert_eq!(
+            driver.export_field_hint("region", &values),
+            dbflux_core::ExportFieldHint::Include,
+            "DynamoDB 'region' (Text) must derive Include"
+        );
+        assert_eq!(
+            driver.export_field_hint("endpoint", &values),
+            dbflux_core::ExportFieldHint::Include,
+            "DynamoDB 'endpoint' (Text) must derive Include"
+        );
+        assert_eq!(
+            driver.export_field_hint("table", &values),
+            dbflux_core::ExportFieldHint::Include,
+            "DynamoDB 'table' (Text) must derive Include"
         );
     }
 }

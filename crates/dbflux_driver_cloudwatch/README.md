@@ -23,6 +23,7 @@ AWS CloudWatch Logs driver for DBFlux, built on the [`aws-sdk-cloudwatchlogs`](h
 
 ## Limitations
 
+- The `profile` field (AWS named profile) is marked `RequiredOnImport` on bundle export. Recipients must supply or create a matching auth profile at import time; the field value is omitted from the exported bundle rather than embedded.
 - Query cancellation is not implemented; `cancel()` returns `NotSupported`.
 - OpenSearch SQL mode does not receive external log groups: SQL queries must declare their queried log groups in the SQL text, because the CloudWatch API does not accept external log-group parameters for SQL mode (only CWLI and PPL get `set_log_group_names`).
 - Editor syntax highlighting remains generic (`query_language` is reported as `Sql` at the metadata level); mode selection drives execution semantics and completion keywords rather than per-mode highlighting.

@@ -200,6 +200,24 @@ impl DbDriver for CloudWatchDriver {
         values
     }
 
+    fn export_field_hint(
+        &self,
+        field_id: &str,
+        _values: &FormValues,
+    ) -> dbflux_core::ExportFieldHint {
+        if field_id == "profile" {
+            return dbflux_core::ExportFieldHint::RequiredOnImport;
+        }
+
+        match self.form_definition().field(field_id).map(|f| &f.kind) {
+            Some(dbflux_core::FormFieldKind::Password | dbflux_core::FormFieldKind::WriteOnly) => {
+                dbflux_core::ExportFieldHint::Secret
+            }
+            Some(dbflux_core::FormFieldKind::FilePath) => dbflux_core::ExportFieldHint::LocalPath,
+            _ => dbflux_core::ExportFieldHint::Include,
+        }
+    }
+
     fn connect_with_secrets(
         &self,
         profile: &ConnectionProfile,
@@ -1634,7 +1652,8 @@ mod tests {
     use aws_sdk_cloudwatch::primitives::DateTime;
     use aws_sdk_cloudwatch::types::MetricDataResult;
     use dbflux_core::{
-        ColumnKind, DbConfig, DbDriver, DriverCapabilities, FormFieldKind, MetricQuerySeries, Value,
+        ColumnKind, DbConfig, DbDriver, DriverCapabilities, FormFieldKind, FormValues,
+        MetricQuerySeries, Value,
     };
     use std::collections::HashMap;
 
@@ -2109,6 +2128,34 @@ mod tests {
             ),
             "CloudWatch 'profile' field must be AuthProfileRef {{ provider_id: None }}, got {:?}",
             profile_field.kind
+        );
+    }
+
+    #[test]
+    fn cloudwatch_export_hint_profile_is_required_on_import() {
+        let driver = CloudWatchDriver::new();
+        let values = FormValues::default();
+        assert_eq!(
+            driver.export_field_hint("profile", &values),
+            dbflux_core::ExportFieldHint::RequiredOnImport,
+            "CloudWatch 'profile' field must be RequiredOnImport on export"
+        );
+    }
+
+    #[test]
+    fn cloudwatch_export_hint_non_profile_fields_use_kind_derivation() {
+        let driver = CloudWatchDriver::new();
+        let values = FormValues::default();
+
+        assert_eq!(
+            driver.export_field_hint("region", &values),
+            dbflux_core::ExportFieldHint::Include,
+            "CloudWatch 'region' (Text) must derive Include"
+        );
+        assert_eq!(
+            driver.export_field_hint("endpoint", &values),
+            dbflux_core::ExportFieldHint::Include,
+            "CloudWatch 'endpoint' (Text) must derive Include"
         );
     }
 }

@@ -7,12 +7,12 @@ use crate::{
     CollectionChildrenRequest, CollectionCountRequest, CollectionRef, ConnectionProfile,
     CrudResult, CustomTypeInfo, DatabaseInfo, DbConfig, DbError, DbKind, DbSchemaInfo,
     DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate, DriverCapabilities,
-    DriverFormDef, DriverMetadata, EventPage, EventQuery, ExplainRequest, FormValues,
-    LanguageService, NoOpCodeGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    RelationRef, RoutineInfo, RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaSnapshot, SemanticPlan, SemanticPlanner, SemanticRequest, SqlDialect,
-    SqlGenerationRequest, SqlLanguageService, TableBrowseRequest, TableCountRequest, TableInfo,
-    Value, ViewInfo,
+    DriverFormDef, DriverMetadata, EventPage, EventQuery, ExplainRequest, ExportFieldHint,
+    FormFieldKind, FormValues, LanguageService, NoOpCodeGenerator, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, RelationRef, RoutineInfo, RowDelete, RowInsert, RowPatch,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, SemanticPlan, SemanticPlanner,
+    SemanticRequest, SqlDialect, SqlGenerationRequest, SqlLanguageService, TableBrowseRequest,
+    TableCountRequest, TableInfo, Value, ViewInfo,
     config::DriverKey,
     data::key_value::{
         HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
@@ -324,6 +324,28 @@ pub trait DbDriver: Send + Sync {
     ///
     /// Used when loading a saved connection profile into the form.
     fn extract_values(&self, config: &crate::DbConfig) -> FormValues;
+
+    /// Returns how a single form field value should travel in an export bundle.
+    ///
+    /// The default derives the hint from the field's `FormFieldKind`: `Password`
+    /// and `WriteOnly` map to `Secret`; `FilePath` maps to `LocalPath`; all other
+    /// kinds (including `Text`, `AuthProfileRef`, `Select`, etc.) map to `Include`.
+    ///
+    /// Drivers override this only for fields whose export semantics cannot be
+    /// inferred from the kind alone — for example, a `Text` or `AuthProfileRef`
+    /// field that names an environment-local resource such as an AWS profile must
+    /// be marked `RequiredOnImport` explicitly.
+    ///
+    /// The `values` parameter carries the current form state and is available for
+    /// overrides that need to vary the hint based on other field settings; the
+    /// default implementation ignores it.
+    fn export_field_hint(&self, field_id: &str, _values: &FormValues) -> ExportFieldHint {
+        match self.form_definition().field(field_id).map(|f| &f.kind) {
+            Some(FormFieldKind::Password | FormFieldKind::WriteOnly) => ExportFieldHint::Secret,
+            Some(FormFieldKind::FilePath) => ExportFieldHint::LocalPath,
+            _ => ExportFieldHint::Include,
+        }
+    }
 
     /// Build a connection URI from individual form field values and password.
     /// Returns `None` for drivers without URI support.
@@ -1572,6 +1594,171 @@ mod tests {
         assert!(
             conn.dashboard_source().is_none(),
             "default dashboard_source() must return None"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // DbDriver::export_field_hint default derivation tests (T1.2)
+    // -------------------------------------------------------------------------
+
+    use crate::{
+        DriverFormDef, ExportFieldHint, FormFieldKind, FormSection, FormTab, FormValues,
+        field_required,
+    };
+    use std::sync::LazyLock;
+
+    fn one_field_form(id: &str, kind: FormFieldKind) -> DriverFormDef {
+        DriverFormDef {
+            tabs: vec![FormTab {
+                id: "main".into(),
+                label: "Main".into(),
+                sections: vec![FormSection {
+                    title: "Test".into(),
+                    fields: vec![field_required(id, id, kind, "")],
+                }],
+            }],
+        }
+    }
+
+    static STUB_DRIVER_PASSWORD_FORM: LazyLock<DriverFormDef> =
+        LazyLock::new(|| one_field_form("secret_field", FormFieldKind::Password));
+    static STUB_DRIVER_WRITEONLY_FORM: LazyLock<DriverFormDef> =
+        LazyLock::new(|| one_field_form("wo_field", FormFieldKind::WriteOnly));
+    static STUB_DRIVER_FILEPATH_FORM: LazyLock<DriverFormDef> =
+        LazyLock::new(|| one_field_form("path_field", FormFieldKind::FilePath));
+    static STUB_DRIVER_TEXT_FORM: LazyLock<DriverFormDef> =
+        LazyLock::new(|| one_field_form("text_field", FormFieldKind::Text));
+    static STUB_DRIVER_CHECKBOX_FORM: LazyLock<DriverFormDef> =
+        LazyLock::new(|| one_field_form("flag_field", FormFieldKind::Checkbox));
+    static STUB_DRIVER_AUTHREF_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| {
+        one_field_form(
+            "profile_field",
+            FormFieldKind::AuthProfileRef { provider_id: None },
+        )
+    });
+
+    macro_rules! stub_driver {
+        ($name:ident, $form:expr) => {
+            struct $name;
+
+            impl DbDriver for $name {
+                fn kind(&self) -> crate::DbKind {
+                    crate::DbKind::SQLite
+                }
+
+                fn metadata(&self) -> &crate::DriverMetadata {
+                    unimplemented!()
+                }
+
+                fn form_definition(&self) -> &DriverFormDef {
+                    &$form
+                }
+
+                fn driver_key(&self) -> crate::config::DriverKey {
+                    unimplemented!()
+                }
+
+                fn build_config(&self, _: &FormValues) -> Result<crate::DbConfig, crate::DbError> {
+                    unimplemented!()
+                }
+
+                fn extract_values(&self, _: &crate::DbConfig) -> FormValues {
+                    unimplemented!()
+                }
+
+                fn connect_with_secrets(
+                    &self,
+                    _: &crate::ConnectionProfile,
+                    _: Option<&secrecy::SecretString>,
+                    _: Option<&secrecy::SecretString>,
+                ) -> Result<Box<dyn Connection>, crate::DbError> {
+                    unimplemented!()
+                }
+
+                fn test_connection(
+                    &self,
+                    _: &crate::ConnectionProfile,
+                ) -> Result<(), crate::DbError> {
+                    unimplemented!()
+                }
+            }
+        };
+    }
+
+    stub_driver!(PasswordDriver, STUB_DRIVER_PASSWORD_FORM);
+    stub_driver!(WriteOnlyDriver, STUB_DRIVER_WRITEONLY_FORM);
+    stub_driver!(FilePathDriver, STUB_DRIVER_FILEPATH_FORM);
+    stub_driver!(TextDriver, STUB_DRIVER_TEXT_FORM);
+    stub_driver!(CheckboxDriver, STUB_DRIVER_CHECKBOX_FORM);
+    stub_driver!(AuthRefDriver, STUB_DRIVER_AUTHREF_FORM);
+
+    #[test]
+    fn export_field_hint_default_password_is_secret() {
+        let driver = PasswordDriver;
+        let values = FormValues::default();
+        assert_eq!(
+            driver.export_field_hint("secret_field", &values),
+            ExportFieldHint::Secret
+        );
+    }
+
+    #[test]
+    fn export_field_hint_default_writeonly_is_secret() {
+        let driver = WriteOnlyDriver;
+        let values = FormValues::default();
+        assert_eq!(
+            driver.export_field_hint("wo_field", &values),
+            ExportFieldHint::Secret
+        );
+    }
+
+    #[test]
+    fn export_field_hint_default_filepath_is_local_path() {
+        let driver = FilePathDriver;
+        let values = FormValues::default();
+        assert_eq!(
+            driver.export_field_hint("path_field", &values),
+            ExportFieldHint::LocalPath
+        );
+    }
+
+    #[test]
+    fn export_field_hint_default_text_is_include() {
+        let driver = TextDriver;
+        let values = FormValues::default();
+        assert_eq!(
+            driver.export_field_hint("text_field", &values),
+            ExportFieldHint::Include
+        );
+    }
+
+    #[test]
+    fn export_field_hint_default_checkbox_is_include() {
+        let driver = CheckboxDriver;
+        let values = FormValues::default();
+        assert_eq!(
+            driver.export_field_hint("flag_field", &values),
+            ExportFieldHint::Include
+        );
+    }
+
+    #[test]
+    fn export_field_hint_default_auth_profile_ref_is_include() {
+        let driver = AuthRefDriver;
+        let values = FormValues::default();
+        assert_eq!(
+            driver.export_field_hint("profile_field", &values),
+            ExportFieldHint::Include
+        );
+    }
+
+    #[test]
+    fn export_field_hint_default_unknown_field_id_is_include() {
+        let driver = TextDriver;
+        let values = FormValues::default();
+        assert_eq!(
+            driver.export_field_hint("nonexistent_field", &values),
+            ExportFieldHint::Include
         );
     }
 }

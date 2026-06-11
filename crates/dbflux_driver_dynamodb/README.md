@@ -19,6 +19,7 @@ AWS DynamoDB driver for DBFlux, built on the [`aws-sdk-dynamodb`](https://crates
 
 ## Limitations
 
+- The `profile` field (AWS named profile) is marked `RequiredOnImport` on bundle export. Recipients must supply or create a matching auth profile at import time; the field value is omitted from the exported bundle rather than embedded.
 - Query cancellation is not supported; the driver returns `NotSupported` for cancel requests.
 - The command envelope API does not expose PartiQL or DynamoDB transaction operations; transactions are disabled (`supports_transactions: false`).
 - Single-item upsert is supported (`supports_upsert: true`); `update` with `many=true` and `upsert=true` together is rejected (`update_many_with_upsert`).
