@@ -170,6 +170,13 @@ pub struct AuthEntry {
     /// `auth:<local_id>:<field>` keys.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub secret_field_names: Vec<String>,
+
+    /// Required references that the recipient must resolve at import time
+    /// (e.g. a secret field the exporter could not read from the keyring).
+    /// Provides parity with `SshEntry` and `ProxyEntry` so the importer learns
+    /// exactly which auth field was omitted, not just that some secret was missing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_refs: Vec<RequiredRef>,
 }
 
 /// An SSH tunnel profile entry.

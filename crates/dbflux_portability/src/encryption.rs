@@ -7,7 +7,7 @@
 //! This module is compiled only when the `encryption` feature is enabled. When the
 //! feature is absent, the only reachable code paths are the plaintext ones; any
 //! bundle with `encryption = "age-passphrase"` will produce
-//! `PortabilityError::EncryptionUnavailable` at parse time.
+//! `PortabilityError::EncryptionUnavailable` at decrypt time.
 
 use std::collections::HashMap;
 

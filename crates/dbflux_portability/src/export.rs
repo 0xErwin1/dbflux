@@ -447,6 +447,7 @@ fn build_auth_entries(
         .iter()
         .map(|auth| {
             let mut secret_field_names = Vec::new();
+            let mut required_refs: Vec<RequiredRef> = Vec::new();
 
             for (field_id, in_memory_secret) in &auth.secret_fields {
                 let bundle_key = format!("auth:{}:{}", auth.id, field_id);
@@ -465,6 +466,10 @@ fn build_auth_entries(
                             "auth profile '{}' field '{}' secret not available; recorded as required on import",
                             auth.name, field_id
                         ));
+                        required_refs.push(RequiredRef {
+                            field: field_id.clone(),
+                            kind: RequiredRefKind::Secret,
+                        });
                         report.required_ref_count += 1;
                     }
                 }
@@ -477,6 +482,7 @@ fn build_auth_entries(
                 enabled: auth.enabled,
                 fields: auth.fields.clone(),
                 secret_field_names,
+                required_refs,
             }
         })
         .collect()

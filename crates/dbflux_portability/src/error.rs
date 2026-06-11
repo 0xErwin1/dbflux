@@ -57,4 +57,12 @@ pub enum PortabilityError {
     /// the security implications of writing secrets in cleartext.
     #[error("plaintext export requires explicit force opt-in")]
     PlaintextForceMissing,
+
+    /// The bundle header `encryption` mode conflicts with the `[secrets]` section variant.
+    ///
+    /// For example: `encryption = "age-passphrase"` paired with a plaintext `[secrets]`
+    /// table, or `encryption = "none"` paired with an encrypted ciphertext blob.
+    /// Such a bundle is malformed and must be rejected before any plan or apply step.
+    #[error("bundle encryption mode '{declared}' does not match secrets section variant '{found}'")]
+    ModeMismatch { declared: String, found: String },
 }
