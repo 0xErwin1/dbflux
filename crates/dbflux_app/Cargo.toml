@@ -27,6 +27,7 @@ dbflux_driver_dynamodb = { workspace = true, optional = true }
 dbflux_driver_cloudwatch = { workspace = true, optional = true }
 dbflux_driver_influxdb = { workspace = true, optional = true }
 dbflux_driver_mssql = { workspace = true, optional = true }
+dbflux_portability.workspace = true
 dbflux_lua = { workspace = true, optional = true }
 dbflux_approval = { workspace = true, optional = true }
 dbflux_mcp = { workspace = true, optional = true }

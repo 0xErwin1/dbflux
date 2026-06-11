@@ -2559,6 +2559,7 @@ dependencies = [
  "dbflux_mcp",
  "dbflux_mcp_server",
  "dbflux_policy",
+ "dbflux_portability",
  "dbflux_proxy",
  "dbflux_ssh",
  "dbflux_ssm",

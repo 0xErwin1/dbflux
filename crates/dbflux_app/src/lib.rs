@@ -13,6 +13,7 @@ pub mod hook_executor;
 pub mod keymap;
 pub mod mcp_command;
 pub mod metric_catalog_cache;
+pub mod portability;
 pub mod proxy;
 pub mod remote_dashboard_cache;
 pub mod rpc_services;

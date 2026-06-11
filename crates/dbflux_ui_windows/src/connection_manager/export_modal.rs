@@ -1,14 +1,12 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 
+use dbflux_app::portability::{
+    AppFieldHintResolver, AppSecretReader, ExportInputs, build_export_graph,
+};
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_components::tokens::{Radii, Spacing};
 use dbflux_core::secrecy::SecretString;
-use dbflux_core::{ConnectionProfile, DbDriver, ExportFieldHint, FormValues};
-use dbflux_portability::{
-    AwsRef, ConnectionWithValues, EncryptionChoice, ExportGraph, ExportOptions, FieldHintResolver,
-    SecretReader,
-};
+use dbflux_portability::{AwsRef, EncryptionChoice, ExportOptions};
 use dbflux_ui_base::{
     AppStateEntity,
     user_error::{ErrorKind, UserFacingError, report_error_async},
@@ -23,42 +21,6 @@ use uuid::Uuid;
 // ---------------------------------------------------------------------------
 
 gpui::actions!(connection_manager, [ExportConnections]);
-
-// ---------------------------------------------------------------------------
-// FieldHintResolver implementation backed by the driver registry
-// ---------------------------------------------------------------------------
-
-/// Resolves export field hints by calling `DbDriver::export_field_hint` for the
-/// connection's registered driver. No `driver_id` branching: the driver is
-/// looked up by id and the method is called generically.
-struct AppStateFieldHintResolver {
-    drivers: std::collections::HashMap<String, Arc<dyn DbDriver>>,
-}
-
-impl AppStateFieldHintResolver {
-    fn new(drivers: std::collections::HashMap<String, Arc<dyn DbDriver>>) -> Self {
-        Self { drivers }
-    }
-}
-
-impl FieldHintResolver for AppStateFieldHintResolver {
-    fn hint(
-        &self,
-        profile: &ConnectionProfile,
-        field_id: &str,
-        values: &FormValues,
-    ) -> ExportFieldHint {
-        let Some(driver_id) = profile.driver_id.as_deref() else {
-            return ExportFieldHint::Include;
-        };
-
-        let Some(driver) = self.drivers.get(driver_id) else {
-            return ExportFieldHint::Include;
-        };
-
-        driver.export_field_hint(field_id, values)
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Export state
@@ -289,36 +251,31 @@ impl ExportModal {
 
         // Read everything from AppState inside a scoped block so the borrow ends
         // before we start the background task.
-        let (
-            connections_with_values,
-            auth_profiles,
-            ssh_tunnels,
-            proxies,
-            aws_refs,
-            drivers,
-            secret_store,
-        ) = {
+        let (inputs, drivers, secret_store) = {
             let state = self.app_state.read(cx);
 
-            let selected_profiles: Vec<ConnectionProfile> = state
+            let selected_profiles: Vec<dbflux_core::ConnectionProfile> = state
                 .profiles()
                 .iter()
                 .filter(|p| self.selected_ids.contains(&p.id))
                 .cloned()
                 .collect();
 
-            let mut connections_with_values: Vec<(ConnectionProfile, FormValues)> = Vec::new();
+            let mut connections_with_values: Vec<(
+                dbflux_core::ConnectionProfile,
+                dbflux_core::FormValues,
+            )> = Vec::new();
             for profile in &selected_profiles {
                 let values = if let Some(driver) = state.driver_for_profile(profile) {
                     driver.extract_values(&profile.config)
                 } else {
-                    FormValues::default()
+                    dbflux_core::FormValues::default()
                 };
                 connections_with_values.push((profile.clone(), values));
             }
 
             let mut auth_profile_ids: Vec<Uuid> = Vec::new();
-            let mut aws_refs: Vec<AwsRef> = Vec::new();
+            let mut aws_references: Vec<AwsRef> = Vec::new();
             let mut ssh_tunnel_ids: Vec<Uuid> = Vec::new();
             let mut proxy_ids: Vec<Uuid> = Vec::new();
 
@@ -329,7 +286,7 @@ impl ExportModal {
 
                     if let Some(auth) = auth {
                         if auth.read_only {
-                            aws_refs.push(AwsRef {
+                            aws_references.push(AwsRef {
                                 provider_id: auth.provider_id.clone(),
                                 name: auth.name.clone(),
                             });
@@ -373,18 +330,18 @@ impl ExportModal {
                 .filter_map(|id| all_proxy.iter().find(|p| &p.id == id).cloned())
                 .collect();
 
+            let inputs = ExportInputs {
+                connections_with_values,
+                auth_profiles,
+                aws_references,
+                ssh_tunnels,
+                proxies,
+            };
+
             let drivers = state.drivers().clone();
             let secret_store = state.facade.secrets.secret_store_arc();
 
-            (
-                connections_with_values,
-                auth_profiles,
-                ssh_tunnels,
-                proxies,
-                aws_refs,
-                drivers,
-                secret_store,
-            )
+            (inputs, drivers, secret_store)
         };
 
         let opts = ExportOptions {
@@ -406,29 +363,9 @@ impl ExportModal {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let hints = AppStateFieldHintResolver::new(drivers);
-                    let reader = AppStateSecretReaderFromStore {
-                        store: secret_store,
-                    };
-
-                    let owned_connections: Vec<(ConnectionProfile, FormValues)> =
-                        connections_with_values;
-                    let borrowed: Vec<ConnectionWithValues<'_>> = owned_connections
-                        .iter()
-                        .map(|(p, v)| ConnectionWithValues {
-                            profile: p,
-                            values: v.clone(),
-                        })
-                        .collect();
-
-                    let graph = ExportGraph {
-                        connections: borrowed,
-                        auth_profiles: auth_profiles.iter().collect(),
-                        aws_references: aws_refs,
-                        ssh_tunnels: ssh_tunnels.iter().collect(),
-                        proxies: proxies.iter().collect(),
-                    };
-
+                    let hints = AppFieldHintResolver::new(drivers);
+                    let reader = AppSecretReader::new(secret_store);
+                    let graph = build_export_graph(&inputs);
                     dbflux_portability::export::export(&graph, &opts, &hints, &reader)
                 })
                 .await;
@@ -481,21 +418,6 @@ impl ExportModal {
             }
         })
         .detach();
-    }
-}
-
-// ---------------------------------------------------------------------------
-// SecretReader backed by a raw Arc<RwLock<Box<dyn SecretStore>>>
-// ---------------------------------------------------------------------------
-
-struct AppStateSecretReaderFromStore {
-    store: Arc<std::sync::RwLock<Box<dyn dbflux_core::SecretStore>>>,
-}
-
-impl SecretReader for AppStateSecretReaderFromStore {
-    fn read(&self, secret_ref: &str) -> Option<SecretString> {
-        let store = self.store.read().ok()?;
-        store.get(secret_ref).ok().flatten()
     }
 }
 
@@ -852,7 +774,3 @@ impl ExportModal {
             .child(Text::body(label).color(theme.foreground))
     }
 }
-
-// ---------------------------------------------------------------------------
-// Unit tests for the non-GPUI bridge logic
-// ---------------------------------------------------------------------------
