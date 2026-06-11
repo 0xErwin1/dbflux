@@ -343,6 +343,7 @@ pub trait DbDriver: Send + Sync {
         match self.form_definition().field(field_id).map(|f| &f.kind) {
             Some(FormFieldKind::Password | FormFieldKind::WriteOnly) => ExportFieldHint::Secret,
             Some(FormFieldKind::FilePath) => ExportFieldHint::LocalPath,
+            Some(FormFieldKind::AuthProfileRef { .. }) => ExportFieldHint::RequiredOnImport,
             _ => ExportFieldHint::Include,
         }
     }
@@ -1743,12 +1744,12 @@ mod tests {
     }
 
     #[test]
-    fn export_field_hint_default_auth_profile_ref_is_include() {
+    fn export_field_hint_default_auth_profile_ref_is_required_on_import() {
         let driver = AuthRefDriver;
         let values = FormValues::default();
         assert_eq!(
             driver.export_field_hint("profile_field", &values),
-            ExportFieldHint::Include
+            ExportFieldHint::RequiredOnImport
         );
     }
 
