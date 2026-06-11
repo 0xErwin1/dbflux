@@ -10,6 +10,7 @@ use dbflux_portability::{
     ConflictChoice, ConflictKind, ImportPlan, ParsedBundle, ResolutionChoices,
 };
 use dbflux_ui_base::AppStateEntity;
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -61,23 +62,39 @@ impl ImportPersistence for AppStatePersistence<'_> {
         self.state.add_proxy(proxy);
     }
 
+    /// Insert a connection profile into the app state.
+    ///
+    /// # Driver-id invariant
+    ///
+    /// The portability crate emits `ImportActions::connections` with
+    /// `DbConfig::External { values, .. }` so the full form values from the
+    /// bundle are carried without loss.  This method looks up the driver by
+    /// `profile.driver_id()` and calls `driver.build_config(values)` to produce
+    /// the correct concrete `DbConfig`.  If `build_config` fails the profile is
+    /// still persisted with the `External` config — it will produce a
+    /// connect-time error that the user can fix by editing the connection.
+    ///
+    /// Returns `None` only when the driver is absent from the registry; the
+    /// caller records the connection in `needs_driver` rather than persisting a
+    /// mis-typed placeholder.
     fn add_connection(&mut self, profile: ConnectionProfile) -> Option<()> {
         let driver_id = profile.driver_id().to_string();
         if !self.registered_drivers.contains(&driver_id) {
             return None;
         }
 
-        // Rebuild the real DbConfig from the driver form before persisting,
-        // replacing the placeholder config produced by the portability crate.
         let rebuilt = if let Some(driver) = self.state.drivers().get(&driver_id).cloned() {
-            let values = driver.extract_values(&profile.config);
-            match driver.build_config(&values) {
-                Ok(config) => {
-                    let mut rebuilt = profile.clone();
-                    rebuilt.config = config;
-                    rebuilt
+            if let dbflux_core::DbConfig::External { values, .. } = &profile.config {
+                match driver.build_config(values) {
+                    Ok(config) => {
+                        let mut rebuilt = profile.clone();
+                        rebuilt.config = config;
+                        rebuilt
+                    }
+                    Err(_) => profile,
                 }
-                Err(_) => profile,
+            } else {
+                profile
             }
         } else {
             profile
@@ -120,8 +137,15 @@ pub struct ImportWizard {
     import_plan: Option<ImportPlan>,
     conflict_choices: HashMap<String, ConflictChoice>,
 
-    // Step 3: RequiredReferences (owner_local_id, field) -> entered value
+    // Step 3: RequiredReferences
+    // One masked InputState per (owner_local_id, field) secret resolution.
+    // Created in render() via the pending flag pattern (requires Window access).
+    secret_inputs: HashMap<(String, String), Entity<InputState>>,
+    // Mirrors the current value() of each secret input for quick lookup.
     secret_values: HashMap<(String, String), String>,
+    // Set to true when the plan is resolved; drained in render() to create
+    // the per-secret InputState entities (which require &mut Window).
+    pending_provision_secrets: bool,
     auth_profile_choices: HashMap<(String, String), Uuid>,
 
     // Step 4/5: Confirm / PartialSummary
@@ -170,7 +194,9 @@ impl ImportWizard {
             parsed_bundle: None,
             import_plan: None,
             conflict_choices: HashMap::new(),
+            secret_inputs: HashMap::new(),
             secret_values: HashMap::new(),
+            pending_provision_secrets: false,
             auth_profile_choices: HashMap::new(),
             is_applying: false,
             pending_outcome: None,
@@ -271,6 +297,7 @@ impl ImportWizard {
 
                             this.parsed_bundle = Some(parsed);
                             this.import_plan = Some(plan);
+                            this.pending_provision_secrets = true;
 
                             if has_conflicts {
                                 this.step = WizardStep::ConflictResolution;
@@ -291,6 +318,61 @@ impl ImportWizard {
             }
         })
         .detach();
+    }
+
+    /// Create one masked `InputState` per `RequiredResolutionKind::Secret` entry in
+    /// the resolved plan and subscribe to mirror input values into `self.secret_values`.
+    ///
+    /// # Invariants
+    ///
+    /// - Called from `render()` via the `pending_provision_secrets` flag, which
+    ///   is the only path that provides `&mut Window` after an async background task.
+    /// - Each subscription updates `self.secret_values[(owner, field)]` on every
+    ///   `InputEvent::Change` / `Blur`, so `build_resolution_choices` assembles
+    ///   real user-typed `SecretString` values for `apply()`.
+    /// - No sentinel strings are written: if the user leaves an input empty it is
+    ///   omitted from `ResolutionChoices.secret_values` and `apply()` will not
+    ///   write anything to the keyring for that field.
+    fn provision_secret_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use dbflux_portability::RequiredResolutionKind;
+
+        let Some(plan) = &self.import_plan else {
+            return;
+        };
+
+        let secret_keys: Vec<(String, String)> = plan
+            .required_resolutions
+            .iter()
+            .filter(|r| matches!(r.kind, RequiredResolutionKind::Secret))
+            .map(|r| (r.owner_local_id.clone(), r.field.clone()))
+            .collect();
+
+        self.secret_inputs.clear();
+
+        for key in secret_keys {
+            let key_for_sub = key.clone();
+
+            let input = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("Enter secret value")
+                    .masked(true)
+            });
+
+            let sub = cx.subscribe(&input, move |this, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change | InputEvent::Blur) {
+                    let value = this
+                        .secret_inputs
+                        .get(&key_for_sub)
+                        .map(|inp| inp.read(cx).value().to_string())
+                        .unwrap_or_default();
+                    this.secret_values.insert(key_for_sub.clone(), value);
+                    cx.notify();
+                }
+            });
+
+            self._subscriptions.push(sub);
+            self.secret_inputs.insert(key, input);
+        }
     }
 
     fn advance_from_conflicts(&mut self, cx: &mut Context<Self>) {
@@ -325,7 +407,15 @@ impl ImportWizard {
             use dbflux_portability::RequiredResolutionKind;
             let key = (r.owner_local_id.clone(), r.field.clone());
             match &r.kind {
-                RequiredResolutionKind::Secret => self.secret_values.contains_key(&key),
+                RequiredResolutionKind::Secret => {
+                    // A secret is resolved only when the user has typed a non-empty value.
+                    // We never write a sentinel; if the value is empty the seam skips the
+                    // keyring write and the outcome reports it as still-required.
+                    self.secret_values
+                        .get(&key)
+                        .map(|v| !v.is_empty())
+                        .unwrap_or(false)
+                }
                 RequiredResolutionKind::AwsReference { .. } => {
                     // AWS references that aren't in dest are informational; allow advancing.
                     true
@@ -338,9 +428,13 @@ impl ImportWizard {
     }
 
     fn build_resolution_choices(&self) -> ResolutionChoices {
+        // Only include non-empty secret values so apply() never receives a
+        // sentinel string as a real secret.  Empty entries are omitted and
+        // will surface as still-required in ImportOutcome.
         let secret_values = self
             .secret_values
             .iter()
+            .filter(|(_, value)| !value.is_empty())
             .map(|((owner, field), value)| {
                 (
                     (owner.clone(), field.clone()),
@@ -395,6 +489,19 @@ impl ImportWizard {
                             dbflux_app::portability::persist_import_actions(actions, &mut deps)
                         });
 
+                        // Surface keyring failures through the report_error seam
+                        // (toast + audit row + status-bar badge) in addition to
+                        // the PartialSummary banner.  Only this catch site reports;
+                        // the PartialSummary render does NOT call report_error again.
+                        if !outcome.secret_failures.is_empty() {
+                            let count = outcome.secret_failures.len();
+                            let msg = format!(
+                                "{count} secret(s) could not be written to the keyring \
+                                 during import. The keyring may be locked or unavailable."
+                            );
+                            report_error(UserFacingError::new(ErrorKind::Storage, msg), cx);
+                        }
+
                         this.update(cx, |this, cx| {
                             this.is_applying = false;
                             let has_failures = !outcome.secret_failures.is_empty()
@@ -425,6 +532,11 @@ impl Render for ImportWizard {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(path) = self.pending_file_path.take() {
             self.file_path = path;
+        }
+
+        if self.pending_provision_secrets {
+            self.pending_provision_secrets = false;
+            self.provision_secret_inputs(window, cx);
         }
 
         let theme = cx.theme().clone();
@@ -811,12 +923,10 @@ impl ImportWizard {
 
             match kind {
                 RequiredResolutionKind::Secret => {
-                    let current = self.secret_values.get(&key).cloned().unwrap_or_default();
                     let label = format!("Secret required: \"{field}\"");
-                    let key2 = key.clone();
-                    let this_row = cx.entity().clone();
+                    let input = self.secret_inputs.get(&key).cloned();
 
-                    div()
+                    let mut row = div()
                         .flex()
                         .flex_col()
                         .gap(px(2.0))
@@ -824,37 +934,13 @@ impl ImportWizard {
                         .border_1()
                         .border_color(theme.border)
                         .rounded(Radii::SM)
-                        .child(div().text_sm().text_color(theme.foreground).child(label))
-                        .child(
-                            div()
-                                .id(ElementId::Name(format!("import-secret-{}-{}", owner, field).into()))
-                                .flex()
-                                .flex_1()
-                                .px(Spacing::SM)
-                                .py(px(4.0))
-                                .border_1()
-                                .border_color(theme.border)
-                                .rounded(Radii::SM)
-                                .cursor_pointer()
-                                .hover(|d| d.bg(theme.secondary))
-                                .on_click(move |_, _, cx| {
-                                    this_row.update(cx, |this, cx| {
-                                        this.secret_values.insert(key2.clone(), "(required)".to_string());
-                                        cx.notify();
-                                    });
-                                })
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(theme.muted_foreground)
-                                        .child(if current.is_empty() {
-                                            "Click to mark as known (enter value after import)"
-                                        } else {
-                                            "Marked as known"
-                                        }),
-                                ),
-                        )
-                        .into_any_element()
+                        .child(div().text_sm().text_color(theme.foreground).child(label));
+
+                    if let Some(input_entity) = input {
+                        row = row.child(input_entity);
+                    }
+
+                    row.into_any_element()
                 }
 
                 RequiredResolutionKind::AwsReference { provider_id, name } => {

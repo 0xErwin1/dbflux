@@ -543,9 +543,19 @@ pub fn apply(
             }
         }
 
-        let config = build_connection_config(conn_entry);
+        let values: dbflux_core::FormValues = conn_entry
+            .fields
+            .iter()
+            .chain(conn_entry.local_path_fields.iter())
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let config = dbflux_core::DbConfig::External {
+            kind: dbflux_core::DbKind::Postgres,
+            values,
+        };
         let mut profile = dbflux_core::ConnectionProfile::new(&conn_entry.name, config);
         profile.id = new_conn_id;
+        profile.set_driver_id(conn_entry.driver_id.clone());
         profile.auth_profile_id = auth_profile_id;
         profile.access_kind = access_kind;
 
@@ -725,46 +735,6 @@ fn rewrite_access_kind(
             params: params.clone(),
         }),
     })
-}
-
-/// Build a minimal `DbConfig::Postgres` placeholder for the imported connection.
-///
-/// The fields are sourced from the bundle's `[connections.fields]` map. Fields
-/// not present in the bundle default to empty/None. Type-specific dispatch is not
-/// possible at this layer (we have no driver registry); `Postgres` is used as the
-/// common deserializable variant. The app layer (Slice 5) will create the actual
-/// config from the driver form, not from this helper.
-///
-/// For now this produces a structurally valid `ConnectionProfile` that the
-/// repository can persist. The config will be replaced by the wizard's form
-/// reconstruction in Slice 5.
-fn build_connection_config(conn: &crate::bundle::ConnectionEntry) -> dbflux_core::DbConfig {
-    // Extract common fields from the bundle's flat field map.
-    let host = conn.fields.get("host").cloned().unwrap_or_default();
-    let port: u16 = conn
-        .fields
-        .get("port")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(5432u16);
-    let user = conn.fields.get("user").cloned().unwrap_or_default();
-    let database = conn.fields.get("database").cloned().unwrap_or_default();
-
-    // Return a Postgres config as a structurally valid placeholder.
-    // Slice 5 (the import wizard) rebuilds the config from the driver form.
-    dbflux_core::DbConfig::Postgres {
-        use_uri: false,
-        uri: None,
-        host,
-        port,
-        user,
-        database,
-        ssl_mode: conn.fields.get("ssl_mode").cloned(),
-        ssl_root_cert_path: conn.fields.get("ssl_root_cert_path").cloned(),
-        ssl_client_cert_path: conn.fields.get("ssl_client_cert_path").cloned(),
-        ssl_client_key_path: conn.fields.get("ssl_client_key_path").cloned(),
-        ssh_tunnel: None,
-        ssh_tunnel_profile_id: None,
-    }
 }
 
 /// Parse a proxy kind string from the bundle's `kind` field.
@@ -1619,5 +1589,141 @@ encryption = "none"
             import_plan.conflicts.first().expect("conflict").existing_id,
             dest_proxy_id
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // apply() — driver_id preservation (FIX-1)
+    // -----------------------------------------------------------------------
+
+    /// Importing a connection with `driver_id = "mysql"` must produce a profile
+    /// whose `driver_id()` returns `"mysql"` — never `"postgres"` or any other
+    /// driver id that does not match the bundle entry.
+    #[test]
+    fn apply_connection_preserves_driver_id_from_bundle() {
+        let local_id = "conn-mysql-1";
+        let mut entry = make_connection_entry(local_id);
+        entry.driver_id = "mysql".to_string();
+        entry
+            .fields
+            .insert("host".to_string(), "mysql.example.com".to_string());
+        entry.fields.insert("port".to_string(), "3306".to_string());
+
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        bundle.connections.push(entry);
+
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: None,
+        };
+
+        let import_plan = plan(&parsed, &empty_dest());
+        let choices = ResolutionChoices::default();
+        let actions = apply(&parsed, &import_plan, &choices).expect("apply");
+
+        let conn = actions.connections.first().expect("one connection");
+
+        assert_eq!(
+            conn.driver_id(),
+            "mysql",
+            "imported connection driver_id must match the bundle entry; \
+             got '{}' instead of 'mysql'",
+            conn.driver_id()
+        );
+    }
+
+    /// Importing a connection with `driver_id = "redis"` must not silently
+    /// become `"postgres"`.  Ensures no connection can be mis-typed on import.
+    #[test]
+    fn apply_connection_driver_id_is_never_silently_postgres() {
+        for driver in [
+            "redis",
+            "mongodb",
+            "mssql",
+            "dynamodb",
+            "cloudwatch",
+            "influxdb",
+        ] {
+            let local_id = format!("conn-{driver}-1");
+            let mut entry = make_connection_entry(&local_id);
+            entry.driver_id = driver.to_string();
+
+            let mut bundle = empty_bundle(EncryptionMode::None);
+            bundle.connections.push(entry);
+
+            let parsed = crate::ParsedBundle {
+                bundle,
+                decrypted_secrets: None,
+            };
+
+            let import_plan = plan(&parsed, &empty_dest());
+            let choices = ResolutionChoices::default();
+            let actions = apply(&parsed, &import_plan, &choices).expect("apply");
+
+            let conn = actions.connections.first().expect("one connection");
+
+            assert_ne!(
+                conn.driver_id(),
+                "postgres",
+                "driver '{}' must not become 'postgres' after import",
+                driver
+            );
+            assert_eq!(
+                conn.driver_id(),
+                driver,
+                "driver_id must be preserved as '{}'; got '{}'",
+                driver,
+                conn.driver_id()
+            );
+        }
+    }
+
+    /// The form values from the bundle's `fields` map must be stored in the
+    /// profile's config so the app-layer `build_config` call can reconstruct
+    /// the correct driver config without data loss.
+    #[test]
+    fn apply_connection_form_values_carried_in_config() {
+        let local_id = "conn-pg-values";
+        let mut entry = make_connection_entry(local_id);
+        entry.driver_id = "postgres".to_string();
+        entry
+            .fields
+            .insert("host".to_string(), "db.example.com".to_string());
+        entry.fields.insert("port".to_string(), "5433".to_string());
+        entry.fields.insert("user".to_string(), "admin".to_string());
+        entry
+            .fields
+            .insert("database".to_string(), "mydb".to_string());
+
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        bundle.connections.push(entry);
+
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: None,
+        };
+
+        let import_plan = plan(&parsed, &empty_dest());
+        let choices = ResolutionChoices::default();
+        let actions = apply(&parsed, &import_plan, &choices).expect("apply");
+
+        let conn = actions.connections.first().expect("one connection");
+
+        // The config must be DbConfig::External so the app layer can call
+        // build_config(values) with the real driver.
+        let dbflux_core::DbConfig::External { values, .. } = &conn.config else {
+            panic!(
+                "imported connection config must be DbConfig::External so \
+                 the app layer can rebuild it with the real driver; \
+                 got a concrete driver config variant instead"
+            );
+        };
+
+        assert_eq!(
+            values.get("host").map(String::as_str),
+            Some("db.example.com")
+        );
+        assert_eq!(values.get("port").map(String::as_str), Some("5433"));
+        assert_eq!(values.get("user").map(String::as_str), Some("admin"));
+        assert_eq!(values.get("database").map(String::as_str), Some("mydb"));
     }
 }

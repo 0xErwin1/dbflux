@@ -1008,4 +1008,79 @@ mod tests {
         assert_eq!(deps.conn_names.len(), 1);
         assert_eq!(deps.conn_names[0], "KnownConn");
     }
+
+    /// `persist_import_actions` must carry the `DbConfig::External` variant
+    /// (carrying form values) to `add_connection` so the app-layer rebuild can
+    /// call `build_config(values)` with the real driver rather than
+    /// `extract_values(placeholder_config)`.
+    ///
+    /// This test verifies that a connection profile emitted by the portability
+    /// crate (with `DbConfig::External`) arrives at the persistence seam with
+    /// `driver_id()` intact — not silently rewritten to `"postgres"`.
+    #[test]
+    fn persist_connection_driver_id_is_preserved_through_seam() {
+        struct DriverIdRecorder {
+            recorded_driver_ids: Vec<String>,
+            recorded_config_is_external: Vec<bool>,
+        }
+
+        impl ImportPersistence for DriverIdRecorder {
+            fn add_auth_profile(&mut self, _: AuthProfile) {}
+            fn add_ssh_tunnel(&mut self, _: SshTunnelProfile) {}
+            fn add_proxy(&mut self, _: ProxyProfile) {}
+
+            fn add_connection(&mut self, profile: ConnectionProfile) -> Option<()> {
+                self.recorded_driver_ids
+                    .push(profile.driver_id().to_string());
+                let is_external = matches!(profile.config, dbflux_core::DbConfig::External { .. });
+                self.recorded_config_is_external.push(is_external);
+                Some(())
+            }
+
+            fn write_secret(&self, _: &str, _: &SecretString) -> bool {
+                true
+            }
+        }
+
+        let mut recorder = DriverIdRecorder {
+            recorded_driver_ids: Vec::new(),
+            recorded_config_is_external: Vec::new(),
+        };
+
+        let mut mysql_profile = ConnectionProfile::new(
+            "MySQL Prod",
+            dbflux_core::DbConfig::External {
+                kind: dbflux_core::DbKind::SQLite,
+                values: {
+                    let mut v = FormValues::default();
+                    v.insert("host".to_string(), "mysql.example.com".to_string());
+                    v.insert("port".to_string(), "3306".to_string());
+                    v
+                },
+            },
+        );
+        mysql_profile.driver_id = Some("mysql".to_string());
+
+        let actions = ImportActions {
+            connections: vec![mysql_profile],
+            auth_profiles: vec![],
+            ssh_tunnels: vec![],
+            proxies: vec![],
+            secret_writes: vec![],
+        };
+
+        persist_import_actions(actions, &mut recorder);
+
+        assert_eq!(recorder.recorded_driver_ids.len(), 1);
+        assert_eq!(
+            recorder.recorded_driver_ids[0], "mysql",
+            "driver_id must arrive at the persistence seam as 'mysql', \
+             not rewritten to 'postgres'"
+        );
+        assert!(
+            recorder.recorded_config_is_external[0],
+            "config must be DbConfig::External so the app layer can call \
+             build_config(values) with the real driver"
+        );
+    }
 }
