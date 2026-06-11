@@ -990,6 +990,9 @@ impl Workspace {
                 SidebarEvent::RequestExportConnections => {
                     this.open_export_connections_modal(window, cx);
                 }
+                SidebarEvent::RequestImportConnections => {
+                    this.open_import_connections_wizard(window, cx);
+                }
             },
         )
         .detach();

@@ -128,6 +128,46 @@ impl Workspace {
         }
     }
 
+    pub(super) fn open_import_connections_wizard(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::windows::connection_manager::import_wizard::ImportWizard;
+
+        let app_state = self.app_state.clone();
+        let bounds = Bounds::centered(None, size(px(580.0), px(660.0)), cx);
+
+        let mut options = WindowOptions {
+            app_id: Some(dbflux_core::ReleaseChannel::current().app_id().into()),
+            titlebar: Some(TitlebarOptions {
+                title: Some("Import Connections".into()),
+                ..Default::default()
+            }),
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            focus: true,
+            ..Default::default()
+        };
+        platform::apply_window_options(&mut options, 540.0, 600.0);
+
+        match cx.open_window(options, |window, cx| {
+            let wizard = cx.new(|cx| ImportWizard::new(app_state, window, cx));
+            cx.new(|cx| Root::new(wizard, window, cx))
+        }) {
+            Ok(handle) => {
+                if let Err(e) = handle.update(cx, |_root, window, cx| {
+                    window.activate_window();
+                    cx.notify();
+                }) {
+                    log::warn!("Failed to activate import wizard window: {:?}", e);
+                }
+            }
+            Err(error) => {
+                log::warn!("Failed to open import connections wizard: {:?}", error);
+            }
+        }
+    }
+
     pub(super) fn open_export_connections_modal(
         &self,
         _window: &mut Window,

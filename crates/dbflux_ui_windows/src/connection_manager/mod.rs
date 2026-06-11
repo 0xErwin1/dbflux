@@ -2,6 +2,7 @@ mod access_tab;
 pub mod export_modal;
 mod form;
 mod hooks_tab;
+pub mod import_wizard;
 mod navigation;
 mod render;
 mod render_driver_select;

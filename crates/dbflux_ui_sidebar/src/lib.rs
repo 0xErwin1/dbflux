@@ -106,6 +106,8 @@ pub enum SidebarEvent {
     },
     /// Request to open the Export Connections modal.
     RequestExportConnections,
+    /// Request to open the Import Connections wizard.
+    RequestImportConnections,
     /// Request to open the delete-connection modal for a specific connection profile.
     RequestDeleteConnection {
         connection_name: String,

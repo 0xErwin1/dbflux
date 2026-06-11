@@ -1,8 +1,10 @@
-//! Connection-export bridge between `dbflux_portability` and `AppState`.
+//! Connection-export/import bridge between `dbflux_portability` and `AppState`.
 //!
 //! This module owns the two seam implementations that the portability crate
-//! requires from the app layer — `FieldHintResolver` and `SecretReader` — and
-//! the function that assembles an `ExportGraph` from AppState data.
+//! requires from the app layer — `FieldHintResolver` and `SecretReader` — the
+//! function that assembles an `ExportGraph` from AppState data, and the
+//! `apply_import` orchestration that persists `ImportActions` through the
+//! existing repositories and keyring.
 //!
 //! # Testability contract
 //!
@@ -11,6 +13,22 @@
 //! types appear here, which is what allows the `dbflux_app` test binary to
 //! compile and run these tests (unlike `dbflux_ui_windows`, whose GPUI proc-macro
 //! expansion causes rustc to SIGSEGV during test-binary compilation).
+//!
+//! # Import persistence invariants
+//!
+//! `apply_import` persists `ImportActions` with ordered best-effort writes and
+//! NO DB+keyring two-phase commit (2PC).  The insertion order is:
+//!
+//! 1. Auth profiles (so later connection foreign-key-like references exist)
+//! 2. SSH tunnel profiles
+//! 3. Proxy profiles
+//! 4. Connections (referencing all of the above)
+//! 5. Secret writes via `SecretManager::set_by_ref`
+//!
+//! A `false` return from `set_by_ref` (keyring locked or unavailable) is
+//! captured in `ImportOutcome::secret_failures` — it is NEVER silently
+//! discarded.  Connections whose `driver_id` is unregistered are recorded in
+//! `ImportOutcome::needs_driver` and NOT persisted with a placeholder config.
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -21,7 +39,8 @@ use dbflux_core::{
     SecretStore, SshTunnelProfile,
 };
 use dbflux_portability::{
-    AwsRef, ConnectionWithValues, ExportGraph, FieldHintResolver, SecretReader,
+    AwsRef, ConnectionWithValues, DestSnapshot, ExportGraph, FieldHintResolver, ImportActions,
+    ImportPlan, ParsedBundle, ResolutionChoices, SecretReader,
 };
 
 // ---------------------------------------------------------------------------
@@ -136,6 +155,147 @@ pub fn build_export_graph(inputs: &ExportInputs) -> ExportGraph<'_> {
         ssh_tunnels: inputs.ssh_tunnels.iter().collect(),
         proxies: inputs.proxies.iter().collect(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Import orchestration — DestSnapshot builder + apply_import
+// ---------------------------------------------------------------------------
+
+/// Snapshot of the existing destination profiles used for conflict detection.
+///
+/// The three owned `Vec`s hold clones taken just before `plan()` so the data
+/// is stable for the entire import flow.
+pub struct OwnedDestSnapshot {
+    pub auth_profiles: Vec<AuthProfile>,
+    pub ssh_tunnels: Vec<SshTunnelProfile>,
+    pub proxies: Vec<ProxyProfile>,
+}
+
+impl OwnedDestSnapshot {
+    /// Borrow the snapshot as a `DestSnapshot<'_>` suitable for passing to
+    /// `dbflux_portability::plan()`.
+    pub fn as_ref_snapshot(&self) -> DestSnapshot<'_> {
+        DestSnapshot {
+            auth_profiles: self.auth_profiles.iter().collect(),
+            ssh_tunnels: self.ssh_tunnels.iter().collect(),
+            proxies: self.proxies.iter().collect(),
+        }
+    }
+}
+
+/// The result of a completed import apply.
+///
+/// Entities listed in `succeeded` were inserted into the repository and their
+/// secrets written to the keyring (where available).  Items in
+/// `secret_failures` were inserted but at least one secret write was rejected
+/// by the OS keyring (returned `false` from `set_by_ref`).  Items in
+/// `needs_driver` were skipped entirely because their `driver_id` is not
+/// registered in the current driver registry — the UI surfaces an
+/// informational note for each.
+#[derive(Debug, Default)]
+pub struct ImportOutcome {
+    /// Names of entities that were fully persisted.
+    pub succeeded: Vec<String>,
+    /// `(entity_name, secret_ref)` pairs where the keyring write returned `false`.
+    pub secret_failures: Vec<(String, String)>,
+    /// `(connection_name, driver_id)` pairs whose driver is not registered.
+    pub needs_driver: Vec<(String, String)>,
+}
+
+/// Seam for inserting entities into the repository, used by `apply_import`.
+///
+/// The production implementation delegates to `AppState`; tests supply fakes.
+pub trait ImportPersistence {
+    fn add_auth_profile(&mut self, profile: AuthProfile);
+    fn add_ssh_tunnel(&mut self, tunnel: SshTunnelProfile);
+    fn add_proxy(&mut self, proxy: ProxyProfile);
+
+    /// Insert a connection profile.  Returns `None` when the connection's
+    /// `driver_id` is not registered, in which case the caller records a
+    /// `needs_driver` item and skips the insert.
+    fn add_connection(&mut self, profile: ConnectionProfile) -> Option<()>;
+
+    /// Write a secret under an explicit keyring reference.
+    ///
+    /// Returns `true` on success, `false` when the keyring is unavailable or
+    /// rejected the write.
+    fn write_secret(&self, secret_ref: &str, secret: &SecretString) -> bool;
+}
+
+/// Run the pure `dbflux_portability::apply()` and persist the resulting
+/// `ImportActions` through `deps`.
+///
+/// This is the final step of the import pipeline.  It is SEPARATE from the
+/// portability crate's `apply()` because persistence requires access to the
+/// driver registry (to rebuild the real `DbConfig`) and the OS keyring (for
+/// `SecretManager::set_by_ref`), neither of which the pure-logic crate owns.
+///
+/// Persistence order: auth profiles → SSH tunnels → proxy profiles →
+/// connections → secrets.  This order ensures FK-like references exist before
+/// they are pointed to.
+///
+/// Any connection whose `driver_id` is not registered by `deps.add_connection`
+/// is skipped and recorded in `ImportOutcome::needs_driver`; the import
+/// continues for all remaining entities.
+pub fn apply_import(
+    parsed: &ParsedBundle,
+    plan: &ImportPlan,
+    choices: &ResolutionChoices,
+    deps: &mut dyn ImportPersistence,
+) -> Result<ImportOutcome, dbflux_portability::PortabilityError> {
+    let actions = dbflux_portability::import::apply(parsed, plan, choices)?;
+    let outcome = persist_import_actions(actions, deps);
+    Ok(outcome)
+}
+
+/// Persist `ImportActions` through the `ImportPersistence` seam.
+///
+/// Separated from `apply_import` so tests can call it directly with a
+/// pre-built `ImportActions` without needing a full `ParsedBundle`.
+pub fn persist_import_actions(
+    actions: ImportActions,
+    deps: &mut dyn ImportPersistence,
+) -> ImportOutcome {
+    let mut outcome = ImportOutcome::default();
+
+    for auth in actions.auth_profiles {
+        let name = auth.name.clone();
+        deps.add_auth_profile(auth);
+        outcome.succeeded.push(name);
+    }
+
+    for ssh in actions.ssh_tunnels {
+        let name = ssh.name.clone();
+        deps.add_ssh_tunnel(ssh);
+        outcome.succeeded.push(name);
+    }
+
+    for proxy in actions.proxies {
+        let name = proxy.name.clone();
+        deps.add_proxy(proxy);
+        outcome.succeeded.push(name);
+    }
+
+    for conn in actions.connections {
+        let name = conn.name.clone();
+        let driver_id = conn.driver_id().to_string();
+
+        if deps.add_connection(conn).is_none() {
+            outcome.needs_driver.push((name, driver_id));
+        } else {
+            outcome.succeeded.push(name);
+        }
+    }
+
+    for (secret_ref, secret) in actions.secret_writes {
+        if !deps.write_secret(&secret_ref, &secret) {
+            outcome
+                .secret_failures
+                .push(("(secret)".to_string(), secret_ref));
+        }
+    }
+
+    outcome
 }
 
 // ---------------------------------------------------------------------------
@@ -573,5 +733,279 @@ mod tests {
         assert_eq!(graph.auth_profiles.len(), 1);
         assert_eq!(graph.auth_profiles[0].id, included_auth);
         assert!(!graph.auth_profiles.iter().any(|a| a.id == excluded_auth));
+    }
+
+    // -----------------------------------------------------------------------
+    // ImportPersistence tests (T5.1 — import orchestration, TDD first)
+    // -----------------------------------------------------------------------
+
+    use super::{ImportOutcome, ImportPersistence, persist_import_actions};
+    use dbflux_portability::ImportActions;
+
+    /// Minimal fake implementation of `ImportPersistence` for unit tests.
+    struct FakePersistence {
+        drivers: std::collections::HashSet<String>,
+        auth_count: usize,
+        ssh_count: usize,
+        proxy_count: usize,
+        conn_names: Vec<String>,
+        /// `None` keys are secrets that must NOT be written (unknown driver skip).
+        /// `Some(false)` means the write is simulated to fail (keyring locked).
+        secret_outcomes: HashMap<String, bool>,
+        written_secrets: Vec<String>,
+    }
+
+    impl FakePersistence {
+        fn with_drivers(drivers: &[&str]) -> Self {
+            Self {
+                drivers: drivers.iter().map(|s| s.to_string()).collect(),
+                auth_count: 0,
+                ssh_count: 0,
+                proxy_count: 0,
+                conn_names: Vec::new(),
+                secret_outcomes: HashMap::new(),
+                written_secrets: Vec::new(),
+            }
+        }
+
+        fn all_drivers() -> Self {
+            let mut s = Self::with_drivers(&[]);
+            s.drivers.insert("*".to_string());
+            s
+        }
+
+        fn with_keyring_failure(mut self, secret_ref: &str) -> Self {
+            self.secret_outcomes.insert(secret_ref.to_string(), false);
+            self
+        }
+    }
+
+    impl ImportPersistence for FakePersistence {
+        fn add_auth_profile(&mut self, _profile: AuthProfile) {
+            self.auth_count += 1;
+        }
+
+        fn add_ssh_tunnel(&mut self, _tunnel: SshTunnelProfile) {
+            self.ssh_count += 1;
+        }
+
+        fn add_proxy(&mut self, _proxy: ProxyProfile) {
+            self.proxy_count += 1;
+        }
+
+        fn add_connection(&mut self, profile: ConnectionProfile) -> Option<()> {
+            let driver_id = profile.driver_id().to_string();
+            if !self.drivers.contains("*") && !self.drivers.contains(&driver_id) {
+                return None;
+            }
+            self.conn_names.push(profile.name.clone());
+            Some(())
+        }
+
+        fn write_secret(&self, secret_ref: &str, _secret: &SecretString) -> bool {
+            let result = self
+                .secret_outcomes
+                .get(secret_ref)
+                .copied()
+                .unwrap_or(true);
+            result
+        }
+    }
+
+    fn make_import_actions_empty() -> ImportActions {
+        ImportActions {
+            connections: vec![],
+            auth_profiles: vec![],
+            ssh_tunnels: vec![],
+            proxies: vec![],
+            secret_writes: vec![],
+        }
+    }
+
+    fn make_conn_profile(name: &str, driver_id: &str) -> ConnectionProfile {
+        let mut p = ConnectionProfile::new(
+            name,
+            dbflux_core::DbConfig::External {
+                kind: dbflux_core::DbKind::SQLite,
+                values: FormValues::default(),
+            },
+        );
+        p.driver_id = Some(driver_id.to_string());
+        p
+    }
+
+    #[test]
+    fn persist_empty_actions_returns_empty_outcome() {
+        let mut deps = FakePersistence::all_drivers();
+        let outcome = persist_import_actions(make_import_actions_empty(), &mut deps);
+
+        assert!(outcome.succeeded.is_empty());
+        assert!(outcome.secret_failures.is_empty());
+        assert!(outcome.needs_driver.is_empty());
+    }
+
+    #[test]
+    fn persist_auth_ssh_proxy_are_inserted_before_connections() {
+        let mut deps = FakePersistence::all_drivers();
+
+        let auth = AuthProfile {
+            id: Uuid::new_v4(),
+            name: "TestAuth".to_string(),
+            provider_id: "test-provider".to_string(),
+            fields: HashMap::new(),
+            secret_fields: HashMap::new(),
+            enabled: true,
+            read_only: false,
+            dangling_origin: None,
+        };
+        let ssh = SshTunnelProfile::new(
+            "TestSSH",
+            dbflux_core::SshTunnelConfig {
+                host: "bastion.example.com".to_string(),
+                port: 22,
+                user: "ec2-user".to_string(),
+                auth_method: dbflux_core::SshAuthMethod::Password,
+            },
+        );
+        let proxy = ProxyProfile {
+            id: Uuid::new_v4(),
+            name: "TestProxy".to_string(),
+            kind: dbflux_core::ProxyKind::Http,
+            host: "proxy.example.com".to_string(),
+            port: 3128,
+            auth: dbflux_core::ProxyAuth::None,
+            no_proxy: None,
+            enabled: true,
+            save_secret: false,
+        };
+        let conn = make_conn_profile("TestConn", "postgres");
+
+        let actions = ImportActions {
+            connections: vec![conn],
+            auth_profiles: vec![auth],
+            ssh_tunnels: vec![ssh],
+            proxies: vec![proxy],
+            secret_writes: vec![],
+        };
+
+        let outcome = persist_import_actions(actions, &mut deps);
+
+        assert_eq!(deps.auth_count, 1);
+        assert_eq!(deps.ssh_count, 1);
+        assert_eq!(deps.proxy_count, 1);
+        assert_eq!(deps.conn_names.len(), 1);
+        assert_eq!(deps.conn_names[0], "TestConn");
+        assert!(outcome.needs_driver.is_empty());
+        assert_eq!(outcome.succeeded.len(), 4);
+    }
+
+    #[test]
+    fn persist_unknown_driver_skips_connection_and_records_needs_driver() {
+        let mut deps = FakePersistence::with_drivers(&["postgres"]);
+        let conn_unknown = make_conn_profile("UnknownConn", "totally-unknown-driver");
+
+        let actions = ImportActions {
+            connections: vec![conn_unknown],
+            auth_profiles: vec![],
+            ssh_tunnels: vec![],
+            proxies: vec![],
+            secret_writes: vec![],
+        };
+
+        let outcome = persist_import_actions(actions, &mut deps);
+
+        assert_eq!(outcome.needs_driver.len(), 1);
+        assert_eq!(outcome.needs_driver[0].0, "UnknownConn");
+        assert_eq!(outcome.needs_driver[0].1, "totally-unknown-driver");
+        assert!(outcome.succeeded.is_empty());
+        assert!(deps.conn_names.is_empty());
+    }
+
+    #[test]
+    fn persist_known_driver_inserts_connection_into_succeeded() {
+        let mut deps = FakePersistence::with_drivers(&["postgres"]);
+        let conn = make_conn_profile("ProdPG", "postgres");
+
+        let actions = ImportActions {
+            connections: vec![conn],
+            auth_profiles: vec![],
+            ssh_tunnels: vec![],
+            proxies: vec![],
+            secret_writes: vec![],
+        };
+
+        let outcome = persist_import_actions(actions, &mut deps);
+
+        assert_eq!(outcome.succeeded.len(), 1);
+        assert_eq!(outcome.succeeded[0], "ProdPG");
+        assert!(outcome.needs_driver.is_empty());
+    }
+
+    #[test]
+    fn persist_secret_write_failure_is_recorded_not_silently_lost() {
+        let mut deps =
+            FakePersistence::all_drivers().with_keyring_failure("dbflux:conn:aaaa-bbbb:password");
+
+        let actions = ImportActions {
+            connections: vec![],
+            auth_profiles: vec![],
+            ssh_tunnels: vec![],
+            proxies: vec![],
+            secret_writes: vec![(
+                "dbflux:conn:aaaa-bbbb:password".to_string(),
+                SecretString::from("s3cr3t".to_string()),
+            )],
+        };
+
+        let outcome = persist_import_actions(actions, &mut deps);
+
+        assert_eq!(outcome.secret_failures.len(), 1);
+        assert_eq!(
+            outcome.secret_failures[0].1,
+            "dbflux:conn:aaaa-bbbb:password"
+        );
+    }
+
+    #[test]
+    fn persist_successful_secret_write_does_not_appear_in_failures() {
+        let mut deps = FakePersistence::all_drivers();
+
+        let actions = ImportActions {
+            connections: vec![],
+            auth_profiles: vec![],
+            ssh_tunnels: vec![],
+            proxies: vec![],
+            secret_writes: vec![(
+                "dbflux:conn:1111-2222:password".to_string(),
+                SecretString::from("ok".to_string()),
+            )],
+        };
+
+        let outcome = persist_import_actions(actions, &mut deps);
+
+        assert!(outcome.secret_failures.is_empty());
+    }
+
+    #[test]
+    fn persist_reuse_does_not_insert_new_entity_and_unknown_driver_does_not_block_others() {
+        let mut deps = FakePersistence::with_drivers(&["postgres"]);
+
+        let conn_known = make_conn_profile("KnownConn", "postgres");
+        let conn_unknown = make_conn_profile("UnknownConn", "some-external-driver");
+
+        let actions = ImportActions {
+            connections: vec![conn_known, conn_unknown],
+            auth_profiles: vec![],
+            ssh_tunnels: vec![],
+            proxies: vec![],
+            secret_writes: vec![],
+        };
+
+        let outcome = persist_import_actions(actions, &mut deps);
+
+        assert_eq!(outcome.succeeded.len(), 1);
+        assert_eq!(outcome.needs_driver.len(), 1);
+        assert_eq!(deps.conn_names.len(), 1);
+        assert_eq!(deps.conn_names[0], "KnownConn");
     }
 }
