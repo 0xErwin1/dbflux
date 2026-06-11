@@ -70,7 +70,7 @@ pub fn decrypt(
 
     #[cfg(not(feature = "encryption"))]
     {
-        let _ = passphrase;
+        let _passphrase = passphrase;
         Err(PortabilityError::EncryptionUnavailable)
     }
 }

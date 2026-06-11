@@ -92,6 +92,7 @@ pub fn decrypt_secrets(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
 

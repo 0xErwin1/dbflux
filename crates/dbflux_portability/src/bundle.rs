@@ -70,7 +70,7 @@ pub enum EncryptionMode {
 /// Informational driver identity. Never used to gate import.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DriverRef {
-    /// Format: `built-in:<driver>:<version>` or `external:<provider>:<version>`.
+    /// Format: `built-in:<driver>` or `external:<socket_id>`.
     pub reference: String,
 }
 
@@ -189,6 +189,11 @@ pub struct SshEntry {
     /// and `embed_ssh_keys` was opted in). When false the key path becomes a required_ref.
     #[serde(default)]
     pub key_embedded: bool,
+
+    /// Required references that the recipient must resolve at import time
+    /// (e.g. missing key or password that the exporter could not stage).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_refs: Vec<RequiredRef>,
 }
 
 /// Serialized SSH auth method kind.
@@ -217,6 +222,11 @@ pub struct ProxyEntry {
     /// Whether proxy credentials are staged in `[secrets]`.
     #[serde(default)]
     pub has_secret: bool,
+
+    /// Required references that the recipient must resolve at import time
+    /// (e.g. missing credential that the exporter could not stage).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_refs: Vec<RequiredRef>,
 }
 
 /// A required reference: a field the recipient must supply or resolve at import.
@@ -263,7 +273,11 @@ pub enum AuthRefKind {
 /// When `encryption = "age-passphrase"`, the `ciphertext` field holds the
 /// raw age ASCII-armor blob. When `encryption = "none"` (plaintext force),
 /// the `plaintext` field holds the key-value map directly.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+///
+/// `Debug` is implemented manually to redact the `Plaintext` map: printing
+/// cleartext secrets via `{:?}` would leak them into logs and panic messages.
+/// The `Encrypted` arm is safe to print as-is (ciphertext carries no plaintext).
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum SecretsSection {
     /// Age-encrypted blob (ASCII armor stored as a TOML string).
@@ -272,11 +286,30 @@ pub enum SecretsSection {
     Plaintext { values: HashMap<String, String> },
 }
 
+impl std::fmt::Debug for SecretsSection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SecretsSection::Encrypted { ciphertext } => f
+                .debug_struct("Encrypted")
+                .field("ciphertext", ciphertext)
+                .finish(),
+            SecretsSection::Plaintext { values } => f
+                .debug_struct("Plaintext")
+                .field(
+                    "values",
+                    &format_args!("<redacted {} entries>", values.len()),
+                )
+                .finish(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -289,7 +322,7 @@ mod tests {
                 encryption,
             },
             drivers: vec![DriverRef {
-                reference: "built-in:postgres:0.7.0".to_string(),
+                reference: "built-in:postgres".to_string(),
             }],
             connections: vec![ConnectionEntry {
                 local_id: "aaaaaaaa-0000-0000-0000-000000000001".to_string(),
@@ -330,6 +363,7 @@ mod tests {
                 user: "ec2-user".to_string(),
                 auth_method: SshAuthMethodKind::PrivateKey,
                 key_embedded: false,
+                required_refs: vec![],
             }],
             proxies: vec![],
             secrets: None,

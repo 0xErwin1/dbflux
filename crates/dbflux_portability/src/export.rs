@@ -5,9 +5,9 @@
 ///
 /// - MCP governance data is NEVER written to any bundle, regardless of options.
 ///   This is a hard security invariant enforced here, not delegated to the caller.
-/// - `value_refs` are always included; `ValueRef::Literal` values are never written
-///   in cleartext — they are routed to the encrypted `[secrets]` section or, when
-///   that is not possible (no encryption configured), recorded as `RequiredRef`.
+/// - `value_refs` are always included; `ValueRef::Literal` values are staged into
+///   the encrypted `[secrets]` section and are NOT treated as `RequiredRef` — the
+///   value is present and available to the importer after decryption.
 /// - Hooks and `settings_overrides` are excluded by default; opt-in via
 ///   `ExportOptions::{include_hooks, include_settings_overrides}`.
 /// - Hook `env` entries are NEVER written in cleartext. They are moved to the
@@ -23,7 +23,7 @@
 ///   keyring ref become `RequiredRef` entries.
 /// - Plaintext export (`EncryptionChoice::Plaintext`) requires `forced: true`; the
 ///   pipeline returns `PortabilityError::PlaintextForceMissing` otherwise.
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use dbflux_core::{
     ExportFieldHint, ProxyAuth, SshAuthMethod, auth_field_secret_ref, connection_secret_ref,
@@ -67,14 +67,22 @@ pub fn export(
         // A ConnectionProfile has exactly ONE connection secret (the password/token
         // field). When multiple form fields carry the Secret hint, only the first
         // gets the keyring value; any subsequent ones must be RequiredRef.
+        //
+        // Fields are iterated in lexicographic order so the binding is deterministic
+        // across runs regardless of the HashMap's internal ordering.
         let mut connection_secret_staged = false;
 
-        for (field_id, field_value) in values.iter() {
+        let sorted_values: BTreeMap<&str, &str> = values
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
+        for (field_id, field_value) in &sorted_values {
             let hint = hints.hint(profile, field_id, values);
 
             match hint {
                 ExportFieldHint::Include => {
-                    include_fields.insert(field_id.clone(), field_value.clone());
+                    include_fields.insert((*field_id).to_string(), (*field_value).to_string());
                 }
 
                 ExportFieldHint::Secret => {
@@ -86,7 +94,7 @@ pub fn export(
                             connection_secret_staged = true;
                         } else {
                             required_refs.push(RequiredRef {
-                                field: field_id.clone(),
+                                field: (*field_id).to_string(),
                                 kind: RequiredRefKind::Secret,
                             });
                             report.required_ref_count += 1;
@@ -96,7 +104,7 @@ pub fn export(
                         // Additional Secret-hinted fields have no distinct keyring ref;
                         // record them as RequiredRef so the importer can surface them.
                         required_refs.push(RequiredRef {
-                            field: field_id.clone(),
+                            field: (*field_id).to_string(),
                             kind: RequiredRefKind::Secret,
                         });
                         report.required_ref_count += 1;
@@ -108,7 +116,7 @@ pub fn export(
                 }
 
                 ExportFieldHint::LocalPath => {
-                    local_path_fields.insert(field_id.clone(), field_value.clone());
+                    local_path_fields.insert((*field_id).to_string(), (*field_value).to_string());
                     report.warnings.push(format!(
                         "connection '{}' field '{}' is a local path and may not be portable on the target",
                         profile.name, field_id
@@ -117,7 +125,7 @@ pub fn export(
 
                 ExportFieldHint::RequiredOnImport => {
                     required_refs.push(RequiredRef {
-                        field: field_id.clone(),
+                        field: (*field_id).to_string(),
                         kind: RequiredRefKind::AuthProfile,
                     });
                     report.required_ref_count += 1;
@@ -134,12 +142,11 @@ pub fn export(
 
         let access = build_access_entry(profile);
 
-        let value_refs = build_value_refs(
-            profile,
-            &mut staged_secrets,
-            &mut required_refs,
-            &mut report,
-        );
+        let value_refs = build_value_refs(profile, &mut staged_secrets, &mut report);
+
+        // Dedup required_refs so a field cannot accumulate duplicate entries
+        // when both a Secret hint and another path target the same field_id.
+        required_refs.dedup_by(|a, b| a.field == b.field && a.kind == b.kind);
 
         let (hooks_payload, include_hooks) = if opts.include_hooks {
             match profile.hooks.as_ref() {
@@ -308,16 +315,16 @@ fn build_access_entry(profile: &dbflux_core::ConnectionProfile) -> Option<Access
 
 /// Build the `value_refs` map for a connection entry.
 ///
-/// `ValueRef::Literal` values are never written in cleartext: they are staged
-/// into `staged_secrets` under `conn_vref:<profile_id>:<field>` and will land in
-/// the encrypted `[secrets]` section. When the `value_refs` map already exists
-/// (non-literal variants), they are serialized as-is.
+/// `ValueRef::Literal` values are staged into `staged_secrets` under
+/// `conn_vref:<profile_id>:<field>` so they land in the encrypted `[secrets]`
+/// section. A `Literal` is NOT a `RequiredRef`: the value is present and will
+/// be available to the importer after decryption. Non-literal variants are
+/// serialized as-is into the cleartext `value_refs` map.
 ///
 /// Conversion failures push a warning rather than silently dropping the entry.
 fn build_value_refs(
     profile: &dbflux_core::ConnectionProfile,
     staged_secrets: &mut HashMap<String, String>,
-    required_refs: &mut Vec<RequiredRef>,
     report: &mut ExportReport,
 ) -> HashMap<String, toml::Value> {
     let mut out: HashMap<String, toml::Value> = HashMap::new();
@@ -325,14 +332,8 @@ fn build_value_refs(
     for (field_key, vref) in &profile.value_refs {
         match vref {
             dbflux_core::values::ValueRef::Literal { value } => {
-                // Literal values can be sensitive; route to the secrets section.
                 let secrets_key = format!("conn_vref:{}:{}", profile.id, field_key);
                 staged_secrets.insert(secrets_key, value.clone());
-                required_refs.push(RequiredRef {
-                    field: field_key.clone(),
-                    kind: RequiredRefKind::Secret,
-                });
-                report.required_ref_count += 1;
             }
 
             other => {
@@ -496,12 +497,24 @@ fn build_ssh_entries(
         .ssh_tunnels
         .iter()
         .map(|ssh| {
+            let mut required_refs: Vec<RequiredRef> = Vec::new();
+
             let (auth_method, key_embedded) = match &ssh.config.auth_method {
                 SshAuthMethod::Password => {
                     let secret_ref = ssh_tunnel_secret_ref(&ssh.id);
                     let bundle_key = format!("ssh_tunnel:{}:password", ssh.id);
                     if let Some(secret) = secrets.read(&secret_ref) {
                         staged_secrets.insert(bundle_key, secret.expose_secret().to_string());
+                    } else {
+                        report.warnings.push(format!(
+                            "SSH tunnel '{}' password not available; recorded as required_ref",
+                            ssh.name
+                        ));
+                        required_refs.push(RequiredRef {
+                            field: "password".to_string(),
+                            kind: RequiredRefKind::Secret,
+                        });
+                        report.required_ref_count += 1;
                     }
                     (SshAuthMethodKind::Password, false)
                 }
@@ -518,6 +531,11 @@ fn build_ssh_entries(
                                 "SSH tunnel '{}' key bytes not available; recorded as required_ref",
                                 ssh.name
                             ));
+                            required_refs.push(RequiredRef {
+                                field: "private_key".to_string(),
+                                kind: RequiredRefKind::Secret,
+                            });
+                            report.required_ref_count += 1;
                             (SshAuthMethodKind::PrivateKey, false)
                         }
                     } else {
@@ -534,6 +552,7 @@ fn build_ssh_entries(
                 user: ssh.config.user.clone(),
                 auth_method,
                 key_embedded,
+                required_refs,
             }
         })
         .collect()
@@ -549,6 +568,8 @@ fn build_proxy_entries(
         .proxies
         .iter()
         .map(|proxy| {
+            let mut required_refs: Vec<RequiredRef> = Vec::new();
+
             let (username, has_secret) = match &proxy.auth {
                 ProxyAuth::None => (None, false),
                 ProxyAuth::Basic { username } => {
@@ -559,9 +580,14 @@ fn build_proxy_entries(
                         true
                     } else {
                         report.warnings.push(format!(
-                            "proxy '{}' credential not available; recorded as warning",
+                            "proxy '{}' credential not available; recorded as required_ref",
                             proxy.name
                         ));
+                        required_refs.push(RequiredRef {
+                            field: "password".to_string(),
+                            kind: RequiredRefKind::Secret,
+                        });
+                        report.required_ref_count += 1;
                         false
                     };
                     (Some(username.clone()), has_secret)
@@ -577,15 +603,28 @@ fn build_proxy_entries(
                 username,
                 no_proxy: proxy.no_proxy.clone(),
                 has_secret,
+                required_refs,
             }
         })
         .collect()
 }
 
+/// Build the `[secrets]` section from staged secrets, subject to the caller's
+/// encryption choice.
+///
+/// The `Plaintext { forced: false }` gate is checked unconditionally before the
+/// early-return for empty secrets so the pipeline's behavior depends solely on
+/// the caller's choice, not on whether any secrets happened to be staged. This
+/// ensures callers cannot bypass the force requirement by exporting a connection
+/// that has no secrets in a given run.
 fn build_secrets_section(
     staged_secrets: HashMap<String, String>,
     opts: &ExportOptions,
 ) -> Result<(EncryptionMode, Option<SecretsSection>), PortabilityError> {
+    if let EncryptionChoice::Plaintext { forced: false } = &opts.encryption {
+        return Err(PortabilityError::PlaintextForceMissing);
+    }
+
     if staged_secrets.is_empty() {
         return Ok((EncryptionMode::None, None));
     }
@@ -603,7 +642,7 @@ fn build_secrets_section(
 
             #[cfg(not(feature = "encryption"))]
             {
-                let _ = passphrase;
+                let _passphrase = passphrase;
                 Err(PortabilityError::EncryptionUnavailable)
             }
         }
@@ -616,7 +655,7 @@ fn build_secrets_section(
         )),
 
         EncryptionChoice::Plaintext { forced: false } => {
-            Err(PortabilityError::PlaintextForceMissing)
+            unreachable!("forced: false is handled above")
         }
     }
 }
@@ -631,6 +670,7 @@ fn chrono_now() -> String {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use std::collections::HashMap;
 
@@ -1123,12 +1163,19 @@ mod tests {
         );
     }
 
-    // --- Fix #1: Two Secret-hinted fields — second must not receive first's value ---
+    // --- R1: Two Secret-hinted fields — binding is deterministic (lexicographic) ---
+    //
+    // Fields are iterated in lexicographic order. With "api_secret" and "password":
+    //   - "api_secret" (lex-first) receives the connection keyring secret.
+    //   - "password" (lex-second) becomes a RequiredRef.
+    // The test pins these two identities explicitly so a HashMap order change
+    // cannot silently reorder the binding.
 
     #[test]
-    fn two_secret_fields_second_becomes_required_ref() {
+    fn two_secret_fields_lex_first_receives_secret_second_becomes_required_ref() {
         let profile = postgres_profile();
         let mut values = FormValues::default();
+        // "api_secret" is lex-before "password".
         values.insert("password".to_string(), "s3cr3t".to_string());
         values.insert("api_secret".to_string(), "another_s3cr3t".to_string());
 
@@ -1137,7 +1184,7 @@ mod tests {
         let conn_ref = dbflux_core::connection_secret_ref(&profile.id);
         let secrets = FixedSecrets({
             let mut m = HashMap::new();
-            m.insert(conn_ref, "s3cr3t".to_string());
+            m.insert(conn_ref, "keyring_value".to_string());
             m
         });
 
@@ -1151,16 +1198,38 @@ mod tests {
 
         let text = String::from_utf8(bytes).expect("utf8");
 
-        // The second field must not receive the connection secret value.
+        // Neither FormValues plaintext value must appear in the bundle.
+        assert!(
+            !text.contains("s3cr3t"),
+            "FormValues password value must not appear in bundle: {text}"
+        );
         assert!(
             !text.contains("another_s3cr3t"),
-            "second Secret field value must not appear anywhere in bundle: {text}"
+            "FormValues api_secret value must not appear in bundle: {text}"
         );
 
-        // The second field must be recorded as a required_ref.
+        // The lex-first field "api_secret" received the keyring value.
         assert!(
-            report.required_ref_count >= 1,
-            "second Secret field must be recorded as required_ref"
+            text.contains("keyring_value"),
+            "keyring secret must be staged in bundle: {text}"
+        );
+        // The lex-first field key must appear in [secrets] (conn:<id>:api_secret).
+        assert!(
+            text.contains("api_secret"),
+            "api_secret must be the staged field key in secrets: {text}"
+        );
+
+        // "password" is lex-second and must be a RequiredRef with field="password".
+        let conn = report.required_ref_count;
+        assert!(
+            conn >= 1,
+            "password (lex-second) must be recorded as required_ref; count={conn}"
+        );
+
+        // Verify the bundle text contains required_refs referencing "password".
+        assert!(
+            text.contains("\"password\""),
+            "required_ref for 'password' field must appear in bundle: {text}"
         );
     }
 
@@ -1208,7 +1277,7 @@ mod tests {
         let values = FormValues::default();
         let graph = simple_graph(&profile, values);
 
-        let (bytes, _report) = export(
+        let (bytes, report) = export(
             &graph,
             &default_opts_plaintext(),
             &IncludeAllHints,
@@ -1223,6 +1292,13 @@ mod tests {
         assert!(
             !before_secrets.contains("super_secret_literal"),
             "ValueRef::Literal value must not appear in cleartext: {text}"
+        );
+
+        // A Literal has a present value and must NOT count as a required ref
+        // (the importer finds it in [secrets] after decryption).
+        assert_eq!(
+            report.required_ref_count, 0,
+            "ValueRef::Literal must not be counted as a required_ref: {text}"
         );
     }
 
@@ -1294,7 +1370,7 @@ mod tests {
 
         let mut profile = postgres_profile();
 
-        let mut auth = AuthProfile {
+        let auth = AuthProfile {
             id: uuid::Uuid::new_v4(),
             name: "Test Auth Missing".to_string(),
             provider_id: "test-provider".to_string(),
@@ -1537,5 +1613,128 @@ mod tests {
 
         let result = export(&graph, &opts, &SecretHintForPassword, &secrets);
         assert!(result.is_ok(), "plaintext with forced=true must succeed");
+    }
+
+    // --- R5: Force gate applies even when no secrets are staged ---
+
+    #[test]
+    fn plaintext_without_force_fails_even_with_zero_secrets() {
+        let profile = postgres_profile();
+        let mut values = FormValues::default();
+        values.insert("host".to_string(), "db.internal".to_string());
+
+        let graph = simple_graph(&profile, values);
+
+        let opts = ExportOptions {
+            include_hooks: false,
+            include_settings_overrides: false,
+            embed_ssh_keys: false,
+            encryption: EncryptionChoice::Plaintext { forced: false },
+        };
+
+        let result = export(&graph, &opts, &IncludeAllHints, &NoSecrets);
+        assert!(
+            matches!(result, Err(crate::PortabilityError::PlaintextForceMissing)),
+            "plaintext without force must fail even when no secrets are staged, got: {:?}",
+            result.err()
+        );
+    }
+
+    // --- R7: Missing proxy and SSH secrets produce RequiredRef entries ---
+
+    #[test]
+    fn ssh_missing_password_records_required_ref() {
+        use dbflux_core::{SshAuthMethod, SshTunnelConfig, SshTunnelProfile};
+
+        let profile = postgres_profile();
+        let ssh = SshTunnelProfile::new(
+            "Bastion",
+            SshTunnelConfig {
+                host: "bastion.example.com".to_string(),
+                port: 22,
+                user: "ec2-user".to_string(),
+                auth_method: SshAuthMethod::Password,
+            },
+        );
+
+        let values = FormValues::default();
+        let graph = ExportGraph {
+            connections: vec![ConnectionWithValues {
+                profile: &profile,
+                values,
+            }],
+            auth_profiles: vec![],
+            aws_references: vec![],
+            ssh_tunnels: vec![&ssh],
+            proxies: vec![],
+        };
+
+        let (_bytes, report) = export(
+            &graph,
+            &default_opts_plaintext(),
+            &IncludeAllHints,
+            &NoSecrets,
+        )
+        .expect("export");
+
+        assert!(
+            report.required_ref_count >= 1,
+            "missing SSH password must produce a required_ref; count={}",
+            report.required_ref_count
+        );
+        assert!(
+            !report.warnings.is_empty(),
+            "missing SSH password must produce a warning"
+        );
+    }
+
+    #[test]
+    fn proxy_missing_credential_records_required_ref() {
+        use dbflux_core::{ProxyAuth, ProxyKind, ProxyProfile};
+
+        let profile = postgres_profile();
+        let proxy = ProxyProfile {
+            id: uuid::Uuid::new_v4(),
+            name: "Corp Proxy".to_string(),
+            kind: ProxyKind::Http,
+            host: "proxy.corp.example.com".to_string(),
+            port: 8080,
+            auth: ProxyAuth::Basic {
+                username: "corp_user".to_string(),
+            },
+            no_proxy: None,
+            enabled: true,
+            save_secret: false,
+        };
+
+        let values = FormValues::default();
+        let graph = ExportGraph {
+            connections: vec![ConnectionWithValues {
+                profile: &profile,
+                values,
+            }],
+            auth_profiles: vec![],
+            aws_references: vec![],
+            ssh_tunnels: vec![],
+            proxies: vec![&proxy],
+        };
+
+        let (_bytes, report) = export(
+            &graph,
+            &default_opts_plaintext(),
+            &IncludeAllHints,
+            &NoSecrets,
+        )
+        .expect("export");
+
+        assert!(
+            report.required_ref_count >= 1,
+            "missing proxy credential must produce a required_ref; count={}",
+            report.required_ref_count
+        );
+        assert!(
+            !report.warnings.is_empty(),
+            "missing proxy credential must produce a warning"
+        );
     }
 }
