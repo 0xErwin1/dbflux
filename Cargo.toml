@@ -35,6 +35,7 @@ members = [
     "crates/dbflux_audit",
     "crates/dbflux_storage",
     "crates/dbflux_driver_influxdb",
+    "crates/dbflux_portability",
 ]
 default-members = ["crates/dbflux"]
 resolver = "2"
@@ -75,6 +76,7 @@ dbflux_approval = { path = "crates/dbflux_approval" }
 dbflux_audit = { path = "crates/dbflux_audit" }
 dbflux_storage = { path = "crates/dbflux_storage" }
 dbflux_driver_influxdb = { path = "crates/dbflux_driver_influxdb" }
+dbflux_portability = { path = "crates/dbflux_portability" }
 dbflux_app = { path = "crates/dbflux_app" }
 dbflux_components = { path = "crates/dbflux_components" }
 dbflux_ui_base = { path = "crates/dbflux_ui_base" }
@@ -92,8 +94,11 @@ rfd = "0.17"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = "1"
 uuid = { version = "1", features = ["v4", "v5", "v7", "serde"] }
 thiserror = "2"
+secrecy = "0.10"
+age = { version = "0.11", features = ["armor"] }
 dirs = "5"
 rusqlite = { version = "0.32", features = ["bundled"] }
 tokio-postgres = "0.7"
