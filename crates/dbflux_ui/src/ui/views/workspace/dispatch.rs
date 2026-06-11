@@ -128,6 +128,10 @@ impl CommandDispatcher for Workspace {
                 self.open_connection_manager(cx);
                 true
             }
+            Command::ExportConnections => {
+                self.open_export_connections_modal(window, cx);
+                true
+            }
             Command::OpenLoginModal => {
                 self.open_login_modal(window, cx);
                 true

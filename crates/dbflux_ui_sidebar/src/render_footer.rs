@@ -6,6 +6,7 @@ impl Sidebar {
         let theme = cx.theme();
         let app_state = self.app_state.clone();
         let sidebar = cx.entity().clone();
+        let sidebar_for_export = cx.entity().clone();
 
         let state = self.app_state.read(cx);
         let connected_count = state.connections().len();
@@ -42,42 +43,69 @@ impl Sidebar {
             )
             .child(
                 div()
-                    .id("settings-btn")
                     .flex()
                     .items_center()
-                    .justify_center()
-                    .size(px(22.0))
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .hover(|d| d.bg(theme.secondary))
-                    .on_click(move |_, _, cx| {
-                        let sidebar = sidebar.clone();
-                        dbflux_ui_windows::settings::open_or_focus_settings(
-                            app_state.clone(),
-                            None,
-                            cx,
-                            move |settings, cx| {
-                                cx.subscribe(
-                                    settings,
-                                    move |_settings, event: &dbflux_ui_windows::settings::SettingsEvent, cx| {
-                                        sidebar.update(cx, |_this, cx| {
-                                            match event {
-                                                dbflux_ui_windows::settings::SettingsEvent::OpenScript { path } => {
-                                                    cx.emit(SidebarEvent::OpenScript { path: path.clone() });
-                                                }
-                                                dbflux_ui_windows::settings::SettingsEvent::OpenLoginModal { .. } => {}
-                                            }
-                                        });
-                                    },
-                                )
-                                .detach();
-                            },
-                        );
-                    })
+                    .gap(Spacing::XS)
                     .child(
-                        Icon::new(AppIcon::Settings)
-                            .size(px(14.0))
-                            .color(theme.muted_foreground),
+                        div()
+                            .id("export-connections-btn")
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(px(22.0))
+                            .rounded(Radii::SM)
+                            .cursor_pointer()
+                            .hover(|d| d.bg(theme.secondary))
+                            .on_click(move |_, _, cx| {
+                                sidebar_for_export.update(cx, |_this, cx| {
+                                    cx.emit(SidebarEvent::RequestExportConnections);
+                                });
+                            })
+                            .child(
+                                Icon::new(AppIcon::ArrowUp)
+                                    .size(px(14.0))
+                                    .color(theme.muted_foreground),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("settings-btn")
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(px(22.0))
+                            .rounded(Radii::SM)
+                            .cursor_pointer()
+                            .hover(|d| d.bg(theme.secondary))
+                            .on_click(move |_, _, cx| {
+                                let sidebar = sidebar.clone();
+                                dbflux_ui_windows::settings::open_or_focus_settings(
+                                    app_state.clone(),
+                                    None,
+                                    cx,
+                                    move |settings, cx| {
+                                        cx.subscribe(
+                                            settings,
+                                            move |_settings, event: &dbflux_ui_windows::settings::SettingsEvent, cx| {
+                                                sidebar.update(cx, |_this, cx| {
+                                                    match event {
+                                                        dbflux_ui_windows::settings::SettingsEvent::OpenScript { path } => {
+                                                            cx.emit(SidebarEvent::OpenScript { path: path.clone() });
+                                                        }
+                                                        dbflux_ui_windows::settings::SettingsEvent::OpenLoginModal { .. } => {}
+                                                    }
+                                                });
+                                            },
+                                        )
+                                        .detach();
+                                    },
+                                );
+                            })
+                            .child(
+                                Icon::new(AppIcon::Settings)
+                                    .size(px(14.0))
+                                    .color(theme.muted_foreground),
+                            ),
                     ),
             )
     }

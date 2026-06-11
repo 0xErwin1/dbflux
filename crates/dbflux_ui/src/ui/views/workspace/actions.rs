@@ -128,6 +128,46 @@ impl Workspace {
         }
     }
 
+    pub(super) fn open_export_connections_modal(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::windows::connection_manager::export_modal::ExportModal;
+
+        let app_state = self.app_state.clone();
+        let bounds = Bounds::centered(None, size(px(560.0), px(620.0)), cx);
+
+        let mut options = WindowOptions {
+            app_id: Some(dbflux_core::ReleaseChannel::current().app_id().into()),
+            titlebar: Some(TitlebarOptions {
+                title: Some("Export Connections".into()),
+                ..Default::default()
+            }),
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            focus: true,
+            ..Default::default()
+        };
+        platform::apply_window_options(&mut options, 520.0, 580.0);
+
+        match cx.open_window(options, |window, cx| {
+            let modal = cx.new(|cx| ExportModal::new(app_state, window, cx));
+            cx.new(|cx| Root::new(modal, window, cx))
+        }) {
+            Ok(handle) => {
+                if let Err(e) = handle.update(cx, |_root, window, cx| {
+                    window.activate_window();
+                    cx.notify();
+                }) {
+                    log::warn!("Failed to activate export modal window: {:?}", e);
+                }
+            }
+            Err(error) => {
+                log::warn!("Failed to open export connections modal: {:?}", error);
+            }
+        }
+    }
+
     pub(super) fn open_settings(&self, cx: &mut Context<Self>) {
         let workspace = cx.entity().clone();
         crate::ui::windows::settings::open_or_focus_settings(

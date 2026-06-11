@@ -18,6 +18,7 @@ dbflux_components.workspace = true
 dbflux_core.workspace = true
 dbflux_app.workspace = true
 dbflux_storage.workspace = true
+dbflux_portability.workspace = true
 dbflux_ssh.workspace = true
 dbflux_mcp = { workspace = true, optional = true }
 dbflux_policy = { workspace = true, optional = true }

@@ -104,6 +104,8 @@ pub enum SidebarEvent {
         profile_name: String,
         watcher: dbflux_core::StateWatcher,
     },
+    /// Request to open the Export Connections modal.
+    RequestExportConnections,
     /// Request to open the delete-connection modal for a specific connection profile.
     RequestDeleteConnection {
         connection_name: String,

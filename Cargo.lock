@@ -3171,6 +3171,7 @@ dependencies = [
  "dbflux_core",
  "dbflux_mcp",
  "dbflux_policy",
+ "dbflux_portability",
  "dbflux_ssh",
  "dbflux_storage",
  "dbflux_ui_base",

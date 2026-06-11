@@ -88,6 +88,7 @@ pub enum Command {
     SidebarNextTab,
     RefreshSchema,
     OpenConnectionManager,
+    ExportConnections,
     Disconnect,
     OpenItemMenu,
     CreateFolder,
@@ -132,6 +133,7 @@ impl Command {
             "prev_tab" => Some(Command::PrevTab),
             "export_results" => Some(Command::ExportResults),
             "open_connection_manager" => Some(Command::OpenConnectionManager),
+            "export_connections" => Some(Command::ExportConnections),
             "disconnect" => Some(Command::Disconnect),
             "refresh_schema" => Some(Command::RefreshSchema),
             "focus_sidebar" => Some(Command::FocusSidebar),
@@ -233,6 +235,7 @@ impl Command {
             Command::SidebarNextTab => "Sidebar Next Tab",
             Command::RefreshSchema => "Refresh Schema",
             Command::OpenConnectionManager => "Open Connection Manager",
+            Command::ExportConnections => "Export Connections…",
             Command::Disconnect => "Disconnect",
             Command::OpenItemMenu => "Open Item Menu",
             Command::CreateFolder => "Create Folder",
@@ -328,6 +331,7 @@ impl Command {
             Command::SidebarNextTab
             | Command::RefreshSchema
             | Command::OpenConnectionManager
+            | Command::ExportConnections
             | Command::Disconnect
             | Command::OpenItemMenu
             | Command::CreateFolder => "Sidebar",

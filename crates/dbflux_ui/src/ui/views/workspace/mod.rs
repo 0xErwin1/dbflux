@@ -987,6 +987,9 @@ impl Workspace {
                         modal.open(req, window, cx);
                     });
                 }
+                SidebarEvent::RequestExportConnections => {
+                    this.open_export_connections_modal(window, cx);
+                }
             },
         )
         .detach();
@@ -1479,6 +1482,7 @@ impl Workspace {
                 "Open Connection Manager",
                 "Connections",
             ),
+            PaletteCommand::new("export_connections", "Export Connections…", "Connections"),
             PaletteCommand::new("disconnect", "Disconnect Current", "Connections"),
             PaletteCommand::new("refresh_schema", "Refresh Schema", "Connections"),
             // Focus — Ctrl+Shift+1..4 stay literal Ctrl on every platform

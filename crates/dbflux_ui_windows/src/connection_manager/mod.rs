@@ -1,10 +1,13 @@
 mod access_tab;
+pub mod export_modal;
 mod form;
 mod hooks_tab;
 mod navigation;
 mod render;
 mod render_driver_select;
 mod render_tabs;
+
+pub use export_modal::ExportConnections;
 
 use crate::ssh_shared::SshAuthSelection;
 use dbflux_app::keymap::KeymapStack;
