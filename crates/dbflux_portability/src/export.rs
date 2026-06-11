@@ -144,10 +144,6 @@ pub fn export(
 
         let value_refs = build_value_refs(profile, &mut staged_secrets, &mut report);
 
-        // Dedup required_refs so a field cannot accumulate duplicate entries
-        // when both a Secret hint and another path target the same field_id.
-        required_refs.dedup_by(|a, b| a.field == b.field && a.kind == b.kind);
-
         let (hooks_payload, include_hooks) = if opts.include_hooks {
             match profile.hooks.as_ref() {
                 None => (None, true),
@@ -539,6 +535,11 @@ fn build_ssh_entries(
                             (SshAuthMethodKind::PrivateKey, false)
                         }
                     } else {
+                        required_refs.push(RequiredRef {
+                            field: "private_key".to_string(),
+                            kind: RequiredRefKind::Secret,
+                        });
+                        report.required_ref_count += 1;
                         (SshAuthMethodKind::PrivateKey, false)
                     }
                 }
@@ -629,35 +630,29 @@ fn build_secrets_section(
         return Ok((EncryptionMode::None, None));
     }
 
-    match &opts.encryption {
-        EncryptionChoice::Passphrase(passphrase) => {
-            #[cfg(feature = "encryption")]
-            {
-                let ciphertext = crate::encryption::encrypt_secrets(&staged_secrets, passphrase)?;
-                Ok((
-                    EncryptionMode::AgePassphrase,
-                    Some(SecretsSection::Encrypted { ciphertext }),
-                ))
-            }
-
-            #[cfg(not(feature = "encryption"))]
-            {
-                let _passphrase = passphrase;
-                Err(PortabilityError::EncryptionUnavailable)
-            }
+    if let EncryptionChoice::Passphrase(passphrase) = &opts.encryption {
+        #[cfg(feature = "encryption")]
+        {
+            let ciphertext = crate::encryption::encrypt_secrets(&staged_secrets, passphrase)?;
+            return Ok((
+                EncryptionMode::AgePassphrase,
+                Some(SecretsSection::Encrypted { ciphertext }),
+            ));
         }
 
-        EncryptionChoice::Plaintext { forced: true } => Ok((
-            EncryptionMode::None,
-            Some(SecretsSection::Plaintext {
-                values: staged_secrets,
-            }),
-        )),
-
-        EncryptionChoice::Plaintext { forced: false } => {
-            unreachable!("forced: false is handled above")
+        #[cfg(not(feature = "encryption"))]
+        {
+            let _passphrase = passphrase;
+            return Err(PortabilityError::EncryptionUnavailable);
         }
     }
+
+    Ok((
+        EncryptionMode::None,
+        Some(SecretsSection::Plaintext {
+            values: staged_secrets,
+        }),
+    ))
 }
 
 fn chrono_now() -> String {
@@ -1213,23 +1208,42 @@ mod tests {
             text.contains("keyring_value"),
             "keyring secret must be staged in bundle: {text}"
         );
-        // The lex-first field key must appear in [secrets] (conn:<id>:api_secret).
+
+        // The staged secrets key must be exactly conn:<profile_id>:api_secret
+        // (lex-first winner). The password key must NOT exist.
+        let api_secret_key = format!("conn:{}:api_secret", profile.id);
+        let password_key = format!("conn:{}:password", profile.id);
         assert!(
-            text.contains("api_secret"),
-            "api_secret must be the staged field key in secrets: {text}"
+            text.contains(&api_secret_key),
+            "staged secrets must contain key for api_secret: {text}"
+        );
+        assert!(
+            !text.contains(&password_key),
+            "staged secrets must NOT contain key for password (it is a required_ref): {text}"
         );
 
-        // "password" is lex-second and must be a RequiredRef with field="password".
-        let conn = report.required_ref_count;
-        assert!(
-            conn >= 1,
-            "password (lex-second) must be recorded as required_ref; count={conn}"
+        // "password" is lex-second and must be exactly one RequiredRef.
+        assert_eq!(
+            report.required_ref_count, 1,
+            "exactly one required_ref expected (password); count={}",
+            report.required_ref_count
         );
 
-        // Verify the bundle text contains required_refs referencing "password".
-        assert!(
-            text.contains("\"password\""),
-            "required_ref for 'password' field must appear in bundle: {text}"
+        // Parse the bundle and verify the required_refs entry precisely.
+        let bundle: crate::bundle::Bundle = toml::from_str(&text).expect("parse bundle");
+        let conn_entry = bundle.connections.first().expect("connection entry");
+        assert_eq!(
+            conn_entry.required_refs.len(),
+            1,
+            "exactly one required_ref on connection entry"
+        );
+        let rref = conn_entry
+            .required_refs
+            .first()
+            .expect("required_ref entry");
+        assert_eq!(
+            rref.field, "password",
+            "required_ref field must be 'password'"
         );
     }
 
@@ -1685,6 +1699,61 @@ mod tests {
         assert!(
             !report.warnings.is_empty(),
             "missing SSH password must produce a warning"
+        );
+    }
+
+    #[test]
+    fn private_key_not_embedded_records_required_ref() {
+        use dbflux_core::{SshAuthMethod, SshTunnelConfig, SshTunnelProfile};
+
+        let profile = postgres_profile();
+        let ssh = SshTunnelProfile::new(
+            "Bastion",
+            SshTunnelConfig {
+                host: "bastion.example.com".to_string(),
+                port: 22,
+                user: "ec2-user".to_string(),
+                auth_method: SshAuthMethod::PrivateKey { key_path: None },
+            },
+        );
+
+        let values = FormValues::default();
+        let graph = ExportGraph {
+            connections: vec![ConnectionWithValues {
+                profile: &profile,
+                values,
+            }],
+            auth_profiles: vec![],
+            aws_references: vec![],
+            ssh_tunnels: vec![&ssh],
+            proxies: vec![],
+        };
+
+        let opts = ExportOptions {
+            include_hooks: false,
+            include_settings_overrides: false,
+            embed_ssh_keys: false,
+            encryption: EncryptionChoice::Plaintext { forced: true },
+        };
+
+        let (bytes, report) = export(&graph, &opts, &IncludeAllHints, &NoSecrets).expect("export");
+        let text = String::from_utf8(bytes).expect("utf8");
+
+        assert_eq!(
+            report.required_ref_count, 1,
+            "exactly one required_ref expected for private_key; count={}",
+            report.required_ref_count
+        );
+
+        let private_key_bundle_key = format!("ssh_tunnel:{}:private_key", ssh.id);
+        assert!(
+            !text.contains(&private_key_bundle_key),
+            "no key bytes must be staged in secrets when embed_ssh_keys=false: {text}"
+        );
+
+        assert!(
+            text.contains("\"private_key\""),
+            "required_ref field 'private_key' must appear in bundle: {text}"
         );
     }
 
