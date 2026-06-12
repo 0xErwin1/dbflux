@@ -6,7 +6,6 @@ impl Sidebar {
         let theme = cx.theme();
         let app_state = self.app_state.clone();
         let sidebar = cx.entity().clone();
-        let sidebar_for_import = cx.entity().clone();
 
         let state = self.app_state.read(cx);
         let connected_count = state.connections().len();
@@ -46,27 +45,6 @@ impl Sidebar {
                     .flex()
                     .items_center()
                     .gap(Spacing::XS)
-                    .child(
-                        div()
-                            .id("import-connections-btn")
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .size(px(22.0))
-                            .rounded(Radii::SM)
-                            .cursor_pointer()
-                            .hover(|d| d.bg(theme.secondary))
-                            .on_click(move |_, _, cx| {
-                                sidebar_for_import.update(cx, |_this, cx| {
-                                    cx.emit(SidebarEvent::RequestImportConnections);
-                                });
-                            })
-                            .child(
-                                Icon::new(AppIcon::ArrowDown)
-                                    .size(px(14.0))
-                                    .color(theme.muted_foreground),
-                            ),
-                    )
                     .child(
                         div()
                             .id("settings-btn")

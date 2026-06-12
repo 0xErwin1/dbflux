@@ -2,13 +2,14 @@ mod access_tab;
 pub mod export_modal;
 mod form;
 mod hooks_tab;
-pub mod import_wizard;
+pub mod import_panel;
 mod navigation;
 mod render;
 mod render_driver_select;
 mod render_tabs;
 
 pub use export_modal::{ExportConnectionModal, ExportConnectionModalEvent};
+pub use import_panel::{ImportConnectionsPanel, ImportConnectionsPanelEvent};
 
 use crate::ssh_shared::SshAuthSelection;
 use dbflux_app::keymap::KeymapStack;
@@ -168,6 +169,7 @@ type EditState = FormEditState;
 enum View {
     DriverSelect,
     EditForm,
+    Import,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -217,6 +219,9 @@ struct DriverInfo {
 pub struct ConnectionManagerWindow {
     app_state: Entity<AppStateEntity>,
     view: View,
+    /// In-window import panel. Rendered when `view == View::Import`. Holds the
+    /// multi-step import state so it never bloats this struct.
+    import_panel: Entity<ImportConnectionsPanel>,
     active_tab: ActiveTab,
     available_drivers: Vec<DriverInfo>,
     selected_driver_id: Option<String>,
@@ -606,7 +611,24 @@ impl ConnectionManagerWindow {
             },
         );
 
+        let import_panel =
+            cx.new(|cx| ImportConnectionsPanel::new(app_state.clone(), window, cx));
+
+        let import_panel_sub = cx.subscribe_in(
+            &import_panel,
+            window,
+            |this, _, event: &ImportConnectionsPanelEvent, window, cx| match event {
+                ImportConnectionsPanelEvent::Cancelled
+                | ImportConnectionsPanelEvent::Completed => {
+                    this.view = View::DriverSelect;
+                    window.focus(&this.focus_handle);
+                    cx.notify();
+                }
+            },
+        );
+
         let subscriptions = vec![
+            import_panel_sub,
             driver_filter_focus_sub,
             dropdown_subscription,
             proxy_dropdown_subscription,
@@ -634,6 +656,7 @@ impl ConnectionManagerWindow {
         Self {
             app_state: app_state.clone(),
             view: View::DriverSelect,
+            import_panel,
             active_tab: ActiveTab::Main,
             available_drivers,
             selected_driver_id: None,
@@ -762,6 +785,15 @@ impl ConnectionManagerWindow {
         let mut instance = Self::new(app_state, window, cx);
         instance.target_folder_id = Some(folder_id);
         instance
+    }
+
+    /// Switch to the in-window import panel, resetting it to its first step.
+    pub(super) fn open_import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.import_panel.update(cx, |panel, cx| {
+            panel.reset(window, cx);
+        });
+        self.view = View::Import;
+        cx.notify();
     }
 
     pub fn new_for_edit(

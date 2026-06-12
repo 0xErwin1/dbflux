@@ -842,6 +842,26 @@ impl ConnectionManagerWindow {
         match self.view {
             View::DriverSelect => self.handle_driver_select_command(command, window, cx),
             View::EditForm => self.handle_form_command(command, window, cx),
+            View::Import => self.handle_import_command(command, window, cx),
+        }
+    }
+
+    /// In the import view, Esc returns to the driver picker; everything else is
+    /// handled by the panel's own click affordances.
+    fn handle_import_command(
+        &mut self,
+        command: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match command {
+            Command::Cancel => {
+                self.view = View::DriverSelect;
+                window.focus(&self.focus_handle);
+                cx.notify();
+                true
+            }
+            _ => false,
         }
     }
 

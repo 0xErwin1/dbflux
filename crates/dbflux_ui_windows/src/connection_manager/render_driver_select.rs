@@ -267,6 +267,13 @@ impl ConnectionManagerWindow {
                     .items_center()
                     .gap_2()
                     .child(
+                        Button::new("cm-driver-import", "Import from file\u{2026}").on_click(
+                            cx.listener(|this, _, window, cx| {
+                                this.open_import(window, cx);
+                            }),
+                        ),
+                    )
+                    .child(
                         Button::new("cm-driver-cancel", "Cancel").on_click(cx.listener(
                             |_, _, window, cx| {
                                 cx.emit(DismissEvent);

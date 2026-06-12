@@ -1202,9 +1202,9 @@ impl Render for ConnectionManagerWindow {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
-                    // In the driver-picker view the filter input must remain
-                    // freely clickable, so don't reclaim window focus here.
-                    if this.view == View::DriverSelect {
+                    // In the driver-picker and import views, embedded inputs must
+                    // remain freely clickable, so don't reclaim window focus here.
+                    if matches!(this.view, View::DriverSelect | View::Import) {
                         return;
                     }
                     if this.edit_state == EditState::Navigating {
@@ -1224,6 +1224,7 @@ impl Render for ConnectionManagerWindow {
             .child(match self.view {
                 View::DriverSelect => self.render_driver_select(window, cx).into_any_element(),
                 View::EditForm => self.render_form(window, cx).into_any_element(),
+                View::Import => self.import_panel.clone().into_any_element(),
             })
     }
 }

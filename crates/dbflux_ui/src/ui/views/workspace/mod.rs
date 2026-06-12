@@ -1001,9 +1001,6 @@ impl Workspace {
                 SidebarEvent::RequestExportConnection { profile_id } => {
                     this.open_export_connection_modal(*profile_id, window, cx);
                 }
-                SidebarEvent::RequestImportConnections => {
-                    this.open_import_connections_wizard(window, cx);
-                }
             },
         )
         .detach();

@@ -108,8 +108,6 @@ pub enum SidebarEvent {
     RequestExportConnection {
         profile_id: Uuid,
     },
-    /// Request to open the Import Connections wizard.
-    RequestImportConnections,
     /// Request to open the delete-connection modal for a specific connection profile.
     RequestDeleteConnection {
         connection_name: String,
