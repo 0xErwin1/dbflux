@@ -8,7 +8,7 @@ mod render;
 mod render_driver_select;
 mod render_tabs;
 
-pub use export_modal::ExportConnections;
+pub use export_modal::{ExportConnectionModal, ExportConnectionModalEvent};
 
 use crate::ssh_shared::SshAuthSelection;
 use dbflux_app::keymap::KeymapStack;
