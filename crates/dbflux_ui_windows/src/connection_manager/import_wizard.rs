@@ -110,6 +110,28 @@ impl ImportPersistence for AppStatePersistence<'_> {
     fn write_secret(&self, secret_ref: &str, secret: &SecretString) -> bool {
         self.state.facade.secrets.set_by_ref(secret_ref, secret)
     }
+
+    /// Populate the in-memory `secret_fields` for a newly imported auth profile.
+    ///
+    /// The profile manager holds the profile in memory; setting `secret_fields`
+    /// directly lets the RPC auth provider path authenticate in the current session
+    /// without a restart (H3 / ADR-4 / R-INT-2).
+    fn hydrate_auth_secret_fields(
+        &mut self,
+        auth_id: uuid::Uuid,
+        fields: HashMap<String, SecretString>,
+    ) {
+        if let Some(profile) = self
+            .state
+            .facade
+            .auth_profiles
+            .items
+            .iter_mut()
+            .find(|p| p.id == auth_id)
+        {
+            profile.secret_fields = fields;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

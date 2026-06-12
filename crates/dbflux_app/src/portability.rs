@@ -283,6 +283,19 @@ pub trait ImportPersistence {
     /// Returns `true` on success, `false` when the keyring is unavailable or
     /// rejected the write.
     fn write_secret(&self, secret_ref: &str, secret: &SecretString) -> bool;
+
+    /// Populate the in-memory `secret_fields` for an auth profile after its secrets
+    /// have been written to the keyring.
+    ///
+    /// Called immediately after `add_auth_profile` for newly created (non-Reuse/MapTo)
+    /// profiles so they authenticate in the current session without a restart (H3 / ADR-4).
+    /// The production implementation looks up the profile in the profile manager and
+    /// sets `secret_fields` directly on the in-memory copy.
+    fn hydrate_auth_secret_fields(
+        &mut self,
+        auth_id: uuid::Uuid,
+        fields: HashMap<String, SecretString>,
+    );
 }
 
 /// Run the pure `dbflux_portability::apply()` and persist the resulting
@@ -316,6 +329,13 @@ pub fn apply_import(
 /// Separated from `apply_import` so tests can call it directly with a
 /// pre-built `ImportActions` without needing a full `ParsedBundle`.
 ///
+/// # Hydration (H3 / ADR-4)
+///
+/// After writing auth-profile secrets to the keyring, this function populates the
+/// in-memory `secret_fields` on newly created auth profiles via `hydrate_auth_secret_fields`.
+/// This allows the imported profile to authenticate in the current session without restart.
+/// Reuse/MapTo profiles are excluded — they retain their destination credentials (ADR-6 / H2).
+///
 /// # Secret-write filtering
 ///
 /// Secrets are written only for connections that were successfully persisted.
@@ -328,10 +348,47 @@ pub fn persist_import_actions(
 ) -> ImportOutcome {
     let mut outcome = ImportOutcome::default();
 
+    // Record kind and dangling-ref failures reported by the pure apply() step.
+    for (name, driver_id) in actions.kind_failures {
+        outcome
+            .config_failures
+            .push((name, format!("missing or unparseable `kind` field (driver: {driver_id})")));
+    }
+    for name in actions.unresolved_ref_connections {
+        outcome.unresolved_refs.push(name);
+    }
+
+    // Collect (new_auth_id, field_name) -> secret pairs for in-session hydration.
+    // We capture these before writing so we can populate secret_fields post-write.
+    let mut auth_secret_by_id: HashMap<uuid::Uuid, HashMap<String, SecretString>> =
+        HashMap::new();
+
+    // Stage: identify which auth secret_writes belong to the new auth profiles.
+    // Auth secret refs use the format `dbflux:auth:<uuid>:<field>`.
+    for (ref_str, secret) in &actions.secret_writes {
+        if let Some(stripped) = ref_str.strip_prefix("dbflux:auth:") {
+            // Parse uuid and field from `<uuid>:<field>`.
+            if let Some((uuid_str, field)) = stripped.split_once(':') {
+                if let Ok(auth_id) = uuid::Uuid::parse_str(uuid_str) {
+                    auth_secret_by_id
+                        .entry(auth_id)
+                        .or_default()
+                        .insert(field.to_string(), secret.clone());
+                }
+            }
+        }
+    }
+
     for auth in actions.auth_profiles {
         let name = auth.name.clone();
+        let auth_id = auth.id;
         deps.add_auth_profile(auth);
         outcome.succeeded.push(name);
+
+        // H3 / ADR-4: hydrate in-memory secret_fields for the newly added profile.
+        if let Some(fields) = auth_secret_by_id.get(&auth_id) {
+            deps.hydrate_auth_secret_fields(auth_id, fields.clone());
+        }
     }
 
     for ssh in actions.ssh_tunnels {
@@ -397,6 +454,99 @@ pub fn persist_import_actions(
     }
 
     outcome
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4.1 — M7: MapTo candidate computation
+// ---------------------------------------------------------------------------
+
+/// Return all destination profiles of the same `ConflictKind` as the given conflict,
+/// suitable for the "Map to another" picker in the import wizard.
+///
+/// MapTo (choose a different destination profile) is distinct from Reuse (keep the
+/// conflicting one). This function returns ALL same-kind profiles at the destination,
+/// not only the conflicting one. An empty list means only Reuse or CreateNew are
+/// available (ADR-3 / M7 / R-WIZ-3).
+pub fn mapto_candidates(
+    kind: dbflux_portability::ConflictKind,
+    dest: &OwnedDestSnapshot,
+) -> Vec<(uuid::Uuid, String)> {
+    match kind {
+        dbflux_portability::ConflictKind::AuthProfile => dest
+            .auth_profiles
+            .iter()
+            .map(|a| (a.id, a.name.clone()))
+            .collect(),
+        dbflux_portability::ConflictKind::SshTunnel => dest
+            .ssh_tunnels
+            .iter()
+            .map(|s| (s.id, s.name.clone()))
+            .collect(),
+        dbflux_portability::ConflictKind::Proxy => dest
+            .proxies
+            .iter()
+            .map(|p| (p.id, p.name.clone()))
+            .collect(),
+        dbflux_portability::ConflictKind::Connection => dest
+            .connections
+            .iter()
+            .map(|c| (c.id, c.name.clone()))
+            .collect(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4.2 — C3: ConfirmSummary — computed once at plan time for stable rendering
+// ---------------------------------------------------------------------------
+
+/// Summary of entities to be imported, computed at plan time.
+///
+/// The wizard renders from this value rather than from the live `parsed_bundle`,
+/// so the Confirm step shows correct counts even after `parsed_bundle` is consumed
+/// by `do_apply` (ADR-3 / C3 / R-WIZ-1).
+#[derive(Debug, Clone, Default)]
+pub struct ConfirmSummary {
+    /// Number of connections to be imported (including new + reuse + conflict-resolved).
+    pub connection_count: usize,
+    /// Number of auth profiles to be imported or reused.
+    pub auth_profile_count: usize,
+    /// Number of SSH tunnel profiles to be imported or reused.
+    pub ssh_tunnel_count: usize,
+    /// Number of proxy profiles to be imported or reused.
+    pub proxy_count: usize,
+    /// Number of required resolutions the user must supply before applying.
+    pub required_resolution_count: usize,
+    /// Number of connection conflicts detected (Reuse/CreateNew/MapTo choices pending).
+    pub conflict_count: usize,
+    /// True when any connection in the bundle targets a driver not in the registry.
+    /// The wizard can surface a note about installing the relevant driver.
+    pub has_driver_not_installed: bool,
+}
+
+/// Compute a `ConfirmSummary` from the plan and bundle.
+///
+/// Called immediately after `plan()` returns so the wizard can render the Confirm
+/// step from a stable snapshot rather than the live `ParsedBundle`.
+pub fn confirm_summary(
+    parsed: &dbflux_portability::ParsedBundle,
+    plan: &dbflux_portability::ImportPlan,
+    registered_drivers: &std::collections::HashSet<String>,
+) -> ConfirmSummary {
+    let has_driver_not_installed = parsed
+        .bundle
+        .connections
+        .iter()
+        .any(|c| !registered_drivers.contains(&c.driver_id));
+
+    ConfirmSummary {
+        connection_count: parsed.bundle.connections.len(),
+        auth_profile_count: parsed.bundle.auth_profiles.len(),
+        ssh_tunnel_count: parsed.bundle.ssh_tunnels.len(),
+        proxy_count: parsed.bundle.proxies.len(),
+        required_resolution_count: plan.required_resolutions.len(),
+        conflict_count: plan.conflicts.len(),
+        has_driver_not_installed,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -906,6 +1056,14 @@ mod tests {
                 .copied()
                 .unwrap_or(true)
         }
+
+        fn hydrate_auth_secret_fields(
+            &mut self,
+            _auth_id: uuid::Uuid,
+            _fields: HashMap<String, SecretString>,
+        ) {
+            // No-op for tests that don't verify hydration.
+        }
     }
 
     fn make_import_actions_empty() -> ImportActions {
@@ -915,6 +1073,8 @@ mod tests {
             ssh_tunnels: vec![],
             proxies: vec![],
             secret_writes: vec![],
+            kind_failures: vec![],
+            unresolved_ref_connections: vec![],
         }
     }
 
@@ -982,6 +1142,8 @@ mod tests {
             ssh_tunnels: vec![ssh],
             proxies: vec![proxy],
             secret_writes: vec![],
+            kind_failures: vec![],
+            unresolved_ref_connections: vec![],
         };
 
         let outcome = persist_import_actions(actions, &mut deps);
@@ -1006,6 +1168,8 @@ mod tests {
             ssh_tunnels: vec![],
             proxies: vec![],
             secret_writes: vec![],
+            kind_failures: vec![],
+            unresolved_ref_connections: vec![],
         };
 
         let outcome = persist_import_actions(actions, &mut deps);
@@ -1028,6 +1192,8 @@ mod tests {
             ssh_tunnels: vec![],
             proxies: vec![],
             secret_writes: vec![],
+            kind_failures: vec![],
+            unresolved_ref_connections: vec![],
         };
 
         let outcome = persist_import_actions(actions, &mut deps);
@@ -1051,6 +1217,8 @@ mod tests {
                 "dbflux:conn:aaaa-bbbb:password".to_string(),
                 SecretString::from("s3cr3t".to_string()),
             )],
+            kind_failures: vec![],
+            unresolved_ref_connections: vec![],
         };
 
         let outcome = persist_import_actions(actions, &mut deps);
@@ -1075,6 +1243,8 @@ mod tests {
                 "dbflux:conn:1111-2222:password".to_string(),
                 SecretString::from("ok".to_string()),
             )],
+            kind_failures: vec![],
+            unresolved_ref_connections: vec![],
         };
 
         let outcome = persist_import_actions(actions, &mut deps);
@@ -1095,6 +1265,8 @@ mod tests {
             ssh_tunnels: vec![],
             proxies: vec![],
             secret_writes: vec![],
+            kind_failures: vec![],
+            unresolved_ref_connections: vec![],
         };
 
         let outcome = persist_import_actions(actions, &mut deps);
@@ -1136,6 +1308,13 @@ mod tests {
             fn write_secret(&self, _: &str, _: &SecretString) -> bool {
                 true
             }
+
+            fn hydrate_auth_secret_fields(
+                &mut self,
+                _auth_id: uuid::Uuid,
+                _fields: HashMap<String, SecretString>,
+            ) {
+            }
         }
 
         let mut recorder = DriverIdRecorder {
@@ -1163,6 +1342,8 @@ mod tests {
             ssh_tunnels: vec![],
             proxies: vec![],
             secret_writes: vec![],
+            kind_failures: vec![],
+            unresolved_ref_connections: vec![],
         };
 
         persist_import_actions(actions, &mut recorder);
@@ -1208,6 +1389,13 @@ mod tests {
         fn write_secret(&self, _: &str, _: &SecretString) -> bool {
             true
         }
+
+        fn hydrate_auth_secret_fields(
+            &mut self,
+            _auth_id: uuid::Uuid,
+            _fields: HashMap<String, SecretString>,
+        ) {
+        }
     }
 
     #[test]
@@ -1225,6 +1413,8 @@ mod tests {
             ssh_tunnels: vec![],
             proxies: vec![],
             secret_writes: vec![],
+            kind_failures: vec![],
+            unresolved_ref_connections: vec![],
         };
 
         let outcome = persist_import_actions(actions, &mut deps);
@@ -1276,6 +1466,13 @@ mod tests {
                 .push(secret_ref.to_string());
             true
         }
+
+        fn hydrate_auth_secret_fields(
+            &mut self,
+            _auth_id: uuid::Uuid,
+            _fields: HashMap<String, SecretString>,
+        ) {
+        }
     }
 
     #[test]
@@ -1315,6 +1512,8 @@ mod tests {
                     SecretString::from("ok-secret".to_string()),
                 ),
             ],
+            kind_failures: vec![],
+            unresolved_ref_connections: vec![],
         };
 
         let outcome = persist_import_actions(actions, &mut deps);
@@ -1353,6 +1552,248 @@ mod tests {
         assert!(
             report.warnings.is_empty(),
             "skipped connection must not also appear as a warning unless explicitly added"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 4.1 — mapto_candidates (M7 / R-WIZ-3)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn mapto_candidates_auth_profile_returns_all_dest_auth_profiles() {
+        let auth1 = make_auth_profile(Uuid::new_v4());
+        let auth2 = make_auth_profile(Uuid::new_v4());
+
+        let dest = OwnedDestSnapshot {
+            auth_profiles: vec![auth1.clone(), auth2.clone()],
+            ssh_tunnels: vec![],
+            proxies: vec![],
+            connections: vec![],
+        };
+
+        let candidates = super::mapto_candidates(dbflux_portability::ConflictKind::AuthProfile, &dest);
+
+        assert_eq!(candidates.len(), 2, "must return all auth profiles");
+        let ids: Vec<_> = candidates.iter().map(|(id, _)| *id).collect();
+        assert!(ids.contains(&auth1.id));
+        assert!(ids.contains(&auth2.id));
+    }
+
+    #[test]
+    fn mapto_candidates_ssh_tunnel_returns_all_dest_tunnels() {
+        let ssh1 = make_ssh_tunnel(Uuid::new_v4());
+        let ssh2 = make_ssh_tunnel(Uuid::new_v4());
+
+        let dest = OwnedDestSnapshot {
+            auth_profiles: vec![],
+            ssh_tunnels: vec![ssh1.clone(), ssh2.clone()],
+            proxies: vec![],
+            connections: vec![],
+        };
+
+        let candidates = super::mapto_candidates(dbflux_portability::ConflictKind::SshTunnel, &dest);
+
+        assert_eq!(candidates.len(), 2);
+        let ids: Vec<_> = candidates.iter().map(|(id, _)| *id).collect();
+        assert!(ids.contains(&ssh1.id));
+        assert!(ids.contains(&ssh2.id));
+    }
+
+    #[test]
+    fn mapto_candidates_empty_dest_returns_empty_list() {
+        let dest = OwnedDestSnapshot {
+            auth_profiles: vec![],
+            ssh_tunnels: vec![],
+            proxies: vec![],
+            connections: vec![],
+        };
+
+        let candidates = super::mapto_candidates(dbflux_portability::ConflictKind::AuthProfile, &dest);
+        assert!(
+            candidates.is_empty(),
+            "empty dest must yield empty candidate list"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 4.2 — ConfirmSummary (C3 / R-WIZ-1)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn confirm_summary_counts_bundle_entities() {
+        use dbflux_portability::bundle::{
+            AuthEntry, Bundle, BundleMeta, CURRENT_FORMAT_VERSION, ConnectionEntry, EncryptionMode,
+            SshEntry, SshAuthMethodKind,
+        };
+        use dbflux_portability::ParsedBundle;
+
+        let bundle = Bundle {
+            bundle: BundleMeta {
+                format_version: CURRENT_FORMAT_VERSION,
+                created_at: "2026-01-01T00:00:00Z".to_string(),
+                dbflux_version: "0.7.0-dev.0".to_string(),
+                encryption: EncryptionMode::None,
+            },
+            drivers: vec![],
+            connections: vec![
+                ConnectionEntry {
+                    local_id: "c1".to_string(),
+                    name: "Conn1".to_string(),
+                    driver_id: "postgres".to_string(),
+                    fields: Default::default(),
+                    local_path_fields: Default::default(),
+                    required_refs: vec![],
+                    auth_ref: None,
+                    auth_profile_local_id: None,
+                    access: None,
+                    value_refs: Default::default(),
+                    include_hooks: false,
+                    include_settings_overrides: false,
+                    hooks_payload: None,
+                    settings_overrides_payload: None,
+                    kind: Some("Postgres".to_string()),
+                    uri_secret_fields: vec![],
+                },
+                ConnectionEntry {
+                    local_id: "c2".to_string(),
+                    name: "Conn2".to_string(),
+                    driver_id: "unknown-driver".to_string(),
+                    fields: Default::default(),
+                    local_path_fields: Default::default(),
+                    required_refs: vec![],
+                    auth_ref: None,
+                    auth_profile_local_id: None,
+                    access: None,
+                    value_refs: Default::default(),
+                    include_hooks: false,
+                    include_settings_overrides: false,
+                    hooks_payload: None,
+                    settings_overrides_payload: None,
+                    kind: Some("MongoDB".to_string()),
+                    uri_secret_fields: vec![],
+                },
+            ],
+            auth_profiles: vec![AuthEntry {
+                local_id: "a1".to_string(),
+                name: "MySSO".to_string(),
+                provider_id: "aws-sso".to_string(),
+                enabled: true,
+                fields: Default::default(),
+                secret_field_names: vec![],
+                required_refs: vec![],
+            }],
+            ssh_tunnels: vec![SshEntry {
+                local_id: "s1".to_string(),
+                name: "Bastion".to_string(),
+                host: "bastion.example.com".to_string(),
+                port: 22,
+                user: "ec2-user".to_string(),
+                auth_method: SshAuthMethodKind::Password,
+                key_embedded: false,
+                required_refs: vec![],
+            }],
+            proxies: vec![],
+            secrets: None,
+        };
+
+        let parsed = ParsedBundle {
+            bundle,
+            decrypted_secrets: None,
+        };
+
+        let plan = dbflux_portability::ImportPlan {
+            conflicts: vec![],
+            required_resolutions: vec![],
+        };
+
+        let registered: std::collections::HashSet<String> = ["postgres".to_string()].into_iter().collect();
+        let summary = super::confirm_summary(&parsed, &plan, &registered);
+
+        assert_eq!(summary.connection_count, 2);
+        assert_eq!(summary.auth_profile_count, 1);
+        assert_eq!(summary.ssh_tunnel_count, 1);
+        assert_eq!(summary.proxy_count, 0);
+        assert_eq!(summary.conflict_count, 0);
+        assert_eq!(summary.required_resolution_count, 0);
+        assert!(
+            summary.has_driver_not_installed,
+            "unknown-driver must trigger has_driver_not_installed"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 4.3 — H3: hydrate_auth_secret_fields (R-INT-2)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn hydrate_auth_secret_fields_is_called_for_new_auth_profiles() {
+        // After persist_import_actions, the hydrate_auth_secret_fields seam must
+        // be called for newly created auth profiles (H3 / ADR-4 / R-INT-2).
+        struct HydrationTracker {
+            hydrated: HashMap<uuid::Uuid, HashMap<String, SecretString>>,
+        }
+
+        impl ImportPersistence for HydrationTracker {
+            fn add_auth_profile(&mut self, _p: AuthProfile) {}
+            fn add_ssh_tunnel(&mut self, _: SshTunnelProfile) {}
+            fn add_proxy(&mut self, _: ProxyProfile) {}
+            fn add_connection(&mut self, _: ConnectionProfile) -> ConnectionInsertResult {
+                ConnectionInsertResult::Ok
+            }
+            fn write_secret(&self, _: &str, _: &SecretString) -> bool {
+                true
+            }
+            fn hydrate_auth_secret_fields(
+                &mut self,
+                auth_id: uuid::Uuid,
+                fields: HashMap<String, SecretString>,
+            ) {
+                self.hydrated.insert(auth_id, fields);
+            }
+        }
+
+        let auth_id = Uuid::new_v4();
+        let auth_secret_ref = dbflux_core::auth_field_secret_ref(&auth_id, "token");
+
+        let auth = AuthProfile {
+            id: auth_id,
+            name: "SSO Profile".to_string(),
+            provider_id: "aws-sso".to_string(),
+            fields: HashMap::new(),
+            secret_fields: HashMap::new(),
+            enabled: true,
+            read_only: false,
+            dangling_origin: None,
+        };
+
+        let actions = ImportActions {
+            auth_profiles: vec![auth],
+            connections: vec![],
+            ssh_tunnels: vec![],
+            proxies: vec![],
+            secret_writes: vec![(
+                auth_secret_ref.clone(),
+                SecretString::from("hydrated-secret".to_string()),
+            )],
+            kind_failures: vec![],
+            unresolved_ref_connections: vec![],
+        };
+
+        let mut tracker = HydrationTracker {
+            hydrated: HashMap::new(),
+        };
+
+        persist_import_actions(actions, &mut tracker);
+
+        assert!(
+            tracker.hydrated.contains_key(&auth_id),
+            "hydrate_auth_secret_fields must be called for the new auth profile"
+        );
+        let fields = &tracker.hydrated[&auth_id];
+        assert!(
+            fields.contains_key("token"),
+            "the token field must be hydrated; got: {:?}",
+            fields.keys().collect::<Vec<_>>()
         );
     }
 }
