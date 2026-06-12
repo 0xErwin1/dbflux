@@ -4065,8 +4065,8 @@ mod tests {
         );
     }
 
-    /// a driver whose `driver_key()` is `"builtin:influxdb"`.
     // --- T-3.6: list_auth_profiles() union seam ---
+    // Tests for a driver whose `driver_key()` is `"builtin:influxdb"`.
 
     struct ReflectingTestAuthProvider {
         provider_id: String,

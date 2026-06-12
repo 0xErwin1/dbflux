@@ -326,15 +326,22 @@ pub fn persist_import_actions(
         }
     }
 
-    for (secret_ref, secret) in actions.secret_writes {
-        // Skip secrets that belong to connections that were not persisted.
-        // Connection secret refs are of the form dbflux:conn:<uuid>:... so we can
-        // check for the UUID prefix to identify and filter them.
-        let is_skipped_conn_secret = skipped_conn_ids
-            .iter()
-            .any(|id| secret_ref.contains(&id.to_string()));
+    // Precompute the exact `connection_secret_ref` string for each skipped id so the
+    // filter below uses an exact prefix match rather than a loose substring search.
+    // `connection_secret_ref` produces the canonical `"dbflux:conn:<uuid>"` prefix that
+    // all connection-scoped secret refs begin with.
+    let skipped_conn_refs: std::collections::HashSet<String> = skipped_conn_ids
+        .iter()
+        .map(dbflux_core::connection_secret_ref)
+        .collect();
 
-        if is_skipped_conn_secret {
+    for (secret_ref, secret) in actions.secret_writes {
+        // Skip secrets belonging to connections that were not persisted.
+        let is_skipped = skipped_conn_refs
+            .iter()
+            .any(|prefix| secret_ref.starts_with(prefix.as_str()));
+
+        if is_skipped {
             continue;
         }
 
@@ -363,7 +370,6 @@ mod tests {
     use dbflux_core::{
         AuthProfile, Connection, ConnectionProfile, DbConfig, DbError, DbKind, DriverFormDef,
         DriverMetadata, ExportFieldHint, FormValues, ProxyProfile, SecretStore, SshTunnelProfile,
-        connection_secret_ref,
     };
     use dbflux_portability::{AwsRef, FieldHintResolver, SecretReader};
     use uuid::Uuid;
@@ -790,7 +796,7 @@ mod tests {
     // ImportPersistence tests (T5.1 — import orchestration, TDD first)
     // -----------------------------------------------------------------------
 
-    use super::{ImportOutcome, ImportPersistence, persist_import_actions};
+    use super::{ImportPersistence, persist_import_actions};
     use dbflux_portability::ImportActions;
 
     /// Minimal fake implementation of `ImportPersistence` for unit tests.
@@ -800,10 +806,8 @@ mod tests {
         ssh_count: usize,
         proxy_count: usize,
         conn_names: Vec<String>,
-        /// `None` keys are secrets that must NOT be written (unknown driver skip).
-        /// `Some(false)` means the write is simulated to fail (keyring locked).
+        /// `None` keys succeed; `Some(false)` simulates keyring-locked failure.
         secret_outcomes: HashMap<String, bool>,
-        written_secrets: Vec<String>,
     }
 
     impl FakePersistence {
@@ -815,7 +819,6 @@ mod tests {
                 proxy_count: 0,
                 conn_names: Vec::new(),
                 secret_outcomes: HashMap::new(),
-                written_secrets: Vec::new(),
             }
         }
 
@@ -854,12 +857,10 @@ mod tests {
         }
 
         fn write_secret(&self, secret_ref: &str, _secret: &SecretString) -> bool {
-            let result = self
-                .secret_outcomes
+            self.secret_outcomes
                 .get(secret_ref)
                 .copied()
-                .unwrap_or(true);
-            result
+                .unwrap_or(true)
         }
     }
 
@@ -1205,35 +1206,7 @@ mod tests {
     // Finding #8 — skipped connection secrets are not written to keyring
     // -----------------------------------------------------------------------
 
-    /// A persistence implementation that records all secret refs passed to write_secret.
-    struct SecretRecordingPersistence {
-        registered_drivers: std::collections::HashSet<String>,
-        written_secret_refs: Vec<String>,
-    }
-
-    impl ImportPersistence for SecretRecordingPersistence {
-        fn add_auth_profile(&mut self, _: AuthProfile) {}
-        fn add_ssh_tunnel(&mut self, _: SshTunnelProfile) {}
-        fn add_proxy(&mut self, _: ProxyProfile) {}
-
-        fn add_connection(&mut self, profile: ConnectionProfile) -> ConnectionInsertResult {
-            let driver_id = profile.driver_id().to_string();
-            if !self.registered_drivers.contains(&driver_id) {
-                ConnectionInsertResult::NeedsDriver
-            } else {
-                ConnectionInsertResult::Ok
-            }
-        }
-
-        fn write_secret(&self, secret_ref: &str, _: &SecretString) -> bool {
-            // Track via interior mutability is not available here, but we use
-            // a separate recorder struct in the test that keeps its own log.
-            let _ = secret_ref;
-            true
-        }
-    }
-
-    /// Mutable-tracking version for this specific test.
+    /// Mutable-tracking version for this test.
     struct TrackingPersistence {
         registered: std::collections::HashSet<String>,
         written_secret_refs: std::sync::Arc<std::sync::Mutex<Vec<String>>>,

@@ -204,7 +204,9 @@ pub fn export(
 
         driver_refs.push(driver_ref_for(&driver_id));
 
-        let kind = Some(format!("{:?}", profile.kind()));
+        let kind = serde_json::to_value(profile.kind())
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string));
 
         connection_entries.push(ConnectionEntry {
             local_id: profile.id.to_string(),

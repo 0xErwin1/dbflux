@@ -571,8 +571,13 @@ pub fn apply(
         profile.value_refs = restore_value_refs(conn_entry);
 
         // Restore hooks when the bundle included them.
+        // Pass decrypted_secrets so hook env entries can be reconstructed from
+        // the encrypted section where they were staged during export.
         if conn_entry.include_hooks {
-            profile.hooks = conn_entry.hooks_payload.as_ref().and_then(restore_hooks);
+            profile.hooks = conn_entry
+                .hooks_payload
+                .as_ref()
+                .and_then(|p| restore_hooks(p, &conn_entry.local_id, secrets));
         }
 
         // Restore settings_overrides when the bundle included them.
@@ -601,27 +606,15 @@ pub fn apply(
 
 /// Resolve the `DbKind` for an imported connection.
 ///
-/// Prefers the `kind` field serialized by the exporter (as `"{:?}"` of `DbKind`).
-/// Falls back to deriving the kind from `driver_id` via `builtin_driver_id_for_kind`
-/// for bundles written before the `kind` field was introduced.
+/// Prefers the `kind` field serialized by the exporter via `serde_json`, which produces
+/// the canonical serde variant name (e.g. `"Postgres"`, `"SQLite"`). Falls back to
+/// deriving the kind from `driver_id` for legacy bundles that predate the `kind` field.
 fn db_kind_from_bundle(conn: &crate::bundle::ConnectionEntry) -> dbflux_core::DbKind {
     use dbflux_core::DbKind;
 
     if let Some(kind_str) = &conn.kind {
-        let parsed = match kind_str.as_str() {
-            "Postgres" => Some(DbKind::Postgres),
-            "SQLite" => Some(DbKind::SQLite),
-            "MySQL" => Some(DbKind::MySQL),
-            "MariaDB" => Some(DbKind::MariaDB),
-            "MongoDB" => Some(DbKind::MongoDB),
-            "Redis" => Some(DbKind::Redis),
-            "DynamoDB" => Some(DbKind::DynamoDB),
-            "CloudWatchLogs" => Some(DbKind::CloudWatchLogs),
-            "InfluxDB" => Some(DbKind::InfluxDB),
-            "SqlServer" => Some(DbKind::SqlServer),
-            _ => None,
-        };
-        if let Some(k) = parsed {
+        let jv = serde_json::Value::String(kind_str.clone());
+        if let Ok(k) = serde_json::from_value::<DbKind>(jv) {
             return k;
         }
     }
@@ -660,12 +653,72 @@ fn restore_value_refs(
         .collect()
 }
 
-/// Deserialize the `hooks_payload` toml::Value into `ConnectionHooks`.
+/// Deserialize the `hooks_payload` toml::Value into `ConnectionHooks` and
+/// repopulate each hook's `env` map from the decrypted secrets.
 ///
-/// Returns `None` when the payload is absent or deserialization fails.
-fn restore_hooks(payload: &toml::Value) -> Option<dbflux_core::ConnectionHooks> {
+/// During export, hook env entries are moved to the encrypted `[secrets]` section
+/// under keys `conn_hook_env:<bundle_local_id>:<phase>:<index>:<env_key>`.
+/// This function reconstructs those entries from `decrypted_secrets` so the
+/// restored hooks have the same env as the originals.
+///
+/// Returns `None` when the payload is absent or the top-level deserialization fails.
+/// Individual env-key lookup failures are silently skipped — a missing env key is
+/// preferable to blocking the entire import.
+fn restore_hooks(
+    payload: &toml::Value,
+    bundle_local_id: &str,
+    decrypted_secrets: Option<&HashMap<String, String>>,
+) -> Option<dbflux_core::ConnectionHooks> {
     let jv = serde_json::to_value(payload).ok()?;
-    serde_json::from_value(jv).ok()
+    let mut hooks: dbflux_core::ConnectionHooks = serde_json::from_value(jv).ok()?;
+
+    let Some(secrets) = decrypted_secrets else {
+        return Some(hooks);
+    };
+
+    restore_hook_env(
+        &mut hooks.pre_connect,
+        "pre_connect",
+        bundle_local_id,
+        secrets,
+    );
+    restore_hook_env(
+        &mut hooks.post_connect,
+        "post_connect",
+        bundle_local_id,
+        secrets,
+    );
+    restore_hook_env(
+        &mut hooks.pre_disconnect,
+        "pre_disconnect",
+        bundle_local_id,
+        secrets,
+    );
+    restore_hook_env(
+        &mut hooks.post_disconnect,
+        "post_disconnect",
+        bundle_local_id,
+        secrets,
+    );
+
+    Some(hooks)
+}
+
+/// Repopulate the `env` map for each hook in a phase slice from the decrypted secrets.
+fn restore_hook_env(
+    phase_hooks: &mut [dbflux_core::ConnectionHook],
+    phase: &str,
+    bundle_local_id: &str,
+    secrets: &HashMap<String, String>,
+) {
+    for (index, hook) in phase_hooks.iter_mut().enumerate() {
+        let prefix = format!("conn_hook_env:{}:{}:{}:", bundle_local_id, phase, index);
+        for (secrets_key, env_value) in secrets {
+            if let Some(env_key) = secrets_key.strip_prefix(&prefix) {
+                hook.env.insert(env_key.to_string(), env_value.clone());
+            }
+        }
+    }
 }
 
 /// Deserialize the `settings_overrides_payload` toml::Value into `GlobalOverrides`.
@@ -862,13 +915,13 @@ fn parse_proxy_kind(kind: &str) -> dbflux_core::ProxyKind {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-#[allow(clippy::expect_used)]
+#[allow(clippy::expect_used, clippy::panic)]
 mod tests {
     use std::collections::HashMap;
 
     use dbflux_core::{
-        AuthProfile, ProxyAuth, ProxyKind, ProxyProfile, SshAuthMethod, SshTunnelConfig,
-        SshTunnelProfile,
+        AuthProfile, ConnectionHook, ConnectionHooks, HookKind, ProxyAuth, ProxyKind, ProxyProfile,
+        SshAuthMethod, SshTunnelConfig, SshTunnelProfile,
     };
     use uuid::Uuid;
 
@@ -1860,6 +1913,72 @@ encryption = "none"
     }
 
     // -----------------------------------------------------------------------
+    // R2-4: db_kind_from_bundle uses canonical serde representation
+    // -----------------------------------------------------------------------
+
+    /// Every DbKind variant must survive the export→import round-trip through the
+    /// canonical serde string (the same path used by the new export pipeline).
+    #[test]
+    fn db_kind_all_variants_round_trip_via_canonical_serde() {
+        use super::db_kind_from_bundle;
+        use dbflux_core::DbKind;
+
+        let variants: &[(DbKind, &str, &str)] = &[
+            (DbKind::Postgres, "Postgres", "postgres"),
+            (DbKind::SQLite, "SQLite", "sqlite"),
+            (DbKind::MySQL, "MySQL", "mysql"),
+            (DbKind::MariaDB, "MariaDB", "mariadb"),
+            (DbKind::MongoDB, "MongoDB", "mongodb"),
+            (DbKind::Redis, "Redis", "redis"),
+            (DbKind::DynamoDB, "DynamoDB", "dynamodb"),
+            (DbKind::CloudWatchLogs, "CloudWatchLogs", "cloudwatch"),
+            (DbKind::InfluxDB, "InfluxDB", "influxdb"),
+            (DbKind::SqlServer, "SqlServer", "mssql"),
+        ];
+
+        for (expected, kind_str, driver_id) in variants {
+            let mut entry = make_connection_entry("rt-kind");
+            entry.driver_id = driver_id.to_string();
+            entry.kind = Some(kind_str.to_string());
+
+            let got = db_kind_from_bundle(&entry);
+            assert_eq!(
+                got, *expected,
+                "kind_str='{}' must parse to {:?}; got {:?}",
+                kind_str, expected, got
+            );
+        }
+    }
+
+    /// Legacy bundle (no `kind` field) must derive the correct kind from driver_id.
+    #[test]
+    fn db_kind_falls_back_to_driver_id_for_legacy_bundles() {
+        use super::db_kind_from_bundle;
+        use dbflux_core::DbKind;
+
+        let cases: &[(&str, DbKind)] = &[
+            ("postgres", DbKind::Postgres),
+            ("mysql", DbKind::MySQL),
+            ("redis", DbKind::Redis),
+            ("mssql", DbKind::SqlServer),
+            ("cloudwatch", DbKind::CloudWatchLogs),
+        ];
+
+        for (driver_id, expected) in cases {
+            let mut entry = make_connection_entry("legacy");
+            entry.driver_id = driver_id.to_string();
+            entry.kind = None;
+
+            let got = db_kind_from_bundle(&entry);
+            assert_eq!(
+                got, *expected,
+                "driver_id='{}' must fall back to {:?}; got {:?}",
+                driver_id, expected, got
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // apply() — value_refs preserved on import (#1)
     // -----------------------------------------------------------------------
 
@@ -1975,6 +2094,138 @@ encryption = "none"
         assert!(
             conn.hooks.is_some(),
             "hooks must be preserved when include_hooks = true and hooks_payload is present"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // R2-1: Hook env round-trips through the encrypted secrets section
+    // -----------------------------------------------------------------------
+
+    /// Builds a toml::Value hooks payload from a ConnectionHooks struct, mirroring
+    /// what the export pipeline writes (after sanitizing env out).
+    fn hooks_toml_payload(hooks: &dbflux_core::ConnectionHooks) -> toml::Value {
+        let jv = serde_json::to_value(hooks).expect("serialize hooks");
+        toml::Value::try_from(jv).expect("convert to toml")
+    }
+
+    /// A connection exported with a hook carrying env vars must restore those env
+    /// vars when imported with the corresponding decrypted secrets present.
+    #[test]
+    fn apply_hook_env_is_restored_from_decrypted_secrets() {
+        let local_id = "conn-hook-env-1";
+        let mut entry = make_connection_entry(local_id);
+        entry.include_hooks = true;
+
+        // Build a hooks struct with an empty env — the exporter sanitizes env out and
+        // stages it in the encrypted secrets section.
+        let hook = ConnectionHook {
+            enabled: true,
+            kind: HookKind::Command {
+                command: "echo".to_string(),
+                args: vec![],
+            },
+            cwd: None,
+            env: HashMap::new(), // env was moved to secrets during export
+            inherit_env: false,
+            env_denylist: vec![],
+            timeout_ms: None,
+            execution_mode: Default::default(),
+            ready_signal: None,
+            on_failure: Default::default(),
+        };
+        let hooks = ConnectionHooks {
+            pre_connect: vec![hook],
+            post_connect: vec![],
+            pre_disconnect: vec![],
+            post_disconnect: vec![],
+        };
+        entry.hooks_payload = Some(hooks_toml_payload(&hooks));
+
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        bundle.connections.push(entry);
+
+        // The decrypted_secrets map contains the env entry staged by the exporter.
+        let env_key = format!("conn_hook_env:{}:pre_connect:0:SECRET_TOKEN", local_id);
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: Some({
+                let mut m = HashMap::new();
+                m.insert(env_key, "tok_live_supersecret".to_string());
+                m
+            }),
+        };
+
+        let import_plan = plan(&parsed, &empty_dest());
+        let choices = ResolutionChoices::default();
+        let actions = apply(&parsed, &import_plan, &choices).expect("apply");
+
+        let conn = actions.connections.first().expect("connection");
+        let restored_hooks = conn.hooks.as_ref().expect("hooks must be present");
+        let hook = restored_hooks
+            .pre_connect
+            .first()
+            .expect("pre_connect hook");
+
+        assert_eq!(
+            hook.env.get("SECRET_TOKEN").map(String::as_str),
+            Some("tok_live_supersecret"),
+            "hook env SECRET_TOKEN must be restored from decrypted_secrets"
+        );
+    }
+
+    /// A hook with no env entries must import with an empty env map — no panic, no crash.
+    #[test]
+    fn apply_hook_with_no_env_imports_with_empty_env() {
+        let local_id = "conn-hook-noenv-1";
+        let mut entry = make_connection_entry(local_id);
+        entry.include_hooks = true;
+
+        let hook = ConnectionHook {
+            enabled: true,
+            kind: HookKind::Command {
+                command: "echo".to_string(),
+                args: vec![],
+            },
+            cwd: None,
+            env: HashMap::new(),
+            inherit_env: false,
+            env_denylist: vec![],
+            timeout_ms: None,
+            execution_mode: Default::default(),
+            ready_signal: None,
+            on_failure: Default::default(),
+        };
+        let hooks = ConnectionHooks {
+            pre_connect: vec![hook],
+            post_connect: vec![],
+            pre_disconnect: vec![],
+            post_disconnect: vec![],
+        };
+        entry.hooks_payload = Some(hooks_toml_payload(&hooks));
+
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        bundle.connections.push(entry);
+
+        // No decrypted_secrets at all.
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: None,
+        };
+
+        let import_plan = plan(&parsed, &empty_dest());
+        let choices = ResolutionChoices::default();
+        let actions = apply(&parsed, &import_plan, &choices).expect("apply");
+
+        let conn = actions.connections.first().expect("connection");
+        let restored_hooks = conn.hooks.as_ref().expect("hooks present");
+        let hook = restored_hooks
+            .pre_connect
+            .first()
+            .expect("pre_connect hook");
+
+        assert!(
+            hook.env.is_empty(),
+            "hook with no env staged must have empty env after import"
         );
     }
 

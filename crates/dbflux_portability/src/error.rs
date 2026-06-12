@@ -66,3 +66,23 @@ pub enum PortabilityError {
     #[error("bundle encryption mode '{declared}' does not match secrets section variant '{found}'")]
     ModeMismatch { declared: String, found: String },
 }
+
+impl PortabilityError {
+    /// Returns `true` when this error indicates that the encryption feature was
+    /// compiled out of this build.
+    ///
+    /// Using this predicate instead of matching on `Display` output avoids
+    /// brittle string matching and works correctly in both `encryption`-enabled
+    /// (always `false`) and `encryption`-disabled builds.
+    pub fn is_encryption_unavailable(&self) -> bool {
+        #[cfg(not(feature = "encryption"))]
+        {
+            matches!(self, PortabilityError::EncryptionUnavailable)
+        }
+        #[cfg(feature = "encryption")]
+        {
+            let _ = self;
+            false
+        }
+    }
+}
