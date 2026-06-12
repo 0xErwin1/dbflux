@@ -421,7 +421,7 @@ fn build_sanitized_hooks_payload(
 
     if had_env {
         report.warnings.push(format!(
-            "connection '{}' hook env entries moved to encrypted secrets section",
+            "connection '{}' hook env entries moved to the bundle secrets section",
             profile.name
         ));
     }

@@ -523,14 +523,27 @@ pub fn apply(
         let access_kind = rewrite_access_kind(conn_entry, &id_map);
 
         // Connection secret: re-key the staged secret for this connection.
-        for field_id in conn_entry.fields.keys() {
-            // The secret is stored under conn:<local_id>:<field_id> in the bundle.
-            let old_key = format!("conn:{}:{}", conn_entry.local_id, field_id);
-            if let Some(secret_map) = secrets
-                && let Some(value) = secret_map.get(&old_key)
-            {
-                let new_ref = dbflux_core::connection_secret_ref(&new_conn_id);
-                secret_writes.push((new_ref, secrecy::SecretString::from(value.clone())));
+        //
+        // Secret-hinted fields are NOT present in `conn_entry.fields` — the exporter
+        // excludes them from the cleartext table and stages them in the secrets section
+        // under `conn:<local_id>:<field_id>`. Iterating `fields.keys()` therefore never
+        // finds the password. Instead, scan the secrets map by the `conn:<local_id>:`
+        // prefix so the lookup is independent of field names.
+        //
+        // The `conn:` prefix (with the colon immediately after "conn") is distinct from
+        // `conn_hook_env:` (hook env entries) and `conn_vref:` (future use) because those
+        // names contain an underscore after "conn", making the prefix collision impossible.
+        //
+        // A ConnectionProfile has exactly one connection-secret slot (`dbflux:conn:<uuid>`),
+        // so at most one matching entry is expected; writing all matches is safe because
+        // the export pipeline itself enforces the single-slot constraint.
+        if let Some(secret_map) = secrets {
+            let prefix = format!("conn:{}:", conn_entry.local_id);
+            for (staged_key, value) in secret_map {
+                if staged_key.starts_with(&prefix) {
+                    let new_ref = dbflux_core::connection_secret_ref(&new_conn_id);
+                    secret_writes.push((new_ref, secrecy::SecretString::from(value.clone())));
+                }
             }
         }
 
@@ -923,6 +936,7 @@ mod tests {
         AuthProfile, ConnectionHook, ConnectionHooks, HookKind, ProxyAuth, ProxyKind, ProxyProfile,
         SshAuthMethod, SshTunnelConfig, SshTunnelProfile,
     };
+    use secrecy::ExposeSecret;
     use uuid::Uuid;
 
     use crate::{
@@ -2412,6 +2426,119 @@ encryption = "none"
             actual,
             Some(expected),
             "AWS reference present in dest must resolve to the deterministic UUID"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // R3-2: Connection password (secret-hinted field) round-trips through
+    //        the secrets section on export → import.
+    // -----------------------------------------------------------------------
+
+    /// A connection whose password was staged in the bundle secrets section must
+    /// have its secret re-keyed and pushed to `secret_writes` on import.
+    ///
+    /// The exporter stages the connection secret under `conn:<local_id>:<field_id>`,
+    /// NOT under the cleartext `fields` key. The importer must scan the secrets map
+    /// by the `conn:<local_id>:` prefix instead of iterating `fields.keys()`.
+    #[test]
+    fn apply_connection_password_is_restored_from_staged_secret() {
+        let local_id = "conn-secret-restore-1";
+        let mut entry = make_connection_entry(local_id);
+
+        // The password field must NOT appear in cleartext fields (Secret-hinted fields
+        // are excluded from the export's [connection.fields] table). The field name
+        // must match what the exporter stages in the secrets section.
+        entry.fields.remove("host"); // keep only minimal required fields
+        entry.fields.remove("port");
+        entry
+            .fields
+            .insert("host".to_string(), "db.example.com".to_string());
+        entry.fields.insert("port".to_string(), "5432".to_string());
+        // "password" is intentionally absent from fields — it went to secrets.
+
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        bundle.connections.push(entry);
+
+        // The secrets map contains the staged password as the exporter wrote it:
+        // conn:<local_id>:<field_id>.
+        let staged_key = format!("conn:{}:password", local_id);
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: Some({
+                let mut m = HashMap::new();
+                m.insert(staged_key, "hunter2".to_string());
+                m
+            }),
+        };
+
+        let import_plan = plan(&parsed, &empty_dest());
+        let choices = ResolutionChoices::default();
+        let actions = apply(&parsed, &import_plan, &choices).expect("apply");
+
+        let conn_id = actions.connections.first().expect("connection").id;
+        let expected_ref = dbflux_core::connection_secret_ref(&conn_id);
+
+        let matched: Vec<_> = actions
+            .secret_writes
+            .iter()
+            .filter(|(ref_str, _)| ref_str == &expected_ref)
+            .collect();
+
+        assert_eq!(
+            matched.len(),
+            1,
+            "secret_writes must contain exactly one entry for the connection secret ref; got {:?}",
+            actions
+                .secret_writes
+                .iter()
+                .map(|(k, _)| k)
+                .collect::<Vec<_>>()
+        );
+
+        let secret_value = matched
+            .first()
+            .expect("matched has one entry")
+            .1
+            .expose_secret();
+        assert_eq!(
+            secret_value, "hunter2",
+            "restored connection secret must equal the staged value"
+        );
+    }
+
+    /// A connection with no secret staged (no password in the bundle) must not
+    /// produce any spurious `secret_writes` entry for the connection secret ref.
+    #[test]
+    fn apply_connection_with_no_staged_secret_produces_no_spurious_write() {
+        let local_id = "conn-no-secret-1";
+        let entry = make_connection_entry(local_id);
+
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        bundle.connections.push(entry);
+
+        // No secrets in the decrypted map at all.
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: Some(HashMap::new()),
+        };
+
+        let import_plan = plan(&parsed, &empty_dest());
+        let choices = ResolutionChoices::default();
+        let actions = apply(&parsed, &import_plan, &choices).expect("apply");
+
+        let conn_id = actions.connections.first().expect("connection").id;
+        let expected_ref = dbflux_core::connection_secret_ref(&conn_id);
+
+        let spurious: Vec<_> = actions
+            .secret_writes
+            .iter()
+            .filter(|(ref_str, _)| ref_str == &expected_ref)
+            .collect();
+
+        assert!(
+            spurious.is_empty(),
+            "no staged secret => no secret_writes for the connection ref; got {:?}",
+            spurious.iter().map(|(k, _)| k).collect::<Vec<_>>()
         );
     }
 }
