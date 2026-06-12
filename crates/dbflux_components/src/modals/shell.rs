@@ -74,9 +74,16 @@ impl ModalShell {
 }
 
 impl RenderOnce for ModalShell {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
         let border_color = ChromeEdgeRole::ModalSeparator.resolve(theme);
+
+        // Cap the card to the viewport so a tall body scrolls inside the shell
+        // instead of pushing the footer off-screen, and so a wide card shrinks
+        // on narrow windows.
+        let viewport = window.viewport_size();
+        let max_card_height = viewport.height * 0.9;
+        let max_card_width = viewport.width * 0.95;
 
         // Danger accent: 2 px red top-border.
         let danger_accent = if self.variant == ModalVariant::Danger {
@@ -118,10 +125,12 @@ impl RenderOnce for ModalShell {
             )
             .when_some(close_btn, |h, btn| h.child(btn));
 
-        // Body area.
+        // Body area. `flex_1` + `min_h(0)` lets it absorb the bounded card's
+        // remaining height and scroll, keeping header and footer pinned.
         let body = div()
-            .p(Spacing::LG)
+            .flex_1()
             .min_h(px(96.0))
+            .p(Spacing::LG)
             .overflow_y_scrollbar()
             .child(self.body);
 
@@ -140,6 +149,8 @@ impl RenderOnce for ModalShell {
         // Card container.
         let mut card = surface_modal_container(cx)
             .w(self.width)
+            .max_w(max_card_width)
+            .max_h(max_card_height)
             .shadow_lg()
             .overflow_hidden()
             .flex()
