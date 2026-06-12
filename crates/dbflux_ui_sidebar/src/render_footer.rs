@@ -6,7 +6,6 @@ impl Sidebar {
         let theme = cx.theme();
         let app_state = self.app_state.clone();
         let sidebar = cx.entity().clone();
-        let sidebar_for_export = cx.entity().clone();
         let sidebar_for_import = cx.entity().clone();
 
         let state = self.app_state.read(cx);
@@ -64,27 +63,6 @@ impl Sidebar {
                             })
                             .child(
                                 Icon::new(AppIcon::ArrowDown)
-                                    .size(px(14.0))
-                                    .color(theme.muted_foreground),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .id("export-connections-btn")
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .size(px(22.0))
-                            .rounded(Radii::SM)
-                            .cursor_pointer()
-                            .hover(|d| d.bg(theme.secondary))
-                            .on_click(move |_, _, cx| {
-                                sidebar_for_export.update(cx, |_this, cx| {
-                                    cx.emit(SidebarEvent::RequestExportConnections);
-                                });
-                            })
-                            .child(
-                                Icon::new(AppIcon::ArrowUp)
                                     .size(px(14.0))
                                     .color(theme.muted_foreground),
                             ),

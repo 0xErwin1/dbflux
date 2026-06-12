@@ -104,8 +104,8 @@ pub enum SidebarEvent {
         profile_name: String,
         watcher: dbflux_core::StateWatcher,
     },
-    /// Request to open the Export Connections modal.
-    RequestExportConnections,
+    /// Request to open the single-connection export modal for a specific profile.
+    RequestExportConnection { profile_id: Uuid },
     /// Request to open the Import Connections wizard.
     RequestImportConnections,
     /// Request to open the delete-connection modal for a specific connection profile.
@@ -349,6 +349,7 @@ pub enum ContextMenuAction {
     Edit,
     Duplicate,
     Delete,
+    Export,
     OpenDatabase,
     CloseDatabase,
     Submenu(Vec<ContextMenuItem>),
@@ -448,6 +449,7 @@ impl ContextMenuAction {
             Self::Edit => Some(AppIcon::Pencil),
             Self::Duplicate => Some(AppIcon::Copy),
             Self::Delete => Some(AppIcon::Delete),
+            Self::Export => Some(AppIcon::ArrowUp),
             Self::OpenDatabase => Some(AppIcon::Database),
             Self::CloseDatabase => Some(AppIcon::Database),
             Self::Submenu(_) => None,

@@ -318,6 +318,7 @@ impl Sidebar {
                         ContextMenuItem::item("Edit", ContextMenuAction::Edit),
                         ContextMenuItem::item("Duplicate", ContextMenuAction::Duplicate),
                         ContextMenuItem::item("Rename", ContextMenuAction::RenameFolder),
+                        ContextMenuItem::item("Export\u{2026}", ContextMenuAction::Export),
                     ],
                 );
 
@@ -1251,6 +1252,11 @@ impl Sidebar {
             ContextMenuAction::Edit => {
                 if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(&item_id) {
                     self.edit_profile(profile_id, cx);
+                }
+            }
+            ContextMenuAction::Export => {
+                if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(&item_id) {
+                    cx.emit(SidebarEvent::RequestExportConnection { profile_id });
                 }
             }
             ContextMenuAction::Duplicate => {
