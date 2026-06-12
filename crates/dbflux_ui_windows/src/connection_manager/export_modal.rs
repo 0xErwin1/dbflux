@@ -111,6 +111,9 @@ pub struct ExportConnectionModal {
     // Output path.
     output_input: Entity<InputState>,
     pending_output_path: Option<String>,
+    /// Suggested bundle file name derived from the connection name (sanitized),
+    /// used as the save-dialog default and the no-picker fallback file name.
+    default_file_name: String,
 
     // Run state.
     is_exporting: bool,
@@ -186,6 +189,7 @@ impl ExportConnectionModal {
             confirm_input,
             output_input,
             pending_output_path: None,
+            default_file_name: String::new(),
             is_exporting: false,
             pending_result: None,
             validation_error: None,
@@ -247,8 +251,23 @@ impl ExportConnectionModal {
             .update(cx, |state, cx| state.set_value("", window, cx));
         self.confirm_input
             .update(cx, |state, cx| state.set_value("", window, cx));
+
+        // Default file name = sanitized connection name; pre-fill the output
+        // path with it under the exports directory so Export works out of the
+        // box and the user can still edit or browse to another location.
+        let stem = self
+            .summary
+            .as_ref()
+            .map(|summary| sanitize_filename(&summary.connection_name))
+            .unwrap_or_else(|| "connection".to_string());
+        self.default_file_name = format!("{stem}.toml");
+
+        let default_path = dbflux_ui_base::file_dialog::fallback_export_dir()
+            .ok()
+            .map(|dir| dir.join(&self.default_file_name).to_string_lossy().to_string())
+            .unwrap_or_default();
         self.output_input
-            .update(cx, |state, cx| state.set_value("", window, cx));
+            .update(cx, |state, cx| state.set_value(default_path, window, cx));
 
         self.visible = true;
         window.focus(&self.focus_handle);
@@ -379,6 +398,12 @@ impl ExportConnectionModal {
     }
 
     fn browse_output_path(&mut self, cx: &mut Context<Self>) {
+        let file_name = if self.default_file_name.is_empty() {
+            "connection.toml".to_string()
+        } else {
+            self.default_file_name.clone()
+        };
+
         if dbflux_ui_base::file_dialog::is_native_file_dialog_available() {
             let this = cx.entity().clone();
             let task = cx.background_executor().spawn(async move {
@@ -386,7 +411,7 @@ impl ExportConnectionModal {
                     .set_title("Export Connection")
                     .add_filter("TOML bundle", &["toml"])
                     .add_filter("All files", &["*"])
-                    .set_file_name("connections.toml")
+                    .set_file_name(file_name)
                     .save_file()
             });
 
@@ -406,8 +431,7 @@ impl ExportConnectionModal {
         } else {
             match dbflux_ui_base::file_dialog::fallback_export_dir() {
                 Ok(dir) => {
-                    let path =
-                        dbflux_ui_base::file_dialog::unique_path_in(&dir, "connections.toml");
+                    let path = dbflux_ui_base::file_dialog::unique_path_in(&dir, &file_name);
                     self.pending_output_path = Some(path.to_string_lossy().to_string());
                     cx.notify();
                 }
@@ -636,6 +660,32 @@ fn include_exclude(include: bool) -> IncludeExclude {
         IncludeExclude::Include
     } else {
         IncludeExclude::Exclude
+    }
+}
+
+/// Turn a connection name into a safe file stem: keep ASCII alphanumerics, `-`,
+/// `_` and `.`; replace any other character (spaces, `/`, etc.) with a single
+/// `-`; collapse runs and trim leading/trailing separators. Falls back to
+/// "connection" when nothing usable remains.
+fn sanitize_filename(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut last_dash = false;
+
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' || ch == '.' {
+            out.push(ch);
+            last_dash = false;
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+
+    let trimmed = out.trim_matches(|c| c == '-' || c == '.');
+    if trimmed.is_empty() {
+        "connection".to_string()
+    } else {
+        trimmed.to_string()
     }
 }
 
