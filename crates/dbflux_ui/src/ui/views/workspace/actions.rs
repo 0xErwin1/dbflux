@@ -187,20 +187,17 @@ impl Workspace {
             // window through the stored handle.
             cx.subscribe(
                 &wizard,
-                move |_wizard_entity, event: &ImportWizardEvent, cx| {
-                    match event {
-                        ImportWizardEvent::Close | ImportWizardEvent::ImportSucceeded => {
-                            let handle =
-                                app_state_for_event.read(cx).import_wizard_window;
-                            app_state_for_event.update(cx, |state, _| {
-                                state.import_wizard_window = None;
-                            });
-                            if let Some(h) = handle {
-                                h.update(cx, |_, window, _cx| {
-                                    window.remove_window();
-                                })
-                                .ok();
-                            }
+                move |_wizard_entity, event: &ImportWizardEvent, cx| match event {
+                    ImportWizardEvent::Close | ImportWizardEvent::ImportSucceeded => {
+                        let handle = app_state_for_event.read(cx).import_wizard_window;
+                        app_state_for_event.update(cx, |state, _| {
+                            state.import_wizard_window = None;
+                        });
+                        if let Some(h) = handle {
+                            h.update(cx, |_, window, _cx| {
+                                window.remove_window();
+                            })
+                            .ok();
                         }
                     }
                 },
@@ -229,73 +226,16 @@ impl Workspace {
         }
     }
 
-    pub(super) fn open_export_connections_modal(
+    /// Open the in-app export modal for a single connection profile.
+    pub(super) fn open_export_connection_modal(
         &self,
-        _window: &mut Window,
+        profile_id: uuid::Uuid,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use crate::ui::windows::connection_manager::export_modal::ExportModal;
-
-        // L7 / R-WIZ-5: focus an existing export window rather than stacking another.
-        if let Some(handle) = self.app_state.read(cx).export_modal_window {
-            match handle.update(cx, |_root, window, _cx| {
-                window.activate_window();
-            }) {
-                Ok(()) => return,
-                Err(e) => {
-                    log::warn!("Stale export modal handle, reopening: {:?}", e);
-                    self.app_state.update(cx, |state, _| {
-                        state.export_modal_window = None;
-                    });
-                }
-            }
-        }
-
-        let app_state = self.app_state.clone();
-        let app_state_for_close = self.app_state.clone();
-        let bounds = Bounds::centered(None, size(px(560.0), px(620.0)), cx);
-
-        let mut options = WindowOptions {
-            app_id: Some(dbflux_core::ReleaseChannel::current().app_id().into()),
-            titlebar: Some(TitlebarOptions {
-                title: Some("Export Connections".into()),
-                ..Default::default()
-            }),
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            focus: true,
-            ..Default::default()
-        };
-        platform::apply_window_options(&mut options, 520.0, 580.0);
-
-        let open_result = cx.open_window(options, move |window, cx| {
-            window.on_window_should_close(cx, move |_window, cx| {
-                app_state_for_close.update(cx, |state, _| {
-                    state.export_modal_window = None;
-                });
-                true
-            });
-
-            let modal = cx.new(|cx| ExportModal::new(app_state, window, cx));
-            cx.new(|cx| Root::new(modal, window, cx))
+        self.export_modal.update(cx, |modal, cx| {
+            modal.open(profile_id, window, cx);
         });
-
-        match open_result {
-            Ok(handle) => {
-                self.app_state.update(cx, |state, _| {
-                    state.export_modal_window = Some(handle);
-                });
-
-                if let Err(e) = handle.update(cx, |_root, window, cx| {
-                    window.activate_window();
-                    cx.notify();
-                }) {
-                    log::warn!("Failed to activate export modal window: {:?}", e);
-                }
-            }
-            Err(error) => {
-                log::warn!("Failed to open export connections modal: {:?}", error);
-            }
-        }
     }
 
     pub(super) fn open_settings(&self, cx: &mut Context<Self>) {

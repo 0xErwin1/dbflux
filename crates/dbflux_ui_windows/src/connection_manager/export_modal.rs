@@ -237,7 +237,11 @@ impl ExportConnectionModal {
     fn build_summary(&self, profile_id: Uuid, cx: &Context<Self>) -> Option<ExportSummary> {
         let state = self.app_state.read(cx);
 
-        let profile = state.profiles().iter().find(|p| p.id == profile_id)?.clone();
+        let profile = state
+            .profiles()
+            .iter()
+            .find(|p| p.id == profile_id)?
+            .clone();
 
         let mut auth_profiles: Vec<AuthProfileRow> = Vec::new();
         if let Some(auth_id) = profile.auth_profile_id {
@@ -321,7 +325,8 @@ impl ExportConnectionModal {
         } else {
             match dbflux_ui_base::file_dialog::fallback_export_dir() {
                 Ok(dir) => {
-                    let path = dbflux_ui_base::file_dialog::unique_path_in(&dir, "connections.toml");
+                    let path =
+                        dbflux_ui_base::file_dialog::unique_path_in(&dir, "connections.toml");
                     self.output_path = path.to_string_lossy().to_string();
                     cx.notify();
                 }
@@ -410,7 +415,11 @@ impl ExportConnectionModal {
                     let graph = build_export_graph(&inputs);
 
                     let (bytes, report) = match dbflux_portability::export::export(
-                        &graph, &opts, &hints, &transforms, &reader,
+                        &graph,
+                        &opts,
+                        &hints,
+                        &transforms,
+                        &reader,
                     ) {
                         Ok(value) => value,
                         Err(e) => return ExportResult::Failed(format!("Export failed: {e}")),
@@ -422,9 +431,7 @@ impl ExportConnectionModal {
                             warnings: report.warnings,
                             required_ref_count: report.required_ref_count,
                         },
-                        Err(e) => {
-                            ExportResult::Failed(format!("Failed to write export file: {e}"))
-                        }
+                        Err(e) => ExportResult::Failed(format!("Failed to write export file: {e}")),
                     }
                 })
                 .await;
@@ -449,7 +456,10 @@ impl ExportConnectionModal {
                     }
                 });
             }) {
-                log::warn!("Failed to update export modal after export: {:?}", update_err);
+                log::warn!(
+                    "Failed to update export modal after export: {:?}",
+                    update_err
+                );
 
                 if let ExportResult::Failed(msg) = outcome {
                     report_error_async(UserFacingError::new(ErrorKind::Storage, msg), cx);
@@ -476,7 +486,11 @@ impl ExportConnectionModal {
     )> {
         let state = self.app_state.read(cx);
 
-        let profile = state.profiles().iter().find(|p| p.id == profile_id)?.clone();
+        let profile = state
+            .profiles()
+            .iter()
+            .find(|p| p.id == profile_id)?
+            .clone();
         let driver = state.driver_for_profile(&profile)?;
         let values = driver.extract_values(&profile.config);
 
@@ -597,7 +611,11 @@ impl Render for ExportConnectionModal {
             cx.emit(ExportConnectionModalEvent::Close);
         });
 
-        let export_label = if is_exporting { "Exporting\u{2026}" } else { "Export" };
+        let export_label = if is_exporting {
+            "Exporting\u{2026}"
+        } else {
+            "Export"
+        };
         let on_export = cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
             this.do_export(window, cx);
         });
@@ -606,7 +624,11 @@ impl Render for ExportConnectionModal {
             .flex()
             .items_center()
             .gap(Spacing::SM)
-            .child(Button::new("export-conn-cancel", "Cancel").ghost().on_click(on_cancel))
+            .child(
+                Button::new("export-conn-cancel", "Cancel")
+                    .ghost()
+                    .on_click(on_cancel),
+            )
             .child(
                 Button::new("export-conn-confirm", export_label)
                     .primary()
@@ -680,7 +702,10 @@ impl ExportConnectionModal {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::body("This connection and its profiles will be exported.").color(theme.muted_foreground))
+            .child(
+                Text::body("This connection and its profiles will be exported.")
+                    .color(theme.muted_foreground),
+            )
             .child(block)
             .into_any_element()
     }
@@ -948,8 +973,10 @@ impl ExportConnectionModal {
                 for w in warnings {
                     body_lines.push(format!("Warning: {w}"));
                 }
-                let mut banner =
-                    BannerBlock::new(BannerVariant::Success, format!("Exported to {}", path.display()));
+                let mut banner = BannerBlock::new(
+                    BannerVariant::Success,
+                    format!("Exported to {}", path.display()),
+                );
                 if !body_lines.is_empty() {
                     banner = banner.with_body(body_lines.join("\n"));
                 }

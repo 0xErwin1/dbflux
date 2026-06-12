@@ -638,6 +638,9 @@ impl Render for Workspace {
             .when(self.modal_add_panel.read(cx).is_visible(), |root| {
                 root.child(self.modal_add_panel.clone())
             })
+            .when(self.export_modal.read(cx).is_visible(), |root| {
+                root.child(self.export_modal.clone())
+            })
             .child(
                 div()
                     .absolute()

@@ -105,7 +105,9 @@ pub enum SidebarEvent {
         watcher: dbflux_core::StateWatcher,
     },
     /// Request to open the single-connection export modal for a specific profile.
-    RequestExportConnection { profile_id: Uuid },
+    RequestExportConnection {
+        profile_id: Uuid,
+    },
     /// Request to open the Import Connections wizard.
     RequestImportConnections,
     /// Request to open the delete-connection modal for a specific connection profile.

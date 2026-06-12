@@ -83,10 +83,6 @@ pub struct AppStateEntity {
     /// Used to focus/reuse rather than stacking multiple wizard windows (L7 / R-WIZ-5).
     pub import_wizard_window: Option<WindowHandle<Root>>,
 
-    /// Handle to the export-connections modal window, if one is open.
-    /// Used to focus/reuse rather than stacking multiple export windows (L7 / R-WIZ-5).
-    pub export_modal_window: Option<WindowHandle<Root>>,
-
     /// Saved-chart manager — loaded from SQLite on startup; mutated via `upsert`/`remove`.
     pub saved_charts: SavedChartManager,
 
@@ -135,7 +131,6 @@ impl AppStateEntity {
             inner,
             settings_window: None,
             import_wizard_window: None,
-            export_modal_window: None,
             saved_charts,
             dashboards,
             saved_queries,
@@ -166,7 +161,6 @@ impl AppStateEntity {
             inner,
             settings_window: None,
             import_wizard_window: None,
-            export_modal_window: None,
             saved_charts,
             dashboards,
             saved_queries,
