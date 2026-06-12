@@ -7,7 +7,7 @@ use dbflux_app::portability::{
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_components::tokens::{Radii, Spacing};
 use dbflux_core::secrecy::SecretString;
-use dbflux_portability::{AwsRef, EncryptionChoice, ExportOptions};
+use dbflux_portability::{AuthExportMode, AwsRef, EncryptionChoice, ExportOptions, IncludeExclude};
 use dbflux_ui_base::{
     AppStateEntity,
     user_error::{ErrorKind, UserFacingError, report_error_async},
@@ -59,6 +59,14 @@ pub struct ExportModal {
     include_settings_overrides: bool,
     embed_ssh_keys: bool,
     force_plaintext: bool,
+
+    // S1 / R-CTL-1: per-category sensitive-data controls.
+    // All default to the safe/exclude mode; users explicitly opt in to inclusion.
+    include_connection_password: bool,
+    include_proxy_credentials: bool,
+    include_ssh_password: bool,
+    /// Per auth-profile export mode. Absent = default (MappableReference).
+    auth_modes: std::collections::HashMap<Uuid, AuthExportMode>,
 
     // Passphrase inputs
     passphrase_input: Entity<InputState>,
@@ -122,6 +130,10 @@ impl ExportModal {
             include_settings_overrides: false,
             embed_ssh_keys: false,
             force_plaintext: false,
+            include_connection_password: false,
+            include_proxy_credentials: false,
+            include_ssh_password: false,
+            auth_modes: std::collections::HashMap::new(),
             passphrase_input,
             confirm_input,
             output_path: String::new(),
@@ -132,18 +144,6 @@ impl ExportModal {
             focus_handle,
             _subscriptions: vec![passphrase_sub, confirm_sub],
         }
-    }
-
-    /// Refresh the connection list from AppState (called when the modal becomes visible).
-    pub fn refresh_connections(&mut self, cx: &mut Context<Self>) {
-        self.connection_ids = self
-            .app_state
-            .read(cx)
-            .profiles()
-            .iter()
-            .map(|p| p.id)
-            .collect();
-        cx.notify();
     }
 
     fn toggle_selection(&mut self, id: Uuid, cx: &mut Context<Self>) {
@@ -355,16 +355,30 @@ impl ExportModal {
             include_settings_overrides: self.include_settings_overrides,
             embed_ssh_keys: self.embed_ssh_keys,
             encryption,
-            connection_password: dbflux_portability::IncludeExclude::Exclude,
-            proxy_credentials: dbflux_portability::IncludeExclude::Exclude,
-            ssh_password: dbflux_portability::IncludeExclude::Exclude,
-            auth_modes: Default::default(),
+            connection_password: if self.include_connection_password {
+                IncludeExclude::Include
+            } else {
+                IncludeExclude::Exclude
+            },
+            proxy_credentials: if self.include_proxy_credentials {
+                IncludeExclude::Include
+            } else {
+                IncludeExclude::Exclude
+            },
+            ssh_password: if self.include_ssh_password {
+                IncludeExclude::Include
+            } else {
+                IncludeExclude::Exclude
+            },
+            auth_modes: self.auth_modes.clone(),
             per_secret_overrides: Default::default(),
         };
 
         let this = cx.entity().clone();
         self.is_exporting = true;
         self.validation_error = None;
+        // L7 / R-WIZ-5: clear stale result banner from a previous run.
+        self.pending_result = None;
         cx.notify();
 
         // Dismiss focus from any input before spawning.
@@ -394,15 +408,20 @@ impl ExportModal {
 
             match result {
                 Ok((bytes, report)) => {
-                    let write_result = std::fs::write(&output_path, &bytes);
+                    // L8 / R-ROB-5: write the bundle file on the background executor
+                    // so the UI thread is not blocked by disk I/O.
+                    let write_result = cx
+                        .background_executor()
+                        .spawn(async move { std::fs::write(&output_path, &bytes).map(|()| output_path) })
+                        .await;
 
                     if let Err(e) = cx.update(|cx| {
                         this.update(cx, |this, cx| {
                             this.is_exporting = false;
                             match write_result {
-                                Ok(()) => {
+                                Ok(written_path) => {
                                     this.pending_result = Some(ExportResult::Success {
-                                        path: output_path,
+                                        path: written_path,
                                         warnings: report.warnings,
                                         required_ref_count: report.required_ref_count,
                                     });
@@ -507,6 +526,9 @@ impl Render for ExportModal {
         let entity_for_plaintext = cx.entity().clone();
         let entity_for_browse = cx.entity().clone();
         let entity_for_export = cx.entity().clone();
+        let entity_for_conn_pw = cx.entity().clone();
+        let entity_for_proxy_creds = cx.entity().clone();
+        let entity_for_ssh_pw = cx.entity().clone();
 
         let is_exporting = self.is_exporting;
         let force_plaintext = self.force_plaintext;
@@ -514,6 +536,9 @@ impl Render for ExportModal {
         let include_settings = self.include_settings_overrides;
         let embed_ssh = self.embed_ssh_keys;
         let output_path = self.output_path.clone();
+        let include_connection_password = self.include_connection_password;
+        let include_proxy_credentials = self.include_proxy_credentials;
+        let include_ssh_password = self.include_ssh_password;
 
         let encryption_section = if force_plaintext {
             BannerBlock::new(
@@ -675,6 +700,49 @@ impl Render for ExportModal {
                         cx,
                     )),
             )
+            // S1 / R-CTL-1: per-category sensitive-data controls.
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(Spacing::XS)
+                    .child(Text::body("Credentials").color(theme.muted_foreground))
+                    .child(self.render_toggle(
+                        "toggle-conn-pw",
+                        include_connection_password,
+                        "Include connection passwords",
+                        entity_for_conn_pw,
+                        |this, cx| {
+                            this.include_connection_password = !this.include_connection_password;
+                            cx.notify();
+                        },
+                        cx,
+                    ))
+                    .child(self.render_toggle(
+                        "toggle-proxy-creds",
+                        include_proxy_credentials,
+                        "Include proxy credentials",
+                        entity_for_proxy_creds,
+                        |this, cx| {
+                            this.include_proxy_credentials = !this.include_proxy_credentials;
+                            cx.notify();
+                        },
+                        cx,
+                    ))
+                    .child(self.render_toggle(
+                        "toggle-ssh-pw",
+                        include_ssh_password,
+                        "Include SSH passwords",
+                        entity_for_ssh_pw,
+                        |this, cx| {
+                            this.include_ssh_password = !this.include_ssh_password;
+                            cx.notify();
+                        },
+                        cx,
+                    )),
+            )
+            // Auth profile export modes (per-profile, S1).
+            .child(self.render_auth_profile_modes(cx))
             // Encryption section (passphrase or warning)
             .child(encryption_section)
             // Output path
@@ -795,4 +863,164 @@ impl ExportModal {
             )
             .child(Text::body(label).color(theme.foreground))
     }
+
+    /// Render the per-auth-profile export-mode picker (S1 / R-CTL-1).
+    ///
+    /// Each stored (non-reflected) auth profile referenced by any selected connection
+    /// gets a 4-way mode selector: IncludeValues, MappableReference (default),
+    /// RequiredOnImport, Exclude. AWS reflected profiles are LOCKED to
+    /// MappableReference — the UI does not offer the other modes for them.
+    fn render_auth_profile_modes(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        use dbflux_components::primitives::Text;
+
+        let theme = cx.theme().clone();
+
+        // Collect referenced non-reflected auth profiles in a scoped block so the
+        // read lock on app_state is released before the for loop borrows self.auth_modes.
+        let referenced: Vec<dbflux_core::AuthProfile> = {
+            let state = self.app_state.read(cx);
+            let selected_auth_ids: std::collections::HashSet<Uuid> = state
+                .profiles()
+                .iter()
+                .filter(|p| self.selected_ids.contains(&p.id))
+                .filter_map(|p| p.auth_profile_id)
+                .collect();
+
+            let all_auth = state.list_auth_profiles();
+            all_auth
+                .into_iter()
+                .filter(|a| selected_auth_ids.contains(&a.id) && !a.read_only)
+                .collect()
+        };
+
+        if referenced.is_empty() {
+            return div().into_any_element();
+        }
+
+        let mut col = div()
+            .flex()
+            .flex_col()
+            .gap(Spacing::XS)
+            .child(Text::body("Auth profile export mode").color(theme.muted_foreground));
+
+        for auth in referenced {
+            let auth_id = auth.id;
+            let auth_name = auth.name.clone();
+            let current_mode = self
+                .auth_modes
+                .get(&auth_id)
+                .copied()
+                .unwrap_or(AuthExportMode::MappableReference);
+
+            let entity_inc = cx.entity().clone();
+            let entity_ref = cx.entity().clone();
+            let entity_req = cx.entity().clone();
+            let entity_exc = cx.entity().clone();
+
+            let row = div()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .p(Spacing::SM)
+                .border_1()
+                .border_color(theme.border)
+                .rounded(Radii::SM)
+                .child(Text::body(auth_name.clone()).color(theme.foreground))
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap(Spacing::XS)
+                        .child(export_mode_btn(
+                            format!("auth-{auth_id}-include"),
+                            "Include values",
+                            current_mode == AuthExportMode::IncludeValues,
+                            move |_, _, cx| {
+                                entity_inc.update(cx, |this, cx| {
+                                    this.auth_modes
+                                        .insert(auth_id, AuthExportMode::IncludeValues);
+                                    cx.notify();
+                                });
+                            },
+                            &theme,
+                        ))
+                        .child(export_mode_btn(
+                            format!("auth-{auth_id}-ref"),
+                            "Mappable reference",
+                            current_mode == AuthExportMode::MappableReference,
+                            move |_, _, cx| {
+                                entity_ref.update(cx, |this, cx| {
+                                    this.auth_modes
+                                        .insert(auth_id, AuthExportMode::MappableReference);
+                                    cx.notify();
+                                });
+                            },
+                            &theme,
+                        ))
+                        .child(export_mode_btn(
+                            format!("auth-{auth_id}-req"),
+                            "Required on import",
+                            current_mode == AuthExportMode::RequiredOnImport,
+                            move |_, _, cx| {
+                                entity_req.update(cx, |this, cx| {
+                                    this.auth_modes
+                                        .insert(auth_id, AuthExportMode::RequiredOnImport);
+                                    cx.notify();
+                                });
+                            },
+                            &theme,
+                        ))
+                        .child(export_mode_btn(
+                            format!("auth-{auth_id}-exc"),
+                            "Exclude",
+                            current_mode == AuthExportMode::Exclude,
+                            move |_, _, cx| {
+                                entity_exc.update(cx, |this, cx| {
+                                    this.auth_modes.insert(auth_id, AuthExportMode::Exclude);
+                                    cx.notify();
+                                });
+                            },
+                            &theme,
+                        )),
+                );
+
+            col = col.child(row);
+        }
+
+        col.into_any_element()
+    }
+}
+
+fn export_mode_btn(
+    id_seed: impl ToString,
+    label: &str,
+    selected: bool,
+    handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    theme: &gpui_component::Theme,
+) -> impl IntoElement {
+    use dbflux_components::primitives::Text;
+
+    let id_str: SharedString = format!("export-mode-{}", id_seed.to_string()).into();
+    div()
+        .id(ElementId::Name(id_str))
+        .px(Spacing::SM)
+        .py(px(3.0))
+        .border_1()
+        .border_color(if selected { theme.accent } else { theme.border })
+        .rounded(Radii::SM)
+        .cursor_pointer()
+        .bg(if selected {
+            theme.accent.opacity(0.1)
+        } else {
+            theme.background
+        })
+        .hover(|d| d.bg(theme.secondary))
+        .on_click(handler)
+        .child(
+            Text::body(label.to_string()).color(if selected {
+                theme.accent
+            } else {
+                theme.foreground
+            }),
+        )
 }
