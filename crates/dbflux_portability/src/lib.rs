@@ -364,4 +364,19 @@ pub struct ImportActions {
     /// `bool` must be checked; a `false` means the keyring write failed and
     /// must be surfaced as a user-facing error.
     pub secret_writes: Vec<(String, SecretString)>,
+
+    /// Connections skipped because their `kind` field was absent or unparseable.
+    ///
+    /// Each entry is `(connection_name, driver_id)`. The app layer records these
+    /// in `ImportOutcome::config_failures`; they are NOT imported silently as the
+    /// wrong driver (R-KIND-1 / M6 / ADR-9). The driver_id is carried for reporting.
+    pub kind_failures: Vec<(String, String)>,
+
+    /// Connections skipped because an intra-bundle reference (ssh/proxy/auth local_id)
+    /// could not be resolved in the id_map.
+    ///
+    /// Each entry is the connection name. These connections are NOT imported to prevent
+    /// silent topology degradation (e.g. bastion-routed → direct-connect). The app layer
+    /// records them in `ImportOutcome::unresolved_refs` (R-INT-3 / M3 / ADR-8).
+    pub unresolved_ref_connections: Vec<String>,
 }

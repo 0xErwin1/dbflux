@@ -17,7 +17,7 @@ use crate::{
     PortabilityError, ProfileConflict, RequiredResolution, RequiredResolutionKind,
     ResolutionChoices,
     bundle::{EncryptionMode, SecretsSection},
-    conflict::{auth_conflict, proxy_conflict, ssh_conflict},
+    conflict::{auth_conflict, conn_conflict, proxy_conflict, ssh_conflict},
 };
 
 /// Parse the bundle TOML bytes into `ParsedBundle`.
@@ -32,7 +32,7 @@ use crate::{
 /// a plaintext secrets map, or `"none"` header with an encrypted blob).
 pub fn parse(bytes: &[u8]) -> Result<ParsedBundle, PortabilityError> {
     let text = std::str::from_utf8(bytes)
-        .map_err(|e| PortabilityError::Decryption(format!("bundle is not valid UTF-8: {e}")))?;
+        .map_err(|e| PortabilityError::Format(format!("bundle is not valid UTF-8: {e}")))?;
 
     let bundle: crate::bundle::Bundle = toml::from_str(text).map_err(PortabilityError::Parse)?;
 
@@ -210,15 +210,55 @@ pub fn plan(parsed: &ParsedBundle, dest: &DestSnapshot<'_>) -> ImportPlan {
         }
     }
 
+    // Connection conflict detection (M4 / ADR-5).
+    // Natural key: (name, driver_id). Mirroring auth/ssh/proxy: detect and surface
+    // rather than silently duplicate.
+    for conn in &parsed.bundle.connections {
+        if let Some(existing_id) = conn_conflict(&conn.name, &conn.driver_id, dest) {
+            let existing_name = dest
+                .connections
+                .iter()
+                .find(|c| c.id == existing_id)
+                .map(|c| c.name.clone())
+                .unwrap_or_default();
+
+            conflicts.push(ProfileConflict {
+                bundle_local_id: conn.local_id.clone(),
+                kind: ConflictKind::Connection,
+                bundle_name: conn.name.clone(),
+                existing_id,
+                existing_name,
+            });
+        }
+    }
+
     // Connection-level required_refs and AWS reference resolution.
     for conn in &parsed.bundle.connections {
-        // Omitted-secret required_refs recorded by the exporter.
+        // Omitted required_refs recorded by the exporter.
+        // C2 / ADR-2: Map RequiredRefKind faithfully to RequiredResolutionKind.
+        // Suppression rule: skip an AuthProfile required_ref when the connection
+        // already carries auth_ref or auth_profile_local_id — the auth binding is
+        // already satisfied and surfacing a second resolution would confuse the wizard.
+        let has_auth_binding =
+            conn.auth_ref.is_some() || conn.auth_profile_local_id.is_some();
+
         for rref in &conn.required_refs {
+            let kind = match rref.kind {
+                crate::bundle::RequiredRefKind::Secret => RequiredResolutionKind::Secret,
+                crate::bundle::RequiredRefKind::AuthProfile => {
+                    if has_auth_binding {
+                        // The auth binding is already present; suppress this resolution.
+                        continue;
+                    }
+                    RequiredResolutionKind::AuthProfileRef
+                }
+            };
+
             required_resolutions.push(RequiredResolution {
                 owner_local_id: conn.local_id.clone(),
                 owner_name: conn.name.clone(),
                 field: rref.field.clone(),
-                kind: RequiredResolutionKind::Secret,
+                kind,
             });
         }
 
@@ -267,7 +307,7 @@ pub fn plan(parsed: &ParsedBundle, dest: &DestSnapshot<'_>) -> ImportPlan {
 /// is used instead of minting a new one, and no new entity is emitted for that entry.
 pub fn apply(
     parsed: &ParsedBundle,
-    _plan: &ImportPlan,
+    plan: &ImportPlan,
     choices: &ResolutionChoices,
 ) -> Result<ImportActions, PortabilityError> {
     let secrets = parsed.decrypted_secrets.as_ref();
@@ -282,7 +322,7 @@ pub fn apply(
         let new_id = match choices.conflict_choices.get(&auth.local_id) {
             Some(ConflictChoice::Reuse) => {
                 // Find the conflict record to get the existing destination id.
-                conflict_existing_id(&auth.local_id, _plan).ok_or_else(|| {
+                conflict_existing_id(&auth.local_id, plan).ok_or_else(|| {
                     PortabilityError::MissingResolution {
                         local_id: auth.local_id.clone(),
                     }
@@ -297,7 +337,7 @@ pub fn apply(
     for ssh in &parsed.bundle.ssh_tunnels {
         let new_id =
             match choices.conflict_choices.get(&ssh.local_id) {
-                Some(ConflictChoice::Reuse) => conflict_existing_id(&ssh.local_id, _plan)
+                Some(ConflictChoice::Reuse) => conflict_existing_id(&ssh.local_id, plan)
                     .ok_or_else(|| PortabilityError::MissingResolution {
                         local_id: ssh.local_id.clone(),
                     })?,
@@ -309,7 +349,7 @@ pub fn apply(
 
     for proxy in &parsed.bundle.proxies {
         let new_id = match choices.conflict_choices.get(&proxy.local_id) {
-            Some(ConflictChoice::Reuse) => conflict_existing_id(&proxy.local_id, _plan)
+            Some(ConflictChoice::Reuse) => conflict_existing_id(&proxy.local_id, plan)
                 .ok_or_else(|| PortabilityError::MissingResolution {
                     local_id: proxy.local_id.clone(),
                 })?,
@@ -320,7 +360,15 @@ pub fn apply(
     }
 
     for conn in &parsed.bundle.connections {
-        id_map.insert(conn.local_id.clone(), Uuid::new_v4());
+        let new_id = match choices.conflict_choices.get(&conn.local_id) {
+            Some(ConflictChoice::Reuse) => conflict_existing_id(&conn.local_id, plan)
+                .ok_or_else(|| PortabilityError::MissingResolution {
+                    local_id: conn.local_id.clone(),
+                })?,
+            Some(ConflictChoice::MapTo(dest_id)) => *dest_id,
+            _ => Uuid::new_v4(),
+        };
+        id_map.insert(conn.local_id.clone(), new_id);
     }
 
     // --- Build output structures ---
@@ -330,6 +378,8 @@ pub fn apply(
     let mut out_proxies: Vec<dbflux_core::ProxyProfile> = Vec::new();
     let mut out_connections: Vec<dbflux_core::ConnectionProfile> = Vec::new();
     let mut secret_writes: Vec<(String, SecretString)> = Vec::new();
+    let mut kind_failures: Vec<(String, String)> = Vec::new();
+    let mut unresolved_ref_connections: Vec<String> = Vec::new();
 
     // Auth profiles.
     for auth_entry in &parsed.bundle.auth_profiles {
@@ -340,20 +390,11 @@ pub fn apply(
         })?;
 
         // Reuse/MapTo -> wire to dest id, emit no new entity.
+        // Do NOT re-key or overwrite the destination's existing credential (ADR-6 / H2).
         if matches!(
             choices.conflict_choices.get(&auth_entry.local_id),
             Some(ConflictChoice::Reuse) | Some(ConflictChoice::MapTo(_))
         ) {
-            // Secret writes still need re-keying to the destination id.
-            for field_name in &auth_entry.secret_field_names {
-                let old_key = format!("auth:{}:{}", auth_entry.local_id, field_name);
-                let new_ref = dbflux_core::auth_field_secret_ref(&new_id, field_name);
-                if let Some(secret_map) = secrets
-                    && let Some(value) = secret_map.get(&old_key)
-                {
-                    secret_writes.push((new_ref, SecretString::from(value.clone())));
-                }
-            }
             continue;
         }
 
@@ -407,30 +448,11 @@ pub fn apply(
             }
         })?;
 
-        // Reuse/MapTo -> no new entity; secret re-key still needed.
+        // Reuse/MapTo -> no new entity; do NOT overwrite the destination's credential (ADR-6 / H2).
         if matches!(
             choices.conflict_choices.get(&ssh_entry.local_id),
             Some(ConflictChoice::Reuse) | Some(ConflictChoice::MapTo(_))
         ) {
-            let new_ref = dbflux_core::ssh_tunnel_secret_ref(&new_id);
-            if ssh_entry.key_embedded {
-                let old_key = format!("ssh_tunnel:{}:private_key", ssh_entry.local_id);
-                if let Some(secret_map) = secrets
-                    && let Some(value) = secret_map.get(&old_key)
-                {
-                    secret_writes.push((new_ref, SecretString::from(value.clone())));
-                }
-            } else if matches!(
-                ssh_entry.auth_method,
-                crate::bundle::SshAuthMethodKind::Password
-            ) {
-                let old_key = format!("ssh_tunnel:{}:password", ssh_entry.local_id);
-                if let Some(secret_map) = secrets
-                    && let Some(value) = secret_map.get(&old_key)
-                {
-                    secret_writes.push((new_ref, SecretString::from(value.clone())));
-                }
-            }
             continue;
         }
 
@@ -439,14 +461,18 @@ pub fn apply(
 
         if let Some((ref_str, secret)) = key_secret_write {
             secret_writes.push((ref_str, secret));
-        }
-
-        // Collect user-supplied secret values for required_refs on this SSH entry.
-        for rref in &ssh_entry.required_refs {
-            let key = (ssh_entry.local_id.clone(), rref.field.clone());
-            if let Some(supplied) = choices.secret_values.get(&key) {
-                let new_ref = dbflux_core::ssh_tunnel_secret_ref(&new_id);
-                secret_writes.push((new_ref, supplied.clone()));
+            // L6: the secret was already written by build_ssh_auth_method; do NOT
+            // also iterate required_refs for the same field — that would double-write.
+            // required_refs are only for fields that build_ssh_auth_method did NOT write.
+        } else {
+            // build_ssh_auth_method found no secret in the bundle; check user-supplied values.
+            for rref in &ssh_entry.required_refs {
+                let key = (ssh_entry.local_id.clone(), rref.field.clone());
+                if let Some(supplied) = choices.secret_values.get(&key) {
+                    let new_ref = dbflux_core::ssh_tunnel_secret_ref(&new_id);
+                    secret_writes.push((new_ref, supplied.clone()));
+                    break; // single slot; first match wins
+                }
             }
         }
 
@@ -471,19 +497,11 @@ pub fn apply(
             }
         })?;
 
+        // Reuse/MapTo -> no new entity; do NOT overwrite the destination's credential (ADR-6 / H2).
         if matches!(
             choices.conflict_choices.get(&proxy_entry.local_id),
             Some(ConflictChoice::Reuse) | Some(ConflictChoice::MapTo(_))
         ) {
-            if proxy_entry.has_secret {
-                let old_key = format!("proxy:{}:password", proxy_entry.local_id);
-                let new_ref = dbflux_core::proxy_secret_ref(&new_id);
-                if let Some(secret_map) = secrets
-                    && let Some(value) = secret_map.get(&old_key)
-                {
-                    secret_writes.push((new_ref, SecretString::from(value.clone())));
-                }
-            }
             continue;
         }
 
@@ -521,11 +539,37 @@ pub fn apply(
             }
         })?;
 
+        // M6 / ADR-9: Derive DbKind exclusively from the canonical `kind` field.
+        // Absent or unparseable `kind` is a per-connection failure, not a silent Postgres default.
+        let kind = match db_kind_from_bundle(conn_entry) {
+            Some(k) => k,
+            None => {
+                kind_failures.push((conn_entry.name.clone(), conn_entry.driver_id.clone()));
+                continue;
+            }
+        };
+
+        // Reuse/MapTo for connections: no new entity emitted; references are wired to dest id.
+        if matches!(
+            choices.conflict_choices.get(&conn_entry.local_id),
+            Some(ConflictChoice::Reuse) | Some(ConflictChoice::MapTo(_))
+        ) {
+            continue;
+        }
+
         // Rewrite auth_profile_id to the new (or reused/mapped) destination id.
-        let auth_profile_id = resolve_auth_id(conn_entry, &id_map, _plan, choices);
+        let auth_profile_id = resolve_auth_id(conn_entry, &id_map, plan, choices);
 
         // Rewrite access_kind to point at the remapped ssh/proxy ids.
-        let access_kind = rewrite_access_kind(conn_entry, &id_map);
+        // M3 / ADR-8: When the referenced local_id is absent from id_map (dangling ref),
+        // do NOT silently degrade to direct-connect. Record the connection as unresolved.
+        let access_kind = match rewrite_access_kind(conn_entry, &id_map) {
+            AccessRewrite::Resolved(ak) => ak,
+            AccessRewrite::Dangling => {
+                unresolved_ref_connections.push(conn_entry.name.clone());
+                continue;
+            }
+        };
 
         // Connection secret: re-key the staged secret for this connection.
         //
@@ -539,21 +583,33 @@ pub fn apply(
         // `conn_hook_env:` (hook env entries) and `conn_vref:` (future use) because those
         // names contain an underscore after "conn", making the prefix collision impossible.
         //
-        // A ConnectionProfile has exactly one connection-secret slot (`dbflux:conn:<uuid>`),
-        // so at most one matching entry is expected; writing all matches is safe because
-        // the export pipeline itself enforces the single-slot constraint.
+        // C1 / ADR-1: URI-split fields (uri_secret_fields) are already staged under
+        // `conn:<local_id>:<field>` and therefore match this prefix scan. Their secret
+        // routes to `connection_secret_ref(new_id)` so the runtime injection path
+        // (e.g. `inject_password_into_pg_uri`) re-merges it at connect time.
+        //
+        // M2 / ADR-10: A single match is expected (one connection-secret slot per
+        // ConnectionProfile). Break after the first match so a malformed multi-key
+        // bundle is deterministic.
         if let Some(secret_map) = secrets {
             let prefix = format!("conn:{}:", conn_entry.local_id);
             for (staged_key, value) in secret_map {
                 if staged_key.starts_with(&prefix) {
                     let new_ref = dbflux_core::connection_secret_ref(&new_conn_id);
                     secret_writes.push((new_ref, secrecy::SecretString::from(value.clone())));
+                    break;
                 }
             }
         }
 
         // Collect user-supplied secrets for connection required_refs.
+        // C2 / ADR-2 apply guard: only Secret-kind refs write to the connection password
+        // slot. AuthProfileRef-kind refs are satisfied via auth_profile_choices, never the
+        // password slot.
         for rref in &conn_entry.required_refs {
+            if rref.kind != crate::bundle::RequiredRefKind::Secret {
+                continue;
+            }
             let key = (conn_entry.local_id.clone(), rref.field.clone());
             if let Some(supplied) = choices.secret_values.get(&key) {
                 let new_ref = dbflux_core::connection_secret_ref(&new_conn_id);
@@ -568,9 +624,10 @@ pub fn apply(
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        let kind = db_kind_from_bundle(conn_entry);
-
-        let config = dbflux_core::DbConfig::External { kind, values };
+        let config = dbflux_core::DbConfig::External {
+            kind,
+            values,
+        };
         let mut profile = dbflux_core::ConnectionProfile::new(&conn_entry.name, config);
         profile.id = new_conn_id;
         profile.set_driver_id(conn_entry.driver_id.clone());
@@ -615,6 +672,8 @@ pub fn apply(
         ssh_tunnels: out_ssh_tunnels,
         proxies: out_proxies,
         secret_writes,
+        kind_failures,
+        unresolved_ref_connections,
     })
 }
 
@@ -622,35 +681,20 @@ pub fn apply(
 // Private helpers
 // ---------------------------------------------------------------------------
 
-/// Resolve the `DbKind` for an imported connection.
+/// Resolve the `DbKind` for an imported connection from the canonical `kind` field.
 ///
-/// Prefers the `kind` field serialized by the exporter via `serde_json`, which produces
-/// the canonical serde variant name (e.g. `"Postgres"`, `"SQLite"`). Falls back to
-/// deriving the kind from `driver_id` for legacy bundles that predate the `kind` field.
-fn db_kind_from_bundle(conn: &crate::bundle::ConnectionEntry) -> dbflux_core::DbKind {
+/// Derives `DbKind` exclusively from the serialized `kind` field written by the exporter.
+/// An absent or unparseable `kind` returns `None`; the caller must record this as a
+/// per-connection failure rather than silently defaulting (R-KIND-1 / M6 / ADR-9).
+///
+/// The driver-id string-branching fallback has been removed. Bundles that predate
+/// the `kind` field are rejected rather than silently imported as the wrong driver.
+fn db_kind_from_bundle(conn: &crate::bundle::ConnectionEntry) -> Option<dbflux_core::DbKind> {
     use dbflux_core::DbKind;
 
-    if let Some(kind_str) = &conn.kind {
-        let jv = serde_json::Value::String(kind_str.clone());
-        if let Ok(k) = serde_json::from_value::<DbKind>(jv) {
-            return k;
-        }
-    }
-
-    // Fallback: derive from driver_id for legacy bundles without the `kind` field.
-    match conn.driver_id.as_str() {
-        "postgres" => DbKind::Postgres,
-        "sqlite" => DbKind::SQLite,
-        "mysql" => DbKind::MySQL,
-        "mariadb" => DbKind::MariaDB,
-        "mongodb" => DbKind::MongoDB,
-        "redis" => DbKind::Redis,
-        "dynamodb" => DbKind::DynamoDB,
-        "cloudwatch" => DbKind::CloudWatchLogs,
-        "influxdb" => DbKind::InfluxDB,
-        "mssql" => DbKind::SqlServer,
-        _ => DbKind::Postgres,
-    }
+    let kind_str = conn.kind.as_deref()?;
+    let jv = serde_json::Value::String(kind_str.to_string());
+    serde_json::from_value::<DbKind>(jv).ok()
 }
 
 /// Deserialize the `value_refs` map from `toml::Value` entries to `ValueRef`.
@@ -890,33 +934,50 @@ fn resolve_auth_id(
     }
 }
 
+/// Result of rewriting a connection's access binding.
+enum AccessRewrite {
+    /// The access binding was resolved or absent (direct-connect).
+    Resolved(Option<dbflux_core::AccessKind>),
+    /// An intra-bundle local_id reference could not be found in the id_map.
+    ///
+    /// This indicates a dangling reference: the referenced SSH tunnel or proxy profile
+    /// was not included in the bundle. The caller must record the connection as
+    /// unresolved rather than silently importing it as direct-connect (ADR-8 / M3).
+    Dangling,
+}
+
 /// Rewrite the connection's `access_kind` to use remapped SSH/proxy UUIDs.
-fn rewrite_access_kind(
-    conn: &crate::bundle::ConnectionEntry,
-    id_map: &HashMap<String, Uuid>,
-) -> Option<dbflux_core::AccessKind> {
+///
+/// Returns `Dangling` when the bundle references a local_id that is absent from
+/// `id_map`, preventing silent topology degradation (e.g. bastion-routed →
+/// direct-connect). Managed access always resolves because it carries no local_id.
+fn rewrite_access_kind(conn: &crate::bundle::ConnectionEntry, id_map: &HashMap<String, Uuid>) -> AccessRewrite {
     use crate::bundle::AccessEntry;
 
-    conn.access.as_ref().and_then(|access| match access {
-        AccessEntry::Ssh { ssh_local_id } => {
-            id_map
-                .get(ssh_local_id)
-                .map(|&new_id| dbflux_core::AccessKind::Ssh {
-                    ssh_tunnel_profile_id: new_id,
-                })
+    let Some(access) = &conn.access else {
+        return AccessRewrite::Resolved(None);
+    };
+
+    match access {
+        AccessEntry::Ssh { ssh_local_id } => match id_map.get(ssh_local_id) {
+            Some(&new_id) => AccessRewrite::Resolved(Some(dbflux_core::AccessKind::Ssh {
+                ssh_tunnel_profile_id: new_id,
+            })),
+            None => AccessRewrite::Dangling,
+        },
+        AccessEntry::Proxy { proxy_local_id } => match id_map.get(proxy_local_id) {
+            Some(&new_id) => AccessRewrite::Resolved(Some(dbflux_core::AccessKind::Proxy {
+                proxy_profile_id: new_id,
+            })),
+            None => AccessRewrite::Dangling,
+        },
+        AccessEntry::Managed { provider, params } => {
+            AccessRewrite::Resolved(Some(dbflux_core::AccessKind::Managed {
+                provider: provider.clone(),
+                params: params.clone(),
+            }))
         }
-        AccessEntry::Proxy { proxy_local_id } => {
-            id_map
-                .get(proxy_local_id)
-                .map(|&new_id| dbflux_core::AccessKind::Proxy {
-                    proxy_profile_id: new_id,
-                })
-        }
-        AccessEntry::Managed { provider, params } => Some(dbflux_core::AccessKind::Managed {
-            provider: provider.clone(),
-            params: params.clone(),
-        }),
-    })
+    }
 }
 
 /// Parse a proxy kind string from the bundle's `kind` field.
@@ -1047,7 +1108,9 @@ mod tests {
             include_settings_overrides: false,
             hooks_payload: None,
             settings_overrides_payload: None,
-            kind: None,
+            // Default to a valid Postgres kind so apply() tests don't fail on M6 checks.
+            // Tests that specifically exercise missing/invalid kind override this field.
+            kind: Some("Postgres".to_string()),
             uri_secret_fields: vec![],
         }
     }
@@ -1175,16 +1238,17 @@ encryption = "none"
     }
 
     #[test]
-    fn parse_non_utf8_bytes_returns_error_not_panic() {
-        // Non-UTF-8 bytes must return an error (currently Decryption variant for the UTF-8 check),
-        // not panic.
+    fn parse_non_utf8_bytes_returns_format_error_not_decryption_error() {
+        // Non-UTF-8 bytes must return PortabilityError::Format (not Decryption),
+        // since the failure is a binary input issue, not a wrong passphrase (R-ROB-3 / L4).
         let non_utf8: &[u8] = &[0xFF, 0xFE, 0x00, 0x01];
 
         let result = parse(non_utf8);
 
         assert!(
-            result.is_err(),
-            "non-UTF-8 input must return an error, not panic"
+            matches!(result, Err(PortabilityError::Format(_))),
+            "non-UTF-8 input must return Format error (not Decryption), got: {:?}",
+            result.err()
         );
     }
 
@@ -1972,39 +2036,46 @@ encryption = "none"
 
             let got = db_kind_from_bundle(&entry);
             assert_eq!(
-                got, *expected,
+                got,
+                Some(*expected),
                 "kind_str='{}' must parse to {:?}; got {:?}",
-                kind_str, expected, got
+                kind_str,
+                expected,
+                got
             );
         }
     }
 
-    /// Legacy bundle (no `kind` field) must derive the correct kind from driver_id.
+    /// A missing `kind` field must return None (no driver-id fallback — R-KIND-1 / M6 / ADR-9).
     #[test]
-    fn db_kind_falls_back_to_driver_id_for_legacy_bundles() {
+    fn db_kind_returns_none_for_absent_kind_field() {
         use super::db_kind_from_bundle;
-        use dbflux_core::DbKind;
 
-        let cases: &[(&str, DbKind)] = &[
-            ("postgres", DbKind::Postgres),
-            ("mysql", DbKind::MySQL),
-            ("redis", DbKind::Redis),
-            ("mssql", DbKind::SqlServer),
-            ("cloudwatch", DbKind::CloudWatchLogs),
-        ];
+        let mut entry = make_connection_entry("no-kind");
+        entry.kind = None;
 
-        for (driver_id, expected) in cases {
-            let mut entry = make_connection_entry("legacy");
-            entry.driver_id = driver_id.to_string();
-            entry.kind = None;
+        let got = db_kind_from_bundle(&entry);
+        assert!(
+            got.is_none(),
+            "absent `kind` must return None, not a driver-id fallback; got {:?}",
+            got
+        );
+    }
 
-            let got = db_kind_from_bundle(&entry);
-            assert_eq!(
-                got, *expected,
-                "driver_id='{}' must fall back to {:?}; got {:?}",
-                driver_id, expected, got
-            );
-        }
+    /// An unparseable `kind` string must return None (not a silent default).
+    #[test]
+    fn db_kind_returns_none_for_unparseable_kind_string() {
+        use super::db_kind_from_bundle;
+
+        let mut entry = make_connection_entry("bad-kind");
+        entry.kind = Some("this-is-not-a-valid-dbkind".to_string());
+
+        let got = db_kind_from_bundle(&entry);
+        assert!(
+            got.is_none(),
+            "unparseable `kind` must return None, not a silent default; got {:?}",
+            got
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -2555,6 +2626,555 @@ encryption = "none"
             spurious.is_empty(),
             "no staged secret => no secret_writes for the connection ref; got {:?}",
             spurious.iter().map(|(k, _)| k).collect::<Vec<_>>()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 3.1 — L4: non-UTF-8 input classified as Format error (not Decryption)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_utf8_error_is_format_not_decryption() {
+        let bad: &[u8] = &[0xFF, 0xFE, 0xAB, 0xCD];
+        let result = parse(bad);
+        assert!(
+            matches!(result, Err(PortabilityError::Format(_))),
+            "non-UTF-8 bytes must yield Format error, not Decryption; got: {:?}",
+            result.err()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 3.2 — M6: db_kind_from_bundle has no driver-id fallback
+    // (tests already added above alongside the helper; these are the new ones)
+
+    // Phase 3.3 — M2: prefix scan break — covered implicitly by the round-trip test;
+    // an explicit multi-key bundle test:
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn apply_prefix_scan_is_deterministic_with_multi_key_bundle() {
+        // A malformed bundle with two keys under the same conn prefix must not
+        // produce two secret_writes for the same connection slot (M2 / ADR-10).
+        let local_id = "conn-multi";
+        let conn = make_connection_entry(local_id);
+
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        bundle.connections.push(conn);
+
+        let secret_map = {
+            let mut m = HashMap::new();
+            // Two keys for the same local_id — exporter invariant violation, but
+            // import must be deterministic (break after first match).
+            m.insert(
+                format!("conn:{}:password", local_id),
+                "first-secret".to_string(),
+            );
+            m.insert(
+                format!("conn:{}:other_field", local_id),
+                "second-secret".to_string(),
+            );
+            m
+        };
+
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: Some(secret_map),
+        };
+
+        let plan = plan(&parsed, &empty_dest());
+        let choices = ResolutionChoices::default();
+        let actions = apply(&parsed, &plan, &choices).expect("apply");
+
+        let conn_writes: Vec<_> = actions
+            .secret_writes
+            .iter()
+            .filter(|(r, _)| r.starts_with("dbflux:conn:"))
+            .collect();
+
+        assert_eq!(
+            conn_writes.len(),
+            1,
+            "prefix scan must break after first match, producing exactly 1 write; got {:?}",
+            conn_writes.iter().map(|(k, _)| k).collect::<Vec<_>>()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 3.4/3.5 — C2: plan() maps RequiredRefKind faithfully
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn plan_auth_profile_required_ref_maps_to_auth_profile_ref_resolution() {
+        // When a connection has an AuthProfile-kind required_ref (no auth binding present),
+        // plan() must emit RequiredResolutionKind::AuthProfileRef, NOT Secret (C2 / ADR-2).
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        let mut conn = make_connection_entry("conn-auth-ref");
+        conn.required_refs.push(RequiredRef {
+            field: "profile".to_string(),
+            kind: RequiredRefKind::AuthProfile,
+        });
+        bundle.connections.push(conn);
+
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: None,
+        };
+
+        let plan = plan(&parsed, &empty_dest());
+
+        let res = plan
+            .required_resolutions
+            .iter()
+            .find(|r| r.field == "profile")
+            .expect("must have a resolution for 'profile'");
+
+        assert_eq!(
+            res.kind,
+            crate::RequiredResolutionKind::AuthProfileRef,
+            "AuthProfile-kind ref must map to AuthProfileRef resolution, not Secret"
+        );
+    }
+
+    #[test]
+    fn plan_auth_profile_required_ref_suppressed_when_auth_binding_present() {
+        // C2 suppression rule: when the connection already has auth_profile_local_id,
+        // an AuthProfile-kind required_ref must NOT also be emitted (ADR-2).
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        let mut auth_entry = make_auth_entry("auth-local-1", "aws-sso", "My SSO");
+        auth_entry.required_refs = vec![];
+        bundle.auth_profiles.push(auth_entry);
+
+        let mut conn = make_connection_entry("conn-has-binding");
+        conn.auth_profile_local_id = Some("auth-local-1".to_string());
+        conn.required_refs.push(RequiredRef {
+            field: "profile".to_string(),
+            kind: RequiredRefKind::AuthProfile,
+        });
+        bundle.connections.push(conn);
+
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: None,
+        };
+
+        let plan = plan(&parsed, &empty_dest());
+
+        let auth_profile_refs: Vec<_> = plan
+            .required_resolutions
+            .iter()
+            .filter(|r| r.kind == crate::RequiredResolutionKind::AuthProfileRef)
+            .collect();
+
+        assert!(
+            auth_profile_refs.is_empty(),
+            "AuthProfile required_ref must be suppressed when auth_profile_local_id is set; got {:?}",
+            auth_profile_refs
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 3.6 — C2: apply() guard — AuthProfileRef resolution must NOT write
+    // to the connection password slot
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn apply_auth_profile_ref_resolution_does_not_write_connection_password_slot() {
+        // C2 apply guard: a required_ref with kind=AuthProfile on a connection must not
+        // route to connection_secret_ref (the password slot) even if the user supplies
+        // a value in secret_values (ADR-2).
+        let local_id = "conn-no-pw-write";
+        let mut conn = make_connection_entry(local_id);
+        conn.required_refs.push(RequiredRef {
+            field: "profile".to_string(),
+            kind: RequiredRefKind::AuthProfile,
+        });
+
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        bundle.connections.push(conn);
+
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: None,
+        };
+
+        let plan = plan(&parsed, &empty_dest());
+
+        // Simulate user incorrectly supplying a secret value for an AuthProfile field.
+        let mut choices = ResolutionChoices::default();
+        choices.secret_values.insert(
+            (local_id.to_string(), "profile".to_string()),
+            secrecy::SecretString::from("should-not-land-in-password".to_string()),
+        );
+
+        let actions = apply(&parsed, &plan, &choices).expect("apply");
+
+        let conn_pw_writes: Vec<_> = actions
+            .secret_writes
+            .iter()
+            .filter(|(r, _)| r.starts_with("dbflux:conn:"))
+            .collect();
+
+        assert!(
+            conn_pw_writes.is_empty(),
+            "AuthProfile-kind required_ref must NEVER write to connection password slot; got {:?}",
+            conn_pw_writes.iter().map(|(k, _)| k).collect::<Vec<_>>()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 3.7 — C1: URI round-trip — uri_secret_fields routes staged secret
+    // to connection_secret_ref so the runtime injection path can re-merge it
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn apply_uri_secret_field_routes_staged_secret_to_connection_secret_ref() {
+        // The exporter stages the URI password under conn:<local_id>:<field>.
+        // The importer must route it to connection_secret_ref(new_id) via the
+        // prefix scan, so the runtime URI injection path (inject_password_into_pg_uri)
+        // can re-merge it at connect time (C1 / ADR-1).
+        let local_id = "pg-uri-conn";
+        let mut conn = make_connection_entry(local_id);
+        conn.driver_id = "postgres".to_string();
+        conn.kind = Some("Postgres".to_string());
+        // The exporter stores the skeleton URI (empty password) in fields
+        conn.fields.insert(
+            "uri".to_string(),
+            "postgres://alice:@db.example/app".to_string(),
+        );
+        conn.uri_secret_fields = vec!["uri".to_string()];
+
+        let staged_key = format!("conn:{}:uri", local_id);
+
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        bundle.connections.push(conn);
+        bundle.secrets = Some(crate::bundle::SecretsSection::Plaintext {
+            values: {
+                let mut m = HashMap::new();
+                m.insert(staged_key, "s3cr3t".to_string());
+                m
+            },
+        });
+
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: Some({
+                let mut m = HashMap::new();
+                m.insert(
+                    format!("conn:{}:uri", local_id),
+                    "s3cr3t".to_string(),
+                );
+                m
+            }),
+        };
+
+        let plan = plan(&parsed, &empty_dest());
+        let choices = ResolutionChoices::default();
+        let actions = apply(&parsed, &plan, &choices).expect("apply");
+
+        let conn_writes: Vec<_> = actions
+            .secret_writes
+            .iter()
+            .filter(|(r, _)| r.starts_with("dbflux:conn:"))
+            .collect();
+
+        assert_eq!(
+            conn_writes.len(),
+            1,
+            "URI staged secret must produce exactly one connection_secret_ref write"
+        );
+
+        use secrecy::ExposeSecret;
+        assert_eq!(
+            conn_writes[0].1.expose_secret(),
+            "s3cr3t",
+            "the recovered URI password must be routed to the connection password slot"
+        );
+
+        // The cleartext fields must not contain the password.
+        let conn_out = actions.connections.first().expect("connection");
+        if let dbflux_core::DbConfig::External { values, .. } = &conn_out.config {
+            let uri_val = values.get("uri").map(String::as_str).unwrap_or("");
+            assert!(
+                !uri_val.contains("s3cr3t"),
+                "cleartext URI field must not contain the recovered password; got: {uri_val}"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 3.8 — M4: conn_conflict predicate + plan() connection conflict detection
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn conn_conflict_same_name_same_driver_returns_dest_id() {
+        use super::super::conflict::conn_conflict;
+        use dbflux_core::{ConnectionProfile, DbConfig, DbKind, FormValues};
+
+        let mut existing = ConnectionProfile::new(
+            "Prod PG",
+            DbConfig::External {
+                kind: DbKind::Postgres,
+                values: FormValues::default(),
+            },
+        );
+        existing.driver_id = Some("postgres".to_string());
+        let existing_id = existing.id;
+
+        let dest = DestSnapshot {
+            auth_profiles: vec![],
+            ssh_tunnels: vec![],
+            proxies: vec![],
+            connections: vec![&existing],
+        };
+
+        let result = conn_conflict("Prod PG", "postgres", &dest);
+        assert_eq!(result, Some(existing_id));
+    }
+
+    #[test]
+    fn conn_conflict_same_name_different_driver_no_match() {
+        use super::super::conflict::conn_conflict;
+        use dbflux_core::{ConnectionProfile, DbConfig, DbKind, FormValues};
+
+        let mut existing = ConnectionProfile::new(
+            "Prod DB",
+            DbConfig::External {
+                kind: DbKind::Postgres,
+                values: FormValues::default(),
+            },
+        );
+        existing.driver_id = Some("postgres".to_string());
+
+        let dest = DestSnapshot {
+            auth_profiles: vec![],
+            ssh_tunnels: vec![],
+            proxies: vec![],
+            connections: vec![&existing],
+        };
+
+        let result = conn_conflict("Prod DB", "mysql", &dest);
+        assert!(result.is_none(), "different driver must not conflict");
+    }
+
+    #[test]
+    fn plan_connection_conflict_detected_by_name_and_driver() {
+        // Re-importing the same bundle must surface a Connection conflict (M4 / ADR-5).
+        use dbflux_core::{ConnectionProfile, DbConfig, DbKind, FormValues};
+
+        let mut existing = ConnectionProfile::new(
+            "Test Conn",
+            DbConfig::External {
+                kind: DbKind::Postgres,
+                values: FormValues::default(),
+            },
+        );
+        existing.driver_id = Some("postgres".to_string());
+        let existing_id = existing.id;
+
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        bundle.connections.push(make_connection_entry("conn-re-import"));
+
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: None,
+        };
+
+        let dest = DestSnapshot {
+            auth_profiles: vec![],
+            ssh_tunnels: vec![],
+            proxies: vec![],
+            connections: vec![&existing],
+        };
+
+        let plan = plan(&parsed, &dest);
+
+        let conn_conflicts: Vec<_> = plan
+            .conflicts
+            .iter()
+            .filter(|c| c.kind == crate::ConflictKind::Connection)
+            .collect();
+
+        assert_eq!(conn_conflicts.len(), 1, "must detect the connection conflict");
+        assert_eq!(conn_conflicts[0].existing_id, existing_id);
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 3.9 — M3: dangling intra-bundle refs surface in apply() as unresolved
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn apply_dangling_ssh_ref_surfaces_connection_as_unresolved_not_direct_connect() {
+        // A connection referencing an SSH local_id absent from the bundle must be
+        // recorded in unresolved_ref_connections, NOT silently imported as direct-connect
+        // (M3 / ADR-8 / R-INT-3).
+        let mut conn = make_connection_entry("conn-dangling-ssh");
+        conn.access = Some(crate::bundle::AccessEntry::Ssh {
+            ssh_local_id: "ssh-not-in-bundle".to_string(),
+        });
+
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        bundle.connections.push(conn);
+
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: None,
+        };
+
+        let plan = plan(&parsed, &empty_dest());
+        let choices = ResolutionChoices::default();
+        let actions = apply(&parsed, &plan, &choices).expect("apply");
+
+        assert!(
+            actions.connections.is_empty(),
+            "connection with dangling SSH ref must NOT be imported"
+        );
+        assert_eq!(
+            actions.unresolved_ref_connections.len(),
+            1,
+            "connection with dangling SSH ref must appear in unresolved_ref_connections"
+        );
+        assert_eq!(actions.unresolved_ref_connections[0], "Test Conn");
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 3.10 — H2: Reuse/MapTo must NOT overwrite destination credential
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn apply_reuse_auth_profile_emits_no_secret_write() {
+        // Choosing Reuse for an auth profile must NOT re-key the destination's
+        // credential (H2 / ADR-6 / R-INT-1).
+        let mut auth = make_auth_entry("auth-reuse-1", "aws-sso", "My SSO");
+        auth.secret_field_names = vec!["token".to_string()];
+
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        bundle.auth_profiles.push(auth);
+
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: Some({
+                let mut m = HashMap::new();
+                m.insert("auth:auth-reuse-1:token".to_string(), "bundle-token".to_string());
+                m
+            }),
+        };
+
+        let dest_auth = make_dest_auth("aws-sso", "My SSO");
+        let existing_id = dest_auth.id;
+
+        let dest = DestSnapshot {
+            auth_profiles: vec![&dest_auth],
+            ssh_tunnels: vec![],
+            proxies: vec![],
+            connections: vec![],
+        };
+
+        let plan = plan(&parsed, &dest);
+
+        let mut choices = ResolutionChoices::default();
+        choices
+            .conflict_choices
+            .insert("auth-reuse-1".to_string(), crate::ConflictChoice::Reuse);
+
+        let actions = apply(&parsed, &plan, &choices).expect("apply");
+
+        let auth_writes: Vec<_> = actions
+            .secret_writes
+            .iter()
+            .filter(|(r, _)| r.contains(&existing_id.to_string()))
+            .collect();
+
+        assert!(
+            auth_writes.is_empty(),
+            "Reuse must NOT write any secret for the destination auth profile; got {:?}",
+            auth_writes.iter().map(|(k, _)| k).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn apply_map_to_auth_profile_emits_no_secret_write() {
+        // MapTo must also not overwrite the destination's credential (H2 / ADR-6).
+        let auth = make_auth_entry("auth-mapto-1", "aws-sso", "Source SSO");
+
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        bundle.auth_profiles.push(auth);
+
+        let dest_auth = make_dest_auth("aws-sso", "Target SSO");
+        let dest_id = dest_auth.id;
+
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: Some({
+                let mut m = HashMap::new();
+                m.insert(
+                    "auth:auth-mapto-1:token".to_string(),
+                    "bundle-token".to_string(),
+                );
+                m
+            }),
+        };
+
+        let plan = plan(&parsed, &empty_dest());
+        let mut choices = ResolutionChoices::default();
+        choices
+            .conflict_choices
+            .insert("auth-mapto-1".to_string(), crate::ConflictChoice::MapTo(dest_id));
+
+        let actions = apply(&parsed, &plan, &choices).expect("apply");
+
+        let writes_for_dest: Vec<_> = actions
+            .secret_writes
+            .iter()
+            .filter(|(r, _)| r.contains(&dest_id.to_string()))
+            .collect();
+
+        assert!(
+            writes_for_dest.is_empty(),
+            "MapTo must NOT write any secret for the destination profile; got {:?}",
+            writes_for_dest.iter().map(|(k, _)| k).collect::<Vec<_>>()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 3.11 — L6: SSH password written exactly once
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn apply_ssh_password_written_exactly_once() {
+        // An SSH entry with a staged password in the bundle secrets map must
+        // produce exactly one secret_write for that tunnel, not two (L6 / ADR-10).
+        let ssh = make_ssh_entry("ssh-once-1");
+
+        let staged_key = format!("ssh_tunnel:{}:password", ssh.local_id);
+
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        bundle.ssh_tunnels.push(ssh);
+
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: Some({
+                let mut m = HashMap::new();
+                m.insert(staged_key, "tunnel-password".to_string());
+                m
+            }),
+        };
+
+        let plan = plan(&parsed, &empty_dest());
+        let choices = ResolutionChoices::default();
+        let actions = apply(&parsed, &plan, &choices).expect("apply");
+
+        let ssh_writes: Vec<_> = actions
+            .secret_writes
+            .iter()
+            .filter(|(r, _)| r.starts_with("dbflux:ssh_tunnel:"))
+            .collect();
+
+        assert_eq!(
+            ssh_writes.len(),
+            1,
+            "SSH password must be written exactly once; got {} writes",
+            ssh_writes.len()
         );
     }
 }

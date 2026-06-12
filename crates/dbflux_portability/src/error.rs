@@ -7,6 +7,14 @@ pub enum PortabilityError {
     #[error("bundle parse error: {0}")]
     Parse(#[from] toml::de::Error),
 
+    /// The bundle bytes are not valid UTF-8 or have another format-level problem
+    /// that is detected before TOML parsing begins.
+    ///
+    /// Distinct from `Decryption`: the input is simply not a readable bundle,
+    /// not a passphrase failure. (R-ROB-3 / L4 / ADR-10)
+    #[error("bundle format error: {0}")]
+    Format(String),
+
     /// The bundle was serialized to TOML but the process failed.
     #[error("bundle serialize error: {0}")]
     Serialize(#[from] toml::ser::Error),

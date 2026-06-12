@@ -41,6 +41,19 @@ pub fn proxy_conflict(kind: &str, host: &str, port: u16, dest: &DestSnapshot<'_>
         .map(|p| p.id)
 }
 
+/// Return the UUID of the first destination connection matching the natural key `(name, driver_id)`.
+///
+/// The natural key mirrors the user's mental identity for "the same connection":
+/// name + driver. Host/values are intentionally excluded to avoid driver-specific
+/// value introspection (ADR-5 / M4). Two connections with the same name and driver
+/// are treated as a conflict and surface the Reuse/CreateNew/MapTo choice.
+pub fn conn_conflict(name: &str, driver_id: &str, dest: &DestSnapshot<'_>) -> Option<Uuid> {
+    dest.connections
+        .iter()
+        .find(|c| c.name == name && c.driver_id() == driver_id)
+        .map(|c| c.id)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
