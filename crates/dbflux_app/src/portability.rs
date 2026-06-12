@@ -366,16 +366,14 @@ pub fn persist_import_actions(
     // Stage: identify which auth secret_writes belong to the new auth profiles.
     // Auth secret refs use the format `dbflux:auth:<uuid>:<field>`.
     for (ref_str, secret) in &actions.secret_writes {
-        if let Some(stripped) = ref_str.strip_prefix("dbflux:auth:") {
-            // Parse uuid and field from `<uuid>:<field>`.
-            if let Some((uuid_str, field)) = stripped.split_once(':') {
-                if let Ok(auth_id) = uuid::Uuid::parse_str(uuid_str) {
-                    auth_secret_by_id
-                        .entry(auth_id)
-                        .or_default()
-                        .insert(field.to_string(), secret.clone());
-                }
-            }
+        if let Some(stripped) = ref_str.strip_prefix("dbflux:auth:")
+            && let Some((uuid_str, field)) = stripped.split_once(':')
+            && let Ok(auth_id) = uuid::Uuid::parse_str(uuid_str)
+        {
+            auth_secret_by_id
+                .entry(auth_id)
+                .or_default()
+                .insert(field.to_string(), secret.clone());
         }
     }
 

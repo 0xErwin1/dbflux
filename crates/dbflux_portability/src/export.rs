@@ -53,10 +53,8 @@ pub fn export(
 ) -> Result<(Vec<u8>, ExportReport), PortabilityError> {
     // R-SEC-2 / H1: SSH key embedding requires passphrase encryption.
     // Reject before any I/O or staging so no key bytes are ever written.
-    if opts.embed_ssh_keys {
-        if let EncryptionChoice::Plaintext { .. } = &opts.encryption {
-            return Err(PortabilityError::SshKeyEmbedRequiresEncryption);
-        }
+    if opts.embed_ssh_keys && let EncryptionChoice::Plaintext { .. } = &opts.encryption {
+        return Err(PortabilityError::SshKeyEmbedRequiresEncryption);
     }
 
     let mut report = ExportReport::default();
@@ -805,33 +803,26 @@ mod tests {
             field_id: &str,
             values: &FormValues,
         ) -> dbflux_core::FieldExportTransform {
-            if field_id == "uri" {
-                if let Some(uri) = values.get("uri") {
-                    if uri.contains(':') && uri.contains('@') {
-                        // Extract the password between ':' and '@' for the test.
-                        // This is a test-only minimal splitter; real drivers use parse_uri.
-                        let skeleton = uri.replacen(
-                            |c: char| false,
+            if field_id == "uri"
+                && let Some(uri) = values.get("uri")
+                && uri.contains(':')
+                && uri.contains('@')
+            {
+                // Find user:pass@ pattern
+                if let Some(at_pos) = uri.find('@') {
+                    let before_at = &uri[..at_pos];
+                    if let Some(colon_pos) = before_at.rfind(':') {
+                        let pass = before_at[colon_pos + 1..].to_string();
+                        let skeleton = format!(
+                            "{}:{}{}",
+                            &uri[..colon_pos + 1],
                             "",
-                            0,
+                            &uri[at_pos..]
                         );
-                        // Find user:pass@ pattern
-                        if let Some(at_pos) = uri.find('@') {
-                            let before_at = &uri[..at_pos];
-                            if let Some(colon_pos) = before_at.rfind(':') {
-                                let pass = before_at[colon_pos + 1..].to_string();
-                                let skeleton = format!(
-                                    "{}:{}{}",
-                                    &uri[..colon_pos + 1],
-                                    "",
-                                    &uri[at_pos..]
-                                );
-                                return dbflux_core::FieldExportTransform::SplitSecret {
-                                    skeleton,
-                                    secret: ::secrecy::SecretString::from(pass),
-                                };
-                            }
-                        }
+                        return dbflux_core::FieldExportTransform::SplitSecret {
+                            skeleton,
+                            secret: ::secrecy::SecretString::from(pass),
+                        };
                     }
                 }
             }
@@ -1857,7 +1848,7 @@ mod tests {
 
         let graph = simple_graph(&profile, values);
 
-        let secrets = FixedSecrets({
+        let _secrets = FixedSecrets({
             let mut m = HashMap::new();
             m.insert(
                 dbflux_core::connection_secret_ref(&profile.id),

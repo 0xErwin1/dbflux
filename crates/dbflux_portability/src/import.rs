@@ -2885,8 +2885,9 @@ encryption = "none"
         );
 
         use secrecy::ExposeSecret;
+        let first_write = conn_writes.first().expect("first conn_write");
         assert_eq!(
-            conn_writes[0].1.expose_secret(),
+            first_write.1.expose_secret(),
             "s3cr3t",
             "the recovered URI password must be routed to the connection password slot"
         );
@@ -2996,7 +2997,8 @@ encryption = "none"
             .collect();
 
         assert_eq!(conn_conflicts.len(), 1, "must detect the connection conflict");
-        assert_eq!(conn_conflicts[0].existing_id, existing_id);
+        let first_conflict = conn_conflicts.first().expect("first conflict");
+        assert_eq!(first_conflict.existing_id, existing_id);
     }
 
     // -----------------------------------------------------------------------
@@ -3034,7 +3036,10 @@ encryption = "none"
             1,
             "connection with dangling SSH ref must appear in unresolved_ref_connections"
         );
-        assert_eq!(actions.unresolved_ref_connections[0], "Test Conn");
+        assert_eq!(
+            actions.unresolved_ref_connections.first().map(String::as_str),
+            Some("Test Conn")
+        );
     }
 
     // -----------------------------------------------------------------------
