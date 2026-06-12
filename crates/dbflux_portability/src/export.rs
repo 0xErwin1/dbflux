@@ -53,7 +53,9 @@ pub fn export(
 ) -> Result<(Vec<u8>, ExportReport), PortabilityError> {
     // R-SEC-2 / H1: SSH key embedding requires passphrase encryption.
     // Reject before any I/O or staging so no key bytes are ever written.
-    if opts.embed_ssh_keys && let EncryptionChoice::Plaintext { .. } = &opts.encryption {
+    if opts.embed_ssh_keys
+        && let EncryptionChoice::Plaintext { .. } = &opts.encryption
+    {
         return Err(PortabilityError::SshKeyEmbedRequiresEncryption);
     }
 
@@ -110,8 +112,11 @@ pub fn export(
 
                 ExportFieldHint::Secret => {
                     // Per-secret DoNotExport override — user chose to force a required_ref.
-                    let per_override = opts.per_secret_overrides.get(&(profile.id, (*field_id).to_string()));
-                    let force_required = matches!(per_override, Some(crate::SecretExportChoice::DoNotExport));
+                    let per_override = opts
+                        .per_secret_overrides
+                        .get(&(profile.id, (*field_id).to_string()));
+                    let force_required =
+                        matches!(per_override, Some(crate::SecretExportChoice::DoNotExport));
 
                     if force_required {
                         required_refs.push(RequiredRef {
@@ -813,12 +818,8 @@ mod tests {
                     let before_at = &uri[..at_pos];
                     if let Some(colon_pos) = before_at.rfind(':') {
                         let pass = before_at[colon_pos + 1..].to_string();
-                        let skeleton = format!(
-                            "{}:{}{}",
-                            &uri[..colon_pos + 1],
-                            "",
-                            &uri[at_pos..]
-                        );
+                        let skeleton =
+                            format!("{}:{}{}", &uri[..colon_pos + 1], "", &uri[at_pos..]);
                         return dbflux_core::FieldExportTransform::SplitSecret {
                             skeleton,
                             secret: ::secrecy::SecretString::from(pass),
@@ -1254,7 +1255,13 @@ mod tests {
         };
 
         // R-SEC-2 / H1: SSH key embedding with plaintext must be rejected.
-        let result = export(&graph, &opts_plaintext, &IncludeAllHints, &NoTransforms, &secrets);
+        let result = export(
+            &graph,
+            &opts_plaintext,
+            &IncludeAllHints,
+            &NoTransforms,
+            &secrets,
+        );
         assert!(
             matches!(
                 result,
@@ -1288,7 +1295,8 @@ mod tests {
             ..Default::default()
         };
 
-        let (bytes, _) = export(&graph, &opts, &IncludeAllHints, &NoTransforms, &NoSecrets).expect("export");
+        let (bytes, _) =
+            export(&graph, &opts, &IncludeAllHints, &NoTransforms, &NoSecrets).expect("export");
         let text = String::from_utf8(bytes).expect("utf8");
 
         // Full serialized bundle must not contain any governance-derived fields.
@@ -1515,10 +1523,20 @@ mod tests {
             include_settings_overrides: false,
             embed_ssh_keys: false,
             encryption: EncryptionChoice::Plaintext { forced: true },
-                    ..crate::ExportOptions { encryption: crate::EncryptionChoice::Plaintext { forced: true }, ..Default::default() }
+            ..crate::ExportOptions {
+                encryption: crate::EncryptionChoice::Plaintext { forced: true },
+                ..Default::default()
+            }
         };
 
-        let (bytes, _report) = export(&graph, &opts_forced, &IncludeAllHints, &NoTransforms, &NoSecrets).expect(
+        let (bytes, _report) = export(
+            &graph,
+            &opts_forced,
+            &IncludeAllHints,
+            &NoTransforms,
+            &NoSecrets,
+        )
+        .expect(
             "export with forced plaintext must succeed when only Literal value_refs are present",
         );
 
@@ -1713,10 +1731,14 @@ mod tests {
             include_settings_overrides: false,
             embed_ssh_keys: false,
             encryption: EncryptionChoice::Plaintext { forced: true },
-                    ..crate::ExportOptions { encryption: crate::EncryptionChoice::Plaintext { forced: true }, ..Default::default() }
+            ..crate::ExportOptions {
+                encryption: crate::EncryptionChoice::Plaintext { forced: true },
+                ..Default::default()
+            }
         };
 
-        let (bytes, _report) = export(&graph, &opts, &IncludeAllHints, &NoTransforms, &NoSecrets).expect("export");
+        let (bytes, _report) =
+            export(&graph, &opts, &IncludeAllHints, &NoTransforms, &NoSecrets).expect("export");
         let text = String::from_utf8(bytes).expect("utf8");
 
         // Hook env value must NOT appear in the cleartext portion (before [secrets]).
@@ -1828,10 +1850,19 @@ mod tests {
             include_settings_overrides: false,
             embed_ssh_keys: false,
             encryption: EncryptionChoice::Plaintext { forced: false },
-                    ..crate::ExportOptions { encryption: crate::EncryptionChoice::Plaintext { forced: true }, ..Default::default() }
+            ..crate::ExportOptions {
+                encryption: crate::EncryptionChoice::Plaintext { forced: true },
+                ..Default::default()
+            }
         };
 
-        let result = export(&graph, &opts, &SecretHintForPassword, &NoTransforms, &secrets);
+        let result = export(
+            &graph,
+            &opts,
+            &SecretHintForPassword,
+            &NoTransforms,
+            &secrets,
+        );
 
         assert!(
             matches!(result, Err(crate::PortabilityError::PlaintextForceMissing)),
@@ -1869,7 +1900,13 @@ mod tests {
             per_secret_overrides: Default::default(),
         };
 
-        let result = export(&graph, &opts, &SecretHintForPassword, &NoTransforms, &NoSecrets);
+        let result = export(
+            &graph,
+            &opts,
+            &SecretHintForPassword,
+            &NoTransforms,
+            &NoSecrets,
+        );
         assert!(result.is_ok(), "plaintext with forced=true must succeed");
     }
 
@@ -1888,7 +1925,10 @@ mod tests {
             include_settings_overrides: false,
             embed_ssh_keys: false,
             encryption: EncryptionChoice::Plaintext { forced: false },
-                    ..crate::ExportOptions { encryption: crate::EncryptionChoice::Plaintext { forced: true }, ..Default::default() }
+            ..crate::ExportOptions {
+                encryption: crate::EncryptionChoice::Plaintext { forced: true },
+                ..Default::default()
+            }
         };
 
         let result = export(&graph, &opts, &IncludeAllHints, &NoTransforms, &NoSecrets);
@@ -1985,10 +2025,14 @@ mod tests {
             include_settings_overrides: false,
             embed_ssh_keys: false,
             encryption: EncryptionChoice::Plaintext { forced: true },
-                    ..crate::ExportOptions { encryption: crate::EncryptionChoice::Plaintext { forced: true }, ..Default::default() }
+            ..crate::ExportOptions {
+                encryption: crate::EncryptionChoice::Plaintext { forced: true },
+                ..Default::default()
+            }
         };
 
-        let (bytes, report) = export(&graph, &opts, &IncludeAllHints, &NoTransforms, &NoSecrets).expect("export");
+        let (bytes, report) =
+            export(&graph, &opts, &IncludeAllHints, &NoTransforms, &NoSecrets).expect("export");
         let text = String::from_utf8(bytes).expect("utf8");
 
         assert_eq!(
@@ -2132,8 +2176,8 @@ mod tests {
 
         // Default: ssh_password = Exclude
         let opts = default_opts_plaintext();
-        let (_, report) = export(&graph, &opts, &IncludeAllHints, &NoTransforms, &NoSecrets)
-            .expect("export");
+        let (_, report) =
+            export(&graph, &opts, &IncludeAllHints, &NoTransforms, &NoSecrets).expect("export");
 
         assert_eq!(
             report.required_ref_count, 1,
@@ -2155,10 +2199,7 @@ mod tests {
             fields: HashMap::new(),
             secret_fields: {
                 let mut m = HashMap::new();
-                m.insert(
-                    "token".to_string(),
-                    SecretString::from("my_auth_token"),
-                );
+                m.insert("token".to_string(), SecretString::from("my_auth_token"));
                 m
             },
             enabled: true,
@@ -2188,8 +2229,14 @@ mod tests {
             ..default_opts_plaintext()
         };
 
-        let (bytes, _) = export(&graph, &opts_include, &IncludeAllHints, &NoTransforms, &NoSecrets)
-            .expect("export");
+        let (bytes, _) = export(
+            &graph,
+            &opts_include,
+            &IncludeAllHints,
+            &NoTransforms,
+            &NoSecrets,
+        )
+        .expect("export");
         let text = String::from_utf8(bytes).expect("utf8");
 
         assert!(
@@ -2216,9 +2263,14 @@ mod tests {
             ..Default::default()
         };
 
-        let (bytes, _report) =
-            export(&graph, &opts, &IncludeAllHints, &SplitSecretForUri, &NoSecrets)
-                .expect("export");
+        let (bytes, _report) = export(
+            &graph,
+            &opts,
+            &IncludeAllHints,
+            &SplitSecretForUri,
+            &NoSecrets,
+        )
+        .expect("export");
         let text = String::from_utf8(bytes).expect("utf8");
 
         // The cleartext portion (everything before [secrets]) must not contain the password.
@@ -2263,7 +2315,10 @@ mod tests {
             cwd: None,
             env: {
                 let mut m = HashMap::new();
-                m.insert("DB_MIGRATION_TOKEN".to_string(), "tok_migrate_secret".to_string());
+                m.insert(
+                    "DB_MIGRATION_TOKEN".to_string(),
+                    "tok_migrate_secret".to_string(),
+                );
                 m
             },
             inherit_env: false,
@@ -2290,7 +2345,8 @@ mod tests {
             ..Default::default()
         };
 
-        let (bytes, _) = export(&graph, &opts, &IncludeAllHints, &NoTransforms, &NoSecrets).expect("export");
+        let (bytes, _) =
+            export(&graph, &opts, &IncludeAllHints, &NoTransforms, &NoSecrets).expect("export");
         let text = String::from_utf8(bytes).expect("utf8");
 
         assert!(
@@ -2336,7 +2392,10 @@ mod tests {
 
         let result = export(&graph, &opts, &IncludeAllHints, &NoTransforms, &NoSecrets);
         assert!(
-            matches!(result, Err(crate::PortabilityError::SshKeyEmbedRequiresEncryption)),
+            matches!(
+                result,
+                Err(crate::PortabilityError::SshKeyEmbedRequiresEncryption)
+            ),
             "embed_ssh_keys=true with plaintext must be rejected; got: {:?}",
             result.err()
         );
@@ -2393,8 +2452,8 @@ mod tests {
 
     #[test]
     fn driver_refs_non_adjacent_dedup() {
-        use crate::bundle::DriverRef;
         use super::driver_ref_for;
+        use crate::bundle::DriverRef;
 
         // Simulate a graph where two connections share the same driver, producing [A, B, A].
         // Adjacent-only dedup_by would leave [A, B, A] unchanged. The fix must collapse to [A, B].
@@ -2408,7 +2467,11 @@ mod tests {
         refs.sort_by(|a, b| a.reference.cmp(&b.reference));
         refs.dedup_by(|a, b| a.reference == b.reference);
 
-        assert_eq!(refs.len(), 2, "non-adjacent duplicate must be removed: {refs:?}");
+        assert_eq!(
+            refs.len(),
+            2,
+            "non-adjacent duplicate must be removed: {refs:?}"
+        );
         let refs_strs: Vec<&str> = refs.iter().map(|r| r.reference.as_str()).collect();
         assert!(
             refs_strs.contains(&"built-in:mysql"),

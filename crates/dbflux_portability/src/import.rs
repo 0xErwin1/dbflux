@@ -239,8 +239,7 @@ pub fn plan(parsed: &ParsedBundle, dest: &DestSnapshot<'_>) -> ImportPlan {
         // Suppression rule: skip an AuthProfile required_ref when the connection
         // already carries auth_ref or auth_profile_local_id — the auth binding is
         // already satisfied and surfacing a second resolution would confuse the wizard.
-        let has_auth_binding =
-            conn.auth_ref.is_some() || conn.auth_profile_local_id.is_some();
+        let has_auth_binding = conn.auth_ref.is_some() || conn.auth_profile_local_id.is_some();
 
         for rref in &conn.required_refs {
             let kind = match rref.kind {
@@ -348,26 +347,28 @@ pub fn apply(
     }
 
     for proxy in &parsed.bundle.proxies {
-        let new_id = match choices.conflict_choices.get(&proxy.local_id) {
-            Some(ConflictChoice::Reuse) => conflict_existing_id(&proxy.local_id, plan)
-                .ok_or_else(|| PortabilityError::MissingResolution {
-                    local_id: proxy.local_id.clone(),
-                })?,
-            Some(ConflictChoice::MapTo(dest_id)) => *dest_id,
-            _ => Uuid::new_v4(),
-        };
+        let new_id =
+            match choices.conflict_choices.get(&proxy.local_id) {
+                Some(ConflictChoice::Reuse) => conflict_existing_id(&proxy.local_id, plan)
+                    .ok_or_else(|| PortabilityError::MissingResolution {
+                        local_id: proxy.local_id.clone(),
+                    })?,
+                Some(ConflictChoice::MapTo(dest_id)) => *dest_id,
+                _ => Uuid::new_v4(),
+            };
         id_map.insert(proxy.local_id.clone(), new_id);
     }
 
     for conn in &parsed.bundle.connections {
-        let new_id = match choices.conflict_choices.get(&conn.local_id) {
-            Some(ConflictChoice::Reuse) => conflict_existing_id(&conn.local_id, plan)
-                .ok_or_else(|| PortabilityError::MissingResolution {
-                    local_id: conn.local_id.clone(),
-                })?,
-            Some(ConflictChoice::MapTo(dest_id)) => *dest_id,
-            _ => Uuid::new_v4(),
-        };
+        let new_id =
+            match choices.conflict_choices.get(&conn.local_id) {
+                Some(ConflictChoice::Reuse) => conflict_existing_id(&conn.local_id, plan)
+                    .ok_or_else(|| PortabilityError::MissingResolution {
+                        local_id: conn.local_id.clone(),
+                    })?,
+                Some(ConflictChoice::MapTo(dest_id)) => *dest_id,
+                _ => Uuid::new_v4(),
+            };
         id_map.insert(conn.local_id.clone(), new_id);
     }
 
@@ -624,10 +625,7 @@ pub fn apply(
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        let config = dbflux_core::DbConfig::External {
-            kind,
-            values,
-        };
+        let config = dbflux_core::DbConfig::External { kind, values };
         let mut profile = dbflux_core::ConnectionProfile::new(&conn_entry.name, config);
         profile.id = new_conn_id;
         profile.set_driver_id(conn_entry.driver_id.clone());
@@ -951,7 +949,10 @@ enum AccessRewrite {
 /// Returns `Dangling` when the bundle references a local_id that is absent from
 /// `id_map`, preventing silent topology degradation (e.g. bastion-routed →
 /// direct-connect). Managed access always resolves because it carries no local_id.
-fn rewrite_access_kind(conn: &crate::bundle::ConnectionEntry, id_map: &HashMap<String, Uuid>) -> AccessRewrite {
+fn rewrite_access_kind(
+    conn: &crate::bundle::ConnectionEntry,
+    id_map: &HashMap<String, Uuid>,
+) -> AccessRewrite {
     use crate::bundle::AccessEntry;
 
     let Some(access) = &conn.access else {
@@ -2860,10 +2861,7 @@ encryption = "none"
             bundle,
             decrypted_secrets: Some({
                 let mut m = HashMap::new();
-                m.insert(
-                    format!("conn:{}:uri", local_id),
-                    "s3cr3t".to_string(),
-                );
+                m.insert(format!("conn:{}:uri", local_id), "s3cr3t".to_string());
                 m
             }),
         };
@@ -2974,7 +2972,9 @@ encryption = "none"
         let existing_id = existing.id;
 
         let mut bundle = empty_bundle(EncryptionMode::None);
-        bundle.connections.push(make_connection_entry("conn-re-import"));
+        bundle
+            .connections
+            .push(make_connection_entry("conn-re-import"));
 
         let parsed = crate::ParsedBundle {
             bundle,
@@ -2996,7 +2996,11 @@ encryption = "none"
             .filter(|c| c.kind == crate::ConflictKind::Connection)
             .collect();
 
-        assert_eq!(conn_conflicts.len(), 1, "must detect the connection conflict");
+        assert_eq!(
+            conn_conflicts.len(),
+            1,
+            "must detect the connection conflict"
+        );
         let first_conflict = conn_conflicts.first().expect("first conflict");
         assert_eq!(first_conflict.existing_id, existing_id);
     }
@@ -3037,7 +3041,10 @@ encryption = "none"
             "connection with dangling SSH ref must appear in unresolved_ref_connections"
         );
         assert_eq!(
-            actions.unresolved_ref_connections.first().map(String::as_str),
+            actions
+                .unresolved_ref_connections
+                .first()
+                .map(String::as_str),
             Some("Test Conn")
         );
     }
@@ -3060,7 +3067,10 @@ encryption = "none"
             bundle,
             decrypted_secrets: Some({
                 let mut m = HashMap::new();
-                m.insert("auth:auth-reuse-1:token".to_string(), "bundle-token".to_string());
+                m.insert(
+                    "auth:auth-reuse-1:token".to_string(),
+                    "bundle-token".to_string(),
+                );
                 m
             }),
         };
@@ -3122,9 +3132,10 @@ encryption = "none"
 
         let plan = plan(&parsed, &empty_dest());
         let mut choices = ResolutionChoices::default();
-        choices
-            .conflict_choices
-            .insert("auth-mapto-1".to_string(), crate::ConflictChoice::MapTo(dest_id));
+        choices.conflict_choices.insert(
+            "auth-mapto-1".to_string(),
+            crate::ConflictChoice::MapTo(dest_id),
+        );
 
         let actions = apply(&parsed, &plan, &choices).expect("apply");
 

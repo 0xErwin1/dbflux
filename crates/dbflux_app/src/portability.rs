@@ -350,9 +350,10 @@ pub fn persist_import_actions(
 
     // Record kind and dangling-ref failures reported by the pure apply() step.
     for (name, driver_id) in actions.kind_failures {
-        outcome
-            .config_failures
-            .push((name, format!("missing or unparseable `kind` field (driver: {driver_id})")));
+        outcome.config_failures.push((
+            name,
+            format!("missing or unparseable `kind` field (driver: {driver_id})"),
+        ));
     }
     for name in actions.unresolved_ref_connections {
         outcome.unresolved_refs.push(name);
@@ -360,8 +361,7 @@ pub fn persist_import_actions(
 
     // Collect (new_auth_id, field_name) -> secret pairs for in-session hydration.
     // We capture these before writing so we can populate secret_fields post-write.
-    let mut auth_secret_by_id: HashMap<uuid::Uuid, HashMap<String, SecretString>> =
-        HashMap::new();
+    let mut auth_secret_by_id: HashMap<uuid::Uuid, HashMap<String, SecretString>> = HashMap::new();
 
     // Stage: identify which auth secret_writes belong to the new auth profiles.
     // Auth secret refs use the format `dbflux:auth:<uuid>:<field>`.
@@ -1569,7 +1569,8 @@ mod tests {
             connections: vec![],
         };
 
-        let candidates = super::mapto_candidates(dbflux_portability::ConflictKind::AuthProfile, &dest);
+        let candidates =
+            super::mapto_candidates(dbflux_portability::ConflictKind::AuthProfile, &dest);
 
         assert_eq!(candidates.len(), 2, "must return all auth profiles");
         let ids: Vec<_> = candidates.iter().map(|(id, _)| *id).collect();
@@ -1589,7 +1590,8 @@ mod tests {
             connections: vec![],
         };
 
-        let candidates = super::mapto_candidates(dbflux_portability::ConflictKind::SshTunnel, &dest);
+        let candidates =
+            super::mapto_candidates(dbflux_portability::ConflictKind::SshTunnel, &dest);
 
         assert_eq!(candidates.len(), 2);
         let ids: Vec<_> = candidates.iter().map(|(id, _)| *id).collect();
@@ -1606,7 +1608,8 @@ mod tests {
             connections: vec![],
         };
 
-        let candidates = super::mapto_candidates(dbflux_portability::ConflictKind::AuthProfile, &dest);
+        let candidates =
+            super::mapto_candidates(dbflux_portability::ConflictKind::AuthProfile, &dest);
         assert!(
             candidates.is_empty(),
             "empty dest must yield empty candidate list"
@@ -1619,11 +1622,11 @@ mod tests {
 
     #[test]
     fn confirm_summary_counts_bundle_entities() {
+        use dbflux_portability::ParsedBundle;
         use dbflux_portability::bundle::{
             AuthEntry, Bundle, BundleMeta, CURRENT_FORMAT_VERSION, ConnectionEntry, EncryptionMode,
-            SshEntry, SshAuthMethodKind,
+            SshAuthMethodKind, SshEntry,
         };
-        use dbflux_portability::ParsedBundle;
 
         let bundle = Bundle {
             bundle: BundleMeta {
@@ -1704,7 +1707,8 @@ mod tests {
             required_resolutions: vec![],
         };
 
-        let registered: std::collections::HashSet<String> = ["postgres".to_string()].into_iter().collect();
+        let registered: std::collections::HashSet<String> =
+            ["postgres".to_string()].into_iter().collect();
         let summary = super::confirm_summary(&parsed, &plan, &registered);
 
         assert_eq!(summary.connection_count, 2);

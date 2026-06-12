@@ -11,9 +11,7 @@ use dbflux_components::controls::{
 };
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::shell::ModalShell;
-use dbflux_components::primitives::{
-    BannerBlock, BannerVariant, IconButton, Text, surface_raised,
-};
+use dbflux_components::primitives::{BannerBlock, BannerVariant, IconButton, Text, surface_raised};
 use dbflux_components::tokens::{FontSizes, Heights, Spacing};
 use dbflux_components::typography::AppFonts;
 use dbflux_core::access::AccessKind;
@@ -264,7 +262,11 @@ impl ExportConnectionModal {
 
         let default_path = dbflux_ui_base::file_dialog::fallback_export_dir()
             .ok()
-            .map(|dir| dir.join(&self.default_file_name).to_string_lossy().to_string())
+            .map(|dir| {
+                dir.join(&self.default_file_name)
+                    .to_string_lossy()
+                    .to_string()
+            })
             .unwrap_or_default();
         self.output_input
             .update(cx, |state, cx| state.set_value(default_path, window, cx));

@@ -12,20 +12,20 @@ use dbflux_core::{
     DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
     DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection, DriverCapabilities,
     DriverFormDef, DriverLimits, DriverMetadata, DropForeignKeyRequest, DropIndexRequest,
-    ExecutionSourceContext, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind,
-    FormSection, FormTab, FormValues, FormattedError, Icon, IndexData, IndexInfo, InstanceCatalog,
-    IsolationLevel, KeyValueConnection, MutationCapabilities, OrderByColumn, PaginationStyle,
-    PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalConnection,
-    RelationalSchema, RoutineInfo, RoutineKind, Row, RowDelete, RowInsert, RowPatch,
-    SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest,
-    SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SyntaxInfo,
-    TableInfo, TransactionCapabilities, Value, ViewInfo, WhereOperator, field, field_password,
-    FieldExportTransform, field_required, field_use_uri, generate_delete_template,
-    generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
-    generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab, when_checked,
-    when_unchecked, with_default,
+    ExecutionSourceContext, ExplainRequest, FieldExportTransform, ForeignKeyBuilder,
+    ForeignKeyInfo, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon,
+    IndexData, IndexInfo, InstanceCatalog, IsolationLevel, KeyValueConnection,
+    MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
+    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, RecordIdentity, RelationalConnection, RelationalSchema, RoutineInfo,
+    RoutineKind, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
+    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
+    SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities, Value,
+    ViewInfo, WhereOperator, field, field_password, field_required, field_use_uri,
+    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
+    generate_truncate, generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab,
+    when_checked, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
@@ -667,11 +667,7 @@ impl DbDriver for MysqlDriver {
         &MYSQL_FORM
     }
 
-    fn export_field_transform(
-        &self,
-        field_id: &str,
-        values: &FormValues,
-    ) -> FieldExportTransform {
+    fn export_field_transform(&self, field_id: &str, values: &FormValues) -> FieldExportTransform {
         if field_id != "uri" {
             return FieldExportTransform::None;
         }

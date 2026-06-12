@@ -8,8 +8,7 @@ pub use capabilities::{
     SslCertFields, SslModeOption, SyntaxInfo, TransactionCapabilities, WhereOperator,
 };
 pub use form::{
-    DriverFormDef, ExportFieldHint, FieldExportTransform, FormFieldDef, FormFieldKind,
-    FormSection, FormTab, FormValues, RefreshTrigger, SelectOption, field, field_file_path,
-    field_password, field_required, field_use_uri, ssh_tab, when_checked, when_unchecked,
-    with_default, with_help,
+    DriverFormDef, ExportFieldHint, FieldExportTransform, FormFieldDef, FormFieldKind, FormSection,
+    FormTab, FormValues, RefreshTrigger, SelectOption, field, field_file_path, field_password,
+    field_required, field_use_uri, ssh_tab, when_checked, when_unchecked, with_default, with_help,
 };

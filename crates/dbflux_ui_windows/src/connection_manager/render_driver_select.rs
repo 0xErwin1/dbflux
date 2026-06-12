@@ -264,16 +264,17 @@ impl ConnectionManagerWindow {
                             })),
                     )
                     .child(
-                        Button::new("cm-driver-cancel", "Cancel").small().on_click(
-                            cx.listener(|_, _, window, cx| {
+                        Button::new("cm-driver-cancel", "Cancel")
+                            .small()
+                            .on_click(cx.listener(|_, _, window, cx| {
                                 cx.emit(DismissEvent);
                                 window.remove_window();
-                            }),
-                        ),
+                            })),
                     )
                     .child({
-                        let mut cta =
-                            Button::new("cm-driver-configure", cta_label).primary().small();
+                        let mut cta = Button::new("cm-driver-configure", cta_label)
+                            .primary()
+                            .small();
                         if cta_disabled {
                             cta = cta.disabled(true);
                         } else {

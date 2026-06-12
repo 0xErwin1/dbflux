@@ -26,10 +26,9 @@ use dbflux_core::{
     SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
     SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities,
     TypeDefinition, Value, ViewInfo, WhereOperator, field_password, field_required, field_use_uri,
-    generate_create_table, generate_delete_template, generate_drop_table,
-    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
-    render_semantic_filter_sql, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
-    with_help,
+    generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
+    generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
+    sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default, with_help,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -621,11 +620,7 @@ impl DbDriver for PostgresDriver {
         &POSTGRES_FORM
     }
 
-    fn export_field_transform(
-        &self,
-        field_id: &str,
-        values: &FormValues,
-    ) -> FieldExportTransform {
+    fn export_field_transform(&self, field_id: &str, values: &FormValues) -> FieldExportTransform {
         if field_id != "uri" {
             return FieldExportTransform::None;
         }
@@ -4817,8 +4812,8 @@ mod tests {
 
     #[test]
     fn uri_transform_splits_password() {
-        use dbflux_core::{FieldExportTransform, FormValues};
         use dbflux_core::secrecy::ExposeSecret;
+        use dbflux_core::{FieldExportTransform, FormValues};
 
         let driver = PostgresDriver::new();
         let mut values = FormValues::new();
@@ -4856,10 +4851,7 @@ mod tests {
         let driver = PostgresDriver::new();
         let mut values = FormValues::new();
         values.insert("use_uri".to_string(), "true".to_string());
-        values.insert(
-            "uri".to_string(),
-            "postgres://db.example/app".to_string(),
-        );
+        values.insert("uri".to_string(), "postgres://db.example/app".to_string());
 
         assert!(
             matches!(

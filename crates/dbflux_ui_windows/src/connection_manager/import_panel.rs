@@ -376,8 +376,10 @@ impl ImportConnectionsPanel {
                     if is_encrypted && passphrase.expose_secret().is_empty() {
                         return (
                             true,
-                            Err("This bundle is encrypted. Enter the passphrase and try again."
-                                .to_string()),
+                            Err(
+                                "This bundle is encrypted. Enter the passphrase and try again."
+                                    .to_string(),
+                            ),
                         );
                     }
 
@@ -573,7 +575,8 @@ impl ImportConnectionsPanel {
                 Err(e) => {
                     this.update(cx, |this, cx| {
                         this.is_applying = false;
-                        this.run_result = Some(ImportRunResult::Failed(format!("Import failed: {e}")));
+                        this.run_result =
+                            Some(ImportRunResult::Failed(format!("Import failed: {e}")));
                         this.step = Step::Outcome;
                         cx.notify();
                     });
@@ -695,10 +698,7 @@ impl ImportConnectionsPanel {
             .border_b_1()
             .border_color(theme.border)
             .child(Text::heading("Import Connections").font_size(FontSizes::LG))
-            .child(
-                Text::muted("Load a TOML bundle exported from DBFlux.")
-                    .font_size(FontSizes::SM),
-            )
+            .child(Text::muted("Load a TOML bundle exported from DBFlux.").font_size(FontSizes::SM))
             .into_any_element()
     }
 
@@ -824,8 +824,7 @@ impl ImportConnectionsPanel {
             .flex_col()
             .gap(Spacing::SM)
             .child(
-                Text::body("This bundle will import the following:")
-                    .color(theme.muted_foreground),
+                Text::body("This bundle will import the following:").color(theme.muted_foreground),
             )
             .child(counts);
 
@@ -860,11 +859,14 @@ impl ImportConnectionsPanel {
         }
 
         col = col.child(
-            BannerBlock::new(BannerVariant::Info, "External value references travel as-is")
-                .with_body(
-                    "SSM, Secrets Manager, and environment references are imported unchanged and \
+            BannerBlock::new(
+                BannerVariant::Info,
+                "External value references travel as-is",
+            )
+            .with_body(
+                "SSM, Secrets Manager, and environment references are imported unchanged and \
                      resolved against this machine at connect time.",
-                ),
+            ),
         );
 
         col.into_any_element()
@@ -908,7 +910,10 @@ impl ImportConnectionsPanel {
         };
 
         let candidates = mapto_candidates(conflict.kind, dest);
-        let current = self.conflict_choices.get(&conflict.bundle_local_id).cloned();
+        let current = self
+            .conflict_choices
+            .get(&conflict.bundle_local_id)
+            .cloned();
 
         let mut items = vec![
             SegmentedItem::new(CHOICE_REUSE, "Reuse existing"),
@@ -1018,9 +1023,7 @@ impl ImportConnectionsPanel {
                                 resolution.owner_name, resolution.field
                             )),
                     )
-                    .child(
-                        Text::muted("Leave empty to skip.").font_size(FontSizes::XS),
-                    );
+                    .child(Text::muted("Leave empty to skip.").font_size(FontSizes::XS));
 
                 if let Some(input) = self.secret_inputs.get(&key) {
                     row = row.child(Input::new(input));
@@ -1141,8 +1144,7 @@ impl ImportConnectionsPanel {
             }
             Some(ImportRunResult::Failed(msg)) => {
                 col = col.child(
-                    BannerBlock::new(BannerVariant::Danger, "Import failed")
-                        .with_body(msg.clone()),
+                    BannerBlock::new(BannerVariant::Danger, "Import failed").with_body(msg.clone()),
                 );
             }
             Some(ImportRunResult::Outcome(outcome)) => {
@@ -1230,40 +1232,42 @@ impl ImportConnectionsPanel {
         let theme = cx.theme().clone();
 
         let left = match self.step {
-            Step::SelectFile => Button::new("import-cancel", "Cancel").ghost().on_click(
-                cx.listener(|_this, _: &gpui::ClickEvent, _, cx| {
-                    cx.emit(ImportConnectionsPanelEvent::Cancelled);
-                }),
-            ),
-            Step::Preview => Button::new("import-back", "Back").ghost().on_click(cx.listener(
-                |this, _: &gpui::ClickEvent, _, cx| {
+            Step::SelectFile => {
+                Button::new("import-cancel", "Cancel")
+                    .ghost()
+                    .on_click(cx.listener(|_this, _: &gpui::ClickEvent, _, cx| {
+                        cx.emit(ImportConnectionsPanelEvent::Cancelled);
+                    }))
+            }
+            Step::Preview => Button::new("import-back", "Back")
+                .ghost()
+                .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
                     this.step = Step::SelectFile;
                     cx.notify();
-                },
-            )),
-            Step::Conflicts => Button::new("import-back", "Back").ghost().on_click(cx.listener(
-                |this, _: &gpui::ClickEvent, _, cx| {
+                })),
+            Step::Conflicts => Button::new("import-back", "Back")
+                .ghost()
+                .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
                     this.step = Step::Preview;
                     cx.notify();
-                },
-            )),
+                })),
             Step::RequiredReferences => {
-                Button::new("import-back", "Back").ghost().on_click(cx.listener(
-                    |this, _: &gpui::ClickEvent, _, cx| {
+                Button::new("import-back", "Back")
+                    .ghost()
+                    .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
                         this.step = if this.has_conflicts() {
                             Step::Conflicts
                         } else {
                             Step::Preview
                         };
                         cx.notify();
-                    },
-                ))
+                    }))
             }
-            Step::Outcome => Button::new("import-done", "Done").ghost().on_click(cx.listener(
-                |_this, _: &gpui::ClickEvent, _, cx| {
+            Step::Outcome => Button::new("import-done", "Done")
+                .ghost()
+                .on_click(cx.listener(|_this, _: &gpui::ClickEvent, _, cx| {
                     cx.emit(ImportConnectionsPanelEvent::Completed);
-                },
-            )),
+                })),
         };
 
         let primary = self.render_primary_button(cx);
@@ -1286,7 +1290,11 @@ impl ImportConnectionsPanel {
             Step::SelectFile => {
                 let can_load =
                     !self.file_input.read(cx).value().trim().is_empty() && !self.is_parsing;
-                let label = if self.is_parsing { "Loading\u{2026}" } else { "Load" };
+                let label = if self.is_parsing {
+                    "Loading\u{2026}"
+                } else {
+                    "Load"
+                };
                 Some(
                     Button::new("import-load", label)
                         .primary()

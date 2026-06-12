@@ -611,15 +611,13 @@ impl ConnectionManagerWindow {
             },
         );
 
-        let import_panel =
-            cx.new(|cx| ImportConnectionsPanel::new(app_state.clone(), window, cx));
+        let import_panel = cx.new(|cx| ImportConnectionsPanel::new(app_state.clone(), window, cx));
 
         let import_panel_sub = cx.subscribe_in(
             &import_panel,
             window,
             |this, _, event: &ImportConnectionsPanelEvent, window, cx| match event {
-                ImportConnectionsPanelEvent::Cancelled
-                | ImportConnectionsPanelEvent::Completed => {
+                ImportConnectionsPanelEvent::Cancelled | ImportConnectionsPanelEvent::Completed => {
                     this.view = View::DriverSelect;
                     window.focus(&this.focus_handle);
                     cx.notify();

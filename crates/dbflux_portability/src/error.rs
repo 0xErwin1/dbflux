@@ -71,7 +71,9 @@ pub enum PortabilityError {
     /// Private-key bytes may only be embedded when the bundle's `[secrets]`
     /// section is passphrase-encrypted. Emitting key bytes in cleartext is
     /// rejected unconditionally regardless of the force flag (R-SEC-2 / H1).
-    #[error("SSH key embedding requires passphrase encryption; cannot embed private-key bytes in a cleartext bundle")]
+    #[error(
+        "SSH key embedding requires passphrase encryption; cannot embed private-key bytes in a cleartext bundle"
+    )]
     SshKeyEmbedRequiresEncryption,
 
     /// The bundle header `encryption` mode conflicts with the `[secrets]` section variant.
