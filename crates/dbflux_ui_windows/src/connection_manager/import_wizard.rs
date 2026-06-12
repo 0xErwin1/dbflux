@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use dbflux_app::portability::{ImportOutcome, ImportPersistence, OwnedDestSnapshot};
+use dbflux_app::portability::{
+    ConfirmSummary, ImportOutcome, ImportPersistence, OwnedDestSnapshot, confirm_summary,
+    mapto_candidates,
+};
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_components::primitives::{BannerBlock, BannerVariant};
 use dbflux_components::tokens::{Radii, Spacing};
@@ -28,6 +31,7 @@ enum WizardStep {
     RequiredReferences,
     Confirm,
     PartialSummary,
+    ImportSuccess,
 }
 
 // ---------------------------------------------------------------------------
@@ -173,11 +177,18 @@ pub struct ImportWizard {
     pending_provision_secrets: bool,
     auth_profile_choices: HashMap<(String, String), Uuid>,
 
+    // Step 4: Confirm
+    // Computed once at plan time so it survives parsed_bundle/import_plan being taken
+    // when do_apply() consumes them. Never taken inside render — read by reference.
+    confirm_summary: Option<ConfirmSummary>,
+
     // Step 4/5: Confirm / PartialSummary
     is_applying: bool,
+    // Stored (not taken) outcome so details persist across re-renders.
     pending_outcome: Option<Result<ImportOutcome, String>>,
+    // Count from a successful import for the success step display.
+    import_success_count: usize,
 
-    #[allow(dead_code)]
     dest_auth_profiles: Vec<AuthProfile>,
 
     focus_handle: FocusHandle,
@@ -223,8 +234,10 @@ impl ImportWizard {
             secret_values: HashMap::new(),
             pending_provision_secrets: false,
             auth_profile_choices: HashMap::new(),
+            confirm_summary: None,
             is_applying: false,
             pending_outcome: None,
+            import_success_count: 0,
             dest_auth_profiles,
             focus_handle,
             _subscriptions: vec![passphrase_sub],
@@ -283,7 +296,9 @@ impl ImportWizard {
 
         let this = cx.entity().clone();
         self.is_parsing = true;
+        // Clear any stale outcome banner from a prior run before starting a new one.
         self.parse_error = None;
+        self.pending_outcome = None;
         window.focus(&self.focus_handle);
         cx.notify();
 
@@ -360,6 +375,18 @@ impl ImportWizard {
                         Ok((parsed, plan)) => {
                             let has_conflicts = !plan.conflicts.is_empty();
                             let has_required = !plan.required_resolutions.is_empty();
+
+                            // Compute ConfirmSummary BEFORE storing parsed/plan so counts
+                            // survive do_apply() consuming them. This is the field that
+                            // render_confirm() reads from — never from parsed_bundle directly.
+                            let registered = this
+                                .app_state
+                                .read(cx)
+                                .drivers()
+                                .keys()
+                                .cloned()
+                                .collect::<std::collections::HashSet<_>>();
+                            this.confirm_summary = Some(confirm_summary(&parsed, &plan, &registered));
 
                             this.parsed_bundle = Some(parsed);
                             this.import_plan = Some(plan);
@@ -465,34 +492,6 @@ impl ImportWizard {
             .all(|c| self.conflict_choices.contains_key(&c.bundle_local_id))
     }
 
-    fn all_required_resolved(&self) -> bool {
-        let Some(plan) = &self.import_plan else {
-            return true;
-        };
-        plan.required_resolutions.iter().all(|r| {
-            use dbflux_portability::RequiredResolutionKind;
-            let key = (r.owner_local_id.clone(), r.field.clone());
-            match &r.kind {
-                RequiredResolutionKind::Secret => {
-                    // A secret is resolved only when the user has typed a non-empty value.
-                    // We never write a sentinel; if the value is empty the seam skips the
-                    // keyring write and the outcome reports it as still-required.
-                    self.secret_values
-                        .get(&key)
-                        .map(|v| !v.is_empty())
-                        .unwrap_or(false)
-                }
-                RequiredResolutionKind::AwsReference { .. } => {
-                    // AWS references that aren't in dest are informational; allow advancing.
-                    true
-                }
-                RequiredResolutionKind::AuthProfileRef => {
-                    self.auth_profile_choices.contains_key(&key)
-                }
-            }
-        })
-    }
-
     fn build_resolution_choices(&self) -> ResolutionChoices {
         // Only include non-empty secret values so apply() never receives a
         // sentinel string as a real secret.  Empty entries are omitted and
@@ -572,11 +571,17 @@ impl ImportWizard {
                             this.is_applying = false;
                             let has_failures = !outcome.secret_failures.is_empty()
                                 || !outcome.needs_driver.is_empty()
-                                || !outcome.config_failures.is_empty();
+                                || !outcome.config_failures.is_empty()
+                                || !outcome.unresolved_refs.is_empty();
+
+                            let succeeded_count = outcome.succeeded.len();
                             this.pending_outcome = Some(Ok(outcome));
+
                             if has_failures {
                                 this.step = WizardStep::PartialSummary;
                             } else {
+                                this.import_success_count = succeeded_count;
+                                this.step = WizardStep::ImportSuccess;
                                 cx.emit(ImportWizardEvent::ImportSucceeded);
                             }
                             cx.notify();
@@ -621,6 +626,7 @@ impl Render for ImportWizard {
             }
             WizardStep::Confirm => self.render_confirm(window, cx).into_any_element(),
             WizardStep::PartialSummary => self.render_partial_summary(cx).into_any_element(),
+            WizardStep::ImportSuccess => self.render_import_success(cx).into_any_element(),
         };
 
         div()
@@ -838,8 +844,20 @@ impl ImportWizard {
             })
             .collect();
 
+        // Collect all same-kind destination candidates for MapTo picker.
+        let dest_snapshot = {
+            let state = self.app_state.read(cx);
+            OwnedDestSnapshot {
+                auth_profiles: state.list_auth_profiles(),
+                ssh_tunnels: state.ssh_tunnels().to_vec(),
+                proxies: state.proxies().to_vec(),
+                connections: state.connections().values().map(|c| c.profile.clone()).collect(),
+            }
+        };
+
         let all_resolved = self.all_conflicts_resolved();
         let this_next = cx.entity().clone();
+        let this_back = cx.entity().clone();
 
         let rows: Vec<AnyElement> = conflicts
             .iter()
@@ -854,13 +872,16 @@ impl ImportWizard {
                     let current_choice = self.conflict_choices.get(local_id).cloned();
                     let lid_reuse = local_id.clone();
                     let lid_new = local_id.clone();
-                    let lid_map = local_id.clone();
                     let eid = *existing_id;
                     let this_r = cx.entity().clone();
                     let this_n = cx.entity().clone();
-                    let this_m = cx.entity().clone();
 
-                    div()
+                    // Build MapTo candidates for this conflict's kind.
+                    let map_candidates = mapto_candidates(*kind, &dest_snapshot);
+                    let lid_map_base = local_id.clone();
+                    let this_m_base = cx.entity().clone();
+
+                    let mut row = div()
                         .flex()
                         .flex_col()
                         .gap(px(2.0))
@@ -901,24 +922,72 @@ impl ImportWizard {
                                         });
                                     },
                                     &theme,
-                                ))
-                                .child(small_choice_button(
-                                    format!("{local_id}-map"),
-                                    &format!("Map to \"{existing_name}\""),
-                                    current_choice == Some(ConflictChoice::MapTo(eid)),
-                                    move |_, _, cx| {
-                                        this_m.update(cx, |this, cx| {
-                                            this.conflict_choices.insert(
-                                                lid_map.clone(),
-                                                ConflictChoice::MapTo(eid),
-                                            );
-                                            cx.notify();
-                                        });
-                                    },
-                                    &theme,
                                 )),
-                        )
-                        .into_any_element()
+                        );
+
+                    // MapTo picker: all same-kind destination profiles.
+                    if !map_candidates.is_empty() {
+                        let mut map_row = div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child("Map to another:"),
+                            );
+
+                        for (candidate_id, candidate_name) in &map_candidates {
+                            let cid = *candidate_id;
+                            let cname = candidate_name.clone();
+                            let lid_c = lid_map_base.clone();
+                            let this_c = this_m_base.clone();
+                            let btn_seed = format!("{}-map-{cid}", lid_map_base);
+                            let is_selected = current_choice == Some(ConflictChoice::MapTo(cid));
+                            let label = format!("→ {cname}");
+
+                            map_row = map_row.child(small_choice_button(
+                                btn_seed,
+                                &label,
+                                is_selected,
+                                move |_, _, cx| {
+                                    this_c.update(cx, |this, cx| {
+                                        this.conflict_choices.insert(
+                                            lid_c.clone(),
+                                            ConflictChoice::MapTo(cid),
+                                        );
+                                        cx.notify();
+                                    });
+                                },
+                                &theme,
+                            ));
+                        }
+
+                        row = row.child(map_row);
+                    } else {
+                        // Existing profile is the only candidate for MapTo — expose
+                        // MapTo(existing_id) as "Map to existing" alongside Reuse.
+                        let lid_map_only = lid_map_base.clone();
+                        let this_map_only = this_m_base.clone();
+                        row = row.child(small_choice_button(
+                            format!("{local_id}-map"),
+                            &format!("Map to \"{existing_name}\""),
+                            current_choice == Some(ConflictChoice::MapTo(eid)),
+                            move |_, _, cx| {
+                                this_map_only.update(cx, |this, cx| {
+                                    this.conflict_choices.insert(
+                                        lid_map_only.clone(),
+                                        ConflictChoice::MapTo(eid),
+                                    );
+                                    cx.notify();
+                                });
+                            },
+                            &theme,
+                        ));
+                    }
+
+                    row.into_any_element()
                 },
             )
             .collect();
@@ -933,40 +1002,54 @@ impl ImportWizard {
             ))
             .children(rows)
             .child(
-                div().flex().justify_end().child(
-                    div()
-                        .id("import-conflict-next")
-                        .px(Spacing::MD)
-                        .py(px(6.0))
-                        .border_1()
-                        .border_color(if all_resolved {
-                            theme.accent
-                        } else {
-                            theme.border
-                        })
-                        .rounded(Radii::SM)
-                        .cursor_pointer()
-                        .when(all_resolved, |d| {
-                            d.hover(|d| d.bg(theme.accent.opacity(0.15)))
-                        })
-                        .on_click(move |_, _, cx| {
-                            this_next.update(cx, |this, cx| {
-                                if this.all_conflicts_resolved() {
-                                    this.advance_from_conflicts(cx);
-                                }
+                div()
+                    .flex()
+                    .justify_between()
+                    .child(small_nav_button(
+                        "import-conflict-back",
+                        "Back",
+                        move |_, _, cx| {
+                            this_back.update(cx, |this, cx| {
+                                this.step = WizardStep::FileAndPassphrase;
+                                cx.notify();
                             });
-                        })
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(if all_resolved {
-                                    theme.accent
-                                } else {
-                                    theme.muted_foreground
-                                })
-                                .child("Next"),
-                        ),
-                ),
+                        },
+                        &theme,
+                    ))
+                    .child(
+                        div()
+                            .id("import-conflict-next")
+                            .px(Spacing::MD)
+                            .py(px(6.0))
+                            .border_1()
+                            .border_color(if all_resolved {
+                                theme.accent
+                            } else {
+                                theme.border
+                            })
+                            .rounded(Radii::SM)
+                            .cursor_pointer()
+                            .when(all_resolved, |d| {
+                                d.hover(|d| d.bg(theme.accent.opacity(0.15)))
+                            })
+                            .on_click(move |_, _, cx| {
+                                this_next.update(cx, |this, cx| {
+                                    if this.all_conflicts_resolved() {
+                                        this.advance_from_conflicts(cx);
+                                    }
+                                });
+                            })
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(if all_resolved {
+                                        theme.accent
+                                    } else {
+                                        theme.muted_foreground
+                                    })
+                                    .child("Next"),
+                            ),
+                    ),
             )
             .into_any_element()
     }
@@ -982,161 +1065,275 @@ impl ImportWizard {
         let resolutions: Vec<_> = plan
             .required_resolutions
             .iter()
-            .map(|r| (r.owner_local_id.clone(), r.field.clone(), r.kind.clone()))
+            .map(|r| {
+                (
+                    r.owner_local_id.clone(),
+                    r.field.clone(),
+                    r.kind.clone(),
+                    r.owner_name.clone(),
+                )
+            })
             .collect();
 
-        let all_resolved = self.all_required_resolved();
         let this_next = cx.entity().clone();
+        let this_back = cx.entity().clone();
 
-        let rows: Vec<AnyElement> = resolutions.iter().map(|(owner, field, kind)| {
-            use dbflux_portability::RequiredResolutionKind;
-            let key = (owner.clone(), field.clone());
+        let rows: Vec<AnyElement> = resolutions
+            .iter()
+            .map(|(owner, field, kind, owner_name)| {
+                use dbflux_portability::RequiredResolutionKind;
+                let key = (owner.clone(), field.clone());
 
-            match kind {
-                RequiredResolutionKind::Secret => {
-                    let label = format!("Secret required: \"{field}\"");
-                    let input = self.secret_inputs.get(&key).cloned();
+                match kind {
+                    RequiredResolutionKind::Secret => {
+                        let label = format!("Secret required for \"{owner_name}\": {field}");
+                        let input = self.secret_inputs.get(&key).cloned();
 
-                    let mut row = div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.0))
-                        .p(Spacing::SM)
-                        .border_1()
-                        .border_color(theme.border)
-                        .rounded(Radii::SM)
-                        .child(div().text_sm().text_color(theme.foreground).child(label));
-
-                    if let Some(input_entity) = input {
-                        row = row.child(input_entity);
-                    }
-
-                    row.into_any_element()
-                }
-
-                RequiredResolutionKind::AwsReference { provider_id, name } => {
-                    let label = format!(
-                        "AWS auth profile \"{name}\" ({provider_id}) not found on this machine."
-                    );
-
-                    // Collect destination profiles whose provider matches the reference.
-                    let matching: Vec<(Uuid, String)> = self
-                        .dest_auth_profiles
-                        .iter()
-                        .filter(|p| &p.provider_id == provider_id)
-                        .map(|p| (p.id, p.name.clone()))
-                        .collect();
-
-                    let current_choice = self.auth_profile_choices.get(&key).copied();
-                    let key_sel = key.clone();
-
-                    let mut container = div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.0))
-                        .p(Spacing::SM)
-                        .border_1()
-                        .border_color(theme.border)
-                        .rounded(Radii::SM)
-                        .child(div().text_sm().text_color(theme.foreground).child(label));
-
-                    if matching.is_empty() {
-                        // No local profile of this provider exists — import without auth.
-                        // The user can assign a profile after importing.
-                        container = container
+                        let mut row = div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .p(Spacing::SM)
+                            .border_1()
+                            .border_color(theme.border)
+                            .rounded(Radii::SM)
                             .child(
                                 div()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child(
-                                        "No matching auth profile found on this machine. \
-                                         The connection will be imported without an auth profile. \
-                                         You can assign one in the Connection Manager after importing.",
-                                    ),
+                                    .text_sm()
+                                    .text_color(theme.foreground)
+                                    .child(label),
                             )
                             .child(
                                 div()
                                     .text_xs()
                                     .text_color(theme.muted_foreground)
                                     .child(
-                                        "To create a new profile: go to Settings > Auth Profiles \
-                                         and add a profile of the matching provider type, then \
-                                         re-import this bundle.",
+                                        "Leave empty to skip — the connection will import \
+                                         without this secret.",
                                     ),
                             );
-                    } else {
-                        // Show a picker of local profiles that match the provider.
-                        let choice_label = current_choice
-                            .and_then(|id| matching.iter().find(|(pid, _)| *pid == id))
-                            .map(|(_, n)| format!("Use: {n}"))
-                            .unwrap_or_else(|| "Skip (import without auth profile)".to_string());
 
-                        container = container.child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child("Select an existing local profile to use, or skip:"),
+                        if let Some(input_entity) = input {
+                            row = row.child(input_entity);
+                        }
+
+                        row.into_any_element()
+                    }
+
+                    RequiredResolutionKind::AwsReference { provider_id, name } => {
+                        let label = format!(
+                            "AWS auth profile \"{name}\" ({provider_id}) not found on this machine."
                         );
 
-                        // "Skip" option
-                        let key_skip = key_sel.clone();
-                        let this_skip = cx.entity().clone();
-                        let skip_seed = format!("{}-{}-skip", key_sel.0, key_sel.1);
-                        container = container.child(small_choice_button(
-                            skip_seed,
-                            "Skip (import without auth profile)",
-                            current_choice.is_none(),
-                            move |_, _, cx| {
-                                this_skip.update(cx, |this, cx| {
-                                    this.auth_profile_choices.remove(&key_skip);
-                                    cx.notify();
-                                });
-                            },
-                            &theme,
-                        ));
+                        // Collect destination profiles whose provider matches the reference.
+                        let matching: Vec<(Uuid, String)> = self
+                            .dest_auth_profiles
+                            .iter()
+                            .filter(|p| &p.provider_id == provider_id)
+                            .map(|p| (p.id, p.name.clone()))
+                            .collect();
 
-                        for (pid, pname) in &matching {
-                            let pid = *pid;
-                            let pname = pname.clone();
-                            let key_p = key_sel.clone();
-                            let this_p = cx.entity().clone();
-                            let label_p = format!("Use: {pname}");
-                            let btn_seed = format!("{}-{}-{pid}", key_sel.0, key_sel.1);
+                        let current_choice = self.auth_profile_choices.get(&key).copied();
+                        let key_sel = key.clone();
+
+                        let mut container = div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .p(Spacing::SM)
+                            .border_1()
+                            .border_color(theme.border)
+                            .rounded(Radii::SM)
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme.foreground)
+                                    .child(label),
+                            );
+
+                        if matching.is_empty() {
+                            container = container
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .child(
+                                            "No matching auth profile found on this machine. \
+                                             The connection will be imported without an auth profile. \
+                                             You can assign one in the Connection Manager after importing.",
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .child(
+                                            "To create a new profile: go to Settings > Auth Profiles \
+                                             and add a profile of the matching provider type, then \
+                                             re-import this bundle.",
+                                        ),
+                                );
+                        } else {
+                            let choice_label = current_choice
+                                .and_then(|id| matching.iter().find(|(pid, _)| *pid == id))
+                                .map(|(_, n)| format!("Use: {n}"))
+                                .unwrap_or_else(|| {
+                                    "Skip (import without auth profile)".to_string()
+                                });
+
+                            container = container.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child("Select an existing local profile to use, or skip:"),
+                            );
+
+                            let key_skip = key_sel.clone();
+                            let this_skip = cx.entity().clone();
+                            let skip_seed = format!("{}-{}-skip", key_sel.0, key_sel.1);
                             container = container.child(small_choice_button(
-                                btn_seed,
-                                &label_p,
-                                current_choice == Some(pid),
+                                skip_seed,
+                                "Skip (import without auth profile)",
+                                current_choice.is_none(),
                                 move |_, _, cx| {
-                                    this_p.update(cx, |this, cx| {
-                                        this.auth_profile_choices.insert(key_p.clone(), pid);
+                                    this_skip.update(cx, |this, cx| {
+                                        this.auth_profile_choices.remove(&key_skip);
                                         cx.notify();
                                     });
                                 },
                                 &theme,
                             ));
+
+                            for (pid, pname) in &matching {
+                                let pid = *pid;
+                                let pname = pname.clone();
+                                let key_p = key_sel.clone();
+                                let this_p = cx.entity().clone();
+                                let label_p = format!("Use: {pname}");
+                                let btn_seed =
+                                    format!("{}-{}-{pid}", key_sel.0, key_sel.1);
+                                container = container.child(small_choice_button(
+                                    btn_seed,
+                                    &label_p,
+                                    current_choice == Some(pid),
+                                    move |_, _, cx| {
+                                        this_p.update(cx, |this, cx| {
+                                            this.auth_profile_choices
+                                                .insert(key_p.clone(), pid);
+                                            cx.notify();
+                                        });
+                                    },
+                                    &theme,
+                                ));
+                            }
+
+                            container = container.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(choice_label),
+                            );
                         }
 
-                        // Show the resolved choice summary.
-                        container = container.child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child(choice_label),
-                        );
+                        container.into_any_element()
                     }
 
-                    container.into_any_element()
-                }
+                    RequiredResolutionKind::AuthProfileRef => {
+                        // Generic non-AWS auth-profile reference: offer all destination
+                        // auth profiles as candidates so the user can pick or skip.
+                        let label =
+                            format!("Auth profile required for \"{owner_name}\": {field}");
+                        let current_choice = self.auth_profile_choices.get(&key).copied();
+                        let key_sel = key.clone();
+                        let key_skip = key.clone();
+                        let this_skip = cx.entity().clone();
 
-                RequiredResolutionKind::AuthProfileRef => {
-                    // Generic non-AWS auth-profile reference: informational only.
-                    div()
-                        .text_sm()
-                        .child(format!("Auth profile required for: \"{field}\""))
-                        .into_any_element()
+                        let all_dest: Vec<(Uuid, String)> = self
+                            .dest_auth_profiles
+                            .iter()
+                            .map(|p| (p.id, p.name.clone()))
+                            .collect();
+
+                        let mut container = div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .p(Spacing::SM)
+                            .border_1()
+                            .border_color(theme.border)
+                            .rounded(Radii::SM)
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme.foreground)
+                                    .child(label),
+                            );
+
+                        if all_dest.is_empty() {
+                            container = container.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(
+                                        "No auth profiles on this machine. The connection \
+                                         will be imported without an auth profile. Add a profile \
+                                         in Settings > Auth Profiles, then re-import.",
+                                    ),
+                            );
+                        } else {
+                            container = container.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child("Select an auth profile to use, or skip:"),
+                            );
+
+                            let skip_seed =
+                                format!("{}-{}-authref-skip", key_sel.0, key_sel.1);
+                            container = container.child(small_choice_button(
+                                skip_seed,
+                                "Skip (import without auth profile)",
+                                current_choice.is_none(),
+                                move |_, _, cx| {
+                                    this_skip.update(cx, |this, cx| {
+                                        this.auth_profile_choices.remove(&key_skip);
+                                        cx.notify();
+                                    });
+                                },
+                                &theme,
+                            ));
+
+                            for (pid, pname) in &all_dest {
+                                let pid = *pid;
+                                let pname = pname.clone();
+                                let key_p = key_sel.clone();
+                                let this_p = cx.entity().clone();
+                                let label_p = format!("Use: {pname}");
+                                let btn_seed = format!(
+                                    "{}-{}-authref-{pid}",
+                                    key_sel.0, key_sel.1
+                                );
+                                container = container.child(small_choice_button(
+                                    btn_seed,
+                                    &label_p,
+                                    current_choice == Some(pid),
+                                    move |_, _, cx| {
+                                        this_p.update(cx, |this, cx| {
+                                            this.auth_profile_choices
+                                                .insert(key_p.clone(), pid);
+                                            cx.notify();
+                                        });
+                                    },
+                                    &theme,
+                                ));
+                            }
+                        }
+
+                        container.into_any_element()
+                    }
                 }
-            }
-        }).collect();
+            })
+            .collect();
 
         div()
             .flex()
@@ -1146,95 +1343,107 @@ impl ImportWizard {
                 div()
                     .text_sm()
                     .text_color(theme.muted_foreground)
-                    .child("The following values are required before the bundle can be imported."),
+                    .child(
+                        "The following values may be required. \
+                         Leave optional secrets empty to skip them.",
+                    ),
             )
             .children(rows)
             .child(
-                div().flex().justify_end().child(
-                    div()
-                        .id("import-required-next")
-                        .px(Spacing::MD)
-                        .py(px(6.0))
-                        .border_1()
-                        .border_color(if all_resolved {
-                            theme.accent
-                        } else {
-                            theme.border
-                        })
-                        .rounded(Radii::SM)
-                        .cursor_pointer()
-                        .when(all_resolved, |d| {
-                            d.hover(|d| d.bg(theme.accent.opacity(0.15)))
-                        })
-                        .on_click(move |_, _, cx| {
-                            this_next.update(cx, |this, cx| {
-                                if this.all_required_resolved() {
+                div()
+                    .flex()
+                    .justify_between()
+                    .child(small_nav_button(
+                        "import-required-back",
+                        "Back",
+                        move |_, _, cx| {
+                            this_back.update(cx, |this, cx| {
+                                if this.import_plan.as_ref().map(|p| !p.conflicts.is_empty()).unwrap_or(false) {
+                                    this.step = WizardStep::ConflictResolution;
+                                } else {
+                                    this.step = WizardStep::FileAndPassphrase;
+                                }
+                                cx.notify();
+                            });
+                        },
+                        &theme,
+                    ))
+                    .child(
+                        div()
+                            .id("import-required-next")
+                            .px(Spacing::MD)
+                            .py(px(6.0))
+                            .border_1()
+                            .border_color(theme.accent)
+                            .rounded(Radii::SM)
+                            .cursor_pointer()
+                            .hover(|d| d.bg(theme.accent.opacity(0.15)))
+                            .on_click(move |_, _, cx| {
+                                this_next.update(cx, |this, cx| {
                                     this.step = WizardStep::Confirm;
                                     cx.notify();
-                                }
-                            });
-                        })
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(if all_resolved {
-                                    theme.accent
-                                } else {
-                                    theme.muted_foreground
-                                })
-                                .child("Next"),
-                        ),
-                ),
+                                });
+                            })
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme.accent)
+                                    .child("Next"),
+                            ),
+                    ),
             )
             .into_any_element()
     }
 
-    fn render_confirm(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_confirm(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = cx.theme().clone();
         let is_applying = self.is_applying;
         let this_apply = cx.entity().clone();
+        let this_back = cx.entity().clone();
 
-        let conn_count = self
-            .parsed_bundle
-            .as_ref()
-            .map(|p| p.bundle.connections.len())
-            .unwrap_or(0);
-        let auth_count = self
-            .parsed_bundle
-            .as_ref()
-            .map(|p| p.bundle.auth_profiles.len())
-            .unwrap_or(0);
-        let ssh_count = self
-            .parsed_bundle
-            .as_ref()
-            .map(|p| p.bundle.ssh_tunnels.len())
-            .unwrap_or(0);
-        let proxy_count = self
-            .parsed_bundle
-            .as_ref()
-            .map(|p| p.bundle.proxies.len())
-            .unwrap_or(0);
-
-        // T5.7: connections with unregistered driver_id — informational, non-blocking.
-        let drivers = self
-            .app_state
-            .read(cx)
-            .drivers()
-            .keys()
-            .cloned()
-            .collect::<std::collections::HashSet<_>>();
-        let needs_driver_note: Vec<String> = self
-            .parsed_bundle
-            .as_ref()
-            .map(|p| {
-                p.bundle
-                    .connections
-                    .iter()
-                    .filter(|c| !drivers.contains(&c.driver_id))
-                    .map(|c| format!("\"{}\" (driver: {})", c.name, c.driver_id))
-                    .collect()
-            })
-            .unwrap_or_default();
+        // Read counts from ConfirmSummary computed at plan time — safe even after
+        // parsed_bundle/import_plan are taken by do_apply().
+        let (conn_count, auth_count, ssh_count, proxy_count, needs_driver_note) =
+            match &self.confirm_summary {
+                Some(s) => {
+                    let conn_count = s.connection_count;
+                    let auth_count = s.auth_profile_count;
+                    let ssh_count = s.ssh_tunnel_count;
+                    let proxy_count = s.proxy_count;
+                    let needs_driver = if s.has_driver_not_installed {
+                        // Fall through to per-connection detail via parsed_bundle if still
+                        // available, else show a generic note.
+                        let drivers = self
+                            .app_state
+                            .read(cx)
+                            .drivers()
+                            .keys()
+                            .cloned()
+                            .collect::<std::collections::HashSet<_>>();
+                        self.parsed_bundle
+                            .as_ref()
+                            .map(|p| {
+                                p.bundle
+                                    .connections
+                                    .iter()
+                                    .filter(|c| !drivers.contains(&c.driver_id))
+                                    .map(|c| format!("\"{}\" (driver: {})", c.name, c.driver_id))
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_else(|| {
+                                vec!["One or more connections need a driver not installed on this machine.".to_string()]
+                            })
+                    } else {
+                        vec![]
+                    };
+                    (conn_count, auth_count, ssh_count, proxy_count, needs_driver)
+                }
+                None => (0, 0, 0, 0, vec![]),
+            };
 
         let mut col = div()
             .flex()
@@ -1305,44 +1514,74 @@ impl ImportWizard {
         }
 
         col.child(
-            div().flex().justify_end().child(
-                div()
-                    .id("import-confirm-btn")
-                    .px(Spacing::MD)
-                    .py(px(6.0))
-                    .border_1()
-                    .border_color(if !is_applying {
-                        theme.accent
-                    } else {
-                        theme.border
-                    })
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .when(!is_applying, |d| {
-                        d.hover(|d| d.bg(theme.accent.opacity(0.15)))
-                    })
-                    .on_click(move |_, window, cx| {
-                        if !is_applying {
-                            this_apply.update(cx, |this, cx| {
-                                this.do_apply(window, cx);
-                            });
-                        }
-                    })
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(if !is_applying {
-                                theme.accent
+            div()
+                .flex()
+                .justify_between()
+                .child(small_nav_button(
+                    "import-confirm-back",
+                    "Back",
+                    move |_, _, cx| {
+                        this_back.update(cx, |this, cx| {
+                            if this
+                                .import_plan
+                                .as_ref()
+                                .map(|p| !p.required_resolutions.is_empty())
+                                .unwrap_or(false)
+                            {
+                                this.step = WizardStep::RequiredReferences;
+                            } else if this
+                                .import_plan
+                                .as_ref()
+                                .map(|p| !p.conflicts.is_empty())
+                                .unwrap_or(false)
+                            {
+                                this.step = WizardStep::ConflictResolution;
                             } else {
-                                theme.muted_foreground
-                            })
-                            .child(if is_applying {
-                                "Importing..."
-                            } else {
-                                "Import"
-                            }),
-                    ),
-            ),
+                                this.step = WizardStep::FileAndPassphrase;
+                            }
+                            cx.notify();
+                        });
+                    },
+                    &theme,
+                ))
+                .child(
+                    div()
+                        .id("import-confirm-btn")
+                        .px(Spacing::MD)
+                        .py(px(6.0))
+                        .border_1()
+                        .border_color(if !is_applying {
+                            theme.accent
+                        } else {
+                            theme.border
+                        })
+                        .rounded(Radii::SM)
+                        .cursor_pointer()
+                        .when(!is_applying, |d| {
+                            d.hover(|d| d.bg(theme.accent.opacity(0.15)))
+                        })
+                        .on_click(move |_, window, cx| {
+                            if !is_applying {
+                                this_apply.update(cx, |this, cx| {
+                                    this.do_apply(window, cx);
+                                });
+                            }
+                        })
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(if !is_applying {
+                                    theme.accent
+                                } else {
+                                    theme.muted_foreground
+                                })
+                                .child(if is_applying {
+                                    "Importing..."
+                                } else {
+                                    "Import"
+                                }),
+                        ),
+                ),
         )
     }
 
@@ -1352,7 +1591,10 @@ impl ImportWizard {
 
         let mut col = div().flex().flex_col().gap(Spacing::SM);
 
-        match self.pending_outcome.take() {
+        // Read outcome by reference — do NOT take() it so details persist across
+        // re-renders (R-WIZ-1: failure details must not collapse to nothing after
+        // the first frame).
+        match self.pending_outcome.as_ref() {
             None => {
                 col = col.child(
                     div()
@@ -1368,7 +1610,6 @@ impl ImportWizard {
                 ));
             }
             Some(Ok(outcome)) => {
-                // T5.7: needs_driver items — informational, not an error.
                 if !outcome.needs_driver.is_empty() {
                     col = col
                         .child(div().text_sm().text_color(theme.muted_foreground).child(
@@ -1382,7 +1623,23 @@ impl ImportWizard {
                         }));
                 }
 
-                // config_failures — driver is registered but build_config failed.
+                if !outcome.unresolved_refs.is_empty() {
+                    col = col
+                        .child(BannerBlock::new(
+                            BannerVariant::Warning,
+                            format!(
+                                "{} connection(s) have unresolvable references and were not imported.",
+                                outcome.unresolved_refs.len()
+                            ),
+                        ))
+                        .children(outcome.unresolved_refs.iter().map(|name| {
+                            div()
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .child(format!("- \"{name}\""))
+                        }));
+                }
+
                 if !outcome.config_failures.is_empty() {
                     col = col
                         .child(BannerBlock::new(
@@ -1443,6 +1700,40 @@ impl ImportWizard {
             ),
         )
     }
+
+    fn render_import_success(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let this_close = cx.entity().clone();
+        let count = self.import_success_count;
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(Spacing::SM)
+            .child(BannerBlock::new(
+                BannerVariant::Success,
+                format!("Import successful — {count} entity/entities imported."),
+            ))
+            .child(
+                div().flex().justify_end().child(
+                    div()
+                        .id("import-success-close-btn")
+                        .px(Spacing::MD)
+                        .py(px(6.0))
+                        .border_1()
+                        .border_color(theme.accent)
+                        .rounded(Radii::SM)
+                        .cursor_pointer()
+                        .hover(|d| d.bg(theme.accent.opacity(0.15)))
+                        .on_click(move |_, _, cx| {
+                            this_close.update(cx, |_this, cx| {
+                                cx.emit(ImportWizardEvent::Close);
+                            });
+                        })
+                        .child(div().text_sm().text_color(theme.accent).child("Close")),
+                ),
+            )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1480,6 +1771,30 @@ fn small_choice_button(
                 } else {
                     theme.foreground
                 })
+                .child(label.to_string()),
+        )
+}
+
+fn small_nav_button(
+    id: impl Into<ElementId>,
+    label: &str,
+    handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    theme: &gpui_component::Theme,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .px(Spacing::MD)
+        .py(px(6.0))
+        .border_1()
+        .border_color(theme.border)
+        .rounded(Radii::SM)
+        .cursor_pointer()
+        .hover(|d| d.bg(theme.secondary))
+        .on_click(handler)
+        .child(
+            div()
+                .text_sm()
+                .text_color(theme.muted_foreground)
                 .child(label.to_string()),
         )
 }

@@ -133,9 +133,28 @@ impl Workspace {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use crate::ui::windows::connection_manager::import_wizard::ImportWizard;
+        use crate::ui::windows::connection_manager::import_wizard::{
+            ImportWizard, ImportWizardEvent,
+        };
+
+        // L7 / R-WIZ-5: focus an existing wizard window rather than stacking another.
+        if let Some(handle) = self.app_state.read(cx).import_wizard_window {
+            match handle.update(cx, |_root, window, _cx| {
+                window.activate_window();
+            }) {
+                Ok(()) => return,
+                Err(e) => {
+                    log::warn!("Stale import wizard handle, reopening: {:?}", e);
+                    self.app_state.update(cx, |state, _| {
+                        state.import_wizard_window = None;
+                    });
+                }
+            }
+        }
 
         let app_state = self.app_state.clone();
+        let app_state_for_close = self.app_state.clone();
+        let app_state_for_event = self.app_state.clone();
         let bounds = Bounds::centered(None, size(px(580.0), px(660.0)), cx);
 
         let mut options = WindowOptions {
@@ -150,11 +169,53 @@ impl Workspace {
         };
         platform::apply_window_options(&mut options, 540.0, 600.0);
 
-        match cx.open_window(options, |window, cx| {
+        let open_result = cx.open_window(options, move |window, cx| {
+            // Clear the stored handle when the OS closes the window so the dedup
+            // check above does not try to activate a dead handle.
+            window.on_window_should_close(cx, move |_window, cx| {
+                app_state_for_close.update(cx, |state, _| {
+                    state.import_wizard_window = None;
+                });
+                true
+            });
+
             let wizard = cx.new(|cx| ImportWizard::new(app_state, window, cx));
+
+            // C3 / R-WIZ-1: subscribe so wizard events drive window closure.
+            // Inside open_window the context is &mut App, so subscribe uses the
+            // 3-arg form: (entity, event, &mut App).  We close by updating the
+            // window through the stored handle.
+            cx.subscribe(
+                &wizard,
+                move |_wizard_entity, event: &ImportWizardEvent, cx| {
+                    match event {
+                        ImportWizardEvent::Close | ImportWizardEvent::ImportSucceeded => {
+                            let handle =
+                                app_state_for_event.read(cx).import_wizard_window;
+                            app_state_for_event.update(cx, |state, _| {
+                                state.import_wizard_window = None;
+                            });
+                            if let Some(h) = handle {
+                                h.update(cx, |_, window, _cx| {
+                                    window.remove_window();
+                                })
+                                .ok();
+                            }
+                        }
+                    }
+                },
+            )
+            .detach();
+
             cx.new(|cx| Root::new(wizard, window, cx))
-        }) {
+        });
+
+        match open_result {
             Ok(handle) => {
+                self.app_state.update(cx, |state, _| {
+                    state.import_wizard_window = Some(handle);
+                });
+
                 if let Err(e) = handle.update(cx, |_root, window, cx| {
                     window.activate_window();
                     cx.notify();
@@ -175,7 +236,23 @@ impl Workspace {
     ) {
         use crate::ui::windows::connection_manager::export_modal::ExportModal;
 
+        // L7 / R-WIZ-5: focus an existing export window rather than stacking another.
+        if let Some(handle) = self.app_state.read(cx).export_modal_window {
+            match handle.update(cx, |_root, window, _cx| {
+                window.activate_window();
+            }) {
+                Ok(()) => return,
+                Err(e) => {
+                    log::warn!("Stale export modal handle, reopening: {:?}", e);
+                    self.app_state.update(cx, |state, _| {
+                        state.export_modal_window = None;
+                    });
+                }
+            }
+        }
+
         let app_state = self.app_state.clone();
+        let app_state_for_close = self.app_state.clone();
         let bounds = Bounds::centered(None, size(px(560.0), px(620.0)), cx);
 
         let mut options = WindowOptions {
@@ -190,11 +267,24 @@ impl Workspace {
         };
         platform::apply_window_options(&mut options, 520.0, 580.0);
 
-        match cx.open_window(options, |window, cx| {
+        let open_result = cx.open_window(options, move |window, cx| {
+            window.on_window_should_close(cx, move |_window, cx| {
+                app_state_for_close.update(cx, |state, _| {
+                    state.export_modal_window = None;
+                });
+                true
+            });
+
             let modal = cx.new(|cx| ExportModal::new(app_state, window, cx));
             cx.new(|cx| Root::new(modal, window, cx))
-        }) {
+        });
+
+        match open_result {
             Ok(handle) => {
+                self.app_state.update(cx, |state, _| {
+                    state.export_modal_window = Some(handle);
+                });
+
                 if let Err(e) = handle.update(cx, |_root, window, cx| {
                     window.activate_window();
                     cx.notify();
