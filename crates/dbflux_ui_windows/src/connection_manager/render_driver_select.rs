@@ -1,6 +1,6 @@
 use dbflux_components::controls::{Button, GpuiInput, InputState};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Chord, Icon, IconButton, KbdBadge, Text};
+use dbflux_components::primitives::{Icon, IconButton, KbdBadge, Text};
 use dbflux_components::tokens::FontSizes;
 use dbflux_components::tokens::{Heights, Radii, Spacing};
 use dbflux_core::DatabaseCategory;
@@ -249,17 +249,7 @@ impl ConnectionManagerWindow {
             .py_3()
             .border_t_1()
             .border_color(theme.border)
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_4()
-                    .child(footer_hint(Chord::new(["↑", "↓", "←", "→"]), "navigate"))
-                    .child(footer_hint(Chord::new(["/"]), "filter"))
-                    .child(footer_hint(Chord::new(["↵"]), "select"))
-                    .child(footer_hint(Chord::new(["Esc"]), "close")),
-            )
+            .justify_end()
             .child(
                 div()
                     .flex()
@@ -267,22 +257,23 @@ impl ConnectionManagerWindow {
                     .items_center()
                     .gap_2()
                     .child(
-                        Button::new("cm-driver-import", "Import from file\u{2026}").on_click(
-                            cx.listener(|this, _, window, cx| {
+                        Button::new("cm-driver-import", "Import from file\u{2026}")
+                            .small()
+                            .on_click(cx.listener(|this, _, window, cx| {
                                 this.open_import(window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("cm-driver-cancel", "Cancel").small().on_click(
+                            cx.listener(|_, _, window, cx| {
+                                cx.emit(DismissEvent);
+                                window.remove_window();
                             }),
                         ),
                     )
-                    .child(
-                        Button::new("cm-driver-cancel", "Cancel").on_click(cx.listener(
-                            |_, _, window, cx| {
-                                cx.emit(DismissEvent);
-                                window.remove_window();
-                            },
-                        )),
-                    )
                     .child({
-                        let mut cta = Button::new("cm-driver-configure", cta_label).primary();
+                        let mut cta =
+                            Button::new("cm-driver-configure", cta_label).primary().small();
                         if cta_disabled {
                             cta = cta.disabled(true);
                         } else {
@@ -346,16 +337,6 @@ fn render_section_header(
                 .text_color(muted)
                 .child(SharedString::from(count.to_string())),
         )
-}
-
-fn footer_hint(chord: Chord, label: &'static str) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_1()
-        .child(chord)
-        .child(div().text_size(FontSizes::XS).child(label))
 }
 
 /// Build the ordered list of drivers visible in the picker for the given
