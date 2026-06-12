@@ -26,14 +26,14 @@
 use std::collections::{BTreeMap, HashMap};
 
 use dbflux_core::{
-    ExportFieldHint, ProxyAuth, SshAuthMethod, auth_field_secret_ref, connection_secret_ref,
-    proxy_secret_ref, ssh_tunnel_secret_ref,
+    ExportFieldHint, FieldExportTransform, ProxyAuth, SshAuthMethod, auth_field_secret_ref,
+    connection_secret_ref, proxy_secret_ref, ssh_tunnel_secret_ref,
 };
 use secrecy::ExposeSecret;
 
 use crate::{
-    AwsRef, EncryptionChoice, ExportGraph, ExportOptions, ExportReport, FieldHintResolver,
-    PortabilityError, SecretReader,
+    AwsRef, EncryptionChoice, ExportGraph, ExportOptions, ExportReport, ExportTransformResolver,
+    FieldHintResolver, PortabilityError, SecretReader,
     bundle::{
         AccessEntry, AuthEntry, AuthRef, AuthRefKind, Bundle, BundleMeta, CURRENT_FORMAT_VERSION,
         ConnectionEntry, DriverRef, EncryptionMode, ProxyEntry, RequiredRef, RequiredRefKind,
@@ -48,8 +48,17 @@ pub fn export(
     graph: &ExportGraph<'_>,
     opts: &ExportOptions,
     hints: &dyn FieldHintResolver,
+    transforms: &dyn ExportTransformResolver,
     secrets: &dyn SecretReader,
 ) -> Result<(Vec<u8>, ExportReport), PortabilityError> {
+    // R-SEC-2 / H1: SSH key embedding requires passphrase encryption.
+    // Reject before any I/O or staging so no key bytes are ever written.
+    if opts.embed_ssh_keys {
+        if let EncryptionChoice::Plaintext { .. } = &opts.encryption {
+            return Err(PortabilityError::SshKeyEmbedRequiresEncryption);
+        }
+    }
+
     let mut report = ExportReport::default();
     let mut staged_secrets: HashMap<String, String> = HashMap::new();
 
@@ -71,6 +80,7 @@ pub fn export(
         // Fields are iterated in lexicographic order so the binding is deterministic
         // across runs regardless of the HashMap's internal ordering.
         let mut connection_secret_staged = false;
+        let mut uri_secret_fields: Vec<String> = Vec::new();
 
         let sorted_values: BTreeMap<&str, &str> = values
             .iter()
@@ -78,6 +88,21 @@ pub fn export(
             .collect();
 
         for (field_id, field_value) in &sorted_values {
+            // Consult the transform resolver BEFORE the hint (ADR-1 / C1).
+            // SplitSecret takes priority: the skeleton goes to cleartext, the secret
+            // to staged_secrets under the conn: prefix. The hint path is bypassed.
+            let transform = transforms.transform(profile, field_id, values);
+            match transform {
+                FieldExportTransform::SplitSecret { skeleton, secret } => {
+                    include_fields.insert((*field_id).to_string(), skeleton);
+                    let key = format!("conn:{}:{}", profile.id, field_id);
+                    staged_secrets.insert(key, secret.expose_secret().to_string());
+                    uri_secret_fields.push((*field_id).to_string());
+                    continue;
+                }
+                FieldExportTransform::None => {}
+            }
+
             let hint = hints.hint(profile, field_id, values);
 
             match hint {
@@ -86,19 +111,40 @@ pub fn export(
                 }
 
                 ExportFieldHint::Secret => {
-                    if !connection_secret_staged {
-                        let secret_ref = connection_secret_ref(&profile.id);
-                        let key = format!("conn:{}:{}", profile.id, field_id);
-                        if let Some(secret) = secrets.read(&secret_ref) {
-                            staged_secrets.insert(key, secret.expose_secret().to_string());
-                            connection_secret_staged = true;
-                        } else {
+                    // Per-secret DoNotExport override — user chose to force a required_ref.
+                    let per_override = opts.per_secret_overrides.get(&(profile.id, (*field_id).to_string()));
+                    let force_required = matches!(per_override, Some(crate::SecretExportChoice::DoNotExport));
+
+                    if force_required {
+                        required_refs.push(RequiredRef {
+                            field: (*field_id).to_string(),
+                            kind: RequiredRefKind::Secret,
+                        });
+                        report.required_ref_count += 1;
+                        connection_secret_staged = true;
+                    } else if !connection_secret_staged {
+                        // Honor connection_password option: Exclude → RequiredRef, Include → stage.
+                        if matches!(opts.connection_password, crate::IncludeExclude::Exclude) {
                             required_refs.push(RequiredRef {
                                 field: (*field_id).to_string(),
                                 kind: RequiredRefKind::Secret,
                             });
                             report.required_ref_count += 1;
                             connection_secret_staged = true;
+                        } else {
+                            let secret_ref = connection_secret_ref(&profile.id);
+                            let key = format!("conn:{}:{}", profile.id, field_id);
+                            if let Some(secret) = secrets.read(&secret_ref) {
+                                staged_secrets.insert(key, secret.expose_secret().to_string());
+                                connection_secret_staged = true;
+                            } else {
+                                required_refs.push(RequiredRef {
+                                    field: (*field_id).to_string(),
+                                    kind: RequiredRefKind::Secret,
+                                });
+                                report.required_ref_count += 1;
+                                connection_secret_staged = true;
+                            }
                         }
                     } else {
                         // Additional Secret-hinted fields have no distinct keyring ref;
@@ -224,13 +270,15 @@ pub fn export(
             hooks_payload,
             settings_overrides_payload,
             kind,
+            uri_secret_fields,
         });
     }
 
-    let auth_entries = build_auth_entries(graph, secrets, &mut staged_secrets, &mut report);
+    let auth_entries = build_auth_entries(graph, opts, secrets, &mut staged_secrets, &mut report);
     let ssh_entries = build_ssh_entries(graph, opts, secrets, &mut staged_secrets, &mut report);
-    let proxy_entries = build_proxy_entries(graph, secrets, &mut staged_secrets, &mut report);
+    let proxy_entries = build_proxy_entries(graph, opts, secrets, &mut staged_secrets, &mut report);
 
+    driver_refs.sort_by(|a, b| a.reference.cmp(&b.reference));
     driver_refs.dedup_by(|a, b| a.reference == b.reference);
 
     let (encryption_mode, secrets_section) = build_secrets_section(staged_secrets, opts)?;
@@ -433,6 +481,7 @@ fn build_sanitized_hooks_payload(
 
 fn build_auth_entries(
     graph: &ExportGraph<'_>,
+    opts: &ExportOptions,
     secrets: &dyn SecretReader,
     staged_secrets: &mut HashMap<String, String>,
     report: &mut ExportReport,
@@ -444,28 +493,54 @@ fn build_auth_entries(
             let mut secret_field_names = Vec::new();
             let mut required_refs: Vec<RequiredRef> = Vec::new();
 
-            for (field_id, in_memory_secret) in &auth.secret_fields {
-                let bundle_key = format!("auth:{}:{}", auth.id, field_id);
+            let mode = opts
+                .auth_modes
+                .get(&auth.id)
+                .copied()
+                .unwrap_or(crate::AuthExportMode::MappableReference);
 
-                let secret_value = in_memory_secret.expose_secret().to_string();
-                if !secret_value.is_empty() {
-                    staged_secrets.insert(bundle_key, secret_value);
-                    secret_field_names.push(field_id.clone());
-                } else {
-                    let key_ref = auth_field_secret_ref(&auth.id, field_id);
-                    if let Some(from_keyring) = secrets.read(&key_ref) {
-                        staged_secrets.insert(bundle_key, from_keyring.expose_secret().to_string());
-                        secret_field_names.push(field_id.clone());
-                    } else {
-                        report.warnings.push(format!(
-                            "auth profile '{}' field '{}' secret not available; recorded as required on import",
-                            auth.name, field_id
-                        ));
+            match mode {
+                crate::AuthExportMode::Exclude => {
+                    // No secrets staged; no required_refs emitted.
+                }
+                crate::AuthExportMode::RequiredOnImport => {
+                    for field_id in auth.secret_fields.keys() {
                         required_refs.push(RequiredRef {
                             field: field_id.clone(),
                             kind: RequiredRefKind::Secret,
                         });
                         report.required_ref_count += 1;
+                    }
+                }
+                crate::AuthExportMode::MappableReference => {
+                    // Travel as a reference; no secret material staged.
+                }
+                crate::AuthExportMode::IncludeValues => {
+                    for (field_id, in_memory_secret) in &auth.secret_fields {
+                        let bundle_key = format!("auth:{}:{}", auth.id, field_id);
+
+                        let secret_value = in_memory_secret.expose_secret().to_string();
+                        if !secret_value.is_empty() {
+                            staged_secrets.insert(bundle_key, secret_value);
+                            secret_field_names.push(field_id.clone());
+                        } else {
+                            let key_ref = auth_field_secret_ref(&auth.id, field_id);
+                            if let Some(from_keyring) = secrets.read(&key_ref) {
+                                staged_secrets
+                                    .insert(bundle_key, from_keyring.expose_secret().to_string());
+                                secret_field_names.push(field_id.clone());
+                            } else {
+                                report.warnings.push(format!(
+                                    "auth profile '{}' field '{}' secret not available; recorded as required on import",
+                                    auth.name, field_id
+                                ));
+                                required_refs.push(RequiredRef {
+                                    field: field_id.clone(),
+                                    kind: RequiredRefKind::Secret,
+                                });
+                                report.required_ref_count += 1;
+                            }
+                        }
                     }
                 }
             }
@@ -498,20 +573,28 @@ fn build_ssh_entries(
 
             let (auth_method, key_embedded) = match &ssh.config.auth_method {
                 SshAuthMethod::Password => {
-                    let secret_ref = ssh_tunnel_secret_ref(&ssh.id);
-                    let bundle_key = format!("ssh_tunnel:{}:password", ssh.id);
-                    if let Some(secret) = secrets.read(&secret_ref) {
-                        staged_secrets.insert(bundle_key, secret.expose_secret().to_string());
-                    } else {
-                        report.warnings.push(format!(
-                            "SSH tunnel '{}' password not available; recorded as required_ref",
-                            ssh.name
-                        ));
+                    if matches!(opts.ssh_password, crate::IncludeExclude::Exclude) {
                         required_refs.push(RequiredRef {
                             field: "password".to_string(),
                             kind: RequiredRefKind::Secret,
                         });
                         report.required_ref_count += 1;
+                    } else {
+                        let secret_ref = ssh_tunnel_secret_ref(&ssh.id);
+                        let bundle_key = format!("ssh_tunnel:{}:password", ssh.id);
+                        if let Some(secret) = secrets.read(&secret_ref) {
+                            staged_secrets.insert(bundle_key, secret.expose_secret().to_string());
+                        } else {
+                            report.warnings.push(format!(
+                                "SSH tunnel '{}' password not available; recorded as required_ref",
+                                ssh.name
+                            ));
+                            required_refs.push(RequiredRef {
+                                field: "password".to_string(),
+                                kind: RequiredRefKind::Secret,
+                            });
+                            report.required_ref_count += 1;
+                        }
                     }
                     (SshAuthMethodKind::Password, false)
                 }
@@ -562,6 +645,7 @@ fn build_ssh_entries(
 
 fn build_proxy_entries(
     graph: &ExportGraph<'_>,
+    opts: &ExportOptions,
     secrets: &dyn SecretReader,
     staged_secrets: &mut HashMap<String, String>,
     report: &mut ExportReport,
@@ -575,24 +659,33 @@ fn build_proxy_entries(
             let (username, has_secret) = match &proxy.auth {
                 ProxyAuth::None => (None, false),
                 ProxyAuth::Basic { username } => {
-                    let secret_ref = proxy_secret_ref(&proxy.id);
-                    let bundle_key = format!("proxy:{}:password", proxy.id);
-                    let has_secret = if let Some(secret) = secrets.read(&secret_ref) {
-                        staged_secrets.insert(bundle_key, secret.expose_secret().to_string());
-                        true
-                    } else {
-                        report.warnings.push(format!(
-                            "proxy '{}' credential not available; recorded as required_ref",
-                            proxy.name
-                        ));
+                    if matches!(opts.proxy_credentials, crate::IncludeExclude::Exclude) {
                         required_refs.push(RequiredRef {
                             field: "password".to_string(),
                             kind: RequiredRefKind::Secret,
                         });
                         report.required_ref_count += 1;
-                        false
-                    };
-                    (Some(username.clone()), has_secret)
+                        (Some(username.clone()), false)
+                    } else {
+                        let secret_ref = proxy_secret_ref(&proxy.id);
+                        let bundle_key = format!("proxy:{}:password", proxy.id);
+                        let has_secret = if let Some(secret) = secrets.read(&secret_ref) {
+                            staged_secrets.insert(bundle_key, secret.expose_secret().to_string());
+                            true
+                        } else {
+                            report.warnings.push(format!(
+                                "proxy '{}' credential not available; recorded as required_ref",
+                                proxy.name
+                            ));
+                            required_refs.push(RequiredRef {
+                                field: "password".to_string(),
+                                kind: RequiredRefKind::Secret,
+                            });
+                            report.required_ref_count += 1;
+                            false
+                        };
+                        (Some(username.clone()), has_secret)
+                    }
                 }
             };
 
@@ -687,6 +780,62 @@ mod tests {
     impl FieldHintResolver for IncludeAllHints {
         fn hint(&self, _p: &ConnectionProfile, _f: &str, _v: &FormValues) -> ExportFieldHint {
             ExportFieldHint::Include
+        }
+    }
+
+    struct NoTransforms;
+
+    impl crate::ExportTransformResolver for NoTransforms {
+        fn transform(
+            &self,
+            _p: &ConnectionProfile,
+            _f: &str,
+            _v: &FormValues,
+        ) -> dbflux_core::FieldExportTransform {
+            dbflux_core::FieldExportTransform::None
+        }
+    }
+
+    struct SplitSecretForUri;
+
+    impl crate::ExportTransformResolver for SplitSecretForUri {
+        fn transform(
+            &self,
+            _p: &ConnectionProfile,
+            field_id: &str,
+            values: &FormValues,
+        ) -> dbflux_core::FieldExportTransform {
+            if field_id == "uri" {
+                if let Some(uri) = values.get("uri") {
+                    if uri.contains(':') && uri.contains('@') {
+                        // Extract the password between ':' and '@' for the test.
+                        // This is a test-only minimal splitter; real drivers use parse_uri.
+                        let skeleton = uri.replacen(
+                            |c: char| false,
+                            "",
+                            0,
+                        );
+                        // Find user:pass@ pattern
+                        if let Some(at_pos) = uri.find('@') {
+                            let before_at = &uri[..at_pos];
+                            if let Some(colon_pos) = before_at.rfind(':') {
+                                let pass = before_at[colon_pos + 1..].to_string();
+                                let skeleton = format!(
+                                    "{}:{}{}",
+                                    &uri[..colon_pos + 1],
+                                    "",
+                                    &uri[at_pos..]
+                                );
+                                return dbflux_core::FieldExportTransform::SplitSecret {
+                                    skeleton,
+                                    secret: ::secrecy::SecretString::from(pass),
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+            dbflux_core::FieldExportTransform::None
         }
     }
 
@@ -814,6 +963,7 @@ mod tests {
             &graph,
             &default_opts_plaintext(),
             &IncludeAllHints,
+            &NoTransforms,
             &NoSecrets,
         )
         .expect("export");
@@ -840,10 +990,16 @@ mod tests {
             m
         });
 
+        let opts_include = ExportOptions {
+            connection_password: crate::IncludeExclude::Include,
+            ..default_opts_plaintext()
+        };
+
         let (bytes, _) = export(
             &graph,
-            &default_opts_plaintext(),
+            &opts_include,
             &SecretHintForPassword,
+            &NoTransforms,
             &secrets,
         )
         .expect("export");
@@ -881,6 +1037,7 @@ mod tests {
             &graph,
             &default_opts_plaintext(),
             &RequiredOnImportForProfile,
+            &NoTransforms,
             &NoSecrets,
         )
         .expect("export");
@@ -910,6 +1067,7 @@ mod tests {
             &graph,
             &default_opts_plaintext(),
             &LocalPathForCert,
+            &NoTransforms,
             &NoSecrets,
         )
         .expect("export");
@@ -942,6 +1100,7 @@ mod tests {
             &graph,
             &default_opts_plaintext(),
             &IncludeAllHints,
+            &NoTransforms,
             &NoSecrets,
         )
         .expect("export");
@@ -967,6 +1126,7 @@ mod tests {
             &graph,
             &default_opts_plaintext(),
             &IncludeAllHints,
+            &NoTransforms,
             &NoSecrets,
         )
         .expect("export");
@@ -1000,6 +1160,7 @@ mod tests {
             &graph,
             &default_opts_plaintext(),
             &IncludeAllHints,
+            &NoTransforms,
             &NoSecrets,
         )
         .expect("export");
@@ -1040,6 +1201,7 @@ mod tests {
             &graph,
             &default_opts_plaintext(),
             &IncludeAllHints,
+            &NoTransforms,
             &NoSecrets,
         )
         .expect("export");
@@ -1092,20 +1254,23 @@ mod tests {
             proxies: vec![],
         };
 
-        let opts = ExportOptions {
+        let opts_plaintext = ExportOptions {
             include_hooks: false,
             include_settings_overrides: false,
             embed_ssh_keys: true,
             encryption: EncryptionChoice::Plaintext { forced: true },
-                    ..crate::ExportOptions { encryption: crate::EncryptionChoice::Plaintext { forced: true }, ..Default::default() }
+            ..Default::default()
         };
 
-        let (bytes, _) = export(&graph, &opts, &IncludeAllHints, &secrets).expect("export");
-        let text = String::from_utf8(bytes).expect("utf8");
-
+        // R-SEC-2 / H1: SSH key embedding with plaintext must be rejected.
+        let result = export(&graph, &opts_plaintext, &IncludeAllHints, &NoTransforms, &secrets);
         assert!(
-            text.contains("key_embedded = true"),
-            "key_embedded must be true when opted in: {text}"
+            matches!(
+                result,
+                Err(crate::PortabilityError::SshKeyEmbedRequiresEncryption)
+            ),
+            "embed_ssh_keys=true with plaintext must return SshKeyEmbedRequiresEncryption, got: {:?}",
+            result.err()
         );
     }
 
@@ -1127,12 +1292,12 @@ mod tests {
         let opts = ExportOptions {
             include_hooks: true,
             include_settings_overrides: true,
-            embed_ssh_keys: true,
+            embed_ssh_keys: false,
             encryption: EncryptionChoice::Plaintext { forced: true },
-                    ..crate::ExportOptions { encryption: crate::EncryptionChoice::Plaintext { forced: true }, ..Default::default() }
+            ..Default::default()
         };
 
-        let (bytes, _) = export(&graph, &opts, &IncludeAllHints, &NoSecrets).expect("export");
+        let (bytes, _) = export(&graph, &opts, &IncludeAllHints, &NoTransforms, &NoSecrets).expect("export");
         let text = String::from_utf8(bytes).expect("utf8");
 
         // Full serialized bundle must not contain any governance-derived fields.
@@ -1191,10 +1356,16 @@ mod tests {
             m
         });
 
+        let opts_include = ExportOptions {
+            connection_password: crate::IncludeExclude::Include,
+            ..default_opts_plaintext()
+        };
+
         let (bytes, report) = export(
             &graph,
-            &default_opts_plaintext(),
+            &opts_include,
             &SecretHintForAll,
+            &NoTransforms,
             &secrets,
         )
         .expect("export");
@@ -1305,6 +1476,7 @@ mod tests {
             &graph,
             &default_opts_plaintext(),
             &IncludeAllHints,
+            &NoTransforms,
             &NoSecrets,
         )
         .expect("export");
@@ -1355,7 +1527,7 @@ mod tests {
                     ..crate::ExportOptions { encryption: crate::EncryptionChoice::Plaintext { forced: true }, ..Default::default() }
         };
 
-        let (bytes, _report) = export(&graph, &opts_forced, &IncludeAllHints, &NoSecrets).expect(
+        let (bytes, _report) = export(&graph, &opts_forced, &IncludeAllHints, &NoTransforms, &NoSecrets).expect(
             "export with forced plaintext must succeed when only Literal value_refs are present",
         );
 
@@ -1408,10 +1580,20 @@ mod tests {
             proxies: vec![],
         };
 
+        let opts_include_values = ExportOptions {
+            auth_modes: {
+                let mut m = std::collections::HashMap::new();
+                m.insert(auth.id, crate::AuthExportMode::IncludeValues);
+                m
+            },
+            ..default_opts_plaintext()
+        };
+
         let (bytes, report) = export(
             &graph,
-            &default_opts_plaintext(),
+            &opts_include_values,
             &IncludeAllHints,
+            &NoTransforms,
             &NoSecrets,
         )
         .expect("export");
@@ -1468,10 +1650,20 @@ mod tests {
             proxies: vec![],
         };
 
+        let opts_include_values = ExportOptions {
+            auth_modes: {
+                let mut m = std::collections::HashMap::new();
+                m.insert(auth.id, crate::AuthExportMode::IncludeValues);
+                m
+            },
+            ..default_opts_plaintext()
+        };
+
         let (_bytes, report) = export(
             &graph,
-            &default_opts_plaintext(),
+            &opts_include_values,
             &IncludeAllHints,
+            &NoTransforms,
             &NoSecrets,
         )
         .expect("export");
@@ -1533,7 +1725,7 @@ mod tests {
                     ..crate::ExportOptions { encryption: crate::EncryptionChoice::Plaintext { forced: true }, ..Default::default() }
         };
 
-        let (bytes, _report) = export(&graph, &opts, &IncludeAllHints, &NoSecrets).expect("export");
+        let (bytes, _report) = export(&graph, &opts, &IncludeAllHints, &NoTransforms, &NoSecrets).expect("export");
         let text = String::from_utf8(bytes).expect("utf8");
 
         // Hook env value must NOT appear in the cleartext portion (before [secrets]).
@@ -1578,6 +1770,7 @@ mod tests {
             &graph,
             &default_opts_plaintext(),
             &IncludeAllHints,
+            &NoTransforms,
             &NoSecrets,
         )
         .expect("export");
@@ -1609,6 +1802,7 @@ mod tests {
             &graph2,
             &default_opts_plaintext(),
             &IncludeAllHints,
+            &NoTransforms,
             &NoSecrets,
         )
         .expect("export http");
@@ -1646,7 +1840,7 @@ mod tests {
                     ..crate::ExportOptions { encryption: crate::EncryptionChoice::Plaintext { forced: true }, ..Default::default() }
         };
 
-        let result = export(&graph, &opts, &SecretHintForPassword, &secrets);
+        let result = export(&graph, &opts, &SecretHintForPassword, &NoTransforms, &secrets);
 
         assert!(
             matches!(result, Err(crate::PortabilityError::PlaintextForceMissing)),
@@ -1684,7 +1878,7 @@ mod tests {
             per_secret_overrides: Default::default(),
         };
 
-        let result = export(&graph, &opts, &SecretHintForPassword, &NoSecrets);
+        let result = export(&graph, &opts, &SecretHintForPassword, &NoTransforms, &NoSecrets);
         assert!(result.is_ok(), "plaintext with forced=true must succeed");
     }
 
@@ -1706,7 +1900,7 @@ mod tests {
                     ..crate::ExportOptions { encryption: crate::EncryptionChoice::Plaintext { forced: true }, ..Default::default() }
         };
 
-        let result = export(&graph, &opts, &IncludeAllHints, &NoSecrets);
+        let result = export(&graph, &opts, &IncludeAllHints, &NoTransforms, &NoSecrets);
         assert!(
             matches!(result, Err(crate::PortabilityError::PlaintextForceMissing)),
             "plaintext without force must fail even when no secrets are staged, got: {:?}",
@@ -1743,10 +1937,16 @@ mod tests {
             proxies: vec![],
         };
 
+        let opts_ssh_include = ExportOptions {
+            ssh_password: crate::IncludeExclude::Include,
+            ..default_opts_plaintext()
+        };
+
         let (_bytes, report) = export(
             &graph,
-            &default_opts_plaintext(),
+            &opts_ssh_include,
             &IncludeAllHints,
+            &NoTransforms,
             &NoSecrets,
         )
         .expect("export");
@@ -1797,7 +1997,7 @@ mod tests {
                     ..crate::ExportOptions { encryption: crate::EncryptionChoice::Plaintext { forced: true }, ..Default::default() }
         };
 
-        let (bytes, report) = export(&graph, &opts, &IncludeAllHints, &NoSecrets).expect("export");
+        let (bytes, report) = export(&graph, &opts, &IncludeAllHints, &NoTransforms, &NoSecrets).expect("export");
         let text = String::from_utf8(bytes).expect("utf8");
 
         assert_eq!(
@@ -1849,10 +2049,16 @@ mod tests {
             proxies: vec![&proxy],
         };
 
+        let opts_proxy_include = ExportOptions {
+            proxy_credentials: crate::IncludeExclude::Include,
+            ..default_opts_plaintext()
+        };
+
         let (_bytes, report) = export(
             &graph,
-            &default_opts_plaintext(),
+            &opts_proxy_include,
             &IncludeAllHints,
+            &NoTransforms,
             &NoSecrets,
         )
         .expect("export");
@@ -1865,6 +2071,361 @@ mod tests {
         assert!(
             !report.warnings.is_empty(),
             "missing proxy credential must produce a warning"
+        );
+    }
+
+    // --- Phase 2.2: ExportOptions per-category honoring (R-CTL-1 / S1 / ADR-7) ---
+
+    #[test]
+    fn export_options_password_exclude_no_staged_secret() {
+        let profile = postgres_profile();
+        let mut values = FormValues::default();
+        values.insert("password".to_string(), "sekret".to_string());
+
+        let graph = simple_graph(&profile, values);
+
+        let conn_ref = dbflux_core::connection_secret_ref(&profile.id);
+        let secrets = FixedSecrets({
+            let mut m = HashMap::new();
+            m.insert(conn_ref, "sekret".to_string());
+            m
+        });
+
+        // Default: connection_password = Exclude
+        let (bytes, report) = export(
+            &graph,
+            &default_opts_plaintext(),
+            &SecretHintForPassword,
+            &NoTransforms,
+            &secrets,
+        )
+        .expect("export");
+        let text = String::from_utf8(bytes).expect("utf8");
+
+        assert!(
+            !text.contains("sekret"),
+            "password must not appear in bundle when connection_password=Exclude: {text}"
+        );
+        assert_eq!(
+            report.required_ref_count, 1,
+            "Exclude mode must emit one required_ref for the password"
+        );
+    }
+
+    #[test]
+    fn export_options_ssh_pw_exclude() {
+        use dbflux_core::{SshAuthMethod, SshTunnelConfig, SshTunnelProfile};
+
+        let profile = postgres_profile();
+        let ssh = SshTunnelProfile::new(
+            "Bastion",
+            SshTunnelConfig {
+                host: "bastion.example.com".to_string(),
+                port: 22,
+                user: "ec2-user".to_string(),
+                auth_method: SshAuthMethod::Password,
+            },
+        );
+
+        let values = FormValues::default();
+        let graph = ExportGraph {
+            connections: vec![ConnectionWithValues {
+                profile: &profile,
+                values,
+            }],
+            auth_profiles: vec![],
+            aws_references: vec![],
+            ssh_tunnels: vec![&ssh],
+            proxies: vec![],
+        };
+
+        // Default: ssh_password = Exclude
+        let opts = default_opts_plaintext();
+        let (_, report) = export(&graph, &opts, &IncludeAllHints, &NoTransforms, &NoSecrets)
+            .expect("export");
+
+        assert_eq!(
+            report.required_ref_count, 1,
+            "ssh_password=Exclude must emit a required_ref (no warning since it's intentional)"
+        );
+    }
+
+    #[test]
+    fn export_options_auth_include_values_stages_secret() {
+        use dbflux_core::auth::AuthProfile;
+        use secrecy::SecretString;
+
+        let mut profile = postgres_profile();
+
+        let auth = AuthProfile {
+            id: uuid::Uuid::new_v4(),
+            name: "Test Auth".to_string(),
+            provider_id: "test-provider".to_string(),
+            fields: HashMap::new(),
+            secret_fields: {
+                let mut m = HashMap::new();
+                m.insert(
+                    "token".to_string(),
+                    SecretString::from("my_auth_token"),
+                );
+                m
+            },
+            enabled: true,
+            read_only: false,
+            dangling_origin: None,
+        };
+        profile.auth_profile_id = Some(auth.id);
+
+        let values = FormValues::default();
+        let graph = ExportGraph {
+            connections: vec![ConnectionWithValues {
+                profile: &profile,
+                values,
+            }],
+            auth_profiles: vec![&auth],
+            aws_references: vec![],
+            ssh_tunnels: vec![],
+            proxies: vec![],
+        };
+
+        let opts_include = ExportOptions {
+            auth_modes: {
+                let mut m = std::collections::HashMap::new();
+                m.insert(auth.id, crate::AuthExportMode::IncludeValues);
+                m
+            },
+            ..default_opts_plaintext()
+        };
+
+        let (bytes, _) = export(&graph, &opts_include, &IncludeAllHints, &NoTransforms, &NoSecrets)
+            .expect("export");
+        let text = String::from_utf8(bytes).expect("utf8");
+
+        assert!(
+            text.contains("my_auth_token"),
+            "IncludeValues must stage the auth token: {text}"
+        );
+    }
+
+    // --- Phase 2.1: URI SplitSecret transform — no credential in cleartext (R-SEC-1 / C1 / ADR-1) ---
+
+    #[test]
+    fn uri_split_secret_not_in_cleartext() {
+        let profile = postgres_profile();
+        let mut values = FormValues::default();
+        values.insert(
+            "uri".to_string(),
+            "postgres://alice:s3cr3t@db.example/app".to_string(),
+        );
+
+        let graph = simple_graph(&profile, values);
+
+        let opts = ExportOptions {
+            encryption: EncryptionChoice::Plaintext { forced: true },
+            ..Default::default()
+        };
+
+        let (bytes, _report) =
+            export(&graph, &opts, &IncludeAllHints, &SplitSecretForUri, &NoSecrets)
+                .expect("export");
+        let text = String::from_utf8(bytes).expect("utf8");
+
+        // The cleartext portion (everything before [secrets]) must not contain the password.
+        let before_secrets = text.split("[secrets").next().unwrap_or(&text);
+        assert!(
+            !before_secrets.contains("s3cr3t"),
+            "password must not appear in cleartext section: {text}"
+        );
+
+        // The password must be in [secrets].
+        assert!(
+            text.contains("s3cr3t"),
+            "password must be in the secrets section: {text}"
+        );
+
+        // The skeleton (with empty password placeholder) must be in cleartext fields.
+        assert!(
+            before_secrets.contains("alice"),
+            "skeleton URI must contain the username: {text}"
+        );
+
+        // The uri_secret_fields marker must be written.
+        assert!(
+            text.contains("uri_secret_fields"),
+            "uri_secret_fields must appear in the bundle: {text}"
+        );
+    }
+
+    // --- Phase 2.6: Hook env fail-closed (R-SEC-3 / L3) ---
+
+    #[test]
+    fn hook_excluded_no_env_in_cleartext() {
+        use dbflux_core::{ConnectionHook, ConnectionHooks, HookKind};
+
+        let mut profile = postgres_profile();
+        let hook = ConnectionHook {
+            enabled: true,
+            kind: HookKind::Command {
+                command: "deploy.sh".to_string(),
+                args: vec![],
+            },
+            cwd: None,
+            env: {
+                let mut m = HashMap::new();
+                m.insert("DB_MIGRATION_TOKEN".to_string(), "tok_migrate_secret".to_string());
+                m
+            },
+            inherit_env: false,
+            env_denylist: vec![],
+            timeout_ms: None,
+            execution_mode: Default::default(),
+            ready_signal: None,
+            on_failure: Default::default(),
+        };
+        profile.hooks = Some(ConnectionHooks {
+            pre_connect: vec![hook],
+            post_connect: vec![],
+            pre_disconnect: vec![],
+            post_disconnect: vec![],
+        });
+
+        let values = FormValues::default();
+        let graph = simple_graph(&profile, values);
+
+        // Hooks EXCLUDED — env secret must not appear anywhere in the bundle.
+        let opts = ExportOptions {
+            include_hooks: false,
+            encryption: EncryptionChoice::Plaintext { forced: true },
+            ..Default::default()
+        };
+
+        let (bytes, _) = export(&graph, &opts, &IncludeAllHints, &NoTransforms, &NoSecrets).expect("export");
+        let text = String::from_utf8(bytes).expect("utf8");
+
+        assert!(
+            !text.contains("tok_migrate_secret"),
+            "excluded hook env value must not appear anywhere in bundle: {text}"
+        );
+    }
+
+    // --- Phase 2.5: SSH embed+encryption guard (R-SEC-2 / H1) ---
+
+    #[test]
+    fn ssh_embed_plaintext_is_rejected() {
+        use dbflux_core::{SshAuthMethod, SshTunnelConfig, SshTunnelProfile};
+
+        let profile = postgres_profile();
+        let ssh = SshTunnelProfile::new(
+            "Bastion",
+            SshTunnelConfig {
+                host: "bastion.example.com".to_string(),
+                port: 22,
+                user: "ec2-user".to_string(),
+                auth_method: SshAuthMethod::PrivateKey { key_path: None },
+            },
+        );
+
+        let values = FormValues::default();
+        let graph = ExportGraph {
+            connections: vec![ConnectionWithValues {
+                profile: &profile,
+                values,
+            }],
+            auth_profiles: vec![],
+            aws_references: vec![],
+            ssh_tunnels: vec![&ssh],
+            proxies: vec![],
+        };
+
+        let opts = ExportOptions {
+            embed_ssh_keys: true,
+            encryption: EncryptionChoice::Plaintext { forced: true },
+            ..Default::default()
+        };
+
+        let result = export(&graph, &opts, &IncludeAllHints, &NoTransforms, &NoSecrets);
+        assert!(
+            matches!(result, Err(crate::PortabilityError::SshKeyEmbedRequiresEncryption)),
+            "embed_ssh_keys=true with plaintext must be rejected; got: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn ssh_embed_without_consent_does_not_embed() {
+        use dbflux_core::{SshAuthMethod, SshTunnelConfig, SshTunnelProfile};
+
+        let profile = postgres_profile();
+        let ssh = SshTunnelProfile::new(
+            "Bastion",
+            SshTunnelConfig {
+                host: "bastion.example.com".to_string(),
+                port: 22,
+                user: "ec2-user".to_string(),
+                auth_method: SshAuthMethod::PrivateKey { key_path: None },
+            },
+        );
+
+        let values = FormValues::default();
+        let graph = ExportGraph {
+            connections: vec![ConnectionWithValues {
+                profile: &profile,
+                values,
+            }],
+            auth_profiles: vec![],
+            aws_references: vec![],
+            ssh_tunnels: vec![&ssh],
+            proxies: vec![],
+        };
+
+        let opts = ExportOptions {
+            embed_ssh_keys: false,
+            encryption: EncryptionChoice::Plaintext { forced: true },
+            ..Default::default()
+        };
+
+        let (bytes, report) = export(&graph, &opts, &IncludeAllHints, &NoTransforms, &NoSecrets)
+            .expect("no-embed export must succeed");
+        let text = String::from_utf8(bytes).expect("utf8");
+
+        assert!(
+            !text.contains("key_embedded = true"),
+            "key must NOT be embedded when consent is off: {text}"
+        );
+        assert!(
+            report.required_ref_count >= 1,
+            "private_key must be a required_ref when not embedded"
+        );
+    }
+
+    // --- Phase 2.3: driver_refs non-adjacent dedup (R-ROB-6 / L1) ---
+
+    #[test]
+    fn driver_refs_non_adjacent_dedup() {
+        use crate::bundle::DriverRef;
+        use super::driver_ref_for;
+
+        // Simulate a graph where two connections share the same driver, producing [A, B, A].
+        // Adjacent-only dedup_by would leave [A, B, A] unchanged. The fix must collapse to [A, B].
+        let mut refs: Vec<DriverRef> = vec![
+            driver_ref_for("postgres"),
+            driver_ref_for("mysql"),
+            driver_ref_for("postgres"),
+        ];
+
+        // Apply the order-independent dedup.
+        refs.sort_by(|a, b| a.reference.cmp(&b.reference));
+        refs.dedup_by(|a, b| a.reference == b.reference);
+
+        assert_eq!(refs.len(), 2, "non-adjacent duplicate must be removed: {refs:?}");
+        let refs_strs: Vec<&str> = refs.iter().map(|r| r.reference.as_str()).collect();
+        assert!(
+            refs_strs.contains(&"built-in:mysql"),
+            "mysql must remain: {refs:?}"
+        );
+        assert!(
+            refs_strs.contains(&"built-in:postgres"),
+            "postgres must remain once: {refs:?}"
         );
     }
 

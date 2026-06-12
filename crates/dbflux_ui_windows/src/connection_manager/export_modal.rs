@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use dbflux_app::portability::{
-    AppFieldHintResolver, AppSecretReader, ExportInputs, build_export_graph,
+    AppExportTransformResolver, AppFieldHintResolver, AppSecretReader, ExportInputs,
+    build_export_graph,
 };
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_components::tokens::{Radii, Spacing};
@@ -251,7 +252,7 @@ impl ExportModal {
 
         // Read everything from AppState inside a scoped block so the borrow ends
         // before we start the background task.
-        let (inputs, drivers, secret_store) = {
+        let (inputs, drivers, secret_store, skipped_unregistered) = {
             let state = self.app_state.read(cx);
 
             let selected_profiles: Vec<dbflux_core::ConnectionProfile> = state
@@ -265,13 +266,18 @@ impl ExportModal {
                 dbflux_core::ConnectionProfile,
                 dbflux_core::FormValues,
             )> = Vec::new();
+            let mut skipped_unregistered: Vec<(String, String)> = Vec::new();
             for profile in &selected_profiles {
-                let values = if let Some(driver) = state.driver_for_profile(profile) {
-                    driver.extract_values(&profile.config)
+                if let Some(driver) = state.driver_for_profile(profile) {
+                    let values = driver.extract_values(&profile.config);
+                    connections_with_values.push((profile.clone(), values));
                 } else {
-                    dbflux_core::FormValues::default()
-                };
-                connections_with_values.push((profile.clone(), values));
+                    let driver_id = profile
+                        .driver_id
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string());
+                    skipped_unregistered.push((profile.name.clone(), driver_id));
+                }
             }
 
             let mut auth_profile_ids: Vec<Uuid> = Vec::new();
@@ -341,7 +347,7 @@ impl ExportModal {
             let drivers = state.drivers().clone();
             let secret_store = state.facade.secrets.secret_store_arc();
 
-            (inputs, drivers, secret_store)
+            (inputs, drivers, secret_store, skipped_unregistered)
         };
 
         let opts = ExportOptions {
@@ -368,10 +374,21 @@ impl ExportModal {
             let result = cx
                 .background_executor()
                 .spawn(async move {
+                    let transforms = AppExportTransformResolver::new(drivers.clone());
                     let hints = AppFieldHintResolver::new(drivers);
                     let reader = AppSecretReader::new(secret_store);
                     let graph = build_export_graph(&inputs);
-                    dbflux_portability::export::export(&graph, &opts, &hints, &reader)
+                    dbflux_portability::export::export(
+                        &graph,
+                        &opts,
+                        &hints,
+                        &transforms,
+                        &reader,
+                    )
+                    .map(|(bytes, mut report)| {
+                        report.skipped_connections.extend(skipped_unregistered);
+                        (bytes, report)
+                    })
                 })
                 .await;
 

@@ -157,6 +157,16 @@ pub struct ConnectionEntry {
     /// fall back to deriving the kind from `driver_id` via `builtin_driver_id_for_kind`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+
+    /// Field IDs that were split by `export_field_transform` into a cleartext
+    /// skeleton (in `fields`) and a recoverable secret (in `[secrets]`).
+    ///
+    /// On import, the staged `conn:<local_id>:<field>` secret is routed to
+    /// `connection_secret_ref(new_id)` so the runtime URI injection path
+    /// (e.g. `inject_password_into_pg_uri`) re-merges it at connect time.
+    /// Empty in bundles that predate this field or where no URI transform was applied.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uri_secret_fields: Vec<String>,
 }
 
 /// Connection access binding.
@@ -385,6 +395,7 @@ mod tests {
                 hooks_payload: None,
                 settings_overrides_payload: None,
                 kind: None,
+                uri_secret_fields: vec![],
             }],
             auth_profiles: vec![],
             ssh_tunnels: vec![SshEntry {

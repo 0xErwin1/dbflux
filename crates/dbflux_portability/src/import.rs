@@ -1048,6 +1048,7 @@ mod tests {
             hooks_payload: None,
             settings_overrides_payload: None,
             kind: None,
+            uri_secret_fields: vec![],
         }
     }
 

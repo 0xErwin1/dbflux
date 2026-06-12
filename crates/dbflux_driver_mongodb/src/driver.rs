@@ -27,8 +27,8 @@ use dbflux_core::{
     Row, SchemaDropTarget, SchemaLoadingStrategy, SchemaObjectKind, SchemaSnapshot,
     SemanticFieldRef, SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticRequest, SqlDialect,
     SshTunnelConfig, TableInfo, TransactionCapabilities, Value, ViewInfo, WhereOperator, field,
-    field_password, field_required, field_use_uri, sanitize_uri, ssh_tab, when_checked,
-    when_unchecked, with_default,
+    FieldExportTransform, field_password, field_required, field_use_uri, sanitize_uri, ssh_tab,
+    when_checked, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};
@@ -292,6 +292,28 @@ impl DbDriver for MongoDriver {
 
     fn form_definition(&self) -> &DriverFormDef {
         &MONGODB_FORM
+    }
+
+    fn export_field_transform(
+        &self,
+        field_id: &str,
+        values: &FormValues,
+    ) -> FieldExportTransform {
+        if field_id != "uri" {
+            return FieldExportTransform::None;
+        }
+
+        let use_uri = values.get("use_uri").map(|s| s == "true").unwrap_or(false);
+        if !use_uri {
+            return FieldExportTransform::None;
+        }
+
+        let uri = match values.get("uri") {
+            Some(u) if !u.is_empty() => u.as_str(),
+            _ => return FieldExportTransform::None,
+        };
+
+        split_mongodb_uri_secret(uri)
     }
 
     fn build_config(&self, values: &FormValues) -> Result<DbConfig, DbError> {
@@ -1061,6 +1083,52 @@ fn parse_srv_uri(uri: &str) -> FormValues {
     }
 
     values
+}
+
+/// Extract the password from a mongodb:// or mongodb+srv:// URI into a `SplitSecret`.
+///
+/// Returns `None` when the URI has no embedded credentials or when the password is
+/// already empty. The runtime password-injection path (`inject_credentials_into_uri`)
+/// re-merges the skeleton + secret at connect time.
+fn split_mongodb_uri_secret(uri: &str) -> FieldExportTransform {
+    let (prefix, rest) = if let Some(r) = uri.strip_prefix("mongodb+srv://") {
+        ("mongodb+srv://", r)
+    } else if let Some(r) = uri.strip_prefix("mongodb://") {
+        ("mongodb://", r)
+    } else {
+        return FieldExportTransform::None;
+    };
+
+    let at_pos = match rest.find('@') {
+        Some(p) => p,
+        None => return FieldExportTransform::None,
+    };
+
+    let user_pass = &rest[..at_pos];
+    let after_at = &rest[at_pos..];
+
+    let colon_pos = match user_pass.find(':') {
+        Some(p) => p,
+        None => return FieldExportTransform::None,
+    };
+
+    let user = &user_pass[..colon_pos];
+    let encoded_pass = &user_pass[colon_pos + 1..];
+
+    if encoded_pass.is_empty() {
+        return FieldExportTransform::None;
+    }
+
+    let password = urlencoding::decode(encoded_pass)
+        .unwrap_or_else(|_| encoded_pass.into())
+        .into_owned();
+
+    let skeleton = format!("{}{}:{}", prefix, user, after_at);
+
+    FieldExportTransform::SplitSecret {
+        skeleton,
+        secret: dbflux_core::secrecy::SecretString::from(password),
+    }
 }
 
 fn inject_credentials_into_uri(
@@ -4688,5 +4756,57 @@ mod tests {
         assert!(params.contains("tls=true"));
         assert!(params.contains("tlsCAFile=%2Fetc%2Fssl%2Fca.pem"));
         assert!(params.contains("tlsCertificateKeyFile=%2Ftmp%2Fdbflux-mongo-pem-xyz.pem"));
+    }
+
+    // --- Phase 2.4: URI transform splits password (R-SEC-1 / C1 / ADR-1) ---
+
+    #[test]
+    fn uri_transform_splits_password() {
+        use dbflux_core::secrecy::ExposeSecret;
+        use dbflux_core::{FieldExportTransform, FormValues};
+
+        let driver = MongoDriver;
+        let mut values = FormValues::new();
+        values.insert("use_uri".to_string(), "true".to_string());
+        values.insert(
+            "uri".to_string(),
+            "mongodb://alice:s3cr3t@cluster.example.net/mydb".to_string(),
+        );
+
+        let transform = driver.export_field_transform("uri", &values);
+
+        let FieldExportTransform::SplitSecret { skeleton, secret } = transform else {
+            panic!("expected SplitSecret but got None");
+        };
+
+        assert!(
+            !skeleton.contains("s3cr3t"),
+            "skeleton must not contain the password: {skeleton}"
+        );
+        assert_eq!(secret.expose_secret(), "s3cr3t");
+    }
+
+    #[test]
+    fn uri_transform_srv_splits_password() {
+        use dbflux_core::secrecy::ExposeSecret;
+        use dbflux_core::{FieldExportTransform, FormValues};
+
+        let driver = MongoDriver;
+        let mut values = FormValues::new();
+        values.insert("use_uri".to_string(), "true".to_string());
+        values.insert(
+            "uri".to_string(),
+            "mongodb+srv://alice:s3cr3t@cluster0.example.net/main".to_string(),
+        );
+
+        let transform = driver.export_field_transform("uri", &values);
+
+        let FieldExportTransform::SplitSecret { skeleton, secret } = transform else {
+            panic!("expected SplitSecret for SRV URI but got None");
+        };
+
+        assert!(!skeleton.contains("s3cr3t"));
+        assert!(skeleton.starts_with("mongodb+srv://"));
+        assert_eq!(secret.expose_secret(), "s3cr3t");
     }
 }

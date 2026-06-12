@@ -35,12 +35,12 @@ use std::sync::{Arc, RwLock};
 
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    AuthProfile, ConnectionProfile, DbDriver, ExportFieldHint, FormValues, ProxyProfile,
-    SecretStore, SshTunnelProfile,
+    AuthProfile, ConnectionProfile, DbDriver, ExportFieldHint, FieldExportTransform, FormValues,
+    ProxyProfile, SecretStore, SshTunnelProfile,
 };
 use dbflux_portability::{
-    AwsRef, ConnectionWithValues, DestSnapshot, ExportGraph, FieldHintResolver, ImportActions,
-    ImportPlan, ParsedBundle, ResolutionChoices, SecretReader,
+    AwsRef, ConnectionWithValues, DestSnapshot, ExportGraph, ExportTransformResolver,
+    FieldHintResolver, ImportActions, ImportPlan, ParsedBundle, ResolutionChoices, SecretReader,
 };
 
 // ---------------------------------------------------------------------------
@@ -80,6 +80,44 @@ impl FieldHintResolver for AppFieldHintResolver {
         };
 
         driver.export_field_hint(field_id, values)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ExportTransformResolver — backed by the same driver snapshot
+// ---------------------------------------------------------------------------
+
+/// Resolves per-field export transforms by delegating to the registered driver.
+///
+/// Shares the same `drivers` snapshot as `AppFieldHintResolver`. The transform
+/// is consulted before the hint in the export loop; drivers that embed credentials
+/// in URI fields return `SplitSecret` for those fields.
+pub struct AppExportTransformResolver {
+    drivers: HashMap<String, Arc<dyn DbDriver>>,
+}
+
+impl AppExportTransformResolver {
+    pub fn new(drivers: HashMap<String, Arc<dyn DbDriver>>) -> Self {
+        Self { drivers }
+    }
+}
+
+impl ExportTransformResolver for AppExportTransformResolver {
+    fn transform(
+        &self,
+        profile: &ConnectionProfile,
+        field_id: &str,
+        values: &FormValues,
+    ) -> FieldExportTransform {
+        let Some(driver_id) = profile.driver_id.as_deref() else {
+            return FieldExportTransform::None;
+        };
+
+        let Some(driver) = self.drivers.get(driver_id) else {
+            return FieldExportTransform::None;
+        };
+
+        driver.export_field_transform(field_id, values)
     }
 }
 
@@ -1293,5 +1331,28 @@ mod tests {
         );
         assert_eq!(outcome.needs_driver.len(), 1);
         assert_eq!(outcome.succeeded.len(), 1);
+    }
+
+    // --- Phase 2.8: ExportReport::skipped_connections for unregistered drivers (R-ROB-2 / M5) ---
+
+    #[test]
+    fn export_report_skipped_connections_can_be_populated() {
+        let mut report = dbflux_portability::ExportReport::default();
+
+        report
+            .skipped_connections
+            .push(("Prod DB".to_string(), "unknown-driver".to_string()));
+
+        assert_eq!(
+            report.skipped_connections.len(),
+            1,
+            "skipped_connections must be recordable"
+        );
+        assert_eq!(report.skipped_connections[0].0, "Prod DB");
+        assert_eq!(report.skipped_connections[0].1, "unknown-driver");
+        assert!(
+            report.warnings.is_empty(),
+            "skipped connection must not also appear as a warning unless explicitly added"
+        );
     }
 }

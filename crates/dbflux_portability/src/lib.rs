@@ -219,6 +219,13 @@ pub struct ExportReport {
 
     /// Number of required references recorded in the bundle.
     pub required_ref_count: usize,
+
+    /// Connections that were skipped because their driver is not registered.
+    ///
+    /// Each entry is `(connection_name, driver_id)`. The app layer surfaces these
+    /// via `report_error_async` so the user learns which connections were omitted
+    /// rather than silently receiving an empty-fields bundle entry. (R-ROB-2 / M5)
+    pub skipped_connections: Vec<(String, String)>,
 }
 
 // ---------------------------------------------------------------------------

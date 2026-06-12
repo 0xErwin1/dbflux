@@ -22,9 +22,10 @@ use dbflux_core::{
     SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest,
     SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SyntaxInfo,
     TableInfo, TransactionCapabilities, Value, ViewInfo, WhereOperator, field, field_password,
-    field_required, field_use_uri, generate_delete_template, generate_drop_table,
-    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
-    render_semantic_filter_sql, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
+    FieldExportTransform, field_required, field_use_uri, generate_delete_template,
+    generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
+    generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab, when_checked,
+    when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
@@ -664,6 +665,28 @@ impl DbDriver for MysqlDriver {
 
     fn form_definition(&self) -> &DriverFormDef {
         &MYSQL_FORM
+    }
+
+    fn export_field_transform(
+        &self,
+        field_id: &str,
+        values: &FormValues,
+    ) -> FieldExportTransform {
+        if field_id != "uri" {
+            return FieldExportTransform::None;
+        }
+
+        let use_uri = values.get("use_uri").map(|s| s == "true").unwrap_or(false);
+        if !use_uri {
+            return FieldExportTransform::None;
+        }
+
+        let uri = match values.get("uri") {
+            Some(u) if !u.is_empty() => u.as_str(),
+            _ => return FieldExportTransform::None,
+        };
+
+        split_mysql_uri_secret(uri)
     }
 
     fn build_config(&self, values: &FormValues) -> Result<DbConfig, DbError> {
@@ -1438,6 +1461,46 @@ fn format_mysql_uri_error<E: std::fmt::Display>(e: &E, uri: &str) -> DbError {
 
     log::error!("MySQL URI connection failed: {}", message);
     DbError::connection_failed(message)
+}
+
+fn split_mysql_uri_secret(uri: &str) -> FieldExportTransform {
+    if !uri.starts_with("mysql://") {
+        return FieldExportTransform::None;
+    }
+
+    let prefix = "mysql://";
+    let rest = &uri[prefix.len()..];
+
+    let at_pos = match rest.find('@') {
+        Some(p) => p,
+        None => return FieldExportTransform::None,
+    };
+
+    let user_pass = &rest[..at_pos];
+    let after_at = &rest[at_pos..];
+
+    let colon_pos = match user_pass.find(':') {
+        Some(p) => p,
+        None => return FieldExportTransform::None,
+    };
+
+    let user = &user_pass[..colon_pos];
+    let encoded_pass = &user_pass[colon_pos + 1..];
+
+    if encoded_pass.is_empty() {
+        return FieldExportTransform::None;
+    }
+
+    let password = urlencoding::decode(encoded_pass)
+        .unwrap_or_else(|_| encoded_pass.into())
+        .into_owned();
+
+    let skeleton = format!("{}{}:{}", prefix, user, after_at);
+
+    FieldExportTransform::SplitSecret {
+        skeleton,
+        secret: dbflux_core::secrecy::SecretString::from(password),
+    }
 }
 
 fn inject_password_into_mysql_uri(base_uri: &str, password: Option<&str>) -> String {
@@ -3927,5 +3990,33 @@ mod tests {
                 .contains(DriverCapabilities::INSTANCE_METRICS),
             "INSTANCE_METRICS must remain set on MySQL driver"
         );
+    }
+
+    // --- Phase 2.4: URI transform splits password (R-SEC-1 / C1 / ADR-1) ---
+
+    #[test]
+    fn uri_transform_splits_password() {
+        use dbflux_core::secrecy::ExposeSecret;
+        use dbflux_core::{FieldExportTransform, FormValues};
+
+        let driver = MysqlDriver::new(DbKind::MySQL);
+        let mut values = FormValues::new();
+        values.insert("use_uri".to_string(), "true".to_string());
+        values.insert(
+            "uri".to_string(),
+            "mysql://root:s3cr3t@db.example:3306/app".to_string(),
+        );
+
+        let transform = driver.export_field_transform("uri", &values);
+
+        let FieldExportTransform::SplitSecret { skeleton, secret } = transform else {
+            panic!("expected SplitSecret but got None");
+        };
+
+        assert!(
+            !skeleton.contains("s3cr3t"),
+            "skeleton must not contain the password: {skeleton}"
+        );
+        assert_eq!(secret.expose_secret(), "s3cr3t");
     }
 }

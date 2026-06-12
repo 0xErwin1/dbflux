@@ -15,20 +15,21 @@ use dbflux_core::{
     DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DeploymentClass,
     DescribeRequest, DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits,
     DriverMetadata, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation,
-    ExecutionSourceContext, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind,
-    FormSection, FormTab, FormValues, FormattedError, Icon, IndexData, IndexInfo, InstanceCatalog,
-    IsolationLevel, KeyValueConnection, MutationCapabilities, OrderByColumn, PaginationStyle,
-    PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalConnection,
-    RelationalSchema, RoutineInfo, RoutineKind, Row, RowDelete, RowInsert, RowPatch,
-    SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest,
-    SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SyntaxInfo,
-    TableInfo, TransactionCapabilities, TypeDefinition, Value, ViewInfo, WhereOperator,
-    field_password, field_required, field_use_uri, generate_create_table, generate_delete_template,
-    generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
-    generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab, when_checked,
-    when_unchecked, with_default, with_help,
+    ExecutionSourceContext, ExplainRequest, FieldExportTransform, ForeignKeyBuilder,
+    ForeignKeyInfo, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon,
+    IndexData, IndexInfo, InstanceCatalog, IsolationLevel, KeyValueConnection,
+    MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
+    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, ReindexRequest, RelationalConnection, RelationalSchema, RoutineInfo,
+    RoutineKind, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
+    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
+    SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities,
+    TypeDefinition, Value, ViewInfo, WhereOperator, field_password, field_required, field_use_uri,
+    generate_create_table, generate_delete_template, generate_drop_table,
+    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
+    render_semantic_filter_sql, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
+    with_help,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -618,6 +619,28 @@ impl DbDriver for PostgresDriver {
 
     fn form_definition(&self) -> &DriverFormDef {
         &POSTGRES_FORM
+    }
+
+    fn export_field_transform(
+        &self,
+        field_id: &str,
+        values: &FormValues,
+    ) -> FieldExportTransform {
+        if field_id != "uri" {
+            return FieldExportTransform::None;
+        }
+
+        let use_uri = values.get("use_uri").map(|s| s == "true").unwrap_or(false);
+        if !use_uri {
+            return FieldExportTransform::None;
+        }
+
+        let uri = match values.get("uri") {
+            Some(u) if !u.is_empty() => u.as_str(),
+            _ => return FieldExportTransform::None,
+        };
+
+        split_postgres_uri_secret(uri)
     }
 
     fn build_config(&self, values: &FormValues) -> Result<DbConfig, DbError> {
@@ -3761,6 +3784,59 @@ fn format_pg_uri_error(e: &postgres::Error, uri: &str) -> DbError {
     formatted.into_connection_error()
 }
 
+/// Extract the password from a postgres/postgresql URI into a `SplitSecret` transform.
+///
+/// When the URI carries embedded credentials (`scheme://user:pass@host/db`), this
+/// returns the URI with an empty password placeholder as the skeleton and the
+/// extracted (URL-decoded) password as the secret.
+///
+/// Returns `None` (i.e. `FieldExportTransform::None`) when:
+/// - the URI has no `@` (no credentials), or
+/// - the user portion has no colon-separated password.
+fn split_postgres_uri_secret(uri: &str) -> FieldExportTransform {
+    let prefix_end = if uri.starts_with("postgresql://") {
+        13
+    } else if uri.starts_with("postgres://") {
+        11
+    } else {
+        return FieldExportTransform::None;
+    };
+
+    let prefix = &uri[..prefix_end];
+    let rest = &uri[prefix_end..];
+
+    let at_pos = match rest.find('@') {
+        Some(p) => p,
+        None => return FieldExportTransform::None,
+    };
+
+    let user_pass = &rest[..at_pos];
+    let after_at = &rest[at_pos..];
+
+    let colon_pos = match user_pass.find(':') {
+        Some(p) => p,
+        None => return FieldExportTransform::None,
+    };
+
+    let user = &user_pass[..colon_pos];
+    let encoded_pass = &user_pass[colon_pos + 1..];
+
+    if encoded_pass.is_empty() {
+        return FieldExportTransform::None;
+    }
+
+    let password = urlencoding::decode(encoded_pass)
+        .unwrap_or_else(|_| encoded_pass.into())
+        .into_owned();
+
+    let skeleton = format!("{}{}:{}", prefix, user, after_at);
+
+    FieldExportTransform::SplitSecret {
+        skeleton,
+        secret: dbflux_core::secrecy::SecretString::from(password),
+    }
+}
+
 fn inject_password_into_pg_uri(base_uri: &str, password: Option<&str>) -> String {
     let password = match password {
         Some(p) if !p.is_empty() => p,
@@ -4734,6 +4810,81 @@ mod tests {
                 .capabilities
                 .contains(DriverCapabilities::INSTANCE_METRICS),
             "INSTANCE_METRICS must remain set on PostgreSQL driver"
+        );
+    }
+
+    // --- Phase 2.4: URI transform splits password (R-SEC-1 / C1 / ADR-1) ---
+
+    #[test]
+    fn uri_transform_splits_password() {
+        use dbflux_core::{FieldExportTransform, FormValues};
+        use dbflux_core::secrecy::ExposeSecret;
+
+        let driver = PostgresDriver::new();
+        let mut values = FormValues::new();
+        values.insert("use_uri".to_string(), "true".to_string());
+        values.insert(
+            "uri".to_string(),
+            "postgres://alice:s3cr3t@db.example/app".to_string(),
+        );
+
+        let transform = driver.export_field_transform("uri", &values);
+
+        let FieldExportTransform::SplitSecret { skeleton, secret } = transform else {
+            panic!("expected SplitSecret but got None");
+        };
+
+        assert!(
+            !skeleton.contains("s3cr3t"),
+            "skeleton must not contain the password: {skeleton}"
+        );
+        assert!(
+            skeleton.contains("alice"),
+            "skeleton must contain the username: {skeleton}"
+        );
+        assert_eq!(
+            secret.expose_secret(),
+            "s3cr3t",
+            "secret must be the extracted password"
+        );
+    }
+
+    #[test]
+    fn uri_transform_no_credentials_returns_none() {
+        use dbflux_core::{FieldExportTransform, FormValues};
+
+        let driver = PostgresDriver::new();
+        let mut values = FormValues::new();
+        values.insert("use_uri".to_string(), "true".to_string());
+        values.insert(
+            "uri".to_string(),
+            "postgres://db.example/app".to_string(),
+        );
+
+        assert!(
+            matches!(
+                driver.export_field_transform("uri", &values),
+                FieldExportTransform::None
+            ),
+            "URI without credentials must return None"
+        );
+    }
+
+    #[test]
+    fn uri_transform_non_uri_mode_returns_none() {
+        use dbflux_core::{FieldExportTransform, FormValues};
+
+        let driver = PostgresDriver::new();
+        let mut values = FormValues::new();
+        values.insert("use_uri".to_string(), "false".to_string());
+        values.insert("host".to_string(), "localhost".to_string());
+
+        assert!(
+            matches!(
+                driver.export_field_transform("uri", &values),
+                FieldExportTransform::None
+            ),
+            "non-URI mode must return None"
         );
     }
 }
