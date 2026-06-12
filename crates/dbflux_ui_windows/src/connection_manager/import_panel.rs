@@ -7,9 +7,9 @@ use dbflux_app::portability::{
 use dbflux_components::controls::{Button, Checkbox, Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{
-    BannerBlock, BannerVariant, FilePicker, SegmentedControl, SegmentedItem, Text, surface_raised,
+    BannerBlock, BannerVariant, IconButton, SegmentedControl, SegmentedItem, Text, surface_raised,
 };
-use dbflux_components::tokens::{FontSizes, Spacing};
+use dbflux_components::tokens::{FontSizes, Heights, Spacing};
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{AuthProfile, ConnectionProfile, ProxyProfile, SshTunnelProfile};
 use dbflux_portability::{
@@ -159,9 +159,13 @@ pub struct ImportConnectionsPanel {
     step: Step,
 
     // Step 1: file + passphrase.
-    file_path: String,
+    file_input: Entity<InputState>,
     pending_file_path: Option<String>,
+    /// Set when a Browse attempt found no native picker; drives a one-line muted
+    /// hint so the user types the path instead of seeing a blocking error.
+    native_picker_unavailable: bool,
     bundle_encrypted: bool,
+    show_passphrase: bool,
     passphrase_input: Entity<InputState>,
     parse_error: Option<String>,
     is_parsing: bool,
@@ -213,15 +217,27 @@ impl ImportConnectionsPanel {
             }
         });
 
+        let file_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Path to TOML bundle\u{2026}"));
+
+        let file_sub = cx.subscribe(&file_input, |this, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change | InputEvent::Blur) {
+                this.parse_error = None;
+                cx.notify();
+            }
+        });
+
         let dest_auth_profiles = app_state.read(cx).list_auth_profiles();
         let focus_handle = cx.focus_handle();
 
         Self {
             app_state,
             step: Step::SelectFile,
-            file_path: String::new(),
+            file_input,
             pending_file_path: None,
+            native_picker_unavailable: false,
             bundle_encrypted: false,
+            show_passphrase: false,
             passphrase_input,
             parse_error: None,
             is_parsing: false,
@@ -237,7 +253,7 @@ impl ImportConnectionsPanel {
             run_result: None,
             dest_auth_profiles,
             focus_handle,
-            _subscriptions: vec![passphrase_sub],
+            _subscriptions: vec![passphrase_sub, file_sub],
         }
     }
 
@@ -245,9 +261,10 @@ impl ImportConnectionsPanel {
     /// manager when switching into the import view.
     pub fn reset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.step = Step::SelectFile;
-        self.file_path.clear();
         self.pending_file_path = None;
+        self.native_picker_unavailable = false;
         self.bundle_encrypted = false;
+        self.show_passphrase = false;
         self.parse_error = None;
         self.is_parsing = false;
         self.parsed_bundle = None;
@@ -263,6 +280,8 @@ impl ImportConnectionsPanel {
         self.dest_auth_profiles = self.app_state.read(cx).list_auth_profiles();
 
         self.passphrase_input
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.file_input
             .update(cx, |state, cx| state.set_value("", window, cx));
 
         window.focus(&self.focus_handle);
@@ -294,11 +313,9 @@ impl ImportConnectionsPanel {
             })
             .detach();
         } else {
-            self.parse_error = Some(
-                "No native file picker is available on this system. \
-                 Install xdg-desktop-portal, zenity, or kdialog to browse for a bundle."
-                    .to_string(),
-            );
+            // No native picker: do not block with a red error — the user can
+            // type the path directly. Surface only a one-line muted hint.
+            self.native_picker_unavailable = true;
             cx.notify();
         }
     }
@@ -320,7 +337,7 @@ impl ImportConnectionsPanel {
     /// Parse + decrypt + plan the selected bundle on the background executor,
     /// then advance to the preview step.
     fn do_parse_and_plan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let path = self.file_path.trim().to_string();
+        let path = self.file_input.read(cx).value().trim().to_string();
         if path.is_empty() {
             self.parse_error = Some("Choose a bundle file to import.".to_string());
             cx.notify();
@@ -617,13 +634,20 @@ impl ImportConnectionsPanel {
 impl Render for ImportConnectionsPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(path) = self.pending_file_path.take() {
-            self.file_path = path;
+            self.file_input
+                .update(cx, |state, cx| state.set_value(path, window, cx));
         }
 
         if self.pending_provision_secrets {
             self.pending_provision_secrets = false;
             self.provision_secret_inputs(window, cx);
         }
+
+        // Masking is render-driven so the eye toggle can reveal the passphrase.
+        let show_passphrase = self.show_passphrase;
+        self.passphrase_input.update(cx, |state, cx| {
+            state.set_masked(!show_passphrase, window, cx);
+        });
 
         let theme = cx.theme().clone();
 
@@ -682,29 +706,40 @@ impl ImportConnectionsPanel {
         let theme = cx.theme().clone();
         let entity = cx.entity().clone();
 
-        let picker = FilePicker::new(
-            "import-input-picker",
-            self.file_path.clone(),
-            AppIcon::Folder,
-            AppIcon::X,
-        )
-        .placeholder("Choose a TOML bundle\u{2026}")
-        .on_browse(move |_event, _window, cx| {
-            entity.update(cx, |this, cx| this.browse_input_path(cx));
-        });
+        let browse = IconButton::new("import-input-browse", AppIcon::Folder.into())
+            .icon_size(Heights::ICON_SM)
+            .on_click(move |_event, _window, cx| {
+                entity.update(cx, |this, cx| this.browse_input_path(cx));
+            });
+
+        let file_row = div()
+            .flex()
+            .items_center()
+            .gap(Spacing::XS)
+            .child(div().flex_1().child(Input::new(&self.file_input)))
+            .child(browse);
+
+        let mut file_block = div()
+            .flex()
+            .flex_col()
+            .gap(Spacing::XS)
+            .child(Text::body("Bundle file").color(theme.muted_foreground))
+            .child(file_row);
+
+        if self.native_picker_unavailable {
+            file_block = file_block.child(
+                Text::muted(
+                    "No native file picker on this system — type or paste the bundle path above.",
+                )
+                .font_size(FontSizes::XS),
+            );
+        }
 
         let mut col = div()
             .flex()
             .flex_col()
             .gap(Spacing::MD)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(Spacing::XS)
-                    .child(Text::body("Bundle file").color(theme.muted_foreground))
-                    .child(picker),
-            )
+            .child(file_block)
             .child(
                 Checkbox::new("import-encrypted-toggle")
                     .checked(self.bundle_encrypted)
@@ -716,13 +751,36 @@ impl ImportConnectionsPanel {
             );
 
         if self.bundle_encrypted {
+            let eye_icon = if self.show_passphrase {
+                AppIcon::EyeOff
+            } else {
+                AppIcon::Eye
+            };
+
+            let toggle = IconButton::new("import-passphrase-eye", eye_icon.into()).on_click({
+                let entity = cx.entity().clone();
+                move |_event, _window, cx| {
+                    entity.update(cx, |this, cx| {
+                        this.show_passphrase = !this.show_passphrase;
+                        cx.notify();
+                    });
+                }
+            });
+
             col = col.child(
                 div()
                     .flex()
                     .flex_col()
                     .gap(Spacing::XS)
                     .child(Text::body("Passphrase").color(theme.muted_foreground))
-                    .child(Input::new(&self.passphrase_input)),
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::XS)
+                            .child(div().flex_1().child(Input::new(&self.passphrase_input)))
+                            .child(toggle),
+                    ),
             );
         }
 
@@ -1226,7 +1284,8 @@ impl ImportConnectionsPanel {
     fn render_primary_button(&self, cx: &Context<Self>) -> Option<AnyElement> {
         match self.step {
             Step::SelectFile => {
-                let can_load = !self.file_path.trim().is_empty() && !self.is_parsing;
+                let can_load =
+                    !self.file_input.read(cx).value().trim().is_empty() && !self.is_parsing;
                 let label = if self.is_parsing { "Loading\u{2026}" } else { "Load" };
                 Some(
                     Button::new("import-load", label)
