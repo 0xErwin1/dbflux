@@ -853,6 +853,7 @@ impl ImportWizard {
                                 .items_center()
                                 .gap(Spacing::SM)
                                 .child(small_choice_button(
+                                    format!("{local_id}-reuse"),
                                     "Reuse existing",
                                     current_choice == Some(ConflictChoice::Reuse),
                                     move |_, _, cx| {
@@ -865,6 +866,7 @@ impl ImportWizard {
                                     &theme,
                                 ))
                                 .child(small_choice_button(
+                                    format!("{local_id}-create"),
                                     "Create new",
                                     current_choice == Some(ConflictChoice::CreateNew),
                                     move |_, _, cx| {
@@ -877,6 +879,7 @@ impl ImportWizard {
                                     &theme,
                                 ))
                                 .child(small_choice_button(
+                                    format!("{local_id}-map"),
                                     &format!("Map to \"{existing_name}\""),
                                     current_choice == Some(ConflictChoice::MapTo(eid)),
                                     move |_, _, cx| {
@@ -1054,7 +1057,9 @@ impl ImportWizard {
                         // "Skip" option
                         let key_skip = key_sel.clone();
                         let this_skip = cx.entity().clone();
+                        let skip_seed = format!("{}-{}-skip", key_sel.0, key_sel.1);
                         container = container.child(small_choice_button(
+                            skip_seed,
                             "Skip (import without auth profile)",
                             current_choice.is_none(),
                             move |_, _, cx| {
@@ -1072,7 +1077,9 @@ impl ImportWizard {
                             let key_p = key_sel.clone();
                             let this_p = cx.entity().clone();
                             let label_p = format!("Use: {pname}");
+                            let btn_seed = format!("{}-{}-{pid}", key_sel.0, key_sel.1);
                             container = container.child(small_choice_button(
+                                btn_seed,
                                 &label_p,
                                 current_choice == Some(pid),
                                 move |_, _, cx| {
@@ -1419,12 +1426,13 @@ impl ImportWizard {
 // ---------------------------------------------------------------------------
 
 fn small_choice_button(
+    id_seed: impl ToString,
     label: &str,
     selected: bool,
     handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     theme: &gpui_component::Theme,
 ) -> impl IntoElement {
-    let id_str: gpui::SharedString = format!("choice-btn-{label}").into();
+    let id_str: gpui::SharedString = format!("choice-btn-{}-{label}", id_seed.to_string()).into();
     div()
         .id(ElementId::Name(id_str))
         .px(Spacing::SM)
