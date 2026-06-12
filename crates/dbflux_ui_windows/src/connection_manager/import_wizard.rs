@@ -266,67 +266,77 @@ impl ImportWizard {
 
         cx.spawn(async move |_this, cx| {
             // The background task returns the bundle's encryption flag alongside
-            // the parsed bundle and plan so the UI can derive bundle_encrypted
-            // from the header rather than relying on the user's manual checkbox.
-            let result: Result<(ParsedBundle, ImportPlan, bool), String> = cx
+            // the parsed bundle and plan so the UI can update `bundle_encrypted` on
+            // BOTH the success and error paths.  This is the only mechanism that
+            // reveals the passphrase field when the user opens an encrypted bundle
+            // without having ticked the checkbox manually.
+            let result: (bool, Result<(ParsedBundle, ImportPlan), String>) = cx
                 .background_executor()
                 .spawn(async move {
-                    let bytes =
-                        std::fs::read(&path).map_err(|e| format!("Cannot read file: {e}"))?;
+                    let bytes = match std::fs::read(&path) {
+                        Ok(b) => b,
+                        Err(e) => return (false, Err(format!("Cannot read file: {e}"))),
+                    };
 
-                    let mut parsed = dbflux_portability::import::parse(&bytes)
-                        .map_err(|e| format!("Parse error: {e}"))?;
+                    let mut parsed = match dbflux_portability::import::parse(&bytes) {
+                        Ok(p) => p,
+                        Err(e) => return (false, Err(format!("Parse error: {e}"))),
+                    };
 
                     use dbflux_portability::bundle::EncryptionMode;
                     let is_encrypted =
                         parsed.bundle.bundle.encryption == EncryptionMode::AgePassphrase;
 
+                    // Short-circuit: if the bundle is encrypted but the passphrase
+                    // field is still empty, expose the passphrase field rather than
+                    // running decrypt with an empty string (which would fail with a
+                    // misleading "wrong passphrase" message).
+                    use dbflux_core::secrecy::ExposeSecret;
+                    if is_encrypted && passphrase.expose_secret().is_empty() {
+                        return (
+                            true,
+                            Err(
+                                "This bundle is encrypted. Enter the passphrase and try again."
+                                    .to_string(),
+                            ),
+                        );
+                    }
+
                     // decrypt() is a no-op for plaintext bundles; always call it
                     // to populate decrypted_secrets from the plaintext section.
                     if let Err(e) = dbflux_portability::import::decrypt(&mut parsed, &passphrase) {
                         use dbflux_portability::PortabilityError;
-                        let msg = match &e {
-                            PortabilityError::Decryption(_) => {
-                                "Decryption failed. Check that the passphrase is correct \
-                                 and the bundle has not been corrupted."
-                                    .to_string()
-                            }
-                            other => {
-                                // EncryptionUnavailable is only compiled in when the
-                                // encryption feature is absent; all other variants map here.
-                                let as_str = format!("{other}");
-                                if as_str.contains("encryption support") {
-                                    "This bundle is passphrase-encrypted but the encryption \
-                                     feature is not available in this build of DBFlux."
-                                        .to_string()
-                                } else {
-                                    format!("Decryption error: {other}")
-                                }
-                            }
+                        let msg = if e.is_encryption_unavailable() {
+                            "This bundle is passphrase-encrypted but the encryption \
+                             feature is not available in this build of DBFlux."
+                                .to_string()
+                        } else if matches!(&e, PortabilityError::Decryption(_)) {
+                            "Passphrase incorrect or bundle corrupted.".to_string()
+                        } else {
+                            format!("Decryption error: {e}")
                         };
-                        return Err(msg);
-                    }
-
-                    if is_encrypted && parsed.decrypted_secrets.is_none() {
-                        return Err("Wrong passphrase or corrupt encrypted bundle.".to_string());
+                        return (is_encrypted, Err(msg));
                     }
 
                     let plan = dbflux_portability::import::plan(&parsed, &dest.as_ref_snapshot());
-                    Ok((parsed, plan, is_encrypted))
+                    (is_encrypted, Ok((parsed, plan)))
                 })
                 .await;
+
+            let (is_encrypted, outcome) = result;
 
             if let Err(e) = cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     this.is_parsing = false;
-                    match result {
-                        Ok((parsed, plan, is_encrypted)) => {
+
+                    // Always update bundle_encrypted from the header so the passphrase
+                    // field is revealed even when decrypt fails on the first attempt.
+                    this.bundle_encrypted = is_encrypted;
+
+                    match outcome {
+                        Ok((parsed, plan)) => {
                             let has_conflicts = !plan.conflicts.is_empty();
                             let has_required = !plan.required_resolutions.is_empty();
-
-                            // Derive bundle_encrypted from the bundle header so the
-                            // passphrase field is shown automatically for encrypted bundles.
-                            this.bundle_encrypted = is_encrypted;
 
                             this.parsed_bundle = Some(parsed);
                             this.import_plan = Some(plan);
@@ -979,9 +989,21 @@ impl ImportWizard {
 
                 RequiredResolutionKind::AwsReference { provider_id, name } => {
                     let label = format!(
-                        "AWS auth reference not found on this machine: \"{name}\" ({provider_id})"
+                        "AWS auth profile \"{name}\" ({provider_id}) not found on this machine."
                     );
-                    div()
+
+                    // Collect destination profiles whose provider matches the reference.
+                    let matching: Vec<(Uuid, String)> = self
+                        .dest_auth_profiles
+                        .iter()
+                        .filter(|p| &p.provider_id == provider_id)
+                        .map(|p| (p.id, p.name.clone()))
+                        .collect();
+
+                    let current_choice = self.auth_profile_choices.get(&key).copied();
+                    let key_sel = key.clone();
+
+                    let mut container = div()
                         .flex()
                         .flex_col()
                         .gap(px(2.0))
@@ -989,21 +1011,94 @@ impl ImportWizard {
                         .border_1()
                         .border_color(theme.border)
                         .rounded(Radii::SM)
-                        .child(div().text_sm().text_color(theme.foreground).child(label))
-                        .child(
+                        .child(div().text_sm().text_color(theme.foreground).child(label));
+
+                    if matching.is_empty() {
+                        // No local profile of this provider exists — import without auth.
+                        // The user can assign a profile after importing.
+                        container = container
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(
+                                        "No matching auth profile found on this machine. \
+                                         The connection will be imported without an auth profile. \
+                                         You can assign one in the Connection Manager after importing.",
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(
+                                        "To create a new profile: go to Settings > Auth Profiles \
+                                         and add a profile of the matching provider type, then \
+                                         re-import this bundle.",
+                                    ),
+                            );
+                    } else {
+                        // Show a picker of local profiles that match the provider.
+                        let choice_label = current_choice
+                            .and_then(|id| matching.iter().find(|(pid, _)| *pid == id))
+                            .map(|(_, n)| format!("Use: {n}"))
+                            .unwrap_or_else(|| "Skip (import without auth profile)".to_string());
+
+                        container = container.child(
                             div()
                                 .text_xs()
                                 .text_color(theme.muted_foreground)
-                                .child(
-                                    "This AWS profile is not available on this machine. \
-                                     The connection will be imported without an auth profile. \
-                                     You can assign one after importing.",
-                                ),
-                        )
-                        .into_any_element()
+                                .child("Select an existing local profile to use, or skip:"),
+                        );
+
+                        // "Skip" option
+                        let key_skip = key_sel.clone();
+                        let this_skip = cx.entity().clone();
+                        container = container.child(small_choice_button(
+                            "Skip (import without auth profile)",
+                            current_choice.is_none(),
+                            move |_, _, cx| {
+                                this_skip.update(cx, |this, cx| {
+                                    this.auth_profile_choices.remove(&key_skip);
+                                    cx.notify();
+                                });
+                            },
+                            &theme,
+                        ));
+
+                        for (pid, pname) in &matching {
+                            let pid = *pid;
+                            let pname = pname.clone();
+                            let key_p = key_sel.clone();
+                            let this_p = cx.entity().clone();
+                            let label_p = format!("Use: {pname}");
+                            container = container.child(small_choice_button(
+                                &label_p,
+                                current_choice == Some(pid),
+                                move |_, _, cx| {
+                                    this_p.update(cx, |this, cx| {
+                                        this.auth_profile_choices.insert(key_p.clone(), pid);
+                                        cx.notify();
+                                    });
+                                },
+                                &theme,
+                            ));
+                        }
+
+                        // Show the resolved choice summary.
+                        container = container.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(choice_label),
+                        );
+                    }
+
+                    container.into_any_element()
                 }
 
                 RequiredResolutionKind::AuthProfileRef => {
+                    // Generic non-AWS auth-profile reference: informational only.
                     div()
                         .text_sm()
                         .child(format!("Auth profile required for: \"{field}\""))

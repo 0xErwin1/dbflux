@@ -3649,7 +3649,7 @@ mod tests {
     /// when they are absent.
     #[::core::prelude::v1::test]
     fn resolve_success_text_reads_from_edit_caps() {
-        use dbflux_core::{AuthEditCapabilities, DanglingMessage};
+        use dbflux_core::AuthEditCapabilities;
         use std::collections::HashMap;
 
         let caps = AuthEditCapabilities {
@@ -3681,7 +3681,7 @@ mod tests {
     /// when they are absent.
     #[::core::prelude::v1::test]
     fn resolve_mirror_label_reads_from_edit_caps() {
-        use dbflux_core::{AuthEditCapabilities, DanglingMessage};
+        use dbflux_core::AuthEditCapabilities;
         use std::collections::HashMap;
 
         let caps = AuthEditCapabilities {
@@ -3744,7 +3744,7 @@ mod tests {
     /// origin key is absent from `capabilities.edit.dangling_messages`.
     #[::core::prelude::v1::test]
     fn resolve_dangling_falls_back_for_unknown_origin() {
-        use dbflux_core::{AuthEditCapabilities, DanglingMessage};
+        use dbflux_core::AuthEditCapabilities;
         use std::collections::HashMap;
 
         let caps = AuthEditCapabilities {

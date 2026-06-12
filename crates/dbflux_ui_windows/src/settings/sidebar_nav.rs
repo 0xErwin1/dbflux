@@ -160,7 +160,7 @@ mod tests {
 
     #[test]
     fn tree_id_roundtrip_all_sections() {
-        let mut sections = vec![
+        let sections = vec![
             SettingsSectionId::General,
             SettingsSectionId::Audit,
             SettingsSectionId::Keybindings,
