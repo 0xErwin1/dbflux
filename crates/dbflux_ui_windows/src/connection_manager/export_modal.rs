@@ -5,13 +5,16 @@ use dbflux_app::portability::{
     AppExportTransformResolver, AppFieldHintResolver, AppSecretReader, ExportInputs,
     build_export_graph,
 };
-use dbflux_components::controls::{Button, Checkbox, Input, InputEvent, InputState};
+use dbflux_components::controls::{
+    Button, Checkbox, Dropdown, DropdownItem, DropdownSelectionChanged, Input, InputEvent,
+    InputState,
+};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::shell::ModalShell;
 use dbflux_components::primitives::{
-    BannerBlock, BannerVariant, FilePicker, SegmentedControl, SegmentedItem, Text, surface_raised,
+    BannerBlock, BannerVariant, IconButton, Text, surface_raised,
 };
-use dbflux_components::tokens::{FontSizes, Spacing};
+use dbflux_components::tokens::{FontSizes, Heights, Spacing};
 use dbflux_components::typography::AppFonts;
 use dbflux_core::access::AccessKind;
 use dbflux_core::secrecy::SecretString;
@@ -32,15 +35,11 @@ pub enum ExportConnectionModalEvent {
     Close,
 }
 
-/// Per-auth-profile export mode segment ids (kept in sync with `auth_mode_from_id`).
+/// Auth-profile export-mode dropdown values (kept in sync with `auth_mode_from_id`).
 const AUTH_MODE_INCLUDE: &str = "include";
 const AUTH_MODE_REFERENCE: &str = "reference";
 const AUTH_MODE_REQUIRED: &str = "required";
 const AUTH_MODE_EXCLUDE: &str = "exclude";
-
-/// Include/exclude segment ids (shared by every two-way credential control).
-const INCLUDE_ID: &str = "include";
-const EXCLUDE_ID: &str = "exclude";
 
 /// A read-only description of one auth profile referenced by the exported
 /// connection. `locked` marks AWS reflected profiles, which travel only as a
@@ -93,14 +92,24 @@ pub struct ExportConnectionModal {
     embed_ssh_keys: bool,
     /// Per auth-profile export mode. Absent = default (`IncludeValues`).
     auth_modes: HashMap<Uuid, AuthExportMode>,
+    /// The single auth profile (if any) the exported connection references,
+    /// together with whether it is locked (AWS reflected). The export is scoped
+    /// to one connection, which references at most one auth profile.
+    auth_profile: Option<AuthProfileRow>,
+    /// Dropdown for the single referenced auth profile's export mode. Absent when
+    /// the connection has no auth profile, or when it is AWS-locked (a muted
+    /// label is shown instead).
+    auth_dropdown: Option<Entity<Dropdown>>,
+    auth_dropdown_sub: Option<Subscription>,
 
     // Encryption.
     force_plaintext: bool,
+    show_passphrase: bool,
     passphrase_input: Entity<InputState>,
     confirm_input: Entity<InputState>,
 
     // Output path.
-    output_path: String,
+    output_input: Entity<InputState>,
     pending_output_path: Option<String>,
 
     // Run state.
@@ -146,6 +155,16 @@ impl ExportConnectionModal {
             }
         });
 
+        let output_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Path to output file\u{2026}"));
+
+        let output_sub = cx.subscribe(&output_input, |this, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change | InputEvent::Blur) {
+                this.validation_error = None;
+                cx.notify();
+            }
+        });
+
         let focus_handle = cx.focus_handle();
 
         Self {
@@ -158,16 +177,20 @@ impl ExportConnectionModal {
             include_ssh_password: false,
             embed_ssh_keys: false,
             auth_modes: HashMap::new(),
+            auth_profile: None,
+            auth_dropdown: None,
+            auth_dropdown_sub: None,
             force_plaintext: false,
+            show_passphrase: false,
             passphrase_input,
             confirm_input,
-            output_path: String::new(),
+            output_input,
             pending_output_path: None,
             is_exporting: false,
             pending_result: None,
             validation_error: None,
             focus_handle,
-            _subscriptions: vec![passphrase_sub, confirm_sub],
+            _subscriptions: vec![passphrase_sub, confirm_sub, output_sub],
         }
     }
 
@@ -190,34 +213,41 @@ impl ExportConnectionModal {
         self.include_ssh_password = false;
         self.embed_ssh_keys = false;
         self.force_plaintext = false;
-        self.output_path.clear();
+        self.show_passphrase = false;
         self.pending_output_path = None;
         self.is_exporting = false;
         self.pending_result = None;
         self.validation_error = None;
 
-        self.auth_modes = self
+        // The export is scoped to one connection, which references at most one
+        // auth profile. Seed the default mode (AWS reflected = locked reference).
+        self.auth_profile = self
             .summary
             .as_ref()
-            .map(|summary| {
-                summary
-                    .auth_profiles
-                    .iter()
-                    .map(|row| {
-                        let mode = if row.locked {
-                            AuthExportMode::MappableReference
-                        } else {
-                            AuthExportMode::IncludeValues
-                        };
-                        (row.id, mode)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+            .and_then(|summary| summary.auth_profiles.first())
+            .map(|row| AuthProfileRow {
+                id: row.id,
+                name: row.name.clone(),
+                locked: row.locked,
+            });
+
+        self.auth_modes.clear();
+        if let Some(auth) = self.auth_profile.as_ref() {
+            let mode = if auth.locked {
+                AuthExportMode::MappableReference
+            } else {
+                AuthExportMode::IncludeValues
+            };
+            self.auth_modes.insert(auth.id, mode);
+        }
+
+        self.build_auth_dropdown(window, cx);
 
         self.passphrase_input
             .update(cx, |state, cx| state.set_value("", window, cx));
         self.confirm_input
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.output_input
             .update(cx, |state, cx| state.set_value("", window, cx));
 
         self.visible = true;
@@ -225,10 +255,61 @@ impl ExportConnectionModal {
         cx.notify();
     }
 
+    /// Build (or clear) the auth-profile export-mode dropdown for the single
+    /// referenced auth profile. AWS-locked profiles get no dropdown — the render
+    /// shows a muted "Reference (AWS profile)" label and the mode stays forced to
+    /// `MappableReference`.
+    fn build_auth_dropdown(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.auth_dropdown = None;
+        self.auth_dropdown_sub = None;
+
+        let Some(auth) = self.auth_profile.as_ref() else {
+            return;
+        };
+        if auth.locked {
+            return;
+        }
+
+        let auth_id = auth.id;
+        let current = self
+            .auth_modes
+            .get(&auth_id)
+            .copied()
+            .unwrap_or(AuthExportMode::IncludeValues);
+
+        let items = auth_mode_items();
+        let selected = items
+            .iter()
+            .position(|item| item.value.as_ref() == auth_mode_id(current));
+
+        let dropdown = cx.new(|_cx| {
+            Dropdown::new("export-auth-mode")
+                .items(items)
+                .selected_index(selected)
+        });
+
+        let sub = cx.subscribe(
+            &dropdown,
+            move |this, dropdown, _event: &DropdownSelectionChanged, cx| {
+                if let Some(value) = dropdown.read(cx).selected_value() {
+                    let mode = auth_mode_from_id(value.as_ref());
+                    this.auth_modes.insert(auth_id, mode);
+                    cx.notify();
+                }
+            },
+        );
+
+        self.auth_dropdown = Some(dropdown);
+        self.auth_dropdown_sub = Some(sub);
+    }
+
     pub fn close(&mut self, cx: &mut Context<Self>) {
         self.visible = false;
         self.profile_id = None;
         self.summary = None;
+        self.auth_profile = None;
+        self.auth_dropdown = None;
+        self.auth_dropdown_sub = None;
         cx.notify();
     }
 
@@ -288,7 +369,7 @@ impl ExportConnectionModal {
     /// Whether the Export button may run: a passphrase is set when encrypting,
     /// and an output path has been chosen.
     fn can_export(&self, cx: &Context<Self>) -> bool {
-        if self.output_path.trim().is_empty() {
+        if self.output_input.read(cx).value().trim().is_empty() {
             return false;
         }
         if self.force_plaintext {
@@ -327,7 +408,7 @@ impl ExportConnectionModal {
                 Ok(dir) => {
                     let path =
                         dbflux_ui_base::file_dialog::unique_path_in(&dir, "connections.toml");
-                    self.output_path = path.to_string_lossy().to_string();
+                    self.pending_output_path = Some(path.to_string_lossy().to_string());
                     cx.notify();
                 }
                 Err(e) => {
@@ -345,7 +426,8 @@ impl ExportConnectionModal {
             return;
         };
 
-        if self.output_path.trim().is_empty() {
+        let output_value = self.output_input.read(cx).value().trim().to_string();
+        if output_value.is_empty() {
             self.validation_error = Some("Choose an output file path.".to_string());
             cx.notify();
             return;
@@ -374,7 +456,7 @@ impl ExportConnectionModal {
             EncryptionChoice::Passphrase(SecretString::from(passphrase))
         };
 
-        let output_path = PathBuf::from(self.output_path.trim());
+        let output_path = PathBuf::from(&output_value);
 
         let Some((inputs, drivers, secret_store)) = self.assemble_inputs(profile_id, cx) else {
             self.validation_error =
@@ -575,28 +657,56 @@ fn auth_mode_from_id(id: &str) -> AuthExportMode {
     }
 }
 
+/// The four selectable auth-profile export modes, in display order.
+fn auth_mode_items() -> Vec<DropdownItem> {
+    vec![
+        DropdownItem::with_value("Include values", AUTH_MODE_INCLUDE),
+        DropdownItem::with_value("Reference", AUTH_MODE_REFERENCE),
+        DropdownItem::with_value("Required on import", AUTH_MODE_REQUIRED),
+        DropdownItem::with_value("Exclude", AUTH_MODE_EXCLUDE),
+    ]
+}
+
 impl Render for ExportConnectionModal {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.visible {
             return div().into_any_element();
         }
 
-        // Drain pending output path from the native file-dialog callback.
+        // Drain pending output path from the file-dialog callback (or fallback)
+        // into the editable input.
         if let Some(path) = self.pending_output_path.take() {
-            self.output_path = path;
+            self.output_input
+                .update(cx, |state, cx| state.set_value(path, window, cx));
         }
+
+        // Masking is render-driven so the eye toggle can reveal the value.
+        let show_passphrase = self.show_passphrase;
+        self.passphrase_input.update(cx, |state, cx| {
+            state.set_masked(!show_passphrase, window, cx);
+        });
+        self.confirm_input.update(cx, |state, cx| {
+            state.set_masked(!show_passphrase, window, cx);
+        });
 
         let can_export = self.can_export(cx);
         let is_exporting = self.is_exporting;
 
         let body = div()
             .track_focus(&self.focus_handle)
+            .key_context(dbflux_core::keymap_types::ContextId::ConfirmModal.as_gpui_context())
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _w, cx| {
+                if ev.keystroke.key == "escape" {
+                    this.close(cx);
+                    cx.emit(ExportConnectionModalEvent::Close);
+                }
+            }))
             .flex()
             .flex_col()
             .gap(Spacing::MD)
             .child(self.render_summary(cx))
             .child(self.render_credentials_section(cx))
-            .when_some(self.render_auth_modes_section(cx), |el, section| {
+            .when_some(self.render_auth_mode_section(cx), |el, section| {
                 el.child(section)
             })
             .child(self.render_encryption_section(cx))
@@ -643,7 +753,7 @@ impl Render for ExportConnectionModal {
             body.into_any_element(),
             footer.into_any_element(),
         )
-        .width(px(520.0))
+        .width(px(640.0))
         .on_close(move |_window, cx| {
             close_for_x.update(cx, |this, cx| {
                 this.close(cx);
@@ -727,41 +837,38 @@ impl ExportConnectionModal {
             .flex_col()
             .gap(Spacing::SM)
             .child(Text::body("Credentials").color(theme.muted_foreground))
-            .child(self.include_exclude_row(
-                "export-conn-pw",
-                "Connection password",
-                conn_pw,
-                |this, include, cx| {
-                    this.include_connection_password = include;
-                    cx.notify();
-                },
-                cx,
-            ));
+            .child(
+                Checkbox::new("export-conn-pw")
+                    .checked(conn_pw)
+                    .label("Include connection password")
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        this.include_connection_password = *checked;
+                        cx.notify();
+                    })),
+            );
 
         if has_proxy {
-            col = col.child(self.include_exclude_row(
-                "export-proxy-creds",
-                "Proxy credentials",
-                proxy_creds,
-                |this, include, cx| {
-                    this.include_proxy_credentials = include;
-                    cx.notify();
-                },
-                cx,
-            ));
+            col = col.child(
+                Checkbox::new("export-proxy-creds")
+                    .checked(proxy_creds)
+                    .label("Include proxy credentials")
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        this.include_proxy_credentials = *checked;
+                        cx.notify();
+                    })),
+            );
         }
 
         if has_ssh {
-            col = col.child(self.include_exclude_row(
-                "export-ssh-pw",
-                "SSH password",
-                ssh_pw,
-                |this, include, cx| {
-                    this.include_ssh_password = include;
-                    cx.notify();
-                },
-                cx,
-            ));
+            col = col.child(
+                Checkbox::new("export-ssh-pw")
+                    .checked(ssh_pw)
+                    .label("Include SSH password")
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        this.include_ssh_password = *checked;
+                        cx.notify();
+                    })),
+            );
 
             col = col.child(
                 Checkbox::new("export-embed-ssh-keys")
@@ -780,112 +887,41 @@ impl ExportConnectionModal {
         col.into_any_element()
     }
 
-    /// One labelled include/exclude segmented control bound to a `bool` flag.
-    fn include_exclude_row(
-        &self,
-        id: &str,
-        label: &str,
-        include: bool,
-        on_change: impl Fn(&mut ExportConnectionModal, bool, &mut Context<ExportConnectionModal>)
-        + 'static,
-        cx: &Context<Self>,
-    ) -> AnyElement {
+    /// The single referenced auth profile's export-mode control: a dropdown for
+    /// normal profiles, or a muted "Reference (AWS profile)" label for AWS-locked
+    /// ones.
+    fn render_auth_mode_section(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let theme = cx.theme().clone();
-        let entity = cx.entity().clone();
-        let active = if include { INCLUDE_ID } else { EXCLUDE_ID };
+        let auth = self.auth_profile.as_ref()?;
 
-        let items = vec![
-            SegmentedItem::new(INCLUDE_ID, "Include"),
-            SegmentedItem::new(EXCLUDE_ID, "Exclude"),
-        ];
-
-        let on_change = std::sync::Arc::new(on_change);
-
-        let control = SegmentedControl::new(items, active, move |selected, _window, cx| {
-            let include = selected.as_ref() == INCLUDE_ID;
-            let on_change = on_change.clone();
-            entity.update(cx, |this, cx| on_change(this, include, cx));
-        });
-
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(Spacing::SM)
-            .id(SharedString::from(format!("{id}-row")))
-            .child(Text::body(label.to_string()).color(theme.foreground))
-            .child(control)
-            .into_any_element()
-    }
-
-    fn render_auth_modes_section(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        let theme = cx.theme().clone();
-        let summary = self.summary.as_ref()?;
-        if summary.auth_profiles.is_empty() {
-            return None;
-        }
-
-        let mut col = div()
-            .flex()
-            .flex_col()
-            .gap(Spacing::SM)
-            .child(Text::body("Auth profile export mode").color(theme.muted_foreground));
-
-        for auth in &summary.auth_profiles {
-            col = col.child(self.render_auth_mode_row(auth, cx));
-        }
-
-        Some(col.into_any_element())
-    }
-
-    fn render_auth_mode_row(&self, auth: &AuthProfileRow, cx: &Context<Self>) -> AnyElement {
-        let theme = cx.theme().clone();
-        let auth_id = auth.id;
-        let current = self
-            .auth_modes
-            .get(&auth_id)
-            .copied()
-            .unwrap_or(AuthExportMode::MappableReference);
-
-        // AWS reflected profiles are locked to a mappable reference: show only
-        // that segment and disable selection.
-        let items: Vec<SegmentedItem> = if auth.locked {
-            vec![SegmentedItem::new(AUTH_MODE_REFERENCE, "Reference")]
+        let control: AnyElement = if auth.locked {
+            Text::body("Reference (AWS profile)")
+                .color(theme.muted_foreground)
+                .into_any_element()
+        } else if let Some(dropdown) = self.auth_dropdown.as_ref() {
+            dropdown.clone().into_any_element()
         } else {
-            vec![
-                SegmentedItem::new(AUTH_MODE_INCLUDE, "Include values"),
-                SegmentedItem::new(AUTH_MODE_REFERENCE, "Reference"),
-                SegmentedItem::new(AUTH_MODE_REQUIRED, "Required on import"),
-                SegmentedItem::new(AUTH_MODE_EXCLUDE, "Exclude"),
-            ]
+            return None;
         };
 
-        let entity = cx.entity().clone();
-        let locked = auth.locked;
-        let control = SegmentedControl::new(
-            items,
-            auth_mode_id(current),
-            move |selected, _window, cx| {
-                if locked {
-                    return;
-                }
-                let mode = auth_mode_from_id(selected.as_ref());
-                entity.update(cx, |this, cx| {
-                    this.auth_modes.insert(auth_id, mode);
-                    cx.notify();
-                });
-            },
-        );
-
-        div()
+        let row = div()
             .flex()
             .items_center()
             .justify_between()
             .gap(Spacing::SM)
-            .id(SharedString::from(format!("auth-mode-row-{auth_id}")))
+            .id(SharedString::from(format!("auth-mode-row-{}", auth.id)))
             .child(Text::body(auth.name.clone()).color(theme.foreground))
-            .child(div().opacity(if locked { 0.6 } else { 1.0 }).child(control))
-            .into_any_element()
+            .child(control);
+
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap(Spacing::SM)
+                .child(Text::body("Auth profile export mode").color(theme.muted_foreground))
+                .child(row)
+                .into_any_element(),
+        )
     }
 
     fn render_encryption_section(&self, cx: &Context<Self>) -> AnyElement {
@@ -911,12 +947,35 @@ impl ExportConnectionModal {
             )
             .into_any_element()
         } else {
+            let eye_icon = if self.show_passphrase {
+                AppIcon::EyeOff
+            } else {
+                AppIcon::Eye
+            };
+
+            let toggle = IconButton::new("export-passphrase-eye", eye_icon.into()).on_click({
+                let entity = cx.entity().clone();
+                move |_event, _window, cx| {
+                    entity.update(cx, |this, cx| {
+                        this.show_passphrase = !this.show_passphrase;
+                        cx.notify();
+                    });
+                }
+            });
+
             div()
                 .flex()
                 .flex_col()
                 .gap(Spacing::XS)
                 .child(Text::body("Passphrase").color(theme.muted_foreground))
-                .child(Input::new(&self.passphrase_input))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::XS)
+                        .child(div().flex_1().child(Input::new(&self.passphrase_input)))
+                        .child(toggle),
+                )
                 .child(Text::body("Confirm passphrase").color(theme.muted_foreground))
                 .child(Input::new(&self.confirm_input))
                 .into_any_element()
@@ -936,23 +995,25 @@ impl ExportConnectionModal {
         let theme = cx.theme().clone();
         let entity = cx.entity().clone();
 
-        let picker = FilePicker::new(
-            "export-output-picker",
-            self.output_path.clone(),
-            AppIcon::Folder,
-            AppIcon::X,
-        )
-        .placeholder("Choose output file\u{2026}")
-        .on_browse(move |_event, _window, cx| {
-            entity.update(cx, |this, cx| this.browse_output_path(cx));
-        });
+        let browse = IconButton::new("export-output-browse", AppIcon::Folder.into())
+            .icon_size(Heights::ICON_SM)
+            .on_click(move |_event, _window, cx| {
+                entity.update(cx, |this, cx| this.browse_output_path(cx));
+            });
+
+        let row = div()
+            .flex()
+            .items_center()
+            .gap(Spacing::XS)
+            .child(div().flex_1().child(Input::new(&self.output_input)))
+            .child(browse);
 
         div()
             .flex()
             .flex_col()
             .gap(Spacing::XS)
             .child(Text::body("Output file").color(theme.muted_foreground))
-            .child(picker)
+            .child(row)
             .into_any_element()
     }
 
