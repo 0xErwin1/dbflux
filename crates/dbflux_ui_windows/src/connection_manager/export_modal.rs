@@ -349,6 +349,11 @@ impl ExportModal {
             include_settings_overrides: self.include_settings_overrides,
             embed_ssh_keys: self.embed_ssh_keys,
             encryption,
+            connection_password: dbflux_portability::IncludeExclude::Exclude,
+            proxy_credentials: dbflux_portability::IncludeExclude::Exclude,
+            ssh_password: dbflux_portability::IncludeExclude::Exclude,
+            auth_modes: Default::default(),
+            per_secret_overrides: Default::default(),
         };
 
         let this = cx.entity().clone();

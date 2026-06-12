@@ -170,6 +170,29 @@ pub enum ExportFieldHint {
     RequiredOnImport,
 }
 
+/// Describes a structured per-field transform to apply during export.
+///
+/// Returned by `DbDriver::export_field_transform`. The default implementation
+/// returns `None`, leaving all fields on the existing `export_field_hint` path.
+/// URI-bearing drivers override it for the `uri` field when credentials are
+/// embedded, splitting the URI into a cleartext skeleton and a recoverable secret.
+pub enum FieldExportTransform {
+    /// No special transform; fall through to `export_field_hint`.
+    None,
+    /// The field value was split: the password-stripped skeleton stays in the
+    /// cleartext `[connections.fields]` section, while the extracted password
+    /// rides in `[secrets]` and is re-merged by the runtime injection path on
+    /// connect (e.g. `inject_password_into_pg_uri`).
+    SplitSecret {
+        /// URI with the password component replaced by an empty placeholder
+        /// (e.g. `postgres://alice:@host/db`). Contains NO credential.
+        skeleton: String,
+        /// The extracted password. Staged into `[secrets]` and written to
+        /// `connection_secret_ref` on import so the runtime injection path picks it up.
+        secret: ::secrecy::SecretString,
+    },
+}
+
 // ---------------------------------------------------------------------------
 // Builder helpers — keep form definitions concise
 // ---------------------------------------------------------------------------

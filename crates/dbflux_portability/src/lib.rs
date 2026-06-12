@@ -12,7 +12,8 @@ pub use error::PortabilityError;
 use std::collections::HashMap;
 
 use dbflux_core::{
-    AuthProfile, ConnectionProfile, ExportFieldHint, FormValues, ProxyProfile, SshTunnelProfile,
+    AuthProfile, ConnectionProfile, ExportFieldHint, FieldExportTransform, FormValues,
+    ProxyProfile, SshTunnelProfile,
 };
 use secrecy::SecretString;
 
@@ -40,6 +41,23 @@ pub trait FieldHintResolver {
 /// The app layer implements this by calling `SecretManager::get_by_ref`.
 pub trait SecretReader {
     fn read(&self, secret_ref: &str) -> Option<SecretString>;
+}
+
+/// Resolves the structured export transform for a connection form field.
+///
+/// The app layer implements this by holding the driver registry and calling
+/// `DbDriver::export_field_transform`. This crate never branches on driver ids.
+///
+/// The transform is consulted BEFORE the hint in the export per-field loop.
+/// When the transform returns `SplitSecret`, the skeleton is written to cleartext
+/// fields and the secret is staged into `[secrets]`; the hint path is bypassed.
+pub trait ExportTransformResolver {
+    fn transform(
+        &self,
+        profile: &ConnectionProfile,
+        field_id: &str,
+        values: &FormValues,
+    ) -> FieldExportTransform;
 }
 
 // ---------------------------------------------------------------------------
@@ -82,6 +100,42 @@ pub struct ExportGraph<'a> {
     pub proxies: Vec<&'a ProxyProfile>,
 }
 
+/// Whether a sensitive field is included in the bundle or excluded (omitted / required-on-import).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IncludeExclude {
+    /// Exclude the field: the secret is omitted from the bundle and recorded as a required_ref.
+    #[default]
+    Exclude,
+    /// Include the field: the secret is staged in `[secrets]` as usual.
+    Include,
+}
+
+/// Per-auth-profile export mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AuthExportMode {
+    /// Export the profile's secret field values into `[secrets]`.
+    IncludeValues,
+    /// Export as a mappable reference; no secret values in the bundle.
+    ///
+    /// The importer surfaces this as a conflict / resolution step.
+    #[default]
+    MappableReference,
+    /// Omit values and emit a required_ref so the importer must supply them.
+    RequiredOnImport,
+    /// Exclude the profile's secret material entirely.
+    Exclude,
+}
+
+/// Explicit per-secret override: whether to export or force a required_ref regardless of
+/// keyring availability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretExportChoice {
+    /// Export the secret as usual (honor the hint/transform resolver).
+    Export,
+    /// Do not export; emit a required_ref even when the secret is available.
+    DoNotExport,
+}
+
 /// Options controlling what the export pipeline includes.
 #[derive(Debug, Clone)]
 pub struct ExportOptions {
@@ -98,6 +152,48 @@ pub struct ExportOptions {
     pub embed_ssh_keys: bool,
 
     pub encryption: EncryptionChoice,
+
+    /// Whether to include the connection password in the bundle.
+    ///
+    /// Default: `Exclude` (safe). Only staged when `Include` is chosen explicitly.
+    pub connection_password: IncludeExclude,
+
+    /// Whether to include proxy credentials.
+    ///
+    /// Default: `Exclude` (safe).
+    pub proxy_credentials: IncludeExclude,
+
+    /// Whether to include the SSH tunnel password.
+    ///
+    /// Distinct from `embed_ssh_keys` which controls private-key bytes.
+    /// Default: `Exclude` (safe).
+    pub ssh_password: IncludeExclude,
+
+    /// Per-auth-profile export mode, keyed by the profile's UUID.
+    ///
+    /// Absent entries default to `AuthExportMode::MappableReference`.
+    pub auth_modes: std::collections::HashMap<uuid::Uuid, AuthExportMode>,
+
+    /// Explicit per-secret override keyed by `(profile_uuid, field_id)`.
+    ///
+    /// `DoNotExport` forces a required_ref regardless of keyring read success.
+    pub per_secret_overrides: std::collections::HashMap<(uuid::Uuid, String), SecretExportChoice>,
+}
+
+impl Default for ExportOptions {
+    fn default() -> Self {
+        Self {
+            include_hooks: false,
+            include_settings_overrides: false,
+            embed_ssh_keys: false,
+            encryption: EncryptionChoice::Plaintext { forced: false },
+            connection_password: IncludeExclude::Exclude,
+            proxy_credentials: IncludeExclude::Exclude,
+            ssh_password: IncludeExclude::Exclude,
+            auth_modes: std::collections::HashMap::new(),
+            per_secret_overrides: std::collections::HashMap::new(),
+        }
+    }
 }
 
 /// How the bundle's secrets section should be encrypted.
@@ -136,6 +232,8 @@ pub struct DestSnapshot<'a> {
     pub auth_profiles: Vec<&'a AuthProfile>,
     pub ssh_tunnels: Vec<&'a SshTunnelProfile>,
     pub proxies: Vec<&'a ProxyProfile>,
+    /// Existing connection profiles, used by connection-conflict detection (ADR-5).
+    pub connections: Vec<&'a ConnectionProfile>,
 }
 
 /// Parsed bundle with the plaintext metadata extracted.
@@ -183,6 +281,9 @@ pub enum ConflictKind {
     AuthProfile,
     SshTunnel,
     Proxy,
+    /// A connection profile whose `(name, driver_id)` natural key matches an
+    /// existing profile at the destination. See ADR-5.
+    Connection,
 }
 
 /// A required value the user must supply before import can proceed.
@@ -190,6 +291,13 @@ pub enum ConflictKind {
 pub struct RequiredResolution {
     /// Identifies which bundle entity this resolution belongs to (connection local_id).
     pub owner_local_id: String,
+
+    /// Human-readable display name of the owning connection.
+    ///
+    /// Populated from the bundle connection's `name` field so the wizard can
+    /// show "which connection needs this secret" without looking up the local_id
+    /// in the parsed bundle. See R-WIZ-4 (ADR-3).
+    pub owner_name: String,
 
     /// Field ID within the owner entity.
     pub field: String,

@@ -163,12 +163,13 @@ pub fn build_export_graph(inputs: &ExportInputs) -> ExportGraph<'_> {
 
 /// Snapshot of the existing destination profiles used for conflict detection.
 ///
-/// The three owned `Vec`s hold clones taken just before `plan()` so the data
+/// The four owned `Vec`s hold clones taken just before `plan()` so the data
 /// is stable for the entire import flow.
 pub struct OwnedDestSnapshot {
     pub auth_profiles: Vec<AuthProfile>,
     pub ssh_tunnels: Vec<SshTunnelProfile>,
     pub proxies: Vec<ProxyProfile>,
+    pub connections: Vec<ConnectionProfile>,
 }
 
 impl OwnedDestSnapshot {
@@ -179,6 +180,7 @@ impl OwnedDestSnapshot {
             auth_profiles: self.auth_profiles.iter().collect(),
             ssh_tunnels: self.ssh_tunnels.iter().collect(),
             proxies: self.proxies.iter().collect(),
+            connections: self.connections.iter().collect(),
         }
     }
 }
@@ -203,6 +205,10 @@ pub struct ImportOutcome {
     pub needs_driver: Vec<(String, String)>,
     /// `(connection_name, error_message)` pairs where `build_config` returned an error.
     pub config_failures: Vec<(String, String)>,
+    /// Connection names whose intra-bundle references (ssh/proxy/auth local_ids) could
+    /// not be resolved. These connections were NOT imported to prevent silent topology
+    /// degradation (e.g. bastion-routed → direct-connect).
+    pub unresolved_refs: Vec<String>,
 }
 
 /// Result returned by `ImportPersistence::add_connection`.

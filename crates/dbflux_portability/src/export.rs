@@ -784,6 +784,11 @@ mod tests {
             include_settings_overrides: false,
             embed_ssh_keys: false,
             encryption: EncryptionChoice::Plaintext { forced: true },
+            connection_password: crate::IncludeExclude::Exclude,
+            proxy_credentials: crate::IncludeExclude::Exclude,
+            ssh_password: crate::IncludeExclude::Exclude,
+            auth_modes: Default::default(),
+            per_secret_overrides: Default::default(),
         }
     }
 
@@ -1092,6 +1097,7 @@ mod tests {
             include_settings_overrides: false,
             embed_ssh_keys: true,
             encryption: EncryptionChoice::Plaintext { forced: true },
+                    ..crate::ExportOptions { encryption: crate::EncryptionChoice::Plaintext { forced: true }, ..Default::default() }
         };
 
         let (bytes, _) = export(&graph, &opts, &IncludeAllHints, &secrets).expect("export");
@@ -1123,6 +1129,7 @@ mod tests {
             include_settings_overrides: true,
             embed_ssh_keys: true,
             encryption: EncryptionChoice::Plaintext { forced: true },
+                    ..crate::ExportOptions { encryption: crate::EncryptionChoice::Plaintext { forced: true }, ..Default::default() }
         };
 
         let (bytes, _) = export(&graph, &opts, &IncludeAllHints, &NoSecrets).expect("export");
@@ -1345,6 +1352,7 @@ mod tests {
             include_settings_overrides: false,
             embed_ssh_keys: false,
             encryption: EncryptionChoice::Plaintext { forced: true },
+                    ..crate::ExportOptions { encryption: crate::EncryptionChoice::Plaintext { forced: true }, ..Default::default() }
         };
 
         let (bytes, _report) = export(&graph, &opts_forced, &IncludeAllHints, &NoSecrets).expect(
@@ -1522,6 +1530,7 @@ mod tests {
             include_settings_overrides: false,
             embed_ssh_keys: false,
             encryption: EncryptionChoice::Plaintext { forced: true },
+                    ..crate::ExportOptions { encryption: crate::EncryptionChoice::Plaintext { forced: true }, ..Default::default() }
         };
 
         let (bytes, _report) = export(&graph, &opts, &IncludeAllHints, &NoSecrets).expect("export");
@@ -1634,6 +1643,7 @@ mod tests {
             include_settings_overrides: false,
             embed_ssh_keys: false,
             encryption: EncryptionChoice::Plaintext { forced: false },
+                    ..crate::ExportOptions { encryption: crate::EncryptionChoice::Plaintext { forced: true }, ..Default::default() }
         };
 
         let result = export(&graph, &opts, &SecretHintForPassword, &secrets);
@@ -1667,9 +1677,14 @@ mod tests {
             include_settings_overrides: false,
             embed_ssh_keys: false,
             encryption: EncryptionChoice::Plaintext { forced: true },
+            connection_password: crate::IncludeExclude::Include,
+            proxy_credentials: crate::IncludeExclude::Exclude,
+            ssh_password: crate::IncludeExclude::Exclude,
+            auth_modes: Default::default(),
+            per_secret_overrides: Default::default(),
         };
 
-        let result = export(&graph, &opts, &SecretHintForPassword, &secrets);
+        let result = export(&graph, &opts, &SecretHintForPassword, &NoSecrets);
         assert!(result.is_ok(), "plaintext with forced=true must succeed");
     }
 
@@ -1688,6 +1703,7 @@ mod tests {
             include_settings_overrides: false,
             embed_ssh_keys: false,
             encryption: EncryptionChoice::Plaintext { forced: false },
+                    ..crate::ExportOptions { encryption: crate::EncryptionChoice::Plaintext { forced: true }, ..Default::default() }
         };
 
         let result = export(&graph, &opts, &IncludeAllHints, &NoSecrets);
@@ -1778,6 +1794,7 @@ mod tests {
             include_settings_overrides: false,
             embed_ssh_keys: false,
             encryption: EncryptionChoice::Plaintext { forced: true },
+                    ..crate::ExportOptions { encryption: crate::EncryptionChoice::Plaintext { forced: true }, ..Default::default() }
         };
 
         let (bytes, report) = export(&graph, &opts, &IncludeAllHints, &NoSecrets).expect("export");
@@ -1848,6 +1865,36 @@ mod tests {
         assert!(
             !report.warnings.is_empty(),
             "missing proxy credential must produce a warning"
+        );
+    }
+
+    // --- Phase 1.3: ExportOptions default excludes sensitive fields (R-CTL-1) ---
+
+    #[test]
+    fn export_options_default_excludes_sensitive() {
+        let opts = crate::ExportOptions::default();
+        assert_eq!(
+            opts.connection_password,
+            crate::IncludeExclude::Exclude,
+            "connection_password must default to Exclude"
+        );
+        assert_eq!(
+            opts.proxy_credentials,
+            crate::IncludeExclude::Exclude,
+            "proxy_credentials must default to Exclude"
+        );
+        assert_eq!(
+            opts.ssh_password,
+            crate::IncludeExclude::Exclude,
+            "ssh_password must default to Exclude"
+        );
+        assert!(
+            opts.auth_modes.is_empty(),
+            "auth_modes must default to empty (implicit MappableReference)"
+        );
+        assert!(
+            opts.per_secret_overrides.is_empty(),
+            "per_secret_overrides must default to empty"
         );
     }
 }

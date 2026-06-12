@@ -143,6 +143,7 @@ pub fn plan(parsed: &ParsedBundle, dest: &DestSnapshot<'_>) -> ImportPlan {
         for rref in &auth.required_refs {
             required_resolutions.push(RequiredResolution {
                 owner_local_id: auth.local_id.clone(),
+                owner_name: auth.name.clone(),
                 field: rref.field.clone(),
                 kind: RequiredResolutionKind::Secret,
             });
@@ -172,6 +173,7 @@ pub fn plan(parsed: &ParsedBundle, dest: &DestSnapshot<'_>) -> ImportPlan {
         for rref in &ssh.required_refs {
             required_resolutions.push(RequiredResolution {
                 owner_local_id: ssh.local_id.clone(),
+                owner_name: ssh.name.clone(),
                 field: rref.field.clone(),
                 kind: RequiredResolutionKind::Secret,
             });
@@ -201,6 +203,7 @@ pub fn plan(parsed: &ParsedBundle, dest: &DestSnapshot<'_>) -> ImportPlan {
         for rref in &proxy.required_refs {
             required_resolutions.push(RequiredResolution {
                 owner_local_id: proxy.local_id.clone(),
+                owner_name: proxy.name.clone(),
                 field: rref.field.clone(),
                 kind: RequiredResolutionKind::Secret,
             });
@@ -213,6 +216,7 @@ pub fn plan(parsed: &ParsedBundle, dest: &DestSnapshot<'_>) -> ImportPlan {
         for rref in &conn.required_refs {
             required_resolutions.push(RequiredResolution {
                 owner_local_id: conn.local_id.clone(),
+                owner_name: conn.name.clone(),
                 field: rref.field.clone(),
                 kind: RequiredResolutionKind::Secret,
             });
@@ -230,6 +234,7 @@ pub fn plan(parsed: &ParsedBundle, dest: &DestSnapshot<'_>) -> ImportPlan {
             if !already_present {
                 required_resolutions.push(RequiredResolution {
                     owner_local_id: conn.local_id.clone(),
+                    owner_name: conn.name.clone(),
                     field: "auth_profile".to_string(),
                     kind: RequiredResolutionKind::AwsReference {
                         provider_id: auth_ref.provider_id.clone(),
@@ -974,6 +979,7 @@ mod tests {
             auth_profiles: vec![],
             ssh_tunnels: vec![],
             proxies: vec![],
+            connections: vec![],
         }
     }
 
@@ -1274,6 +1280,7 @@ encryption = "none"
             auth_profiles: vec![],
             ssh_tunnels: vec![&dest_ssh],
             proxies: vec![],
+            connections: vec![],
         };
 
         let import_plan = plan(&parsed, &dest);
@@ -1377,6 +1384,7 @@ encryption = "none"
             auth_profiles: vec![&aws_auth],
             ssh_tunnels: vec![],
             proxies: vec![],
+            connections: vec![],
         };
 
         let import_plan = plan(&parsed, &dest);
@@ -1451,6 +1459,7 @@ encryption = "none"
             auth_profiles: vec![],
             ssh_tunnels: vec![&dest_ssh],
             proxies: vec![],
+            connections: vec![],
         };
 
         let import_plan = plan(&parsed, &dest);
@@ -1490,6 +1499,7 @@ encryption = "none"
             auth_profiles: vec![],
             ssh_tunnels: vec![&dest_ssh],
             proxies: vec![],
+            connections: vec![],
         };
 
         let import_plan = plan(&parsed, &dest);
@@ -1545,6 +1555,7 @@ encryption = "none"
             auth_profiles: vec![&dest_auth],
             ssh_tunnels: vec![],
             proxies: vec![],
+            connections: vec![],
         };
 
         let import_plan = plan(&parsed, &dest);
@@ -1635,6 +1646,7 @@ encryption = "none"
             auth_profiles: vec![],
             ssh_tunnels: vec![&dest_ssh],
             proxies: vec![],
+            connections: vec![],
         };
 
         let import_plan = plan(&parsed, &dest);
@@ -1751,6 +1763,7 @@ encryption = "none"
             auth_profiles: vec![&dest_auth],
             ssh_tunnels: vec![],
             proxies: vec![],
+            connections: vec![],
         };
 
         let import_plan = plan(&parsed, &dest);
@@ -1779,6 +1792,7 @@ encryption = "none"
             auth_profiles: vec![],
             ssh_tunnels: vec![],
             proxies: vec![&dest_proxy],
+            connections: vec![],
         };
 
         let import_plan = plan(&parsed, &dest);
@@ -2399,6 +2413,7 @@ encryption = "none"
             auth_profiles: vec![&dest_auth],
             ssh_tunnels: vec![],
             proxies: vec![],
+            connections: vec![],
         };
 
         let import_plan = plan(&parsed, &dest);

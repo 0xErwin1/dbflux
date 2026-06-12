@@ -110,9 +110,9 @@ pub use data::{
 pub use driver::{
     DatabaseCategory, DdlCapabilities, DeploymentClass, DriverCapabilities, DriverFormDef,
     DriverLimits, DriverMetadata, DriverMetadataBuilder, ExecutionClassification, ExportFieldHint,
-    FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, Icon, IsolationLevel,
-    MutationCapabilities, OperationClassifier, PaginationStyle, QueryCapabilities, QueryLanguage,
-    RefreshTrigger, SelectOption, SslCertFields, SslModeOption, SyntaxInfo,
+    FieldExportTransform, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, Icon,
+    IsolationLevel, MutationCapabilities, OperationClassifier, PaginationStyle, QueryCapabilities,
+    QueryLanguage, RefreshTrigger, SelectOption, SslCertFields, SslModeOption, SyntaxInfo,
     TransactionCapabilities, WhereOperator, field, field_file_path, field_password, field_required,
     field_use_uri, ssh_tab, when_checked, when_unchecked, with_default, with_help,
 };

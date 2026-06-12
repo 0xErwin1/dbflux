@@ -255,6 +255,7 @@ impl ImportWizard {
                 auth_profiles: state.list_auth_profiles(),
                 ssh_tunnels: state.ssh_tunnels().to_vec(),
                 proxies: state.proxies().to_vec(),
+                connections: state.connections().values().map(|c| c.profile.clone()).collect(),
             }
         };
 
@@ -826,6 +827,7 @@ impl ImportWizard {
                         ConflictKind::AuthProfile => "Auth profile",
                         ConflictKind::SshTunnel => "SSH tunnel",
                         ConflictKind::Proxy => "Proxy",
+                        ConflictKind::Connection => "Connection",
                     };
                     let current_choice = self.conflict_choices.get(local_id).cloned();
                     let lid_reuse = local_id.clone();

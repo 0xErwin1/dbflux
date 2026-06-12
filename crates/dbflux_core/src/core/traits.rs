@@ -348,6 +348,25 @@ pub trait DbDriver: Send + Sync {
         }
     }
 
+    /// Returns a structured per-field export transform for fields that require
+    /// richer handling than the flat `export_field_hint` can express.
+    ///
+    /// Drivers that embed credentials in a URI field (postgres, mysql, mongodb)
+    /// override this for the `uri` field when `use_uri = true` and the URI
+    /// contains an embedded password, returning `SplitSecret` so the export
+    /// pipeline strips the password into `[secrets]` while keeping a
+    /// credential-free skeleton in `[connections.fields]`.
+    ///
+    /// The default returns `None` for every field, leaving the existing
+    /// `export_field_hint` path unchanged. All other drivers are unaffected.
+    fn export_field_transform(
+        &self,
+        _field_id: &str,
+        _values: &FormValues,
+    ) -> crate::FieldExportTransform {
+        crate::FieldExportTransform::None
+    }
+
     /// Build a connection URI from individual form field values and password.
     /// Returns `None` for drivers without URI support.
     fn build_uri(&self, _values: &FormValues, _password: &str) -> Option<String> {
@@ -1761,5 +1780,15 @@ mod tests {
             driver.export_field_hint("nonexistent_field", &values),
             ExportFieldHint::Include
         );
+    }
+
+    #[test]
+    fn export_field_transform_default_returns_none() {
+        let driver = TextDriver;
+        let values = FormValues::default();
+        assert!(matches!(
+            driver.export_field_transform("text_field", &values),
+            crate::FieldExportTransform::None
+        ));
     }
 }

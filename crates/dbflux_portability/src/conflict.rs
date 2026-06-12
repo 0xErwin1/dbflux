@@ -108,6 +108,7 @@ mod tests {
             auth_profiles: vec![&auth],
             ssh_tunnels: vec![],
             proxies: vec![],
+            connections: vec![],
         };
 
         let result = auth_conflict("aws-sso", "My SSO", &dest);
@@ -122,6 +123,7 @@ mod tests {
             auth_profiles: vec![&auth],
             ssh_tunnels: vec![],
             proxies: vec![],
+            connections: vec![],
         };
 
         let result = auth_conflict("other-provider", "My SSO", &dest);
@@ -136,6 +138,7 @@ mod tests {
             auth_profiles: vec![&auth],
             ssh_tunnels: vec![],
             proxies: vec![],
+            connections: vec![],
         };
 
         let result = auth_conflict("aws-sso", "Different Name", &dest);
@@ -148,6 +151,7 @@ mod tests {
             auth_profiles: vec![],
             ssh_tunnels: vec![],
             proxies: vec![],
+            connections: vec![],
         };
         assert!(auth_conflict("aws-sso", "My SSO", &dest).is_none());
     }
@@ -162,6 +166,7 @@ mod tests {
             auth_profiles: vec![&auth1, &auth2],
             ssh_tunnels: vec![],
             proxies: vec![],
+            connections: vec![],
         };
 
         let result = auth_conflict("aws-sso", "My SSO", &dest);
@@ -179,6 +184,7 @@ mod tests {
             auth_profiles: vec![],
             ssh_tunnels: vec![&ssh],
             proxies: vec![],
+            connections: vec![],
         };
 
         let result = ssh_conflict("bastion.example.com", 22, "ec2-user", &dest);
@@ -196,6 +202,7 @@ mod tests {
             auth_profiles: vec![],
             ssh_tunnels: vec![&ssh],
             proxies: vec![],
+            connections: vec![],
         };
 
         let result = ssh_conflict("bastion.example.com", 22, "ec2-user", &dest);
@@ -210,6 +217,7 @@ mod tests {
             auth_profiles: vec![],
             ssh_tunnels: vec![&ssh],
             proxies: vec![],
+            connections: vec![],
         };
 
         let result = ssh_conflict("bastion.example.com", 22, "ec2-user", &dest);
@@ -224,6 +232,7 @@ mod tests {
             auth_profiles: vec![],
             ssh_tunnels: vec![&ssh],
             proxies: vec![],
+            connections: vec![],
         };
 
         let result = ssh_conflict("bastion.example.com", 22, "ec2-user", &dest);
@@ -236,6 +245,7 @@ mod tests {
             auth_profiles: vec![],
             ssh_tunnels: vec![],
             proxies: vec![],
+            connections: vec![],
         };
         assert!(ssh_conflict("bastion.example.com", 22, "ec2-user", &dest).is_none());
     }
@@ -250,6 +260,7 @@ mod tests {
             auth_profiles: vec![],
             ssh_tunnels: vec![&ssh1, &ssh2],
             proxies: vec![],
+            connections: vec![],
         };
 
         let result = ssh_conflict("bastion.example.com", 22, "ec2-user", &dest);
@@ -267,6 +278,7 @@ mod tests {
             auth_profiles: vec![],
             ssh_tunnels: vec![],
             proxies: vec![&proxy],
+            connections: vec![],
         };
 
         let result = proxy_conflict("http", "proxy.corp.com", 8080, &dest);
@@ -284,6 +296,7 @@ mod tests {
             auth_profiles: vec![],
             ssh_tunnels: vec![],
             proxies: vec![&proxy],
+            connections: vec![],
         };
 
         let result = proxy_conflict("socks5", "proxy.corp.com", 1080, &dest);
@@ -298,6 +311,7 @@ mod tests {
             auth_profiles: vec![],
             ssh_tunnels: vec![],
             proxies: vec![&proxy],
+            connections: vec![],
         };
 
         let result = proxy_conflict("socks5", "proxy.corp.com", 8080, &dest);
@@ -312,6 +326,7 @@ mod tests {
             auth_profiles: vec![],
             ssh_tunnels: vec![],
             proxies: vec![&proxy],
+            connections: vec![],
         };
 
         let result = proxy_conflict("http", "proxy.corp.com", 9090, &dest);
@@ -324,6 +339,7 @@ mod tests {
             auth_profiles: vec![],
             ssh_tunnels: vec![],
             proxies: vec![],
+            connections: vec![],
         };
         assert!(proxy_conflict("http", "proxy.corp.com", 8080, &dest).is_none());
     }
@@ -338,6 +354,7 @@ mod tests {
             auth_profiles: vec![],
             ssh_tunnels: vec![],
             proxies: vec![&proxy1, &proxy2],
+            connections: vec![],
         };
 
         let result = proxy_conflict("http", "proxy.corp.com", 8080, &dest);
