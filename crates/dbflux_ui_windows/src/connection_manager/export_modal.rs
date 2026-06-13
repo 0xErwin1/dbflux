@@ -523,7 +523,10 @@ impl ExportBundleModal {
     }
 
     fn browse_output_path(&mut self, cx: &mut Context<Self>) {
-        let kind_label = self.target.map(ExportTarget::kind_label).unwrap_or("bundle");
+        let kind_label = self
+            .target
+            .map(ExportTarget::kind_label)
+            .unwrap_or("bundle");
 
         let file_name = if self.default_file_name.is_empty() {
             format!("{}.toml", kind_label.replace(' ', "-"))
