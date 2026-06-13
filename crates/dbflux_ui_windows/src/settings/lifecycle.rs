@@ -5,7 +5,7 @@ use dbflux_components::components::tree_nav::TreeNavAction;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 #[cfg(feature = "mcp")]
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
-use section_trait::SectionFocusEvent;
+use section_trait::{SectionFocusEvent, SectionPortabilityEvent};
 
 impl SettingsCoordinator {
     pub fn new(
@@ -33,6 +33,19 @@ impl SettingsCoordinator {
             Self::new_section_entity(active_section, app_state.clone(), window, cx);
         let active_section_view = active_section_entity.as_view();
 
+        let export_modal = cx.new(|cx| ExportBundleModal::new(app_state.clone(), window, cx));
+        let import_panel = cx.new(|cx| ImportConnectionsPanel::new(app_state.clone(), window, cx));
+
+        let import_sub = cx.subscribe(
+            &import_panel,
+            |this, _, event: &ImportConnectionsPanelEvent, cx| match event {
+                ImportConnectionsPanelEvent::Cancelled | ImportConnectionsPanelEvent::Completed => {
+                    this.import_visible = false;
+                    cx.notify();
+                }
+            },
+        );
+
         Self {
             app_state,
             sidebar_tree,
@@ -47,8 +60,33 @@ impl SettingsCoordinator {
             sidebar_is_resizing: false,
             sidebar_resize_start_x: None,
             sidebar_resize_start_width: None,
+            export_modal,
+            import_panel,
+            import_visible: false,
+            pending_export_target: None,
+            pending_import_open: false,
             _subscriptions: section_subscription,
+            _portability_subscriptions: vec![import_sub],
         }
+    }
+
+    /// Subscribe to a profile section's portability events, deferring the actual
+    /// overlay open to `render` (where a `Window` is in scope).
+    fn subscribe_portability<S>(section: &Entity<S>, cx: &mut Context<Self>) -> Subscription
+    where
+        S: EventEmitter<SectionPortabilityEvent> + 'static,
+    {
+        cx.subscribe(section, |this, _, event: &SectionPortabilityEvent, cx| {
+            match event {
+                SectionPortabilityEvent::OpenExport(target) => {
+                    this.pending_export_target = Some(*target);
+                }
+                SectionPortabilityEvent::OpenImport => {
+                    this.pending_import_open = true;
+                }
+            }
+            cx.notify();
+        })
     }
 
     fn new_section_entity(
@@ -129,7 +167,11 @@ impl SettingsCoordinator {
                         cx.notify();
                     }
                 });
-                (ActiveSettingsSection::Proxies(section), vec![focus_sub])
+                let portability_sub = Self::subscribe_portability(&section, cx);
+                (
+                    ActiveSettingsSection::Proxies(section),
+                    vec![focus_sub, portability_sub],
+                )
             }
             SettingsSectionId::AuthProfiles => {
                 let section = cx.new(|cx| AuthProfilesSection::new(app_state, window, cx));
@@ -161,9 +203,10 @@ impl SettingsCoordinator {
                         }
                     });
 
+                let portability_sub = Self::subscribe_portability(&section, cx);
                 (
                     ActiveSettingsSection::AuthProfiles(section),
-                    vec![focus_sub, login_sub],
+                    vec![focus_sub, login_sub, portability_sub],
                 )
             }
             SettingsSectionId::SshTunnels => {
@@ -174,7 +217,11 @@ impl SettingsCoordinator {
                         cx.notify();
                     }
                 });
-                (ActiveSettingsSection::SshTunnels(section), vec![focus_sub])
+                let portability_sub = Self::subscribe_portability(&section, cx);
+                (
+                    ActiveSettingsSection::SshTunnels(section),
+                    vec![focus_sub, portability_sub],
+                )
             }
             SettingsSectionId::Services => {
                 let section = cx.new(|cx| ServicesSection::new(app_state, window, cx));

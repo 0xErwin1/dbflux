@@ -63,6 +63,7 @@ impl SshFormNav {
 
         if self.editing_id.is_some() {
             rows.push(vec![
+                SshFormField::ExportButton,
                 SshFormField::DeleteButton,
                 SshFormField::TestButton,
                 SshFormField::SaveButton,
@@ -552,6 +553,9 @@ impl SshTunnelsSection {
                         }
                     }
                 }
+                ("i", modifiers) if modifiers == Modifiers::none() => {
+                    self.request_import(cx);
+                }
                 ("g", modifiers) if modifiers == Modifiers::none() => {
                     self.ssh_selected_idx = None;
                     self.ssh_load_selected_profile(window, cx);
@@ -793,6 +797,22 @@ mod tests {
         assert!(all_fields.contains(&&SshFormField::DeleteButton));
         assert!(all_fields.contains(&&SshFormField::TestButton));
         assert!(all_fields.contains(&&SshFormField::SaveButton));
+    }
+
+    #[test]
+    fn form_rows_editing_has_export_button() {
+        let nav = nav_private_key_editing();
+        let rows = nav.form_rows();
+        let all_fields: Vec<_> = rows.iter().flatten().collect();
+        assert!(all_fields.contains(&&SshFormField::ExportButton));
+    }
+
+    #[test]
+    fn form_rows_new_tunnel_no_export_button() {
+        let nav = nav_private_key_new();
+        let rows = nav.form_rows();
+        let all_fields: Vec<_> = rows.iter().flatten().collect();
+        assert!(!all_fields.contains(&&SshFormField::ExportButton));
     }
 
     #[test]
