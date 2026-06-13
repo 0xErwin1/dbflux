@@ -4,6 +4,21 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+* **Export / import standalone profiles from Settings (#214)** — SSH tunnels,
+  proxies, and auth profiles can now be exported and imported directly from
+  their Settings sections, building on the connection portability pipeline
+  (#213). Each profile editor gains an **Export** action in its footer
+  (keyboard-navigable alongside Save / Delete) that opens the same
+  passphrase-encrypted TOML bundle modal, scoped to that single profile; each
+  section's list header gains an **Import…** action (also reachable with `i`
+  when the profile list is focused) that opens the existing import wizard with
+  its conflict / required-reference resolution. AWS reflected auth profiles stay
+  reference-only and cannot be exported. Secret material travels only inside the
+  encrypted secrets section, passphrase encryption is on by default, and the
+  bundle format is unchanged.
+
 ### Fixed
 
 * **Chart auto-detection across four drivers (#204)** — Drivers now assign

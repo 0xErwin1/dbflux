@@ -68,6 +68,7 @@ impl ProxyFormNav {
 
         if self.editing_id.is_some() {
             rows.push(vec![
+                ProxyFormField::ExportButton,
                 ProxyFormField::DeleteButton,
                 ProxyFormField::SaveButton,
             ]);
@@ -479,6 +480,9 @@ impl ProxiesSection {
                         }
                     }
                 }
+                ("i", modifiers) if modifiers == Modifiers::none() => {
+                    self.request_import(cx);
+                }
                 ("g", modifiers) if modifiers == Modifiers::none() => {
                     self.proxy_selected_idx = None;
                     self.proxy_load_selected_profile(window, cx);
@@ -753,6 +757,9 @@ impl ProxiesSection {
             ProxyFormField::SaveButton => {
                 self.save_proxy(window, cx);
             }
+            ProxyFormField::ExportButton => {
+                self.request_export(cx);
+            }
             ProxyFormField::DeleteButton => {
                 if let Some(proxy_id) = self.editing_proxy_id {
                     self.request_delete_proxy(proxy_id, cx);
@@ -827,6 +834,22 @@ mod tests {
         let all_fields: Vec<_> = rows.iter().flatten().collect();
         assert!(all_fields.contains(&&ProxyFormField::DeleteButton));
         assert!(all_fields.contains(&&ProxyFormField::SaveButton));
+    }
+
+    #[test]
+    fn form_rows_editing_has_export_button() {
+        let nav = nav_basic_auth_editing();
+        let rows = nav.form_rows();
+        let all_fields: Vec<_> = rows.iter().flatten().collect();
+        assert!(all_fields.contains(&&ProxyFormField::ExportButton));
+    }
+
+    #[test]
+    fn form_rows_new_proxy_no_export_button() {
+        let nav = nav_no_auth_new();
+        let rows = nav.form_rows();
+        let all_fields: Vec<_> = rows.iter().flatten().collect();
+        assert!(!all_fields.contains(&&ProxyFormField::ExportButton));
     }
 
     #[test]

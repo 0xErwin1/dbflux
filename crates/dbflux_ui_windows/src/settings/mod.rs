@@ -28,6 +28,9 @@ mod sidebar_nav;
 mod ssh_tunnels;
 mod ssh_tunnels_section;
 
+use crate::connection_manager::{
+    ExportBundleModal, ExportTarget, ImportConnectionsPanel, ImportConnectionsPanelEvent,
+};
 use about_section::AboutSection;
 use audit_section::AuditSection;
 use auth_profiles_section::AuthProfilesSection;
@@ -322,7 +325,17 @@ pub struct SettingsCoordinator {
     sidebar_is_resizing: bool,
     sidebar_resize_start_x: Option<Pixels>,
     sidebar_resize_start_width: Option<Pixels>,
+    /// Shared export modal and import wizard overlays for standalone profile
+    /// portability, opened from the SSH / proxy / auth profile sections.
+    export_modal: Entity<ExportBundleModal>,
+    import_panel: Entity<ImportConnectionsPanel>,
+    import_visible: bool,
+    /// Deferred opens drained in `render`, where a `Window` is available (the
+    /// section-event subscriptions that set them have no window in scope).
+    pending_export_target: Option<ExportTarget>,
+    pending_import_open: bool,
     _subscriptions: Vec<Subscription>,
+    _portability_subscriptions: Vec<Subscription>,
 }
 
 pub type SettingsWindow = SettingsCoordinator;

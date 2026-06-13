@@ -26,11 +26,37 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use uuid::Uuid;
 
-/// Event emitted by [`ExportConnectionModal`] so the workspace host can react
+/// Event emitted by [`ExportBundleModal`] so the workspace host can react
 /// to dismissal (closing the overlay clears the rendered child).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ExportConnectionModalEvent {
+pub enum ExportBundleModalEvent {
     Close,
+}
+
+/// What the modal exports: a full connection (plus its referenced profiles) or a
+/// single standalone profile from a Settings section.
+///
+/// The portability pipeline already supports a bundle with no connections, so a
+/// standalone profile travels as a one-entry bundle of the matching kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportTarget {
+    Connection(Uuid),
+    AuthProfile(Uuid),
+    SshTunnel(Uuid),
+    Proxy(Uuid),
+}
+
+impl ExportTarget {
+    /// Human label for the exported entity kind, used in the modal title and the
+    /// summary block.
+    fn kind_label(self) -> &'static str {
+        match self {
+            ExportTarget::Connection(_) => "connection",
+            ExportTarget::AuthProfile(_) => "auth profile",
+            ExportTarget::SshTunnel(_) => "SSH tunnel",
+            ExportTarget::Proxy(_) => "proxy",
+        }
+    }
 }
 
 /// Auth-profile export-mode dropdown values (kept in sync with `auth_mode_from_id`).
@@ -50,13 +76,19 @@ struct AuthProfileRow {
 
 /// A short, read-only summary of everything that will travel in the bundle.
 ///
-/// Computed once in [`ExportConnectionModal::open`] so the body renders from
+/// Computed once in [`ExportBundleModal::open`] so the body renders from
 /// stable values instead of re-reading `AppState` on every frame.
 struct ExportSummary {
-    connection_name: String,
+    /// Name of the primary entity being exported (connection or standalone profile).
+    primary_name: String,
+    /// Auth profiles referenced by the connection, or the single auth profile when
+    /// the target is a standalone auth profile.
     auth_profiles: Vec<AuthProfileRow>,
     proxy_name: Option<String>,
     ssh_name: Option<String>,
+    /// For an SSH target: whether the tunnel authenticates with a password (vs a
+    /// private key). Drives which secret control the credentials section shows.
+    ssh_uses_password: bool,
 }
 
 /// Result of a completed export run, shown as a banner in the modal body.
@@ -70,17 +102,17 @@ enum ExportResult {
     Failed(String),
 }
 
-/// In-app, single-connection export modal.
+/// In-app export modal for a single portability target.
 ///
-/// Scoped to exactly one connection (plus its referenced auth / proxy / SSH
-/// profiles). Opened from a connection's three-dots menu via
-/// [`ExportConnectionModal::open`] and hosted as a workspace overlay — it never
-/// opens an OS window.
-pub struct ExportConnectionModal {
+/// Scoped to exactly one entity: a connection (plus its referenced auth / proxy /
+/// SSH profiles) when opened from a connection's three-dots menu, or a single
+/// standalone profile when opened from a Settings section. Hosted as an overlay —
+/// it never opens an OS window.
+pub struct ExportBundleModal {
     app_state: Entity<AppStateEntity>,
 
     visible: bool,
-    profile_id: Option<Uuid>,
+    target: Option<ExportTarget>,
     summary: Option<ExportSummary>,
 
     // Per-category include/exclude controls.
@@ -122,9 +154,9 @@ pub struct ExportConnectionModal {
     _subscriptions: Vec<Subscription>,
 }
 
-impl EventEmitter<ExportConnectionModalEvent> for ExportConnectionModal {}
+impl EventEmitter<ExportBundleModalEvent> for ExportBundleModal {}
 
-impl ExportConnectionModal {
+impl ExportBundleModal {
     pub fn new(
         app_state: Entity<AppStateEntity>,
         window: &mut Window,
@@ -171,7 +203,7 @@ impl ExportConnectionModal {
         Self {
             app_state,
             visible: false,
-            profile_id: None,
+            target: None,
             summary: None,
             include_connection_password: true,
             include_proxy_credentials: false,
@@ -202,17 +234,41 @@ impl ExportConnectionModal {
 
     /// Open the modal for a single connection profile.
     ///
-    /// Resets all run state to defaults, computes the read-only summary of the
-    /// connection and its referenced profiles, and seeds the per-auth-profile
-    /// export modes (AWS reflected profiles are locked to a reference).
+    /// Thin wrapper over [`Self::open_target`] kept for the connection entry
+    /// points (three-dots menu, command palette).
     pub fn open(&mut self, profile_id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
-        self.profile_id = Some(profile_id);
-        self.summary = self.build_summary(profile_id, cx);
+        self.open_target(ExportTarget::Connection(profile_id), window, cx);
+    }
 
-        // Reset to ready-to-use defaults on every open.
-        self.include_connection_password = true;
-        self.include_proxy_credentials = false;
-        self.include_ssh_password = false;
+    /// Open the modal for any portability target.
+    ///
+    /// Resets all run state to defaults, computes the read-only summary of the
+    /// target (and, for a connection, its referenced profiles), and seeds the
+    /// per-secret defaults appropriate for the target kind. AWS reflected auth
+    /// profiles are locked to a reference.
+    pub fn open_target(
+        &mut self,
+        target: ExportTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.target = Some(target);
+        self.summary = self.build_summary(target, cx);
+
+        let ssh_uses_password = self
+            .summary
+            .as_ref()
+            .map(|summary| summary.ssh_uses_password)
+            .unwrap_or(false);
+
+        // Reset to ready-to-use defaults on every open. For a standalone profile
+        // the profile's own secret is the subject of the export, so its primary
+        // secret defaults on (mirroring the connection-password default);
+        // embedding SSH keys stays consent-gated and off.
+        self.include_connection_password = matches!(target, ExportTarget::Connection(_));
+        self.include_proxy_credentials = matches!(target, ExportTarget::Proxy(_));
+        self.include_ssh_password =
+            matches!(target, ExportTarget::SshTunnel(_)) && ssh_uses_password;
         self.embed_ssh_keys = false;
         self.force_plaintext = false;
         self.show_passphrase = false;
@@ -221,8 +277,9 @@ impl ExportConnectionModal {
         self.pending_result = None;
         self.validation_error = None;
 
-        // The export is scoped to one connection, which references at most one
-        // auth profile. Seed the default mode (AWS reflected = locked reference).
+        // The connection references at most one auth profile; a standalone auth
+        // target is itself the single profile. Seed the default export mode (AWS
+        // reflected = locked reference; everything else = include values).
         self.auth_profile = self
             .summary
             .as_ref()
@@ -250,14 +307,14 @@ impl ExportConnectionModal {
         self.confirm_input
             .update(cx, |state, cx| state.set_value("", window, cx));
 
-        // Default file name = sanitized connection name; pre-fill the output
-        // path with it under the exports directory so Export works out of the
-        // box and the user can still edit or browse to another location.
+        // Default file name = sanitized entity name; pre-fill the output path with
+        // it under the exports directory so Export works out of the box and the
+        // user can still edit or browse to another location.
         let stem = self
             .summary
             .as_ref()
-            .map(|summary| sanitize_filename(&summary.connection_name))
-            .unwrap_or_else(|| "connection".to_string());
+            .map(|summary| sanitize_filename(&summary.primary_name))
+            .unwrap_or_else(|| target.kind_label().replace(' ', "-"));
         self.default_file_name = format!("{stem}.toml");
 
         let default_path = dbflux_ui_base::file_dialog::fallback_export_dir()
@@ -326,7 +383,7 @@ impl ExportConnectionModal {
 
     pub fn close(&mut self, cx: &mut Context<Self>) {
         self.visible = false;
-        self.profile_id = None;
+        self.target = None;
         self.summary = None;
         self.auth_profile = None;
         self.auth_dropdown = None;
@@ -334,9 +391,23 @@ impl ExportConnectionModal {
         cx.notify();
     }
 
-    /// Collect the connection and its referenced auth / proxy / SSH profile
-    /// names for the read-only summary block.
-    fn build_summary(&self, profile_id: Uuid, cx: &Context<Self>) -> Option<ExportSummary> {
+    /// Build the read-only summary block for the target.
+    fn build_summary(&self, target: ExportTarget, cx: &Context<Self>) -> Option<ExportSummary> {
+        match target {
+            ExportTarget::Connection(profile_id) => self.build_connection_summary(profile_id, cx),
+            ExportTarget::AuthProfile(auth_id) => self.build_auth_summary(auth_id, cx),
+            ExportTarget::SshTunnel(ssh_id) => self.build_ssh_summary(ssh_id, cx),
+            ExportTarget::Proxy(proxy_id) => self.build_proxy_summary(proxy_id, cx),
+        }
+    }
+
+    /// Collect the connection and its referenced auth / proxy / SSH profile names
+    /// for the read-only summary block.
+    fn build_connection_summary(
+        &self,
+        profile_id: Uuid,
+        cx: &Context<Self>,
+    ) -> Option<ExportSummary> {
         let state = self.app_state.read(cx);
 
         let profile = state
@@ -380,10 +451,62 @@ impl ExportConnectionModal {
         };
 
         Some(ExportSummary {
-            connection_name: profile.name.clone(),
+            primary_name: profile.name.clone(),
             auth_profiles,
             proxy_name,
             ssh_name,
+            ssh_uses_password: false,
+        })
+    }
+
+    /// Summary for a standalone auth profile. The profile itself is the single
+    /// entry in `auth_profiles` so the auth-mode control renders for it.
+    fn build_auth_summary(&self, auth_id: Uuid, cx: &Context<Self>) -> Option<ExportSummary> {
+        let state = self.app_state.read(cx);
+        let all_auth = state.list_auth_profiles();
+        let auth = all_auth.iter().find(|a| a.id == auth_id)?;
+
+        Some(ExportSummary {
+            primary_name: auth.name.clone(),
+            auth_profiles: vec![AuthProfileRow {
+                id: auth.id,
+                name: auth.name.clone(),
+                locked: auth.read_only,
+            }],
+            proxy_name: None,
+            ssh_name: None,
+            ssh_uses_password: false,
+        })
+    }
+
+    /// Summary for a standalone SSH tunnel profile.
+    fn build_ssh_summary(&self, ssh_id: Uuid, cx: &Context<Self>) -> Option<ExportSummary> {
+        let state = self.app_state.read(cx);
+        let ssh = state.ssh_tunnels().iter().find(|s| s.id == ssh_id)?.clone();
+
+        let ssh_uses_password =
+            matches!(ssh.config.auth_method, dbflux_core::SshAuthMethod::Password);
+
+        Some(ExportSummary {
+            primary_name: ssh.name.clone(),
+            auth_profiles: Vec::new(),
+            proxy_name: None,
+            ssh_name: Some(ssh.name.clone()),
+            ssh_uses_password,
+        })
+    }
+
+    /// Summary for a standalone proxy profile.
+    fn build_proxy_summary(&self, proxy_id: Uuid, cx: &Context<Self>) -> Option<ExportSummary> {
+        let state = self.app_state.read(cx);
+        let proxy = state.proxies().iter().find(|p| p.id == proxy_id)?.clone();
+
+        Some(ExportSummary {
+            primary_name: proxy.name.clone(),
+            auth_profiles: Vec::new(),
+            proxy_name: Some(proxy.name.clone()),
+            ssh_name: None,
+            ssh_uses_password: false,
         })
     }
 
@@ -400,17 +523,21 @@ impl ExportConnectionModal {
     }
 
     fn browse_output_path(&mut self, cx: &mut Context<Self>) {
+        let kind_label = self.target.map(ExportTarget::kind_label).unwrap_or("bundle");
+
         let file_name = if self.default_file_name.is_empty() {
-            "connection.toml".to_string()
+            format!("{}.toml", kind_label.replace(' ', "-"))
         } else {
             self.default_file_name.clone()
         };
+
+        let title = format!("Export {kind_label}");
 
         if dbflux_ui_base::file_dialog::is_native_file_dialog_available() {
             let this = cx.entity().clone();
             let task = cx.background_executor().spawn(async move {
                 rfd::FileDialog::new()
-                    .set_title("Export Connection")
+                    .set_title(title)
                     .add_filter("TOML bundle", &["toml"])
                     .add_filter("All files", &["*"])
                     .set_file_name(file_name)
@@ -445,10 +572,10 @@ impl ExportConnectionModal {
         }
     }
 
-    /// Validate inputs, assemble the export graph for the single connection, and
-    /// run the export on a background thread.
+    /// Validate inputs, assemble the export graph for the target, and run the
+    /// export on a background thread.
     fn do_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(profile_id) = self.profile_id else {
+        let Some(target) = self.target else {
             return;
         };
 
@@ -484,9 +611,10 @@ impl ExportConnectionModal {
 
         let output_path = PathBuf::from(&output_value);
 
-        let Some((inputs, drivers, secret_store)) = self.assemble_inputs(profile_id, cx) else {
-            self.validation_error =
-                Some("Connection driver is not registered; cannot export.".to_string());
+        let Some((inputs, drivers, secret_store)) = self.assemble_inputs(target, cx) else {
+            self.validation_error = Some(
+                "This profile can no longer be exported; it may have been removed.".to_string(),
+            );
             cx.notify();
             return;
         };
@@ -549,13 +677,17 @@ impl ExportConnectionModal {
                     this.is_exporting = false;
                     match &outcome {
                         ExportResult::Success { path, .. } => {
+                            let kind = this
+                                .target
+                                .map(ExportTarget::kind_label)
+                                .unwrap_or("bundle");
                             dbflux_ui_base::toast::Toast::success(format!(
-                                "Exported connection to {}",
+                                "Exported {kind} to {}",
                                 path.display()
                             ))
                             .push(cx);
                             this.close(cx);
-                            cx.emit(ExportConnectionModalEvent::Close);
+                            cx.emit(ExportBundleModalEvent::Close);
                         }
                         ExportResult::Failed(_) => {
                             this.pending_result = Some(outcome.clone());
@@ -577,15 +709,16 @@ impl ExportConnectionModal {
         .detach();
     }
 
-    /// Assemble the `ExportInputs` for one connection plus its references.
+    /// Assemble the `ExportInputs`, drivers, and secret store for the target.
     ///
-    /// Returns `None` when the connection's driver is not registered (export of
-    /// a connection with an unknown driver is rejected rather than producing an
-    /// empty-fields entry).
+    /// For a connection, returns `None` when its driver is not registered (export
+    /// of a connection with an unknown driver is rejected rather than producing an
+    /// empty-fields entry). For a standalone profile, returns `None` only when the
+    /// profile no longer exists.
     #[allow(clippy::type_complexity)]
     fn assemble_inputs(
         &self,
-        profile_id: Uuid,
+        target: ExportTarget,
         cx: &Context<Self>,
     ) -> Option<(
         ExportInputs,
@@ -594,6 +727,54 @@ impl ExportConnectionModal {
     )> {
         let state = self.app_state.read(cx);
 
+        let inputs = match target {
+            ExportTarget::Connection(profile_id) => {
+                self.assemble_connection_inputs(state, profile_id)?
+            }
+            ExportTarget::AuthProfile(auth_id) => {
+                let all_auth = state.list_auth_profiles();
+                let auth = all_auth.iter().find(|a| a.id == auth_id)?;
+
+                // AWS reflected profiles are read-only mirrors of ~/.aws and have
+                // no standalone payload; the Settings UI disables Export for them.
+                if auth.read_only {
+                    return None;
+                }
+
+                ExportInputs {
+                    auth_profiles: vec![auth.clone()],
+                    ..Default::default()
+                }
+            }
+            ExportTarget::SshTunnel(ssh_id) => {
+                let ssh = state.ssh_tunnels().iter().find(|s| s.id == ssh_id)?.clone();
+                ExportInputs {
+                    ssh_tunnels: vec![ssh],
+                    ..Default::default()
+                }
+            }
+            ExportTarget::Proxy(proxy_id) => {
+                let proxy = state.proxies().iter().find(|p| p.id == proxy_id)?.clone();
+                ExportInputs {
+                    proxies: vec![proxy],
+                    ..Default::default()
+                }
+            }
+        };
+
+        let drivers = state.drivers().clone();
+        let secret_store = state.facade.secrets.secret_store_arc();
+
+        Some((inputs, drivers, secret_store))
+    }
+
+    /// Assemble inputs for a connection plus its referenced auth / proxy / SSH
+    /// profiles. Returns `None` when the connection or its driver is missing.
+    fn assemble_connection_inputs(
+        &self,
+        state: &AppStateEntity,
+        profile_id: Uuid,
+    ) -> Option<ExportInputs> {
         let profile = state
             .profiles()
             .iter()
@@ -642,18 +823,13 @@ impl ExportConnectionModal {
             _ => {}
         }
 
-        let inputs = ExportInputs {
+        Some(ExportInputs {
             connections_with_values: vec![(profile, values)],
             auth_profiles,
             aws_references,
             ssh_tunnels,
             proxies,
-        };
-
-        let drivers = state.drivers().clone();
-        let secret_store = state.facade.secrets.secret_store_arc();
-
-        Some((inputs, drivers, secret_store))
+        })
     }
 }
 
@@ -719,7 +895,7 @@ fn auth_mode_items() -> Vec<DropdownItem> {
     ]
 }
 
-impl Render for ExportConnectionModal {
+impl Render for ExportBundleModal {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.visible {
             return div().into_any_element();
@@ -750,7 +926,7 @@ impl Render for ExportConnectionModal {
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _w, cx| {
                 if ev.keystroke.key == "escape" {
                     this.close(cx);
-                    cx.emit(ExportConnectionModalEvent::Close);
+                    cx.emit(ExportBundleModalEvent::Close);
                 }
             }))
             .flex()
@@ -770,7 +946,7 @@ impl Render for ExportConnectionModal {
 
         let on_cancel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
             this.close(cx);
-            cx.emit(ExportConnectionModalEvent::Close);
+            cx.emit(ExportBundleModalEvent::Close);
         });
 
         let export_label = if is_exporting {
@@ -800,23 +976,24 @@ impl Render for ExportConnectionModal {
 
         let close_for_x = cx.entity().clone();
 
-        ModalShell::new(
-            "Export connection",
-            body.into_any_element(),
-            footer.into_any_element(),
-        )
-        .width(px(640.0))
-        .on_close(move |_window, cx| {
-            close_for_x.update(cx, |this, cx| {
-                this.close(cx);
-                cx.emit(ExportConnectionModalEvent::Close);
-            });
-        })
-        .into_any_element()
+        let title = match self.target {
+            Some(target) => format!("Export {}", target.kind_label()),
+            None => "Export".to_string(),
+        };
+
+        ModalShell::new(title, body.into_any_element(), footer.into_any_element())
+            .width(px(640.0))
+            .on_close(move |_window, cx| {
+                close_for_x.update(cx, |this, cx| {
+                    this.close(cx);
+                    cx.emit(ExportBundleModalEvent::Close);
+                });
+            })
+            .into_any_element()
     }
 }
 
-impl ExportConnectionModal {
+impl ExportBundleModal {
     fn render_summary(&self, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
 
@@ -824,16 +1001,22 @@ impl ExportConnectionModal {
             return div().into_any_element();
         };
 
+        // Referenced-profile lines only make sense for a connection; a standalone
+        // profile is fully named by the primary block above.
+        let is_connection = matches!(self.target, Some(ExportTarget::Connection(_)));
+
         let mut lines: Vec<String> = Vec::new();
-        for auth in &summary.auth_profiles {
-            let suffix = if auth.locked { " (reference)" } else { "" };
-            lines.push(format!("Auth profile: {}{}", auth.name, suffix));
-        }
-        if let Some(proxy) = &summary.proxy_name {
-            lines.push(format!("Proxy: {proxy}"));
-        }
-        if let Some(ssh) = &summary.ssh_name {
-            lines.push(format!("SSH tunnel: {ssh}"));
+        if is_connection {
+            for auth in &summary.auth_profiles {
+                let suffix = if auth.locked { " (reference)" } else { "" };
+                lines.push(format!("Auth profile: {}{}", auth.name, suffix));
+            }
+            if let Some(proxy) = &summary.proxy_name {
+                lines.push(format!("Proxy: {proxy}"));
+            }
+            if let Some(ssh) = &summary.ssh_name {
+                lines.push(format!("SSH tunnel: {ssh}"));
+            }
         }
 
         let mut block = surface_raised(cx)
@@ -848,7 +1031,7 @@ impl ExportConnectionModal {
                     .text_size(FontSizes::SM)
                     .font_family(AppFonts::MONO)
                     .text_color(theme.foreground)
-                    .child(summary.connection_name.clone()),
+                    .child(summary.primary_name.clone()),
             );
 
         for line in lines {
@@ -860,36 +1043,68 @@ impl ExportConnectionModal {
             );
         }
 
+        let intro = if is_connection {
+            "This connection and its profiles will be exported."
+        } else {
+            "This profile will be exported."
+        };
+
         div()
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(
-                Text::body("This connection and its profiles will be exported.")
-                    .color(theme.muted_foreground),
-            )
+            .child(Text::body(intro).color(theme.muted_foreground))
             .child(block)
             .into_any_element()
     }
 
     fn render_credentials_section(&self, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
-        let summary = self.summary.as_ref();
-        let has_proxy = summary.map(|s| s.proxy_name.is_some()).unwrap_or(false);
-        let has_ssh = summary.map(|s| s.ssh_name.is_some()).unwrap_or(false);
 
+        // An auth profile carries no credential checkboxes; its secret material is
+        // governed by the export-mode control rendered below.
+        if matches!(self.target, Some(ExportTarget::AuthProfile(_))) {
+            return div().into_any_element();
+        }
+
+        let summary = self.summary.as_ref();
         let conn_pw = self.include_connection_password;
         let proxy_creds = self.include_proxy_credentials;
         let ssh_pw = self.include_ssh_password;
         let embed_keys = self.embed_ssh_keys;
         let force_plaintext = self.force_plaintext;
 
+        // Which controls apply depends on the target. A connection shows its
+        // password plus controls for any referenced proxy / SSH profile; a
+        // standalone profile shows only its own secret control.
+        let show_conn_pw = matches!(self.target, Some(ExportTarget::Connection(_)));
+        let show_proxy = match self.target {
+            Some(ExportTarget::Connection(_)) => {
+                summary.map(|s| s.proxy_name.is_some()).unwrap_or(false)
+            }
+            Some(ExportTarget::Proxy(_)) => true,
+            _ => false,
+        };
+        let (show_ssh_pw, show_embed) = match self.target {
+            Some(ExportTarget::Connection(_)) => {
+                let has_ssh = summary.map(|s| s.ssh_name.is_some()).unwrap_or(false);
+                (has_ssh, has_ssh)
+            }
+            Some(ExportTarget::SshTunnel(_)) => {
+                let uses_password = summary.map(|s| s.ssh_uses_password).unwrap_or(false);
+                (uses_password, !uses_password)
+            }
+            _ => (false, false),
+        };
+
         let mut col = div()
             .flex()
             .flex_col()
             .gap(Spacing::SM)
-            .child(Text::body("Credentials").color(theme.muted_foreground))
-            .child(
+            .child(Text::body("Credentials").color(theme.muted_foreground));
+
+        if show_conn_pw {
+            col = col.child(
                 Checkbox::new("export-conn-pw")
                     .checked(conn_pw)
                     .label("Include connection password")
@@ -898,8 +1113,9 @@ impl ExportConnectionModal {
                         cx.notify();
                     })),
             );
+        }
 
-        if has_proxy {
+        if show_proxy {
             col = col.child(
                 Checkbox::new("export-proxy-creds")
                     .checked(proxy_creds)
@@ -911,7 +1127,7 @@ impl ExportConnectionModal {
             );
         }
 
-        if has_ssh {
+        if show_ssh_pw {
             col = col.child(
                 Checkbox::new("export-ssh-pw")
                     .checked(ssh_pw)
@@ -921,7 +1137,9 @@ impl ExportConnectionModal {
                         cx.notify();
                     })),
             );
+        }
 
+        if show_embed {
             col = col.child(
                 Checkbox::new("export-embed-ssh-keys")
                     .checked(embed_keys && !force_plaintext)

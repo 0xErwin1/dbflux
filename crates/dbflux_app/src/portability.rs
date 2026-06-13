@@ -157,7 +157,9 @@ impl SecretReader for AppSecretReader {
 /// Input data needed to assemble an `ExportGraph`.
 ///
 /// The caller (UI layer) extracts this from `AppState` and passes it here so
-/// the assembly function has no dependency on GPUI types.
+/// the assembly function has no dependency on GPUI types. `Default` yields an
+/// empty graph, which a standalone-profile export fills with a single entry.
+#[derive(Default)]
 pub struct ExportInputs {
     /// Selected connection profiles with their driver-extracted form values.
     pub connections_with_values: Vec<(ConnectionProfile, FormValues)>,

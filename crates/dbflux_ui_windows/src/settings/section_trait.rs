@@ -77,3 +77,14 @@ pub trait SettingsSection: 'static {
 pub enum SectionFocusEvent {
     RequestFocusReturn,
 }
+
+/// Portability actions a profile section (SSH tunnels, proxies, auth profiles)
+/// asks the settings coordinator to perform. The coordinator owns the export
+/// modal and import wizard overlays; the section only signals intent.
+#[derive(Clone, Debug)]
+pub enum SectionPortabilityEvent {
+    /// Export the section's currently selected profile as a portable bundle.
+    OpenExport(crate::connection_manager::ExportTarget),
+    /// Open the import wizard to bring in a profile from a bundle file.
+    OpenImport,
+}

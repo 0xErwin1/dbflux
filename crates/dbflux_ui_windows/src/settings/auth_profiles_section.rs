@@ -2,7 +2,8 @@ use super::SettingsSection;
 use super::SettingsSectionId;
 use super::form_section::{FormSection, create_blur_subscription};
 use super::layout;
-use super::section_trait::SectionFocusEvent;
+use super::section_trait::{SectionFocusEvent, SectionPortabilityEvent};
+use crate::connection_manager::ExportTarget;
 use dbflux_app::keymap::Modifiers;
 use dbflux_components::controls::InputState;
 use dbflux_components::controls::{Button, Checkbox, Input};
@@ -133,6 +134,7 @@ pub(super) enum AuthFormField {
     DynamicField(usize),
     ProviderLogin,
     Enabled,
+    ExportButton,
     DeleteButton,
     SaveButton,
 }
@@ -152,6 +154,7 @@ pub(super) enum AuthProfilesSectionEvent {
 
 impl EventEmitter<AuthProfilesSectionEvent> for AuthProfilesSection {}
 impl EventEmitter<SectionFocusEvent> for AuthProfilesSection {}
+impl EventEmitter<SectionPortabilityEvent> for AuthProfilesSection {}
 
 fn build_form_rows(
     has_providers: bool,
@@ -182,7 +185,11 @@ fn build_form_rows(
     }
 
     if is_editing && !is_reflected {
-        rows.push(vec![AuthFormField::DeleteButton, AuthFormField::SaveButton]);
+        rows.push(vec![
+            AuthFormField::ExportButton,
+            AuthFormField::DeleteButton,
+            AuthFormField::SaveButton,
+        ]);
     } else {
         rows.push(vec![AuthFormField::SaveButton]);
     }
@@ -449,6 +456,25 @@ impl AuthProfilesSection {
         }
 
         section
+    }
+
+    /// Ask the coordinator to export the auth profile currently loaded in the form.
+    ///
+    /// Only emits for a stored, non-reflected, non-read-only profile being edited.
+    pub(super) fn request_export(&mut self, cx: &mut Context<Self>) {
+        if !self.profile_is_read_only
+            && self.edit_snapshot.is_none()
+            && let Some(id) = self.editing_profile_id
+        {
+            cx.emit(SectionPortabilityEvent::OpenExport(
+                ExportTarget::AuthProfile(id),
+            ));
+        }
+    }
+
+    /// Ask the coordinator to open the import wizard.
+    pub(super) fn request_import(&mut self, cx: &mut Context<Self>) {
+        cx.emit(SectionPortabilityEvent::OpenImport);
     }
 
     fn provider_entries(&self, cx: &App) -> Vec<(String, String)> {
@@ -1149,6 +1175,9 @@ impl AuthProfilesSection {
                 }
                 ("d", modifiers) if modifiers == Modifiers::none() => {
                     self.request_delete_selected_profile(cx);
+                }
+                ("i", modifiers) if modifiers == Modifiers::none() => {
+                    self.request_import(cx);
                 }
                 ("l", modifiers) | ("right", modifiers) | ("enter", modifiers)
                     if modifiers == Modifiers::none() =>
@@ -2120,6 +2149,16 @@ impl AuthProfilesSection {
                                 this.auth_focus = AuthFocus::Form;
                                 this.begin_create_profile(window, cx);
                             })),
+                    )
+                    .child(
+                        Button::new("import-auth-profile", "Import\u{2026}")
+                            .icon(Icon::new(AppIcon::Download))
+                            .small()
+                            .ghost()
+                            .w_full()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.request_import(cx);
+                            })),
                     ),
             )
             .child(
@@ -2614,6 +2653,17 @@ impl AuthProfilesSection {
             .gap_3()
             .when(is_editing && !is_reflected, |root| {
                 root.child(layout::footer_action_frame(
+                    is_form_focused && self.auth_form_field == AuthFormField::ExportButton,
+                    primary,
+                    Button::new("export-auth-profile", "Export")
+                        .small()
+                        .ghost()
+                        .w_full()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.request_export(cx);
+                        })),
+                ))
+                .child(layout::footer_action_frame(
                     is_form_focused && self.auth_form_field == AuthFormField::DeleteButton,
                     primary,
                     Button::new("delete-auth-profile", "Delete")
@@ -2770,6 +2820,9 @@ impl FormSection for AuthProfilesSection {
             }
             AuthFormField::ProviderLogin => {
                 self.login_selected_profile(cx);
+            }
+            AuthFormField::ExportButton => {
+                self.request_export(cx);
             }
             AuthFormField::SaveButton => {
                 self.save_profile(window, cx);
@@ -3359,6 +3412,35 @@ mod tests {
             rows.iter()
                 .any(|row| row.contains(&AuthFormField::SaveButton)),
             "reflected profiles must still expose a Save button"
+        );
+    }
+
+    /// Reflected (AWS) profiles are read-only mirrors and must NOT expose an
+    /// Export button; a stored editable profile must.
+    #[::core::prelude::v1::test]
+    fn export_button_only_for_stored_editable_profile() {
+        let reflected = build_form_rows(true, 2, false, true, /* is_reflected */ true);
+        assert!(
+            !reflected
+                .iter()
+                .any(|row| row.contains(&AuthFormField::ExportButton)),
+            "reflected profiles must not expose an Export button"
+        );
+
+        let stored = build_form_rows(true, 2, false, /* is_editing */ true, false);
+        assert!(
+            stored
+                .iter()
+                .any(|row| row.contains(&AuthFormField::ExportButton)),
+            "stored editable profiles must expose an Export button"
+        );
+
+        let creating = build_form_rows(true, 2, false, /* is_editing */ false, false);
+        assert!(
+            !creating
+                .iter()
+                .any(|row| row.contains(&AuthFormField::ExportButton)),
+            "a not-yet-saved profile must not expose an Export button"
         );
     }
 

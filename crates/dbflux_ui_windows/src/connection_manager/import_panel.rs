@@ -697,7 +697,7 @@ impl ImportConnectionsPanel {
             .py(Spacing::MD)
             .border_b_1()
             .border_color(theme.border)
-            .child(Text::heading("Import Connections").font_size(FontSizes::LG))
+            .child(Text::heading("Import").font_size(FontSizes::LG))
             .child(Text::muted("Load a TOML bundle exported from DBFlux.").font_size(FontSizes::SM))
             .into_any_element()
     }
