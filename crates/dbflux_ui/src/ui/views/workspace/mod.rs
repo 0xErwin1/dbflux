@@ -294,7 +294,7 @@ pub struct Workspace {
     modal_add_panel: Entity<ModalAddPanelPicker>,
 
     /// In-app single-connection export modal (overlay, not an OS window).
-    export_modal: Entity<dbflux_ui_windows::connection_manager::ExportConnectionModal>,
+    export_modal: Entity<dbflux_ui_windows::connection_manager::ExportBundleModal>,
 
     tasks_state: PanelState,
     pending_command: Option<&'static str>,
@@ -381,7 +381,7 @@ impl Workspace {
         let modal_add_panel = cx.new(|cx| ModalAddPanelPicker::new(window, cx));
 
         let export_modal = cx.new(|cx| {
-            dbflux_ui_windows::connection_manager::ExportConnectionModal::new(
+            dbflux_ui_windows::connection_manager::ExportBundleModal::new(
                 app_state.clone(),
                 window,
                 cx,

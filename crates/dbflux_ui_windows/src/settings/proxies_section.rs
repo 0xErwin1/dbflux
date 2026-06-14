@@ -3,7 +3,8 @@ use super::SettingsSectionId;
 use super::form_section::FormSection;
 use super::layout;
 use super::proxies::ProxyFormNav;
-use super::section_trait::SectionFocusEvent;
+use super::section_trait::{SectionFocusEvent, SectionPortabilityEvent};
+use crate::connection_manager::ExportTarget;
 use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
@@ -47,6 +48,7 @@ pub(super) enum ProxyFormField {
     NoProxy,
     Enabled,
     SaveSecret,
+    ExportButton,
     SaveButton,
     DeleteButton,
 }
@@ -84,8 +86,21 @@ pub(super) struct ProxiesSection {
 }
 
 impl EventEmitter<SectionFocusEvent> for ProxiesSection {}
+impl EventEmitter<SectionPortabilityEvent> for ProxiesSection {}
 
 impl ProxiesSection {
+    /// Ask the coordinator to export the proxy currently loaded in the form.
+    pub(super) fn request_export(&mut self, cx: &mut Context<Self>) {
+        if let Some(id) = self.editing_proxy_id {
+            cx.emit(SectionPortabilityEvent::OpenExport(ExportTarget::Proxy(id)));
+        }
+    }
+
+    /// Ask the coordinator to open the import wizard.
+    pub(super) fn request_import(&mut self, cx: &mut Context<Self>) {
+        cx.emit(SectionPortabilityEvent::OpenImport);
+    }
+
     pub(super) fn new(
         app_state: Entity<AppStateEntity>,
         window: &mut Window,
@@ -518,29 +533,46 @@ impl ProxiesSection {
             .flex()
             .flex_col()
             .child(
-                div().p_2().border_b_1().border_color(theme.border).child(
-                    div()
-                        .rounded(Radii::SM)
-                        .border_1()
-                        .border_color(if is_new_button_focused {
-                            theme.primary
-                        } else {
-                            transparent_black()
-                        })
-                        .child(
-                            Button::new("new-proxy", "New Proxy")
-                                .icon(Icon::new(AppIcon::Plus))
-                                .small()
-                                .w_full()
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.request_proxy_action(
-                                        PendingProxyAction::ClearForm,
-                                        window,
-                                        cx,
-                                    );
-                                })),
-                        ),
-                ),
+                div()
+                    .p_2()
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .rounded(Radii::SM)
+                            .border_1()
+                            .border_color(if is_new_button_focused {
+                                theme.primary
+                            } else {
+                                transparent_black()
+                            })
+                            .child(
+                                Button::new("new-proxy", "New Proxy")
+                                    .icon(Icon::new(AppIcon::Plus))
+                                    .small()
+                                    .w_full()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.request_proxy_action(
+                                            PendingProxyAction::ClearForm,
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                            ),
+                    )
+                    .child(
+                        Button::new("import-proxy", "Import\u{2026}")
+                            .icon(Icon::new(AppIcon::Download))
+                            .small()
+                            .ghost()
+                            .w_full()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.request_import(cx);
+                            })),
+                    ),
             )
             .child(
                 div()
@@ -599,6 +631,7 @@ impl ProxiesSection {
                                     .child(
                                         div()
                                             .flex()
+                                            .flex_shrink_0()
                                             .items_center()
                                             .gap_1()
                                             .mt(px(2.0))
@@ -615,6 +648,7 @@ impl ProxiesSection {
                                         div()
                                             .flex()
                                             .flex_col()
+                                            .min_w_0()
                                             .gap_1()
                                             .child(Body::new(proxy.name.clone()))
                                             .child(MonoMeta::new(subtitle)),
@@ -751,6 +785,17 @@ impl ProxiesSection {
                 let proxy_id = editing_id.expect("checked is_some");
 
                 root.child(layout::footer_action_frame(
+                    is_form_focused && field == ProxyFormField::ExportButton,
+                    primary,
+                    Button::new("export-proxy", "Export")
+                        .small()
+                        .ghost()
+                        .w_full()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.request_export(cx);
+                        })),
+                ))
+                .child(layout::footer_action_frame(
                     is_form_focused && field == ProxyFormField::DeleteButton,
                     primary,
                     Button::new("delete-proxy", "Delete")

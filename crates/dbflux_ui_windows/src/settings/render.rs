@@ -222,12 +222,29 @@ impl Render for SettingsCoordinator {
             self.focus_handle.focus(_window);
         }
 
+        // A section asked to open a portability overlay; do it here where a
+        // `Window` is available (the section-event subscription had none).
+        if let Some(target) = self.pending_export_target.take() {
+            self.import_visible = false;
+            self.export_modal.update(cx, |modal, cx| {
+                modal.open_target(target, _window, cx);
+            });
+        }
+        if std::mem::take(&mut self.pending_import_open) {
+            self.export_modal.update(cx, |modal, cx| modal.close(cx));
+            self.import_visible = true;
+            self.import_panel.update(cx, |panel, cx| {
+                panel.reset(_window, cx);
+            });
+        }
+
         let _ = self.app_state.read(cx);
 
         let csd_title_bar = platform::render_csd_title_bar(_window, cx, "Settings");
 
         div()
             .size_full()
+            .relative()
             .bg(cx.theme().background)
             .flex()
             .flex_col()
@@ -284,6 +301,12 @@ impl Render for SettingsCoordinator {
                             section_name
                         ))),
                 )
+            })
+            .when(self.export_modal.read(cx).is_visible(), |root| {
+                root.child(self.export_modal.clone())
+            })
+            .when(self.import_visible, |root| {
+                root.child(self.import_panel.clone())
             })
     }
 }

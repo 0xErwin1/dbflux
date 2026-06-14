@@ -2,8 +2,9 @@ use super::SettingsSection;
 use super::SettingsSectionId;
 use super::form_section::{FormSection, create_blur_subscription};
 use super::layout;
-use super::section_trait::SectionFocusEvent;
+use super::section_trait::{SectionFocusEvent, SectionPortabilityEvent};
 use super::ssh_tunnels::SshFormNav;
+use crate::connection_manager::ExportTarget;
 use crate::ssh_shared::{self, SshAuthSelection};
 use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput as Input, InputState};
@@ -40,6 +41,7 @@ pub(super) enum SshFormField {
     Passphrase,
     Password,
     SaveSecret,
+    ExportButton,
     DeleteButton,
     TestButton,
     SaveButton,
@@ -82,6 +84,23 @@ pub(super) struct SshTunnelsSection {
 }
 
 impl EventEmitter<SectionFocusEvent> for SshTunnelsSection {}
+impl EventEmitter<SectionPortabilityEvent> for SshTunnelsSection {}
+
+impl SshTunnelsSection {
+    /// Ask the coordinator to export the SSH tunnel currently loaded in the form.
+    pub(super) fn request_export(&mut self, cx: &mut Context<Self>) {
+        if let Some(id) = self.editing_tunnel_id {
+            cx.emit(SectionPortabilityEvent::OpenExport(
+                ExportTarget::SshTunnel(id),
+            ));
+        }
+    }
+
+    /// Ask the coordinator to open the import wizard.
+    pub(super) fn request_import(&mut self, cx: &mut Context<Self>) {
+        cx.emit(SectionPortabilityEvent::OpenImport);
+    }
+}
 
 impl FormSection for SshTunnelsSection {
     type Focus = SshFocus;
@@ -213,6 +232,9 @@ impl FormSection for SshTunnelsSection {
                 if let Some(id) = self.editing_tunnel_id {
                     self.request_delete_tunnel(id, cx);
                 }
+            }
+            SshFormField::ExportButton => {
+                self.request_export(cx);
             }
             field if Self::is_input_field(field) => {
                 self.focus_current_field(window, cx);
@@ -647,25 +669,42 @@ impl SshTunnelsSection {
             .flex()
             .flex_col()
             .child(
-                div().p_2().border_b_1().border_color(theme.border).child(
-                    div()
-                        .rounded(Radii::SM)
-                        .border_1()
-                        .border_color(if is_new_button_focused {
-                            theme.primary
-                        } else {
-                            transparent_black()
-                        })
-                        .child(
-                            Button::new("new-ssh-tunnel", "New Tunnel")
-                                .icon(Icon::new(AppIcon::Plus))
-                                .small()
-                                .w_full()
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.clear_form(window, cx);
-                                })),
-                        ),
-                ),
+                div()
+                    .p_2()
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .rounded(Radii::SM)
+                            .border_1()
+                            .border_color(if is_new_button_focused {
+                                theme.primary
+                            } else {
+                                transparent_black()
+                            })
+                            .child(
+                                Button::new("new-ssh-tunnel", "New Tunnel")
+                                    .icon(Icon::new(AppIcon::Plus))
+                                    .small()
+                                    .w_full()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.clear_form(window, cx);
+                                    })),
+                            ),
+                    )
+                    .child(
+                        Button::new("import-ssh-tunnel", "Import\u{2026}")
+                            .icon(Icon::new(AppIcon::Download))
+                            .small()
+                            .ghost()
+                            .w_full()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.request_import(cx);
+                            })),
+                    ),
             )
             .child(
                 div()
@@ -725,14 +764,17 @@ impl SshTunnelsSection {
                                     .items_start()
                                     .gap_2()
                                     .child(
-                                        FluxIcon::new(AppIcon::Globe)
-                                            .size(px(14.0))
-                                            .color(theme.muted_foreground),
+                                        div().flex_shrink_0().mt(px(2.0)).child(
+                                            FluxIcon::new(AppIcon::Globe)
+                                                .size(px(14.0))
+                                                .color(theme.muted_foreground),
+                                        ),
                                     )
                                     .child(
                                         div()
                                             .flex()
                                             .flex_col()
+                                            .min_w_0()
                                             .gap_1()
                                             .child(Body::new(tunnel.name.clone()))
                                             .child(MonoMeta::new(subtitle))
@@ -858,6 +900,17 @@ impl SshTunnelsSection {
                 let tunnel_id = editing_id.expect("checked is_some");
 
                 root.child(layout::footer_action_frame(
+                    is_form_focused && field == SshFormField::ExportButton,
+                    primary,
+                    Button::new("export-ssh-tunnel", "Export")
+                        .small()
+                        .ghost()
+                        .w_full()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.request_export(cx);
+                        })),
+                ))
+                .child(layout::footer_action_frame(
                     is_form_focused && field == SshFormField::DeleteButton,
                     primary,
                     Button::new("delete-ssh-tunnel", "Delete")

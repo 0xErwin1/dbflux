@@ -8,7 +8,7 @@ mod render;
 mod render_driver_select;
 mod render_tabs;
 
-pub use export_modal::{ExportConnectionModal, ExportConnectionModalEvent};
+pub use export_modal::{ExportBundleModal, ExportBundleModalEvent, ExportTarget};
 pub use import_panel::{ImportConnectionsPanel, ImportConnectionsPanelEvent};
 
 use crate::ssh_shared::SshAuthSelection;

@@ -6,6 +6,7 @@ use dbflux_app::portability::{
 };
 use dbflux_components::controls::{Button, Checkbox, Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::shell::ModalShell;
 use dbflux_components::primitives::{
     BannerBlock, BannerVariant, IconButton, SegmentedControl, SegmentedItem, Text, surface_raised,
 };
@@ -652,9 +653,7 @@ impl Render for ImportConnectionsPanel {
             state.set_masked(!show_passphrase, window, cx);
         });
 
-        let theme = cx.theme().clone();
-
-        let body: AnyElement = match self.step {
+        let body_content: AnyElement = match self.step {
             Step::SelectFile => self.render_select_file(cx),
             Step::Preview => self.render_preview(cx),
             Step::Conflicts => self.render_conflicts(cx),
@@ -662,46 +661,28 @@ impl Render for ImportConnectionsPanel {
             Step::Outcome => self.render_outcome(cx),
         };
 
-        div()
+        let body = div()
             .track_focus(&self.focus_handle)
             .flex()
             .flex_col()
-            .size_full()
-            .bg(theme.background)
-            .child(self.render_header(cx))
-            .child(
-                div()
-                    .id("import-panel-body")
-                    .flex_1()
-                    .flex()
-                    .flex_col()
-                    .gap(Spacing::MD)
-                    .px(Spacing::LG)
-                    .py(Spacing::MD)
-                    .overflow_scroll()
-                    .child(body),
-            )
-            .child(self.render_footer(cx))
+            .gap(Spacing::MD)
+            .child(body_content)
+            .into_any_element();
+
+        let close_for_x = cx.entity().clone();
+
+        ModalShell::new("Import", body, self.render_footer(cx))
+            .width(px(640.0))
+            .on_close(move |_window, cx| {
+                close_for_x.update(cx, |_this, cx| {
+                    cx.emit(ImportConnectionsPanelEvent::Cancelled);
+                });
+            })
+            .into_any_element()
     }
 }
 
 impl ImportConnectionsPanel {
-    fn render_header(&self, cx: &Context<Self>) -> AnyElement {
-        let theme = cx.theme().clone();
-
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .px(Spacing::LG)
-            .py(Spacing::MD)
-            .border_b_1()
-            .border_color(theme.border)
-            .child(Text::heading("Import Connections").font_size(FontSizes::LG))
-            .child(Text::muted("Load a TOML bundle exported from DBFlux.").font_size(FontSizes::SM))
-            .into_any_element()
-    }
-
     fn render_select_file(&self, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let entity = cx.entity().clone();
@@ -1229,8 +1210,6 @@ impl ImportConnectionsPanel {
     }
 
     fn render_footer(&self, cx: &Context<Self>) -> AnyElement {
-        let theme = cx.theme().clone();
-
         let left = match self.step {
             Step::SelectFile => {
                 Button::new("import-cancel", "Cancel")
@@ -1274,12 +1253,9 @@ impl ImportConnectionsPanel {
 
         div()
             .flex()
+            .w_full()
             .items_center()
             .justify_between()
-            .px(Spacing::LG)
-            .py(Spacing::MD)
-            .border_t_1()
-            .border_color(theme.border)
             .child(left)
             .when_some(primary, |el, btn| el.child(btn))
             .into_any_element()
