@@ -764,14 +764,17 @@ impl SshTunnelsSection {
                                     .items_start()
                                     .gap_2()
                                     .child(
-                                        FluxIcon::new(AppIcon::Globe)
-                                            .size(px(14.0))
-                                            .color(theme.muted_foreground),
+                                        div().flex_shrink_0().mt(px(2.0)).child(
+                                            FluxIcon::new(AppIcon::Globe)
+                                                .size(px(14.0))
+                                                .color(theme.muted_foreground),
+                                        ),
                                     )
                                     .child(
                                         div()
                                             .flex()
                                             .flex_col()
+                                            .min_w_0()
                                             .gap_1()
                                             .child(Body::new(tunnel.name.clone()))
                                             .child(MonoMeta::new(subtitle))

@@ -631,6 +631,7 @@ impl ProxiesSection {
                                     .child(
                                         div()
                                             .flex()
+                                            .flex_shrink_0()
                                             .items_center()
                                             .gap_1()
                                             .mt(px(2.0))
@@ -647,6 +648,7 @@ impl ProxiesSection {
                                         div()
                                             .flex()
                                             .flex_col()
+                                            .min_w_0()
                                             .gap_1()
                                             .child(Body::new(proxy.name.clone()))
                                             .child(MonoMeta::new(subtitle)),

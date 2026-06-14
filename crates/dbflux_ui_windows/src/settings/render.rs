@@ -306,7 +306,7 @@ impl Render for SettingsCoordinator {
                 root.child(self.export_modal.clone())
             })
             .when(self.import_visible, |root| {
-                root.child(div().absolute().inset_0().child(self.import_panel.clone()))
+                root.child(self.import_panel.clone())
             })
     }
 }

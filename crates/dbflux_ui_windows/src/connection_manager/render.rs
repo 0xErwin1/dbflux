@@ -1224,7 +1224,12 @@ impl Render for ConnectionManagerWindow {
             .child(match self.view {
                 View::DriverSelect => self.render_driver_select(window, cx).into_any_element(),
                 View::EditForm => self.render_form(window, cx).into_any_element(),
-                View::Import => self.import_panel.clone().into_any_element(),
+                View::Import => div()
+                    .relative()
+                    .size_full()
+                    .child(self.render_driver_select(window, cx))
+                    .child(self.import_panel.clone())
+                    .into_any_element(),
             })
     }
 }
