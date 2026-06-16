@@ -4,31 +4,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
-### Fixed
-
-* **Chart auto-detection across four drivers (#204)** — Drivers now assign
-  `ColumnKind` honestly so the chart engine includes genuine numeric columns
-  and excludes non-plottable ones. CloudWatch CWL Insights `@timestamp` and
-  `@ingestionTime` values are normalised from CWLI format (`YYYY-MM-DD
-  HH:MM:SS.mmm`, UTC) to RFC3339 so the time axis can parse them; the kind
-  scanner now skips `Text` samples and keeps scanning for a numeric value,
-  so mixed-type columns resolve correctly. DynamoDB infers column kind from
-  `AttributeValue` (`N` → `Integer` when the string parses as `i64`, else
-  `Float`; `S` → `Text`; `Bool` → `Integer`; anything else → `Unknown`).
-  MongoDB document and query results infer column kinds from BSON value types
-  (Int32/Int64 → Integer, Double/Decimal128 → Float, Boolean → Integer,
-  String → Text, DateTime → Timestamp); BSON `Timestamp` (oplog logical
-  clock) stays `Unknown` because it carries no wall-clock meaning. InfluxDB
-  Flux and InfluxQL kind mappers classify `boolean` as `Integer`. Across all
-  drivers, `Value::Bool` now plots as 0/1, matching MSSQL BIT behaviour. The
-  chart engine now extracts `Value::DateTime` and `Value::Date` as
-  epoch-milliseconds on a time axis (Date as midnight UTC), so datetime/date
-  columns from any driver can drive a time axis. `Value::Time` has no absolute
-  epoch and remains unplottable, so SQL Server `TIME` columns are now
-  classified `Unknown` instead of `Timestamp` (they would otherwise be offered
-  as an empty time axis).
-
-## [0.6.0] - 2026-06-04
+## [0.6.0] - 2026-06-16
 
 ### Added
 
@@ -224,6 +200,27 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Chart auto-detection across four drivers (#204)** — Drivers now assign
+  `ColumnKind` honestly so the chart engine includes genuine numeric columns
+  and excludes non-plottable ones. CloudWatch CWL Insights `@timestamp` and
+  `@ingestionTime` values are normalised from CWLI format (`YYYY-MM-DD
+  HH:MM:SS.mmm`, UTC) to RFC3339 so the time axis can parse them; the kind
+  scanner now skips `Text` samples and keeps scanning for a numeric value,
+  so mixed-type columns resolve correctly. DynamoDB infers column kind from
+  `AttributeValue` (`N` → `Integer` when the string parses as `i64`, else
+  `Float`; `S` → `Text`; `Bool` → `Integer`; anything else → `Unknown`).
+  MongoDB document and query results infer column kinds from BSON value types
+  (Int32/Int64 → Integer, Double/Decimal128 → Float, Boolean → Integer,
+  String → Text, DateTime → Timestamp); BSON `Timestamp` (oplog logical
+  clock) stays `Unknown` because it carries no wall-clock meaning. InfluxDB
+  Flux and InfluxQL kind mappers classify `boolean` as `Integer`. Across all
+  drivers, `Value::Bool` now plots as 0/1, matching MSSQL BIT behaviour. The
+  chart engine now extracts `Value::DateTime` and `Value::Date` as
+  epoch-milliseconds on a time axis (Date as midnight UTC), so datetime/date
+  columns from any driver can drive a time axis. `Value::Time` has no absolute
+  epoch and remains unplottable, so SQL Server `TIME` columns are now
+  classified `Unknown` instead of `Timestamp` (they would otherwise be offered
+  as an empty time axis).
 - **Scripts-tab folders can be collapsed again** — Chevron clicks were routed through the connections tree only, so script-folder expansion lookups always returned `false` and every click tried to expand. Toggling now routes through the active tab's tree, propagates the override into the scripts tree state, and applies expansion overrides when building script items so collapses survive a refresh.
 - **Syntax highlighting preserved across `AppStateChanged`** — `CodeDocument` re-applied the highlighter mode on every `AppStateChanged`, and `InputState::set_highlighter` clears the cached highlighter until the next render — wiping SQL coloring after running a query until the next keystroke. The document now tracks the last applied `editor_mode` and only re-applies the highlighter when it actually changes.
 - **NULL rendered as an empty field in CSV export** — CSV export emitted the PostgreSQL `\COPY` sentinel `\N` for NULL, which most CSV consumers (Excel, Sheets, generic parsers) read as the literal string. NULL now exports as an empty field, the de facto CSV convention.
