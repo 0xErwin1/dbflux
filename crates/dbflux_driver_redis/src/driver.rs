@@ -2586,10 +2586,7 @@ mod tests {
         let parsed = driver.parse_uri(&uri).expect("uri should parse");
         assert_eq!(parsed.get("host").map(String::as_str), Some("cache.local"));
         assert_eq!(parsed.get("port").map(String::as_str), Some("6380"));
-        assert_eq!(
-            parsed.get("user").map(String::as_str),
-            Some("service user")
-        );
+        assert_eq!(parsed.get("user").map(String::as_str), Some("service user"));
         assert_eq!(parsed.get("database").map(String::as_str), Some("2"));
     }
 
