@@ -94,8 +94,11 @@ impl ConnectionManagerWindow {
     ) -> AnyElement {
         let theme = cx.theme().clone();
         let focus = self.form_focus;
-        let password_source_is_literal =
-            self.password_value_source_selector.read(cx).is_literal(cx);
+        let password_source_is_literal = self
+            .form
+            .password_value_source_selector
+            .read(cx)
+            .is_literal(cx);
 
         let selector_focused = show_focus && focus == FormFocus::PasswordValueSource;
         let password_focused = show_focus && focus == FormFocus::Password;
@@ -131,7 +134,7 @@ impl ConnectionManagerWindow {
                                     );
                                 }),
                             )
-                            .child(self.password_value_source_selector.clone()),
+                            .child(self.form.password_value_source_selector.clone()),
                     )
                     .child(
                         div()
@@ -149,7 +152,7 @@ impl ConnectionManagerWindow {
                                     this.enter_edit_mode_for_field(FormFocus::Password, window, cx);
                                 }),
                             )
-                            .child(Input::new(&self.input_password)),
+                            .child(Input::new(&self.form.input_password)),
                     )
                     .when(password_source_is_literal, |d| {
                         d.child(
@@ -162,13 +165,13 @@ impl ConnectionManagerWindow {
                                 })
                                 .child(
                                     Self::render_password_toggle(
-                                        self.show_password,
+                                        self.form.show_password,
                                         "toggle-password",
                                         &theme,
                                     )
                                     .on_click(cx.listener(
                                         |this, _, _, cx| {
-                                            this.show_password = !this.show_password;
+                                            this.form.show_password = !this.form.show_password;
                                             cx.notify();
                                         },
                                     )),
@@ -192,7 +195,7 @@ impl ConnectionManagerWindow {
                                     Checkbox::new("save-password")
                                         .checked(save_password)
                                         .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                            this.form_save_password = *checked;
+                                            this.form.form_save_password = *checked;
                                             cx.notify();
                                         })),
                                 )
@@ -245,7 +248,7 @@ impl ConnectionManagerWindow {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let Some(driver) = &self.selected_driver else {
+        let Some(driver) = &self.form.selected_driver else {
             return div().into_any_element();
         };
 
@@ -308,6 +311,7 @@ impl ConnectionManagerWindow {
                     })
                     .child({
                         let brand_icon = self
+                            .form
                             .selected_driver
                             .as_ref()
                             .map(|driver| AppIcon::from_icon(driver.metadata().icon));
@@ -328,7 +332,7 @@ impl ConnectionManagerWindow {
                     .child(div().flex_1())
                     .child(self.form_field_input_inline(
                         "Name",
-                        &self.input_name,
+                        &self.form.input_name,
                         show_focus && focus == FormFocus::Name,
                         ring_color,
                         FormFocus::Name,
@@ -493,13 +497,13 @@ impl ConnectionManagerWindow {
                 if !is_ssh_tab && (field_def.id == "database" || field_def.id == "user") {
                     let (selector, selector_focus, input_focus) = if field_def.id == "database" {
                         (
-                            self.database_value_source_selector.clone(),
+                            self.form.database_value_source_selector.clone(),
                             FormFocus::DatabaseValueSource,
                             FormFocus::Database,
                         )
                     } else {
                         (
-                            self.user_value_source_selector.clone(),
+                            self.form.user_value_source_selector.clone(),
                             FormFocus::UserValueSource,
                             FormFocus::User,
                         )
@@ -673,9 +677,10 @@ impl ConnectionManagerWindow {
             FormFieldKind::Checkbox => {
                 let field_id = field_def.id.clone();
                 let is_checked = if field_id == "ssh_enabled" {
-                    self.ssh_enabled
+                    self.access.ssh_enabled
                 } else {
-                    self.checkbox_states
+                    self.form
+                        .checkbox_states
                         .get(&field_id)
                         .copied()
                         .unwrap_or(false)
@@ -694,9 +699,9 @@ impl ConnectionManagerWindow {
                             .label(field_def.label.as_str())
                             .on_click(cx.listener(move |this, checked: &bool, window, cx| {
                                 if field_id == "ssh_enabled" {
-                                    this.ssh_enabled = *checked;
+                                    this.access.ssh_enabled = *checked;
                                 } else {
-                                    this.checkbox_states.insert(field_id.clone(), *checked);
+                                    this.form.checkbox_states.insert(field_id.clone(), *checked);
                                 }
                                 window.focus(&this.focus_handle);
                                 cx.notify();
@@ -710,7 +715,7 @@ impl ConnectionManagerWindow {
 
             FormFieldKind::Select { options } => {
                 if field_def.id == "ssh_auth_method" {
-                    let selected_index = match self.ssh_auth_method {
+                    let selected_index = match self.access.ssh_auth_method {
                         SshAuthSelection::PrivateKey => 0,
                         SshAuthSelection::Password => 1,
                     };
@@ -728,7 +733,7 @@ impl ConnectionManagerWindow {
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(move |this, _, window, cx| {
-                                        this.ssh_auth_method = if idx == 0 {
+                                        this.access.ssh_auth_method = if idx == 0 {
                                             SshAuthSelection::PrivateKey
                                         } else {
                                             SshAuthSelection::Password
@@ -784,7 +789,7 @@ impl ConnectionManagerWindow {
                             }),
                         )
                     })
-                    .child(self.auth_profile_dropdown.clone());
+                    .child(self.auth_profile.auth_profile_dropdown.clone());
 
                 Self::field_row_cm(
                     field_def.label.clone(),
@@ -893,6 +898,7 @@ impl ConnectionManagerWindow {
         };
 
         let uri_mode_active = self
+            .form
             .checkbox_states
             .get("use_uri")
             .copied()
@@ -957,7 +963,7 @@ impl ConnectionManagerWindow {
                             }),
                         )
                     })
-                    .child(self.host_value_source_selector.clone()),
+                    .child(self.form.host_value_source_selector.clone()),
             )
             .child(
                 div()
@@ -1108,39 +1114,39 @@ impl ConnectionManagerWindow {
 
 impl Render for ConnectionManagerWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if let Some(path) = self.pending_ssh_key_path.take() {
-            self.input_ssh_key_path.update(cx, |state, cx| {
+        if let Some(path) = self.pending.ssh_key_path.take() {
+            self.access.input_ssh_key_path.update(cx, |state, cx| {
                 state.set_value(path, window, cx);
             });
         }
 
-        if let Some(path) = self.pending_file_path.take()
-            && let Some(input) = self.driver_inputs.get("path").cloned()
+        if let Some(path) = self.pending.file_path.take()
+            && let Some(input) = self.form.driver_inputs.get("path").cloned()
         {
             input.update(cx, |state, cx| {
                 state.set_value(path, window, cx);
             });
         }
 
-        if let Some(path) = self.pending_ssl_ca_cert_path.take() {
-            self.ssl_ca_cert_input.update(cx, |state, cx| {
+        if let Some(path) = self.pending.ssl_ca_cert_path.take() {
+            self.form.ssl_ca_cert_input.update(cx, |state, cx| {
                 state.set_value(path, window, cx);
             });
         }
 
-        if let Some(path) = self.pending_ssl_client_cert_path.take() {
-            self.ssl_client_cert_input.update(cx, |state, cx| {
+        if let Some(path) = self.pending.ssl_client_cert_path.take() {
+            self.form.ssl_client_cert_input.update(cx, |state, cx| {
                 state.set_value(path, window, cx);
             });
         }
 
-        if let Some(path) = self.pending_ssl_client_key_path.take() {
-            self.ssl_client_key_input.update(cx, |state, cx| {
+        if let Some(path) = self.pending.ssl_client_key_path.take() {
+            self.form.ssl_client_key_input.update(cx, |state, cx| {
                 state.set_value(path, window, cx);
             });
         }
 
-        if let Some(proxy_id) = self.pending_proxy_selection.take() {
+        if let Some(proxy_id) = self.pending.proxy_selection.take() {
             let proxy = self
                 .app_state
                 .read(cx)
@@ -1156,7 +1162,7 @@ impl Render for ConnectionManagerWindow {
         self.apply_pending_auth_profile(window, cx);
         self.apply_pending_ssm_auth_profile();
 
-        if let Some(tunnel_id) = self.pending_ssh_tunnel_selection.take() {
+        if let Some(tunnel_id) = self.pending.ssh_tunnel_selection.take() {
             let tunnel = self
                 .app_state
                 .read(cx)
@@ -1174,20 +1180,25 @@ impl Render for ConnectionManagerWindow {
             cx.notify();
         }
 
-        let show_password = self.show_password;
-        let password_source_is_literal =
-            self.password_value_source_selector.read(cx).is_literal(cx);
-        let show_ssh_passphrase = self.show_ssh_passphrase;
-        let show_ssh_password = self.show_ssh_password;
+        let show_password = self.form.show_password;
+        let password_source_is_literal = self
+            .form
+            .password_value_source_selector
+            .read(cx)
+            .is_literal(cx);
+        let show_ssh_passphrase = self.form.show_ssh_passphrase;
+        let show_ssh_password = self.form.show_ssh_password;
 
-        self.input_password.update(cx, |state, cx| {
+        self.form.input_password.update(cx, |state, cx| {
             let should_mask = password_source_is_literal && !show_password;
             state.set_masked(should_mask, window, cx);
         });
-        self.input_ssh_key_passphrase.update(cx, |state, cx| {
-            state.set_masked(!show_ssh_passphrase, window, cx);
-        });
-        self.input_ssh_password.update(cx, |state, cx| {
+        self.access
+            .input_ssh_key_passphrase
+            .update(cx, |state, cx| {
+                state.set_masked(!show_ssh_passphrase, window, cx);
+            });
+        self.access.input_ssh_password.update(cx, |state, cx| {
             state.set_masked(!show_ssh_password, window, cx);
         });
 

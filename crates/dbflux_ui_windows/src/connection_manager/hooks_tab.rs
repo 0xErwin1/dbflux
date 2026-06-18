@@ -7,38 +7,52 @@ use gpui_component::ActiveTheme;
 impl ConnectionManagerWindow {
     fn selected_hook_ids(&self, cx: &Context<Self>) -> Vec<String> {
         let pre_connect = Self::merge_hook_ids(
-            self.conn_pre_hook_dropdown
+            self.settings_tab
+                .conn_pre_hook_dropdown
                 .read(cx)
                 .selected_value()
                 .map(|value| value.to_string()),
-            self.conn_pre_hook_extra_input.read(cx).value().to_string(),
+            self.settings_tab
+                .conn_pre_hook_extra_input
+                .read(cx)
+                .value()
+                .to_string(),
         );
 
         let post_connect = Self::merge_hook_ids(
-            self.conn_post_hook_dropdown
+            self.settings_tab
+                .conn_post_hook_dropdown
                 .read(cx)
                 .selected_value()
                 .map(|value| value.to_string()),
-            self.conn_post_hook_extra_input.read(cx).value().to_string(),
+            self.settings_tab
+                .conn_post_hook_extra_input
+                .read(cx)
+                .value()
+                .to_string(),
         );
 
         let pre_disconnect = Self::merge_hook_ids(
-            self.conn_pre_disconnect_hook_dropdown
+            self.settings_tab
+                .conn_pre_disconnect_hook_dropdown
                 .read(cx)
                 .selected_value()
                 .map(|value| value.to_string()),
-            self.conn_pre_disconnect_hook_extra_input
+            self.settings_tab
+                .conn_pre_disconnect_hook_extra_input
                 .read(cx)
                 .value()
                 .to_string(),
         );
 
         let post_disconnect = Self::merge_hook_ids(
-            self.conn_post_disconnect_hook_dropdown
+            self.settings_tab
+                .conn_post_disconnect_hook_dropdown
                 .read(cx)
                 .selected_value()
                 .map(|value| value.to_string()),
-            self.conn_post_disconnect_hook_extra_input
+            self.settings_tab
+                .conn_post_disconnect_hook_extra_input
                 .read(cx)
                 .value()
                 .to_string(),
@@ -101,7 +115,7 @@ impl ConnectionManagerWindow {
                     .child(
                         div()
                             .w(Widths::CM_FORM_DROPDOWN)
-                            .child(self.conn_pre_hook_dropdown.clone()),
+                            .child(self.settings_tab.conn_pre_hook_dropdown.clone()),
                     ),
             )
             .child(
@@ -120,7 +134,7 @@ impl ConnectionManagerWindow {
                     .child(
                         div()
                             .w(Widths::CM_FORM_DROPDOWN)
-                            .child(self.conn_post_hook_dropdown.clone()),
+                            .child(self.settings_tab.conn_post_hook_dropdown.clone()),
                     ),
             )
             .child(
@@ -139,7 +153,7 @@ impl ConnectionManagerWindow {
                     .child(
                         div()
                             .w(Widths::CM_FORM_DROPDOWN)
-                            .child(self.conn_pre_disconnect_hook_dropdown.clone()),
+                            .child(self.settings_tab.conn_pre_disconnect_hook_dropdown.clone()),
                     ),
             )
             .child(
@@ -158,7 +172,7 @@ impl ConnectionManagerWindow {
                     .child(
                         div()
                             .w(Widths::CM_FORM_DROPDOWN)
-                            .child(self.conn_post_disconnect_hook_dropdown.clone()),
+                            .child(self.settings_tab.conn_post_disconnect_hook_dropdown.clone()),
                     ),
             )
             .child(

@@ -14,11 +14,12 @@ use super::{ConnectionManagerWindow, DismissEvent, TestStatus};
 
 impl ConnectionManagerWindow {
     fn collect_mcp_governance(&self, cx: &Context<Self>) -> Option<ConnectionMcpGovernance> {
-        if !self.conn_mcp_enabled {
+        if !self.mcp_tab.conn_mcp_enabled {
             return None;
         }
 
         let actor_id = self
+            .mcp_tab
             .conn_mcp_actor_dropdown
             .read(cx)
             .selected_value()
@@ -26,14 +27,20 @@ impl ConnectionManagerWindow {
             .unwrap_or_default();
 
         let mut role_ids = Vec::new();
-        if let Some(primary_role) = self.conn_mcp_role_dropdown.read(cx).selected_value() {
+        if let Some(primary_role) = self
+            .mcp_tab
+            .conn_mcp_role_dropdown
+            .read(cx)
+            .selected_value()
+        {
             let primary_str = primary_role.to_string();
             if !primary_str.is_empty() {
                 role_ids.push(primary_str);
             }
         }
         role_ids.extend(
-            self.conn_mcp_role_multi_select
+            self.mcp_tab
+                .conn_mcp_role_multi_select
                 .read(cx)
                 .selected_values()
                 .into_iter()
@@ -41,14 +48,20 @@ impl ConnectionManagerWindow {
         );
 
         let mut policy_ids = Vec::new();
-        if let Some(primary_policy) = self.conn_mcp_policy_dropdown.read(cx).selected_value() {
+        if let Some(primary_policy) = self
+            .mcp_tab
+            .conn_mcp_policy_dropdown
+            .read(cx)
+            .selected_value()
+        {
             let primary_str = primary_policy.to_string();
             if !primary_str.is_empty() {
                 policy_ids.push(primary_str);
             }
         }
         policy_ids.extend(
-            self.conn_mcp_policy_multi_select
+            self.mcp_tab
+                .conn_mcp_policy_multi_select
                 .read(cx)
                 .selected_values()
                 .into_iter()
@@ -75,14 +88,14 @@ impl ConnectionManagerWindow {
         self.validation_errors.clear();
 
         if require_name {
-            let name = self.input_name.read(cx).value().to_string();
+            let name = self.form.input_name.read(cx).value().to_string();
             if name.trim().is_empty() {
                 self.validation_errors
                     .push("Connection name is required".to_string());
             }
         }
 
-        let Some(driver) = &self.selected_driver else {
+        let Some(driver) = &self.form.selected_driver else {
             self.validation_errors
                 .push("No driver selected".to_string());
             return false;
@@ -103,6 +116,7 @@ impl ConnectionManagerWindow {
                     }
 
                     let value = self
+                        .form
                         .driver_inputs
                         .get(&field.id)
                         .map(|input| input.read(cx).value().to_string())
@@ -127,20 +141,20 @@ impl ConnectionManagerWindow {
             }
         }
 
-        if self.ssh_enabled && form.supports_ssh() {
-            let ssh_host = self.input_ssh_host.read(cx).value().to_string();
+        if self.access.ssh_enabled && form.supports_ssh() {
+            let ssh_host = self.access.input_ssh_host.read(cx).value().to_string();
             if ssh_host.trim().is_empty() {
                 self.validation_errors
                     .push("SSH Host is required when SSH is enabled".to_string());
             }
 
-            let ssh_user = self.input_ssh_user.read(cx).value().to_string();
+            let ssh_user = self.access.input_ssh_user.read(cx).value().to_string();
             if ssh_user.trim().is_empty() {
                 self.validation_errors
                     .push("SSH User is required when SSH is enabled".to_string());
             }
 
-            let ssh_port_str = self.input_ssh_port.read(cx).value().to_string();
+            let ssh_port_str = self.access.input_ssh_port.read(cx).value().to_string();
             if !ssh_port_str.trim().is_empty() && ssh_port_str.parse::<u16>().is_err() {
                 self.validation_errors
                     .push("SSH Port must be a valid number".to_string());
@@ -149,7 +163,12 @@ impl ConnectionManagerWindow {
 
         // Validate SSM fields if SSM access method is selected (T-7.3)
         if self.is_ssm_selected() {
-            let instance_id = self.input_ssm_instance_id.read(cx).value().to_string();
+            let instance_id = self
+                .access
+                .input_ssm_instance_id
+                .read(cx)
+                .value()
+                .to_string();
             if instance_id.trim().is_empty() {
                 self.validation_errors
                     .push("SSM Instance ID is required".to_string());
@@ -161,13 +180,18 @@ impl ConnectionManagerWindow {
                     .push("SSM Instance ID must start with 'i-' or 'mi-'".to_string());
             }
 
-            let region = self.input_ssm_region.read(cx).value().to_string();
+            let region = self.access.input_ssm_region.read(cx).value().to_string();
             if region.trim().is_empty() {
                 self.validation_errors
                     .push("SSM Region is required".to_string());
             }
 
-            let port_str = self.input_ssm_remote_port.read(cx).value().to_string();
+            let port_str = self
+                .access
+                .input_ssm_remote_port
+                .read(cx)
+                .value()
+                .to_string();
             if !self.has_dynamic_value_ref_for_field("ssm_remote_port", cx) {
                 match port_str.parse::<u16>() {
                     Ok(0) => {
@@ -187,7 +211,7 @@ impl ConnectionManagerWindow {
         // longer resolves to any entry in the current reflected+stored union,
         // block the connect with a user-facing message. When the stored profile
         // is present but marked dangling, tailor the message to the origin.
-        if let Some(auth_profile_id) = self.selected_auth_profile_id {
+        if let Some(auth_profile_id) = self.auth_profile.selected_auth_profile_id {
             let bound_profile = self
                 .app_state
                 .read(cx)
@@ -233,7 +257,7 @@ impl ConnectionManagerWindow {
         });
 
         if uses_dynamic_auth_sources {
-            let Some(auth_profile_id) = self.selected_auth_profile_id else {
+            let Some(auth_profile_id) = self.auth_profile.selected_auth_profile_id else {
                 self.validation_errors.push(
                     "Dynamic value sources require an Auth Profile. Select one in Access tab."
                         .to_string(),
@@ -310,26 +334,26 @@ impl ConnectionManagerWindow {
     }
 
     pub(super) fn build_ssh_config(&self, cx: &Context<Self>) -> Option<SshTunnelConfig> {
-        if !self.ssh_enabled {
+        if !self.access.ssh_enabled {
             return None;
         }
 
-        let host = self.input_ssh_host.read(cx).value().to_string();
-        let port_str = self.input_ssh_port.read(cx).value().to_string();
-        let user = self.input_ssh_user.read(cx).value().to_string();
-        let key_path_str = self.input_ssh_key_path.read(cx).value().to_string();
+        let host = self.access.input_ssh_host.read(cx).value().to_string();
+        let port_str = self.access.input_ssh_port.read(cx).value().to_string();
+        let user = self.access.input_ssh_user.read(cx).value().to_string();
+        let key_path_str = self.access.input_ssh_key_path.read(cx).value().to_string();
 
         Some(ssh_shared::build_ssh_config(
             &host,
             &port_str,
             &user,
-            self.ssh_auth_method,
+            self.access.ssh_auth_method,
             &key_path_str,
         ))
     }
 
     pub(super) fn build_config(&self, cx: &Context<Self>) -> Option<DbConfig> {
-        let driver = self.selected_driver.as_ref()?;
+        let driver = self.form.selected_driver.as_ref()?;
         let values = self.collect_form_values(driver.form_definition(), cx);
 
         let mut config = match driver.build_config(&values) {
@@ -342,8 +366,8 @@ impl ConnectionManagerWindow {
 
         // Persist the SSL mode id string selected in the UI. Drivers hardcode a default; we
         // overwrite here so the user's selection is saved without each driver reading form values.
-        if !self.selected_ssl_mode.is_empty() {
-            let selected = self.selected_ssl_mode.clone();
+        if !self.form.selected_ssl_mode.is_empty() {
+            let selected = self.form.selected_ssl_mode.clone();
             match &mut config {
                 DbConfig::Postgres { ssl_mode, .. }
                 | DbConfig::MySQL { ssl_mode, .. }
@@ -358,15 +382,15 @@ impl ConnectionManagerWindow {
 
         // Apply SSL cert path inputs.
         let ssl_root_cert = {
-            let v = self.ssl_ca_cert_input.read(cx).value().to_string();
+            let v = self.form.ssl_ca_cert_input.read(cx).value().to_string();
             if v.trim().is_empty() { None } else { Some(v) }
         };
         let ssl_client_cert = {
-            let v = self.ssl_client_cert_input.read(cx).value().to_string();
+            let v = self.form.ssl_client_cert_input.read(cx).value().to_string();
             if v.trim().is_empty() { None } else { Some(v) }
         };
         let ssl_client_key = {
-            let v = self.ssl_client_key_input.read(cx).value().to_string();
+            let v = self.form.ssl_client_key_input.read(cx).value().to_string();
             if v.trim().is_empty() { None } else { Some(v) }
         };
 
@@ -402,7 +426,7 @@ impl ConnectionManagerWindow {
             _ => {}
         }
 
-        let ssh_tunnel_profile_id = self.selected_ssh_tunnel_id;
+        let ssh_tunnel_profile_id = self.access.selected_ssh_tunnel_id;
         let ssh_tunnel = if ssh_tunnel_profile_id.is_some() {
             None
         } else {
@@ -449,7 +473,7 @@ impl ConnectionManagerWindow {
     }
 
     pub(super) fn build_profile(&self, cx: &Context<Self>) -> Option<ConnectionProfile> {
-        let name = self.input_name.read(cx).value().to_string();
+        let name = self.form.input_name.read(cx).value().to_string();
         let kind = self.selected_kind()?;
         let driver_id = self.selected_driver_id()?;
         let config = self.build_config(cx)?;
@@ -462,9 +486,9 @@ impl ConnectionManagerWindow {
             ConnectionProfile::new_with_driver(name, kind, driver_id, config)
         };
 
-        profile.save_password = self.form_save_password;
-        profile.proxy_profile_id = self.selected_proxy_id;
-        profile.auth_profile_id = self.selected_auth_profile_id;
+        profile.save_password = self.form.form_save_password;
+        profile.proxy_profile_id = self.access.selected_proxy_id;
+        profile.auth_profile_id = self.auth_profile.selected_auth_profile_id;
         profile.value_refs = self.collect_value_refs(cx);
         profile.settings_overrides = self.collect_connection_overrides(cx);
         profile.connection_settings = self.collect_connection_settings(cx);
@@ -475,14 +499,14 @@ impl ConnectionManagerWindow {
         // of flattening them into inline connection fields.
         let access_kind = if self.is_ssm_selected() {
             Some(self.collect_managed_access_kind(cx))
-        } else if let Some(ssh_tunnel_profile_id) = self.selected_ssh_tunnel_id {
+        } else if let Some(ssh_tunnel_profile_id) = self.access.selected_ssh_tunnel_id {
             Some(AccessKind::Ssh {
                 ssh_tunnel_profile_id,
             })
-        } else if let Some(proxy_profile_id) = self.selected_proxy_id {
+        } else if let Some(proxy_profile_id) = self.access.selected_proxy_id {
             Some(AccessKind::Proxy { proxy_profile_id })
         } else {
-            self.access_kind.clone()
+            self.access.access_kind.clone()
         };
         profile.access_kind = access_kind;
 
@@ -503,14 +527,19 @@ impl ConnectionManagerWindow {
     }
 
     pub(super) fn get_ssh_secret(&self, cx: &Context<Self>) -> Option<String> {
-        if !self.ssh_enabled {
+        if !self.access.ssh_enabled {
             return None;
         }
 
-        let passphrase = self.input_ssh_key_passphrase.read(cx).value().to_string();
-        let password = self.input_ssh_password.read(cx).value().to_string();
+        let passphrase = self
+            .access
+            .input_ssh_key_passphrase
+            .read(cx)
+            .value()
+            .to_string();
+        let password = self.access.input_ssh_password.read(cx).value().to_string();
 
-        ssh_shared::get_ssh_secret(self.ssh_auth_method, &passphrase, &password)
+        ssh_shared::get_ssh_secret(self.access.ssh_auth_method, &passphrase, &password)
     }
 
     pub(super) fn save_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -528,7 +557,7 @@ impl ConnectionManagerWindow {
 
         let saved_profile_id = profile.id;
 
-        let mut password = self.input_password.read(cx).value().to_string();
+        let mut password = self.form.input_password.read(cx).value().to_string();
         let uri_password = profile.config.strip_uri_password();
 
         if password.is_empty()
@@ -539,8 +568,11 @@ impl ConnectionManagerWindow {
 
         let ssh_secret = self.get_ssh_secret(cx);
         let is_edit = self.editing_profile_id.is_some();
-        let password_source_is_literal =
-            self.password_value_source_selector.read(cx).is_literal(cx);
+        let password_source_is_literal = self
+            .form
+            .password_value_source_selector
+            .read(cx)
+            .is_literal(cx);
 
         info!(
             "{} profile: {}, save_password={}, password_len={}, ssh_enabled={}, ssh_auth={:?}",
@@ -548,11 +580,11 @@ impl ConnectionManagerWindow {
             profile.name,
             profile.save_password,
             password.len(),
-            self.ssh_enabled,
-            self.ssh_auth_method
+            self.access.ssh_enabled,
+            self.access.ssh_auth_method
         );
 
-        if self.conn_override_refresh_interval
+        if self.settings_tab.conn_override_refresh_interval
             && profile
                 .settings_overrides
                 .as_ref()
@@ -564,7 +596,7 @@ impl ConnectionManagerWindow {
         }
 
         if let Some(ref conn_settings) = profile.connection_settings
-            && let Some(driver) = &self.selected_driver
+            && let Some(driver) = &self.form.selected_driver
             && let Some(schema) = driver.settings_schema()
         {
             let warnings = form_renderer::validate_values(&schema, conn_settings);
@@ -583,7 +615,7 @@ impl ConnectionManagerWindow {
                 state.delete_password(&profile);
             }
 
-            if self.form_save_ssh_secret {
+            if self.form.form_save_ssh_secret {
                 if let Some(ref secret) = ssh_secret {
                     info!("Saving SSH secret to keyring for profile {}", profile.id);
                     state.save_ssh_password(&profile, &SecretString::from(secret.clone()));
@@ -694,7 +726,7 @@ impl ConnectionManagerWindow {
             return;
         };
 
-        let Some(driver) = self.selected_driver.clone() else {
+        let Some(driver) = self.form.selected_driver.clone() else {
             self.test_status = TestStatus::Failed;
             self.test_error = Some("No driver selected".to_string());
             cx.notify();
@@ -746,7 +778,7 @@ impl ConnectionManagerWindow {
                 )
             })
         } else {
-            let password = self.input_password.read(cx).value().to_string();
+            let password = self.form.input_password.read(cx).value().to_string();
             let password_opt = if password.is_empty() {
                 None
             } else {

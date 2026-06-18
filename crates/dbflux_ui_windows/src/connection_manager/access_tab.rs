@@ -19,22 +19,26 @@ impl ConnectionManagerWindow {
         let show_focus =
             self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Access;
 
-        self.access_method_dropdown.update(cx, |dropdown, cx| {
-            let focus_color = if show_focus && self.form_focus == FormFocus::AccessMethod {
-                Some(ring_color)
-            } else {
-                None
-            };
+        self.access
+            .access_method_dropdown
+            .update(cx, |dropdown, cx| {
+                let focus_color = if show_focus && self.form_focus == FormFocus::AccessMethod {
+                    Some(ring_color)
+                } else {
+                    None
+                };
 
-            dropdown.set_focus_ring(focus_color, cx);
-        });
+                dropdown.set_focus_ring(focus_color, cx);
+            });
 
-        self.auth_profile_dropdown.update(cx, |dropdown, cx| {
-            dropdown.set_focus_ring(None, cx);
-        });
+        self.auth_profile
+            .auth_profile_dropdown
+            .update(cx, |dropdown, cx| {
+                dropdown.set_focus_ring(None, cx);
+            });
 
-        let login_enabled =
-            !self.auth_profile_login_in_progress && self.selected_auth_profile_needs_login(cx);
+        let login_enabled = !self.auth_profile.auth_profile_login_in_progress
+            && self.selected_auth_profile_needs_login(cx);
         let auth_profile_is_valid = self.selected_auth_profile_is_valid(cx);
 
         let mut sections = vec![
@@ -49,7 +53,7 @@ impl ConnectionManagerWindow {
                         .child(
                             div()
                                 .min_w(Widths::CM_FORM_DROPDOWN)
-                                .child(self.access_method_dropdown.clone()),
+                                .child(self.access.access_method_dropdown.clone()),
                         ),
                 ),
                 &theme,
@@ -57,7 +61,7 @@ impl ConnectionManagerWindow {
             .into_any_element(),
         ];
 
-        match self.access_tab_mode {
+        match self.access.access_tab_mode {
             AccessTabMode::Direct => {
                 sections.push(
                     div()
@@ -75,7 +79,7 @@ impl ConnectionManagerWindow {
                                     self.render_focus_shell(
                                         show_focus && self.form_focus == FormFocus::SsmAuthProfile,
                                         ring_color,
-                                        self.auth_profile_dropdown.clone(),
+                                        self.auth_profile.auth_profile_dropdown.clone(),
                                         cx,
                                     )
                                         .min_w(px(280.0))
@@ -181,7 +185,7 @@ impl ConnectionManagerWindow {
                                     .label("Auth profile session is valid"),
                             )
                         })
-                        .when_some(self.auth_profile_action_message.as_ref(), |d, message| {
+                        .when_some(self.auth_profile.auth_profile_action_message.as_ref(), |d, message| {
                             d.child(Text::caption(message.clone()))
                         })
                         .into_any_element(),
@@ -200,8 +204,8 @@ impl ConnectionManagerWindow {
         let ring_color = theme.ring;
         let show_focus =
             self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Access;
-        let login_enabled =
-            !self.auth_profile_login_in_progress && self.selected_auth_profile_needs_login(cx);
+        let login_enabled = !self.auth_profile.auth_profile_login_in_progress
+            && self.selected_auth_profile_needs_login(cx);
         let auth_profile_is_valid = self.selected_auth_profile_is_valid(cx);
 
         self.render_section(
@@ -212,8 +216,8 @@ impl ConnectionManagerWindow {
                 .gap_3()
                 .child(self.render_ssm_value_field(
                     "Instance ID",
-                    &self.input_ssm_instance_id,
-                    self.ssm_instance_id_value_source_selector.clone(),
+                    &self.access.input_ssm_instance_id,
+                    self.access.ssm_instance_id_value_source_selector.clone(),
                     true,
                     show_focus && self.form_focus == FormFocus::SsmInstanceIdValueSource,
                     show_focus && self.form_focus == FormFocus::SsmInstanceId,
@@ -224,8 +228,8 @@ impl ConnectionManagerWindow {
                 ))
                 .child(self.render_ssm_value_field(
                     "Region",
-                    &self.input_ssm_region,
-                    self.ssm_region_value_source_selector.clone(),
+                    &self.access.input_ssm_region,
+                    self.access.ssm_region_value_source_selector.clone(),
                     true,
                     show_focus && self.form_focus == FormFocus::SsmRegionValueSource,
                     show_focus && self.form_focus == FormFocus::SsmRegion,
@@ -236,8 +240,8 @@ impl ConnectionManagerWindow {
                 ))
                 .child(self.render_ssm_value_field(
                     "Remote Port",
-                    &self.input_ssm_remote_port,
-                    self.ssm_remote_port_value_source_selector.clone(),
+                    &self.access.input_ssm_remote_port,
+                    self.access.ssm_remote_port_value_source_selector.clone(),
                     false,
                     show_focus && self.form_focus == FormFocus::SsmRemotePortValueSource,
                     show_focus && self.form_focus == FormFocus::SsmRemotePort,
@@ -257,7 +261,7 @@ impl ConnectionManagerWindow {
                             self.render_focus_shell(
                                 show_focus && self.form_focus == FormFocus::SsmAuthProfile,
                                 ring_color,
-                                self.auth_profile_dropdown.clone(),
+                                self.auth_profile.auth_profile_dropdown.clone(),
                                 cx,
                             )
                                 .min_w(px(280.0))
@@ -413,7 +417,7 @@ impl ConnectionManagerWindow {
 
     pub(super) fn render_proxy_tab(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let proxies = self.app_state.read(cx).proxies().to_vec();
-        let selected_proxy_id = self.selected_proxy_id;
+        let selected_proxy_id = self.access.selected_proxy_id;
 
         let show_focus =
             self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Access;
@@ -458,14 +462,14 @@ impl ConnectionManagerWindow {
                 DropdownItem::with_value(&label, p.id.to_string())
             })
             .collect();
-        self.proxy_uuids = proxies.iter().map(|p| p.id).collect();
+        self.access.proxy_uuids = proxies.iter().map(|p| p.id).collect();
 
         let selected_proxy_index =
             selected_proxy_id.and_then(|id| proxies.iter().position(|p| p.id == id));
 
         let proxy_selector_focused = show_focus && focus == FormFocus::ProxySelector;
         let proxy_clear_focused = show_focus && focus == FormFocus::ProxyClear;
-        self.proxy_dropdown.update(cx, |dropdown, cx| {
+        self.access.proxy_dropdown.update(cx, |dropdown, cx| {
             dropdown.set_items(proxy_items, cx);
             dropdown.set_selected_index(selected_proxy_index, cx);
 
@@ -489,7 +493,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(div().flex_1().child(self.proxy_dropdown.clone()))
+                    .child(div().flex_1().child(self.access.proxy_dropdown.clone()))
                     .when(has_selection, |d| {
                         d.child(
                             div()
@@ -560,12 +564,12 @@ impl ConnectionManagerWindow {
     }
 
     pub(super) fn render_ssh_tab(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let ssh_enabled = self.ssh_enabled;
-        let ssh_auth_method = self.ssh_auth_method;
+        let ssh_enabled = self.access.ssh_enabled;
+        let ssh_auth_method = self.access.ssh_auth_method;
         let keyring_available = self.app_state.read(cx).secret_store_available();
-        let save_ssh_secret = self.form_save_ssh_secret;
+        let save_ssh_secret = self.form.form_save_ssh_secret;
         let ssh_tunnels = self.app_state.read(cx).ssh_tunnels().to_vec();
-        let selected_tunnel_id = self.selected_ssh_tunnel_id;
+        let selected_tunnel_id = self.access.selected_ssh_tunnel_id;
         let has_selected_tunnel = selected_tunnel_id.is_some();
 
         let show_focus =
@@ -590,7 +594,7 @@ impl ConnectionManagerWindow {
                 Checkbox::new("ssh-enabled")
                     .checked(ssh_enabled)
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                        this.ssh_enabled = *checked;
+                        this.access.ssh_enabled = *checked;
                         cx.notify();
                     })),
             )
@@ -600,14 +604,14 @@ impl ConnectionManagerWindow {
             .iter()
             .map(|t| DropdownItem::with_value(&t.name, t.id.to_string()))
             .collect();
-        self.ssh_tunnel_uuids = ssh_tunnels.iter().map(|t| t.id).collect();
+        self.access.ssh_tunnel_uuids = ssh_tunnels.iter().map(|t| t.id).collect();
 
         let selected_tunnel_index =
             selected_tunnel_id.and_then(|id| ssh_tunnels.iter().position(|t| t.id == id));
 
         let tunnel_selector_focused = show_focus && focus == FormFocus::SshTunnelSelector;
         let tunnel_clear_focused = show_focus && focus == FormFocus::SshTunnelClear;
-        self.ssh_tunnel_dropdown.update(cx, |dropdown, cx| {
+        self.access.ssh_tunnel_dropdown.update(cx, |dropdown, cx| {
             dropdown.set_items(tunnel_items, cx);
             dropdown.set_selected_index(selected_tunnel_index, cx);
             let focus_color = if tunnel_selector_focused {
@@ -634,7 +638,11 @@ impl ConnectionManagerWindow {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(div().flex_1().child(self.ssh_tunnel_dropdown.clone()))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .child(self.access.ssh_tunnel_dropdown.clone()),
+                            )
                             .when(selected_tunnel_name.is_some(), |d| {
                                 d.child(
                                     div()
@@ -760,7 +768,7 @@ impl ConnectionManagerWindow {
                                 .gap_3()
                                 .child(div().flex_1().child(self.form_field_input(
                                     "Host",
-                                    &self.input_ssh_host,
+                                    &self.access.input_ssh_host,
                                     true,
                                     show_focus && focus == FormFocus::SshHost,
                                     ring_color,
@@ -769,7 +777,7 @@ impl ConnectionManagerWindow {
                                 )))
                                 .child(div().w(px(80.0)).child(self.form_field_input(
                                     "Port",
-                                    &self.input_ssh_port,
+                                    &self.access.input_ssh_port,
                                     false,
                                     show_focus && focus == FormFocus::SshPort,
                                     ring_color,
@@ -779,7 +787,7 @@ impl ConnectionManagerWindow {
                         )
                         .child(div().id(3usize).child(self.form_field_input(
                             "Username",
-                            &self.input_ssh_user,
+                            &self.access.input_ssh_user,
                             true,
                             show_focus && focus == FormFocus::SshUser,
                             ring_color,
@@ -936,11 +944,11 @@ impl ConnectionManagerWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let click_key = cx.listener(|this, _, _, cx| {
-            this.ssh_auth_method = SshAuthSelection::PrivateKey;
+            this.access.ssh_auth_method = SshAuthSelection::PrivateKey;
             cx.notify();
         });
         let click_pw = cx.listener(|this, _, _, cx| {
-            this.ssh_auth_method = SshAuthSelection::Password;
+            this.access.ssh_auth_method = SshAuthSelection::Password;
             cx.notify();
         });
 
@@ -1013,7 +1021,7 @@ impl ConnectionManagerWindow {
                 Checkbox::new("save-ssh-passphrase")
                     .checked(save_ssh_secret)
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                        this.form_save_ssh_secret = *checked;
+                        this.form.form_save_ssh_secret = *checked;
                         cx.notify();
                     })),
             )
@@ -1026,7 +1034,7 @@ impl ConnectionManagerWindow {
                 Checkbox::new("save-ssh-password")
                     .checked(save_ssh_secret)
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                        this.form_save_ssh_secret = *checked;
+                        this.form.form_save_ssh_secret = *checked;
                         cx.notify();
                     })),
             )
@@ -1079,7 +1087,7 @@ impl ConnectionManagerWindow {
                                                 );
                                             }),
                                         )
-                                        .child(Input::new(&self.input_ssh_key_path).small()),
+                                        .child(Input::new(&self.access.input_ssh_key_path).small()),
                                 )
                                 .child(
                                     div()
@@ -1135,17 +1143,18 @@ impl ConnectionManagerWindow {
                                                 );
                                             }),
                                         )
-                                        .child(Input::new(&self.input_ssh_key_passphrase)),
+                                        .child(Input::new(&self.access.input_ssh_key_passphrase)),
                                 )
                                 .child(
                                     Self::render_password_toggle(
-                                        self.show_ssh_passphrase,
+                                        self.form.show_ssh_passphrase,
                                         "toggle-ssh-passphrase",
                                         theme,
                                     )
                                     .on_click(cx.listener(
                                         |this, _, _, cx| {
-                                            this.show_ssh_passphrase = !this.show_ssh_passphrase;
+                                            this.form.show_ssh_passphrase =
+                                                !this.form.show_ssh_passphrase;
                                             cx.notify();
                                         },
                                     )),
@@ -1211,17 +1220,18 @@ impl ConnectionManagerWindow {
                                                 );
                                             }),
                                         )
-                                        .child(Input::new(&self.input_ssh_password)),
+                                        .child(Input::new(&self.access.input_ssh_password)),
                                 )
                                 .child(
                                     Self::render_password_toggle(
-                                        self.show_ssh_password,
+                                        self.form.show_ssh_password,
                                         "toggle-ssh-password",
                                         theme,
                                     )
                                     .on_click(cx.listener(
                                         |this, _, _, cx| {
-                                            this.show_ssh_password = !this.show_ssh_password;
+                                            this.form.show_ssh_password =
+                                                !this.form.show_ssh_password;
                                             cx.notify();
                                         },
                                     )),

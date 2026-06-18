@@ -879,12 +879,12 @@ impl ConnectionManagerWindow {
 
         match command {
             Command::FocusSearch => {
-                self.driver_filter_input.update(cx, |state, cx| {
+                self.form.driver_filter_input.update(cx, |state, cx| {
                     state.focus(window, cx);
                 });
                 true
             }
-            Command::Cancel if self.driver_filter_focused => {
+            Command::Cancel if self.form.driver_filter_focused => {
                 window.focus(&self.focus_handle);
                 true
             }
@@ -954,29 +954,31 @@ impl ConnectionManagerWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.proxy_dropdown.read(cx).is_open() && self.handle_proxy_dropdown_command(command, cx)
+        if self.access.proxy_dropdown.read(cx).is_open()
+            && self.handle_proxy_dropdown_command(command, cx)
         {
             return true;
         }
 
-        if self.ssh_tunnel_dropdown.read(cx).is_open() && self.handle_dropdown_command(command, cx)
+        if self.access.ssh_tunnel_dropdown.read(cx).is_open()
+            && self.handle_dropdown_command(command, cx)
         {
             return true;
         }
 
-        if self.access_method_dropdown.read(cx).is_open()
+        if self.access.access_method_dropdown.read(cx).is_open()
             && self.handle_access_method_dropdown_command(command, cx)
         {
             return true;
         }
 
-        if self.auth_profile_dropdown.read(cx).is_open()
+        if self.auth_profile.auth_profile_dropdown.read(cx).is_open()
             && self.handle_auth_profile_dropdown_command(command, cx)
         {
             return true;
         }
 
-        if self.ssm_auth_profile_dropdown.read(cx).is_open()
+        if self.access.ssm_auth_profile_dropdown.read(cx).is_open()
             && self.handle_ssm_auth_profile_dropdown_command(command, cx)
         {
             return true;
@@ -996,37 +998,37 @@ impl ConnectionManagerWindow {
     fn handle_dropdown_command(&mut self, command: Command, cx: &mut Context<Self>) -> bool {
         match command {
             Command::SelectNext => {
-                self.ssh_tunnel_dropdown.update(cx, |dropdown, cx| {
+                self.access.ssh_tunnel_dropdown.update(cx, |dropdown, cx| {
                     dropdown.select_next_item(cx);
                 });
                 true
             }
             Command::SelectPrev => {
-                self.ssh_tunnel_dropdown.update(cx, |dropdown, cx| {
+                self.access.ssh_tunnel_dropdown.update(cx, |dropdown, cx| {
                     dropdown.select_prev_item(cx);
                 });
                 true
             }
             Command::Execute => {
-                self.ssh_tunnel_dropdown.update(cx, |dropdown, cx| {
+                self.access.ssh_tunnel_dropdown.update(cx, |dropdown, cx| {
                     dropdown.accept_selection(cx);
                 });
                 true
             }
             Command::PageDown => {
-                self.ssh_tunnel_dropdown.update(cx, |dropdown, cx| {
+                self.access.ssh_tunnel_dropdown.update(cx, |dropdown, cx| {
                     dropdown.select_next_page(cx);
                 });
                 true
             }
             Command::PageUp => {
-                self.ssh_tunnel_dropdown.update(cx, |dropdown, cx| {
+                self.access.ssh_tunnel_dropdown.update(cx, |dropdown, cx| {
                     dropdown.select_prev_page(cx);
                 });
                 true
             }
             Command::Cancel => {
-                self.ssh_tunnel_dropdown.update(cx, |dropdown, cx| {
+                self.access.ssh_tunnel_dropdown.update(cx, |dropdown, cx| {
                     dropdown.close(cx);
                 });
                 true
@@ -1038,37 +1040,37 @@ impl ConnectionManagerWindow {
     fn handle_proxy_dropdown_command(&mut self, command: Command, cx: &mut Context<Self>) -> bool {
         match command {
             Command::SelectNext => {
-                self.proxy_dropdown.update(cx, |dropdown, cx| {
+                self.access.proxy_dropdown.update(cx, |dropdown, cx| {
                     dropdown.select_next_item(cx);
                 });
                 true
             }
             Command::SelectPrev => {
-                self.proxy_dropdown.update(cx, |dropdown, cx| {
+                self.access.proxy_dropdown.update(cx, |dropdown, cx| {
                     dropdown.select_prev_item(cx);
                 });
                 true
             }
             Command::Execute => {
-                self.proxy_dropdown.update(cx, |dropdown, cx| {
+                self.access.proxy_dropdown.update(cx, |dropdown, cx| {
                     dropdown.accept_selection(cx);
                 });
                 true
             }
             Command::PageDown => {
-                self.proxy_dropdown.update(cx, |dropdown, cx| {
+                self.access.proxy_dropdown.update(cx, |dropdown, cx| {
                     dropdown.select_next_page(cx);
                 });
                 true
             }
             Command::PageUp => {
-                self.proxy_dropdown.update(cx, |dropdown, cx| {
+                self.access.proxy_dropdown.update(cx, |dropdown, cx| {
                     dropdown.select_prev_page(cx);
                 });
                 true
             }
             Command::Cancel => {
-                self.proxy_dropdown.update(cx, |dropdown, cx| {
+                self.access.proxy_dropdown.update(cx, |dropdown, cx| {
                     dropdown.close(cx);
                 });
                 true
@@ -1084,39 +1086,51 @@ impl ConnectionManagerWindow {
     ) -> bool {
         match command {
             Command::SelectNext => {
-                self.access_method_dropdown.update(cx, |dropdown, cx| {
-                    dropdown.select_next_item(cx);
-                });
+                self.access
+                    .access_method_dropdown
+                    .update(cx, |dropdown, cx| {
+                        dropdown.select_next_item(cx);
+                    });
                 true
             }
             Command::SelectPrev => {
-                self.access_method_dropdown.update(cx, |dropdown, cx| {
-                    dropdown.select_prev_item(cx);
-                });
+                self.access
+                    .access_method_dropdown
+                    .update(cx, |dropdown, cx| {
+                        dropdown.select_prev_item(cx);
+                    });
                 true
             }
             Command::Execute => {
-                self.access_method_dropdown.update(cx, |dropdown, cx| {
-                    dropdown.accept_selection(cx);
-                });
+                self.access
+                    .access_method_dropdown
+                    .update(cx, |dropdown, cx| {
+                        dropdown.accept_selection(cx);
+                    });
                 true
             }
             Command::PageDown => {
-                self.access_method_dropdown.update(cx, |dropdown, cx| {
-                    dropdown.select_next_page(cx);
-                });
+                self.access
+                    .access_method_dropdown
+                    .update(cx, |dropdown, cx| {
+                        dropdown.select_next_page(cx);
+                    });
                 true
             }
             Command::PageUp => {
-                self.access_method_dropdown.update(cx, |dropdown, cx| {
-                    dropdown.select_prev_page(cx);
-                });
+                self.access
+                    .access_method_dropdown
+                    .update(cx, |dropdown, cx| {
+                        dropdown.select_prev_page(cx);
+                    });
                 true
             }
             Command::Cancel => {
-                self.access_method_dropdown.update(cx, |dropdown, cx| {
-                    dropdown.close(cx);
-                });
+                self.access
+                    .access_method_dropdown
+                    .update(cx, |dropdown, cx| {
+                        dropdown.close(cx);
+                    });
                 true
             }
             _ => false,
@@ -1130,39 +1144,51 @@ impl ConnectionManagerWindow {
     ) -> bool {
         match command {
             Command::SelectNext => {
-                self.auth_profile_dropdown.update(cx, |dropdown, cx| {
-                    dropdown.select_next_item(cx);
-                });
+                self.auth_profile
+                    .auth_profile_dropdown
+                    .update(cx, |dropdown, cx| {
+                        dropdown.select_next_item(cx);
+                    });
                 true
             }
             Command::SelectPrev => {
-                self.auth_profile_dropdown.update(cx, |dropdown, cx| {
-                    dropdown.select_prev_item(cx);
-                });
+                self.auth_profile
+                    .auth_profile_dropdown
+                    .update(cx, |dropdown, cx| {
+                        dropdown.select_prev_item(cx);
+                    });
                 true
             }
             Command::PageDown => {
-                self.auth_profile_dropdown.update(cx, |dropdown, cx| {
-                    dropdown.select_next_page(cx);
-                });
+                self.auth_profile
+                    .auth_profile_dropdown
+                    .update(cx, |dropdown, cx| {
+                        dropdown.select_next_page(cx);
+                    });
                 true
             }
             Command::PageUp => {
-                self.auth_profile_dropdown.update(cx, |dropdown, cx| {
-                    dropdown.select_prev_page(cx);
-                });
+                self.auth_profile
+                    .auth_profile_dropdown
+                    .update(cx, |dropdown, cx| {
+                        dropdown.select_prev_page(cx);
+                    });
                 true
             }
             Command::Execute => {
-                self.auth_profile_dropdown.update(cx, |dropdown, cx| {
-                    dropdown.accept_selection(cx);
-                });
+                self.auth_profile
+                    .auth_profile_dropdown
+                    .update(cx, |dropdown, cx| {
+                        dropdown.accept_selection(cx);
+                    });
                 true
             }
             Command::Cancel => {
-                self.auth_profile_dropdown.update(cx, |dropdown, cx| {
-                    dropdown.close(cx);
-                });
+                self.auth_profile
+                    .auth_profile_dropdown
+                    .update(cx, |dropdown, cx| {
+                        dropdown.close(cx);
+                    });
                 true
             }
             _ => false,
@@ -1176,39 +1202,51 @@ impl ConnectionManagerWindow {
     ) -> bool {
         match command {
             Command::SelectNext => {
-                self.ssm_auth_profile_dropdown.update(cx, |dropdown, cx| {
-                    dropdown.select_next_item(cx);
-                });
+                self.access
+                    .ssm_auth_profile_dropdown
+                    .update(cx, |dropdown, cx| {
+                        dropdown.select_next_item(cx);
+                    });
                 true
             }
             Command::SelectPrev => {
-                self.ssm_auth_profile_dropdown.update(cx, |dropdown, cx| {
-                    dropdown.select_prev_item(cx);
-                });
+                self.access
+                    .ssm_auth_profile_dropdown
+                    .update(cx, |dropdown, cx| {
+                        dropdown.select_prev_item(cx);
+                    });
                 true
             }
             Command::PageDown => {
-                self.ssm_auth_profile_dropdown.update(cx, |dropdown, cx| {
-                    dropdown.select_next_page(cx);
-                });
+                self.access
+                    .ssm_auth_profile_dropdown
+                    .update(cx, |dropdown, cx| {
+                        dropdown.select_next_page(cx);
+                    });
                 true
             }
             Command::PageUp => {
-                self.ssm_auth_profile_dropdown.update(cx, |dropdown, cx| {
-                    dropdown.select_prev_page(cx);
-                });
+                self.access
+                    .ssm_auth_profile_dropdown
+                    .update(cx, |dropdown, cx| {
+                        dropdown.select_prev_page(cx);
+                    });
                 true
             }
             Command::Execute => {
-                self.ssm_auth_profile_dropdown.update(cx, |dropdown, cx| {
-                    dropdown.accept_selection(cx);
-                });
+                self.access
+                    .ssm_auth_profile_dropdown
+                    .update(cx, |dropdown, cx| {
+                        dropdown.accept_selection(cx);
+                    });
                 true
             }
             Command::Cancel => {
-                self.ssm_auth_profile_dropdown.update(cx, |dropdown, cx| {
-                    dropdown.close(cx);
-                });
+                self.access
+                    .ssm_auth_profile_dropdown
+                    .update(cx, |dropdown, cx| {
+                        dropdown.close(cx);
+                    });
                 true
             }
             _ => false,
@@ -1222,13 +1260,13 @@ impl ConnectionManagerWindow {
         use FormFocus::*;
 
         match self.form_focus {
-            HostValueSource => Some(&self.host_value_source_selector),
-            DatabaseValueSource => Some(&self.database_value_source_selector),
-            UserValueSource => Some(&self.user_value_source_selector),
-            PasswordValueSource => Some(&self.password_value_source_selector),
-            SsmInstanceIdValueSource => Some(&self.ssm_instance_id_value_source_selector),
-            SsmRegionValueSource => Some(&self.ssm_region_value_source_selector),
-            SsmRemotePortValueSource => Some(&self.ssm_remote_port_value_source_selector),
+            HostValueSource => Some(&self.form.host_value_source_selector),
+            DatabaseValueSource => Some(&self.form.database_value_source_selector),
+            UserValueSource => Some(&self.form.user_value_source_selector),
+            PasswordValueSource => Some(&self.form.password_value_source_selector),
+            SsmInstanceIdValueSource => Some(&self.access.ssm_instance_id_value_source_selector),
+            SsmRegionValueSource => Some(&self.access.ssm_region_value_source_selector),
+            SsmRemotePortValueSource => Some(&self.access.ssm_remote_port_value_source_selector),
             _ => None,
         }
     }
@@ -1385,13 +1423,13 @@ impl ConnectionManagerWindow {
     pub(super) fn ssh_nav_state(&self, cx: &Context<Self>) -> SshNavState {
         let state = self.app_state.read(cx);
         let has_tunnels = !state.ssh_tunnels().is_empty();
-        let has_selected_tunnel = self.selected_ssh_tunnel_id.is_some();
-        let can_save_tunnel = self.selected_ssh_tunnel_id.is_none();
+        let has_selected_tunnel = self.access.selected_ssh_tunnel_id.is_some();
+        let can_save_tunnel = self.access.selected_ssh_tunnel_id.is_none();
         SshNavState::new(
-            self.ssh_enabled,
+            self.access.ssh_enabled,
             has_tunnels,
             has_selected_tunnel,
-            self.ssh_auth_method,
+            self.access.ssh_auth_method,
             can_save_tunnel,
         )
     }
@@ -1399,12 +1437,13 @@ impl ConnectionManagerWindow {
     pub(super) fn proxy_nav_state(&self, cx: &Context<Self>) -> ProxyNavState {
         let state = self.app_state.read(cx);
         let has_proxies = !state.proxies().is_empty();
-        let has_selected_proxy = self.selected_proxy_id.is_some();
+        let has_selected_proxy = self.access.selected_proxy_id.is_some();
         ProxyNavState::new(has_proxies, has_selected_proxy)
     }
 
     pub(super) fn main_nav_state(&self, cx: &Context<Self>) -> MainNavState {
         let has_uri_option = self
+            .form
             .selected_driver
             .as_ref()
             .and_then(|d| d.form_definition().field("use_uri"))
@@ -1412,13 +1451,17 @@ impl ConnectionManagerWindow {
 
         let uri_mode_active = has_uri_option
             && self
+                .form
                 .checkbox_states
                 .get("use_uri")
                 .copied()
                 .unwrap_or(false);
 
-        let password_source_is_literal =
-            self.password_value_source_selector.read(cx).is_literal(cx);
+        let password_source_is_literal = self
+            .form
+            .password_value_source_selector
+            .read(cx)
+            .is_literal(cx);
         let can_save_password =
             password_source_is_literal && self.app_state.read(cx).secret_store_available();
 
@@ -1432,7 +1475,8 @@ impl ConnectionManagerWindow {
     }
 
     fn ssm_auth_login_enabled(&self, cx: &Context<Self>) -> bool {
-        !self.auth_profile_login_in_progress && self.selected_auth_profile_needs_login(cx)
+        !self.auth_profile.auth_profile_login_in_progress
+            && self.selected_auth_profile_needs_login(cx)
     }
 
     pub(super) fn normalize_focus_for_state(&mut self, cx: &Context<Self>) -> bool {
@@ -1457,8 +1501,8 @@ impl ConnectionManagerWindow {
                 }
             }
             ActiveTab::Access => {
-                if (self.access_tab_mode == AccessTabMode::ManagedSsm
-                    || self.access_tab_mode == AccessTabMode::Direct)
+                if (self.access.access_tab_mode == AccessTabMode::ManagedSsm
+                    || self.access.access_tab_mode == AccessTabMode::Direct)
                     && !self.ssm_auth_login_enabled(cx)
                     && next_focus == SsmAuthLogin
                 {
@@ -1485,7 +1529,7 @@ impl ConnectionManagerWindow {
                 | Password | PasswordToggle | PasswordSave => 1,
                 _ => 0,
             },
-            ActiveTab::Access => match self.access_tab_mode {
+            ActiveTab::Access => match self.access.access_tab_mode {
                 AccessTabMode::Direct => match self.form_focus {
                     AccessMethod => 0,
                     SsmAuthProfile => 1,
@@ -1504,7 +1548,8 @@ impl ConnectionManagerWindow {
                     _ => 3,
                 },
                 AccessTabMode::Ssh => {
-                    let has_tunnels = self.ssh_enabled && !self.ssh_tunnel_uuids.is_empty();
+                    let has_tunnels =
+                        self.access.ssh_enabled && !self.access.ssh_tunnel_uuids.is_empty();
                     let tunnel_offset = if has_tunnels { 1 } else { 0 };
 
                     match self.form_focus {
@@ -1547,7 +1592,7 @@ impl ConnectionManagerWindow {
         self.form_focus = match self.active_tab {
             ActiveTab::Main => self.form_focus.down_main(self.main_nav_state(cx)),
             ActiveTab::Access => self.form_focus.down_access(
-                self.access_tab_mode,
+                self.access.access_tab_mode,
                 self.ssh_nav_state(cx),
                 self.proxy_nav_state(cx),
             ),
@@ -1565,7 +1610,7 @@ impl ConnectionManagerWindow {
         self.form_focus = match self.active_tab {
             ActiveTab::Main => self.form_focus.up_main(self.main_nav_state(cx)),
             ActiveTab::Access => self.form_focus.up_access(
-                self.access_tab_mode,
+                self.access.access_tab_mode,
                 self.ssh_nav_state(cx),
                 self.proxy_nav_state(cx),
             ),
@@ -1583,7 +1628,7 @@ impl ConnectionManagerWindow {
         self.form_focus = match self.active_tab {
             ActiveTab::Main => self.form_focus.left_main(self.main_nav_state(cx)),
             ActiveTab::Access => self.form_focus.left_access(
-                self.access_tab_mode,
+                self.access.access_tab_mode,
                 self.ssh_nav_state(cx),
                 self.proxy_nav_state(cx),
             ),
@@ -1592,8 +1637,8 @@ impl ConnectionManagerWindow {
         };
 
         if self.active_tab == ActiveTab::Access
-            && (self.access_tab_mode == AccessTabMode::ManagedSsm
-                || self.access_tab_mode == AccessTabMode::Direct)
+            && (self.access.access_tab_mode == AccessTabMode::ManagedSsm
+                || self.access.access_tab_mode == AccessTabMode::Direct)
             && self.form_focus == FormFocus::SsmAuthLogin
             && !self.ssm_auth_login_enabled(cx)
         {
@@ -1609,7 +1654,7 @@ impl ConnectionManagerWindow {
         self.form_focus = match self.active_tab {
             ActiveTab::Main => self.form_focus.right_main(self.main_nav_state(cx)),
             ActiveTab::Access => self.form_focus.right_access(
-                self.access_tab_mode,
+                self.access.access_tab_mode,
                 self.ssh_nav_state(cx),
                 self.proxy_nav_state(cx),
             ),
@@ -1618,8 +1663,8 @@ impl ConnectionManagerWindow {
         };
 
         if self.active_tab == ActiveTab::Access
-            && (self.access_tab_mode == AccessTabMode::ManagedSsm
-                || self.access_tab_mode == AccessTabMode::Direct)
+            && (self.access.access_tab_mode == AccessTabMode::ManagedSsm
+                || self.access.access_tab_mode == AccessTabMode::Direct)
             && self.form_focus == FormFocus::SsmAuthLogin
             && !self.ssm_auth_login_enabled(cx)
         {
@@ -1679,7 +1724,7 @@ impl ConnectionManagerWindow {
         match self.form_focus {
             FormFocus::Name => {
                 self.edit_state = EditState::Editing;
-                self.input_name.update(cx, |state, cx| {
+                self.form.input_name.update(cx, |state, cx| {
                     state.focus(window, cx);
                 });
             }
@@ -1694,26 +1739,32 @@ impl ConnectionManagerWindow {
             }
 
             FormFocus::HostValueSource => {
-                self.host_value_source_selector.update(cx, |selector, cx| {
-                    selector.open_source_dropdown(cx);
-                });
+                self.form
+                    .host_value_source_selector
+                    .update(cx, |selector, cx| {
+                        selector.open_source_dropdown(cx);
+                    });
             }
 
             FormFocus::DatabaseValueSource => {
-                self.database_value_source_selector
+                self.form
+                    .database_value_source_selector
                     .update(cx, |selector, cx| {
                         selector.open_source_dropdown(cx);
                     });
             }
 
             FormFocus::UserValueSource => {
-                self.user_value_source_selector.update(cx, |selector, cx| {
-                    selector.open_source_dropdown(cx);
-                });
+                self.form
+                    .user_value_source_selector
+                    .update(cx, |selector, cx| {
+                        selector.open_source_dropdown(cx);
+                    });
             }
 
             FormFocus::PasswordValueSource => {
-                self.password_value_source_selector
+                self.form
+                    .password_value_source_selector
                     .update(cx, |selector, cx| {
                         selector.open_source_dropdown(cx);
                     });
@@ -1721,68 +1772,78 @@ impl ConnectionManagerWindow {
 
             FormFocus::Password => {
                 self.edit_state = EditState::Editing;
-                self.input_password.update(cx, |state, cx| {
+                self.form.input_password.update(cx, |state, cx| {
                     state.focus(window, cx);
                 });
             }
 
             FormFocus::PasswordToggle => {
-                if self.password_value_source_selector.read(cx).is_literal(cx) {
-                    self.show_password = !self.show_password;
+                if self
+                    .form
+                    .password_value_source_selector
+                    .read(cx)
+                    .is_literal(cx)
+                {
+                    self.form.show_password = !self.form.show_password;
                 }
             }
 
             FormFocus::AccessMethod => {
-                self.access_method_dropdown.update(cx, |dropdown, cx| {
-                    dropdown.open(cx);
-                });
+                self.access
+                    .access_method_dropdown
+                    .update(cx, |dropdown, cx| {
+                        dropdown.open(cx);
+                    });
             }
 
             FormFocus::SshHost => {
                 self.edit_state = EditState::Editing;
-                self.input_ssh_host.update(cx, |state, cx| {
+                self.access.input_ssh_host.update(cx, |state, cx| {
                     state.focus(window, cx);
                 });
             }
             FormFocus::SshPort => {
                 self.edit_state = EditState::Editing;
-                self.input_ssh_port.update(cx, |state, cx| {
+                self.access.input_ssh_port.update(cx, |state, cx| {
                     state.focus(window, cx);
                 });
             }
             FormFocus::SshUser => {
                 self.edit_state = EditState::Editing;
-                self.input_ssh_user.update(cx, |state, cx| {
+                self.access.input_ssh_user.update(cx, |state, cx| {
                     state.focus(window, cx);
                 });
             }
             FormFocus::SshKeyPath => {
                 self.edit_state = EditState::Editing;
-                self.input_ssh_key_path.update(cx, |state, cx| {
+                self.access.input_ssh_key_path.update(cx, |state, cx| {
                     state.focus(window, cx);
                 });
             }
             FormFocus::SshPassphrase => {
                 self.edit_state = EditState::Editing;
-                self.input_ssh_key_passphrase.update(cx, |state, cx| {
-                    state.focus(window, cx);
-                });
+                self.access
+                    .input_ssh_key_passphrase
+                    .update(cx, |state, cx| {
+                        state.focus(window, cx);
+                    });
             }
             FormFocus::SshPassword => {
                 self.edit_state = EditState::Editing;
-                self.input_ssh_password.update(cx, |state, cx| {
+                self.access.input_ssh_password.update(cx, |state, cx| {
                     state.focus(window, cx);
                 });
             }
             FormFocus::SsmInstanceId => {
                 self.edit_state = EditState::Editing;
-                self.input_ssm_instance_id.update(cx, |state, cx| {
+                self.access.input_ssm_instance_id.update(cx, |state, cx| {
                     state.focus(window, cx);
                 });
             }
 
             FormFocus::SsmInstanceIdValueSource => {
-                self.ssm_instance_id_value_source_selector
+                self.access
+                    .ssm_instance_id_value_source_selector
                     .update(cx, |selector, cx| {
                         selector.open_source_dropdown(cx);
                     });
@@ -1790,13 +1851,14 @@ impl ConnectionManagerWindow {
 
             FormFocus::SsmRegion => {
                 self.edit_state = EditState::Editing;
-                self.input_ssm_region.update(cx, |state, cx| {
+                self.access.input_ssm_region.update(cx, |state, cx| {
                     state.focus(window, cx);
                 });
             }
 
             FormFocus::SsmRegionValueSource => {
-                self.ssm_region_value_source_selector
+                self.access
+                    .ssm_region_value_source_selector
                     .update(cx, |selector, cx| {
                         selector.open_source_dropdown(cx);
                     });
@@ -1804,22 +1866,25 @@ impl ConnectionManagerWindow {
 
             FormFocus::SsmRemotePort => {
                 self.edit_state = EditState::Editing;
-                self.input_ssm_remote_port.update(cx, |state, cx| {
+                self.access.input_ssm_remote_port.update(cx, |state, cx| {
                     state.focus(window, cx);
                 });
             }
 
             FormFocus::SsmRemotePortValueSource => {
-                self.ssm_remote_port_value_source_selector
+                self.access
+                    .ssm_remote_port_value_source_selector
                     .update(cx, |selector, cx| {
                         selector.open_source_dropdown(cx);
                     });
             }
 
             FormFocus::SsmAuthProfile => {
-                self.auth_profile_dropdown.update(cx, |dropdown, cx| {
-                    dropdown.open(cx);
-                });
+                self.auth_profile
+                    .auth_profile_dropdown
+                    .update(cx, |dropdown, cx| {
+                        dropdown.open(cx);
+                    });
             }
 
             FormFocus::SsmAuthManage => {
@@ -1827,7 +1892,7 @@ impl ConnectionManagerWindow {
             }
 
             FormFocus::SsmAuthLogin => {
-                if !self.auth_profile_login_in_progress
+                if !self.auth_profile.auth_profile_login_in_progress
                     && self.selected_auth_profile_needs_login(cx)
                 {
                     self.login_selected_auth_profile(cx);
@@ -1848,12 +1913,14 @@ impl ConnectionManagerWindow {
 
             FormFocus::UseUri => {
                 let current = self
+                    .form
                     .checkbox_states
                     .get("use_uri")
                     .copied()
                     .unwrap_or(false);
                 let new_value = !current;
-                self.checkbox_states
+                self.form
+                    .checkbox_states
                     .insert("use_uri".to_string(), new_value);
 
                 if new_value {
@@ -1863,10 +1930,14 @@ impl ConnectionManagerWindow {
                 }
             }
             FormFocus::PasswordSave => {
-                if self.password_value_source_selector.read(cx).is_literal(cx)
+                if self
+                    .form
+                    .password_value_source_selector
+                    .read(cx)
+                    .is_literal(cx)
                     && self.app_state.read(cx).secret_store_available()
                 {
-                    self.form_save_password = !self.form_save_password;
+                    self.form.form_save_password = !self.form.form_save_password;
                 }
             }
             FormFocus::ProxySelector => {
@@ -1882,9 +1953,9 @@ impl ConnectionManagerWindow {
                         DropdownItem::with_value(&label, p.id.to_string())
                     })
                     .collect();
-                self.proxy_uuids = proxies.iter().map(|p| p.id).collect();
+                self.access.proxy_uuids = proxies.iter().map(|p| p.id).collect();
 
-                self.proxy_dropdown.update(cx, |dropdown, cx| {
+                self.access.proxy_dropdown.update(cx, |dropdown, cx| {
                     dropdown.set_items(proxy_items, cx);
                     dropdown.open(cx);
                 });
@@ -1895,10 +1966,10 @@ impl ConnectionManagerWindow {
             }
 
             FormFocus::SshEnabled => {
-                self.ssh_enabled = !self.ssh_enabled;
+                self.access.ssh_enabled = !self.access.ssh_enabled;
             }
             FormFocus::SshSaveSecret => {
-                self.form_save_ssh_secret = !self.form_save_ssh_secret;
+                self.form.form_save_ssh_secret = !self.form.form_save_ssh_secret;
             }
 
             FormFocus::SshTunnelSelector => {
@@ -1907,9 +1978,9 @@ impl ConnectionManagerWindow {
                     .iter()
                     .map(|t| DropdownItem::with_value(&t.name, t.id.to_string()))
                     .collect();
-                self.ssh_tunnel_uuids = ssh_tunnels.iter().map(|t| t.id).collect();
+                self.access.ssh_tunnel_uuids = ssh_tunnels.iter().map(|t| t.id).collect();
 
-                self.ssh_tunnel_dropdown.update(cx, |dropdown, cx| {
+                self.access.ssh_tunnel_dropdown.update(cx, |dropdown, cx| {
                     dropdown.set_items(tunnel_items, cx);
                     dropdown.open(cx);
                 });
@@ -1920,10 +1991,10 @@ impl ConnectionManagerWindow {
             }
 
             FormFocus::SshAuthPrivateKey => {
-                self.ssh_auth_method = SshAuthSelection::PrivateKey;
+                self.access.ssh_auth_method = SshAuthSelection::PrivateKey;
             }
             FormFocus::SshAuthPassword => {
-                self.ssh_auth_method = SshAuthSelection::Password;
+                self.access.ssh_auth_method = SshAuthSelection::Password;
             }
 
             FormFocus::SshEditInSettings => {
@@ -1942,16 +2013,19 @@ impl ConnectionManagerWindow {
             }
 
             FormFocus::SettingsRefreshPolicy => {
-                self.conn_override_refresh_policy = !self.conn_override_refresh_policy;
+                self.settings_tab.conn_override_refresh_policy =
+                    !self.settings_tab.conn_override_refresh_policy;
             }
             FormFocus::SettingsRefreshInterval => {
-                if self.conn_override_refresh_interval {
+                if self.settings_tab.conn_override_refresh_interval {
                     self.edit_state = EditState::Editing;
-                    self.conn_refresh_interval_input.update(cx, |state, cx| {
-                        state.focus(window, cx);
-                    });
+                    self.settings_tab
+                        .conn_refresh_interval_input
+                        .update(cx, |state, cx| {
+                            state.focus(window, cx);
+                        });
                 } else {
-                    self.conn_override_refresh_interval = true;
+                    self.settings_tab.conn_override_refresh_interval = true;
                 }
             }
             FormFocus::SettingsConfirmDangerous
@@ -1965,18 +2039,25 @@ impl ConnectionManagerWindow {
                     match &field.kind {
                         FormFieldKind::Checkbox => {
                             let current = self
+                                .settings_tab
                                 .conn_form_state
                                 .checkboxes
                                 .get(&field.id)
                                 .copied()
                                 .unwrap_or(false);
-                            self.conn_form_state
+                            self.settings_tab
+                                .conn_form_state
                                 .checkboxes
                                 .insert(field.id.clone(), !current);
                         }
                         FormFieldKind::Select { .. } => {}
                         _ => {
-                            if let Some(input) = self.conn_form_state.inputs.get(&field.id).cloned()
+                            if let Some(input) = self
+                                .settings_tab
+                                .conn_form_state
+                                .inputs
+                                .get(&field.id)
+                                .cloned()
                             {
                                 self.edit_state = EditState::Editing;
                                 input.update(cx, |state, cx| {

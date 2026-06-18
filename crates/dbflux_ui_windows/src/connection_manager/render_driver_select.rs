@@ -54,7 +54,8 @@ impl ConnectionManagerWindow {
 
     /// Lowercased filter query, read live from the filter input each render.
     pub(super) fn current_driver_filter(&self, cx: &App) -> String {
-        self.driver_filter_input
+        self.form
+            .driver_filter_input
             .read(cx)
             .value()
             .to_string()
@@ -104,7 +105,7 @@ impl ConnectionManagerWindow {
                     .items_center()
                     .gap_2()
                     .w(px(360.0))
-                    .child(render_filter_input(&self.driver_filter_input))
+                    .child(render_filter_input(&self.form.driver_filter_input))
                     .child(KbdBadge::new("/")),
             )
     }

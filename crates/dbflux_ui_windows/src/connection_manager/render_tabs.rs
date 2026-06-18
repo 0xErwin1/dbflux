@@ -107,13 +107,13 @@ impl ConnectionManagerWindow {
     pub(super) fn render_main_tab(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         // Clone the driver Arc up front so we don't hold a reference into `self`
         // across mutable calls like `render_form_tab` below.
-        let Some(driver) = self.selected_driver.clone() else {
+        let Some(driver) = self.form.selected_driver.clone() else {
             return Vec::new();
         };
 
         let keyring_available = self.app_state.read(cx).secret_store_available();
         let requires_password = driver.requires_password();
-        let save_password = self.form_save_password;
+        let save_password = self.form.form_save_password;
         let ssl_modes = driver.metadata().ssl_modes;
 
         let show_focus =
@@ -175,7 +175,7 @@ impl ConnectionManagerWindow {
         ssl_modes: &'static [dbflux_core::SslModeOption],
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let current_ssl_mode = self.selected_ssl_mode.clone();
+        let current_ssl_mode = self.form.selected_ssl_mode.clone();
 
         let ssl_items: Vec<SegmentedItem> = ssl_modes
             .iter()
@@ -190,7 +190,7 @@ impl ConnectionManagerWindow {
             move |selected: &SharedString, _window, cx| {
                 let mode = selected.to_string();
                 entity.update(cx, |this, cx| {
-                    this.selected_ssl_mode = mode;
+                    this.form.selected_ssl_mode = mode;
                     cx.notify();
                 });
             },
@@ -215,7 +215,7 @@ impl ConnectionManagerWindow {
 
         // Cert path inputs — shown only when the driver declares ssl_cert_fields and the
         // selected mode requires certificate verification.
-        if let Some(driver) = &self.selected_driver {
+        if let Some(driver) = &self.form.selected_driver {
             let metadata = driver.metadata();
             if let Some(cert_fields) = &metadata.ssl_cert_fields {
                 let mode_requires_root =
@@ -265,9 +265,9 @@ impl ConnectionManagerWindow {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let input_entity = match slot {
-            super::SslCertSlot::CaCert => &self.ssl_ca_cert_input,
-            super::SslCertSlot::ClientCert => &self.ssl_client_cert_input,
-            super::SslCertSlot::ClientKey => &self.ssl_client_key_input,
+            super::SslCertSlot::CaCert => &self.form.ssl_ca_cert_input,
+            super::SslCertSlot::ClientCert => &self.form.ssl_client_cert_input,
+            super::SslCertSlot::ClientKey => &self.form.ssl_client_key_input,
         };
 
         let current_value = input_entity.read(cx).value().to_string();
@@ -362,9 +362,9 @@ impl ConnectionManagerWindow {
                     .p(px(2.0))
                     .child(
                         Checkbox::new("conn-override-refresh-policy")
-                            .checked(self.conn_override_refresh_policy)
+                            .checked(self.settings_tab.conn_override_refresh_policy)
                             .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                this.conn_override_refresh_policy = *checked;
+                                this.settings_tab.conn_override_refresh_policy = *checked;
                                 cx.notify();
                             })),
                     )
@@ -373,13 +373,13 @@ impl ConnectionManagerWindow {
                         div()
                             .min_w(px(160.0))
                             .relative()
-                            .opacity(if self.conn_override_refresh_policy {
+                            .opacity(if self.settings_tab.conn_override_refresh_policy {
                                 1.0
                             } else {
                                 0.6
                             })
-                            .child(self.conn_refresh_policy_dropdown.clone())
-                            .when(!self.conn_override_refresh_policy, |d| {
+                            .child(self.settings_tab.conn_refresh_policy_dropdown.clone())
+                            .when(!self.settings_tab.conn_override_refresh_policy, |d| {
                                 d.child(
                                     div()
                                         .absolute()
@@ -411,9 +411,9 @@ impl ConnectionManagerWindow {
                     .p(px(2.0))
                     .child(
                         Checkbox::new("conn-override-refresh-interval")
-                            .checked(self.conn_override_refresh_interval)
+                            .checked(self.settings_tab.conn_override_refresh_interval)
                             .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                this.conn_override_refresh_interval = *checked;
+                                this.settings_tab.conn_override_refresh_interval = *checked;
                                 cx.notify();
                             })),
                     )
@@ -421,15 +421,15 @@ impl ConnectionManagerWindow {
                     .child(
                         div()
                             .w(px(100.0))
-                            .opacity(if self.conn_override_refresh_interval {
+                            .opacity(if self.settings_tab.conn_override_refresh_interval {
                                 1.0
                             } else {
                                 0.6
                             })
                             .child(
-                                Input::new(&self.conn_refresh_interval_input)
+                                Input::new(&self.settings_tab.conn_refresh_interval_input)
                                     .small()
-                                    .disabled(!self.conn_override_refresh_interval),
+                                    .disabled(!self.settings_tab.conn_override_refresh_interval),
                             ),
                     )
                     .child(Text::caption(format!(
@@ -463,7 +463,7 @@ impl ConnectionManagerWindow {
                     .child(
                         div()
                             .min_w(px(160.0))
-                            .child(self.conn_confirm_dangerous_dropdown.clone()),
+                            .child(self.settings_tab.conn_confirm_dangerous_dropdown.clone()),
                     )
                     .child(Text::caption(format!(
                         "Default: {}",
@@ -495,7 +495,7 @@ impl ConnectionManagerWindow {
                     .child(
                         div()
                             .min_w(px(160.0))
-                            .child(self.conn_requires_where_dropdown.clone()),
+                            .child(self.settings_tab.conn_requires_where_dropdown.clone()),
                     )
                     .child(Text::caption(format!(
                         "Default: {}",
@@ -527,7 +527,7 @@ impl ConnectionManagerWindow {
                     .child(
                         div()
                             .min_w(px(160.0))
-                            .child(self.conn_requires_preview_dropdown.clone()),
+                            .child(self.settings_tab.conn_requires_preview_dropdown.clone()),
                     )
                     .child(Text::caption(format!(
                         "Default: {}",
@@ -552,7 +552,7 @@ impl ConnectionManagerWindow {
         );
 
         // --- Driver Schema Section ---
-        if let Some(driver) = &self.selected_driver
+        if let Some(driver) = &self.form.selected_driver
             && let Some(schema) = driver.settings_schema()
         {
             let mut field_idx: u8 = 0;
@@ -570,12 +570,13 @@ impl ConnectionManagerWindow {
                             show_focus && focus == FormFocus::SettingsDriverField(current_idx);
                         let enabled = form_renderer::is_field_enabled(
                             field,
-                            &self.conn_form_state.checkboxes,
+                            &self.settings_tab.conn_form_state.checkboxes,
                         );
 
                         match &field.kind {
                             FormFieldKind::Checkbox => {
                                 let checked = self
+                                    .settings_tab
                                     .conn_form_state
                                     .checkboxes
                                     .get(&field.id)
@@ -613,7 +614,8 @@ impl ConnectionManagerWindow {
                                                     if !enabled {
                                                         return;
                                                     }
-                                                    this.conn_form_state
+                                                    this.settings_tab
+                                                        .conn_form_state
                                                         .checkboxes
                                                         .insert(field_id.clone(), *checked);
                                                     cx.notify();
@@ -626,8 +628,12 @@ impl ConnectionManagerWindow {
                             }
 
                             FormFieldKind::Select { .. } => {
-                                let dropdown =
-                                    self.conn_form_state.dropdowns.get(&field.id)?.clone();
+                                let dropdown = self
+                                    .settings_tab
+                                    .conn_form_state
+                                    .dropdowns
+                                    .get(&field.id)?
+                                    .clone();
                                 let default_val = effective
                                     .driver_values
                                     .get(&field.id)
@@ -664,7 +670,12 @@ impl ConnectionManagerWindow {
                             }
 
                             _ => {
-                                let input = self.conn_form_state.inputs.get(&field.id)?.clone();
+                                let input = self
+                                    .settings_tab
+                                    .conn_form_state
+                                    .inputs
+                                    .get(&field.id)?
+                                    .clone();
                                 let default_val = effective
                                     .driver_values
                                     .get(&field.id)
@@ -717,16 +728,18 @@ impl ConnectionManagerWindow {
 
     pub(super) fn render_mcp_tab(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let theme = cx.theme().clone();
-        let enabled = self.conn_mcp_enabled;
+        let enabled = self.mcp_tab.conn_mcp_enabled;
         let opacity = if enabled { 1.0 } else { 0.5 };
 
         let actor_label = self
+            .mcp_tab
             .conn_mcp_actor_dropdown
             .read(cx)
             .selected_label()
             .map(|l| l.to_string())
             .unwrap_or_default();
         let role_label = self
+            .mcp_tab
             .conn_mcp_role_dropdown
             .read(cx)
             .selected_value()
@@ -734,6 +747,7 @@ impl ConnectionManagerWindow {
             .map(|v| v.to_string())
             .unwrap_or_else(|| "none".to_string());
         let policy_label = self
+            .mcp_tab
             .conn_mcp_policy_dropdown
             .read(cx)
             .selected_value()
@@ -763,7 +777,7 @@ impl ConnectionManagerWindow {
                     .gap_2()
                     .child(Checkbox::new("conn-mcp-enabled").checked(enabled).on_click(
                         cx.listener(|this, checked: &bool, _, cx| {
-                            this.conn_mcp_enabled = *checked;
+                            this.mcp_tab.conn_mcp_enabled = *checked;
                             cx.notify();
                         }),
                     ))
@@ -779,7 +793,7 @@ impl ConnectionManagerWindow {
                     .child(Text::caption(
                         "AI agent identity — configure in Settings → MCP",
                     ))
-                    .child(self.conn_mcp_actor_dropdown.clone()),
+                    .child(self.mcp_tab.conn_mcp_actor_dropdown.clone()),
             )
             .child(
                 div()
@@ -791,9 +805,9 @@ impl ConnectionManagerWindow {
                     .child(Text::caption(
                         "Configure roles in Settings \u{2192} MCP \u{2192} Roles",
                     ))
-                    .child(self.conn_mcp_role_dropdown.clone())
+                    .child(self.mcp_tab.conn_mcp_role_dropdown.clone())
                     .child(Text::caption("Additional roles (optional)"))
-                    .child(self.conn_mcp_role_multi_select.clone()),
+                    .child(self.mcp_tab.conn_mcp_role_multi_select.clone()),
             )
             .child(
                 div()
@@ -805,9 +819,9 @@ impl ConnectionManagerWindow {
                     .child(Text::caption(
                         "Configure policies in Settings \u{2192} MCP \u{2192} Policies",
                     ))
-                    .child(self.conn_mcp_policy_dropdown.clone())
+                    .child(self.mcp_tab.conn_mcp_policy_dropdown.clone())
                     .child(Text::caption("Additional policies (optional)"))
-                    .child(self.conn_mcp_policy_multi_select.clone()),
+                    .child(self.mcp_tab.conn_mcp_policy_multi_select.clone()),
             )
             .child(Text::caption("Scope/policy assignment preview").into_any_element())
             .child(Text::body(preview_text));
