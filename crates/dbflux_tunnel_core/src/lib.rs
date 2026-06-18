@@ -7,9 +7,9 @@
 
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -45,7 +45,9 @@ pub struct Tunnel {
     thread: Option<JoinHandle<()>>,
     /// Receives on `Disconnect` once the forwarding thread returns and drops
     /// its `Sender`, signalling that `thread.join()` will complete immediately.
-    thread_exit: Receiver<()>,
+    /// Wrapped in a `Mutex` so `Tunnel` stays `Sync` (`Receiver` is `!Sync`),
+    /// which the `dbflux_core::Connection: Send + Sync` bound requires.
+    thread_exit: Mutex<Receiver<()>>,
 }
 
 impl Tunnel {
@@ -94,7 +96,7 @@ impl Tunnel {
             local_port,
             shutdown,
             thread: Some(thread),
-            thread_exit,
+            thread_exit: Mutex::new(thread_exit),
         })
     }
 
@@ -111,7 +113,12 @@ impl Drop for Tunnel {
             return;
         };
 
-        match self.thread_exit.recv_timeout(DROP_JOIN_GRACE) {
+        let exit_guard = match self.thread_exit.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        match exit_guard.recv_timeout(DROP_JOIN_GRACE) {
             Err(RecvTimeoutError::Disconnected) => {
                 // The forwarding thread has returned and dropped its sender, so
                 // join completes immediately and releases the local port.

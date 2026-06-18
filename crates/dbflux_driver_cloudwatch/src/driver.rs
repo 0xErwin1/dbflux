@@ -1531,12 +1531,19 @@ pub(crate) fn classify_cw(
 /// surfaces the underlying message ("dns error: failed to lookup …", "tcp
 /// connect error", certificate failures) so transport faults stay diagnosable.
 fn transport_error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    const MAX_SOURCE_DEPTH: usize = 16;
+
     let mut parts = vec![error.to_string()];
     let mut source = error.source();
 
+    let mut depth = 0;
     while let Some(cause) = source {
+        if depth >= MAX_SOURCE_DEPTH {
+            break;
+        }
         parts.push(cause.to_string());
         source = cause.source();
+        depth += 1;
     }
 
     parts.join(": ")
