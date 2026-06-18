@@ -580,6 +580,12 @@ impl DbDriver for RedisDriver {
     }
 
     fn parse_uri(&self, uri: &str) -> Option<FormValues> {
+        fn decode_lossy(s: &str) -> String {
+            urlencoding::decode(s)
+                .map(std::borrow::Cow::into_owned)
+                .unwrap_or_else(|_| s.to_string())
+        }
+
         let (scheme, rest) = uri.split_once("://")?;
         if scheme != "redis" && scheme != "rediss" {
             return None;
@@ -595,10 +601,15 @@ impl DbDriver for RedisDriver {
         };
 
         let host_port = if let Some((auth, hp)) = authority.rsplit_once('@') {
-            if let Some((user, _)) = auth.split_once(':') {
-                values.insert("user".to_string(), user.to_string());
-            } else if !auth.starts_with(':') {
-                values.insert("user".to_string(), auth.to_string());
+            if let Some((user, pass)) = auth.split_once(':') {
+                if !user.is_empty() {
+                    values.insert("user".to_string(), decode_lossy(user));
+                }
+                if !pass.is_empty() {
+                    values.insert("password".to_string(), decode_lossy(pass));
+                }
+            } else if !auth.is_empty() {
+                values.insert("user".to_string(), decode_lossy(auth));
             }
             hp
         } else {
@@ -2577,7 +2588,7 @@ mod tests {
         assert_eq!(parsed.get("port").map(String::as_str), Some("6380"));
         assert_eq!(
             parsed.get("user").map(String::as_str),
-            Some("service%20user")
+            Some("service user")
         );
         assert_eq!(parsed.get("database").map(String::as_str), Some("2"));
     }
@@ -2776,9 +2787,42 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "TODO: decode percent-encoded username in redis parse_uri"]
-    fn pending_redis_parse_uri_username_decoding() {
-        panic!("TODO: percent-decode username in Redis parse_uri result");
+    fn redis_parse_uri_decodes_username_and_password() {
+        let driver = RedisDriver::new();
+        let v = driver
+            .parse_uri("redis://user%40domain.com:p%40ss@localhost:6379/0")
+            .expect("URI should parse");
+        assert_eq!(v.get("user").map(String::as_str), Some("user@domain.com"));
+        assert_eq!(v.get("password").map(String::as_str), Some("p@ss"));
+        assert_eq!(v.get("host").map(String::as_str), Some("localhost"));
+        assert_eq!(v.get("port").map(String::as_str), Some("6379"));
+    }
+
+    #[test]
+    fn parse_uri_no_userinfo() {
+        let driver = RedisDriver::new();
+        let v = driver
+            .parse_uri("redis://host:6379/0")
+            .expect("URI should parse");
+        assert_eq!(v.get("host").map(String::as_str), Some("host"));
+        assert_eq!(v.get("port").map(String::as_str), Some("6379"));
+        assert!(!v.contains_key("user"), "no user key expected");
+        assert!(!v.contains_key("password"), "no password key expected");
+    }
+
+    #[test]
+    fn parse_uri_invalid_percent_is_lossy() {
+        let driver = RedisDriver::new();
+        // %GG is an invalid percent sequence; parse_uri must return Some (no panic, no None)
+        // and the username segment must equal the original raw text.
+        let v = driver
+            .parse_uri("redis://%GGuser:pass@host:6379/0")
+            .expect("URI should parse even with invalid percent sequence");
+        assert_eq!(
+            v.get("user").map(String::as_str),
+            Some("%GGuser"),
+            "lossy fallback must return the original raw segment"
+        );
     }
 
     #[test]
