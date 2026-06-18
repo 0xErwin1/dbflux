@@ -56,7 +56,24 @@ impl ProxiedStream {
             }
         }
     }
+
+    fn set_write_timeout(&self, timeout: Option<std::time::Duration>) {
+        let result = match self {
+            Self::Plain(stream) => stream.set_write_timeout(timeout),
+            Self::Tls(stream) => stream.get_ref().set_write_timeout(timeout),
+        };
+        if let Err(e) = result {
+            log::warn!(
+                "[Proxy] Failed to set write timeout on proxied stream: {}",
+                e
+            );
+        }
+    }
 }
+
+/// Caps `blocking_write_all` on the forwarded streams so a stalled peer cannot
+/// block the single tunnel thread forever. Matches the SSH tunnel's 30s bound.
+const PROXY_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 impl Read for ProxiedStream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
@@ -456,7 +473,15 @@ fn run_proxy_tunnel_loop(
                 match open_proxied_stream(&config, &remote_host, remote_port) {
                     Ok(proxied_stream) => {
                         proxied_stream.set_nodelay();
+                        proxied_stream.set_write_timeout(Some(PROXY_WRITE_TIMEOUT));
                         proxied_stream.set_nonblocking(true);
+
+                        if let Err(e) = client_stream.set_write_timeout(Some(PROXY_WRITE_TIMEOUT)) {
+                            log::warn!(
+                                "[Proxy] Failed to set write timeout on client stream: {}",
+                                e
+                            );
+                        }
 
                         match ForwardingConnection::new(client_stream, proxied_stream) {
                             Ok(conn) => {

@@ -14,14 +14,14 @@ use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     CollectionBrowseRequest, CollectionChildInfo, CollectionChildrenPage,
     CollectionChildrenRequest, CollectionCountRequest, CollectionInfo, CollectionPresentation,
-    ColumnKind, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionProfile,
-    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DeploymentClass,
-    DocumentSchema, DriverCapabilities, DriverFormDef, DriverMetadata, EventActorType,
-    EventCategory, EventPage, EventQuery, EventRecord, EventSeverity, EventSourceId,
-    EventStreamTarget, ExecutionSourceContext, FormFieldKind, FormSection, FormTab, FormValues,
-    FormattedError, Icon, MetricCatalog, MetricQuerySeries, QueryErrorFormatter, QueryLanguage,
-    QueryRequest, QueryResult, SchemaFeatures, SchemaLoadingStrategy, SchemaSnapshot,
-    SourceContextSpec, SourceQueryMode, TableInfo, ValidationResult, Value, field, field_required,
+    ColumnKind, ColumnMeta, Connection, ConnectionProfile, DatabaseCategory, DatabaseInfo,
+    DbConfig, DbDriver, DbError, DbKind, DeploymentClass, DocumentSchema, DriverCapabilities,
+    DriverFormDef, DriverMetadata, EventActorType, EventCategory, EventPage, EventQuery,
+    EventRecord, EventSeverity, EventSourceId, EventStreamTarget, ExecutionSourceContext,
+    FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, MetricCatalog,
+    MetricQuerySeries, QueryLanguage, QueryRequest, QueryResult, SchemaFeatures,
+    SchemaLoadingStrategy, SchemaSnapshot, SourceContextSpec, SourceQueryMode, TableInfo,
+    ValidationResult, Value, field, field_required,
 };
 
 use crate::dashboard_import::CloudWatchDashboardImporter;
@@ -1412,9 +1412,6 @@ fn unique_series_column_names(series: &[MetricQuerySeries]) -> Vec<String> {
 // CloudWatch error formatter
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
-struct CloudWatchErrorFormatter;
-
 /// Classify a raw AWS error code + message into a structured `FormattedError`.
 ///
 /// This is the single place that knows about CloudWatch / CloudWatch Logs error
@@ -1526,6 +1523,36 @@ pub(crate) fn classify_cw(
     formatted
 }
 
+/// Walk the `std::error::Error::source` chain of a transport-level SDK error
+/// and join every link's `Display` into one string.
+///
+/// `SdkError::to_string()` is terse (e.g. "dispatch failure"), which drops the
+/// root cause for DNS / TLS / connection failures. Walking the source chain
+/// surfaces the underlying message ("dns error: failed to lookup …", "tcp
+/// connect error", certificate failures) so transport faults stay diagnosable.
+fn transport_error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut parts = vec![error.to_string()];
+    let mut source = error.source();
+
+    while let Some(cause) = source {
+        parts.push(cause.to_string());
+        source = cause.source();
+    }
+
+    parts.join(": ")
+}
+
+/// Augment a transport-error `FormattedError` with the SDK error's debug
+/// representation without clobbering the config-derived detail set by
+/// `classify_cw`. The AWS SDK debug output does not contain secrets.
+fn with_transport_debug(mut formatted: FormattedError, debug: String) -> FormattedError {
+    let detail = match formatted.detail.take() {
+        Some(existing) => format!("{existing}; debug={debug}"),
+        None => format!("debug={debug}"),
+    };
+    formatted.with_detail(detail)
+}
+
 /// Convert a `aws_sdk_cloudwatchlogs::error::SdkError<E>` into a `FormattedError`
 /// by extracting the service error code and message via `ProvideErrorMetadata`,
 /// then routing both through the shared `classify_cw` classifier.
@@ -1534,7 +1561,7 @@ fn from_logs_err<E>(
     config: Option<&CloudWatchProfileConfig>,
 ) -> FormattedError
 where
-    E: CloudWatchLogsProvideErrorMetadata,
+    E: CloudWatchLogsProvideErrorMetadata + std::error::Error + std::fmt::Debug + 'static,
 {
     if let Some(svc) = error.as_service_error() {
         classify_cw(
@@ -1543,7 +1570,8 @@ where
             config,
         )
     } else {
-        classify_cw(None, &error.to_string(), config)
+        let formatted = classify_cw(None, &transport_error_chain(error), config);
+        with_transport_debug(formatted, format!("{error:?}"))
     }
 }
 
@@ -1555,7 +1583,7 @@ pub(crate) fn from_metrics_err<E>(
     config: Option<&CloudWatchProfileConfig>,
 ) -> FormattedError
 where
-    E: CloudWatchProvideErrorMetadata,
+    E: CloudWatchProvideErrorMetadata + std::error::Error + std::fmt::Debug + 'static,
 {
     if let Some(svc) = error.as_service_error() {
         classify_cw(
@@ -1564,32 +1592,8 @@ where
             config,
         )
     } else {
-        classify_cw(None, &error.to_string(), config)
-    }
-}
-
-impl QueryErrorFormatter for CloudWatchErrorFormatter {
-    fn format_query_error(&self, error: &(dyn std::error::Error + 'static)) -> FormattedError {
-        classify_cw(None, &error.to_string(), None)
-    }
-}
-
-impl ConnectionErrorFormatter for CloudWatchErrorFormatter {
-    fn format_connection_error(
-        &self,
-        error: &(dyn std::error::Error + 'static),
-        _host: &str,
-        _port: u16,
-    ) -> FormattedError {
-        classify_cw(None, &error.to_string(), None)
-    }
-
-    fn format_uri_error(
-        &self,
-        error: &(dyn std::error::Error + 'static),
-        _sanitized_uri: &str,
-    ) -> FormattedError {
-        classify_cw(None, &error.to_string(), None)
+        let formatted = classify_cw(None, &transport_error_chain(error), config);
+        with_transport_debug(formatted, format!("{error:?}"))
     }
 }
 

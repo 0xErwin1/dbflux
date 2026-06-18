@@ -281,7 +281,7 @@ fn expand_tilde(path: &Path) -> std::path::PathBuf {
 }
 
 // ---------------------------------------------------------------------------
-// Host-key fingerprint helpers — MISC-1
+// Host-key fingerprint helpers
 // ---------------------------------------------------------------------------
 
 /// Outcome of comparing a stored known-hosts entry against the server's current key.
@@ -676,7 +676,7 @@ mod tests {
         assert!(debug_str.contains("SessionPassphraseVault"));
     }
 
-    // SHA-256 fingerprint helper tests (MISC-1)
+    // SHA-256 fingerprint helper tests
 
     #[test]
     fn sha256_base64_fingerprint_matches_ssh_keygen_format() {

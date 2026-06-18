@@ -9,9 +9,18 @@ use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use dbflux_core::DbError;
+
+/// Maximum time `Drop` waits for the forwarding thread to observe `shutdown`
+/// and exit before detaching it. Blocking sections inside the loop (a stalled
+/// `blocking_write_all`, an SSH handshake) may not poll `shutdown` promptly, so
+/// the join is bounded to keep the dropping thread (often the UI thread) from
+/// hanging.
+const DROP_JOIN_GRACE: Duration = Duration::from_secs(2);
 
 /// Protocol-specific tunnel connector (SOCKS5, HTTP CONNECT, SSH, etc.).
 pub trait TunnelConnector: Send + 'static {
@@ -34,6 +43,9 @@ pub struct Tunnel {
     local_port: u16,
     shutdown: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    /// Receives on `Disconnect` once the forwarding thread returns and drops
+    /// its `Sender`, signalling that `thread.join()` will complete immediately.
+    thread_exit: Receiver<()>,
 }
 
 impl Tunnel {
@@ -71,7 +83,10 @@ impl Tunnel {
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = shutdown.clone();
 
+        let (exit_tx, thread_exit) = mpsc::channel::<()>();
+
         let thread = thread::spawn(move || {
+            let _exit_tx = exit_tx;
             connector.run_tunnel_loop(listener, remote_host, remote_port, shutdown_clone);
         });
 
@@ -79,6 +94,7 @@ impl Tunnel {
             local_port,
             shutdown,
             thread: Some(thread),
+            thread_exit,
         })
     }
 
@@ -90,8 +106,31 @@ impl Tunnel {
 impl Drop for Tunnel {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::SeqCst);
-        if let Some(handle) = self.thread.take() {
-            handle.join().ok();
+
+        let Some(handle) = self.thread.take() else {
+            return;
+        };
+
+        match self.thread_exit.recv_timeout(DROP_JOIN_GRACE) {
+            Err(RecvTimeoutError::Disconnected) => {
+                // The forwarding thread has returned and dropped its sender, so
+                // join completes immediately and releases the local port.
+                if handle.join().is_err() {
+                    log::warn!("[Tunnel] forwarding thread panicked");
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                log::warn!(
+                    "[Tunnel] forwarding thread did not stop within the grace period; detaching"
+                );
+            }
+            Ok(()) => {
+                // The sender should only ever drop, never send. Treat a value as
+                // an exit signal and join immediately.
+                if handle.join().is_err() {
+                    log::warn!("[Tunnel] forwarding thread panicked");
+                }
+            }
         }
     }
 }
@@ -243,6 +282,54 @@ mod tests {
         assert!(
             joined.load(Ordering::SeqCst),
             "thread must be joined before drop returns"
+        );
+    }
+
+    struct StuckConnector {
+        exited: Arc<AtomicBool>,
+    }
+
+    impl TunnelConnector for StuckConnector {
+        fn test_connection(&self, _host: &str, _port: u16) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn run_tunnel_loop(
+            self,
+            _listener: TcpListener,
+            _remote_host: String,
+            _remote_port: u16,
+            _shutdown: Arc<AtomicBool>,
+        ) {
+            thread::sleep(std::time::Duration::from_secs(10));
+            self.exited.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn tunnel_drop_detaches_stuck_thread_within_grace() {
+        let exited = Arc::new(AtomicBool::new(false));
+        let t = Tunnel::start(
+            StuckConnector {
+                exited: exited.clone(),
+            },
+            "127.0.0.1".into(),
+            1,
+            "TEST",
+        )
+        .unwrap();
+
+        let started = std::time::Instant::now();
+        drop(t);
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < DROP_JOIN_GRACE + std::time::Duration::from_secs(1),
+            "drop must return shortly after the grace period, took {elapsed:?}"
+        );
+        assert!(
+            !exited.load(Ordering::SeqCst),
+            "thread ignoring shutdown must be detached, not joined"
         );
     }
 }
