@@ -33,8 +33,7 @@ pub trait TunnelConnector: Send + 'static {
 pub struct Tunnel {
     local_port: u16,
     shutdown: Arc<AtomicBool>,
-    #[allow(dead_code)]
-    thread: JoinHandle<()>,
+    thread: Option<JoinHandle<()>>,
 }
 
 impl Tunnel {
@@ -79,7 +78,7 @@ impl Tunnel {
         Ok(Self {
             local_port,
             shutdown,
-            thread,
+            thread: Some(thread),
         })
     }
 
@@ -91,6 +90,9 @@ impl Tunnel {
 impl Drop for Tunnel {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.thread.take() {
+            handle.join().ok();
+        }
     }
 }
 
@@ -194,5 +196,53 @@ pub fn adaptive_sleep(activity: bool, has_connections: bool) {
         } else {
             thread::sleep(std::time::Duration::from_millis(1));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+
+    struct MockConnector {
+        joined: Arc<AtomicBool>,
+    }
+
+    impl TunnelConnector for MockConnector {
+        fn test_connection(&self, _host: &str, _port: u16) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn run_tunnel_loop(
+            self,
+            _listener: TcpListener,
+            _remote_host: String,
+            _remote_port: u16,
+            shutdown: Arc<AtomicBool>,
+        ) {
+            while !shutdown.load(Ordering::SeqCst) {
+                adaptive_sleep(false, false);
+            }
+            self.joined.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn tunnel_drop_joins_thread() {
+        let joined = Arc::new(AtomicBool::new(false));
+        let t = Tunnel::start(
+            MockConnector {
+                joined: joined.clone(),
+            },
+            "127.0.0.1".into(),
+            1,
+            "TEST",
+        )
+        .unwrap();
+        drop(t);
+        assert!(
+            joined.load(Ordering::SeqCst),
+            "thread must be joined before drop returns"
+        );
     }
 }
