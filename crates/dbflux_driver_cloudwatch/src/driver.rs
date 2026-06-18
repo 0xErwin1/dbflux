@@ -4,10 +4,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use aws_config::{BehaviorVersion, Region};
 use aws_sdk_cloudwatch::config::Builder as CloudWatchMetricsConfigBuilder;
+use aws_sdk_cloudwatch::error::ProvideErrorMetadata as CloudWatchProvideErrorMetadata;
 use aws_sdk_cloudwatch::primitives::DateTime as MetricsDateTime;
 use aws_sdk_cloudwatch::types::{Dimension, Metric, MetricDataQuery, MetricStat};
 use aws_sdk_cloudwatchlogs::Client;
 use aws_sdk_cloudwatchlogs::config::Builder as CloudWatchConfigBuilder;
+use aws_sdk_cloudwatchlogs::error::ProvideErrorMetadata as CloudWatchLogsProvideErrorMetadata;
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     CollectionBrowseRequest, CollectionChildInfo, CollectionChildrenPage,
@@ -16,10 +18,10 @@ use dbflux_core::{
     DbConfig, DbDriver, DbError, DbKind, DeploymentClass, DocumentSchema, DriverCapabilities,
     DriverFormDef, DriverMetadata, EventActorType, EventCategory, EventPage, EventQuery,
     EventRecord, EventSeverity, EventSourceId, EventStreamTarget, ExecutionSourceContext,
-    FormFieldKind, FormSection, FormTab, FormValues, Icon, MetricCatalog, MetricQuerySeries,
-    QueryLanguage, QueryRequest, QueryResult, SchemaFeatures, SchemaLoadingStrategy,
-    SchemaSnapshot, SourceContextSpec, SourceQueryMode, TableInfo, ValidationResult, Value, field,
-    field_required,
+    FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, MetricCatalog,
+    MetricQuerySeries, QueryLanguage, QueryRequest, QueryResult, SchemaFeatures,
+    SchemaLoadingStrategy, SchemaSnapshot, SourceContextSpec, SourceQueryMode, TableInfo,
+    ValidationResult, Value, field, field_required,
 };
 
 use crate::dashboard_import::CloudWatchDashboardImporter;
@@ -93,7 +95,7 @@ static CLOUDWATCH_LANGUAGE_SERVICE: CloudWatchLanguageService = CloudWatchLangua
 pub struct CloudWatchDriver;
 
 #[derive(Clone, Debug)]
-struct CloudWatchProfileConfig {
+pub(crate) struct CloudWatchProfileConfig {
     region: String,
     profile: Option<String>,
     endpoint: Option<String>,
@@ -293,6 +295,7 @@ impl Connection for CloudWatchConnection {
                     *start_ms,
                     *end_ms,
                     started,
+                    Some(&self.config),
                 );
             }
             ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
@@ -332,9 +335,9 @@ impl Connection for CloudWatchConnection {
             start_request = start_request.set_log_group_names(Some(log_groups.clone()));
         }
 
-        let start_output = runtime().block_on(start_request.send()).map_err(|error| {
-            DbError::query_failed(format!("CloudWatch StartQuery failed: {error}"))
-        })?;
+        let start_output = runtime()
+            .block_on(start_request.send())
+            .map_err(|error| from_logs_err(&error, Some(&self.config)).into_query_error())?;
 
         let query_id = start_output
             .query_id()
@@ -352,9 +355,7 @@ impl Connection for CloudWatchConnection {
                         .query_id(query_id.clone())
                         .send(),
                 )
-                .map_err(|error| {
-                    DbError::query_failed(format!("CloudWatch GetQueryResults failed: {error}"))
-                })?;
+                .map_err(|error| from_logs_err(&error, Some(&self.config)).into_query_error())?;
 
             let status = output
                 .status()
@@ -512,9 +513,9 @@ impl Connection for CloudWatchConnection {
                 operation = operation.next_token(token);
             }
 
-            let output = runtime().block_on(operation.send()).map_err(|error| {
-                DbError::query_failed(format!("CloudWatch FilterLogEvents failed: {error}"))
-            })?;
+            let output = runtime()
+                .block_on(operation.send())
+                .map_err(|error| from_logs_err(&error, Some(&self.config)).into_query_error())?;
 
             for event in output.events() {
                 if skipped < offset {
@@ -864,9 +865,9 @@ impl CloudWatchConnection {
                 operation = operation.next_token(token);
             }
 
-            let output = runtime().block_on(operation.send()).map_err(|error| {
-                DbError::query_failed(format!("CloudWatch GetLogEvents failed: {error}"))
-            })?;
+            let output = runtime()
+                .block_on(operation.send())
+                .map_err(|error| from_logs_err(&error, Some(&self.config)).into_query_error())?;
 
             let mut page_rows = output
                 .events()
@@ -1218,6 +1219,7 @@ fn execute_metric_query(
     start_ms: i64,
     end_ms: i64,
     started: Instant,
+    config: Option<&CloudWatchProfileConfig>,
 ) -> Result<QueryResult, DbError> {
     if series.is_empty() {
         return Err(DbError::query_failed(
@@ -1274,9 +1276,7 @@ fn execute_metric_query(
                 .set_metric_data_queries(Some(queries))
                 .send(),
         )
-        .map_err(|error| {
-            DbError::query_failed(format!("CloudWatch GetMetricData failed: {error}"))
-        })?;
+        .map_err(|error| from_metrics_err(&error, config).into_query_error())?;
 
     let mut result = metric_data_output_to_multi_series_result(&output, series);
     result.execution_time = started.elapsed();
@@ -1408,18 +1408,208 @@ fn unique_series_column_names(series: &[MetricQuerySeries]) -> Vec<String> {
     base
 }
 
+// ---------------------------------------------------------------------------
+// CloudWatch error formatter
+// ---------------------------------------------------------------------------
+
+/// Classify a raw AWS error code + message into a structured `FormattedError`.
+///
+/// This is the single place that knows about CloudWatch / CloudWatch Logs error
+/// codes and maps them to user-facing hints and retriable flags.  Both SDK
+/// error families (`aws_sdk_cloudwatchlogs` and `aws_sdk_cloudwatch`) reduce
+/// their typed errors to `(code, message)` before arriving here, so the
+/// credential/throttle/syntax logic is never duplicated between the two.
+///
+/// `config` is optional so sites that lack a `CloudWatchProfileConfig` in
+/// scope (e.g. `RealCloudWatchClient::list_metrics`) can still produce
+/// structured errors without threading config state through the seam.
+pub(crate) fn classify_cw(
+    code: Option<&str>,
+    message: &str,
+    config: Option<&CloudWatchProfileConfig>,
+) -> FormattedError {
+    let mut formatted = FormattedError::new(message.to_string());
+
+    if let Some(code_value) = code {
+        formatted = formatted.with_code(code_value.to_string());
+    }
+
+    let (hint, retriable, override_message): (Option<&str>, bool, Option<&str>) = match code {
+        Some(
+            "ExpiredTokenException"
+            | "UnrecognizedClientException"
+            | "InvalidSignatureException"
+            | "IncompleteSignatureException"
+            | "MissingAuthenticationToken",
+        ) => (
+            Some("Re-authenticate or refresh your AWS SSO / credential session and retry."),
+            false,
+            Some("AWS session expired — please re-login"),
+        ),
+        Some("AccessDeniedException") => (
+            Some(
+                "Check IAM permissions for the requested CloudWatch/CloudWatchLogs action in the selected region.",
+            ),
+            false,
+            None,
+        ),
+        Some("ResourceNotFoundException") => (
+            Some("Verify the log group, metric, or resource name and the AWS region."),
+            false,
+            None,
+        ),
+        Some("ThrottlingException" | "ServiceUnavailableException") => (
+            Some("Request was throttled. Retry with exponential back-off or reduce request rate."),
+            true,
+            None,
+        ),
+        Some("InvalidParameterException" | "MalformedQueryException") => (
+            Some(
+                "Check the query syntax and parameter values. Refer to the CloudWatch Logs Insights query syntax documentation.",
+            ),
+            false,
+            None,
+        ),
+        None => {
+            let lower = message.to_lowercase();
+            if lower.contains("expired") || lower.contains("token") || lower.contains("credential")
+            {
+                (
+                    Some("Re-authenticate or refresh your AWS SSO / credential session and retry."),
+                    false,
+                    Some("AWS session expired — please re-login"),
+                )
+            } else if lower.contains("throttl") {
+                (
+                    Some(
+                        "Request was throttled. Retry with exponential back-off or reduce request rate.",
+                    ),
+                    true,
+                    None,
+                )
+            } else {
+                (None, false, None)
+            }
+        }
+        _ => (None, false, None),
+    };
+
+    if let Some(msg) = override_message {
+        formatted = FormattedError::new(msg.to_string());
+        if let Some(code_value) = code {
+            formatted = formatted.with_code(code_value.to_string());
+        }
+    }
+
+    if let Some(hint_value) = hint {
+        formatted = formatted.with_hint(hint_value);
+    }
+
+    if retriable {
+        formatted = formatted.with_retriable(true);
+    }
+
+    if let Some(cfg) = config {
+        let detail = match &cfg.endpoint {
+            Some(ep) => format!("region={}, endpoint_override={}", cfg.region, ep),
+            None => match &cfg.profile {
+                Some(p) => format!("region={}, profile={}", cfg.region, p),
+                None => format!("region={}", cfg.region),
+            },
+        };
+        formatted = formatted.with_detail(detail);
+    }
+
+    formatted
+}
+
+/// Walk the `std::error::Error::source` chain of a transport-level SDK error
+/// and join every link's `Display` into one string.
+///
+/// `SdkError::to_string()` is terse (e.g. "dispatch failure"), which drops the
+/// root cause for DNS / TLS / connection failures. Walking the source chain
+/// surfaces the underlying message ("dns error: failed to lookup …", "tcp
+/// connect error", certificate failures) so transport faults stay diagnosable.
+fn transport_error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    const MAX_SOURCE_DEPTH: usize = 16;
+
+    let mut parts = vec![error.to_string()];
+    let mut source = error.source();
+
+    let mut depth = 0;
+    while let Some(cause) = source {
+        if depth >= MAX_SOURCE_DEPTH {
+            break;
+        }
+        parts.push(cause.to_string());
+        source = cause.source();
+        depth += 1;
+    }
+
+    parts.join(": ")
+}
+
+/// Augment a transport-error `FormattedError` with the SDK error's debug
+/// representation without clobbering the config-derived detail set by
+/// `classify_cw`. The AWS SDK debug output does not contain secrets.
+fn with_transport_debug(mut formatted: FormattedError, debug: String) -> FormattedError {
+    let detail = match formatted.detail.take() {
+        Some(existing) => format!("{existing}; debug={debug}"),
+        None => format!("debug={debug}"),
+    };
+    formatted.with_detail(detail)
+}
+
+/// Convert a `aws_sdk_cloudwatchlogs::error::SdkError<E>` into a `FormattedError`
+/// by extracting the service error code and message via `ProvideErrorMetadata`,
+/// then routing both through the shared `classify_cw` classifier.
+fn from_logs_err<E>(
+    error: &aws_sdk_cloudwatchlogs::error::SdkError<E>,
+    config: Option<&CloudWatchProfileConfig>,
+) -> FormattedError
+where
+    E: CloudWatchLogsProvideErrorMetadata + std::error::Error + std::fmt::Debug + 'static,
+{
+    if let Some(svc) = error.as_service_error() {
+        classify_cw(
+            svc.code(),
+            svc.message().unwrap_or("CloudWatch Logs service error"),
+            config,
+        )
+    } else {
+        let formatted = classify_cw(None, &transport_error_chain(error), config);
+        with_transport_debug(formatted, format!("{error:?}"))
+    }
+}
+
+/// Convert a `aws_sdk_cloudwatch::error::SdkError<E>` into a `FormattedError`
+/// by extracting the service error code and message via `ProvideErrorMetadata`,
+/// then routing both through the shared `classify_cw` classifier.
+pub(crate) fn from_metrics_err<E>(
+    error: &aws_sdk_cloudwatch::error::SdkError<E>,
+    config: Option<&CloudWatchProfileConfig>,
+) -> FormattedError
+where
+    E: CloudWatchProvideErrorMetadata + std::error::Error + std::fmt::Debug + 'static,
+{
+    if let Some(svc) = error.as_service_error() {
+        classify_cw(
+            svc.code(),
+            svc.message().unwrap_or("CloudWatch service error"),
+            config,
+        )
+    } else {
+        let formatted = classify_cw(None, &transport_error_chain(error), config);
+        with_transport_debug(formatted, format!("{error:?}"))
+    }
+}
+
+// ---------------------------------------------------------------------------
+
 fn probe_connection(client: &Client, config: &CloudWatchProfileConfig) -> Result<(), DbError> {
     runtime()
         .block_on(client.describe_log_groups().limit(1).send())
-        .map_err(|error| {
-            DbError::connection_failed(format!(
-                "CloudWatch probe failed (region={}, profile={}): {} | debug={:?}",
-                config.region,
-                config.profile.as_deref().unwrap_or("<default>"),
-                error,
-                error
-            ))
-        })?;
+        .map_err(|error| from_logs_err(&error, Some(config)).into_connection_error())?;
 
     Ok(())
 }
@@ -1434,9 +1624,9 @@ fn fetch_log_groups(client: &Client) -> Result<Vec<CollectionInfo>, DbError> {
             operation = operation.next_token(token);
         }
 
-        let output = runtime().block_on(operation.send()).map_err(|error| {
-            DbError::query_failed(format!("CloudWatch DescribeLogGroups failed: {error}"))
-        })?;
+        let output = runtime()
+            .block_on(operation.send())
+            .map_err(|error| from_logs_err(&error, None).into_query_error())?;
 
         for group in output.log_groups() {
             if let Some(name) = group.log_group_name() {
@@ -1602,9 +1792,9 @@ fn fetch_log_stream_page(
         operation = operation.next_token(token.to_string());
     }
 
-    let output = runtime().block_on(operation.send()).map_err(|error| {
-        DbError::query_failed(format!("CloudWatch DescribeLogStreams failed: {error}"))
-    })?;
+    let output = runtime()
+        .block_on(operation.send())
+        .map_err(|error| from_logs_err(&error, None).into_query_error())?;
 
     for stream in output.log_streams() {
         if let Some(stream_name) = stream.log_stream_name() {
@@ -1627,8 +1817,8 @@ fn fetch_log_stream_page(
 mod tests {
     use super::{
         CLOUDWATCH_FORM, CLOUDWATCH_METADATA, CloudWatchCollectionFilter, CloudWatchDriver,
-        cloudwatch_column_kind, cwli_column_kind, cwli_field_value,
-        metric_data_output_to_multi_series_result,
+        CloudWatchProfileConfig, classify_cw, cloudwatch_column_kind, cwli_column_kind,
+        cwli_field_value, metric_data_output_to_multi_series_result,
     };
     use aws_sdk_cloudwatch::operation::get_metric_data::GetMetricDataOutput;
     use aws_sdk_cloudwatch::primitives::DateTime;
@@ -2121,6 +2311,120 @@ mod tests {
             driver.export_field_hint("profile", &values),
             dbflux_core::ExportFieldHint::RequiredOnImport,
             "CloudWatch 'profile' field must be RequiredOnImport on export"
+        );
+    }
+
+    fn test_config() -> CloudWatchProfileConfig {
+        CloudWatchProfileConfig {
+            region: "us-east-1".to_string(),
+            profile: Some("test-profile".to_string()),
+            endpoint: None,
+        }
+    }
+
+    #[test]
+    fn cloudwatch_error_formatter_session_expired() {
+        let cfg = test_config();
+
+        let expired_by_code = classify_cw(
+            Some("ExpiredTokenException"),
+            "The security token included in the request is expired",
+            Some(&cfg),
+        );
+        assert!(
+            expired_by_code
+                .message
+                .to_lowercase()
+                .contains("session expired")
+                || expired_by_code.message.to_lowercase().contains("re-login"),
+            "ExpiredTokenException must yield a session-expired message, got: {}",
+            expired_by_code.message
+        );
+
+        let expired_by_message = classify_cw(None, "token is expired or invalid", Some(&cfg));
+        assert!(
+            expired_by_message
+                .message
+                .to_lowercase()
+                .contains("session expired")
+                || expired_by_message
+                    .message
+                    .to_lowercase()
+                    .contains("re-login"),
+            "Message containing 'expired' must yield a session-expired message, got: {}",
+            expired_by_message.message
+        );
+    }
+
+    #[test]
+    fn cloudwatch_error_formatter_throttle_is_retriable() {
+        let cfg = test_config();
+
+        let throttled = classify_cw(Some("ThrottlingException"), "Rate exceeded", Some(&cfg));
+        assert!(
+            throttled.retriable,
+            "ThrottlingException must produce retriable=true"
+        );
+
+        let unavailable = classify_cw(
+            Some("ServiceUnavailableException"),
+            "Service unavailable",
+            Some(&cfg),
+        );
+        assert!(
+            unavailable.retriable,
+            "ServiceUnavailableException must produce retriable=true"
+        );
+
+        let access_denied = classify_cw(Some("AccessDeniedException"), "Access denied", Some(&cfg));
+        let hint = access_denied.hint.as_deref().unwrap_or("");
+        assert!(
+            hint.to_lowercase().contains("iam") || hint.to_lowercase().contains("permission"),
+            "AccessDeniedException hint must reference IAM/permissions, got: {hint}"
+        );
+    }
+
+    #[test]
+    fn cloudwatch_error_formatter_malformed_query_hint() {
+        let cfg = test_config();
+
+        let malformed = classify_cw(
+            Some("MalformedQueryException"),
+            "Syntax error in query",
+            Some(&cfg),
+        );
+        let hint = malformed.hint.as_deref().unwrap_or("");
+        assert!(
+            hint.to_lowercase().contains("query") || hint.to_lowercase().contains("syntax"),
+            "MalformedQueryException hint must reference query/syntax, got: {hint}"
+        );
+
+        let invalid_param = classify_cw(
+            Some("InvalidParameterException"),
+            "Invalid parameter value",
+            Some(&cfg),
+        );
+        let hint = invalid_param.hint.as_deref().unwrap_or("");
+        assert!(
+            hint.to_lowercase().contains("query") || hint.to_lowercase().contains("syntax"),
+            "InvalidParameterException hint must reference query/syntax, got: {hint}"
+        );
+    }
+
+    #[test]
+    fn cloudwatch_error_formatter_unknown_degrades() {
+        let cfg = test_config();
+
+        let unknown = classify_cw(None, "some completely unknown error occurred", Some(&cfg));
+        assert!(
+            !unknown.message.is_empty(),
+            "Unknown error must produce a non-empty message"
+        );
+
+        let no_config_case = classify_cw(None, "error with no config context", None);
+        assert!(
+            !no_config_case.message.is_empty(),
+            "Unknown error without config must produce a non-empty message"
         );
     }
 }

@@ -15,8 +15,10 @@ path = "src/lib.rs"
 [dependencies]
 dbflux_core = { path = "../dbflux_core" }
 dbflux_tunnel_core = { path = "../dbflux_tunnel_core" }
+base64 = { workspace = true }
 dirs = "6"
 log = "0.4"
+sha2 = { workspace = true }
 ssh2 = "0.9"
 uuid = { workspace = true }
 

@@ -12,8 +12,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD_NO_PAD;
 use dbflux_core::{DbError, SshAuthMethod, SshTunnelConfig};
 use dbflux_tunnel_core::{ForwardingConnection, Tunnel, TunnelConnector, adaptive_sleep};
+use sha2::{Digest, Sha256};
 use ssh2::Session;
 use uuid::Uuid;
 
@@ -277,7 +280,52 @@ fn expand_tilde(path: &Path) -> std::path::PathBuf {
     path.to_path_buf()
 }
 
+// ---------------------------------------------------------------------------
+// Host-key fingerprint helpers
+// ---------------------------------------------------------------------------
+
+/// Outcome of comparing a stored known-hosts entry against the server's current key.
+#[derive(Debug, PartialEq, Eq)]
+enum HostKeyMatch {
+    /// Stored entry is already in `SHA256:<base64-nopad>` format and matches.
+    NewFormat,
+    /// Stored entry is the legacy lowercase-hex encoding of the same key bytes.
+    /// The caller should migrate the entry to `NewFormat` in place.
+    LegacyHex,
+    /// Neither format matches — the key has changed or is unknown.
+    Mismatch,
+}
+
+/// Returns the `SHA256:<base64-nopad>` fingerprint of `key`, byte-identical to
+/// `ssh-keygen -lf` output for the same raw key bytes.
+fn sha256_base64_fingerprint(key: &[u8]) -> String {
+    format!("SHA256:{}", STANDARD_NO_PAD.encode(Sha256::digest(key)))
+}
+
+/// Compares `stored` (a line from `ssh_known_hosts`) against the server's current
+/// `key` bytes and classifies the relationship.
+///
+/// Migration invariant: `LegacyHex` is returned ONLY when re-deriving the legacy
+/// hex from the SAME `key` bytes via `hex_encode` equals `stored`. This guarantees
+/// migration never widens acceptance — a stored legacy-hex entry that would have been
+/// rejected under the old comparison (because the key changed) still yields `Mismatch`.
+fn host_key_matches_stored(stored: &str, key: &[u8]) -> HostKeyMatch {
+    if stored == sha256_base64_fingerprint(key) {
+        return HostKeyMatch::NewFormat;
+    }
+
+    if !stored.starts_with("SHA256:") && stored == hex_encode(key) {
+        return HostKeyMatch::LegacyHex;
+    }
+
+    HostKeyMatch::Mismatch
+}
+
 fn verify_or_store_host_key(session: &Session, host: &str, port: u16) -> Result<(), DbError> {
+    let (key, _) = session.host_key().ok_or_else(|| {
+        DbError::connection_failed("SSH server did not present a host key".to_string())
+    })?;
+
     let fingerprint = current_host_key_fingerprint(session)?;
 
     let known_hosts_path = tofu_known_hosts_path()?;
@@ -285,14 +333,20 @@ fn verify_or_store_host_key(session: &Session, host: &str, port: u16) -> Result<
     let entry_key = format!("{}\t{}", host, port);
 
     if let Some(existing) = entries.get(&entry_key) {
-        if existing == &fingerprint {
-            return Ok(());
+        match host_key_matches_stored(existing, key) {
+            HostKeyMatch::NewFormat => return Ok(()),
+            HostKeyMatch::LegacyHex => {
+                entries.insert(entry_key, fingerprint);
+                save_tofu_known_hosts(&known_hosts_path, &entries)?;
+                return Ok(());
+            }
+            HostKeyMatch::Mismatch => {
+                return Err(DbError::connection_failed(format!(
+                    "SSH host key mismatch for {}:{} (possible MITM attack)",
+                    host, port
+                )));
+            }
         }
-
-        return Err(DbError::connection_failed(format!(
-            "SSH host key mismatch for {}:{} (possible MITM attack)",
-            host, port
-        )));
     }
 
     entries.insert(entry_key, fingerprint);
@@ -312,7 +366,7 @@ fn current_host_key_fingerprint(session: &Session) -> Result<String, DbError> {
         DbError::connection_failed("SSH server did not present a host key".to_string())
     })?;
 
-    Ok(hex_encode(key))
+    Ok(sha256_base64_fingerprint(key))
 }
 
 fn tofu_known_hosts_path() -> Result<PathBuf, DbError> {
@@ -620,5 +674,57 @@ mod tests {
             "Debug output must not expose passphrase: {debug_str}",
         );
         assert!(debug_str.contains("SessionPassphraseVault"));
+    }
+
+    // SHA-256 fingerprint helper tests
+
+    #[test]
+    fn sha256_base64_fingerprint_matches_ssh_keygen_format() {
+        // Known input: 4 zero bytes.  Expected: SHA256-base64-nopad of [0,0,0,0].
+        // base64-std-nopad of SHA256([0,0,0,0]) = 3z9hmASpL9tAVxktxD3XSOp3itxSvEmM6AUkwBS4ERk
+        // (standard alphabet, no '=' padding)
+        let key: &[u8] = &[0u8; 4];
+        let fp = sha256_base64_fingerprint(key);
+        assert!(fp.starts_with("SHA256:"), "must start with 'SHA256:': {fp}");
+        assert!(!fp.contains('='), "must not contain '=' padding: {fp}");
+        assert_eq!(fp, "SHA256:3z9hmASpL9tAVxktxD3XSOp3itxSvEmM6AUkwBS4ERk");
+    }
+
+    #[test]
+    fn legacy_hex_entry_is_recognized_and_upgraded() {
+        const KEY: &[u8] = b"test-key-bytes";
+        let legacy = hex_encode(KEY);
+        let new_fp = sha256_base64_fingerprint(KEY);
+
+        assert_eq!(
+            host_key_matches_stored(&legacy, KEY),
+            HostKeyMatch::LegacyHex,
+            "stored legacy-hex of same key must be LegacyHex"
+        );
+        assert_eq!(
+            host_key_matches_stored(&new_fp, KEY),
+            HostKeyMatch::NewFormat,
+            "stored SHA256: of same key must be NewFormat"
+        );
+    }
+
+    #[test]
+    fn genuine_key_change_is_mismatch() {
+        const KEY_A: &[u8] = b"key-a";
+        const KEY_B: &[u8] = b"key-b";
+
+        let legacy_a = hex_encode(KEY_A);
+        let new_a = sha256_base64_fingerprint(KEY_A);
+
+        assert_eq!(
+            host_key_matches_stored(&legacy_a, KEY_B),
+            HostKeyMatch::Mismatch,
+            "legacy hex of key_A must not match key_B"
+        );
+        assert_eq!(
+            host_key_matches_stored(&new_a, KEY_B),
+            HostKeyMatch::Mismatch,
+            "SHA256 fingerprint of key_A must not match key_B"
+        );
     }
 }

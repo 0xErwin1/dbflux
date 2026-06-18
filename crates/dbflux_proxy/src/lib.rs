@@ -56,7 +56,24 @@ impl ProxiedStream {
             }
         }
     }
+
+    fn set_write_timeout(&self, timeout: Option<std::time::Duration>) {
+        let result = match self {
+            Self::Plain(stream) => stream.set_write_timeout(timeout),
+            Self::Tls(stream) => stream.get_ref().set_write_timeout(timeout),
+        };
+        if let Err(e) = result {
+            log::warn!(
+                "[Proxy] Failed to set write timeout on proxied stream: {}",
+                e
+            );
+        }
+    }
 }
+
+/// Caps `blocking_write_all` on the forwarded streams so a stalled peer cannot
+/// block the single tunnel thread forever. Matches the SSH tunnel's 30s bound.
+const PROXY_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 impl Read for ProxiedStream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
@@ -345,6 +362,8 @@ fn perform_connect_handshake<S: Read + Write>(
     Ok(stream)
 }
 
+const MAX_HTTP_LINE_BYTES: usize = 8192;
+
 /// Read a single HTTP header line (up to `\n`) byte-by-byte from a stream.
 ///
 /// Reads directly from the raw `TcpStream` without buffering so no bytes
@@ -358,6 +377,12 @@ fn read_http_line<R: Read>(stream: &mut R) -> io::Result<String> {
     loop {
         match stream.read_exact(&mut byte) {
             Ok(()) => {
+                if line.len() >= MAX_HTTP_LINE_BYTES {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "HTTP header line too long",
+                    ));
+                }
                 line.push(byte[0]);
                 if byte[0] == b'\n' {
                     break;
@@ -448,7 +473,15 @@ fn run_proxy_tunnel_loop(
                 match open_proxied_stream(&config, &remote_host, remote_port) {
                     Ok(proxied_stream) => {
                         proxied_stream.set_nodelay();
+                        proxied_stream.set_write_timeout(Some(PROXY_WRITE_TIMEOUT));
                         proxied_stream.set_nonblocking(true);
+
+                        if let Err(e) = client_stream.set_write_timeout(Some(PROXY_WRITE_TIMEOUT)) {
+                            log::warn!(
+                                "[Proxy] Failed to set write timeout on client stream: {}",
+                                e
+                            );
+                        }
 
                         match ForwardingConnection::new(client_stream, proxied_stream) {
                             Ok(conn) => {
@@ -642,5 +675,28 @@ mod tests {
         assert_eq!(line, "partial");
 
         writer.join().unwrap();
+    }
+
+    #[test]
+    fn read_http_line_rejects_overlong_lines() {
+        let data = vec![b'a'; MAX_HTTP_LINE_BYTES + 100];
+        let mut cur = std::io::Cursor::new(data);
+        let err = read_http_line(&mut cur).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn read_http_line_accepts_just_under_cap() {
+        let mut data = vec![b'b'; MAX_HTTP_LINE_BYTES - 1];
+        data.push(b'\n');
+        let mut cur = std::io::Cursor::new(data);
+        assert!(read_http_line(&mut cur).is_ok());
+    }
+
+    #[test]
+    fn read_http_line_accepts_short_line() {
+        let mut cur = std::io::Cursor::new(b"GET / HTTP/1.1\r\n".to_vec());
+        let line = read_http_line(&mut cur).unwrap();
+        assert_eq!(line, "GET / HTTP/1.1\r\n");
     }
 }
