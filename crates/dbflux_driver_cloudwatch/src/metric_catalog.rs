@@ -64,7 +64,7 @@ impl CloudWatchListMetricsClient for RealCloudWatchClient {
 
         let output = crate::driver::runtime()
             .block_on(req.send())
-            .map_err(|e| DbError::connection_failed(format!("{e}")))?;
+            .map_err(|e| crate::driver::from_metrics_err(&e, None).into_connection_error())?;
 
         let metrics = output.metrics().to_vec();
         let next_token = output.next_token().map(ToOwned::to_owned);
