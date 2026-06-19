@@ -107,8 +107,8 @@ impl StorageRuntime {
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
         );
 
         let temp_dir = std::env::temp_dir().join(&temp_label);
@@ -360,8 +360,8 @@ mod tests {
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
         ));
         let _ = std::fs::remove_dir_all(&dir);
         dir
