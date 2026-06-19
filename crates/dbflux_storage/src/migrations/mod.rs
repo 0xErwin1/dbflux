@@ -176,41 +176,85 @@ impl MigrationRegistry {
     /// already been applied and skips them. Runs remaining migrations in
     /// registration order.
     ///
+    /// The `sys_migrations` DDL and the first pending migration's body are committed
+    /// as one atomic unit so there is no window in which the table exists but the
+    /// first migration's record does not. Migrations 2..N each run in their own
+    /// transaction, unchanged from the original behavior.
+    ///
     /// # Errors
     ///
     /// Returns [`MigrationError`] if:
     /// - A database error occurs while checking applied migrations
     /// - A migration's `run()` method returns an error
     pub fn run_all(&self, conn: &Connection) -> Result<(), MigrationError> {
-        // Ensure sys_migrations table exists
-        self.ensure_sys_migrations(conn)?;
+        let mut pending_iter = {
+            let outer_tx =
+                conn.unchecked_transaction()
+                    .map_err(|source| MigrationError::Sqlite {
+                        path: conn_path(conn),
+                        source,
+                    })?;
 
-        // Get set of already-applied migration names
-        let applied: std::collections::HashSet<String> = self
-            .get_applied_migrations(conn)
-            .map_err(|e| MigrationError::Sqlite {
-                path: conn_path(conn),
-                source: e,
+            self.ensure_sys_migrations(&outer_tx)?;
+
+            let applied = self.get_applied_migrations(&outer_tx).map_err(|source| {
+                MigrationError::Sqlite {
+                    path: conn_path(conn),
+                    source,
+                }
             })?;
 
-        info!(
-            "MigrationRegistry: {} migrations already applied, checking {} registered",
-            applied.len(),
-            self.migrations.len()
-        );
+            info!(
+                "MigrationRegistry: {} migrations already applied, checking {} registered",
+                applied.len(),
+                self.migrations.len()
+            );
 
-        // Run each pending migration
-        for migration in &self.migrations {
-            let name = migration.name();
+            let mut pending: Vec<&dyn Migration> = self
+                .migrations
+                .iter()
+                .filter(|m| !applied.contains(m.name()))
+                .map(|m| m.as_ref())
+                .collect();
 
-            if applied.contains(name) {
-                info!("MigrationRegistry: skipping '{}' (already applied)", name);
-                continue;
+            if let Some(first) = pending.first() {
+                let name = first.name();
+                info!("MigrationRegistry: applying migration '{}'", name);
+
+                first.run(&outer_tx)?;
+
+                outer_tx
+                    .execute(
+                        "INSERT INTO sys_migrations (name, applied_at) VALUES (?1, datetime('now'))",
+                        rusqlite::params![name],
+                    )
+                    .map_err(|source| MigrationError::Sqlite {
+                        path: conn_path(conn),
+                        source,
+                    })?;
+
+                outer_tx.commit().map_err(|source| MigrationError::Sqlite {
+                    path: conn_path(conn),
+                    source,
+                })?;
+
+                info!("MigrationRegistry: '{}' applied successfully", name);
+                pending.remove(0);
+            } else {
+                outer_tx.commit().map_err(|source| MigrationError::Sqlite {
+                    path: conn_path(conn),
+                    source,
+                })?;
             }
+
+            pending
+        };
+
+        for migration in pending_iter.drain(..) {
+            let name = migration.name();
 
             info!("MigrationRegistry: applying migration '{}'", name);
 
-            // Run migration in a transaction
             let tx = conn
                 .unchecked_transaction()
                 .map_err(|source| MigrationError::Sqlite {
@@ -220,7 +264,6 @@ impl MigrationRegistry {
 
             migration.run(&tx)?;
 
-            // Record the migration
             tx.execute(
                 "INSERT INTO sys_migrations (name, applied_at) VALUES (?1, datetime('now'))",
                 rusqlite::params![name],
@@ -230,7 +273,6 @@ impl MigrationRegistry {
                 source,
             })?;
 
-            // Commit the transaction
             tx.commit().map_err(|source| MigrationError::Sqlite {
                 path: conn_path(conn),
                 source,
@@ -795,6 +837,84 @@ mod tests {
                 "table '{expected}' must still be present after idempotent rerun"
             );
         }
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    struct FailingMigration;
+
+    impl Migration for FailingMigration {
+        fn name(&self) -> &str {
+            "000_failing_test_migration"
+        }
+
+        fn run(&self, _tx: &Transaction) -> Result<(), MigrationError> {
+            Err(MigrationError::Failed {
+                name: self.name().to_owned(),
+                details: "injected failure".to_owned(),
+            })
+        }
+    }
+
+    #[test]
+    fn test_first_migration_failure_rolls_back_sys_table() {
+        let temp_dir = temp_dir("first_fail_rollback");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("test.db");
+
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            let mut registry = MigrationRegistry {
+                migrations: Vec::new(),
+            };
+            registry.register(FailingMigration);
+
+            assert!(
+                registry.run_all(&conn).is_err(),
+                "run_all must return Err when first migration fails"
+            );
+        }
+
+        let conn2 = Connection::open(&db_path).unwrap();
+        let tables = table_names(&conn2);
+        assert!(
+            !tables.contains("sys_migrations"),
+            "sys_migrations must not exist after a rolled-back first migration"
+        );
+
+        drop(conn2);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_run_all_recovers_from_partial_first_migration_crash() {
+        let temp_dir = temp_dir("partial_crash");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("test.db");
+
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute(
+                "CREATE TABLE sys_migrations (name TEXT PRIMARY KEY, \
+                 applied_at TEXT NOT NULL DEFAULT (datetime('now')))",
+                [],
+            )
+            .unwrap();
+        }
+
+        let conn = Connection::open(&db_path).unwrap();
+        let registry = MigrationRegistry::new();
+        registry
+            .run_all(&conn)
+            .expect("run_all must recover from empty sys_migrations");
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sys_migrations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, registry.migrations.len() as i64);
 
         drop(conn);
         let _ = std::fs::remove_dir_all(temp_dir);
