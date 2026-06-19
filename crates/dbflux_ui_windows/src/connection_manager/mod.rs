@@ -223,16 +223,27 @@ struct FormState {
     form_save_password: bool,
     form_save_ssh_secret: bool,
     input_name: Entity<InputState>,
+    /// Filter text for the driver-select picker. Bound to a text input that
+    /// is focused on `/` from anywhere within the picker. The query is read
+    /// directly off the input in `render_driver_select`, so no cached field
+    /// is needed.
     driver_filter_input: Entity<InputState>,
+    /// Tracks whether the driver-picker filter input currently owns focus.
+    /// Used to decide whether Esc should blur the input or close the window.
     driver_filter_focused: bool,
+    /// Driver-specific field inputs, keyed by field ID.
     driver_inputs: HashMap<String, Entity<InputState>>,
+    /// Password is separate due to visibility toggle and save checkbox UI.
     input_password: Entity<InputState>,
     host_value_source_selector: Entity<ValueSourceSelector>,
     database_value_source_selector: Entity<ValueSourceSelector>,
     user_value_source_selector: Entity<ValueSourceSelector>,
     password_value_source_selector: Entity<ValueSourceSelector>,
+    /// Checkbox states keyed by field ID (e.g., "use_uri" -> true).
     checkbox_states: HashMap<String, bool>,
+    /// Active SSL mode id for the TRANSPORT section segmented control.
     selected_ssl_mode: String,
+    /// SSL certificate path inputs — shown conditionally based on selected_ssl_mode and driver metadata.
     ssl_ca_cert_input: Entity<InputState>,
     ssl_client_cert_input: Entity<InputState>,
     ssl_client_key_input: Entity<InputState>,
@@ -325,8 +336,11 @@ struct PendingActions {
     ssh_tunnel_selection: Option<Uuid>,
     ssh_key_path: Option<String>,
     file_path: Option<String>,
+    /// Pending cert-file path drained into `ssl_ca_cert_input` on next render.
     ssl_ca_cert_path: Option<String>,
+    /// Pending cert-file path drained into `ssl_client_cert_input` on next render.
     ssl_client_cert_path: Option<String>,
+    /// Pending cert-file path drained into `ssl_client_key_input` on next render.
     ssl_client_key_path: Option<String>,
 }
 
