@@ -187,7 +187,7 @@ impl MigrationRegistry {
     /// - A database error occurs while checking applied migrations
     /// - A migration's `run()` method returns an error
     pub fn run_all(&self, conn: &Connection) -> Result<(), MigrationError> {
-        let mut pending_iter = {
+        let mut remaining_migrations = {
             let outer_tx =
                 conn.unchecked_transaction()
                     .map_err(|source| MigrationError::Sqlite {
@@ -250,7 +250,7 @@ impl MigrationRegistry {
             pending
         };
 
-        for migration in pending_iter.drain(..) {
+        for migration in remaining_migrations.drain(..) {
             let name = migration.name();
 
             info!("MigrationRegistry: applying migration '{}'", name);

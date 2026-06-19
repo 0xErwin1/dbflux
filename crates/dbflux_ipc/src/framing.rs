@@ -27,7 +27,7 @@ pub fn recv_msg<R: Read, T: DeserializeOwned>(mut reader: R) -> io::Result<T> {
         return Err(io::Error::other("message too large"));
     }
 
-    let mut buf = Vec::new();
+    let mut buf = Vec::with_capacity(len.min(64 * 1024));
     reader.take(len as u64).read_to_end(&mut buf)?;
     if buf.len() != len {
         return Err(io::Error::new(
