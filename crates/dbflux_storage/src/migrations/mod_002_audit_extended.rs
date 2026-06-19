@@ -188,7 +188,7 @@ mod tests {
 
     use super::column_exists;
 
-    fn open_tx(conn: &Connection) -> rusqlite::Transaction {
+    fn open_tx(conn: &Connection) -> rusqlite::Transaction<'_> {
         conn.unchecked_transaction().unwrap()
     }
 

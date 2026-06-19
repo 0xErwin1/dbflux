@@ -175,7 +175,7 @@ impl Render for ModalRenameItem {
 
 #[cfg(test)]
 mod tests {
-    use super::{ModalRenameItem, RenameItemOutcome, RenameItemRequest, RenameTarget};
+    use super::{RenameItemOutcome, RenameItemRequest, RenameTarget};
     use uuid::Uuid;
 
     fn test_uuid() -> Uuid {

@@ -2997,7 +2997,7 @@ sso_region = us-east-1
             .find(|p| p.name == "my-profile")
             .expect("my-profile");
         assert!(
-            p.fields.get("region").is_none(),
+            !p.fields.contains_key("region"),
             "absent region must not appear in fields"
         );
     }

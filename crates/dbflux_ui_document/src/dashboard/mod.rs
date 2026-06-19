@@ -2373,19 +2373,16 @@ mod tests {
         }
     }
 
+    // The cap constant must stay consistent with the concurrency counter's
+    // initial value (0 < PANEL_REEXEC_CAP); enforced at compile time.
+    const _: () = assert!(0 < PANEL_REEXEC_CAP);
+
     /// F.2 — `DashboardDocument` state defaults: `Clean`, `can_close` = true,
     /// `is_backgrounded` = false, `pending_refresh_on_focus` = false,
     /// concurrency counter starts at zero. Tested without GPUI runtime by
     /// inspecting the invariants in the constructor logic directly.
     #[test]
     fn dashboard_document_default_state_invariants() {
-        // Validate that the cap constant is consistent with the concurrency
-        // counter initial value (0 < PANEL_REEXEC_CAP).
-        assert!(
-            0 < PANEL_REEXEC_CAP,
-            "initial inflight_reexec_count (0) must be less than PANEL_REEXEC_CAP"
-        );
-
         // Validate the orphan/loaded slot enum has exactly the expected variants
         // by constructing both and matching without panicking.
         let orphan = DashboardPanelSlot::Orphan {
@@ -2552,7 +2549,7 @@ mod tests {
             grid_width: 1,
             grid_height: 1,
         };
-        let slots = vec![
+        let slots = [
             DashboardPanelSlot::Orphan {
                 saved_chart_id: Uuid::nil(),
                 grid_pos: default_pos,

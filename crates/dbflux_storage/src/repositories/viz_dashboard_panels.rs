@@ -434,7 +434,7 @@ mod tests {
             grid_height: 4,
         };
 
-        repo.replace_panels_for_dashboard(dashboard_id, &[inspector_panel.clone()])
+        repo.replace_panels_for_dashboard(dashboard_id, std::slice::from_ref(&inspector_panel))
             .expect("replace with inspector panel");
 
         let loaded = repo.list_for_dashboard(dashboard_id).expect("list");

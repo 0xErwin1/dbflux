@@ -445,7 +445,7 @@ mod tests {
         ];
 
         for hint in &variants {
-            let cloned = hint.clone();
+            let cloned = *hint;
             assert_eq!(hint, &cloned);
             let debug_str = format!("{:?}", hint);
             assert!(!debug_str.is_empty());

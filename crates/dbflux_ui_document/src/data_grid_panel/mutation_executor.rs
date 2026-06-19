@@ -2039,7 +2039,7 @@ mod tests {
             });
             let rollback_pos = calls
                 .iter()
-                .position(|c| c.to_ascii_uppercase() == "ROLLBACK");
+                .position(|c| c.eq_ignore_ascii_case("ROLLBACK"));
             assert!(
                 rollback_pos.is_some(),
                 "ROLLBACK must be issued after DML cancel; calls: {:?}",
@@ -2052,7 +2052,7 @@ mod tests {
             );
             // COMMIT must NOT appear.
             assert!(
-                !calls.iter().any(|c| c.to_ascii_uppercase() == "COMMIT"),
+                !calls.iter().any(|c| c.eq_ignore_ascii_case("COMMIT")),
                 "COMMIT must NOT be issued when cancelled after DML; calls: {:?}",
                 calls
             );
@@ -2524,7 +2524,7 @@ mod tests {
             // ROLLBACK must have been issued
             let calls = conn_ref.calls.lock().unwrap().clone();
             assert!(
-                calls.iter().any(|c| c.to_ascii_uppercase() == "ROLLBACK"),
+                calls.iter().any(|c| c.eq_ignore_ascii_case("ROLLBACK")),
                 "expected ROLLBACK in calls: {:?}",
                 calls
             );
@@ -3583,8 +3583,8 @@ mod tests {
                 .position(|c| c.to_ascii_uppercase().contains("SESSION"));
             let begin_pos = calls.iter().position(|c| {
                 c.to_ascii_uppercase().contains("START TRANSACTION")
-                    || c.to_ascii_uppercase() == "BEGIN"
-                    || c.to_ascii_uppercase() == "BEGIN TRANSACTION"
+                    || c.eq_ignore_ascii_case("BEGIN")
+                    || c.eq_ignore_ascii_case("BEGIN TRANSACTION")
             });
             let dml_pos = calls.iter().position(|c| {
                 let u = c.to_ascii_uppercase();

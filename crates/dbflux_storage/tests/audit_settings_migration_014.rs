@@ -60,6 +60,7 @@ fn repository_reads_log_capture_min_level_from_db() {
     let conn = Connection::open_in_memory().unwrap();
     MigrationRegistry::new().run_all(&conn).unwrap();
 
+    #[allow(clippy::arc_with_non_send_sync)]
     let shared = std::sync::Arc::new(conn);
     let repo = AuditSettingsRepository::new(shared);
 
@@ -81,6 +82,7 @@ fn update_log_capture_min_level_persists_new_value() {
     let conn = Connection::open_in_memory().unwrap();
     MigrationRegistry::new().run_all(&conn).unwrap();
 
+    #[allow(clippy::arc_with_non_send_sync)]
     let shared = std::sync::Arc::new(conn);
     let repo = AuditSettingsRepository::new(shared);
 

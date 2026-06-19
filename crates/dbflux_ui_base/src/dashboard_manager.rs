@@ -1426,7 +1426,7 @@ mod tests {
         //   panel 2: col=0, row=3, w=6, h=3
         //   panel 3: col=6, row=3, w=6, h=3
         //   panel 4: col=0, row=6, w=12, h=4  (full-width inspector)
-        let layouts = vec![
+        let layouts = [
             DraftGridLayout {
                 grid_row: 0,
                 grid_column: 0,
@@ -1573,7 +1573,9 @@ mod tests {
 
         let dashboard = sample_dashboard("test");
         let dashboard_id = dashboard.id;
-        manager.upsert_dashboard(dashboard);
+        manager
+            .upsert_dashboard(dashboard)
+            .expect("upsert should persist the dashboard");
 
         let chart_id1 = Uuid::new_v4();
         let chart_id2 = Uuid::new_v4();

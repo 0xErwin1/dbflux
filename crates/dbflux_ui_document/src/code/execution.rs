@@ -2260,14 +2260,15 @@ mod tests {
     fn drift_query_with_pending_action_survives_put_back() {
         use super::{DriftAction, PendingActions, PendingDriftQuery};
 
-        let mut pending = PendingActions::default();
-
-        pending.drift_query = Some(PendingDriftQuery {
-            query: "SELECT 2".to_string(),
-            in_new_tab: true,
-            action: DriftAction::Pending,
-            cache_updates: Vec::new(),
-        });
+        let mut pending = PendingActions {
+            drift_query: Some(PendingDriftQuery {
+                query: "SELECT 2".to_string(),
+                in_new_tab: true,
+                action: DriftAction::Pending,
+                cache_updates: Vec::new(),
+            }),
+            ..Default::default()
+        };
 
         // Simulate the put-back logic: take the value, inspect action, re-store.
         let taken = pending.drift_query.take().unwrap();

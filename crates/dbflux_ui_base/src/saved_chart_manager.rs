@@ -834,7 +834,9 @@ mod tests {
         let chart_id = chart.id;
 
         let mut manager = SavedChartManager::new(Arc::clone(&repo));
-        manager.upsert(chart);
+        manager
+            .upsert(chart)
+            .expect("upsert should persist the chart");
 
         // In-memory cache contains the chart.
         assert_eq!(manager.all_charts().len(), 1);
@@ -923,7 +925,7 @@ mod tests {
         let chart = sample_chart("Original", profile_id);
         let id = chart.id;
         let mut mgr = SavedChartManager::new(Arc::clone(&repo));
-        mgr.upsert(chart);
+        mgr.upsert(chart).expect("upsert should persist the chart");
 
         mgr.rename_chart(id, "Renamed".to_string()).unwrap();
 
@@ -961,7 +963,7 @@ mod tests {
         let chart = sample_chart("ToDelete", profile_id);
         let id = chart.id;
         let mut mgr = SavedChartManager::new(Arc::clone(&repo));
-        mgr.upsert(chart);
+        mgr.upsert(chart).expect("upsert should persist the chart");
         assert_eq!(mgr.all_charts().len(), 1);
 
         mgr.delete_chart(id).unwrap();
@@ -989,7 +991,7 @@ mod tests {
         let chart = sample_chart("Original", profile_id);
         let orig_id = chart.id;
         let mut mgr = SavedChartManager::new(Arc::clone(&repo));
-        mgr.upsert(chart);
+        mgr.upsert(chart).expect("upsert should persist the chart");
 
         let dup_id = mgr.duplicate_chart(orig_id).unwrap();
 
@@ -1032,7 +1034,9 @@ mod tests {
         let chart_id = chart.id;
 
         let mut manager = SavedChartManager::new(Arc::clone(&repo));
-        manager.upsert(chart);
+        manager
+            .upsert(chart)
+            .expect("upsert should persist the chart");
 
         // Reload from storage.
         let manager2 = SavedChartManager::new(Arc::clone(&repo));
@@ -1122,7 +1126,9 @@ mod tests {
         let chart_id = chart.id;
 
         let mut manager = SavedChartManager::new(Arc::clone(&repo));
-        manager.upsert(chart);
+        manager
+            .upsert(chart)
+            .expect("upsert should persist the chart");
 
         let manager2 = SavedChartManager::new(Arc::clone(&repo));
         assert_eq!(manager2.all_charts().len(), 1);

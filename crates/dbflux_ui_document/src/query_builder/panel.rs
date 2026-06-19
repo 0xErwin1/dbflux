@@ -4980,10 +4980,10 @@ mod tests {
         t_add_predicate(&mut panel, vec![], "name");
 
         // Update value at path [0] (email predicate).
-        if let Some(root) = &mut panel.current_spec.filter {
-            if let Some(FilterNode::Predicate(pred)) = filter_node_at_path_mut(root, &[0]) {
-                pred.value = PredicateValue::Single(LiteralValue::Text("%foo%".to_string()));
-            }
+        if let Some(root) = &mut panel.current_spec.filter
+            && let Some(FilterNode::Predicate(pred)) = filter_node_at_path_mut(root, &[0])
+        {
+            pred.value = PredicateValue::Single(LiteralValue::Text("%foo%".to_string()));
         }
         panel.rebuild_spec_pure();
 

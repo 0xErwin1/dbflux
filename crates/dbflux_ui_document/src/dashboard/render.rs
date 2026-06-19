@@ -649,10 +649,7 @@ mod tests {
 
     /// Render-level invariant: `PANEL_REEXEC_CAP` is visible from render.rs
     /// (same crate, `pub(crate)` const). Compile-only assertion.
-    #[test]
-    fn render_can_reference_panel_reexec_cap() {
-        assert!(PANEL_REEXEC_CAP > 0);
-    }
+    const _: () = assert!(PANEL_REEXEC_CAP > 0);
 
     /// `panel_height(1)` is exactly one `DASHBOARD_ROW_PX` row.
     #[test]
@@ -760,7 +757,7 @@ mod tests {
             },
         };
 
-        let mut slots = vec![make_orphan(1, 1), make_orphan(0, 1), make_orphan(0, 0)];
+        let mut slots = [make_orphan(1, 1), make_orphan(0, 1), make_orphan(0, 0)];
 
         slots.sort_by_key(|s| {
             let p = s.grid_pos();

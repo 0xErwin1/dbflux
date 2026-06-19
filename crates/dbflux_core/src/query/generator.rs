@@ -2124,6 +2124,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn materialize_question_mark_float() {
         let q = SelectQuery {
             sql: "SELECT * FROM t WHERE score > ?".to_string(),
@@ -2989,9 +2990,7 @@ mod tests {
     // T-13 — [RED] Tests for QueryGenerator trait extensions (spec B-5, DR-3.1, DR-3.3)
 
     mod mutation_generator_tests {
-        use super::super::{
-            GeneratedMutation, GeneratorError, MockMutationGenerator, QueryGenerator,
-        };
+        use super::super::{GeneratorError, MockMutationGenerator, QueryGenerator};
         use crate::query::table_browser::TableRef;
         use crate::query::visual_query::{
             Assignment, AssignmentValue, MutationKind, ScalarLiteral, VisualMutationSpec,
@@ -3084,8 +3083,8 @@ mod tests {
         use crate::Value;
         use crate::query::table_browser::TableRef;
         use crate::query::visual_query::{
-            Assignment, AssignmentValue, BoolOp, Comparator, FilterNode, LiteralValue,
-            MutationKind, Predicate, PredicateValue, ScalarLiteral, VisualMutationSpec,
+            Assignment, AssignmentValue, Comparator, FilterNode, LiteralValue, MutationKind,
+            Predicate, PredicateValue, ScalarLiteral, VisualMutationSpec,
         };
         use crate::sql::dialect::{PlaceholderStyle, SqlDialect};
 

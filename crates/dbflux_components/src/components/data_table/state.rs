@@ -1033,6 +1033,8 @@ mod tests {
 
     /// Harness that wraps a DataTableState entity so it can be placed in a window.
     struct StateHarness {
+        // Keeps the DataTableState entity owned by the window view for the test's lifetime.
+        #[allow(dead_code)]
         state: gpui::Entity<super::DataTableState>,
     }
 
@@ -1116,7 +1118,7 @@ mod tests {
         let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
         let holder_clone = state_holder.clone();
 
-        let (_, window) = cx.add_window_view(move |window, cx| {
+        let (_, window) = cx.add_window_view(move |_window, cx| {
             let model = one_row_model();
             let state = cx.new(|cx| {
                 let mut s = super::DataTableState::new(model, cx);
@@ -1161,7 +1163,7 @@ mod tests {
         let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
         let holder_clone = state_holder.clone();
 
-        let (_, window) = cx.add_window_view(move |window, cx| {
+        let (_, window) = cx.add_window_view(move |_window, cx| {
             let model = one_row_model();
             let state = cx.new(|cx| {
                 let mut s = super::DataTableState::new(model, cx);

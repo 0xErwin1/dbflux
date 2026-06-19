@@ -290,10 +290,7 @@ impl Render for ModalDeleteSavedChartConfirm {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        DeleteDashboardOutcome, DeleteDashboardRequest, DeleteSavedChartOutcome,
-        DeleteSavedChartRequest, ModalDeleteDashboardConfirm, ModalDeleteSavedChartConfirm,
-    };
+    use super::{DeleteDashboardRequest, DeleteSavedChartRequest, ModalDeleteDashboardConfirm};
     use uuid::Uuid;
 
     fn test_uuid() -> Uuid {

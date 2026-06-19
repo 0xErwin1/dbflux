@@ -813,6 +813,7 @@ mod tests {
 
     // T06: integers, floats, booleans, NULL
     #[test]
+    #[allow(clippy::approx_constant)]
     fn tokenize_number_and_bool() {
         assert_eq!(
             tok("42 3.14 true FALSE null"),
@@ -840,6 +841,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn tokenize_negative_float() {
         let tokens = tok("-3.14");
         assert!(matches!(tokens[0], Token::Float(f) if (f - (-3.14)).abs() < 1e-10));
@@ -914,6 +916,7 @@ mod tests {
 
     // T09: value RHS
     #[test]
+    #[allow(clippy::approx_constant)]
     fn parse_rhs_values() {
         let ast_str = parse("col = 'hello'").unwrap();
         let ast_int = parse("col = 42").unwrap();

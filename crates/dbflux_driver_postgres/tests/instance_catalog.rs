@@ -196,13 +196,13 @@ fn all_numeric_metrics_return_ok_on_empty_instance() {
                 "metric {metric_id} must return at least one row"
             );
 
-            if metric_id == "pg.cache_hit_ratio" {
-                if let Some(dbflux_core::Value::Float(ratio)) = result.rows[0].get(1) {
-                    assert!(
-                        *ratio >= 0.0 && *ratio <= 100.0,
-                        "cache_hit_ratio must be in [0, 100] on empty instance; got {ratio}"
-                    );
-                }
+            if metric_id == "pg.cache_hit_ratio"
+                && let Some(dbflux_core::Value::Float(ratio)) = result.rows[0].get(1)
+            {
+                assert!(
+                    *ratio >= 0.0 && *ratio <= 100.0,
+                    "cache_hit_ratio must be in [0, 100] on empty instance; got {ratio}"
+                );
             }
         }
 

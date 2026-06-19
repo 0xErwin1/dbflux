@@ -555,15 +555,12 @@ mod tests {
         let state = test_state(None, Instant::now(), None);
 
         let result = run_process(&lua, &state, options);
-        match result {
-            Err(e) => {
-                let msg = e.to_string();
-                assert!(
-                    !msg.contains("requires a timeout_ms"),
-                    "unexpected timeout-required error: {msg}"
-                );
-            }
-            Ok(_) => {}
+        if let Err(e) = result {
+            let msg = e.to_string();
+            assert!(
+                !msg.contains("requires a timeout_ms"),
+                "unexpected timeout-required error: {msg}"
+            );
         }
     }
 
@@ -577,15 +574,12 @@ mod tests {
         let state = test_state(Some(Duration::from_secs(60)), Instant::now(), None);
 
         let result = run_process(&lua, &state, options);
-        match result {
-            Err(e) => {
-                let msg = e.to_string();
-                assert!(
-                    !msg.contains("requires a timeout_ms"),
-                    "unexpected timeout-required error when hook timeout is set: {msg}"
-                );
-            }
-            Ok(_) => {}
+        if let Err(e) = result {
+            let msg = e.to_string();
+            assert!(
+                !msg.contains("requires a timeout_ms"),
+                "unexpected timeout-required error when hook timeout is set: {msg}"
+            );
         }
     }
 
@@ -600,15 +594,12 @@ mod tests {
         let state = test_state(None, Instant::now(), None);
 
         let result = run_process(&lua, &state, options);
-        match result {
-            Err(e) => {
-                let msg = e.to_string();
-                assert!(
-                    !msg.contains("requires a timeout_ms"),
-                    "detached run must not require timeout_ms, got: {msg}"
-                );
-            }
-            Ok(_) => {}
+        if let Err(e) = result {
+            let msg = e.to_string();
+            assert!(
+                !msg.contains("requires a timeout_ms"),
+                "detached run must not require timeout_ms, got: {msg}"
+            );
         }
     }
 

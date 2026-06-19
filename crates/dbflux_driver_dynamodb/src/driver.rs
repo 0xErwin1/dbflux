@@ -4292,25 +4292,25 @@ mod tests {
 
         // Integer N
         assert_eq!(
-            infer_field_kind(&[n_int_item.clone()], "count"),
+            infer_field_kind(std::slice::from_ref(&n_int_item), "count"),
             ColumnKind::Integer
         );
 
         // Decimal N
         assert_eq!(
-            infer_field_kind(&[n_float_item.clone()], "score"),
+            infer_field_kind(std::slice::from_ref(&n_float_item), "score"),
             ColumnKind::Float
         );
 
         // S → Text
         assert_eq!(
-            infer_field_kind(&[s_item.clone()], "name"),
+            infer_field_kind(std::slice::from_ref(&s_item), "name"),
             ColumnKind::Text
         );
 
         // Bool → Integer (Value::Bool plots as 0/1 in the chart engine, like MSSQL BIT).
         assert_eq!(
-            infer_field_kind(&[bool_item.clone()], "active"),
+            infer_field_kind(std::slice::from_ref(&bool_item), "active"),
             ColumnKind::Integer
         );
 
@@ -4319,7 +4319,7 @@ mod tests {
 
         // Missing field → Unknown
         assert_eq!(
-            infer_field_kind(&[n_int_item.clone()], "missing"),
+            infer_field_kind(std::slice::from_ref(&n_int_item), "missing"),
             ColumnKind::Unknown
         );
 
