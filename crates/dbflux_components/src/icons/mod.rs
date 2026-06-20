@@ -275,7 +275,6 @@ impl AppIcon {
             Icon::Mongodb => Self::BrandMongodb,
             Icon::Redis => Self::BrandRedis,
             Icon::Dynamodb => Self::Database,
-            // TODO(influxdb-icon): real brand SVG already exists at icons/brand/influxdb.svg
             Icon::Influxdb => Self::BrandInfluxDb,
             Icon::Logs => Self::Logs,
             Icon::Database => Self::Database,
@@ -292,5 +291,19 @@ impl From<AppIcon> for IconSource {
 impl From<AppIcon> for gpui_component::Icon {
     fn from(icon: AppIcon) -> Self {
         gpui_component::Icon::default().path(icon.path())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppIcon;
+    use dbflux_core::Icon;
+
+    #[test]
+    fn influxdb_icon_maps_to_brand_svg() {
+        assert_eq!(
+            AppIcon::from_icon(Icon::Influxdb).path(),
+            "icons/brand/influxdb.svg"
+        );
     }
 }

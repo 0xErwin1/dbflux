@@ -2187,8 +2187,8 @@ pub fn fetch_dependents(
 #[cfg(test)]
 mod tests {
     use super::{
-        SqliteDialect, SqliteDriver, kind_from_decltype, plan_sqlite_semantic_request,
-        sqlite_generate_create_table,
+        RusqliteConnection, SqliteDialect, SqliteDriver, kind_from_decltype,
+        plan_sqlite_semantic_request, sqlite_generate_create_table,
     };
     use dbflux_core::{
         ColumnInfo, ColumnKind, DatabaseCategory, DbConfig, DbDriver, FormValues, MutationRequest,
@@ -2356,9 +2356,27 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "TODO: sqlite URI mode support"]
-    fn pending_sqlite_uri_mode_support() {
-        panic!("TODO: implement URI mode for SQLite driver and replace this pending test");
+    fn sqlite_uri_mode_ro_opens_read_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("ro.db");
+        RusqliteConnection::open(&db)
+            .unwrap()
+            .execute_batch("CREATE TABLE seed(x);")
+            .unwrap();
+
+        let uri = format!("file:{}?mode=ro", db.display());
+        let conn = RusqliteConnection::open(&uri).expect("read-only URI open should succeed");
+        let write = conn.execute_batch("CREATE TABLE t(x);");
+        assert!(write.is_err(), "write must fail on a mode=ro connection");
+    }
+
+    #[test]
+    fn sqlite_plain_path_opens_read_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("rw.db");
+        let conn = RusqliteConnection::open(&db).expect("plain path open should succeed");
+        conn.execute_batch("CREATE TABLE t(x);")
+            .expect("write must succeed on a normal file path");
     }
 
     #[test]
