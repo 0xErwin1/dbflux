@@ -3647,8 +3647,18 @@ fn probe_connection(client: &Client, config: &DynamoProfileConfig) -> Result<(),
     Ok(())
 }
 
+/// Process-wide tokio runtime shared across every DynamoDB SDK call.
+///
+/// Constructing a fresh runtime per call is expensive in file descriptors and
+/// defeats connection pooling — hyper's pool is keyed to the runtime that
+/// issued the request, so per-call runtimes lose keep-alive. A `LazyLock<Runtime>`
+/// lives for the lifetime of the process and is never dropped, which also avoids
+/// any Runtime-in-async-context panic risk.
 #[allow(clippy::expect_used)]
 static DYNAMODB_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
+    // Fatal at process scope: the driver cannot operate without a tokio
+    // runtime and there is no recoverable path. A panic here surfaces the
+    // OS-level reason (typically EMFILE / out-of-memory).
     tokio::runtime::Runtime::new().expect("DynamoDB driver failed to construct tokio runtime")
 });
 
