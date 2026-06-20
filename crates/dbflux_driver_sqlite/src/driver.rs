@@ -24,7 +24,7 @@ use dbflux_core::{
     generate_insert_template, generate_select_star, generate_update_template,
     render_semantic_filter_sql,
 };
-use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
+use rusqlite::{Connection as RusqliteConnection, InterruptHandle, OpenFlags};
 
 pub static SQLITE_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
     tabs: vec![FormTab {
@@ -330,6 +330,20 @@ impl Default for SqliteDriver {
     }
 }
 
+fn open_sqlite(path: &std::path::Path) -> rusqlite::Result<RusqliteConnection> {
+    let path_str = path.to_string_lossy();
+    if path_str.starts_with("file:") {
+        RusqliteConnection::open_with_flags(
+            path_str.as_ref(),
+            OpenFlags::SQLITE_OPEN_URI
+                | OpenFlags::SQLITE_OPEN_READ_WRITE
+                | OpenFlags::SQLITE_OPEN_CREATE,
+        )
+    } else {
+        RusqliteConnection::open(path)
+    }
+}
+
 impl DbDriver for SqliteDriver {
     fn kind(&self) -> DbKind {
         DbKind::SQLite
@@ -389,8 +403,7 @@ impl DbDriver for SqliteDriver {
             }
         }
 
-        let conn = RusqliteConnection::open(&path)
-            .map_err(|e| DbError::connection_failed(e.to_string()))?;
+        let conn = open_sqlite(&path).map_err(|e| DbError::connection_failed(e.to_string()))?;
 
         let interrupt_handle = conn.get_interrupt_handle();
 
@@ -430,8 +443,7 @@ impl DbDriver for SqliteDriver {
             }
         };
 
-        let conn = RusqliteConnection::open(&path)
-            .map_err(|e| DbError::connection_failed(e.to_string()))?;
+        let conn = open_sqlite(&path).map_err(|e| DbError::connection_failed(e.to_string()))?;
 
         conn.execute_batch("SELECT 1")
             .map_err(|e| DbError::connection_failed(e.to_string()))?;
@@ -2187,8 +2199,8 @@ pub fn fetch_dependents(
 #[cfg(test)]
 mod tests {
     use super::{
-        SqliteDialect, SqliteDriver, kind_from_decltype, plan_sqlite_semantic_request,
-        sqlite_generate_create_table,
+        RusqliteConnection, SqliteDialect, SqliteDriver, kind_from_decltype, open_sqlite,
+        plan_sqlite_semantic_request, sqlite_generate_create_table,
     };
     use dbflux_core::{
         ColumnInfo, ColumnKind, DatabaseCategory, DbConfig, DbDriver, FormValues, MutationRequest,
@@ -2356,9 +2368,28 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "TODO: sqlite URI mode support"]
-    fn pending_sqlite_uri_mode_support() {
-        panic!("TODO: implement URI mode for SQLite driver and replace this pending test");
+    fn sqlite_uri_mode_ro_opens_read_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("ro.db");
+        RusqliteConnection::open(&db)
+            .unwrap()
+            .execute_batch("CREATE TABLE seed(x);")
+            .unwrap();
+
+        let uri = format!("file:{}?mode=ro", db.display());
+        let conn =
+            open_sqlite(std::path::Path::new(&uri)).expect("read-only URI open should succeed");
+        let write = conn.execute_batch("CREATE TABLE t(x);");
+        assert!(write.is_err(), "write must fail on a mode=ro connection");
+    }
+
+    #[test]
+    fn sqlite_plain_path_opens_read_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("rw.db");
+        let conn = open_sqlite(&db).expect("plain path open should succeed");
+        conn.execute_batch("CREATE TABLE t(x);")
+            .expect("write must succeed on a normal file path");
     }
 
     #[test]
