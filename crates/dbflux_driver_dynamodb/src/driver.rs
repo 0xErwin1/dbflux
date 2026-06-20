@@ -764,7 +764,7 @@ impl Connection for DynamoConnection {
             table: Some(table_name.to_string()),
         };
 
-        let runtime = runtime()?;
+        let runtime = runtime();
         let request = self.client.delete_table().table_name(table_name);
 
         match runtime.block_on(request.send()) {
@@ -801,7 +801,7 @@ impl Connection for DynamoConnection {
             table: self.default_table.clone(),
         };
 
-        let runtime = runtime()?;
+        let runtime = runtime();
         let output = runtime
             .block_on(self.client.describe_table().table_name(table).send())
             .map_err(|error| {
@@ -852,7 +852,7 @@ impl Connection for DynamoConnection {
             table: self.default_table.clone(),
         };
 
-        let runtime = runtime()?;
+        let runtime = runtime();
 
         if plan.total_items == 0 {
             return Err(DbError::query_failed("Document payload is required"));
@@ -888,7 +888,7 @@ impl Connection for DynamoConnection {
                 &self.client,
                 &plan.table,
                 write_requests,
-                &runtime,
+                runtime,
                 &config,
             )?;
         }
@@ -914,7 +914,7 @@ impl Connection for DynamoConnection {
                 table: self.default_table.clone(),
             };
 
-            let runtime = runtime()?;
+            let runtime = runtime();
 
             let mut condition_attribute_names = HashMap::new();
             condition_attribute_names.insert("#ck0".to_string(), plan.partition_key_name.clone());
@@ -986,7 +986,7 @@ impl Connection for DynamoConnection {
 
         if update.many {
             let many_plan = self.plan_update_many_operation(update)?;
-            let runtime = runtime()?;
+            let runtime = runtime();
 
             let mut updated_count: usize = 0;
 
@@ -1018,7 +1018,7 @@ impl Connection for DynamoConnection {
         }
 
         let plan = self.plan_update_operation(update)?;
-        let runtime = runtime()?;
+        let runtime = runtime();
         runtime
             .block_on(
                 self.client
@@ -1048,7 +1048,7 @@ impl Connection for DynamoConnection {
 
         if delete.many {
             let many_plan = self.plan_delete_many_operation(delete)?;
-            let runtime = runtime()?;
+            let runtime = runtime();
 
             let mut deleted_count: usize = 0;
 
@@ -1074,7 +1074,7 @@ impl Connection for DynamoConnection {
 
         let plan = self.plan_delete_operation(delete)?;
 
-        let runtime = runtime()?;
+        let runtime = runtime();
         runtime
             .block_on(
                 self.client
@@ -1308,7 +1308,7 @@ impl DynamoConnection {
             table: self.default_table.clone(),
         };
 
-        let runtime = runtime()?;
+        let runtime = runtime();
         let mut names = Vec::new();
         let mut cursor: Option<String> = None;
 
@@ -1350,7 +1350,7 @@ impl DynamoConnection {
             table: self.default_table.clone(),
         };
 
-        let runtime = runtime()?;
+        let runtime = runtime();
 
         // Retry up to 2 times on dispatch failure (transient SDK errors)
         let mut last_error = None;
@@ -1439,7 +1439,7 @@ impl DynamoConnection {
             ));
         }
 
-        let runtime = runtime()?;
+        let runtime = runtime();
         let mut remaining_skip = offset;
         let mut collected = Vec::new();
         let mut cursor: Option<HashMap<String, AttributeValue>> = None;
@@ -1465,7 +1465,7 @@ impl DynamoConnection {
                 strategy,
                 request_limit,
                 cursor.clone(),
-                &runtime,
+                runtime,
                 config,
             )?;
 
@@ -1521,7 +1521,7 @@ impl DynamoConnection {
             ));
         }
 
-        let runtime = runtime()?;
+        let runtime = runtime();
         let mut total: u64 = 0;
         let mut cursor: Option<HashMap<String, AttributeValue>> = None;
 
@@ -1532,7 +1532,7 @@ impl DynamoConnection {
                     table,
                     strategy,
                     cursor.clone(),
-                    &runtime,
+                    runtime,
                     config,
                 )?;
 
@@ -1554,7 +1554,7 @@ impl DynamoConnection {
                 strategy,
                 100,
                 cursor.clone(),
-                &runtime,
+                runtime,
                 config,
             )?;
 
@@ -1708,7 +1708,7 @@ impl DynamoConnection {
             table: self.default_table.clone(),
         };
 
-        let runtime = runtime()?;
+        let runtime = runtime();
         let mut cursor: Option<HashMap<String, AttributeValue>> = None;
         let mut key_maps = Vec::new();
 
@@ -1719,7 +1719,7 @@ impl DynamoConnection {
                 strategy,
                 READ_PAGE_LIMIT,
                 cursor.clone(),
-                &runtime,
+                runtime,
                 &config,
             )?;
 
@@ -3591,7 +3591,7 @@ fn build_client(config: &DynamoProfileConfig) -> Result<Client, DbError> {
         loader = loader.profile_name(profile);
     }
 
-    let runtime = runtime()?;
+    let runtime = runtime();
     let sdk_config = runtime.block_on(loader.load());
 
     let mut builder = DynamoConfigBuilder::from(&sdk_config);
@@ -3636,7 +3636,7 @@ fn endpoint_looks_local(endpoint: &str) -> bool {
 }
 
 fn probe_connection(client: &Client, config: &DynamoProfileConfig) -> Result<(), DbError> {
-    let runtime = runtime()?;
+    let runtime = runtime();
     runtime
         .block_on(client.list_tables().limit(1).send())
         .map_err(|error| {
@@ -3647,9 +3647,13 @@ fn probe_connection(client: &Client, config: &DynamoProfileConfig) -> Result<(),
     Ok(())
 }
 
-fn runtime() -> Result<tokio::runtime::Runtime, DbError> {
-    tokio::runtime::Runtime::new()
-        .map_err(|error| DbError::connection_failed(format!("Tokio runtime setup failed: {error}")))
+#[allow(clippy::expect_used)]
+static DYNAMODB_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
+    tokio::runtime::Runtime::new().expect("DynamoDB driver failed to construct tokio runtime")
+});
+
+fn runtime() -> &'static tokio::runtime::Runtime {
+    &DYNAMODB_RUNTIME
 }
 
 fn normalize_table_names(mut table_names: Vec<String>) -> Result<Vec<String>, DbError> {
@@ -4243,8 +4247,8 @@ mod tests {
         ensure_item_contains_required_keys, extract_key_map_from_filter,
         extract_non_key_update_attributes, infer_field_kind, json_value_to_attribute_value,
         key_components_to_fields, key_components_to_indexes, normalize_table_names,
-        plan_dynamo_semantic_request, resolve_upsert_key_map, strip_key_fields_from_update_payload,
-        unsupported_operation, validate_read_options,
+        plan_dynamo_semantic_request, resolve_upsert_key_map, runtime,
+        strip_key_fields_from_update_payload, unsupported_operation, validate_read_options,
     };
     use crate::query_parser::{DynamoFilterFallback, DynamoReadOptions};
     use aws_sdk_dynamodb::types::{
@@ -5401,6 +5405,11 @@ mod tests {
             "DynamoDB 'profile' field must be AuthProfileRef {{ provider_id: None }}, got {:?}",
             profile_field.kind
         );
+    }
+
+    #[test]
+    fn dynamodb_runtime_is_shared() {
+        assert!(std::ptr::eq(runtime(), runtime()));
     }
 
     #[test]
