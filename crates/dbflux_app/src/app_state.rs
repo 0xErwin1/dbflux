@@ -13,10 +13,10 @@ use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     AuthProfile, CancelToken, Connection, ConnectionHook, ConnectionHooks, ConnectionProfile,
     DbDriver, DbSchemaInfo, DriverKey, EffectiveSettings, FetchCollectionChildrenParams,
-    FormValues, GeneralSettings, GlobalOverrides, HistoryEntry, HistoryManager, HookContext,
-    HookPhase, ProfileManager, ProxyProfile, SavedQuery, SavedQueryManager, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore, ServiceConfig, SessionFacade,
-    ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
+    FormValues, GeneralSettings, GlobalOverrides, HistoryEntry, HookContext, HookPhase,
+    ProfileManager, ProxyProfile, SavedQuery, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot,
+    ScriptsDirectory, SecretStore, ServiceConfig, SessionFacade, ShutdownPhase, SshTunnelProfile,
+    TaskId, TaskKind, TaskSnapshot,
 };
 use dbflux_storage::SavedQueryRepo;
 use dbflux_storage::bootstrap::StorageRuntime;
@@ -282,8 +282,6 @@ impl AppState {
             ssh_manager,
             proxy_manager,
             auth_manager,
-            HistoryManager::new(),
-            SavedQueryManager::new(),
             tree_store,
         );
 
