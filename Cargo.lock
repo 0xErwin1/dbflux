@@ -2871,7 +2871,6 @@ dependencies = [
  "bincode",
  "dbflux_core",
  "dbflux_storage",
- "dirs 5.0.1",
  "interprocess",
  "log",
  "secrecy",
