@@ -360,13 +360,17 @@ impl SqlDialect for MysqlDialect {
         value_to_mysql_literal(value)
     }
 
+    /// Satisfies the `SqlDialect` trait contract.
+    ///
+    /// MySQL string literals are produced exclusively by `value_to_literal` /
+    /// `mysql_text_literal` (mode-independent hex encoding). This method is
+    /// never reached for MySQL because `MysqlDialect::value_to_literal`
+    /// overrides the default body that would otherwise call `escape_string`.
+    /// No production caller should use this method to construct MySQL literals:
+    /// no single inner-quote escaping strategy is safe under both the default
+    /// sql_mode and `NO_BACKSLASH_ESCAPES`.
     fn escape_string(&self, s: &str) -> String {
-        s.replace('\\', "\\\\")
-            .replace('\'', "\\'")
-            .replace('"', "\\\"")
-            .replace('\0', "\\0")
-            .replace('\n', "\\n")
-            .replace('\r', "\\r")
+        s.replace('\'', "''")
     }
 
     fn placeholder_style(&self) -> PlaceholderStyle {
