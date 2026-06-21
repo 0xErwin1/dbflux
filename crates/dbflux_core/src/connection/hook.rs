@@ -1216,9 +1216,22 @@ fn drain_output_events(
 
 fn terminate_child(child: &mut Child) -> Result<(), ProcessExecutionError> {
     #[cfg(unix)]
-    terminate_process_group(child);
+    let already_reaped = terminate_process_group(child);
+    #[cfg(not(unix))]
+    let already_reaped = false;
 
-    let _ = child.kill();
+    // An already-exited child that `terminate_process_group` reaped via `try_wait`
+    // has been terminated successfully. A second `kill`/`wait` on it would fail with
+    // ECHILD and that error would mask the real outcome — e.g. turning a cancellation
+    // into a spurious "Wait" failure when the killed process happens to die promptly.
+    if already_reaped {
+        return Ok(());
+    }
+
+    if let Err(error) = child.kill() {
+        log::debug!("kill after group termination failed (child likely already exited): {error}");
+    }
+
     child
         .wait()
         .map(|_| ())
@@ -1235,8 +1248,11 @@ fn terminate_child(child: &mut Child) -> Result<(), ProcessExecutionError> {
 ///
 /// On Windows, only the direct child process is killed; grandchildren are orphaned
 /// because no Job Object is used to bind them to the parent's lifetime.
+///
+/// Returns `true` if the child exited within the grace window and was reaped here
+/// (via `try_wait`), in which case the caller must NOT `wait` on it again.
 #[cfg(unix)]
-fn terminate_process_group(child: &mut Child) {
+fn terminate_process_group(child: &mut Child) -> bool {
     unsafe extern "C" {
         fn kill(pid: i32, sig: i32) -> i32;
     }
@@ -1245,11 +1261,11 @@ fn terminate_process_group(child: &mut Child) {
     const SIGKILL: i32 = 9;
 
     let Ok(pid) = i32::try_from(child.id()) else {
-        return;
+        return false;
     };
 
     if pid <= 0 {
-        return;
+        return false;
     }
 
     unsafe {
@@ -1258,9 +1274,13 @@ fn terminate_process_group(child: &mut Child) {
 
     std::thread::sleep(std::time::Duration::from_millis(50));
 
-    if child.try_wait().ok().flatten().is_none() {
-        unsafe {
-            let _ = kill(-pid, SIGKILL);
+    match child.try_wait() {
+        Ok(Some(_)) => true,
+        _ => {
+            unsafe {
+                let _ = kill(-pid, SIGKILL);
+            }
+            false
         }
     }
 }
