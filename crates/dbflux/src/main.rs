@@ -267,7 +267,7 @@ fn run_gui() {
     info!("IPC socket bound successfully");
 
     Application::new().with_assets(Assets).run(|cx: &mut App| {
-        dbflux_ui::ui::theme::init(cx);
+        dbflux_ui::theme::init(cx);
         dbflux_ui::ui::components::data_table::init(cx);
         dbflux_ui::ui::components::document_tree::init(cx);
 
@@ -315,7 +315,7 @@ fn run_gui() {
 
         // Set up the density global and apply the persisted theme+style so
         // radius tokens are correct from the very first frame.
-        dbflux_ui::ui::theme::init_with_settings(theme_setting, style_setting, cx);
+        dbflux_ui::theme::init_with_settings(theme_setting, style_setting, cx);
 
         let channel = dbflux_core::ReleaseChannel::current();
         let mut main_window_options = WindowOptions {

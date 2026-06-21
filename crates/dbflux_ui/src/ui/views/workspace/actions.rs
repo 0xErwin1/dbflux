@@ -1,6 +1,6 @@
 use super::*;
-use crate::platform;
 use dbflux_core::{DriverCapabilities, DriverMetadata};
+use dbflux_ui_base::platform;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, report_error_async};
 
 /// Returns `true` when the given driver metadata advertises the `METRIC_SERIES`
@@ -128,6 +128,82 @@ impl Workspace {
         }
     }
 
+    pub(super) fn open_connection_manager_for_edit(
+        &self,
+        profile_id: uuid::Uuid,
+        cx: &mut Context<Self>,
+    ) {
+        let app_state = self.app_state.clone();
+
+        let profile = app_state
+            .read(cx)
+            .profiles()
+            .iter()
+            .find(|p| p.id == profile_id)
+            .cloned();
+
+        let Some(profile) = profile else {
+            log::warn!(
+                "open_connection_manager_for_edit: profile {} not found",
+                profile_id
+            );
+            return;
+        };
+
+        let bounds = Bounds::centered(None, size(px(700.0), px(650.0)), cx);
+        let mut options = WindowOptions {
+            app_id: Some(dbflux_core::ReleaseChannel::current().app_id().into()),
+            titlebar: Some(TitlebarOptions {
+                title: Some("Edit Connection".into()),
+                ..Default::default()
+            }),
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            focus: true,
+            ..Default::default()
+        };
+        platform::apply_window_options(&mut options, 600.0, 500.0);
+
+        if let Err(error) = cx.open_window(options, |window, cx| {
+            let manager =
+                cx.new(|cx| ConnectionManagerWindow::new_for_edit(app_state, &profile, window, cx));
+            cx.new(|cx| Root::new(manager, window, cx))
+        }) {
+            log::warn!("Failed to open connection editor window: {:?}", error);
+        }
+    }
+
+    pub(super) fn open_connection_manager_in_folder(
+        &self,
+        folder_id: uuid::Uuid,
+        cx: &mut Context<Self>,
+    ) {
+        let app_state = self.app_state.clone();
+        let bounds = Bounds::centered(None, size(px(700.0), px(650.0)), cx);
+
+        let mut options = WindowOptions {
+            app_id: Some(dbflux_core::ReleaseChannel::current().app_id().into()),
+            titlebar: Some(TitlebarOptions {
+                title: Some("Connection Manager".into()),
+                ..Default::default()
+            }),
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            focus: true,
+            ..Default::default()
+        };
+        platform::apply_window_options(&mut options, 600.0, 500.0);
+
+        if let Err(error) = cx.open_window(options, |window, cx| {
+            let manager = cx
+                .new(|cx| ConnectionManagerWindow::new_in_folder(app_state, folder_id, window, cx));
+            cx.new(|cx| Root::new(manager, window, cx))
+        }) {
+            log::warn!(
+                "Failed to open connection manager window for folder: {:?}",
+                error
+            );
+        }
+    }
+
     /// Open the in-app export modal for a single connection profile.
     pub(super) fn open_export_connection_modal(
         &self,
@@ -142,19 +218,19 @@ impl Workspace {
 
     pub(super) fn open_settings(&self, cx: &mut Context<Self>) {
         let workspace = cx.entity().clone();
-        crate::ui::windows::settings::open_or_focus_settings(
+        dbflux_ui_windows::settings::open_or_focus_settings(
             self.app_state.clone(),
             None,
             cx,
             move |settings, cx| {
                 cx.subscribe(
                     settings,
-                    move |_settings, event: &crate::ui::windows::settings::SettingsEvent, cx| {
+                    move |_settings, event: &dbflux_ui_windows::settings::SettingsEvent, cx| {
                         workspace.update(cx, |this, cx| match event {
-                            crate::ui::windows::settings::SettingsEvent::OpenScript { path } => {
+                            dbflux_ui_windows::settings::SettingsEvent::OpenScript { path } => {
                                 this.open_script_from_path(path.clone(), cx);
                             }
-                            crate::ui::windows::settings::SettingsEvent::OpenLoginModal {
+                            dbflux_ui_windows::settings::SettingsEvent::OpenLoginModal {
                                 provider_name,
                                 profile_name,
                                 url,
@@ -188,9 +264,9 @@ impl Workspace {
     }
 
     pub(super) fn open_auth_profiles_settings(&self, cx: &mut Context<Self>) {
-        crate::ui::windows::settings::open_or_focus_settings(
+        dbflux_ui_windows::settings::open_or_focus_settings(
             self.app_state.clone(),
-            Some(crate::ui::windows::settings::SettingsSectionId::AuthProfiles),
+            Some(dbflux_ui_windows::settings::SettingsSectionId::AuthProfiles),
             cx,
             |_settings, _cx| {},
         );

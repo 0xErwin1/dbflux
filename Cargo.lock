@@ -3147,14 +3147,12 @@ dependencies = [
 name = "dbflux_ui_sidebar"
 version = "0.7.0-dev.0"
 dependencies = [
- "anyhow",
  "dbflux_app",
  "dbflux_components",
  "dbflux_core",
  "dbflux_ssh",
  "dbflux_storage",
  "dbflux_ui_base",
- "dbflux_ui_windows",
  "dirs 5.0.1",
  "gpui",
  "gpui-component",
@@ -3169,7 +3167,6 @@ dependencies = [
 name = "dbflux_ui_windows"
 version = "0.7.0-dev.0"
 dependencies = [
- "anyhow",
  "dbflux_app",
  "dbflux_components",
  "dbflux_core",

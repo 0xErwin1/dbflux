@@ -14,7 +14,6 @@ license.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
 dbflux_ui_base.workspace = true
-dbflux_ui_windows.workspace = true
 dbflux_components.workspace = true
 dbflux_core.workspace = true
 dbflux_app.workspace = true
@@ -24,7 +23,6 @@ log.workspace = true
 serde_json.workspace = true
 rfd.workspace = true
 dirs.workspace = true
-anyhow = "1"
 
 [dev-dependencies]
 dbflux_storage.workspace = true
@@ -33,9 +31,10 @@ rusqlite.workspace = true
 [features]
 default = []
 # Passthroughs: sidebar code has no direct mcp/lua/aws gates, but these must
-# forward to every dependency that also exposes them (dbflux_app, dbflux_ui_base,
-# dbflux_ui_windows) so the feature set stays unified regardless of build entry
-# point and dbflux_app is never compiled twice with mismatched features.
-mcp = ["dbflux_app/mcp", "dbflux_ui_base/mcp", "dbflux_ui_windows/mcp"]
-lua = ["dbflux_app/lua", "dbflux_ui_base/lua", "dbflux_ui_windows/lua"]
-aws = ["dbflux_app/aws", "dbflux_ui_base/aws", "dbflux_ui_windows/aws"]
+# forward to every dependency that also exposes them (dbflux_app, dbflux_ui_base)
+# so the feature set stays unified regardless of build entry point and dbflux_app
+# is never compiled twice with mismatched features.
+# Note: dbflux_ui_windows features are forwarded by dbflux_ui directly.
+mcp = ["dbflux_app/mcp", "dbflux_ui_base/mcp"]
+lua = ["dbflux_app/lua", "dbflux_ui_base/lua"]
+aws = ["dbflux_app/aws", "dbflux_ui_base/aws"]

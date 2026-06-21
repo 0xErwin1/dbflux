@@ -660,10 +660,10 @@ impl CommandDispatcher for Workspace {
             Command::CreateFolder => {
                 if self.focus_target == FocusTarget::Sidebar {
                     self.sidebar.update(cx, |s, cx| match s.active_tab() {
-                        crate::ui::views::sidebar::SidebarTab::Connections => {
+                        dbflux_ui_sidebar::SidebarTab::Connections => {
                             s.create_root_folder(cx);
                         }
-                        crate::ui::views::sidebar::SidebarTab::Scripts => {
+                        dbflux_ui_sidebar::SidebarTab::Scripts => {
                             s.create_script_folder(cx);
                         }
                     });

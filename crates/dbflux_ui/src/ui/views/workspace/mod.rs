@@ -25,8 +25,6 @@ use crate::keymap::{
     self, Command, CommandDispatcher, ContextId, FocusTarget, KeymapStack, default_keymap,
     key_chord_from_gpui,
 };
-use crate::ui::components::toast::{Toast, copy_action, now_hms};
-use crate::ui::components::toast::{ToastGlobal, ToastHost};
 use crate::ui::dock::{SidebarDock, SidebarDockEvent};
 use crate::ui::document::{CodeDocument, DataDocument, Tab, TabBar, TabBarEvent, TabManager};
 
@@ -41,14 +39,15 @@ use crate::ui::overlays::login_modal::{LoginModal, LoginModalEvent};
 use crate::ui::overlays::shutdown_overlay::ShutdownOverlay;
 use crate::ui::overlays::sql_preview_modal::SqlPreviewModal;
 use crate::ui::overlays::sso_wizard::{SsoWizard, SsoWizardEvent};
-use crate::ui::tokens::{Heights, Radii, Spacing};
-use crate::ui::views::sidebar::{Sidebar, SidebarEvent, SidebarTab};
 use crate::ui::views::status_bar::{StatusBar, ToggleTasksPanel};
 use crate::ui::views::tasks_panel::TasksPanel;
-use crate::ui::windows::connection_manager::ConnectionManagerWindow;
+use dbflux_components::tokens::{Heights, Radii, Spacing};
 #[cfg(test)]
 use dbflux_core::{CollectionRef, TableRef};
 use dbflux_core::{ExecutionContext, QueryLanguage};
+use dbflux_ui_base::toast::{Toast, ToastGlobal, ToastHost, copy_action, now_hms};
+use dbflux_ui_sidebar::{Sidebar, SidebarEvent, SidebarTab};
+use dbflux_ui_windows::connection_manager::ConnectionManagerWindow;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -1000,6 +999,18 @@ impl Workspace {
                 }
                 SidebarEvent::RequestExportConnection { profile_id } => {
                     this.open_export_connection_modal(*profile_id, window, cx);
+                }
+                SidebarEvent::RequestOpenSettings => {
+                    this.open_settings(cx);
+                }
+                SidebarEvent::RequestOpenConnectionManager => {
+                    this.open_connection_manager(cx);
+                }
+                SidebarEvent::RequestEditConnection { profile_id } => {
+                    this.open_connection_manager_for_edit(*profile_id, cx);
+                }
+                SidebarEvent::RequestOpenConnectionManagerInFolder { folder_id } => {
+                    this.open_connection_manager_in_folder(*folder_id, cx);
                 }
             },
         )

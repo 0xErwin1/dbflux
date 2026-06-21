@@ -1,5 +1,4 @@
 use crate::*;
-use dbflux_ui_base::platform;
 
 impl Sidebar {
     pub(super) fn collect_subtree_item_ids(
@@ -134,30 +133,7 @@ impl Sidebar {
             return;
         };
 
-        let app_state = self.app_state.clone();
-        let bounds = Bounds::centered(None, size(px(600.0), px(550.0)), cx);
-
-        let mut options = WindowOptions {
-            app_id: Some(dbflux_core::ReleaseChannel::current().app_id().into()),
-            titlebar: Some(TitlebarOptions {
-                title: Some("Connection Manager".into()),
-                ..Default::default()
-            }),
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            ..Default::default()
-        };
-        platform::apply_window_options(&mut options, 600.0, 500.0);
-
-        if let Err(error) = cx.open_window(options, |window, cx| {
-            let manager = cx
-                .new(|cx| ConnectionManagerWindow::new_in_folder(app_state, folder_id, window, cx));
-            cx.new(|cx| Root::new(manager, window, cx))
-        }) {
-            log::warn!(
-                "Failed to open connection manager window for folder: {:?}",
-                error
-            );
-        }
+        cx.emit(SidebarEvent::RequestOpenConnectionManagerInFolder { folder_id });
     }
 
     pub(crate) fn start_rename(

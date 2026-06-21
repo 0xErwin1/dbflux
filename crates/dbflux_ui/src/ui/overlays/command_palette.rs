@@ -1,11 +1,11 @@
 use crate::keymap::ContextId;
 use crate::ui::icons::AppIcon;
-use crate::ui::tokens::{Radii, Spacing};
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 #[cfg(test)]
 use dbflux_components::helpers::text_color_for_selected;
 use dbflux_components::primitives::{Chord, Icon, overlay_bg, surface_modal_container};
 use dbflux_components::semantic::BannerColors as SemBannerColors;
+use dbflux_components::tokens::{Radii, Spacing};
 use dbflux_components::typography::{Body, MonoCaption, MonoLabel};
 use dbflux_core::{CollectionRef, TableRef};
 use fuzzy_matcher::FuzzyMatcher;
@@ -1090,7 +1090,7 @@ impl Render for CommandPalette {
 #[cfg(test)]
 mod tests {
     use super::{PaletteCommand, PaletteItem, palette_qualifier_text, palette_shortcut_text};
-    use crate::ui::theme;
+    use dbflux_components::theme;
     use dbflux_components::tokens::FontSizes;
     use dbflux_components::typography::AppFonts;
     use gpui::TestAppContext;

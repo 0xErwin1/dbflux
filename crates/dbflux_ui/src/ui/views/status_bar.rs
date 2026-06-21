@@ -1,7 +1,7 @@
 use crate::app::{AppStateChanged, AppStateEntity};
-use crate::ui::theme::ghost_border_color;
 use dbflux_components::primitives::{Icon, StatusDot, StatusDotVariant};
 use dbflux_components::semantic::BannerColors as SemBannerColors;
+use dbflux_components::theme::ghost_border_color;
 use dbflux_components::tokens::{Anim, ChromeColors, FontSizes, Heights};
 use dbflux_components::typography::{MonoCaption, MonoMeta};
 use gpui::prelude::FluentBuilder;

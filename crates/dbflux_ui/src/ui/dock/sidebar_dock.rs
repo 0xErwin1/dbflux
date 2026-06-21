@@ -1,7 +1,7 @@
 use crate::ui::icons::AppIcon;
-use crate::ui::tokens::{Radii, Spacing};
-use crate::ui::views::sidebar::Sidebar;
 use dbflux_components::primitives::Icon;
+use dbflux_components::tokens::{Radii, Spacing};
+use dbflux_ui_sidebar::Sidebar;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;

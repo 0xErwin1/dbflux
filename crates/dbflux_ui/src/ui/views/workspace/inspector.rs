@@ -22,8 +22,8 @@
 //! `workspace/dispatch.rs` as a fallback after the active document declines
 //! Cancel: it calls `close()` and returns `true`.
 
-use crate::ui::tokens::{Heights, Radii, Spacing};
 use dbflux_components::primitives::Text;
+use dbflux_components::tokens::{Heights, Radii, Spacing};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;

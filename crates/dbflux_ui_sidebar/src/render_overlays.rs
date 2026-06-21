@@ -1,7 +1,6 @@
 use super::*;
 use dbflux_components::primitives::Icon;
 use dbflux_components::tokens::Heights;
-use dbflux_ui_base::platform;
 use gpui_component::scroll::ScrollableElement;
 
 fn format_child_timestamp(timestamp_ms: Option<i64>) -> String {
@@ -103,7 +102,6 @@ impl Sidebar {
 
     fn add_connections_menu_items(&self, el: Div, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
-        let app_state = self.app_state.clone();
         let sidebar_for_folder = cx.entity().clone();
         let sidebar_for_conn = cx.entity().clone();
         let hover_bg = theme.list_active;
@@ -142,29 +140,8 @@ impl Sidebar {
                 .on_click(move |_, _, cx| {
                     sidebar_for_conn.update(cx, |this, cx| {
                         this.close_add_menu(cx);
+                        cx.emit(SidebarEvent::RequestOpenConnectionManager);
                     });
-                    let app_state = app_state.clone();
-                    let mut options = WindowOptions {
-                        app_id: Some(dbflux_core::ReleaseChannel::current().app_id().into()),
-                        titlebar: Some(TitlebarOptions {
-                            title: Some("Connection Manager".into()),
-                            ..Default::default()
-                        }),
-                        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-                            None,
-                            size(px(600.0), px(550.0)),
-                            cx,
-                        ))),
-                        ..Default::default()
-                    };
-                    platform::apply_window_options(&mut options, 600.0, 500.0);
-
-                    cx.open_window(options, |window, cx| {
-                        let manager =
-                            cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx));
-                        cx.new(|cx| Root::new(manager, window, cx))
-                    })
-                    .ok();
                 })
                 .child(
                     div()

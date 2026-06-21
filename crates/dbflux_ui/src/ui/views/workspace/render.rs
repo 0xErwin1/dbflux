@@ -1,12 +1,12 @@
 use super::*;
 use crate::keymap::ContextId;
-use crate::platform;
-use crate::ui::components::modal_frame::ModalFrame;
 use dbflux_components::composites::{PanelHeaderVariant, panel_header_collapsible_variant};
 use dbflux_components::controls::Button;
 use dbflux_components::modals::shell::{ModalShell, ModalVariant};
 use dbflux_components::primitives::{Chord, Icon, Text};
 use dbflux_components::typography::Body;
+use dbflux_ui_base::modal_frame::ModalFrame;
+use dbflux_ui_base::platform;
 use gpui_component::IconName;
 
 impl Workspace {
@@ -771,7 +771,7 @@ impl Render for Workspace {
             // Context menu rendered at workspace level for proper positioning
             .when_some(sidebar_context_menu, |this, menu| {
                 use crate::ui::components::context_menu as ctx;
-                use crate::ui::views::sidebar::ContextMenuItem;
+                use dbflux_ui_sidebar::ContextMenuItem;
 
                 let sidebar_entity = self.sidebar.clone();
 

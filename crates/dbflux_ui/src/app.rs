@@ -9,7 +9,7 @@ pub use dbflux_app::AppState;
 pub use dbflux_app::{ExternalDriverDiagnostic, ExternalDriverStage};
 pub use dbflux_core::ConnectedProfile;
 
-// Re-export event types from the parent crate
+// Re-export event types from dbflux_ui_base
 #[cfg(feature = "mcp")]
-pub use crate::app_state_entity::McpRuntimeEventRaised;
-pub use crate::app_state_entity::{AppStateChanged, AppStateEntity, AuthProfileCreated};
+pub use dbflux_ui_base::McpRuntimeEventRaised;
+pub use dbflux_ui_base::{AppStateChanged, AppStateEntity, AuthProfileCreated};

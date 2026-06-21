@@ -1,8 +1,8 @@
 use dbflux_components::tokens::Heights;
 use dbflux_storage::bootstrap::StorageRuntime;
-use dbflux_ui::app_state_entity::AppStateEntity;
+use dbflux_ui::AppStateEntity;
+use dbflux_ui::theme;
 use dbflux_ui::ui::document::{AuditDocument, KeyValueDocument};
-use dbflux_ui::ui::theme;
 use gpui::prelude::*;
 use gpui::{AppContext, Context, Entity, Modifiers, Render, TestAppContext, Window, div, px};
 use uuid::Uuid;

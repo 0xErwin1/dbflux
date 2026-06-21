@@ -1,9 +1,9 @@
-use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::icons::AppIcon;
-use crate::ui::tokens::{Radii, Spacing};
 use dbflux_components::controls::Button;
 use dbflux_components::primitives::Text;
+use dbflux_components::tokens::{Radii, Spacing};
 use dbflux_core::PipelineState;
+use dbflux_ui_base::modal_frame::ModalFrame;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;

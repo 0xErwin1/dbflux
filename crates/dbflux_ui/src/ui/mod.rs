@@ -4,10 +4,7 @@ pub mod dock;
 pub mod document;
 pub mod icons;
 pub mod overlays;
-pub mod theme;
-pub mod tokens;
 pub mod views;
-pub mod windows;
 
 #[cfg(test)]
 mod design_system_guardrails;

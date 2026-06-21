@@ -28,7 +28,6 @@ serde_json.workspace = true
 rfd.workspace = true
 dirs.workspace = true
 open = "5"
-anyhow = "1"
 
 [features]
 default = []

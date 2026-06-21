@@ -31,11 +31,9 @@ use dbflux_core::{
     SchemaSnapshot, TableInfo, TableRef, TaskId, TypeDefinition, ViewInfo,
 };
 use dbflux_ui_base::app_state_entity::{AppStateChanged, AppStateEntity};
-use dbflux_ui_windows::connection_manager::ConnectionManagerWindow;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::Root;
 use gpui_component::Sizable;
 use gpui_component::list::ListItem;
 use gpui_component::tree::{TreeItem, TreeState, tree};
@@ -235,6 +233,30 @@ pub enum SidebarEvent {
         user: String,
         /// True when a previous passphrase attempt for this profile already failed.
         last_attempt_failed: bool,
+    },
+
+    /// Request to open the Settings window.
+    ///
+    /// The integrator (`dbflux_ui` Workspace) owns window creation; the sidebar
+    /// emits this event rather than calling `open_or_focus_settings` directly,
+    /// keeping `dbflux_ui_sidebar` free of a dependency on `dbflux_ui_windows`.
+    RequestOpenSettings,
+
+    /// Request to open the Connection Manager window (new-connection flow).
+    ///
+    /// Same layering rationale as `RequestOpenSettings`.
+    RequestOpenConnectionManager,
+
+    /// Request to open the Connection Manager window pre-loaded for editing
+    /// an existing connection profile.
+    RequestEditConnection {
+        profile_id: Uuid,
+    },
+
+    /// Request to open the Connection Manager window with a specific folder
+    /// pre-selected for the new-connection flow.
+    RequestOpenConnectionManagerInFolder {
+        folder_id: Uuid,
     },
 }
 

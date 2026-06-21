@@ -394,7 +394,6 @@ crates/
       manager.rs            # ConnectionManager, schema caching, connect flow
       hook.rs               # Hook definitions, HookRunner, phase orchestration
       tree.rs               # Folder/connection tree model
-      tree_store.rs         # Tree persistence (JSON)
       tree_manager.rs       # ConnectionTreeManager
       context.rs            # Per-tab execution context (connection/database/schema)
       proxy.rs              # ProxyProfile, ProxyKind, ProxyAuth, no_proxy matching
@@ -402,12 +401,9 @@ crates/
       ssh_tunnel_manager.rs # SshTunnelManager
       item_manager.rs       # Generic ItemManager<T>, Identifiable, DefaultFilename traits
     src/storage/            # Persistence and state
-      json_store.rs         # JsonStore<T> generic with type aliases (profiles, tunnels, proxies)
       session.rs            # Session persistence (scratch/shadow files, manifest)
       history.rs            # History persistence
-      history_manager.rs    # HistoryManager
       saved_query.rs        # Saved queries persistence
-      saved_query_manager.rs # SavedQueryManager
       recent_files.rs       # Recent files tracking
       secrets.rs            # Keyring secret storage
       secret_manager.rs     # SecretManager with HasSecretRef trait
@@ -649,7 +645,7 @@ See `docs/DASHBOARDS.md` for the full reference (including instance metrics and 
 - Driver-owned child resources under collections/containers are published through generic `CollectionChildInfo` metadata. The sidebar must not infer driver-specific children from names, field types, or driver IDs.
 - Routines (functions, procedures, aggregates, window functions) appear as a per-schema "Routines" folder when the driver sets the `ROUTINES` capability and populates the `schema_routines` seam. The UI renders the folder generically; it does not special-case any driver.
 - Sidebar dock: `crates/dbflux_ui/src/ui/dock/sidebar_dock.rs` provides collapsible, resizable sidebar with ToggleSidebar command (Ctrl+B).
-- Connection tree: `crates/dbflux_core/src/connection/tree.rs` models folders and connections as a tree structure with persistence via `tree_store.rs`.
+- Connection tree: `crates/dbflux_core/src/connection/tree.rs` models folders and connections as a tree structure; `tree_manager.rs` handles in-memory management.
 
 ### Driver System
 

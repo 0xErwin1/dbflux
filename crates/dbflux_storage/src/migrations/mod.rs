@@ -141,20 +141,21 @@ impl MigrationRegistry {
         registry.register(mod_007_session_exec_ctx_json::MigrationImpl);
         registry.register(mod_008_general_settings_style::MigrationImpl);
         registry.register(mod_009_mssql_instance::MigrationImpl);
-        // The 010/011 prefixes are intentionally reused across two parallel
-        // migration series merged from separate branches (AWS reflection and the
-        // visualization domain). Migrations are tracked by their full unique
-        // `name()`, not the numeric prefix, so the duplicate prefixes are cosmetic
-        // and must NOT be renumbered: renaming an already-applied migration makes
-        // it re-run on databases that recorded it under the old name.
+        // The 010/011/014 file prefixes below were historically duplicated across two
+        // parallel migration series merged from separate branches. The file-prefix
+        // collision has been resolved by renaming the visualization-domain files to
+        // the `b`-suffix variants (mod_010b_*, mod_011b_*, mod_014b_*). The `name()`
+        // strings inside those files are frozen: `sys_migrations` keys rows by
+        // `name()`, so renaming a `name()` string would re-run that migration on every
+        // existing user database. Never change the `name()` return values.
         registry.register(mod_010_aws_reflect_migration_flag::MigrationImpl);
         registry.register(mod_011_connection_drop_auth_profile_fk::MigrationImpl);
-        registry.register(mod_010_viz_charts_and_dashboards::MigrationImpl);
-        registry.register(mod_011_viz_saved_chart_metric_source::MigrationImpl);
+        registry.register(mod_010b_viz_charts_and_dashboards::MigrationImpl);
+        registry.register(mod_011b_viz_saved_chart_metric_source::MigrationImpl);
         registry.register(mod_012_viz_saved_chart_metric_series::MigrationImpl);
         registry.register(mod_013_viz_dashboard_panel_kind::MigrationImpl);
         registry.register(mod_014_audit_settings_log_capture_min_level::MigrationImpl);
-        registry.register(mod_014_viz_inspector_and_instance_metric::MigrationImpl);
+        registry.register(mod_014b_viz_inspector_and_instance_metric::MigrationImpl);
         registry.register(mod_015_viz_inspector_saved_chart_id_constraint::MigrationImpl);
         registry.register(mod_016_viz_divider_saved_chart_id_constraint::MigrationImpl);
         registry.register(mod_017_qry_saved_queries::MigrationImpl);
@@ -350,13 +351,13 @@ mod mod_007_session_exec_ctx_json;
 mod mod_008_general_settings_style;
 mod mod_009_mssql_instance;
 mod mod_010_aws_reflect_migration_flag;
-mod mod_010_viz_charts_and_dashboards;
+mod mod_010b_viz_charts_and_dashboards;
 mod mod_011_connection_drop_auth_profile_fk;
-mod mod_011_viz_saved_chart_metric_source;
+mod mod_011b_viz_saved_chart_metric_source;
 mod mod_012_viz_saved_chart_metric_series;
 mod mod_013_viz_dashboard_panel_kind;
 mod mod_014_audit_settings_log_capture_min_level;
-mod mod_014_viz_inspector_and_instance_metric;
+mod mod_014b_viz_inspector_and_instance_metric;
 mod mod_015_viz_inspector_saved_chart_id_constraint;
 mod mod_016_viz_divider_saved_chart_id_constraint;
 mod mod_017_qry_saved_queries;
@@ -915,6 +916,61 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM sys_migrations", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, registry.migrations.len() as i64);
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    /// Asserts that the full ordered `name()` sequence of the migration registry
+    /// remains byte-for-byte identical after any refactoring of the source files.
+    ///
+    /// The `sys_migrations` table keys rows by `name()`, so renaming a `name()`
+    /// string re-runs that migration on every existing user database. This test
+    /// is the regression fence for that invariant: it is written against the
+    /// current (pre-rename) state and must stay green through file renames.
+    #[test]
+    fn test_migration_name_order_invariant() {
+        let temp_dir = temp_dir("name_order");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("test.db");
+
+        let conn = Connection::open(&db_path).unwrap();
+        let registry = MigrationRegistry::new();
+
+        let expected: Vec<&str> = vec![
+            "001_initial",
+            "002_audit_extended",
+            "003_audit_settings",
+            "004_audit_saved_filters",
+            "005_rpc_service_kind",
+            "006_rpc_service_api_contract",
+            "007_session_exec_ctx_json",
+            "008_general_settings_style",
+            "009_mssql_instance",
+            "010_aws_reflect_migration_flag",
+            "011_connection_drop_auth_profile_fk",
+            "010_viz_charts_and_dashboards",
+            "011_viz_saved_chart_metric_source",
+            "012_viz_saved_chart_metric_series",
+            "013_viz_dashboard_panel_kind",
+            "014_audit_settings_log_capture_min_level",
+            "014_viz_inspector_and_instance_metric",
+            "015_viz_inspector_saved_chart_id_constraint",
+            "016_viz_divider_saved_chart_id_constraint",
+            "017_qry_saved_queries",
+            "018_app_pending_executions",
+            "019_hook_env_denylist",
+        ];
+
+        let pending = registry.get_pending(&conn).unwrap();
+        let actual: Vec<&str> = pending.iter().map(|m| m.name()).collect();
+
+        assert_eq!(
+            actual, expected,
+            "migration name() strings or registration order changed — \
+             name() strings are frozen keys in sys_migrations and must never be renamed"
+        );
 
         drop(conn);
         let _ = std::fs::remove_dir_all(temp_dir);

@@ -90,41 +90,35 @@ impl ModalFrame {
 mod tests {
     use std::fs;
 
-    const COMPONENTS_DIR: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../dbflux_ui/src/ui/components"
-    );
+    const THIS_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/modal_frame.rs");
     const UI_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../dbflux_ui/src/ui");
 
-    fn read_ui_file(name: &str) -> String {
-        fs::read_to_string(format!("{COMPONENTS_DIR}/{name}"))
-            .unwrap_or_else(|error| panic!("failed to read {name}: {error}"))
-    }
-
-    fn read_feature_file(path: &str) -> String {
-        fs::read_to_string(format!("{UI_DIR}/{path}"))
-            .unwrap_or_else(|error| panic!("failed to read {path}: {error}"))
-    }
-
-    fn modal_frame_source() -> String {
-        read_ui_file("modal_frame.rs")
+    fn read_this_source() -> String {
+        fs::read_to_string(THIS_FILE)
+            .unwrap_or_else(|error| panic!("failed to read modal_frame.rs: {error}"))
             .split("#[cfg(test)]")
             .next()
             .expect("modal_frame.rs should contain production code before tests")
             .to_string()
     }
 
-    #[test]
-    fn modal_frame_shim_forwards_to_the_component_owned_modal_frame() {
-        // modal_frame.rs in dbflux_ui is a shim that re-exports from dbflux_ui_base.
-        // The actual implementation lives here in dbflux_ui_base.
-        let source = read_ui_file("modal_frame.rs");
-        assert!(source.contains("dbflux_ui_base::modal_frame::ModalFrame"));
+    fn read_ui_feature_file(path: &str) -> String {
+        fs::read_to_string(format!("{UI_DIR}/{path}"))
+            .unwrap_or_else(|error| panic!("failed to read {path}: {error}"))
     }
 
     #[test]
-    fn modal_frame_shim_drops_local_scrim_container_and_header_contracts() {
-        let source = modal_frame_source();
+    fn modal_frame_delegates_to_component_owned_implementation() {
+        let source = read_this_source();
+        assert!(
+            source.contains("ComponentModalFrame"),
+            "modal_frame.rs must delegate to dbflux_components ComponentModalFrame"
+        );
+    }
+
+    #[test]
+    fn modal_frame_drops_local_scrim_container_and_header_contracts() {
+        let source = read_this_source();
 
         assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
         assert!(!source.contains("surface_panel(cx)"));
@@ -133,21 +127,17 @@ mod tests {
 
     #[test]
     #[allow(clippy::single_element_loop)]
-    fn planned_modal_adopters_continue_to_flow_through_the_modal_frame_shim() {
-        // sso_wizard.rs and sql_preview_modal.rs have migrated to dbflux_ui_base
-        // and import ModalFrame directly; only the remaining dbflux_ui-local
-        // overlays are checked here. The single-element loop is intentional so
-        // additional planned adopters can be added without restructuring.
+    fn overlay_call_sites_import_modal_frame_directly_from_ui_base() {
         for path in ["overlays/login_modal.rs"] {
-            let source = read_feature_file(path);
+            let source = read_ui_feature_file(path);
 
             assert!(
-                source.contains("use crate::ui::components::modal_frame::ModalFrame;"),
-                "{path} stopped using the compatibility shim before the full migration"
+                source.contains("dbflux_ui_base::modal_frame::ModalFrame"),
+                "{path} must import ModalFrame directly from dbflux_ui_base"
             );
             assert!(
                 source.contains("ModalFrame::new("),
-                "{path} no longer builds its modal through the shared shim"
+                "{path} no longer builds its modal through ModalFrame"
             );
         }
     }

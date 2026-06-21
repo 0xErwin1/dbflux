@@ -12,7 +12,6 @@ use dbflux_core::{
     execute_streaming_process, output_channel,
 };
 use dbflux_ssh::is_passphrase_required_error_str;
-use dbflux_ui_base::platform;
 use dbflux_ui_base::toast::PendingToast;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
@@ -1889,43 +1888,22 @@ impl Sidebar {
     }
 
     pub(crate) fn edit_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
-        let profile = self
+        let profile_exists = self
             .app_state
             .read(cx)
             .profiles()
             .iter()
-            .find(|p| p.id == profile_id)
-            .cloned();
+            .any(|p| p.id == profile_id);
 
-        let Some(profile) = profile else {
+        if !profile_exists {
             report_error(
                 UserFacingError::new(ErrorKind::User, "Profile not found")
                     .with_cause(format!("profile id {profile_id}")),
                 cx,
             );
             return;
-        };
-
-        let app_state = self.app_state.clone();
-        let bounds = Bounds::centered(None, size(px(600.0), px(550.0)), cx);
-
-        let mut options = WindowOptions {
-            app_id: Some(dbflux_core::ReleaseChannel::current().app_id().into()),
-            titlebar: Some(TitlebarOptions {
-                title: Some("Edit Connection".into()),
-                ..Default::default()
-            }),
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            ..Default::default()
-        };
-        platform::apply_window_options(&mut options, 600.0, 500.0);
-
-        if let Err(error) = cx.open_window(options, |window, cx| {
-            let manager =
-                cx.new(|cx| ConnectionManagerWindow::new_for_edit(app_state, &profile, window, cx));
-            cx.new(|cx| Root::new(manager, window, cx))
-        }) {
-            log::warn!("Failed to open connection editor window: {:?}", error);
         }
+
+        cx.emit(SidebarEvent::RequestEditConnection { profile_id });
     }
 }
