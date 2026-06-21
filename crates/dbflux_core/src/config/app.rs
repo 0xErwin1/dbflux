@@ -571,7 +571,6 @@ fn default_enabled() -> bool {
     true
 }
 
-
 /// Compare working driver maps against saved state after stripping empty entries.
 ///
 /// Returns `true` when working state differs from saved state, meaning there

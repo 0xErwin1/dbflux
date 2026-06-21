@@ -2870,6 +2870,7 @@ dependencies = [
  "async-trait",
  "bincode",
  "dbflux_core",
+ "dbflux_storage",
  "dirs 5.0.1",
  "interprocess",
  "log",
@@ -2988,11 +2989,13 @@ version = "0.7.0-dev.0"
 dependencies = [
  "base64 0.22.1",
  "dbflux_core",
+ "dbflux_storage",
  "dbflux_tunnel_core",
  "dirs 6.0.0",
  "log",
  "sha2 0.10.9",
  "ssh2",
+ "tempfile",
  "uuid",
 ]
 
