@@ -502,14 +502,18 @@ mod tests {
         let args = lua.create_table().unwrap();
 
         args.set(1, "-c").unwrap();
+        // The child lives far longer than any plausible scheduling delay of the
+        // canceller thread below. Under parallel CI the canceller can be starved
+        // for seconds; a tight process lifetime / timeout would let the executor's
+        // timeout fire first and surface TimedOut instead of Cancelled.
         args.set(
             2,
-            "import sys, time; sys.stdout.write('out'); sys.stdout.flush(); sys.stderr.write('err'); sys.stderr.flush(); time.sleep(5)",
+            "import sys, time; sys.stdout.write('out'); sys.stdout.flush(); sys.stderr.write('err'); sys.stderr.flush(); time.sleep(60)",
         )
         .unwrap();
         options.set("args", args).unwrap();
         options.set("stream", true).unwrap();
-        options.set("timeout_ms", 5000_i64).unwrap();
+        options.set("timeout_ms", 60000_i64).unwrap();
 
         let cancel_token = state.cancel_token.clone();
         thread::spawn(move || {
