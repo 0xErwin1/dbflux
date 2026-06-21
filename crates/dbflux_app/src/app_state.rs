@@ -1811,9 +1811,9 @@ impl AppState {
             None,
         );
 
-        // Persist the new profile to disk. The in-memory ProfileManager is
-        // constructed with `None` for its JsonStore, so its `save()` is a
-        // no-op; the app drives persistence through `save_profiles()`.
+        // Persist the new profile to disk. The in-memory ProfileManager does
+        // not persist on its own; the app drives persistence through
+        // `save_profiles()` (SQLite).
         self.save_profiles();
     }
 
