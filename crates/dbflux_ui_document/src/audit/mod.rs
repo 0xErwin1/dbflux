@@ -1543,13 +1543,13 @@ impl AuditDocument {
                     format!("{}/{}", home, filename)
                 };
 
-                let message = match std::fs::write(&path, &bytes) {
-                    Ok(_) => PendingToast {
+                let message = match write_export_file(std::path::Path::new(&path), &bytes) {
+                    Ok(()) => PendingToast {
                         message: format!("Exported {} events to {}", event_count, path),
                         is_error: false,
                     },
                     Err(error) => PendingToast {
-                        message: format!("Export succeeded but failed to write file: {}", error),
+                        message: format!("Export failed to write file: {}", error),
                         is_error: true,
                     },
                 };
@@ -1581,6 +1581,19 @@ impl Focusable for AuditDocument {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
+}
+
+/// Writes `bytes` to `path` and restricts the resulting file to owner read/write
+/// (`0o600`) on Unix. The caller is responsible for routing errors to the UI.
+///
+/// Extracting the write + chmod into a single helper makes it testable without
+/// any GPUI coupling and ensures the permission step cannot be accidentally
+/// dropped when the write path changes.
+fn write_export_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    std::fs::write(path, bytes)?;
+
+    dbflux_storage::paths::secure_file_permissions(path)
+        .map_err(|e| std::io::Error::other(e.to_string()))
 }
 
 impl EventEmitter<DocumentEvent> for AuditDocument {}
@@ -1732,5 +1745,31 @@ mod tests {
         let line = "a\nb\nc";
 
         assert_eq!(AuditDocument::event_code_rows(line, 2), 3);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_export_file_sets_mode_0o600() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!(
+            "dbflux_audit_export_test_{}.json",
+            std::process::id()
+        ));
+
+        super::write_export_file(&path, b"{}").expect("write succeeded");
+
+        let mode = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "export file must be owner read/write only"
+        );
     }
 }

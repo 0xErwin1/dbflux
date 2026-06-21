@@ -70,6 +70,9 @@ impl StorageRuntime {
         registry.run_all(&dbflux_conn)?;
         crate::sqlite::set_foreign_keys(&dbflux_conn, true)?;
 
+        // Sidecars created lazily on the first migration write; secure them now.
+        paths::secure_db_sidecars(&dbflux_db_path)?;
+
         info!("Unified database ready at {}", dbflux_db_path.display());
 
         // Initialize the artifact store using the parent directory of dbflux.db as data root.

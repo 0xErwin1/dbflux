@@ -134,6 +134,8 @@ fn run_process(lua: &Lua, state: &LuaRuntimeState, options: Table) -> LuaResult<
 
     ensure_program_allowed(&program, &allowlist)?;
 
+    let resolved = resolve_program_in_path(&program);
+
     if !detached && timeout.is_none() && state.hook_timeout.is_none() {
         return Err(mlua::Error::RuntimeError(
             "dbflux.process.run requires a timeout_ms when no hook-level timeout is set"
@@ -141,7 +143,11 @@ fn run_process(lua: &Lua, state: &LuaRuntimeState, options: Table) -> LuaResult<
         ));
     }
 
-    let mut command = Command::new(&program);
+    let exec_target = resolved
+        .as_deref()
+        .map(|p| p.as_os_str())
+        .unwrap_or_else(|| program.as_ref());
+    let mut command = Command::new(exec_target);
     command.args(&args);
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
@@ -154,12 +160,18 @@ fn run_process(lua: &Lua, state: &LuaRuntimeState, options: Table) -> LuaResult<
         command.current_dir(cwd);
     }
 
+    let resolved_display = resolved
+        .as_deref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "<unresolved>".to_string());
+
     append_log(
         state,
         OutputStreamKind::Log,
         format!(
-            "[PROCESS/{allowlist}] {}{}",
+            "[PROCESS/{allowlist}] {} -> {}{}",
             program,
+            resolved_display,
             if args.is_empty() {
                 String::new()
             } else {
@@ -256,6 +268,36 @@ fn format_process_description(program: &str, args: &[String]) -> String {
     }
 }
 
+/// Resolves a bare program name to an absolute executable path by walking `$PATH`.
+///
+/// First match wins. On Unix a candidate must be a file with an executable bit set;
+/// on other platforms `is_file()` is sufficient. Returns `None` when `PATH` is unset
+/// or no candidate matches. Best-effort only: the allowlist already gated the name —
+/// this exists to make the executed binary visible in the run trail, not to enforce trust.
+fn resolve_program_in_path(program: &str) -> Option<std::path::PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        let candidate = dir.join(program);
+        if is_executable_file(&candidate) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &std::path::Path) -> bool {
+    path.is_file()
+}
+
 /// Checks whether a program name is path-qualified (contains a path separator or leading `~`).
 ///
 /// This is a footgun guard: it prevents accidental execution of path-qualified names like
@@ -271,10 +313,12 @@ fn is_path_qualified(program: &str) -> bool {
 
 /// Validates that `program` is a bare command name on the named allowlist.
 ///
-/// The allowlist is an ergonomics/footgun guard that prevents typos and unintended
-/// execution of programs not expected by the hook author. It is NOT a security
-/// isolation boundary: a user controlling PATH can still substitute a different
-/// binary under the same name.
+/// The allowlist is an ergonomics/footgun guard: it prevents typos and unintended
+/// execution of programs the hook author did not expect, and it forbids path-qualified
+/// names. It is NOT a security isolation boundary — a user who controls `$PATH` can
+/// still substitute a different binary under the same name. To make the substitution
+/// auditable, [`run_process`] resolves the name against `$PATH` and records the resolved
+/// absolute path (or `<unresolved>`) in the run trail.
 fn ensure_program_allowed(program: &str, allowlist: &str) -> LuaResult<()> {
     if is_path_qualified(program) {
         return Err(mlua::Error::RuntimeError(format!(
@@ -671,5 +715,88 @@ mod tests {
             .unwrap();
         unsafe { std::env::remove_var("DBFLUX_TEST_SAFE_VAR_12345") };
         assert_eq!(value.as_deref(), Some("visible"));
+    }
+
+    // --- SEC2-3: PATH resolution helper ---
+    // All PATH-mutating sub-cases are in one test fn to avoid cross-test races.
+
+    #[test]
+    fn resolve_program_in_path_cases() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+        fn tmp_dir(label: &str) -> std::path::PathBuf {
+            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+            std::env::temp_dir().join(format!(
+                "dbflux_lua_path_test_{}_{}_{}",
+                std::process::id(),
+                n,
+                label
+            ))
+        }
+
+        let saved_path = std::env::var_os("PATH");
+
+        // Sub-case: returns None when program is absent
+        {
+            let empty = tmp_dir("empty");
+            std::fs::create_dir_all(&empty).unwrap();
+            unsafe { std::env::set_var("PATH", std::env::join_paths([&empty]).unwrap()) };
+
+            let result = resolve_program_in_path("definitely-not-here-xyz");
+            assert!(result.is_none(), "absent program must return None");
+
+            let _ = std::fs::remove_dir_all(&empty);
+        }
+
+        // Unix-only sub-cases: exec-bit detection
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            // Sub-case: finds a bare name when on PATH with exec bit
+            {
+                let dir = tmp_dir("exec");
+                std::fs::create_dir_all(&dir).unwrap();
+                let prog = dir.join("fakeprog");
+                std::fs::write(&prog, b"#!/bin/sh").unwrap();
+                let mut perms = std::fs::metadata(&prog).unwrap().permissions();
+                perms.set_mode(0o755);
+                std::fs::set_permissions(&prog, perms).unwrap();
+
+                unsafe { std::env::set_var("PATH", std::env::join_paths([&dir]).unwrap()) };
+                let result = resolve_program_in_path("fakeprog");
+                assert_eq!(
+                    result.as_deref(),
+                    Some(prog.as_path()),
+                    "exec binary must be found"
+                );
+
+                let _ = std::fs::remove_dir_all(&dir);
+            }
+
+            // Sub-case: skips non-executable file (no exec bit)
+            {
+                let dir = tmp_dir("noexec");
+                std::fs::create_dir_all(&dir).unwrap();
+                let prog = dir.join("fakeprog");
+                std::fs::write(&prog, b"#!/bin/sh").unwrap();
+                let mut perms = std::fs::metadata(&prog).unwrap().permissions();
+                perms.set_mode(0o644);
+                std::fs::set_permissions(&prog, perms).unwrap();
+
+                unsafe { std::env::set_var("PATH", std::env::join_paths([&dir]).unwrap()) };
+                let result = resolve_program_in_path("fakeprog");
+                assert!(result.is_none(), "non-executable file must not be returned");
+
+                let _ = std::fs::remove_dir_all(&dir);
+            }
+        }
+
+        // Restore PATH
+        match saved_path {
+            Some(p) => unsafe { std::env::set_var("PATH", p) },
+            None => unsafe { std::env::remove_var("PATH") },
+        }
     }
 }

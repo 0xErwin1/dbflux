@@ -360,8 +360,17 @@ impl SqlDialect for MysqlDialect {
         value_to_mysql_literal(value)
     }
 
+    /// Satisfies the `SqlDialect` trait contract.
+    ///
+    /// MySQL string literals are produced exclusively by `value_to_literal` /
+    /// `mysql_text_literal` (mode-independent hex encoding). This method is
+    /// never reached for MySQL because `MysqlDialect::value_to_literal`
+    /// overrides the default body that would otherwise call `escape_string`.
+    /// No production caller should use this method to construct MySQL literals:
+    /// no single inner-quote escaping strategy is safe under both the default
+    /// sql_mode and `NO_BACKSLASH_ESCAPES`.
     fn escape_string(&self, s: &str) -> String {
-        mysql_escape_string(s)
+        s.replace('\'', "''")
     }
 
     fn placeholder_style(&self) -> PlaceholderStyle {
@@ -3046,22 +3055,22 @@ fn value_to_mysql_literal(value: &Value) -> String {
                 f.to_string()
             }
         }
-        Value::Decimal(s) => format!("'{}'", mysql_escape_string(s)),
-        Value::Text(s) => format!("'{}'", mysql_escape_string(s)),
-        Value::Json(s) => format!("'{}'", mysql_escape_string(s)),
+        Value::Decimal(s) => mysql_text_literal(s),
+        Value::Text(s) => mysql_text_literal(s),
+        Value::Json(s) => mysql_text_literal(s),
         Value::Bytes(b) => format!("X'{}'", hex::encode(b)),
         Value::DateTime(dt) => format!("'{}'", dt.format("%Y-%m-%d %H:%M:%S")),
         Value::Date(d) => format!("'{}'", d.format("%Y-%m-%d")),
         Value::Time(t) => format!("'{}'", t.format("%H:%M:%S")),
-        Value::ObjectId(id) => format!("'{}'", mysql_escape_string(id)),
+        Value::ObjectId(id) => mysql_text_literal(id),
         Value::Unsupported(_) => "NULL".to_string(),
         Value::Array(arr) => {
             let json = serde_json::to_string(arr).unwrap_or_else(|_| "[]".to_string());
-            format!("'{}'", mysql_escape_string(&json))
+            mysql_text_literal(&json)
         }
         Value::Document(doc) => {
             let json = serde_json::to_string(doc).unwrap_or_else(|_| "{}".to_string());
-            format!("'{}'", mysql_escape_string(&json))
+            mysql_text_literal(&json)
         }
     }
 }
@@ -3110,14 +3119,26 @@ fn mysql_qualified_name(schema: Option<&str>, name: &str) -> String {
     }
 }
 
-/// Escape a string for use inside a MySQL single-quoted literal.
-fn mysql_escape_string(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('\'', "\\'")
-        .replace('"', "\\\"")
-        .replace('\0', "\\0")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
+/// Renders a MySQL string literal that is safe under ALL `sql_mode` settings,
+/// including `NO_BACKSLASH_ESCAPES`.
+///
+/// If the value contains a single quote, a backslash, or any control character
+/// (which includes NUL), it is emitted as a hex string literal `X'<hex>'` — a form
+/// MySQL interprets identically regardless of `sql_mode`. Otherwise the value has no
+/// characters needing escaping and is emitted verbatim inside single quotes, keeping
+/// the common case human-readable.
+///
+/// Backslash-escaping (`\'`) is deliberately NOT used: under `NO_BACKSLASH_ESCAPES`
+/// the server treats `\` as literal, turning `\'` into a string terminator and
+/// reopening injection. Quote-doubling-without-backslash is also rejected: under the
+/// DEFAULT mode a trailing backslash would escape the doubled closing quote. Conditional
+/// hex is the only form correct under BOTH modes.
+fn mysql_text_literal(s: &str) -> String {
+    if s.chars().any(|c| c == '\'' || c == '\\' || c.is_control()) {
+        format!("X'{}'", hex::encode(s.as_bytes()))
+    } else {
+        format!("'{}'", s)
+    }
 }
 
 fn fetch_tables_shallow(conn: &mut Conn, database: &str) -> Result<Vec<TableInfo>, DbError> {
@@ -3703,7 +3724,7 @@ pub fn fetch_dependents(
 mod tests {
     use super::{
         MysqlDialect, MysqlDriver, inject_password_into_mysql_uri, mysql_routine_type_to_kind,
-        normalize_mysql_tcp_host, plan_mysql_semantic_request,
+        mysql_text_literal, normalize_mysql_tcp_host, plan_mysql_semantic_request,
     };
     use dbflux_core::{
         DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, FormValues, MutationRequest,
@@ -4014,5 +4035,41 @@ mod tests {
             "skeleton must not contain the password: {skeleton}"
         );
         assert_eq!(secret.expose_secret(), "s3cr3t");
+    }
+
+    // --- SEC2-5: mode-independent MySQL string literals ---
+
+    #[test]
+    fn mysql_literal_no_backslash_escapes_injection_guard() {
+        let lit = mysql_text_literal("it's a test");
+        assert!(
+            !lit.contains("\\'"),
+            "literal must not contain backslash-quote (unsafe under NO_BACKSLASH_ESCAPES): {lit}"
+        );
+        assert!(
+            lit.starts_with("X'"),
+            "literal containing a single quote must be hex-encoded: {lit}"
+        );
+    }
+
+    #[test]
+    fn mysql_literal_default_mode_trailing_backslash_guard() {
+        let input = "abc\\";
+        let lit = mysql_text_literal(input);
+        assert_eq!(
+            lit,
+            format!("X'{}'", hex::encode(input.as_bytes())),
+            "trailing backslash must be hex-encoded, not quote-escaped"
+        );
+        assert!(
+            !lit.ends_with("\\'"),
+            "literal must not end with backslash-quote: {lit}"
+        );
+    }
+
+    #[test]
+    fn mysql_literal_plain_value_stays_readable() {
+        let lit = mysql_text_literal("plain value 123");
+        assert_eq!(lit, "'plain value 123'");
     }
 }

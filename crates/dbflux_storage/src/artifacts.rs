@@ -36,10 +36,7 @@ impl ArtifactStore {
     pub fn new() -> Result<Self, StorageError> {
         let data_dir = paths::data_dir()?;
         let root = data_dir.join(SESSIONS_SUBDIR);
-        std::fs::create_dir_all(&root).map_err(|source| StorageError::Io {
-            path: root.clone(),
-            source,
-        })?;
+        paths::ensure_private_dir(&root)?;
         Ok(Self { root })
     }
 
@@ -47,10 +44,7 @@ impl ArtifactStore {
     ///
     /// Useful for tests or alternate data roots.
     pub fn for_root(root: PathBuf) -> Result<Self, StorageError> {
-        std::fs::create_dir_all(&root).map_err(|source| StorageError::Io {
-            path: root.clone(),
-            source,
-        })?;
+        paths::ensure_private_dir(&root)?;
         Ok(Self { root })
     }
 
@@ -84,6 +78,8 @@ impl ArtifactStore {
     }
 
     /// Writes content to a file, creating parent directories if needed.
+    ///
+    /// On Unix, the file is narrowed to `0o600` after the write succeeds.
     pub fn write_content(&self, path: &Path, content: &str) -> Result<(), StorageError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|source| StorageError::Io {
@@ -94,7 +90,9 @@ impl ArtifactStore {
         std::fs::write(path, content).map_err(|source| StorageError::Io {
             path: path.to_path_buf(),
             source,
-        })
+        })?;
+        paths::secure_file_permissions(path)?;
+        Ok(())
     }
 
     /// Deletes a file at the given path, silently ignoring absence.

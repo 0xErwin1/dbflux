@@ -170,10 +170,8 @@ impl AuditService {
     }
 
     pub fn new_sqlite_default() -> Result<Self, AuditError> {
-        let data_dir = dirs::data_dir().ok_or(AuditError::ConfigDirUnavailable)?;
-        let db_dir = data_dir.join("dbflux");
-        std::fs::create_dir_all(&db_dir)?;
-
+        let db_dir = dbflux_storage::paths::data_dir()
+            .map_err(|e| AuditError::Io(std::io::Error::other(e.to_string())))?;
         let store = SqliteAuditStore::new(db_dir.join("dbflux.db"))?;
         Ok(Self::new(store))
     }

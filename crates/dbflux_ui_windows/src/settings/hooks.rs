@@ -277,7 +277,10 @@ impl HooksSection {
 
         if hook_kind == HookKindSelection::Lua && self.hook_lua_process_run {
             warnings.push(
-                "Lua process.run is enabled: this hook can execute external programs with your user permissions"
+                "Lua process.run is enabled: this hook can execute external programs with your \
+                 user permissions. The program allowlist is a convenience filter, not a security \
+                 isolation boundary — a program earlier on $PATH can be substituted under the \
+                 same name."
                     .to_string(),
             );
         }
