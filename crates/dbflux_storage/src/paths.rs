@@ -63,6 +63,36 @@ pub fn secure_file_permissions(path: &Path) -> Result<(), StorageError> {
     Ok(())
 }
 
+/// Secures the WAL and SHM sidecar files that SQLite creates lazily alongside a database.
+///
+/// SQLite creates `<db>-wal`, `<db>-shm`, and (in rollback-journal mode) `<db>-journal`
+/// on the first write, after the database file itself has already been opened and
+/// chmod'd. This means those sidecars appear at the process umask rather than at the
+/// desired owner-only mode. This helper is called after the first write has occurred
+/// (e.g. after migrations run) to narrow each sidecar that actually exists to `0o600`.
+///
+/// Missing sidecar files are not an error — when WAL mode is not active or the
+/// database has never been written, the sidecar simply does not exist yet.
+///
+/// On non-Unix platforms this is a no-op.
+pub fn secure_db_sidecars(db_path: &Path) -> Result<(), StorageError> {
+    #[cfg(unix)]
+    {
+        let base = db_path.as_os_str();
+        for suffix in ["-wal", "-shm", "-journal"] {
+            let mut sidecar_os = base.to_owned();
+            sidecar_os.push(suffix);
+            let sidecar = Path::new(&sidecar_os);
+            if sidecar.exists() {
+                secure_file_permissions(sidecar)?;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = db_path;
+    Ok(())
+}
+
 /// Returns `~/.config/dbflux/`, creating it if necessary with owner-only permissions.
 pub fn config_data_dir() -> Result<PathBuf, StorageError> {
     let base = dirs::config_dir().ok_or(StorageError::ConfigDirUnavailable)?;
@@ -160,6 +190,57 @@ mod tests {
             n,
             prefix
         ))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secure_db_sidecars_sets_0o600_on_existing_sidecars() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let db = unique_tmp_path("sidecars.db");
+        let wal = {
+            let mut p = db.as_os_str().to_owned();
+            p.push("-wal");
+            PathBuf::from(p)
+        };
+        let shm = {
+            let mut p = db.as_os_str().to_owned();
+            p.push("-shm");
+            PathBuf::from(p)
+        };
+
+        // Create dummy sidecars at the process umask (typically 0o644).
+        std::fs::write(&wal, b"").expect("write wal");
+        std::fs::write(&shm, b"").expect("write shm");
+
+        secure_db_sidecars(&db).expect("secure_db_sidecars should succeed");
+
+        for (label, path) in [("wal", &wal), ("shm", &shm)] {
+            let mode = std::fs::metadata(path)
+                .expect("metadata readable")
+                .permissions()
+                .mode();
+            assert_eq!(
+                mode & 0o777,
+                0o600,
+                "{} sidecar should be 0o600, got {:o}",
+                label,
+                mode & 0o777
+            );
+        }
+
+        // Missing -journal must be silently tolerated (no error).
+        let _ = std::fs::remove_file(&wal);
+        let _ = std::fs::remove_file(&shm);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secure_db_sidecars_tolerates_missing_sidecars() {
+        let db = unique_tmp_path("no_sidecars.db");
+        // Nothing created — all sidecars absent.
+        let result = secure_db_sidecars(&db);
+        assert!(result.is_ok(), "missing sidecars should not be an error");
     }
 
     #[cfg(unix)]

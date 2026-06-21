@@ -118,6 +118,9 @@ impl SqliteAuditStore {
         dbflux_storage::paths::secure_file_permissions(&path)
             .map_err(|e| AuditError::Io(std::io::Error::other(e.to_string())))?;
 
+        dbflux_storage::paths::secure_db_sidecars(&path)
+            .map_err(|e| AuditError::Io(std::io::Error::other(e.to_string())))?;
+
         // Wrap in Arc<Mutex<Connection>> for AuditRepository
         let conn = Arc::new(Mutex::new(conn));
         let repo = AuditRepository::new(conn);
