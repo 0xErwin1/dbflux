@@ -2588,7 +2588,6 @@ version = "0.7.0-dev.0"
 dependencies = [
  "dbflux_core",
  "dbflux_storage",
- "dirs 5.0.1",
  "hex",
  "regex",
  "rusqlite",

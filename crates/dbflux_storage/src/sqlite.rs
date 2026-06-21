@@ -6,11 +6,17 @@ use crate::error::StorageError;
 
 /// Opens (or creates) a SQLite database at `path` and applies the standard
 /// PRAGMA set that every internal DBFlux database should use.
+///
+/// On Unix the database file is narrowed to `0o600` immediately after opening.
+/// There is a brief TOCTOU window between `Connection::open` and the chmod; this
+/// matches the accepted pattern in `dbflux_ipc::auth`.
 pub fn open_database(path: &Path) -> Result<Connection, StorageError> {
     let conn = Connection::open(path).map_err(|source| StorageError::Sqlite {
         path: path.to_path_buf(),
         source,
     })?;
+
+    crate::paths::secure_file_permissions(path)?;
 
     apply_default_pragmas(&conn, path)?;
 
@@ -72,6 +78,34 @@ mod tests {
 
     fn temp_db(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("dbflux_storage_test_{}.sqlite", name))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_database_secures_file_0o600() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = temp_db("secure");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
+
+        open_database(&path).expect("open_database should succeed");
+
+        let mode = std::fs::metadata(&path)
+            .expect("metadata readable")
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "db file should be 0o600, got {:o}",
+            mode & 0o777
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
     }
 
     #[test]
