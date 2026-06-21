@@ -17,7 +17,6 @@ pub mod proxy_manager;
 pub mod ssh_tunnel_manager;
 pub(crate) mod tree;
 pub mod tree_manager;
-pub(crate) mod tree_store;
 
 use crate::DbError;
 
@@ -74,4 +73,3 @@ pub use proxy_manager::ProxyManager;
 pub use ssh_tunnel_manager::SshTunnelManager;
 pub use tree::{ConnectionTree, ConnectionTreeNode, ConnectionTreeNodeKind};
 pub use tree_manager::ConnectionTreeManager;
-pub use tree_store::ConnectionTreeStore;

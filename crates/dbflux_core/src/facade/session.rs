@@ -5,8 +5,6 @@ use crate::connection::profile_manager::ProfileManager;
 use crate::connection::proxy_manager::ProxyManager;
 use crate::connection::ssh_tunnel_manager::SshTunnelManager;
 use crate::connection::tree_manager::ConnectionTreeManager;
-use crate::storage::history_manager::HistoryManager;
-use crate::storage::saved_query_manager::SavedQueryManager;
 use crate::storage::secret_manager::SecretManager;
 use crate::{
     ConnectionProfile, DangerousQueryKind, DbDriver, ShutdownCoordinator, ShutdownPhase,
@@ -91,8 +89,6 @@ pub struct SessionFacade {
     pub ssh_tunnels: SshTunnelManager,
     pub proxies: ProxyManager,
     pub auth_profiles: AuthProfileManager,
-    pub history: HistoryManager,
-    pub saved_queries: SavedQueryManager,
     pub tree: ConnectionTreeManager,
     pub tasks: TaskManager,
     pub shutdown: ShutdownCoordinator,
@@ -122,8 +118,6 @@ impl SessionFacade {
         info!("Secret store available: {}", secret_store.is_available());
 
         let secrets = SecretManager::new(secret_store);
-        let history = HistoryManager::new();
-        let saved_queries = SavedQueryManager::new();
         let mut tree = ConnectionTreeManager::new();
 
         tree.sync_with_profiles(&profile_manager.profile_ids());
@@ -135,8 +129,6 @@ impl SessionFacade {
             ssh_tunnels: ssh_manager,
             proxies: proxy_manager,
             auth_profiles: auth_manager,
-            history,
-            saved_queries,
             tree,
             tasks: TaskManager::new(),
             shutdown: ShutdownCoordinator::new(),
@@ -144,18 +136,13 @@ impl SessionFacade {
         }
     }
 
-    /// Creates a facade with caller-supplied managers AND pre-built history/saved queries managers.
-    ///
-    /// This allows the app crate to inject repository-backed managers that use `StorageRuntime`,
-    /// replacing the default JSON-backed managers.
+    /// Creates a facade with caller-supplied managers.
     pub fn with_all_custom_managers(
         drivers: HashMap<String, Arc<dyn DbDriver>>,
         profile_manager: ProfileManager,
         ssh_manager: SshTunnelManager,
         proxy_manager: ProxyManager,
         auth_manager: AuthProfileManager,
-        history: HistoryManager,
-        saved_queries: SavedQueryManager,
     ) -> Self {
         let secret_store = create_secret_store();
         info!("Secret store available: {}", secret_store.is_available());
@@ -172,8 +159,6 @@ impl SessionFacade {
             ssh_tunnels: ssh_manager,
             proxies: proxy_manager,
             auth_profiles: auth_manager,
-            history,
-            saved_queries,
             tree,
             tasks: TaskManager::new(),
             shutdown: ShutdownCoordinator::new(),
@@ -185,15 +170,12 @@ impl SessionFacade {
     ///
     /// This allows the app crate to inject a SQLite-backed tree store
     /// via `SqliteTreeStore`, replacing the default JSON file store.
-    #[allow(clippy::too_many_arguments)]
     pub fn with_all_custom_managers_and_tree_store(
         drivers: HashMap<String, Arc<dyn DbDriver>>,
         profile_manager: ProfileManager,
         ssh_manager: SshTunnelManager,
         proxy_manager: ProxyManager,
         auth_manager: AuthProfileManager,
-        history: HistoryManager,
-        saved_queries: SavedQueryManager,
         tree_store: Box<dyn TreeStore>,
     ) -> Self {
         let secret_store = create_secret_store();
@@ -211,8 +193,6 @@ impl SessionFacade {
             ssh_tunnels: ssh_manager,
             proxies: proxy_manager,
             auth_profiles: auth_manager,
-            history,
-            saved_queries,
             tree,
             tasks: TaskManager::new(),
             shutdown: ShutdownCoordinator::new(),

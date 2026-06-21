@@ -411,7 +411,7 @@ Register AI clients to assign policies:
 
 ### Audit Logging
 
-All operations are logged to SQLite (`~/.config/dbflux/audit.sqlite`):
+All operations are logged to SQLite (`~/.local/share/dbflux/dbflux.db`, `aud_audit_events` table):
 
 ```json
 {
@@ -453,7 +453,7 @@ Export audit logs:
 
 ### Connection Profiles
 
-DBFlux reads connection profiles from `~/.config/dbflux/profiles.json`:
+DBFlux stores connection profiles in `~/.local/share/dbflux/dbflux.db` (`cfg_connection_profiles` table). Use the Connection Manager in the DBFlux GUI to manage profiles. For reference, a profile contains fields like:
 
 ```json
 {
@@ -485,7 +485,7 @@ DBFlux reads connection profiles from `~/.config/dbflux/profiles.json`:
 
 ### MCP Settings
 
-MCP settings are stored in `~/.config/dbflux/mcp_settings.json`:
+MCP settings are stored in `~/.local/share/dbflux/dbflux.db`. Example governance configuration:
 
 ```json
 {

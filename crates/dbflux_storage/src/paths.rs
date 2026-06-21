@@ -93,14 +93,6 @@ pub fn secure_db_sidecars(db_path: &Path) -> Result<(), StorageError> {
     Ok(())
 }
 
-/// Returns `~/.config/dbflux/`, creating it if necessary with owner-only permissions.
-pub fn config_data_dir() -> Result<PathBuf, StorageError> {
-    let base = dirs::config_dir().ok_or(StorageError::ConfigDirUnavailable)?;
-    let dir = base.join("dbflux");
-    ensure_private_dir(&dir)?;
-    Ok(dir)
-}
-
 /// Returns `~/.local/share/dbflux/`, creating it if necessary with owner-only permissions.
 ///
 /// This directory is used for:

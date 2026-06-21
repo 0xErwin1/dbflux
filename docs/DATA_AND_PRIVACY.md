@@ -33,8 +33,12 @@ The data directory holds:
 - **`dbflux.db`** — the unified database (everything below in [What's in the
   database](#whats-in-the-database)).
 - **`st_sessions/`** — scratch/shadow files for open editor tabs.
+- **`ipc_auth_token`** — the IPC/MCP auth token (see [below](#ipcmcp-auth-token)).
+- **`ssh_known_hosts`** — accepted SSH host keys (TOFU).
 
-The config directory holds the **IPC auth token** (see [below](#ipcmcp-auth-token)).
+DBFlux no longer uses the config directory. Older versions stored the IPC auth
+token and SSH known-hosts there; leftover files may remain after upgrading and
+can be removed.
 
 ### Stable vs. Nightly
 
@@ -143,10 +147,10 @@ DBFlux exposes a local IPC surface (used by the MCP server and external RPC
 services). It authenticates callers with a token stored at:
 
 ```
-<config dir>/dbflux/ipc_auth_token
+<data dir>/dbflux/ipc_auth_token
 ```
 
-(on Linux, `~/.config/dbflux/ipc_auth_token`). It's a random value regenerated on
+(on Linux, `~/.local/share/dbflux/ipc_auth_token`). It's a random value regenerated on
 each startup, written with owner-only `0600` permissions, and also exported to the
 `DBFLUX_IPC_TOKEN`, `DBFLUX_DRIVER_IPC_TOKEN`, and `DBFLUX_AUTH_PROVIDER_IPC_TOKEN`
 environment variables for child processes.
@@ -181,9 +185,10 @@ until you re-enter the secrets.
 To wipe DBFlux's data:
 
 1. Delete the **data directory** (`~/.local/share/dbflux/` on Linux) — removes the
-   database and session files.
-2. Delete the **config directory** (`~/.config/dbflux/` on Linux) — removes the
-   IPC auth token.
+   database, session files, IPC auth token, and SSH known-hosts.
+2. **Older versions only:** delete the legacy config directory
+   (`~/.config/dbflux/` on Linux) if it still exists — current versions no longer
+   use it.
 3. **Clear keyring entries manually.** Secrets under the `dbflux` service remain
    in your OS keyring after deleting the directories; remove them with your
    platform's keyring tool if you want a complete wipe.

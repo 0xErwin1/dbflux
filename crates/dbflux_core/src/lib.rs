@@ -33,7 +33,7 @@ pub use auth::{
 };
 
 pub use config::{
-    AppConfig, AppConfigStore, AppConfigWarning, AppStyle, DangerousAction, DriverKey,
+    AppConfig, AppConfigWarning, AppStyle, DangerousAction, DriverKey,
     EXTERNAL_SERVICES_CONFIG_KEY, EffectiveSettings, GeneralSettings, GlobalOverrides,
     GovernanceSettings, LoadedAppConfig, PolicyRoleConfig, RefreshPolicy, RefreshPolicySetting,
     RpcServiceKind, ScriptEntry, ScriptsDirectory, ServiceConfig, ServiceRpcApiContract,
@@ -47,25 +47,24 @@ pub use connection::{
     ConnectedProfile, ConnectionHook, ConnectionHookBindings, ConnectionHooks, ConnectionManager,
     ConnectionMcpGovernance, ConnectionMcpPolicyBinding, ConnectionProfile,
     ConnectionResolutionError, ConnectionTree, ConnectionTreeManager, ConnectionTreeNode,
-    ConnectionTreeNodeKind, ConnectionTreeStore, DatabaseConnection, DbConfig, DbKind,
-    DefaultMutationPolicyResolver, DetachedProcessHandle, DetachedProcessReceiver,
-    DetachedProcessSender, ExecutionContext, ExecutionSourceContext, FetchCollectionChildrenParams,
-    FetchCollectionChildrenResult, FetchDatabaseSchemaParams, FetchDatabaseSchemaResult,
-    FetchSchemaForeignKeysParams, FetchSchemaForeignKeysResult, FetchSchemaIndexesParams,
-    FetchSchemaIndexesResult, FetchSchemaRoutinesParams, FetchSchemaRoutinesResult,
-    FetchSchemaTypesParams, FetchSchemaTypesResult, FetchTableDetailsParams,
-    FetchTableDetailsResult, HookContext, HookExecution, HookExecutionContext, HookExecutionMode,
-    HookExecutor, HookFailureMode, HookKind, HookPhase, HookPhaseOutcome, HookResult, HookRunner,
-    Identifiable, InfluxVersion, ItemManager, LuaCapabilities, MetricQuerySeries, MutationPolicy,
-    OutputEvent, OutputReceiver, OutputSender, OutputStreamKind, OwnedCacheEntry, PendingOperation,
-    PrepareConnectError, ProcessExecutionError, ProcessExecutor, ProfileManager,
-    ProfilePolicyResolver, ProxyAuth, ProxyKind, ProxyManager, ProxyProfile, RedisKeyCache,
-    RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, ScriptLanguage, ScriptSource, SshAuthMethod,
-    SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslInfo, SslMode, SwitchDatabaseParams,
-    SwitchDatabaseResult, TestConnectionResult, TreeLoadResult, TreeStore,
-    detached_process_channel, execute_streaming_process, host_matches_no_proxy, output_channel,
-    ssl_mode_from_id, ssl_mode_id_is_cert_active, ssl_mode_id_requires_root_cert,
-    ssl_mode_requires_root_cert,
+    ConnectionTreeNodeKind, DatabaseConnection, DbConfig, DbKind, DefaultMutationPolicyResolver,
+    DetachedProcessHandle, DetachedProcessReceiver, DetachedProcessSender, ExecutionContext,
+    ExecutionSourceContext, FetchCollectionChildrenParams, FetchCollectionChildrenResult,
+    FetchDatabaseSchemaParams, FetchDatabaseSchemaResult, FetchSchemaForeignKeysParams,
+    FetchSchemaForeignKeysResult, FetchSchemaIndexesParams, FetchSchemaIndexesResult,
+    FetchSchemaRoutinesParams, FetchSchemaRoutinesResult, FetchSchemaTypesParams,
+    FetchSchemaTypesResult, FetchTableDetailsParams, FetchTableDetailsResult, HookContext,
+    HookExecution, HookExecutionContext, HookExecutionMode, HookExecutor, HookFailureMode,
+    HookKind, HookPhase, HookPhaseOutcome, HookResult, HookRunner, Identifiable, InfluxVersion,
+    ItemManager, LuaCapabilities, MetricQuerySeries, MutationPolicy, OutputEvent, OutputReceiver,
+    OutputSender, OutputStreamKind, OwnedCacheEntry, PendingOperation, PrepareConnectError,
+    ProcessExecutionError, ProcessExecutor, ProfileManager, ProfilePolicyResolver, ProxyAuth,
+    ProxyKind, ProxyManager, ProxyProfile, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy,
+    SchemaCacheKey, ScriptLanguage, ScriptSource, SshAuthMethod, SshTunnelConfig, SshTunnelManager,
+    SshTunnelProfile, SslInfo, SslMode, SwitchDatabaseParams, SwitchDatabaseResult,
+    TestConnectionResult, TreeLoadResult, TreeStore, detached_process_channel,
+    execute_streaming_process, host_matches_no_proxy, output_channel, ssl_mode_from_id,
+    ssl_mode_id_is_cert_active, ssl_mode_id_requires_root_cert, ssl_mode_requires_root_cert,
 };
 
 pub use connection::{
@@ -215,12 +214,10 @@ pub use values::{
 pub use chrono;
 pub use secrecy;
 pub use storage::{
-    AuthProfileStore, HasSecretRef, HistoryEntry, HistoryManager, HistoryStore, JsonStore,
-    KeyringSecretStore, NoopSecretStore, ProfileStore, ProxyStore, RecentFile, RecentFilesStore,
-    SavedQuery, SavedQueryManager, SavedQueryStore, SecretManager, SecretStore, SessionManifest,
-    SessionStore, SessionTab, SessionTabKind, SshTunnelStore, UiState, UiStateStore,
-    auth_field_secret_ref, connection_secret_ref, create_secret_store, proxy_secret_ref,
-    ssh_tunnel_secret_ref,
+    HasSecretRef, HistoryEntry, KeyringSecretStore, NoopSecretStore, RecentFile, SavedQuery,
+    SecretManager, SecretStore, SessionManifest, SessionStore, SessionTab, SessionTabKind, UiState,
+    UiStateStore, auth_field_secret_ref, connection_secret_ref, create_secret_store,
+    proxy_secret_ref, ssh_tunnel_secret_ref,
 };
 
 pub use observability::{
@@ -237,8 +234,6 @@ pub use connection::proxy_manager;
 pub use connection::ssh_tunnel_manager;
 pub use connection::tree_manager as connection_tree_manager;
 pub use facade::session as session_facade;
-pub use storage::history_manager;
-pub use storage::saved_query_manager;
 pub use storage::secret_manager;
 
 /// Safely truncate a string at a character boundary, appending "..." if truncated.

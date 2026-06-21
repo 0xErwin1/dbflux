@@ -83,7 +83,7 @@ fn print_mcp_help() {
     eprintln!("Options:");
     eprintln!("  --client-id <id>      Identifier for this AI client (required)");
     eprintln!("                        Must match a trusted client in MCP settings");
-    eprintln!("  --config-dir <path>   Override config directory (default: ~/.config/dbflux)");
+    eprintln!("  --config-dir <path>   Override config directory (default: ~/.local/share/dbflux)");
     eprintln!("  --help, -h            Show this help message");
     eprintln!();
     eprintln!("Example:");

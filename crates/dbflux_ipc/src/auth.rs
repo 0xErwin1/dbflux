@@ -49,12 +49,28 @@ pub fn write_app_control_token(token: &str) -> io::Result<()> {
 }
 
 pub fn app_control_token_path() -> io::Result<PathBuf> {
-    let config_dir = dirs::config_dir().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            "failed to resolve user config directory",
-        )
-    })?;
+    let dir = dbflux_storage::paths::data_dir().map_err(|e| io::Error::other(e.to_string()))?;
+    Ok(dir.join(AUTH_TOKEN_FILE))
+}
 
-    Ok(config_dir.join("dbflux").join(AUTH_TOKEN_FILE))
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_control_token_path_is_under_data_dir() {
+        let token_path = app_control_token_path().expect("must resolve token path");
+        let data_dir = dbflux_storage::paths::data_dir().expect("must resolve data dir");
+
+        assert_eq!(
+            token_path.parent().expect("token path must have a parent"),
+            data_dir,
+            "ipc_auth_token must be located under the data directory"
+        );
+        assert_eq!(
+            token_path.file_name().and_then(|n| n.to_str()),
+            Some("ipc_auth_token"),
+            "token file must be named 'ipc_auth_token'"
+        );
+    }
 }
