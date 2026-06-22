@@ -36,12 +36,7 @@
             overlays = [ (import rust-overlay) ];
           };
 
-          rustToolchain = pkgs.pkgsBuildHost.rust-bin.stable.latest.default.override {
-            extensions = [
-              "rust-src"
-              "rust-analyzer"
-            ];
-          };
+          rustToolchain = pkgs.pkgsBuildHost.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
 
           craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
@@ -91,6 +86,8 @@
               # Run with `cargo nextest run` (doctests still need `cargo test --doc`).
               # mold is inherited from dbflux.nativeBuildInputs (see default.nix).
               pkgs.cargo-nextest
+              # Detects unused dependency declarations (DEP-2 regression guard).
+              pkgs.cargo-machete
             ];
 
             buildInputs = dbflux.buildInputs;

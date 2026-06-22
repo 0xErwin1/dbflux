@@ -2507,9 +2507,6 @@ checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 name = "dbflux"
 version = "0.7.0-dev.0"
 dependencies = [
- "anyhow",
- "async-trait",
- "bincode",
  "dbflux_app",
  "dbflux_audit",
  "dbflux_core",
@@ -2518,20 +2515,12 @@ dependencies = [
  "dbflux_ssh",
  "dbflux_test_support",
  "dbflux_ui",
- "dirs 5.0.1",
- "fuzzy-matcher",
  "gpui",
  "gpui-component",
- "indexmap",
  "interprocess",
  "libc",
  "log",
- "lsp-types",
- "open",
- "rfd",
- "serde_json",
  "tokio",
- "uuid",
 ]
 
 [[package]]
@@ -2606,16 +2595,14 @@ dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-ssm",
  "aws-sdk-sso",
- "aws-sdk-ssooidc",
  "aws-sdk-sts",
  "chrono",
  "dbflux_core",
- "dirs 5.0.1",
+ "dirs 6.0.0",
  "filetime",
  "futures-lite 2.6.1",
  "log",
  "secrecy",
- "serde",
  "serde_json",
  "sha1",
  "sha2 0.10.9",
@@ -2649,7 +2636,7 @@ dependencies = [
  "chrono",
  "dbflux_policy",
  "dbflux_test_support",
- "dirs 5.0.1",
+ "dirs 6.0.0",
  "futures",
  "keyring",
  "log",
@@ -2709,7 +2696,6 @@ dependencies = [
  "dbflux_ipc",
  "interprocess",
  "log",
- "serde",
  "serde_json",
  "uuid",
 ]
@@ -2726,7 +2712,6 @@ dependencies = [
  "log",
  "regex",
  "reqwest",
- "serde",
  "serde_json",
  "thiserror 2.0.18",
  "urlencoding",
@@ -2736,13 +2721,11 @@ dependencies = [
 name = "dbflux_driver_ipc"
 version = "0.7.0-dev.0"
 dependencies = [
- "bincode",
  "dbflux_core",
  "dbflux_ipc",
  "dbflux_test_support",
  "interprocess",
  "log",
- "serde",
  "serde_json",
  "thiserror 2.0.18",
  "uuid",
@@ -2785,7 +2768,6 @@ dependencies = [
  "tokio",
  "tokio-util",
  "urlencoding",
- "uuid",
 ]
 
 [[package]]
@@ -2802,7 +2784,6 @@ dependencies = [
  "mysql",
  "serde_json",
  "urlencoding",
- "uuid",
 ]
 
 [[package]]
@@ -2832,7 +2813,6 @@ dependencies = [
  "dbflux_core",
  "dbflux_ssh",
  "dbflux_test_support",
- "log",
  "redis",
  "serde_json",
  "urlencoding",
@@ -2911,7 +2891,6 @@ version = "0.7.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "base64 0.22.1",
  "chrono",
  "dbflux_approval",
  "dbflux_audit",
@@ -2948,7 +2927,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
- "uuid",
 ]
 
 [[package]]
@@ -3003,7 +2981,6 @@ name = "dbflux_ssm"
 version = "0.7.0-dev.0"
 dependencies = [
  "dbflux_core",
- "dbflux_tunnel_core",
  "env_logger",
  "log",
 ]
@@ -3016,13 +2993,11 @@ dependencies = [
  "dbflux_approval",
  "dbflux_core",
  "dbflux_policy",
- "dirs 5.0.1",
- "hex",
+ "dirs 6.0.0",
  "log",
  "rusqlite",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.18",
  "uuid",
@@ -3045,7 +3020,6 @@ dependencies = [
  "dbflux_ipc",
  "interprocess",
  "reqwest",
- "serde_json",
  "testcontainers",
 ]
 
@@ -3061,38 +3035,26 @@ dependencies = [
 name = "dbflux_ui"
 version = "0.7.0-dev.0"
 dependencies = [
- "anyhow",
- "async-trait",
- "bincode",
  "chrono",
  "dbflux_app",
- "dbflux_audit",
  "dbflux_components",
  "dbflux_core",
- "dbflux_driver_ipc",
- "dbflux_export",
  "dbflux_ipc",
- "dbflux_proxy",
  "dbflux_ssh",
  "dbflux_storage",
  "dbflux_ui_base",
  "dbflux_ui_document",
  "dbflux_ui_sidebar",
  "dbflux_ui_windows",
- "dirs 5.0.1",
- "env_logger",
  "fuzzy-matcher",
  "gpui",
  "gpui-component",
- "indexmap",
  "interprocess",
  "libc",
  "log",
- "lsp-types",
  "open",
  "rfd",
  "serde_json",
- "tokio",
  "uuid",
 ]
 
@@ -3153,7 +3115,7 @@ dependencies = [
  "dbflux_ssh",
  "dbflux_storage",
  "dbflux_ui_base",
- "dirs 5.0.1",
+ "dirs 6.0.0",
  "gpui",
  "gpui-component",
  "log",
@@ -3176,7 +3138,7 @@ dependencies = [
  "dbflux_ssh",
  "dbflux_storage",
  "dbflux_ui_base",
- "dirs 5.0.1",
+ "dirs 6.0.0",
  "gpui",
  "gpui-component",
  "log",

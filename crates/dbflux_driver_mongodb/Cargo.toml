@@ -13,15 +13,15 @@ license.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-async-trait = "0.1"
+async-trait = { workspace = true }
 dbflux_core.workspace = true
 dbflux_ssh.workspace = true
 mongodb = { version = "3", default-features = false, features = ["sync", "rustls-tls", "bson-2", "compat-3-3-0", "dns-resolver"] }
 bson = "2"
 log.workspace = true
 serde_json.workspace = true
-chrono = { version = "0.4", features = ["serde"] }
-tokio = { version = "1", features = ["rt-multi-thread"] }
+chrono = { workspace = true }
+tokio = { workspace = true }
 base64 = "0.22"
 urlencoding = "2"
 uuid.workspace = true
@@ -31,3 +31,8 @@ dbflux_test_support.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.cargo-machete]
+# tokio is declared to ensure the rt-multi-thread runtime feature is active for
+# the mongodb async client; the driver itself does not call tokio:: directly.
+ignored = ["tokio"]

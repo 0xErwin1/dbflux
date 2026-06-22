@@ -12,16 +12,16 @@ license.workspace = true
 [dependencies]
 dbflux_core = { path = "../dbflux_core" }
 dbflux_ssh = { path = "../dbflux_ssh" }
-async-trait = "0.1"
-chrono = "0.4"
+async-trait = { workspace = true }
+chrono = { workspace = true }
 hex = "0.4"
 log = "0.4"
 native-tls = "0.2"
 postgres = { version = "0.19", features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 postgres-native-tls = "0.5"
-serde_json = "1"
+serde_json = { workspace = true }
 urlencoding = "2"
-uuid = { version = "1", features = ["v4"] }
+uuid = { workspace = true }
 
 [dev-dependencies]
 dbflux_test_support.workspace = true

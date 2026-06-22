@@ -16,7 +16,6 @@ path = "src/main.rs"
 dbflux_core = { path = "../dbflux_core", features = ["tracing-bridge"] }
 dbflux_ipc = { path = "../dbflux_ipc" }
 interprocess.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 log.workspace = true
