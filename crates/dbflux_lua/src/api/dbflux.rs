@@ -538,15 +538,13 @@ mod tests {
         args.set(2, "import time; time.sleep(30)").unwrap();
         options.set("args", args).unwrap();
         options.set("stream", true).unwrap();
-        // Far above the cancel delay so a cancelled run can never be misclassified as a
-        // timeout.
         options.set("timeout_ms", 30000_i64).unwrap();
 
-        let cancel_token = state.cancel_token.clone();
-        thread::spawn(move || {
-            thread::sleep(Duration::from_millis(200));
-            cancel_token.cancel();
-        });
+        // An already-cancelled token must surface as a cancellation error before the
+        // child is spawned. Cancelling mid-flight instead would race process startup
+        // under load; the streaming monitor's mid-execution cancellation is covered by
+        // the hook executor's own tests.
+        state.cancel_token.cancel();
 
         let error = run_process(&lua, &state, options).unwrap_err().to_string();
 
