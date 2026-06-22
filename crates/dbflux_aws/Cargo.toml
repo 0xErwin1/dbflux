@@ -28,7 +28,7 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 dirs = { workspace = true }
 sha1 = "0.10"
-sha2 = "0.10"
+sha2 = "0.11"
 futures-lite = "2"
 
 [dev-dependencies]
