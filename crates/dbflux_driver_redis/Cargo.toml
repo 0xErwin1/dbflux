@@ -13,10 +13,9 @@ license.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-async-trait = "0.1"
+async-trait = { workspace = true }
 dbflux_core.workspace = true
 dbflux_ssh.workspace = true
-log.workspace = true
 redis = { version = "0.27", features = ["tls-rustls"] }
 serde_json.workspace = true
 urlencoding = "2"

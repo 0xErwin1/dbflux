@@ -24,7 +24,6 @@ dbflux_driver_mysql.workspace = true
 dbflux_driver_postgres.workspace = true
 dbflux_driver_redis.workspace = true
 dbflux_driver_sqlite.workspace = true
-serde_json.workspace = true
 testcontainers = "0.15"
 interprocess.workspace = true
 reqwest = { workspace = true, default-features = false, features = ["blocking", "rustls-tls"] }

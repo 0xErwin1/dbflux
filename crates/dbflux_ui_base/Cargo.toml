@@ -22,7 +22,7 @@ dbflux_aws = { workspace = true, optional = true }
 tracing.workspace = true
 uuid.workspace = true
 log.workspace = true
-anyhow = "1"
+anyhow = { workspace = true }
 chrono.workspace = true
 
 [dev-dependencies]

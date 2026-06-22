@@ -10,12 +10,12 @@ license.workspace = true
 
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
-bincode = "1"
+bincode = { workspace = true }
 interprocess.workspace = true
 dbflux_core.workspace = true
 dbflux_storage.workspace = true
 uuid.workspace = true
 serde_json.workspace = true
 secrecy = "0.10"
-async-trait = "0.1"
+async-trait = { workspace = true }
 log.workspace = true

@@ -42,6 +42,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
+rust-version = "1.85"
 version = "0.7.0-dev.0"
 authors = ["Ignacio Perez <ignacio@feuer.me>"]
 description = "A fast, keyboard-first database client"
@@ -94,12 +95,16 @@ rfd = "0.17"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+async-trait = "0.1"
+anyhow = "1"
+bincode = "1"
+lsp-types = "0.97"
 toml = "1"
 uuid = { version = "1", features = ["v4", "v5", "v7", "serde"] }
 thiserror = "2"
 secrecy = "0.10"
 age = { version = "0.11", features = ["armor"] }
-dirs = "5"
+dirs = "6"
 rusqlite = { version = "0.32", features = ["bundled"] }
 tokio-postgres = "0.7"
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
@@ -148,3 +153,12 @@ debug = "line-tables-only"
 # large reduction in target/ size and link-time memory.
 [profile.dev.package."*"]
 debug = false
+
+# Release build profile tuned for binary size and runtime speed.
+# `panic` is intentionally left at the default `unwind`: switching to `abort` is a
+# separate decision that loses `catch_unwind` and may break GPUI internals that
+# rely on unwinding, so it is not changed here.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

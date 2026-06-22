@@ -54,10 +54,9 @@ tokio = { workspace = true, features = ["rt-multi-thread", "io-util", "sync", "m
 
 # Utilities
 uuid = { workspace = true }
-anyhow = "1"
-base64 = "0.22"
-chrono = { version = "0.4", features = ["serde"] }
-async-trait = "0.1"
+anyhow = { workspace = true }
+chrono = { workspace = true }
+async-trait = { workspace = true }
 rusqlite.workspace = true
 
 log.workspace = true

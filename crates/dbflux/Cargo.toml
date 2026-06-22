@@ -22,19 +22,8 @@ dbflux_ipc.workspace = true
 dbflux_driver_ipc.workspace = true
 dbflux_audit.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
-uuid.workspace = true
 log.workspace = true
-serde_json.workspace = true
-dirs.workspace = true
-rfd.workspace = true
-fuzzy-matcher.workspace = true
-async-trait = "0.1"
-anyhow = "1"
-lsp-types = "0.97"
-bincode = "1"
 interprocess.workspace = true
-open = "5"
-indexmap.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -71,3 +60,11 @@ vendored-openssl = ["dbflux_ssh/vendored-openssl"]
 
 [dev-dependencies]
 dbflux_test_support.workspace = true
+
+[package.metadata.cargo-machete]
+# tokio is declared to pin the rt-multi-thread+time features for the MCP runtime;
+# no direct tokio:: calls appear in this crate's source because the runtime is
+# driven through dbflux_app/dbflux_mcp_server.
+# dbflux_ssh is an optional dep forwarded only to enable the vendored-openssl
+# feature on the ssh crate; no source-level use of dbflux_ssh is needed.
+ignored = ["tokio", "dbflux_ssh"]

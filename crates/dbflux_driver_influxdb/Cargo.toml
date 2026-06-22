@@ -17,7 +17,6 @@ dbflux_core.workspace = true
 reqwest = { workspace = true, default-features = false, features = ["blocking", "rustls-tls", "gzip"] }
 csv = { workspace = true }
 serde_json.workspace = true
-serde.workspace = true
 chrono = { workspace = true }
 urlencoding = { workspace = true }
 thiserror.workspace = true

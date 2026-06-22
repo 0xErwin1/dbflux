@@ -21,28 +21,16 @@ dbflux_ui_sidebar.workspace = true
 dbflux_core.workspace = true
 dbflux_storage.workspace = true
 dbflux_app.workspace = true
-dbflux_export.workspace = true
-dbflux_ssh.workspace = true
-dbflux_proxy.workspace = true
 dbflux_ipc.workspace = true
-dbflux_driver_ipc.workspace = true
-dbflux_audit.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
+dbflux_ssh.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 log.workspace = true
-env_logger.workspace = true
 serde_json.workspace = true
-dirs.workspace = true
 rfd.workspace = true
 fuzzy-matcher.workspace = true
-async-trait = "0.1"
-anyhow = "1"
-lsp-types = "0.97"
-bincode = "1"
 interprocess.workspace = true
 open = "5"
-indexmap = "2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -59,3 +47,8 @@ vendored-openssl = ["dbflux_ssh/vendored-openssl"]
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+
+[package.metadata.cargo-machete]
+# dbflux_ssh is used only via the vendored-openssl feature passthrough
+# (no direct source usage needed — the dep only forwards the feature).
+ignored = ["dbflux_ssh"]
