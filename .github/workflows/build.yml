@@ -23,12 +23,16 @@ on:
         required: true
 
 env:
-  FEATURES: "sqlite,postgres,mysql,mongodb,redis,influxdb"
+  FEATURES: "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,aws"
+
+permissions:
+  contents: read
 
 jobs:
   build-linux:
     name: Build Linux ${{ matrix.arch }}
     runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 90
 
     strategy:
       fail-fast: false
@@ -47,7 +51,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Resolve channel identity
         run: |
@@ -67,7 +71,7 @@ jobs:
           echo "BRAND_DIR=$BRAND_DIR" >> "$GITHUB_ENV"
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
           targets: ${{ matrix.target }}
           components: rust-src
@@ -92,7 +96,7 @@ jobs:
           sudo apt-get install -y gettext imagemagick
 
       - name: Setup Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
           prefix-key: "v0-rust"
           shared-key: linux-${{ matrix.arch }}
@@ -103,7 +107,7 @@ jobs:
         run: sed -i 's/^version = ".*"/version = "${{ inputs.version }}"/' Cargo.toml
 
       - name: Build DBFlux
-        run: cargo build --release --features "$FEATURES" --target ${{ matrix.target }}
+        run: cargo build --release --locked --features "$FEATURES" --target ${{ matrix.target }}
 
       - name: Create package
         run: |
@@ -201,7 +205,7 @@ jobs:
           convert "$BRAND_DIR/mark-small.svg" -resize 16x16 packaging/icons/16x16/apps/dbflux.png
 
       - name: Install Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
         with:
           go-version: stable
 
@@ -229,7 +233,7 @@ jobs:
         run: sudo apt-get install -y rpm debsigs
 
       - name: Import GPG key
-        uses: crazy-max/ghaction-import-gpg@v6
+        uses: crazy-max/ghaction-import-gpg@e89d40939c28e39f97cf32126055eeae86ba74ec  # v6
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
@@ -251,9 +255,11 @@ jobs:
           } > ~/.rpmmacros
 
       - name: Sign .rpm packages
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
           for rpm in *.rpm; do
-            rpm --addsign "$rpm" 3< <(echo "${{ secrets.GPG_PASSPHRASE }}")
+            rpm --addsign "$rpm" 3< <(printf '%s' "$GPG_PASSPHRASE")
           done
 
       - name: Sign artifacts
@@ -272,7 +278,7 @@ jobs:
 
       - name: Upload artifacts
         if: env.ACT != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: linux-${{ matrix.arch }}
           path: |
@@ -310,6 +316,7 @@ jobs:
   build-macos:
     name: Build macOS ${{ matrix.arch }}
     runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 90
 
     strategy:
       fail-fast: false
@@ -328,7 +335,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Resolve channel identity
         run: |
@@ -348,13 +355,13 @@ jobs:
           echo "BRAND_DIR=$BRAND_DIR" >> "$GITHUB_ENV"
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
           targets: ${{ matrix.target }}
           components: rust-src
 
       - name: Setup Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
           prefix-key: "v0-rust"
           shared-key: macos-${{ matrix.arch }}
@@ -369,7 +376,7 @@ jobs:
         # target instead of linking the runner's system OpenSSL. Required to
         # cross-compile x86_64 on the Apple Silicon runner (no x86_64 OpenSSL is
         # present), and keeps both macOS binaries self-contained at runtime.
-        run: cargo build --release --features "$FEATURES,vendored-openssl" --target ${{ matrix.target }}
+        run: cargo build --release --locked --features "$FEATURES,vendored-openssl" --target ${{ matrix.target }}
 
       - name: Create app bundle
         run: |
@@ -412,7 +419,7 @@ jobs:
             "$APP_BUNDLE"
 
       - name: Import GPG key
-        uses: crazy-max/ghaction-import-gpg@v6
+        uses: crazy-max/ghaction-import-gpg@e89d40939c28e39f97cf32126055eeae86ba74ec  # v6
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
@@ -426,7 +433,7 @@ jobs:
 
       - name: Upload artifacts
         if: env.ACT != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: macos-${{ matrix.arch }}
           path: |
@@ -446,10 +453,11 @@ jobs:
   build-windows:
     name: Build Windows amd64
     runs-on: windows-latest
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Resolve channel identity
         shell: pwsh
@@ -463,13 +471,13 @@ jobs:
           }
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
           targets: x86_64-pc-windows-msvc
           components: rust-src
 
       - name: Setup Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
           prefix-key: "v0-rust"
           shared-key: windows-amd64
@@ -482,7 +490,7 @@ jobs:
           (Get-Content Cargo.toml) -replace '^version = ".*"', 'version = "${{ inputs.version }}"' | Set-Content Cargo.toml
 
       - name: Build DBFlux
-        run: cargo build --release --features "$env:FEATURES" --target x86_64-pc-windows-msvc
+        run: cargo build --release --locked --features "$env:FEATURES" --target x86_64-pc-windows-msvc
 
       - name: Install ImageMagick
         run: choco install imagemagick -y
@@ -517,7 +525,7 @@ jobs:
           Copy-Item LICENSE-APACHE installer/LICENSE-APACHE
 
       - name: Build installer
-        uses: Minionguyjpro/Inno-Setup-Action@v1.2.2
+        uses: Minionguyjpro/Inno-Setup-Action@b8e8eb5936437c243592fda645c96dfc6488c275  # v1.2.2
         with:
           path: installer/installer.iss
           options: /DMyAppVersion=${{ inputs.version }} /DMyAppName="${{ env.APP_NAME }}" /DMyAppId="${{ env.MY_APP_ID }}"
@@ -526,7 +534,7 @@ jobs:
         run: Move-Item installer/output/dbflux-windows-amd64-setup.exe dbflux-windows-amd64-setup.exe -Force
 
       - name: Import GPG key
-        uses: crazy-max/ghaction-import-gpg@v6
+        uses: crazy-max/ghaction-import-gpg@e89d40939c28e39f97cf32126055eeae86ba74ec  # v6
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
@@ -546,7 +554,7 @@ jobs:
 
       - name: Upload artifacts
         if: env.ACT != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: windows-amd64
           path: |

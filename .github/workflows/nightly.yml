@@ -7,18 +7,23 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
 
 jobs:
   guard:
     name: Guard — canonical repo and new commits
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       proceed: ${{ steps.guard.outputs.proceed }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -63,12 +68,13 @@ jobs:
     needs: guard
     if: needs.guard.outputs.proceed == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       version: ${{ steps.nightly.outputs.version }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Compute version string
         id: nightly
@@ -97,10 +103,13 @@ jobs:
     name: Publish rolling nightly release
     needs: [compute-version, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           fetch-depth: 0
           # The `nightly` tag (and its pin commit) is needed to scope the
@@ -108,16 +117,17 @@ jobs:
           fetch-tags: true
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           path: artifacts
           pattern: "*"
           merge-multiple: false
 
       - name: Install git-cliff
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@9e1e5806d4a4822de933115878265be9aaa786d9  # v2
         with:
           tool: git-cliff
+          version: 2.13.1
 
       - name: Generate changelog for nightly body
         run: |
@@ -229,7 +239,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish rolling nightly release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
           tag_name: nightly
           name: DBFlux Nightly
