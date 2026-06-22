@@ -91,7 +91,6 @@ jobs:
   cargo-deny:
     name: Supply-chain advisories
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 15
     permissions:
       contents: read
@@ -100,7 +99,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
+      # Non-blocking: advisory/license findings surface as annotations but never
+      # gate a PR. Promote to gating by removing continue-on-error once the
+      # advisory backlog is triaged.
       - name: Run cargo-deny
+        continue-on-error: true
         uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe  # v2
         with:
           command: check advisories licenses bans sources
