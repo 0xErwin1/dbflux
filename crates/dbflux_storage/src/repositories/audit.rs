@@ -599,7 +599,7 @@ impl AuditRepository {
 
         let deleted = conn.execute(
             "DELETE FROM aud_audit_events WHERE created_at_epoch_ms < ?1 LIMIT ?2",
-            rusqlite::params![cutoff_ms, limit],
+            rusqlite::params![cutoff_ms, limit as i64],
         )?;
 
         Ok(deleted as i64)
