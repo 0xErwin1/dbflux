@@ -1529,23 +1529,22 @@ dependencies = [
 
 [[package]]
 name = "bson"
-version = "2.15.0"
+version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7969a9ba84b0ff843813e7249eed1678d9b6607ce5a3b8f0a47af3fcf7978e6e"
+checksum = "b3f109694c4f45353972af96bf97d8a057f82e2d6e496457f4d135b9867a518c"
 dependencies = [
  "ahash 0.8.12",
  "base64 0.22.1",
  "bitvec",
- "getrandom 0.2.17",
  "getrandom 0.3.4",
  "hex",
  "indexmap",
  "js-sys",
- "once_cell",
  "rand 0.9.4",
  "serde",
  "serde_bytes",
- "serde_json",
+ "simdutf8",
+ "thiserror 2.0.18",
  "time",
  "uuid",
 ]
