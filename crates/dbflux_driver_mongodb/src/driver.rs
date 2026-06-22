@@ -3161,7 +3161,7 @@ fn execute_db_operation(
                     let mut doc = Document::new();
                     doc.insert("name", spec.name);
                     doc.insert("type", format!("{:?}", spec.collection_type));
-                    if let Ok(bson) = bson::to_bson(&spec.options) {
+                    if let Ok(bson) = bson::serialize_to_bson(&spec.options) {
                         doc.insert("options", bson);
                     }
                     doc
