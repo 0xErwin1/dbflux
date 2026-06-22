@@ -124,7 +124,7 @@ base64 = "0.22"
 hex = "0.4"
 sha2 = "0.11"
 interprocess = "2.4"
-mlua = "0.10"
+mlua = "0.11"
 indexmap = "2"
 
 [workspace.lints.rust]

@@ -67,20 +67,24 @@ impl HookExecutor for LuaExecutor {
         let cancel = cancel_token.clone();
         let parent = parent_cancel_token.cloned();
 
-        vm.lua.set_hook(
-            HookTriggers::new().every_nth_instruction(1_000),
-            move |_, _| {
-                if cancel.is_cancelled() || parent.as_ref().is_some_and(CancelToken::is_cancelled) {
-                    return Err(LuaError::RuntimeError("Lua hook cancelled".to_string()));
-                }
+        vm.lua
+            .set_hook(
+                HookTriggers::new().every_nth_instruction(1_000),
+                move |_, _| {
+                    if cancel.is_cancelled()
+                        || parent.as_ref().is_some_and(CancelToken::is_cancelled)
+                    {
+                        return Err(LuaError::RuntimeError("Lua hook cancelled".to_string()));
+                    }
 
-                if timeout.is_some_and(|max| start.elapsed() > max) {
-                    return Err(LuaError::RuntimeError("Lua hook timed out".to_string()));
-                }
+                    if timeout.is_some_and(|max| start.elapsed() > max) {
+                        return Err(LuaError::RuntimeError("Lua hook timed out".to_string()));
+                    }
 
-                Ok(VmState::Continue)
-            },
-        );
+                    Ok(VmState::Continue)
+                },
+            )
+            .map_err(|e| format!("Failed to install Lua hook: {e}"))?;
 
         let exec_result = vm.lua.load(&script_content).exec();
         vm.lua.remove_hook();
