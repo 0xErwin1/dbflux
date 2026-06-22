@@ -12,7 +12,11 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   tests:
@@ -26,6 +30,7 @@ jobs:
   classify:
     name: Classify release
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       version: ${{ steps.version.outputs.version }}
       channel: ${{ steps.classify.outputs.channel }}
@@ -80,16 +85,19 @@ jobs:
     name: Create Release
     needs: [classify, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           fetch-depth: 0
 
       - name: Download all artifacts
         if: env.ACT != 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           path: artifacts
           pattern: "*"
@@ -103,9 +111,10 @@ jobs:
           ls -R artifacts
 
       - name: Install git-cliff
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@9e1e5806d4a4822de933115878265be9aaa786d9  # v2
         with:
           tool: git-cliff
+          version: 2.13.1
 
       - name: Generate changelog for release body
         id: cliff
@@ -159,7 +168,7 @@ jobs:
           fi
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
           tag_name: v${{ needs.classify.outputs.version }}
           name: DBFlux v${{ needs.classify.outputs.version }}
