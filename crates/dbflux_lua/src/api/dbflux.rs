@@ -504,12 +504,15 @@ mod tests {
         args.set(1, "-c").unwrap();
         args.set(
             2,
-            "import sys, time; sys.stdout.write('out'); sys.stdout.flush(); sys.stderr.write('err'); sys.stderr.flush(); time.sleep(5)",
+            "import sys, time; sys.stdout.write('out\\n'); sys.stdout.flush(); sys.stderr.write('err\\n'); sys.stderr.flush(); time.sleep(30)",
         )
         .unwrap();
         options.set("args", args).unwrap();
         options.set("stream", true).unwrap();
-        options.set("timeout_ms", 5000_i64).unwrap();
+        // timeout_ms must stay well above the cancel backstop below: if they were
+        // close, a backstop-fired cancel could race the timeout and the run would be
+        // classified TimedOut instead of Cancelled. 30s leaves a wide margin.
+        options.set("timeout_ms", 30000_i64).unwrap();
 
         let cancel_token = state.cancel_token.clone();
         let collected = Arc::new(Mutex::new(Vec::new()));
@@ -517,11 +520,12 @@ mod tests {
         // Cancel only AFTER the child's first stdout and stderr have actually been
         // streamed. A fixed-delay cancel races process startup: under load the child
         // can be killed before it writes anything, which is correct cancellation
-        // behavior but leaves nothing for the streaming assertions to observe.
+        // behavior but leaves nothing for the streaming assertions to observe. The
+        // backstop is far below timeout_ms so cancellation always wins over timeout.
         let cancel_thread = thread::spawn({
             let collected = Arc::clone(&collected);
             move || {
-                let deadline = Instant::now() + Duration::from_secs(5);
+                let deadline = Instant::now() + Duration::from_secs(15);
                 let mut saw_stdout = false;
                 let mut saw_stderr = false;
 
