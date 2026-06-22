@@ -525,7 +525,7 @@ jobs:
           Copy-Item LICENSE-APACHE installer/LICENSE-APACHE
 
       - name: Build installer
-        uses: Minionguyjpro/Inno-Setup-Action@b8e8eb5936437c243592fda645c96dfc6488c275  # v1.2.2
+        uses: Minionguyjpro/Inno-Setup-Action@202dd0c4950ef315b6ba13359998fe120179b147  # v1.2.8
         with:
           path: installer/installer.iss
           options: /DMyAppVersion=${{ inputs.version }} /DMyAppName="${{ env.APP_NAME }}" /DMyAppId="${{ env.MY_APP_ID }}"
