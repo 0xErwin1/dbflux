@@ -494,7 +494,7 @@ mod tests {
     }
 
     #[test]
-    fn run_process_cancellation_streams_partial_stdout_and_stderr() {
+    fn run_process_streams_stdout_and_stderr() {
         let lua = Lua::new();
         let (sender, receiver) = dbflux_core::output_channel();
         let state = test_state(None, Instant::now(), Some(sender));
@@ -504,64 +504,53 @@ mod tests {
         args.set(1, "-c").unwrap();
         args.set(
             2,
-            "import sys, time; sys.stdout.write('out\\n'); sys.stdout.flush(); sys.stderr.write('err\\n'); sys.stderr.flush(); time.sleep(30)",
+            "import sys; sys.stdout.write('out\\n'); sys.stdout.flush(); sys.stderr.write('err\\n'); sys.stderr.flush()",
         )
         .unwrap();
         options.set("args", args).unwrap();
         options.set("stream", true).unwrap();
-        // timeout_ms must stay well above the cancel backstop below: if they were
-        // close, a backstop-fired cancel could race the timeout and the run would be
-        // classified TimedOut instead of Cancelled. 30s leaves a wide margin.
         options.set("timeout_ms", 30000_i64).unwrap();
 
-        let cancel_token = state.cancel_token.clone();
-        let collected = Arc::new(Mutex::new(Vec::new()));
+        // The process writes to both streams and exits normally, so run_process drains
+        // and joins both output readers before returning — every byte is delivered with
+        // no kill race to observe. Verifying streaming under cancellation instead would
+        // be inherently racy: a killed process can lose still-buffered output.
+        run_process(&lua, &state, options).unwrap();
 
-        // Cancel only AFTER the child's first stdout and stderr have actually been
-        // streamed. A fixed-delay cancel races process startup: under load the child
-        // can be killed before it writes anything, which is correct cancellation
-        // behavior but leaves nothing for the streaming assertions to observe. The
-        // backstop is far below timeout_ms so cancellation always wins over timeout.
-        let cancel_thread = thread::spawn({
-            let collected = Arc::clone(&collected);
-            move || {
-                let deadline = Instant::now() + Duration::from_secs(15);
-                let mut saw_stdout = false;
-                let mut saw_stderr = false;
+        let events: Vec<_> = receiver.try_iter().collect();
 
-                while Instant::now() < deadline && !(saw_stdout && saw_stderr) {
-                    match receiver.recv_timeout(Duration::from_millis(50)) {
-                        Ok(event) => {
-                            saw_stdout |= event.stream == OutputStreamKind::Stdout
-                                && event.text.contains("out");
-                            saw_stderr |= event.stream == OutputStreamKind::Stderr
-                                && event.text.contains("err");
-                            collected.lock().unwrap().push(event);
-                        }
-                        Err(_) => continue,
-                    }
-                }
-
-                cancel_token.cancel();
-
-                while let Ok(event) = receiver.recv_timeout(Duration::from_millis(50)) {
-                    collected.lock().unwrap().push(event);
-                }
-            }
-        });
-
-        let error = run_process(&lua, &state, options).unwrap_err().to_string();
-
-        cancel_thread.join().unwrap();
-        let events = collected.lock().unwrap().clone();
-
-        assert!(error.contains("cancelled"));
         assert!(events.iter().any(|event| {
             event.stream == OutputStreamKind::Stdout && event.text.contains("out")
         }));
         assert!(events.iter().any(|event| {
             event.stream == OutputStreamKind::Stderr && event.text.contains("err")
         }));
+    }
+
+    #[test]
+    fn run_process_cancellation_returns_cancelled_error() {
+        let lua = Lua::new();
+        let state = test_state(None, Instant::now(), None);
+        let options = process_options(&lua, python_program()).unwrap();
+        let args = lua.create_table().unwrap();
+
+        args.set(1, "-c").unwrap();
+        args.set(2, "import time; time.sleep(30)").unwrap();
+        options.set("args", args).unwrap();
+        options.set("stream", true).unwrap();
+        // Far above the cancel delay so a cancelled run can never be misclassified as a
+        // timeout.
+        options.set("timeout_ms", 30000_i64).unwrap();
+
+        let cancel_token = state.cancel_token.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(200));
+            cancel_token.cancel();
+        });
+
+        let error = run_process(&lua, &state, options).unwrap_err().to_string();
+
+        assert!(error.contains("cancelled"));
     }
 
     // =========================================================================

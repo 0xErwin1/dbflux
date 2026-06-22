@@ -1121,17 +1121,27 @@ pub fn execute_streaming_process(
 
         if cancel_token.is_cancelled() || parent_cancel_token.is_some_and(CancelToken::is_cancelled)
         {
-            terminate_child(child)?;
+            // The outcome is already decided here; a cleanup failure (e.g. the child
+            // is reaped concurrently and `wait` returns ECHILD) must not be propagated
+            // in its place, or a genuine cancellation would surface as a spurious wait
+            // error. The same holds for the timeout branches below.
+            if let Err(error) = terminate_child(child) {
+                log::debug!("terminate_child during cancellation failed: {error:?}");
+            }
             break ProcessMonitorOutcome::Cancelled;
         }
 
         if abort_timeout.is_some_and(|limit| start.elapsed() > limit) {
-            terminate_child(child)?;
+            if let Err(error) = terminate_child(child) {
+                log::debug!("terminate_child during abort timeout failed: {error:?}");
+            }
             break ProcessMonitorOutcome::AbortTimedOut;
         }
 
         if timeout.is_some_and(|limit| start.elapsed() > limit) {
-            terminate_child(child)?;
+            if let Err(error) = terminate_child(child) {
+                log::debug!("terminate_child during timeout failed: {error:?}");
+            }
             break ProcessMonitorOutcome::TimedOut;
         }
 
