@@ -6,17 +6,20 @@ updates:
       interval: weekly
     open-pull-requests-limit: 10
     groups:
-      # Batch routine minor/patch bumps into a single PR to avoid a flood of
-      # individual PRs. Majors stay ungrouped so each compile-breaking bump is
-      # reviewed and migrated on its own.
-      cargo-minor-patch:
+      # Batch the patch bumps into a single PR per run instead of one PR each.
+      cargo-patches:
         patterns: ["*"]
-        update-types: ["minor", "patch"]
+        update-types: ["patch"]
     ignore:
+      # Patch-only policy: hold all major and minor version updates to cut update
+      # churn. Security updates still fire regardless of this filter.
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
       # Transitive crates whose advisory fix is unreachable without bumping a
-      # parent we do not control directly. Dependabot's security updater fails
-      # these on every run (security_update_not_possible); ignore them until the
-      # parents ship a compatible release, then remove the matching entry.
+      # parent we do not control directly; remove the entry once the parent ships
+      # a compatible release.
       #   grid          pulled by taffy -> gpui; fix needs grid >= 1.0.1
       #   rustls-webpki pulled by the rustls/TLS stack (tracked by DEP-5); fix needs >= 0.103.13
       - dependency-name: "grid"
@@ -27,6 +30,13 @@ updates:
       interval: weekly
     open-pull-requests-limit: 10
     groups:
-      github-actions-minor-patch:
+      github-actions-patches:
         patterns: ["*"]
-        update-types: ["minor", "patch"]
+        update-types: ["patch"]
+    ignore:
+      # Patch-only policy for actions too: hold major/minor bumps (a major action
+      # bump broke the nightly Windows installer once); take only patches.
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
