@@ -19,7 +19,7 @@ impl CodeDocument {
         let theme = cx.theme().clone();
         let is_executing = self.state == DocumentState::Executing;
         let is_preflight = self.drift.preflight_running;
-        let is_db_language = self.editor.query_language.supports_connection_context();
+        let is_db_language = self.supports_connection_context(cx);
         let is_read_only = self.read_only;
 
         let auto_refresh_enabled = self.refresh.refresh_policy.is_auto();
@@ -161,7 +161,7 @@ impl CodeDocument {
         is_read_only: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let is_db_language = self.editor.query_language.supports_connection_context();
+        let is_db_language = self.supports_connection_context(cx);
 
         div()
             .flex()

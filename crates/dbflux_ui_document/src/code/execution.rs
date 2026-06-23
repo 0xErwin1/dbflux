@@ -153,7 +153,7 @@ impl CodeDocument {
         if self.read_only {
             return;
         }
-        if !self.editor.query_language.supports_connection_context() {
+        if !self.supports_connection_context(cx) {
             self.run_script(window, cx);
             return;
         }
@@ -168,7 +168,7 @@ impl CodeDocument {
             return;
         };
 
-        if !self.editor.query_language.supports_connection_context() {
+        if !self.supports_connection_context(cx) {
             self.run_script(window, cx);
             return;
         }
@@ -1409,7 +1409,7 @@ impl CodeDocument {
         if self.read_only {
             return;
         }
-        if !self.editor.query_language.supports_connection_context() {
+        if !self.supports_connection_context(cx) {
             self.run_script(window, cx);
             return;
         }
@@ -1421,7 +1421,7 @@ impl CodeDocument {
     /// Uses the selected text when a selection exists, otherwise the full buffer.
     /// The result appears in the same Results panel as a regular query.
     pub fn run_explain(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.editor.query_language.supports_connection_context() {
+        if !self.supports_connection_context(cx) {
             Toast::warning("Explain is not available for scripts")
                 .meta_right(now_hms())
                 .push(cx);

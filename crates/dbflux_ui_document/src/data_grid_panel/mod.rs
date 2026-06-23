@@ -42,7 +42,7 @@ use dbflux_components::modals::{
 };
 use dbflux_core::{
     CollectionRef, DatabaseCategory, OrderByColumn, Pagination, QueryResult, RefreshPolicy,
-    SelectQuery, SortDirection, TableRef, Value, VisualQuerySpec,
+    SelectQuery, SortDirection, TableRef, Value, VisualQuerySpec, WhereOperator,
 };
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::AsyncUpdateResultExt;
@@ -2547,9 +2547,7 @@ impl DataGridPanel {
     /// next render tick triggers `run_table_query`, which will find
     /// `visual_select` ready to use.
     pub fn apply_builder_draft_spec(&mut self, spec: VisualQuerySpec, cx: &mut Context<Self>) {
-        let generator = self.connection_generator(cx);
-
-        let select = generator.and_then(|qgen| qgen.generate_select(&spec).ok().flatten());
+        let select = self.build_visual_select(&spec, cx);
 
         self.builder.builder_draft_spec = Some(spec);
         self.builder.visual_select = select;
@@ -2557,6 +2555,35 @@ impl DataGridPanel {
         self.pending.refresh = true;
 
         cx.notify();
+    }
+
+    /// Produces the executable read for a builder spec.
+    ///
+    /// Relational drivers materialize a parameterized `SelectQuery` via
+    /// `generate_select`. Document drivers (whose `generate_select` yields
+    /// `None`) fall back to the generic `generate_read_from_spec`, whose opaque
+    /// query text is wrapped as a parameter-less `SelectQuery` so the existing
+    /// execution path runs it unchanged. Selection is by which generator method
+    /// returns a query, never by a driver id.
+    fn build_visual_select(
+        &self,
+        spec: &VisualQuerySpec,
+        cx: &App,
+    ) -> Option<dbflux_core::SelectQuery> {
+        let generator = self.connection_generator(cx)?;
+
+        if let Some(select) = generator.generate_select(spec).ok().flatten() {
+            return Some(select);
+        }
+
+        generator
+            .generate_read_from_spec(spec)
+            .ok()
+            .flatten()
+            .map(|generated| dbflux_core::SelectQuery {
+                sql: generated.text,
+                params: Vec::new(),
+            })
     }
 
     /// Clears the visual spec and restores the raw filter-input chrome.
@@ -2690,12 +2717,31 @@ impl DataGridPanel {
             _ => return false,
         };
 
-        self.app_state
-            .read(cx)
-            .connections()
-            .get(&profile_id)
-            .map(|c| c.connection.metadata().query_language == dbflux_core::QueryLanguage::Sql)
-            .unwrap_or(false)
+        let Some(connected) = self.app_state.read(cx).connections().get(&profile_id) else {
+            return false;
+        };
+
+        let metadata = connected.connection.metadata();
+
+        let category_ok = matches!(
+            metadata.category,
+            DatabaseCategory::Relational | DatabaseCategory::Document
+        );
+
+        let has_predicates = metadata
+            .query
+            .as_ref()
+            .map(|q| {
+                q.where_operators.iter().any(|op| {
+                    !matches!(
+                        op,
+                        WhereOperator::And | WhereOperator::Or | WhereOperator::Not
+                    )
+                })
+            })
+            .unwrap_or(false);
+
+        category_ok && has_predicates
     }
 
     /// Opens (or re-opens) the `QueryBuilderPanel` inspector for this grid.
@@ -2733,9 +2779,19 @@ impl DataGridPanel {
         let generate_preview: Box<dyn Fn(&VisualQuerySpec) -> String + Send + Sync> =
             if let Some(conn) = connection_arc.clone() {
                 Box::new(move |spec: &VisualQuerySpec| {
-                    conn.query_generator()
-                        .and_then(|qgen| qgen.generate_select(spec).ok().flatten())
-                        .map(|q| q.materialize_for_editor(conn.dialect()))
+                    let Some(generator) = conn.query_generator() else {
+                        return String::new();
+                    };
+
+                    if let Some(select) = generator.generate_select(spec).ok().flatten() {
+                        return select.materialize_for_editor(conn.dialect());
+                    }
+
+                    generator
+                        .generate_read_from_spec(spec)
+                        .ok()
+                        .flatten()
+                        .map(|generated| generated.text)
                         .unwrap_or_default()
                 })
             } else {
@@ -3310,9 +3366,7 @@ impl DataGridPanel {
             }
 
             BuilderEvent::SpecChanged(spec) => {
-                self.builder.visual_select = self
-                    .connection_generator(cx)
-                    .and_then(|qgen| qgen.generate_select(spec).ok().flatten());
+                self.builder.visual_select = self.build_visual_select(spec, cx);
                 self.builder.builder_draft_spec = Some(*spec.clone());
             }
 
@@ -4921,7 +4975,7 @@ mod tests {
                     uri_scheme: "stub".to_string(),
                     icon: CoreIcon::Database,
                     syntax: None,
-                    query: None,
+                    query: Some(dbflux_core::QueryCapabilities::default()),
                     mutation: None,
                     ddl: None,
                     transactions: None,

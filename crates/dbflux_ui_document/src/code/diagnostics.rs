@@ -40,23 +40,18 @@ impl CodeDocument {
     fn run_diagnostics(&mut self, cx: &mut Context<Self>) {
         let query_text = self.editor.input_state.read(cx).value().to_string();
 
-        // The connection's language service validates with the SQL tree-sitter
-        // grammar. Only run it when the effective query language actually uses
-        // the SQL editor mode; for Flux, Mongo, Redis, etc. the SQL parser would
-        // flag the whole query as invalid. Falling through with an empty list
-        // still clears any stale diagnostics below.
-        let language_is_sql = self.effective_query_language(cx).editor_mode() == "sql";
-
-        let diagnostics = if language_is_sql {
-            if let Some(conn_id) = self.connection_id {
-                if let Some(connected) = self.app_state.read(cx).connections().get(&conn_id) {
-                    connected
-                        .connection
-                        .language_service()
-                        .editor_diagnostics(&query_text)
-                } else {
-                    Vec::new()
-                }
+        // Live diagnostics are driven by the connected driver's `LanguageService`
+        // rather than the editor mode. Each driver's service validates its own
+        // dialect (SQL drivers use the SQL grammar; Mongo and DynamoDB validate
+        // their own surfaces), and the default service returns no diagnostics,
+        // so drivers without a real language service stay quiet. Falling through
+        // with an empty list still clears any stale diagnostics below.
+        let diagnostics = if let Some(conn_id) = self.connection_id {
+            if let Some(connected) = self.app_state.read(cx).connections().get(&conn_id) {
+                connected
+                    .connection
+                    .language_service()
+                    .editor_diagnostics(&query_text)
             } else {
                 Vec::new()
             }

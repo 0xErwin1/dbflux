@@ -12,9 +12,13 @@ pub fn render_sort(
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
     use dbflux_components::controls::{Button, Input, completion_input_keys_wrapper};
-    use dbflux_core::VisualSortDirection;
+    use dbflux_core::{OrderByMode, VisualSortDirection};
     use gpui::SharedString;
     use gpui::prelude::*;
+
+    if panel.order_by_mode(cx) == OrderByMode::SortKeyOnly {
+        return render_sort_key_only(panel, cx).into_any_element();
+    }
 
     let sort_count = panel.sort_rows.len();
     let sort_rows = panel.sort_rows.clone();
@@ -115,5 +119,67 @@ pub fn render_sort(
         );
     }
 
-    container
+    container.into_any_element()
+}
+
+/// Renders the sort section for drivers that can order only on the sort key
+/// (`OrderByMode::SortKeyOnly`, e.g. DynamoDB): a single ascending/descending
+/// toggle with an inline hint, instead of the multi-column sort list.
+fn render_sort_key_only(
+    panel: &mut QueryBuilderPanel,
+    cx: &mut Context<QueryBuilderPanel>,
+) -> impl IntoElement {
+    use dbflux_components::controls::Button;
+    use dbflux_core::VisualSortDirection;
+    use gpui::SharedString;
+    use gpui::prelude::*;
+    use gpui_component::ActiveTheme;
+
+    let direction = panel.sort_key_direction();
+    let dir_label = match direction {
+        VisualSortDirection::Asc => "ASC",
+        VisualSortDirection::Desc => "DESC",
+    };
+
+    let sort_key_label = panel
+        .sort_key_column(cx)
+        .filter(|name| !name.is_empty())
+        .map(|name| format!("Sort key order ({name})"))
+        .unwrap_or_else(|| "Sort key order".to_string());
+
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .gap_1()
+                .items_center()
+                .child(
+                    div()
+                        .flex_1()
+                        .text_sm()
+                        .child(SharedString::from(sort_key_label)),
+                )
+                .child(
+                    Button::new("qb-sortkey-dir", dir_label)
+                        .ghost()
+                        .small()
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            let next = match this.sort_key_direction() {
+                                VisualSortDirection::Asc => VisualSortDirection::Desc,
+                                VisualSortDirection::Desc => VisualSortDirection::Asc,
+                            };
+                            this.set_sort_key_direction(next, cx);
+                        })),
+                ),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child("Ordering is limited to the sort key for this driver."),
+        )
 }

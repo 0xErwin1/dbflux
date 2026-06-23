@@ -26,10 +26,10 @@ use dbflux_core::observability::{
 };
 use dbflux_core::{
     DangerousAction, DangerousQueryKind, DbError, DiagnosticSeverity as CoreDiagnosticSeverity,
-    DriftOutcome, DriverCapabilities, EditorDiagnostic as CoreEditorDiagnostic, ExecutionContext,
-    ExecutionSourceContext, HistoryEntry, OutputReceiver, QueryLanguage, QueryRequest, QueryResult,
-    RefreshPolicy, SchemaDriftDetected, SchemaLoadingStrategy, TaskTarget, ValidationResult,
-    check_schema_drift,
+    DriftOutcome, DriverCapabilities, EditorDiagnostic as CoreEditorDiagnostic,
+    EditorLanguageProfile, ExecutionContext, ExecutionSourceContext, HistoryEntry, OutputReceiver,
+    QueryLanguage, QueryRequest, QueryResult, RefreshPolicy, SchemaDriftDetected,
+    SchemaLoadingStrategy, TaskTarget, ValidationResult, check_schema_drift,
 };
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
@@ -237,7 +237,7 @@ pub(super) struct EditorState {
     pub(super) _input_subscriptions: Vec<Subscription>,
     pub(super) original_content: String,
     pub(super) saved_query_id: Option<Uuid>,
-    pub(super) current_editor_mode: &'static str,
+    pub(super) current_editor_mode: String,
     pub(super) diagnostic_request_id: u64,
     pub(super) _diagnostic_debounce: Option<Task<()>>,
     pub(super) path: Option<PathBuf>,
@@ -457,6 +457,49 @@ impl CodeDocument {
         Self::new_with_language(app_state, connection_id, query_language, window, cx)
     }
 
+    /// Resolve the editor presentation profile for a document.
+    ///
+    /// Prefers the connected driver's `DriverMetadata::editor_profile()` so a
+    /// driver can override editor mode, completion engagement, placeholder, and
+    /// comment prefix (e.g. DynamoDB's PartiQL surface) without the UI branching
+    /// on a driver id. Falls back to deriving from `query_language` when the
+    /// connection is absent or its language no longer matches the document's
+    /// effective language (a source-context query-mode override).
+    pub(super) fn resolve_editor_profile(
+        app_state: &Entity<AppStateEntity>,
+        connection_id: Option<Uuid>,
+        query_language: &QueryLanguage,
+        cx: &App,
+    ) -> EditorLanguageProfile {
+        if let Some(connection_id) = connection_id
+            && let Some(connected) = app_state.read(cx).connections().get(&connection_id)
+        {
+            let metadata = connected.connection.metadata();
+            if &metadata.query_language == query_language {
+                return metadata.editor_profile();
+            }
+        }
+
+        EditorLanguageProfile::from_language(query_language)
+    }
+
+    /// Whether this document's editor is backed by a database connection
+    /// (versus an in-process script such as Lua/Bash/Python).
+    ///
+    /// Reads the connected driver's editor profile so drivers with a bespoke
+    /// query surface (e.g. DynamoDB) are recognized as connection-backed even
+    /// when their `QueryLanguage` is `Custom`, without the UI branching on a
+    /// driver id.
+    pub(super) fn supports_connection_context(&self, cx: &App) -> bool {
+        Self::resolve_editor_profile(
+            &self.app_state,
+            self.connection_id,
+            &self.editor.query_language,
+            cx,
+        )
+        .supports_connection_context
+    }
+
     /// Create a document with an explicit language (used when opening files).
     pub fn new_with_language(
         app_state: Entity<AppStateEntity>,
@@ -465,8 +508,10 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let editor_mode = query_language.editor_mode();
-        let placeholder = query_language.placeholder();
+        let editor_profile =
+            Self::resolve_editor_profile(&app_state, connection_id, &query_language, cx);
+        let editor_mode = editor_profile.editor_mode.clone();
+        let placeholder = editor_profile.placeholder.clone();
 
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
@@ -479,7 +524,7 @@ impl CodeDocument {
         let completion_provider: Rc<dyn CompletionProvider> = Rc::new(
             QueryCompletionProvider::new(query_language.clone(), app_state.clone(), connection_id),
         );
-        let supports_connection_context = query_language.supports_connection_context();
+        let supports_connection_context = editor_profile.supports_connection_context;
 
         input_state.update(cx, |state, _cx| {
             state.lsp.completion_provider =
@@ -779,7 +824,7 @@ impl CodeDocument {
                 _input_subscriptions: vec![input_change_sub],
                 original_content: String::new(),
                 saved_query_id: None,
-                current_editor_mode: editor_mode,
+                current_editor_mode: editor_profile.editor_mode.clone(),
                 diagnostic_request_id: 0,
                 _diagnostic_debounce: None,
                 path: None,
