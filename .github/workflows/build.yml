@@ -364,6 +364,14 @@ jobs:
           targets: ${{ matrix.target }}
           components: rust-src
 
+      - name: Add cross target to the pinned toolchain
+        # rust-toolchain.toml pins the toolchain cargo actually uses; the step
+        # above adds the target to `stable` instead, so the x86_64-apple-darwin
+        # std is missing on the pinned toolchain when cross-compiling amd64 on the
+        # Apple Silicon runner. Add it to the pinned toolchain. No-op for the
+        # native arm64 target.
+        run: rustup target add ${{ matrix.target }}
+
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
