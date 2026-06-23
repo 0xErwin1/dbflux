@@ -2600,6 +2600,7 @@ dependencies = [
  "dirs 6.0.0",
  "filetime",
  "futures-lite 2.6.1",
+ "hex",
  "log",
  "secrecy",
  "serde_json",
