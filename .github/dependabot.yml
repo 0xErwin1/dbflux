@@ -3,21 +3,43 @@ updates:
   - package-ecosystem: cargo
     directory: "/"
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
+      interval: monthly
+    open-pull-requests-limit: 5
+    cooldown:
+      # Wait at least two weeks after a release before opening a PR, so a
+      # malicious or broken version that gets yanked shortly after publish is
+      # never picked up (supply-chain mitigation). Does not apply to security
+      # updates, which must land immediately.
+      default-days: 14
+    groups:
+      # One grouped PR per run for routine patch + minor bumps.
+      cargo-updates:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
     ignore:
+      # Majors are opt-in: bump them deliberately in-repo, not via a Dependabot PR.
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
       # Transitive crates whose advisory fix is unreachable without bumping a
-      # parent we do not control directly. Dependabot's security updater fails
-      # these on every run (security_update_not_possible); ignore them until the
-      # parents ship a compatible release, then remove the matching entry.
-      #   lru           pulled by the `mysql` crate; fix needs lru >= 0.16.3
+      # parent we do not control directly; remove the entry once the parent ships
+      # a compatible release.
       #   grid          pulled by taffy -> gpui; fix needs grid >= 1.0.1
       #   rustls-webpki pulled by the rustls/TLS stack (tracked by DEP-5); fix needs >= 0.103.13
-      - dependency-name: "lru"
       - dependency-name: "grid"
       - dependency-name: "rustls-webpki"
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
+      interval: monthly
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 14
+    groups:
+      github-actions-updates:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
