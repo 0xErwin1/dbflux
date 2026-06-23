@@ -85,7 +85,7 @@ dbflux_ui_document = { path = "crates/dbflux_ui_document" }
 dbflux_ui_windows = { path = "crates/dbflux_ui_windows" }
 dbflux_ui_sidebar = { path = "crates/dbflux_ui_sidebar" }
 dbflux_ui = { path = "crates/dbflux_ui" }
-mysql = "25"
+mysql = "28"
 
 gpui = "0.2.2"
 gpui-component = { version = "0.5.0", features = ["tree-sitter-languages"] }
