@@ -1,24 +1,25 @@
 use std::time::{Duration, Instant};
-use testcontainers::GenericImage;
-use testcontainers::clients::Cli;
-use testcontainers::core::WaitFor;
+use testcontainers::core::{ContainerPort, WaitFor};
+use testcontainers::runners::SyncRunner;
+use testcontainers::{GenericImage, ImageExt};
 
 pub fn with_postgres_url<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,
 {
-    let docker = Cli::default();
     let image = GenericImage::new("postgres", "16")
-        .with_env_var("POSTGRES_USER", "postgres")
-        .with_env_var("POSTGRES_PASSWORD", "postgres")
-        .with_env_var("POSTGRES_DB", "postgres")
-        .with_exposed_port(5432)
+        .with_exposed_port(ContainerPort::Tcp(5432))
         .with_wait_for(WaitFor::message_on_stdout(
             "database system is ready to accept connections",
-        ));
+        ))
+        .with_env_var("POSTGRES_USER", "postgres")
+        .with_env_var("POSTGRES_PASSWORD", "postgres")
+        .with_env_var("POSTGRES_DB", "postgres");
 
-    let container = docker.run(image);
-    let port = container.get_host_port_ipv4(5432);
+    let container = image.start().expect("failed to start postgres container");
+    let port = container
+        .get_host_port_ipv4(5432)
+        .expect("failed to get postgres host port");
     let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
 
     run(url)
@@ -28,15 +29,16 @@ pub fn with_mysql_url<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,
 {
-    let docker = Cli::default();
     let image = GenericImage::new("mysql", "8.4")
+        .with_exposed_port(ContainerPort::Tcp(3306))
+        .with_wait_for(WaitFor::message_on_stderr("ready for connections"))
         .with_env_var("MYSQL_ROOT_PASSWORD", "root")
-        .with_env_var("MYSQL_DATABASE", "testdb")
-        .with_exposed_port(3306)
-        .with_wait_for(WaitFor::message_on_stderr("ready for connections"));
+        .with_env_var("MYSQL_DATABASE", "testdb");
 
-    let container = docker.run(image);
-    let port = container.get_host_port_ipv4(3306);
+    let container = image.start().expect("failed to start mysql container");
+    let port = container
+        .get_host_port_ipv4(3306)
+        .expect("failed to get mysql host port");
     let url = format!("mysql://root:root@127.0.0.1:{port}/testdb");
 
     run(url)
@@ -46,13 +48,14 @@ pub fn with_mongodb_url<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,
 {
-    let docker = Cli::default();
     let image = GenericImage::new("mongo", "7")
-        .with_exposed_port(27017)
+        .with_exposed_port(ContainerPort::Tcp(27017))
         .with_wait_for(WaitFor::message_on_stdout("Waiting for connections"));
 
-    let container = docker.run(image);
-    let port = container.get_host_port_ipv4(27017);
+    let container = image.start().expect("failed to start mongo container");
+    let port = container
+        .get_host_port_ipv4(27017)
+        .expect("failed to get mongo host port");
     let url = format!("mongodb://127.0.0.1:{port}/testdb");
 
     run(url)
@@ -62,13 +65,14 @@ pub fn with_redis_url<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,
 {
-    let docker = Cli::default();
     let image = GenericImage::new("redis", "7")
-        .with_exposed_port(6379)
+        .with_exposed_port(ContainerPort::Tcp(6379))
         .with_wait_for(WaitFor::message_on_stdout("Ready to accept connections"));
 
-    let container = docker.run(image);
-    let port = container.get_host_port_ipv4(6379);
+    let container = image.start().expect("failed to start redis container");
+    let port = container
+        .get_host_port_ipv4(6379)
+        .expect("failed to get redis host port");
     let url = format!("redis://127.0.0.1:{port}/0");
 
     run(url)
@@ -89,18 +93,19 @@ where
     // `ACCEPT_EULA=Y` and the SA password via `MSSQL_SA_PASSWORD`. The image
     // is amd64-only; on arm64 hosts, run via emulation or substitute the
     // Azure SQL Edge image manually.
-    let docker = Cli::default();
     let image = GenericImage::new("mcr.microsoft.com/mssql/server", "2022-latest")
-        .with_env_var("ACCEPT_EULA", "Y")
-        .with_env_var("MSSQL_SA_PASSWORD", MSSQL_TEST_PASSWORD)
-        .with_env_var("MSSQL_PID", "Developer")
-        .with_exposed_port(1433)
+        .with_exposed_port(ContainerPort::Tcp(1433))
         .with_wait_for(WaitFor::message_on_stdout(
             "SQL Server is now ready for client connections",
-        ));
+        ))
+        .with_env_var("ACCEPT_EULA", "Y")
+        .with_env_var("MSSQL_SA_PASSWORD", MSSQL_TEST_PASSWORD)
+        .with_env_var("MSSQL_PID", "Developer");
 
-    let container = docker.run(image);
-    let port = container.get_host_port_ipv4(1433);
+    let container = image.start().expect("failed to start mssql container");
+    let port = container
+        .get_host_port_ipv4(1433)
+        .expect("failed to get mssql host port");
     // Connect to `master` by default; tests that need a clean database
     // create `dbflux_test` themselves and `USE` it.
     let url = format!(
@@ -115,13 +120,14 @@ pub fn with_dynamodb_endpoint<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,
 {
-    let docker = Cli::default();
     let image = GenericImage::new("amazon/dynamodb-local", "latest")
-        .with_exposed_port(8000)
+        .with_exposed_port(ContainerPort::Tcp(8000))
         .with_wait_for(WaitFor::message_on_stdout("Initializing DynamoDB Local"));
 
-    let container = docker.run(image);
-    let port = container.get_host_port_ipv4(8000);
+    let container = image.start().expect("failed to start dynamodb container");
+    let port = container
+        .get_host_port_ipv4(8000)
+        .expect("failed to get dynamodb host port");
     let endpoint = format!("http://127.0.0.1:{port}");
 
     run(endpoint)
@@ -148,24 +154,27 @@ where
     E: From<dbflux_core::DbError>,
     F: FnOnce(InfluxV2Config) -> Result<T, E>,
 {
-    let docker = Cli::default();
     let token = "dbflux-test-token";
     let org = "dbflux-test-org";
     let bucket = "dbflux-test-bucket";
 
     // InfluxDB v2 logs to stdout; the "Listening" message signals HTTP readiness.
     let image = GenericImage::new("influxdb", "2.7")
+        .with_exposed_port(ContainerPort::Tcp(8086))
+        .with_wait_for(WaitFor::message_on_stdout("Listening"))
         .with_env_var("DOCKER_INFLUXDB_INIT_MODE", "setup")
         .with_env_var("DOCKER_INFLUXDB_INIT_USERNAME", "admin")
         .with_env_var("DOCKER_INFLUXDB_INIT_PASSWORD", "adminpassword")
         .with_env_var("DOCKER_INFLUXDB_INIT_ORG", org)
         .with_env_var("DOCKER_INFLUXDB_INIT_BUCKET", bucket)
-        .with_env_var("DOCKER_INFLUXDB_INIT_ADMIN_TOKEN", token)
-        .with_exposed_port(8086)
-        .with_wait_for(WaitFor::message_on_stdout("Listening"));
+        .with_env_var("DOCKER_INFLUXDB_INIT_ADMIN_TOKEN", token);
 
-    let container = docker.run(image);
-    let port = container.get_host_port_ipv4(8086);
+    let container = image
+        .start()
+        .expect("failed to start influxdb v2 container");
+    let port = container
+        .get_host_port_ipv4(8086)
+        .expect("failed to get influxdb v2 host port");
     let endpoint = format!("http://127.0.0.1:{port}");
 
     // Wait until the InfluxDB HTTP API is ready.
@@ -208,14 +217,17 @@ where
     E: From<dbflux_core::DbError>,
     F: FnOnce(InfluxV1Config) -> Result<T, E>,
 {
-    let docker = Cli::default();
     // InfluxDB v1 logs to stderr; the "Listening on HTTP" message signals readiness.
     let image = GenericImage::new("influxdb", "1.8")
-        .with_exposed_port(8086)
+        .with_exposed_port(ContainerPort::Tcp(8086))
         .with_wait_for(WaitFor::message_on_stderr("Listening on HTTP"));
 
-    let container = docker.run(image);
-    let port = container.get_host_port_ipv4(8086);
+    let container = image
+        .start()
+        .expect("failed to start influxdb v1 container");
+    let port = container
+        .get_host_port_ipv4(8086)
+        .expect("failed to get influxdb v1 host port");
     let endpoint = format!("http://127.0.0.1:{port}");
 
     // Wait until HTTP is ready.
