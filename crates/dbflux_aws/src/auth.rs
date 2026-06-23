@@ -2102,7 +2102,7 @@ pub(crate) fn sso_cache_path(sso_start_url: &str) -> PathBuf {
     // "https://example.awsapps.com/start" and ".../start/" hash identically.
     let normalized = sso_start_url.trim_end_matches('/');
     let hash = Sha1::digest(normalized.as_bytes());
-    let hex = format!("{:x}", hash);
+    let hex = hex::encode(hash);
 
     sso_cache_dir().join(format!("{}.json", hex))
 }
@@ -2426,7 +2426,7 @@ mod tests {
 
     fn write_sso_cache(dir: &std::path::Path, start_url: &str, json: &str) {
         let hash = Sha1::digest(start_url.as_bytes());
-        let hex = format!("{:x}", hash);
+        let hex = hex::encode(hash);
         let path = dir.join(format!("{}.json", hex));
         let mut file = std::fs::File::create(path).unwrap();
         file.write_all(json.as_bytes()).unwrap();
@@ -2449,7 +2449,7 @@ mod tests {
         // Override the cache dir by testing the underlying function with a
         // constructed path
         let hash = Sha1::digest(start_url.as_bytes());
-        let hex = format!("{:x}", hash);
+        let hex = hex::encode(hash);
         let cache_file = tmp.path().join(format!("{}.json", hex));
         let contents = std::fs::read_to_string(&cache_file).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
@@ -2552,7 +2552,7 @@ mod tests {
         let url = "https://my-sso.awsapps.com/start";
         let path = sso_cache_path(url);
 
-        let expected_hash = format!("{:x}", Sha1::digest(url.as_bytes()));
+        let expected_hash = hex::encode(Sha1::digest(url.as_bytes()));
         assert!(path.to_string_lossy().contains(&expected_hash));
         assert!(path.to_string_lossy().ends_with(".json"));
     }
