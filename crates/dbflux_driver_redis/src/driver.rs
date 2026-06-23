@@ -147,7 +147,7 @@ pub static REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
         pagination: vec![PaginationStyle::Cursor],
         where_operators: vec![],
         supports_order_by: false,
-        order_by_mode: dbflux_core::OrderByMode::AnyColumns,
+        order_by_mode: dbflux_core::OrderByMode::None,
         supports_group_by: false,
         supports_having: false,
         supports_distinct: false,

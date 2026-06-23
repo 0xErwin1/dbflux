@@ -57,14 +57,19 @@ fn generate_find(spec: &VisualQuerySpec) -> Result<String, QueryGenError> {
             "MongoDB find() does not support GROUP BY / HAVING / aggregates".to_string(),
         ));
     }
+    if spec.source.table.trim().is_empty() {
+        return Err(QueryGenError::InvalidSpec(
+            "MongoDB find() requires a collection name".to_string(),
+        ));
+    }
 
-    let collection = &spec.source.table;
+    let collection = collection_accessor(&spec.source.table);
     let filter = render_filter(spec.filter.as_ref());
     let projection = render_projection(&spec.projection);
 
     let mut text = match projection {
-        Some(proj) => format!("db.{collection}.find({filter}, {proj})"),
-        None => format!("db.{collection}.find({filter})"),
+        Some(proj) => format!("{collection}.find({filter}, {proj})"),
+        None => format!("{collection}.find({filter})"),
     };
 
     if let Some(sort_doc) = render_sort(&spec.sort) {
@@ -80,6 +85,28 @@ fn generate_find(spec: &VisualQuerySpec) -> Result<String, QueryGenError> {
     }
 
     Ok(text)
+}
+
+/// Render the collection accessor for the MongoDB shell. A simple identifier
+/// uses dot access (`db.<name>`); any other name (containing `.`, quotes,
+/// whitespace, parentheses, etc.) is JSON-escaped and rendered via bracket
+/// access (`db["<escaped>"]`) so the generated text stays valid.
+fn collection_accessor(name: &str) -> String {
+    let is_simple_identifier = !name.is_empty()
+        && name
+            .chars()
+            .enumerate()
+            .all(|(index, character)| match character {
+                'A'..='Z' | 'a'..='z' | '_' => true,
+                '0'..='9' => index > 0,
+                _ => false,
+            });
+
+    if is_simple_identifier {
+        format!("db.{name}")
+    } else {
+        format!("db[{}]", Value::String(name.to_string()))
+    }
 }
 
 /// An order-preserving MongoDB document (object).
@@ -504,6 +531,18 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.text, "db.events.find({})");
+    }
+
+    #[test]
+    fn read_spec_non_identifier_collection_uses_bracket_access() {
+        let spec = read_spec("orders.2024");
+
+        let result = MongoShellGenerator
+            .generate_read_from_spec(&spec)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(result.text, r#"db["orders.2024"].find({})"#);
     }
 
     #[test]

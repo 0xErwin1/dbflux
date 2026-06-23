@@ -330,7 +330,7 @@ pub static DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
         supports_ctes: false,
         supports_explain: false,
         max_query_parameters: 0,
-        max_order_by_columns: 0,
+        max_order_by_columns: 1,
         max_group_by_columns: 0,
     }),
     mutation: Some(MutationCapabilities {
@@ -1255,11 +1255,17 @@ impl DynamoConnection {
 
         let runtime = runtime();
 
+        // limitation: PartiQL pagination beyond page 1 needs an inbound page-token
+        // seam on QueryRequest (deferred to the UI batch); only the first page is
+        // returned and next_page_token is surfaced but cannot yet be fed back in.
         let request = self
             .client
             .execute_statement()
             .statement(req.sql.trim())
-            .set_limit(req.limit.map(|limit| limit as i32));
+            .set_limit(
+                req.limit
+                    .map(|limit| i32::try_from(limit).unwrap_or(i32::MAX)),
+            );
 
         let output = runtime.block_on(request.send()).map_err(|error| {
             let formatted = DYNAMO_ERROR_FORMATTER.format_execute_statement_error(&error, &config);
@@ -1273,11 +1279,12 @@ impl DynamoConnection {
                 next_page_token,
             ))
         } else {
-            // ExecuteStatement returns no affected-row count for writes; a
-            // successful single-statement write affects one item.
-            Ok(crud_result_to_query_result(crud_result_with_affected_rows(
-                1,
-            )))
+            // ExecuteStatement returns no affected-row count for writes, so the
+            // affected count is reported as unknown rather than fabricated.
+            let mut query_result =
+                QueryResult::json(Vec::new(), Vec::new(), std::time::Duration::ZERO);
+            query_result.affected_rows = None;
+            Ok(query_result)
         }
     }
 
@@ -4294,26 +4301,59 @@ enum PartiqlVerb {
     Delete,
 }
 
-fn partiql_verb(query: &str) -> Option<PartiqlVerb> {
-    let lower = query.trim_start().to_ascii_lowercase();
+/// Strip leading `--` line comments and surrounding whitespace from a PartiQL
+/// statement so verb detection sees the first real keyword. The editor
+/// placeholder itself is a `--` comment, so a comment-led statement must still
+/// classify by its underlying verb.
+fn strip_partiql_leading_comments(query: &str) -> &str {
+    let mut rest = query.trim_start();
 
-    if lower.starts_with("select ") || lower.starts_with("select\n") {
-        Some(PartiqlVerb::Select)
-    } else if lower.starts_with("insert ") || lower.starts_with("insert\n") {
-        Some(PartiqlVerb::Insert)
-    } else if lower.starts_with("update ") || lower.starts_with("update\n") {
-        Some(PartiqlVerb::Update)
-    } else if lower.starts_with("delete ") || lower.starts_with("delete\n") {
-        Some(PartiqlVerb::Delete)
-    } else {
-        None
+    while let Some(after) = rest.strip_prefix("--") {
+        match after.find('\n') {
+            Some(newline) => rest = after[newline + 1..].trim_start(),
+            None => return "",
+        }
+    }
+
+    rest
+}
+
+fn partiql_verb(query: &str) -> Option<PartiqlVerb> {
+    let stripped = strip_partiql_leading_comments(query);
+
+    let verb_end = stripped
+        .char_indices()
+        .find(|(_, character)| character.is_ascii_whitespace())
+        .map(|(index, _)| index)?;
+
+    match stripped[..verb_end].to_ascii_lowercase().as_str() {
+        "select" => Some(PartiqlVerb::Select),
+        "insert" => Some(PartiqlVerb::Insert),
+        "update" => Some(PartiqlVerb::Update),
+        "delete" => Some(PartiqlVerb::Delete),
+        _ => None,
     }
 }
 
-/// Whether a PartiQL statement carries a `WHERE` clause.
+/// Whether a PartiQL statement carries a `WHERE` clause. `WHERE` is matched as a
+/// case-insensitive token bounded by ASCII whitespace on both sides, so a clause
+/// whose keyword is followed by a newline or tab is still recognized.
 fn partiql_has_where(query: &str) -> bool {
     let lower = query.to_ascii_lowercase();
-    lower.contains(" where ") || lower.contains("\nwhere ") || lower.ends_with(" where")
+    let bytes = lower.as_bytes();
+
+    lower.match_indices("where").any(|(index, _)| {
+        let before_ok = index
+            .checked_sub(1)
+            .is_none_or(|previous| bytes.get(previous).is_some_and(u8::is_ascii_whitespace));
+
+        let after = index + "where".len();
+        let after_ok = bytes
+            .get(after)
+            .is_none_or(|byte| byte.is_ascii_whitespace());
+
+        before_ok && after_ok
+    })
 }
 
 impl LanguageService for DynamoLanguageService {
@@ -5582,6 +5622,42 @@ mod tests {
         assert_eq!(
             service.detect_dangerous("SELECT * FROM \"users\" WHERE pk = '1'"),
             None
+        );
+    }
+
+    #[test]
+    fn dangerous_detection_recognizes_where_followed_by_newline_or_tab() {
+        let service = DynamoLanguageService;
+
+        assert_eq!(
+            service.detect_dangerous("DELETE FROM \"users\" WHERE\n pk = '1'"),
+            None
+        );
+        assert_eq!(
+            service.detect_dangerous("DELETE FROM \"users\" WHERE\tpk = '1'"),
+            None
+        );
+        assert_eq!(
+            service.detect_dangerous("UPDATE \"users\" SET name = 'A' WHERE\n pk = '1'"),
+            None
+        );
+    }
+
+    #[test]
+    fn verb_detection_handles_leading_comments_and_tab_delimited_verbs() {
+        let service = DynamoLanguageService;
+
+        assert_eq!(
+            service.classify_execution("-- note\nSELECT * FROM \"users\" WHERE pk = '1'"),
+            Some(ExecutionClassification::Read)
+        );
+        assert_eq!(
+            service.classify_execution("SELECT\t* FROM \"users\" WHERE pk = '1'"),
+            Some(ExecutionClassification::Read)
+        );
+        assert_eq!(
+            service.classify_execution("DELETE\tFROM \"users\" WHERE pk = '1'"),
+            Some(ExecutionClassification::Destructive)
         );
     }
 

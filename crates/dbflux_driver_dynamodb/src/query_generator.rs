@@ -1,7 +1,7 @@
 use dbflux_core::{
     Comparator, DocumentDelete, DocumentInsert, DocumentUpdate, FilterNode, GeneratedQuery,
     LiteralValue, MutationCategory, MutationRequest, Predicate, PredicateValue, QueryGenError,
-    QueryGenerator, QueryLanguage, VisualQuerySpec,
+    QueryGenerator, QueryLanguage, VisualQuerySpec, VisualSortDirection,
 };
 
 fn json_text(value: &serde_json::Value) -> Option<String> {
@@ -181,12 +181,11 @@ fn partiql_filter(node: &FilterNode) -> Result<Option<String>, QueryGenError> {
 
 /// Build the PartiQL `SELECT` text for a visual read spec.
 ///
-/// DynamoDB PartiQL has no `LIMIT` or `ORDER BY` keyword: row limiting travels
-/// out-of-band as the `execute_statement` limit argument, and sort-key direction
-/// as the query envelope's `scan_index_forward`. This generator therefore emits
-/// only the `SELECT ... FROM ... [WHERE ...]` shape; `spec.limit`, `spec.offset`,
-/// and `spec.sort` are intentionally not encoded into the text and are carried by
-/// the execution path instead.
+/// DynamoDB PartiQL has no `LIMIT` keyword: row limiting travels out-of-band as
+/// the `execute_statement` limit argument, so `spec.limit` and `spec.offset` are
+/// not encoded into the text. PartiQL does support `ORDER BY` on key attributes,
+/// so a chosen sort-key direction (`OrderByMode::SortKeyOnly`) is emitted in-band
+/// as `ORDER BY "<sortkey>" ASC|DESC` to reach the executed path.
 fn generate_partiql_read(spec: &VisualQuerySpec) -> Result<GeneratedQuery, QueryGenError> {
     if spec.source.table.trim().is_empty() {
         return Err(QueryGenError::InvalidSpec(
@@ -214,6 +213,17 @@ fn generate_partiql_read(spec: &VisualQuerySpec) -> Result<GeneratedQuery, Query
     {
         text.push_str(" WHERE ");
         text.push_str(&where_clause);
+    }
+
+    if let Some(sort) = spec.sort.first() {
+        let direction = match sort.direction {
+            VisualSortDirection::Asc => "ASC",
+            VisualSortDirection::Desc => "DESC",
+        };
+        text.push_str(" ORDER BY ");
+        text.push_str(&quote_partiql_identifier(&sort.column));
+        text.push(' ');
+        text.push_str(direction);
     }
 
     Ok(GeneratedQuery {
@@ -356,7 +366,7 @@ mod tests {
     }
 
     #[test]
-    fn generate_read_from_spec_omits_limit_and_sort_from_text() {
+    fn generate_read_from_spec_omits_limit_but_emits_sort_direction() {
         let generator = DynamoQueryGenerator;
         let mut spec = read_spec("users", None);
         spec.limit = Some(25);
@@ -371,9 +381,39 @@ mod tests {
             .expect("read generation should succeed")
             .expect("DynamoDB generator should emit a read");
 
-        assert_eq!(generated.text, "SELECT * FROM \"users\"");
+        assert_eq!(
+            generated.text,
+            "SELECT * FROM \"users\" ORDER BY \"sk\" DESC"
+        );
         assert!(!generated.text.to_ascii_uppercase().contains("LIMIT"));
-        assert!(!generated.text.to_ascii_uppercase().contains("ORDER BY"));
+    }
+
+    #[test]
+    fn generate_read_from_spec_emits_ascending_order_by_after_where() {
+        let generator = DynamoQueryGenerator;
+        let filter = FilterNode::Group {
+            op: BoolOp::And,
+            children: vec![FilterNode::Predicate(eq_predicate(
+                "pk",
+                LiteralValue::Text("U#1".to_string()),
+            ))],
+        };
+        let mut spec = read_spec("users", Some(filter));
+        spec.sort = vec![SortEntry {
+            source_alias: "t".to_string(),
+            column: "sk".to_string(),
+            direction: VisualSortDirection::Asc,
+        }];
+
+        let generated = generator
+            .generate_read_from_spec(&spec)
+            .expect("read generation should succeed")
+            .expect("DynamoDB generator should emit a read");
+
+        assert_eq!(
+            generated.text,
+            "SELECT * FROM \"users\" WHERE \"pk\" = 'U#1' ORDER BY \"sk\" ASC"
+        );
     }
 
     #[test]
