@@ -274,6 +274,7 @@ impl dbflux_core::Connection for PlannedExecutionConnection {
                 classification_override: None,
                 default_chunk_size: None,
                 supports_lock_timeout: false,
+                editor_profile: None,
             });
 
         &METADATA

@@ -55,6 +55,7 @@ pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driv
     classification_override: None,
     default_chunk_size: None,
     supports_lock_timeout: false,
+    editor_profile: None,
 });
 
 pub static CLOUDWATCH_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {

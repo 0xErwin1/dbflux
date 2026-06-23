@@ -313,6 +313,7 @@ mod tests {
             classification_override: None,
             default_chunk_size: None,
             supports_lock_timeout: false,
+            editor_profile: None,
         }
     }
 

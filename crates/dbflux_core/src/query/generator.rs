@@ -28,7 +28,7 @@ impl MutationRequest {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeneratedQuery {
     pub language: QueryLanguage,
     pub text: String,
@@ -324,6 +324,20 @@ pub trait QueryGenerator: Send + Sync {
         &self,
         _spec: &VisualQuerySpec,
     ) -> Result<Option<SelectQuery>, QueryGenError> {
+        Ok(None)
+    }
+
+    /// Render a structured read spec to a driver-native, non-SQL read query.
+    ///
+    /// Returns a generic [`GeneratedQuery`] whose `text` is the executable
+    /// query (non-SQL stores carry no positional parameters). The default
+    /// returns `Ok(None)` meaning "this generator emits no non-SQL read text",
+    /// so relational drivers keep using [`QueryGenerator::generate_select`].
+    /// Document drivers (MongoDB, DynamoDB) override this.
+    fn generate_read_from_spec(
+        &self,
+        _spec: &VisualQuerySpec,
+    ) -> Result<Option<GeneratedQuery>, QueryGenError> {
         Ok(None)
     }
 
@@ -2068,6 +2082,31 @@ mod tests {
             limit: Some(100),
             offset: 0,
         }
+    }
+
+    #[test]
+    fn generate_read_from_spec_default_is_unsupported() {
+        struct NoReadGenerator;
+        impl QueryGenerator for NoReadGenerator {
+            fn supported_categories(&self) -> &'static [MutationCategory] {
+                &[]
+            }
+            fn generate_mutation(
+                &self,
+                _mutation: &crate::MutationRequest,
+            ) -> Option<GeneratedQuery> {
+                None
+            }
+        }
+
+        let result = NoReadGenerator.generate_read_from_spec(&users_spec());
+        assert_eq!(result, Ok(None));
+    }
+
+    #[test]
+    fn sql_generator_does_not_emit_non_sql_read_text() {
+        let result = SqlMutationGenerator::new(&DIALECT).generate_read_from_spec(&users_spec());
+        assert_eq!(result, Ok(None));
     }
 
     // -------------------------------------------------------------------------

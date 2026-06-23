@@ -3,9 +3,10 @@ pub(crate) mod form;
 
 pub use capabilities::{
     DatabaseCategory, DdlCapabilities, DeploymentClass, DriverCapabilities, DriverLimits,
-    DriverMetadata, DriverMetadataBuilder, ExecutionClassification, Icon, IsolationLevel,
-    MutationCapabilities, OperationClassifier, PaginationStyle, QueryCapabilities, QueryLanguage,
-    SslCertFields, SslModeOption, SyntaxInfo, TransactionCapabilities, WhereOperator,
+    DriverMetadata, DriverMetadataBuilder, EditorLanguageProfile, ExecutionClassification, Icon,
+    IsolationLevel, MutationCapabilities, OperationClassifier, OrderByMode, PaginationStyle,
+    QueryCapabilities, QueryLanguage, SslCertFields, SslModeOption, SyntaxInfo,
+    TransactionCapabilities, WhereOperator,
 };
 pub use form::{
     DriverFormDef, ExportFieldHint, FieldExportTransform, FormFieldDef, FormFieldKind, FormSection,

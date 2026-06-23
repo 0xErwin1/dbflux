@@ -100,6 +100,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             WhereOperator::Not,
         ],
         supports_order_by: true,
+        order_by_mode: dbflux_core::OrderByMode::AnyColumns,
         supports_group_by: true,
         supports_having: true,
         supports_distinct: true,
@@ -205,6 +206,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     classification_override: None,
     default_chunk_size: None,
     supports_lock_timeout: false,
+    editor_profile: None,
 });
 
 /// PostgreSQL SQL dialect implementation.

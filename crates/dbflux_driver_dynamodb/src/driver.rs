@@ -312,6 +312,7 @@ pub static DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
             WhereOperator::Not,
         ],
         supports_order_by: true,
+        order_by_mode: dbflux_core::OrderByMode::AnyColumns,
         supports_group_by: false,
         supports_having: false,
         supports_distinct: false,
@@ -387,6 +388,7 @@ pub static DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
     classification_override: None,
     default_chunk_size: None,
     supports_lock_timeout: false,
+    editor_profile: None,
 });
 
 pub const DYNAMODB_MVP_SUPPORTED_FLOWS: &[&str] = &[

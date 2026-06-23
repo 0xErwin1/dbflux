@@ -981,6 +981,41 @@ impl QueryLanguage {
     }
 }
 
+/// How a driver's query editor should present and behave, independent of the
+/// raw [`QueryLanguage`] enum.
+///
+/// Defaults derive from the language (see [`EditorLanguageProfile::from_language`])
+/// so existing drivers need no change; a driver with a bespoke editor surface
+/// overrides individual fields via [`DriverMetadata::editor_profile`]. The UI reads
+/// presentation from this profile rather than matching on a concrete driver.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditorLanguageProfile {
+    /// Syntax-highlighting mode id (e.g. `"sql"`, `"javascript"`, `"plaintext"`).
+    pub editor_mode: String,
+
+    /// Whether the connection-aware completion provider engages.
+    pub supports_connection_context: bool,
+
+    /// Editor placeholder text.
+    pub placeholder: String,
+
+    /// Line-comment prefix.
+    pub comment_prefix: String,
+}
+
+impl EditorLanguageProfile {
+    /// Default profile derived entirely from the driver's [`QueryLanguage`],
+    /// reproducing the language accessors byte-for-byte.
+    pub fn from_language(language: &QueryLanguage) -> Self {
+        Self {
+            editor_mode: language.editor_mode().to_string(),
+            supports_connection_context: language.supports_connection_context(),
+            placeholder: language.placeholder().to_string(),
+            comment_prefix: language.comment_prefix().to_string(),
+        }
+    }
+}
+
 /// `;`-delimited SQL statement splitter that is aware of strings, identifiers,
 /// comments, and dollar-quoted bodies. See [`QueryLanguage::split_statements`].
 fn split_sql_statements(text: &str) -> Vec<String> {
@@ -1211,6 +1246,24 @@ impl Default for SyntaxInfo {
 // Query Capabilities
 // ============================================================================
 
+/// How a driver allows result ordering, beyond the boolean `supports_order_by`.
+///
+/// Lets a store advertise a constrained ordering surface (e.g. DynamoDB orders
+/// only on the sort key, by direction) so the query builder never offers an
+/// ordering the driver cannot execute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum OrderByMode {
+    /// No ordering support; the builder hides the order-by section.
+    None,
+
+    /// Ordering on any projected column, in any direction (relational default).
+    #[default]
+    AnyColumns,
+
+    /// Ordering only on the sort key, expressed as a single direction toggle.
+    SortKeyOnly,
+}
+
 /// Query-related capabilities supported by a driver.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryCapabilities {
@@ -1225,6 +1278,13 @@ pub struct QueryCapabilities {
 
     /// Whether the driver supports ORDER BY.
     pub supports_order_by: bool,
+
+    /// Granular ordering surface offered by the driver.
+    ///
+    /// Defaults to [`OrderByMode::AnyColumns`] so existing relational drivers
+    /// keep the multi-column sort UI unchanged.
+    #[serde(default)]
+    pub order_by_mode: OrderByMode,
 
     /// Maximum number of ORDER BY columns (0 = unlimited).
     pub max_order_by_columns: u32,
@@ -1294,6 +1354,7 @@ impl Default for QueryCapabilities {
             ],
             max_query_parameters: 0,
             supports_order_by: true,
+            order_by_mode: OrderByMode::AnyColumns,
             max_order_by_columns: 0,
             supports_group_by: true,
             max_group_by_columns: 0,
@@ -1695,6 +1756,15 @@ pub struct DriverMetadata {
     /// SQLite does not.
     #[serde(default)]
     pub supports_lock_timeout: bool,
+
+    /// Editor presentation override for drivers whose surface diverges from the
+    /// defaults derived from `query_language`.
+    ///
+    /// `None` (the common case) means the editor presentation is derived from
+    /// `query_language` via [`DriverMetadata::editor_profile`]. A driver with a
+    /// bespoke surface sets `Some(...)`.
+    #[serde(default)]
+    pub editor_profile: Option<EditorLanguageProfile>,
 }
 
 impl Debug for DriverMetadata {
@@ -1721,6 +1791,7 @@ impl Debug for DriverMetadata {
             .field("classification_override", &"...")
             .field("default_chunk_size", &self.default_chunk_size)
             .field("supports_lock_timeout", &self.supports_lock_timeout)
+            .field("editor_profile", &self.editor_profile)
             .finish()
     }
 }
@@ -1751,6 +1822,7 @@ impl Clone for DriverMetadata {
             classification_override: None,
             default_chunk_size: self.default_chunk_size,
             supports_lock_timeout: self.supports_lock_timeout,
+            editor_profile: self.editor_profile.clone(),
         }
     }
 }
@@ -1779,6 +1851,17 @@ impl DriverMetadata {
     /// Check if this is a log-stream service (e.g. CloudWatch Logs).
     pub fn is_log_stream(&self) -> bool {
         self.category == DatabaseCategory::LogStream
+    }
+
+    /// Editor presentation profile for this driver.
+    ///
+    /// Returns the driver's `editor_profile` override when set, otherwise a
+    /// profile derived from `query_language` (the behavior every existing
+    /// driver had before this field existed).
+    pub fn editor_profile(&self) -> EditorLanguageProfile {
+        self.editor_profile
+            .clone()
+            .unwrap_or_else(|| EditorLanguageProfile::from_language(&self.query_language))
     }
 }
 
@@ -1839,6 +1922,7 @@ pub struct DriverMetadataBuilder {
     classification_override: Option<Box<dyn OperationClassifier>>,
     default_chunk_size: Option<usize>,
     supports_lock_timeout: bool,
+    editor_profile: Option<EditorLanguageProfile>,
 }
 
 impl DriverMetadataBuilder {
@@ -1871,6 +1955,7 @@ impl DriverMetadataBuilder {
             classification_override: None,
             default_chunk_size: None,
             supports_lock_timeout: false,
+            editor_profile: None,
         }
     }
 
@@ -1994,6 +2079,7 @@ impl DriverMetadataBuilder {
             classification_override: self.classification_override,
             default_chunk_size: self.default_chunk_size,
             supports_lock_timeout: self.supports_lock_timeout,
+            editor_profile: self.editor_profile,
         }
     }
 
@@ -2117,6 +2203,69 @@ mod tests {
     fn split_statements_empty_is_zero() {
         assert_eq!(QueryLanguage::Sql.statement_count("   \n  "), 0);
         assert_eq!(QueryLanguage::MongoQuery.statement_count(""), 0);
+    }
+
+    #[test]
+    fn editor_profile_from_language_matches_accessors() {
+        let variants = [
+            QueryLanguage::Sql,
+            QueryLanguage::CloudWatchLogsInsightsQl,
+            QueryLanguage::OpenSearchPpl,
+            QueryLanguage::OpenSearchSql,
+            QueryLanguage::MongoQuery,
+            QueryLanguage::RedisCommands,
+            QueryLanguage::Cypher,
+            QueryLanguage::InfluxQuery,
+            QueryLanguage::Flux,
+            QueryLanguage::Cql,
+            QueryLanguage::Lua,
+            QueryLanguage::Python,
+            QueryLanguage::Bash,
+            QueryLanguage::Custom("DynamoDB".to_string()),
+        ];
+
+        for language in &variants {
+            let profile = EditorLanguageProfile::from_language(language);
+
+            assert_eq!(
+                profile.editor_mode,
+                language.editor_mode(),
+                "editor_mode mismatch for {language:?}"
+            );
+            assert_eq!(
+                profile.supports_connection_context,
+                language.supports_connection_context(),
+                "supports_connection_context mismatch for {language:?}"
+            );
+            assert_eq!(
+                profile.placeholder,
+                language.placeholder(),
+                "placeholder mismatch for {language:?}"
+            );
+            assert_eq!(
+                profile.comment_prefix,
+                language.comment_prefix(),
+                "comment_prefix mismatch for {language:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn editor_profile_defaults_when_metadata_has_no_override() {
+        let derived = EditorLanguageProfile::from_language(&QueryLanguage::MongoQuery);
+
+        assert_eq!(derived.editor_mode, "javascript");
+        assert!(derived.supports_connection_context);
+        assert_eq!(derived.comment_prefix, "//");
+    }
+
+    #[test]
+    fn order_by_mode_default_is_any_columns() {
+        assert_eq!(OrderByMode::default(), OrderByMode::AnyColumns);
+        assert_eq!(
+            QueryCapabilities::default().order_by_mode,
+            OrderByMode::AnyColumns
+        );
     }
 
     #[test]

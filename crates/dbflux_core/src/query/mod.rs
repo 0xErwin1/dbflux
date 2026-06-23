@@ -22,8 +22,8 @@ pub use keyset::lower_keyset_predicate;
 pub use language_service::{
     ClassifiedMutation, DangerousQueryKind, Diagnostic, DiagnosticSeverity, EditorDiagnostic,
     LanguageService, SqlLanguageService, TextPosition, TextPositionRange, TextRange,
-    ValidationResult, classify_query_for_language, classify_visual_mutation,
-    detect_dangerous_query, detect_dangerous_sql, strip_leading_comments,
+    ValidationResult, classify_query_for_language, classify_query_for_language_with_service,
+    classify_visual_mutation, detect_dangerous_query, detect_dangerous_sql, strip_leading_comments,
 };
 pub use safety::{classify_query_for_governance, classify_sql_execution, is_safe_read_query};
 pub use semantic::{

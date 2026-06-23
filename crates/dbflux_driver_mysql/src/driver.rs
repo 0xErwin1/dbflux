@@ -84,6 +84,7 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
             WhereOperator::Not,
         ],
         supports_order_by: true,
+        order_by_mode: dbflux_core::OrderByMode::AnyColumns,
         supports_group_by: true,
         supports_having: true,
         supports_distinct: true,
@@ -185,6 +186,7 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
     classification_override: None,
     default_chunk_size: None,
     supports_lock_timeout: false,
+    editor_profile: None,
 });
 
 /// MariaDB driver metadata.
@@ -240,6 +242,7 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
             WhereOperator::Not,
         ],
         supports_order_by: true,
+        order_by_mode: dbflux_core::OrderByMode::AnyColumns,
         supports_group_by: true,
         supports_having: true,
         supports_distinct: true,
@@ -342,6 +345,7 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
     classification_override: None,
     default_chunk_size: None,
     supports_lock_timeout: false,
+    editor_profile: None,
 });
 
 /// MySQL/MariaDB SQL dialect implementation.

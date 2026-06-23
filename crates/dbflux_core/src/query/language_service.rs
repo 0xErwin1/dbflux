@@ -238,6 +238,23 @@ pub fn classify_query_for_language(
     query_language: &QueryLanguage,
     query: &str,
 ) -> ExecutionClassification {
+    classify_query_for_language_with_service(query_language, query, None)
+}
+
+/// Classify a query's execution impact, optionally delegating a `Custom`
+/// language to the driver's own [`LanguageService`].
+///
+/// For the built-in languages the classification is keyed off the language. For
+/// a `Custom(_)` language the classifier consults `service` (when present) so a
+/// driver-defined surface (e.g. PartiQL) is classified by the driver rather than
+/// dead-ending at a conservative `Write`. With no service it falls back to
+/// `Write`, preserving the previous conservative default for non-connection
+/// callers.
+pub fn classify_query_for_language_with_service(
+    query_language: &QueryLanguage,
+    query: &str,
+    service: Option<&dyn LanguageService>,
+) -> ExecutionClassification {
     match query_language {
         QueryLanguage::Sql => classify_sql_execution(query),
         QueryLanguage::CloudWatchLogsInsightsQl
@@ -245,6 +262,9 @@ pub fn classify_query_for_language(
         | QueryLanguage::OpenSearchSql => ExecutionClassification::Read,
         QueryLanguage::MongoQuery => classify_mongo_query(query),
         QueryLanguage::RedisCommands => classify_redis_query(query),
+        QueryLanguage::Custom(_) => service
+            .and_then(|service| service.classify_execution(query))
+            .unwrap_or(ExecutionClassification::Write),
         _ => ExecutionClassification::Write,
     }
 }
@@ -375,6 +395,17 @@ pub trait LanguageService: Send + Sync {
     /// frequent text changes to provide live feedback as the user types.
     fn editor_diagnostics(&self, _query: &str) -> Vec<EditorDiagnostic> {
         vec![]
+    }
+
+    /// Classify a query's execution impact for governance.
+    ///
+    /// Returns `None` (the default) when the driver does not provide a bespoke
+    /// classifier, letting the core fall back to its language-keyed
+    /// classification. A driver whose `QueryLanguage` is `Custom(_)` (e.g. a
+    /// PartiQL surface) overrides this so its statements are classified by the
+    /// driver rather than dead-ending at a conservative `Write`.
+    fn classify_execution(&self, _query: &str) -> Option<ExecutionClassification> {
+        None
     }
 }
 
@@ -1261,6 +1292,67 @@ END $$;"#;
         assert_eq!(
             classify_query_for_language(&QueryLanguage::RedisCommands, "CONFIG SET a b"),
             ExecutionClassification::Admin
+        );
+    }
+
+    #[test]
+    fn custom_language_without_service_falls_back_to_write() {
+        let language = QueryLanguage::Custom("DynamoDB".to_string());
+
+        assert_eq!(
+            classify_query_for_language(&language, "SELECT * FROM \"t\""),
+            ExecutionClassification::Write
+        );
+        assert_eq!(
+            classify_query_for_language_with_service(&language, "SELECT * FROM \"t\"", None),
+            ExecutionClassification::Write
+        );
+    }
+
+    #[test]
+    fn custom_language_routes_classification_through_service() {
+        struct PartiqlService;
+        impl LanguageService for PartiqlService {
+            fn validate(&self, _query: &str) -> ValidationResult {
+                ValidationResult::Valid
+            }
+            fn detect_dangerous(&self, _query: &str) -> Option<DangerousQueryKind> {
+                None
+            }
+            fn classify_execution(&self, query: &str) -> Option<ExecutionClassification> {
+                let normalized = query.trim_start().to_ascii_uppercase();
+                if normalized.starts_with("SELECT") {
+                    Some(ExecutionClassification::Read)
+                } else if normalized.starts_with("DELETE") {
+                    Some(ExecutionClassification::Destructive)
+                } else {
+                    None
+                }
+            }
+        }
+
+        let language = QueryLanguage::Custom("DynamoDB".to_string());
+        let service = PartiqlService;
+
+        assert_eq!(
+            classify_query_for_language_with_service(
+                &language,
+                "SELECT * FROM \"t\"",
+                Some(&service),
+            ),
+            ExecutionClassification::Read
+        );
+        assert_eq!(
+            classify_query_for_language_with_service(
+                &language,
+                "DELETE FROM \"t\" WHERE pk = 'a'",
+                Some(&service),
+            ),
+            ExecutionClassification::Destructive
+        );
+        assert_eq!(
+            classify_query_for_language_with_service(&language, "weird", Some(&service)),
+            ExecutionClassification::Write
         );
     }
 

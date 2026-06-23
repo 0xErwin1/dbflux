@@ -108,10 +108,11 @@ pub use data::{
 
 pub use driver::{
     DatabaseCategory, DdlCapabilities, DeploymentClass, DriverCapabilities, DriverFormDef,
-    DriverLimits, DriverMetadata, DriverMetadataBuilder, ExecutionClassification, ExportFieldHint,
-    FieldExportTransform, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, Icon,
-    IsolationLevel, MutationCapabilities, OperationClassifier, PaginationStyle, QueryCapabilities,
-    QueryLanguage, RefreshTrigger, SelectOption, SslCertFields, SslModeOption, SyntaxInfo,
+    DriverLimits, DriverMetadata, DriverMetadataBuilder, EditorLanguageProfile,
+    ExecutionClassification, ExportFieldHint, FieldExportTransform, FormFieldDef, FormFieldKind,
+    FormSection, FormTab, FormValues, Icon, IsolationLevel, MutationCapabilities,
+    OperationClassifier, OrderByMode, PaginationStyle, QueryCapabilities, QueryLanguage,
+    RefreshTrigger, SelectOption, SslCertFields, SslModeOption, SyntaxInfo,
     TransactionCapabilities, WhereOperator, field, field_file_path, field_password, field_required,
     field_use_uri, ssh_tab, when_checked, when_unchecked, with_default, with_help,
 };
@@ -135,11 +136,12 @@ pub use query::{
     SqlLanguageService, SqlMutationGenerator, TableBrowseRequest, TableCountRequest, TableRef,
     TextPosition, TextPositionRange, TextRange, TransactionVocab, ValidationResult,
     VisualAggregateSpec, VisualMutationSpec, VisualQuerySpec, VisualSortDirection,
-    classify_query_for_governance, classify_query_for_language, classify_sql_execution,
-    classify_visual_mutation, contains_time_macros, detect_dangerous_query, detect_dangerous_sql,
-    infer_column_kind, inline_params, is_safe_read_query, lower_keyset_predicate,
-    parse_semantic_filter_json, project_aggregate_kinds, render_filter_node_sql,
-    render_semantic_filter_sql, strip_leading_comments, substitute_time_macros,
+    classify_query_for_governance, classify_query_for_language,
+    classify_query_for_language_with_service, classify_sql_execution, classify_visual_mutation,
+    contains_time_macros, detect_dangerous_query, detect_dangerous_sql, infer_column_kind,
+    inline_params, is_safe_read_query, lower_keyset_predicate, parse_semantic_filter_json,
+    project_aggregate_kinds, render_filter_node_sql, render_semantic_filter_sql,
+    strip_leading_comments, substitute_time_macros,
 };
 
 pub use query::relational_filter::{
