@@ -29,6 +29,7 @@ chrono = { workspace = true }
 dirs = { workspace = true }
 sha1 = "0.11"
 sha2 = "0.11"
+hex = { workspace = true }
 futures-lite = "2"
 
 [dev-dependencies]
