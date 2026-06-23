@@ -20,7 +20,7 @@ socks = "0.3"
 native-tls = "0.2"
 
 [dev-dependencies]
-testcontainers = "0.27"
+testcontainers = { version = "0.27", features = ["blocking"] }
 postgres = "0.19"
 uuid.workspace = true
 env_logger.workspace = true
