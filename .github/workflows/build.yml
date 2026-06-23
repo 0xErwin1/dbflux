@@ -534,9 +534,12 @@ jobs:
 
       - name: Build installer
         uses: Minionguyjpro/Inno-Setup-Action@202dd0c4950ef315b6ba13359998fe120179b147  # v1.2.8
+        env:
+          DBFLUX_APP_NAME: ${{ env.APP_NAME }}
+          DBFLUX_APP_ID: ${{ env.MY_APP_ID }}
+          DBFLUX_APP_VERSION: ${{ inputs.version }}
         with:
           path: installer/installer.iss
-          options: /DMyAppVersion=${{ inputs.version }} /DMyAppName="${{ env.APP_NAME }}" /DMyAppId="${{ env.MY_APP_ID }}"
 
       - name: Move installer
         run: Move-Item installer/output/dbflux-windows-amd64-setup.exe dbflux-windows-amd64-setup.exe -Force

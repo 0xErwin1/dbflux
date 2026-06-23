@@ -1,11 +1,27 @@
+; Values are read from the environment so the build workflow does not pass them
+; through the Inno-Setup-Action `options` input. Forwarding /D defines whose
+; values contain spaces (e.g. "DBFlux Nightly") breaks under the action's
+; argument splitting, making ISCC mistake the rest for a second script filename.
 #ifndef MyAppName
+#define MyAppName GetEnv("DBFLUX_APP_NAME")
+#if MyAppName == ""
+#undef MyAppName
 #define MyAppName "DBFlux"
 #endif
+#endif
 #ifndef MyAppId
+#define MyAppId GetEnv("DBFLUX_APP_ID")
+#if MyAppId == ""
+#undef MyAppId
 #define MyAppId "{{D8A3E981-6A8D-4B8F-9E09-86D8DEB7A6F1}"
 #endif
+#endif
 #ifndef MyAppVersion
+#define MyAppVersion GetEnv("DBFLUX_APP_VERSION")
+#if MyAppVersion == ""
+#undef MyAppVersion
 #define MyAppVersion "0.7.0-dev.0"
+#endif
 #endif
 #define MyAppPublisher "Ignacio Perez"
 #define MyAppURL "https://github.com/0xErwin1/dbflux"
