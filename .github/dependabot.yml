@@ -5,15 +5,20 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    groups:
+      # Batch routine minor/patch bumps into a single PR to avoid a flood of
+      # individual PRs. Majors stay ungrouped so each compile-breaking bump is
+      # reviewed and migrated on its own.
+      cargo-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
     ignore:
       # Transitive crates whose advisory fix is unreachable without bumping a
       # parent we do not control directly. Dependabot's security updater fails
       # these on every run (security_update_not_possible); ignore them until the
       # parents ship a compatible release, then remove the matching entry.
-      #   lru           pulled by the `mysql` crate; fix needs lru >= 0.16.3
       #   grid          pulled by taffy -> gpui; fix needs grid >= 1.0.1
       #   rustls-webpki pulled by the rustls/TLS stack (tracked by DEP-5); fix needs >= 0.103.13
-      - dependency-name: "lru"
       - dependency-name: "grid"
       - dependency-name: "rustls-webpki"
   - package-ecosystem: github-actions
@@ -21,3 +26,7 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    groups:
+      github-actions-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
