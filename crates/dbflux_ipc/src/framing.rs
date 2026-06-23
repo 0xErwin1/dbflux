@@ -5,7 +5,7 @@ use std::io::{self, Read, Write};
 const MAX_MSG_SIZE: u32 = 16 * 1024 * 1024;
 
 pub fn send_msg<W: Write, T: Serialize>(mut writer: W, msg: &T) -> io::Result<()> {
-    let bytes = bincode::serialize(msg).map_err(io::Error::other)?;
+    let bytes = postcard::to_allocvec(msg).map_err(io::Error::other)?;
     let len = bytes.len() as u32;
 
     if len > MAX_MSG_SIZE {
@@ -36,7 +36,7 @@ pub fn recv_msg<R: Read, T: DeserializeOwned>(mut reader: R) -> io::Result<T> {
         ));
     }
 
-    bincode::deserialize(&buf).map_err(io::Error::other)
+    postcard::from_bytes(&buf).map_err(io::Error::other)
 }
 
 #[cfg(test)]
