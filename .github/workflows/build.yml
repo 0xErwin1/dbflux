@@ -107,7 +107,11 @@ jobs:
         run: sed -i 's/^version = ".*"/version = "${{ inputs.version }}"/' Cargo.toml
 
       - name: Build DBFlux
-        run: cargo build --release --locked --features "$FEATURES" --target ${{ matrix.target }}
+        # No --locked here: the version stamp above mutates Cargo.toml, so cargo must
+        # refresh the workspace entries in Cargo.lock. Dependency-lock integrity is
+        # already enforced by the deterministic-tests and clippy gates (--locked) on
+        # this same commit; here only the local workspace version changes.
+        run: cargo build --release --features "$FEATURES" --target ${{ matrix.target }}
 
       - name: Create package
         run: |
@@ -376,7 +380,9 @@ jobs:
         # target instead of linking the runner's system OpenSSL. Required to
         # cross-compile x86_64 on the Apple Silicon runner (no x86_64 OpenSSL is
         # present), and keeps both macOS binaries self-contained at runtime.
-        run: cargo build --release --locked --features "$FEATURES,vendored-openssl" --target ${{ matrix.target }}
+        # No --locked: the version stamp above mutates Cargo.toml; see the Linux build
+        # step for the full rationale.
+        run: cargo build --release --features "$FEATURES,vendored-openssl" --target ${{ matrix.target }}
 
       - name: Create app bundle
         run: |
@@ -490,7 +496,9 @@ jobs:
           (Get-Content Cargo.toml) -replace '^version = ".*"', 'version = "${{ inputs.version }}"' | Set-Content Cargo.toml
 
       - name: Build DBFlux
-        run: cargo build --release --locked --features "$env:FEATURES" --target x86_64-pc-windows-msvc
+        # No --locked: the version stamp above mutates Cargo.toml; see the Linux build
+        # step for the full rationale.
+        run: cargo build --release --features "$env:FEATURES" --target x86_64-pc-windows-msvc
 
       - name: Install ImageMagick
         run: choco install imagemagick -y
