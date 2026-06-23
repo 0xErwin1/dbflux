@@ -99,3 +99,43 @@ jobs:
 
       - name: Run SQLite live integration tests
         run: cargo test -p dbflux_driver_sqlite --locked --test live_integration
+
+  cross-platform-check:
+    name: Cross-platform check ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+
+    # GPUI carries a large amount of platform-specific code; a macOS- or
+    # Windows-only break otherwise surfaces only when build.yml runs at release
+    # or nightly tag time. A lightweight `cargo check` on each platform catches
+    # it in the PR instead. Full test execution stays on Linux above.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Native arm64; vendored-openssl matches build.yml (the runner has no
+          # pkg-config-discoverable OpenSSL, so openssl-sys must build it).
+          - os: macos-14
+            extra_features: ",vendored-openssl"
+          # Native x86_64-msvc; OpenSSL is resolved on the runner as in build.yml.
+          - os: windows-latest
+            extra_features: ""
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          components: rust-src
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          shared-key: ci-cross-check-${{ matrix.os }}
+          cache-targets: true
+          cache-on-failure: true
+
+      - name: Cargo check
+        run: cargo check --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,aws${{ matrix.extra_features }}"

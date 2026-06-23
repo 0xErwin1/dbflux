@@ -106,6 +106,8 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: write
+      id-token: write      # OIDC token for build-provenance attestation
+      attestations: write  # write the provenance attestation
 
     steps:
       - name: Checkout repository
@@ -143,16 +145,21 @@ jobs:
           # tag is an ancestor of main (stable/rc tags live on release/vX.Y and
           # are never merged back), so that range is pinned at the last legacy
           # stable and grows without bound. See docs/RELEASE.md.
+          # A git-cliff failure must not silently produce empty release notes
+          # (e.g. a cliff.toml regression). Surface it as a warning and fall back
+          # to a placeholder below, but never swallow it entirely.
           if PREV_NIGHTLY="$(git rev-parse --verify --quiet nightly^)"; then
             git-cliff --config cliff.toml "${PREV_NIGHTLY}..HEAD" \
               --strip header \
-              -o cliff_notes.md 2>/dev/null || true
+              -o cliff_notes.md \
+              || echo "::warning::git-cliff failed to generate nightly notes; the body may be incomplete."
           else
             # First nightly, or the tag is missing: fall back to the unreleased
             # range so the body is never empty on the initial run.
             git-cliff --config cliff.toml --unreleased \
               --strip header \
-              -o cliff_notes.md 2>/dev/null || true
+              -o cliff_notes.md \
+              || echo "::warning::git-cliff failed to generate nightly notes; the body may be incomplete."
           fi
 
           if [ ! -s cliff_notes.md ]; then
@@ -269,3 +276,15 @@ jobs:
             artifacts/windows-*/*-setup.exe.asc
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
+        with:
+          subject-path: |
+            artifacts/linux-*/*.tar.gz
+            artifacts/linux-*/*.AppImage
+            artifacts/linux-*/*.deb
+            artifacts/linux-*/*.rpm
+            artifacts/macos-*/*.dmg
+            artifacts/windows-*/*.zip
+            artifacts/windows-*/*-setup.exe

@@ -104,7 +104,21 @@ jobs:
           cache-on-failure: true
 
       - name: Stamp workspace version
-        run: sed -i 's/^version = ".*"/version = "${{ inputs.version }}"/' Cargo.toml
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          # The workspace version is a single line in the root Cargo.toml. Bail if
+          # zero or several lines match, so a structural change to Cargo.toml can
+          # never silently rewrite the wrong line(s). VERSION is read from env, not
+          # interpolated into the script, so a crafted tag cannot inject shell.
+          MATCHES=$(grep -c '^version = "' Cargo.toml)
+          if [ "$MATCHES" -ne 1 ]; then
+            echo "::error::Expected exactly 1 workspace version line in Cargo.toml, found $MATCHES."
+            exit 1
+          fi
+          sed -i "s|^version = \".*\"|version = \"${VERSION}\"|" Cargo.toml
+          grep -qF "version = \"${VERSION}\"" Cargo.toml \
+            || { echo "::error::Version stamp did not apply."; exit 1; }
 
       - name: Build DBFlux
         # No --locked here: the version stamp above mutates Cargo.toml, so cargo must
@@ -143,11 +157,27 @@ jobs:
           tar -czf ../dbflux-linux-${{ matrix.arch }}.tar.gz .
 
       - name: Download appimagetool
+        # Pinned to a tagged release (not the rolling `continuous`) and verified
+        # by sha256 before exec. appimagetool runs right before the AppImage is
+        # GPG-signed, so a compromised binary would be signed as ours.
+        env:
+          APPIMAGETOOL_VERSION: "1.9.1"
+          SHA256_X86_64: "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
+          SHA256_AARCH64: "f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158"
         run: |
-          ARCH=$(echo "${{ matrix.arch }}" | sed 's/amd64/x86_64/' | sed 's/arm64/aarch64/')
-          curl -LO https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${ARCH}.AppImage
-          chmod +x appimagetool-${ARCH}.AppImage
-          echo "APPIMAGE_ARCH=$ARCH" >> $GITHUB_ENV
+          case "${{ matrix.arch }}" in
+            amd64) ARCH=x86_64;  EXPECTED="$SHA256_X86_64"  ;;
+            arm64) ARCH=aarch64; EXPECTED="$SHA256_AARCH64" ;;
+            *) echo "::error::Unsupported arch '${{ matrix.arch }}'"; exit 1 ;;
+          esac
+
+          curl -fsSL -o "appimagetool-${ARCH}.AppImage" \
+            "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-${ARCH}.AppImage"
+
+          echo "${EXPECTED}  appimagetool-${ARCH}.AppImage" | sha256sum -c -
+
+          chmod +x "appimagetool-${ARCH}.AppImage"
+          echo "APPIMAGE_ARCH=$ARCH" >> "$GITHUB_ENV"
 
       - name: Create AppImage
         run: |
@@ -214,7 +244,8 @@ jobs:
           go-version: stable
 
       - name: Install nfpm
-        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+        # Pinned: @latest would silently pull a new nfpm into the signing job.
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
 
       - name: Generate packages
         run: |
@@ -381,7 +412,19 @@ jobs:
           cache-on-failure: true
 
       - name: Stamp workspace version
-        run: sed -i.bak 's/^version = ".*"/version = "${{ inputs.version }}"/' Cargo.toml
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          # See the Linux build job for the rationale (single-line guard + env-routed
+          # version). BSD sed needs the -i.bak form.
+          MATCHES=$(grep -c '^version = "' Cargo.toml)
+          if [ "$MATCHES" -ne 1 ]; then
+            echo "::error::Expected exactly 1 workspace version line in Cargo.toml, found $MATCHES."
+            exit 1
+          fi
+          sed -i.bak "s|^version = \".*\"|version = \"${VERSION}\"|" Cargo.toml
+          grep -qF "version = \"${VERSION}\"" Cargo.toml \
+            || { echo "::error::Version stamp did not apply."; exit 1; }
 
       - name: Build DBFlux
         # vendored-openssl makes ssh2/libssh2 compile OpenSSL from source for the
@@ -500,8 +543,23 @@ jobs:
 
       - name: Stamp workspace version
         shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          (Get-Content Cargo.toml) -replace '^version = ".*"', 'version = "${{ inputs.version }}"' | Set-Content Cargo.toml
+          # See the Linux build job for the rationale (single-line guard + env-routed
+          # version).
+          $content = Get-Content Cargo.toml
+          $versionLines = @($content | Select-String -Pattern '^version = "').Count
+          if ($versionLines -ne 1) {
+            Write-Output "::error::Expected exactly 1 workspace version line in Cargo.toml, found $versionLines."
+            exit 1
+          }
+          $stamped = $content -replace '^version = ".*"', "version = `"$env:VERSION`""
+          $stamped | Set-Content Cargo.toml
+          if (-not (Select-String -Path Cargo.toml -Pattern ([regex]::Escape("version = `"$env:VERSION`"")))) {
+            Write-Output "::error::Version stamp did not apply."
+            exit 1
+          }
 
       - name: Build DBFlux
         # No --locked: the version stamp above mutates Cargo.toml; see the Linux build
@@ -509,7 +567,9 @@ jobs:
         run: cargo build --release --features "$env:FEATURES" --target x86_64-pc-windows-msvc
 
       - name: Install ImageMagick
-        run: choco install imagemagick -y
+        # Pinned: an unversioned choco install pulls whatever the feed serves into
+        # the icon-generation step.
+        run: choco install imagemagick --version=7.1.2.2500 -y
 
       - name: Create ICO from SVG
         run: |

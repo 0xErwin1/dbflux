@@ -38,37 +38,70 @@ jobs:
       prerelease: ${{ steps.classify.outputs.prerelease }}
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          fetch-depth: 0
+
       - name: Resolve version
         id: version
+        env:
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            RAW="${{ github.event.inputs.version }}"
+            RAW="$DISPATCH_VERSION"
           else
             RAW="${GITHUB_REF_NAME}"
           fi
-          echo "version=${RAW#v}" >> $GITHUB_OUTPUT
+          echo "version=${RAW#v}" >> "$GITHUB_OUTPUT"
 
       - name: Classify channel
         id: classify
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
           if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "channel=stable"    >> $GITHUB_OUTPUT
-            echo "draft=false"       >> $GITHUB_OUTPUT
-            echo "prerelease=false"  >> $GITHUB_OUTPUT
+            echo "channel=stable"    >> "$GITHUB_OUTPUT"
+            echo "draft=false"       >> "$GITHUB_OUTPUT"
+            echo "prerelease=false"  >> "$GITHUB_OUTPUT"
           elif [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]; then
-            echo "channel=rc"        >> $GITHUB_OUTPUT
-            echo "draft=false"       >> $GITHUB_OUTPUT
-            echo "prerelease=true"   >> $GITHUB_OUTPUT
+            echo "channel=rc"        >> "$GITHUB_OUTPUT"
+            echo "draft=false"       >> "$GITHUB_OUTPUT"
+            echo "prerelease=true"   >> "$GITHUB_OUTPUT"
           elif [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$ ]]; then
             # -dev.N is deprecated; kept for back-compat until old tags are gone.
-            echo "channel=rc"        >> $GITHUB_OUTPUT
-            echo "draft=false"       >> $GITHUB_OUTPUT
-            echo "prerelease=true"   >> $GITHUB_OUTPUT
+            echo "channel=rc"        >> "$GITHUB_OUTPUT"
+            echo "draft=false"       >> "$GITHUB_OUTPUT"
+            echo "prerelease=true"   >> "$GITHUB_OUTPUT"
           else
-            echo "channel=stable"    >> $GITHUB_OUTPUT
-            echo "draft=true"        >> $GITHUB_OUTPUT
-            echo "prerelease=false"  >> $GITHUB_OUTPUT
+            echo "channel=stable"    >> "$GITHUB_OUTPUT"
+            echo "draft=true"        >> "$GITHUB_OUTPUT"
+            echo "prerelease=false"  >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Enforce release-branch ancestry
+        # docs/RELEASE.md requires rc/stable tags to originate from a
+        # release/vX.Y branch; tagging from main is an anti-pattern. The classify
+        # steps above key only off the tag name, so an accidental tag pushed from
+        # main would otherwise publish a full release. Verify the built commit is
+        # an ancestor of the matching release branch and fail loudly otherwise.
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          CHANNEL: ${{ steps.classify.outputs.channel }}
+        run: |
+          MINOR="$(echo "$VERSION" | cut -d. -f1,2)"
+          BRANCH="release/v${MINOR}"
+
+          if ! git fetch --quiet origin "$BRANCH" 2>/dev/null; then
+            echo "::error::Release branch '$BRANCH' does not exist on origin. A $CHANNEL release must be cut from its release branch (see docs/RELEASE.md)."
+            exit 1
+          fi
+
+          if git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD; then
+            echo "Commit $GITHUB_SHA is an ancestor of $BRANCH — ancestry OK."
+          else
+            echo "::error::Commit $GITHUB_SHA is not an ancestor of '$BRANCH'. Refusing to publish a $CHANNEL release tagged outside its release branch (see docs/RELEASE.md)."
+            exit 1
           fi
 
   build:
@@ -88,6 +121,8 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: write
+      id-token: write      # OIDC token for build-provenance attestation
+      attestations: write  # write the provenance attestation
 
     steps:
       - name: Checkout repository
@@ -118,20 +153,27 @@ jobs:
 
       - name: Generate changelog for release body
         id: cliff
+        env:
+          RAW_VERSION: ${{ needs.classify.outputs.version }}
+          CHANNEL: ${{ needs.classify.outputs.channel }}
         run: |
-          VERSION="v${{ needs.classify.outputs.version }}"
-          CHANNEL="${{ needs.classify.outputs.channel }}"
+          VERSION="v${RAW_VERSION}"
 
+          # A git-cliff failure must not silently produce empty release notes
+          # (e.g. a cliff.toml regression). Surface it as a warning and fall back
+          # to a placeholder below, but never swallow it entirely.
           if [ "$CHANNEL" = "stable" ]; then
             # Stable: notes for exactly this tag (range since previous stable tag).
             git-cliff --config cliff.toml --current --tag "$VERSION" \
               --strip header \
-              -o cliff_notes.md 2>/dev/null || true
+              -o cliff_notes.md \
+              || echo "::warning::git-cliff failed to generate release notes; the release body may be incomplete."
           else
             # RC / pre-release: unreleased range since last stable tag.
             git-cliff --config cliff.toml --unreleased --tag "$VERSION" \
               --strip header \
-              -o cliff_notes.md 2>/dev/null || true
+              -o cliff_notes.md \
+              || echo "::warning::git-cliff failed to generate release notes; the release body may be incomplete."
           fi
 
           if [ ! -s cliff_notes.md ]; then
@@ -139,10 +181,12 @@ jobs:
           fi
 
       - name: Compose release body
+        env:
+          RAW_VERSION: ${{ needs.classify.outputs.version }}
+          CHANNEL: ${{ needs.classify.outputs.channel }}
         run: |
-          VERSION="v${{ needs.classify.outputs.version }}"
+          VERSION="v${RAW_VERSION}"
           REPO="${{ github.repository }}"
-          CHANNEL="${{ needs.classify.outputs.channel }}"
 
           : > release_body.md
 
@@ -199,3 +243,16 @@ jobs:
           prerelease: ${{ needs.classify.outputs.prerelease == 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Attest build provenance
+        if: env.ACT != 'true'
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
+        with:
+          subject-path: |
+            artifacts/linux-*/*.tar.gz
+            artifacts/linux-*/*.AppImage
+            artifacts/linux-*/*.deb
+            artifacts/linux-*/*.rpm
+            artifacts/macos-*/*.dmg
+            artifacts/windows-*/*.zip
+            artifacts/windows-*/*-setup.exe
