@@ -39,7 +39,9 @@ fn start_socks5_proxy() -> (testcontainers::Container<GenericImage>, u16) {
         ))
         .with_env_var("REQUIRE_AUTH", "false");
 
-    let container = image.start().expect("failed to start socks5 proxy container");
+    let container = image
+        .start()
+        .expect("failed to start socks5 proxy container");
     let port = container
         .get_host_port_ipv4(1080)
         .expect("failed to get socks5 proxy host port");
@@ -55,7 +57,9 @@ fn start_socks5_proxy_with_auth() -> (testcontainers::Container<GenericImage>, u
         .with_env_var("PROXY_USER", "testuser")
         .with_env_var("PROXY_PASSWORD", "testpass");
 
-    let container = image.start().expect("failed to start socks5 proxy container");
+    let container = image
+        .start()
+        .expect("failed to start socks5 proxy container");
     let port = container
         .get_host_port_ipv4(1080)
         .expect("failed to get socks5 proxy host port");

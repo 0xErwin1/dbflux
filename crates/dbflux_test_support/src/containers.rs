@@ -169,7 +169,9 @@ where
         .with_env_var("DOCKER_INFLUXDB_INIT_BUCKET", bucket)
         .with_env_var("DOCKER_INFLUXDB_INIT_ADMIN_TOKEN", token);
 
-    let container = image.start().expect("failed to start influxdb v2 container");
+    let container = image
+        .start()
+        .expect("failed to start influxdb v2 container");
     let port = container
         .get_host_port_ipv4(8086)
         .expect("failed to get influxdb v2 host port");
@@ -220,7 +222,9 @@ where
         .with_exposed_port(ContainerPort::Tcp(8086))
         .with_wait_for(WaitFor::message_on_stderr("Listening on HTTP"));
 
-    let container = image.start().expect("failed to start influxdb v1 container");
+    let container = image
+        .start()
+        .expect("failed to start influxdb v1 container");
     let port = container
         .get_host_port_ipv4(8086)
         .expect("failed to get influxdb v1 host port");
