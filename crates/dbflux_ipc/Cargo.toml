@@ -10,7 +10,7 @@ license.workspace = true
 
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
-bincode = { workspace = true }
+postcard = { workspace = true }
 interprocess.workspace = true
 dbflux_core.workspace = true
 dbflux_storage.workspace = true
