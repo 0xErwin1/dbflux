@@ -1,21 +1,30 @@
 use super::*;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
 
+/// Build the file content, prepending the execution-context annotation header
+/// when the editor surface is connection-backed.
+///
+/// `supports_connection_context` and `comment_prefix` are resolved from the
+/// editor's profile (not the raw `QueryLanguage`) so a driver with a bespoke
+/// surface — e.g. a connection-backed DynamoDB editor whose `QueryLanguage` is
+/// `Custom("DynamoDB")` but whose profile reports connection support and a `--`
+/// prefix — emits the header with the correct prefix.
 fn build_file_content_for_language(
     editor_content: &str,
     exec_ctx: &ExecutionContext,
-    language: QueryLanguage,
+    supports_connection_context: bool,
+    comment_prefix: &str,
 ) -> String {
-    if !language.supports_connection_context() {
+    if !supports_connection_context {
         return editor_content.to_string();
     }
 
-    let header = exec_ctx.to_comment_header(language.clone());
+    let header = exec_ctx.to_comment_header_with_prefix(comment_prefix);
     if header.is_empty() {
         return editor_content.to_string();
     }
 
-    let body = CodeDocument::strip_existing_annotations(editor_content, language);
+    let body = CodeDocument::strip_existing_annotations(editor_content, comment_prefix);
     format!("{}\n{}", header, body)
 }
 
@@ -281,13 +290,13 @@ impl CodeDocument {
         build_file_content_for_language(
             &editor_content,
             &self.source.exec_ctx,
-            self.editor.query_language.clone(),
+            self.supports_connection_context(),
+            self.comment_prefix(),
         )
     }
 
     /// Strip existing annotation comments from the beginning of content.
-    fn strip_existing_annotations(content: &str, language: QueryLanguage) -> &str {
-        let prefix = language.comment_prefix();
+    fn strip_existing_annotations<'a>(content: &'a str, prefix: &str) -> &'a str {
         let mut last_annotation_end = 0;
 
         for line in content.lines() {
@@ -319,12 +328,11 @@ impl CodeDocument {
 #[cfg(test)]
 mod tests {
     use super::build_file_content_for_language;
-    use dbflux_core::{ExecutionContext, ExecutionSourceContext, QueryLanguage};
+    use dbflux_core::{ExecutionContext, ExecutionSourceContext};
     use uuid::Uuid;
 
-    #[test]
-    fn file_headers_remain_relational_only_when_source_window_exists() {
-        let exec_ctx = ExecutionContext {
+    fn collection_window_exec_ctx() -> ExecutionContext {
+        ExecutionContext {
             connection_id: Some(Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()),
             database: Some("logs".into()),
             schema: None,
@@ -335,14 +343,40 @@ mod tests {
                 end_ms: 20,
                 query_mode: Some("cwli".into()),
             }),
-        };
+        }
+    }
 
-        let content = build_file_content_for_language("SELECT 1;", &exec_ctx, QueryLanguage::Sql);
+    #[test]
+    fn file_headers_remain_relational_only_when_source_window_exists() {
+        let exec_ctx = collection_window_exec_ctx();
+
+        let content = build_file_content_for_language("SELECT 1;", &exec_ctx, true, "--");
 
         assert!(content.contains("-- @connection:"));
         assert!(content.contains("-- @database: logs"));
         assert!(!content.contains("log_groups"));
         assert!(!content.contains("start_ms"));
         assert!(!content.contains("end_ms"));
+    }
+
+    #[test]
+    fn connection_backed_custom_surface_emits_header_with_profile_prefix() {
+        // A connection-backed DynamoDB editor: profile reports connection support
+        // and a `--` prefix even though its raw `QueryLanguage` is `Custom`.
+        let exec_ctx = collection_window_exec_ctx();
+
+        let content = build_file_content_for_language("SELECT * FROM \"t\"", &exec_ctx, true, "--");
+
+        assert!(content.contains("-- @connection:"));
+        assert!(content.contains("-- @database: logs"));
+    }
+
+    #[test]
+    fn no_header_when_surface_is_not_connection_backed() {
+        let exec_ctx = collection_window_exec_ctx();
+
+        let content = build_file_content_for_language("print('hi')", &exec_ctx, false, "#");
+
+        assert_eq!(content, "print('hi')");
     }
 }

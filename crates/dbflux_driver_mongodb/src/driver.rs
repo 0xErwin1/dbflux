@@ -135,8 +135,13 @@ pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
         ],
         supports_order_by: true,
         order_by_mode: dbflux_core::OrderByMode::AnyColumns,
-        supports_group_by: true,
-        supports_having: true,
+        // The visual builder emits `find()` reads, which have no GROUP BY / HAVING
+        // form (those belong to the aggregation pipeline the builder does not
+        // generate). Advertising them would render builder sections whose run path
+        // rejects the spec as `InvalidSpec`, so they are reported as unsupported to
+        // keep the offered sections truthful.
+        supports_group_by: false,
+        supports_having: false,
         supports_distinct: false,
         supports_limit: true,
         supports_offset: true,

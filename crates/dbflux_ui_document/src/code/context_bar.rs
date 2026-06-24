@@ -134,6 +134,9 @@ impl CodeDocument {
             Self::resolve_editor_profile(&self.app_state, connection_id, &query_language, cx);
         let editor_mode = editor_profile.editor_mode;
 
+        self.editor.cached_supports_connection_context = editor_profile.supports_connection_context;
+        self.editor.cached_comment_prefix = editor_profile.comment_prefix;
+
         let completion_provider: Rc<dyn CompletionProvider> = Rc::new(
             QueryCompletionProvider::new(query_language, self.app_state.clone(), connection_id),
         );
@@ -1024,7 +1027,7 @@ impl CodeDocument {
 
     /// Returns the visible context-bar slots for the current document.
     fn visible_context_bar_slots(&self, cx: &App) -> Vec<ContextBarSlot> {
-        if !self.supports_connection_context(cx) {
+        if !self.supports_connection_context() {
             return Vec::new();
         }
 
@@ -1248,7 +1251,7 @@ impl CodeDocument {
     // === Render the context bar ===
 
     pub(super) fn render_context_bar(&self, cx: &mut Context<Self>) -> AnyElement {
-        if !self.supports_connection_context(cx) {
+        if !self.supports_connection_context() {
             return div().id("exec-context-bar").into_any_element();
         }
 

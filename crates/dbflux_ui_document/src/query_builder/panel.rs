@@ -364,6 +364,16 @@ pub struct QueryBuilderPanel {
     /// case values stay textual.
     pub(crate) column_kinds: std::collections::HashMap<String, dbflux_core::ColumnKind>,
 
+    /// The single orderable key column for a `SortKeyOnly` driver, resolved once
+    /// at panel open from the browse result's key-schema metadata. `None` when
+    /// the source exposes no orderable key (e.g. a partition-key-only table).
+    ///
+    /// Cached deliberately: a builder-generated read can replace the live result
+    /// with one that no longer carries key markers (e.g. a PartiQL `SELECT *`),
+    /// so the key is captured up front rather than re-derived from whatever the
+    /// grid currently shows.
+    pub(crate) cached_sort_key_column: Option<String>,
+
     /// Serialized `(table, filter)` signature of the last mutation row-count
     /// request. Used so the count is recomputed only when the target rows
     /// actually change, not on every render or assignment edit. `None` while in
@@ -753,6 +763,7 @@ impl QueryBuilderPanel {
             join_cond_op_dropdowns: HashMap::new(),
             available_columns,
             column_kinds: std::collections::HashMap::new(),
+            cached_sort_key_column: None,
             count_signature: None,
             _count_debounce: None,
             schema_cache,
@@ -2150,7 +2161,7 @@ impl QueryBuilderPanel {
         direction: VisualSortDirection,
         cx: &mut Context<Self>,
     ) {
-        let sort_key_column = self.sort_key_column(cx).unwrap_or_default();
+        let sort_key_column = self.sort_key_column().unwrap_or_default();
         self.apply_sort_key_direction(direction, sort_key_column);
         self.rebuild_spec_and_notify(cx);
     }
@@ -2173,6 +2184,7 @@ impl QueryBuilderPanel {
                 row.direction = direction;
                 if row.column.is_empty() {
                     row.column = sort_key_column;
+                    row.source_alias = alias;
                 }
                 self.sort_rows.truncate(1);
             }
@@ -2974,22 +2986,14 @@ impl QueryBuilderPanel {
 
     /// The name of the single orderable column for a `SortKeyOnly` driver.
     ///
-    /// Stores that can order on exactly one key (e.g. DynamoDB's sort key) expose
-    /// it generically as the trailing primary-key column of the result metadata:
-    /// drivers emit primary-key columns partition-first, sort-key-last, so the
-    /// last `is_primary_key` column is the orderable key. This keeps the builder
-    /// driver-agnostic — it never names a driver, only reads `ColumnMeta`. Returns
-    /// `None` when the source exposes no orderable key (e.g. a partition-key-only
-    /// table), in which case no sort column is seeded and no ORDER BY is emitted.
-    pub(crate) fn sort_key_column(&self, cx: &App) -> Option<String> {
-        let data_grid = self.data_grid.as_ref()?.upgrade()?;
-        let result = data_grid.read(cx).result();
-
-        result
-            .columns
-            .iter()
-            .rfind(|column| column.is_primary_key)
-            .map(|column| column.name.clone())
+    /// Returns the key resolved once at panel open from the source's key-schema
+    /// metadata (`cached_sort_key_column`), not from the live result — a builder
+    /// read can replace the grid with a result that no longer carries key markers
+    /// (e.g. a PartiQL `SELECT *`). `None` when the source has no orderable key
+    /// (e.g. a partition-key-only table), in which case no column is seeded and
+    /// no ORDER BY is emitted.
+    pub(crate) fn sort_key_column(&self) -> Option<String> {
+        self.cached_sort_key_column.clone()
     }
 
     /// Switches the panel to the given builder mode.
@@ -3954,6 +3958,7 @@ mod tests {
             join_cond_op_dropdowns: HashMap::new(),
             available_columns: Vec::new(),
             column_kinds: std::collections::HashMap::new(),
+            cached_sort_key_column: None,
             count_signature: None,
             _count_debounce: None,
             schema_cache: Rc::new(RefCell::new(SchemaCache::default())),
@@ -4557,6 +4562,15 @@ mod tests {
         assert_eq!(panel.sort_rows.len(), 1);
         assert!(panel.sort_rows[0].column.is_empty());
         assert!(panel.current_spec.sort.is_empty());
+    }
+
+    #[test]
+    fn sort_key_column_returns_cached_value() {
+        let mut panel = make_panel(make_spec(test_source()));
+        assert_eq!(panel.sort_key_column(), None);
+
+        panel.cached_sort_key_column = Some("created_at".to_string());
+        assert_eq!(panel.sort_key_column(), Some("created_at".to_string()));
     }
 
     // ---- 4.3: filter depth cap enforcement ---------------------------------

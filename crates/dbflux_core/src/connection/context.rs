@@ -136,11 +136,22 @@ impl ExecutionContext {
         ctx
     }
 
-    /// Serialize the context as comment lines to prepend to a file.
+    /// Serialize the context as comment lines to prepend to a file, deriving the
+    /// line-comment prefix from `language`.
     ///
     /// Only set fields are emitted. Returns an empty string when nothing is set.
     pub fn to_comment_header(&self, language: QueryLanguage) -> String {
-        let prefix = language.comment_prefix();
+        self.to_comment_header_with_prefix(language.comment_prefix())
+    }
+
+    /// Serialize the context as comment lines to prepend to a file, using an
+    /// explicit line-comment prefix.
+    ///
+    /// Callers that resolve presentation through a driver's editor profile
+    /// (rather than the raw `QueryLanguage`) pass the profile's prefix here so a
+    /// driver with a bespoke surface (e.g. DynamoDB's PartiQL using `--`) gets the
+    /// correct annotation prefix. Only set fields are emitted.
+    pub fn to_comment_header_with_prefix(&self, prefix: &str) -> String {
         let mut lines = Vec::new();
 
         if let Some(id) = &self.connection_id {

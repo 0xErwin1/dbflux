@@ -41,8 +41,8 @@ use dbflux_components::modals::{
     ModalMutationConfirm, ModalMutationConfirmHard, MutationConfirmOutcome,
 };
 use dbflux_core::{
-    CollectionRef, DatabaseCategory, OrderByColumn, Pagination, QueryResult, RefreshPolicy,
-    SelectQuery, SortDirection, TableRef, Value, VisualQuerySpec, WhereOperator,
+    CollectionRef, ColumnMeta, DatabaseCategory, OrderByColumn, Pagination, QueryResult,
+    RefreshPolicy, SelectQuery, SortDirection, TableRef, Value, VisualQuerySpec, WhereOperator,
 };
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::AsyncUpdateResultExt;
@@ -142,6 +142,27 @@ impl DataSource {
             DataSource::QueryResult { .. } => None,
         }
     }
+}
+
+/// Resolve the single orderable key from a result's column metadata, generically.
+///
+/// Stores that order on exactly one key (e.g. DynamoDB's sort key) emit their
+/// primary-key columns partition-key first and sort-key last, so the trailing
+/// primary-key column is the orderable key. Returns `None` when there are fewer
+/// than two primary-key columns: a single primary-key column is a partition-only
+/// key with nothing to order on. The function reads only generic `ColumnMeta`
+/// and never names a driver.
+fn resolve_orderable_sort_key(columns: &[ColumnMeta]) -> Option<String> {
+    let primary_key_columns: Vec<&ColumnMeta> = columns
+        .iter()
+        .filter(|column| column.is_primary_key)
+        .collect();
+
+    if primary_key_columns.len() < 2 {
+        return None;
+    }
+
+    primary_key_columns.last().map(|column| column.name.clone())
 }
 
 /// Events emitted by DataGridPanel.
@@ -549,7 +570,7 @@ pub(crate) struct BuilderState {
 /// Used both embedded in ScriptDocument and as standalone DataDocument.
 pub struct DataGridPanel {
     source: DataSource,
-    app_state: Entity<AppStateEntity>,
+    app_state: gpui::Entity<AppStateEntity>,
     result: QueryResult,
     grid_table: GridTableState,
     filter_bar: FilterBarState,
@@ -598,7 +619,7 @@ impl DataGridPanel {
         profile_id: Uuid,
         table: TableRef,
         database: Option<String>,
-        app_state: Entity<AppStateEntity>,
+        app_state: gpui::Entity<AppStateEntity>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -633,7 +654,7 @@ impl DataGridPanel {
     pub fn new_for_collection(
         profile_id: Uuid,
         collection: CollectionRef,
-        app_state: Entity<AppStateEntity>,
+        app_state: gpui::Entity<AppStateEntity>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -794,7 +815,7 @@ impl DataGridPanel {
         result: Arc<QueryResult>,
         original_query: String,
         profile_id: Option<Uuid>,
-        app_state: Entity<AppStateEntity>,
+        app_state: gpui::Entity<AppStateEntity>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -812,7 +833,7 @@ impl DataGridPanel {
 
     fn new_internal(
         source: DataSource,
-        app_state: Entity<AppStateEntity>,
+        app_state: gpui::Entity<AppStateEntity>,
         pk_columns: Vec<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -2547,7 +2568,19 @@ impl DataGridPanel {
     /// next render tick triggers `run_table_query`, which will find
     /// `visual_select` ready to use.
     pub fn apply_builder_draft_spec(&mut self, spec: VisualQuerySpec, cx: &mut Context<Self>) {
-        let select = self.build_visual_select(&spec, cx);
+        let select = match self.build_visual_select(&spec, cx) {
+            Ok(select) => select,
+            Err(message) => {
+                dbflux_ui_base::user_error::report_error(
+                    dbflux_ui_base::user_error::UserFacingError::new(
+                        dbflux_ui_base::user_error::ErrorKind::Driver,
+                        message,
+                    ),
+                    cx,
+                );
+                None
+            }
+        };
 
         self.builder.builder_draft_spec = Some(spec);
         self.builder.visual_select = select;
@@ -2565,25 +2598,38 @@ impl DataGridPanel {
     /// query text is wrapped as a parameter-less `SelectQuery` so the existing
     /// execution path runs it unchanged. Selection is by which generator method
     /// returns a query, never by a driver id.
+    ///
+    /// Returns `Ok(None)` when no generator is available or neither path emits a
+    /// query, and `Err(message)` when a generator actively rejects the spec
+    /// (e.g. `generate_read_from_spec` returns `InvalidSpec`) so the caller can
+    /// surface the failure instead of silently producing an empty read.
     fn build_visual_select(
         &self,
         spec: &VisualQuerySpec,
         cx: &App,
-    ) -> Option<dbflux_core::SelectQuery> {
-        let generator = self.connection_generator(cx)?;
+    ) -> Result<Option<dbflux_core::SelectQuery>, String> {
+        let Some(generator) = self.connection_generator(cx) else {
+            return Ok(None);
+        };
 
-        if let Some(select) = generator.generate_select(spec).ok().flatten() {
-            return Some(select);
+        match generator.generate_select(spec) {
+            Ok(Some(select)) => return Ok(Some(select)),
+            // No structured SELECT for this generator (Document drivers return the
+            // default `Ok(None)`; `Unsupported` is the same intent made explicit).
+            // Either way, fall through to `generate_read_from_spec`.
+            Ok(None) => {}
+            Err(dbflux_core::QueryGenError::Unsupported) => {}
+            Err(error) => return Err(error.to_string()),
         }
 
-        generator
-            .generate_read_from_spec(spec)
-            .ok()
-            .flatten()
-            .map(|generated| dbflux_core::SelectQuery {
+        match generator.generate_read_from_spec(spec) {
+            Ok(Some(generated)) => Ok(Some(dbflux_core::SelectQuery {
                 sql: generated.text,
                 params: Vec::new(),
-            })
+            })),
+            Ok(None) => Ok(None),
+            Err(error) => Err(error.to_string()),
+        }
     }
 
     /// Clears the visual spec and restores the raw filter-input chrome.
@@ -2705,16 +2751,18 @@ impl DataGridPanel {
 
     /// Returns whether the toolbar's "Open in Builder" button should be shown.
     ///
-    /// True only for `DataSource::Table` sources on connections whose driver
-    /// uses `QueryLanguage::Sql`.
+    /// Availability is capability-driven, never keyed off a driver id: the
+    /// source must be a relational `Table` or a document `Collection`, the
+    /// driver's `category` must be `Relational` or `Document`, and the driver
+    /// must publish at least one non-logical predicate operator. A `Collection`
+    /// is only eligible when the category is `Document` (relational drivers open
+    /// as `Table`; key-value drivers publish no predicate operators and are thus
+    /// excluded on both counts).
     pub fn can_open_builder(&self, cx: &App) -> bool {
-        if !matches!(self.source, DataSource::Table { .. }) {
-            return false;
-        }
-
-        let profile_id = match &self.source {
-            DataSource::Table { profile_id, .. } => *profile_id,
-            _ => return false,
+        let (profile_id, is_collection) = match &self.source {
+            DataSource::Table { profile_id, .. } => (*profile_id, false),
+            DataSource::Collection { profile_id, .. } => (*profile_id, true),
+            DataSource::QueryResult { .. } => return false,
         };
 
         let Some(connected) = self.app_state.read(cx).connections().get(&profile_id) else {
@@ -2727,6 +2775,12 @@ impl DataGridPanel {
             metadata.category,
             DatabaseCategory::Relational | DatabaseCategory::Document
         );
+
+        // A collection source only makes sense for a document store; a relational
+        // table source is served by `DataSource::Table`.
+        if is_collection && !matches!(metadata.category, DatabaseCategory::Document) {
+            return false;
+        }
 
         let has_predicates = metadata
             .query
@@ -2749,21 +2803,39 @@ impl DataGridPanel {
     /// Constructs the panel entity on first open, or re-hydrates it from
     /// `builder_draft_spec` when the inspector is opened again after being closed.
     pub fn open_query_builder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (profile_id, database, table) = match &self.source {
+        // Relational tables map their schema/name into the spec source; document
+        // collections map their database/name. Both feed the same builder; the
+        // driver's `QueryGenerator` decides which read form is emitted.
+        let (profile_id, database, source) = match &self.source {
             DataSource::Table {
                 profile_id,
                 database,
                 table,
                 ..
-            } => (*profile_id, database.clone(), table.clone()),
-            _ => return,
+            } => {
+                let source = dbflux_core::SourceTable {
+                    schema: table.schema.clone(),
+                    table: table.name.clone(),
+                    alias: table.name.clone(),
+                };
+                (*profile_id, database.clone(), source)
+            }
+            DataSource::Collection {
+                profile_id,
+                collection,
+                ..
+            } => {
+                let source = dbflux_core::SourceTable {
+                    schema: Some(collection.database.clone()),
+                    table: collection.name.clone(),
+                    alias: collection.name.clone(),
+                };
+                (*profile_id, Some(collection.database.clone()), source)
+            }
+            DataSource::QueryResult { .. } => return,
         };
 
-        let source = dbflux_core::SourceTable {
-            schema: table.schema.clone(),
-            table: table.name.clone(),
-            alias: table.name.clone(),
-        };
+        let source_schema = source.schema.clone();
 
         let initial_spec = self.builder.builder_draft_spec.clone();
 
@@ -2783,16 +2855,20 @@ impl DataGridPanel {
                         return String::new();
                     };
 
-                    if let Some(select) = generator.generate_select(spec).ok().flatten() {
-                        return select.materialize_for_editor(conn.dialect());
+                    match generator.generate_select(spec) {
+                        Ok(Some(select)) => return select.materialize_for_editor(conn.dialect()),
+                        Ok(None) => {}
+                        Err(dbflux_core::QueryGenError::Unsupported) => {}
+                        Err(error) => return format!("-- {error}"),
                     }
 
-                    generator
-                        .generate_read_from_spec(spec)
-                        .ok()
-                        .flatten()
-                        .map(|generated| generated.text)
-                        .unwrap_or_default()
+                    match generator.generate_read_from_spec(spec) {
+                        Ok(Some(generated)) => generated.text,
+                        Ok(None) => String::new(),
+                        // Surface the rejection inline so the preview is never a
+                        // silently-empty box when the generator refuses the spec.
+                        Err(error) => format!("-- {error}"),
+                    }
                 })
             } else {
                 Box::new(|_spec: &VisualQuerySpec| String::new())
@@ -2829,6 +2905,17 @@ impl DataGridPanel {
             .map(|c| (c.name.clone(), c.kind))
             .collect();
 
+        // Resolve the orderable key once, from the source's key-schema metadata as
+        // it appears in the browse result the builder opens from — not from the
+        // live result, which a later builder-generated read can replace with one
+        // that no longer carries key markers. Stores that order on a single key
+        // (e.g. DynamoDB's sort key) emit their primary-key columns partition-key
+        // first and sort-key last, so the trailing primary-key column is the
+        // orderable key — but only when more than one primary-key column exists.
+        // A single primary-key column is a partition-only key with nothing to
+        // order on, so no key is seeded and no ORDER BY is emitted.
+        let sort_key_column = resolve_orderable_sort_key(&self.result.columns);
+
         let panel = if let Some(existing) = &self.builder.builder_panel {
             existing.update(cx, |p, cx| {
                 if let Some(spec) = initial_spec.clone() {
@@ -2836,6 +2923,13 @@ impl DataGridPanel {
                 }
                 p.available_columns = available_columns.clone();
                 p.column_kinds = column_kinds.clone();
+                // Only refresh the cached key when the current result still
+                // carries one: a builder-generated read can replace the grid with
+                // a result that has no key markers, and re-opening the builder
+                // must not clobber a previously resolved sort key with None.
+                if let Some(key) = &sort_key_column {
+                    p.cached_sort_key_column = Some(key.clone());
+                }
             });
             existing.clone()
         } else {
@@ -2856,6 +2950,7 @@ impl DataGridPanel {
 
             new_panel.update(cx, |p, _| {
                 p.column_kinds = column_kinds;
+                p.cached_sort_key_column = sort_key_column;
             });
 
             let run_sub = cx.subscribe_in(
@@ -2872,7 +2967,7 @@ impl DataGridPanel {
             new_panel
         };
 
-        self.spawn_fk_fetch_for_builder(panel.clone(), profile_id, database, table.schema, cx);
+        self.spawn_fk_fetch_for_builder(panel.clone(), profile_id, database, source_schema, cx);
 
         let view: AnyView = AnyView::from(panel);
         cx.emit(DataGridEvent::OpenInspector {
@@ -3366,7 +3461,11 @@ impl DataGridPanel {
             }
 
             BuilderEvent::SpecChanged(spec) => {
-                self.builder.visual_select = self.build_visual_select(spec, cx);
+                // Live edit: cache the read for the next Run. A rejected spec is a
+                // transient editing state, so it caches `None` without a toast here;
+                // the failure is surfaced when the user actually Runs (see
+                // `apply_builder_draft_spec`), avoiding a toast on every keystroke.
+                self.builder.visual_select = self.build_visual_select(spec, cx).unwrap_or(None);
                 self.builder.builder_draft_spec = Some(*spec.clone());
             }
 
@@ -4186,6 +4285,50 @@ mod tests {
         QueryResult::table(zero_row_columns(), Vec::new(), None, Duration::ZERO)
     }
 
+    fn key_column(name: &str, is_primary_key: bool) -> ColumnMeta {
+        ColumnMeta {
+            name: name.to_string(),
+            type_name: "S".to_string(),
+            kind: ColumnKind::Text,
+            nullable: false,
+            is_primary_key,
+        }
+    }
+
+    #[test]
+    fn resolve_orderable_sort_key_returns_trailing_primary_key() {
+        // Partition key first, sort key last; both marked primary. The trailing
+        // primary-key column is the orderable sort key.
+        let columns = vec![
+            key_column("pk", true),
+            key_column("sk", true),
+            key_column("attr", false),
+        ];
+
+        assert_eq!(
+            super::resolve_orderable_sort_key(&columns),
+            Some("sk".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_orderable_sort_key_none_for_partition_only_key() {
+        // A single primary-key column is a partition-only key with nothing to
+        // order on, so no orderable key is resolved.
+        let columns = vec![key_column("pk", true), key_column("attr", false)];
+
+        assert_eq!(super::resolve_orderable_sort_key(&columns), None);
+    }
+
+    #[test]
+    fn resolve_orderable_sort_key_none_without_primary_keys() {
+        // A result with no primary-key markers (e.g. a PartiQL `SELECT *`) yields
+        // no orderable key, so no ORDER BY is seeded.
+        let columns = vec![key_column("a", false), key_column("b", false)];
+
+        assert_eq!(super::resolve_orderable_sort_key(&columns), None);
+    }
+
     fn init_test_runtime(cx: &mut TestAppContext) {
         cx.update(gpui_component::init);
         cx.update(theme::init);
@@ -4909,121 +5052,88 @@ mod tests {
         });
     }
 
-    #[gpui::test]
-    fn can_open_builder_false_for_collection_source(cx: &mut TestAppContext) {
-        init_test_runtime(cx);
-
-        let app_state = isolated_test_app_state(cx);
-        let panel_holder = Rc::new(RefCell::new(None));
-        let panel_handle = panel_holder.clone();
-
-        let (_, window) = cx.add_window_view(|window, cx| {
-            let panel = cx.new(|cx| {
-                let source = DataSource::Collection {
-                    profile_id: Uuid::nil(),
-                    collection: CollectionRef::new("db", "items"),
-                    pagination: Pagination::default(),
-                    total_docs: None,
-                };
-
-                DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx)
-            });
-
-            panel_handle.replace(Some(panel.clone()));
-            Root::new(panel, window, cx)
-        });
-
-        let panel = panel_holder
-            .borrow()
-            .clone()
-            .expect("panel should be created");
-
-        let result = window.update(|_, app| panel.read(app).can_open_builder(app));
-
-        assert!(
-            !result,
-            "can_open_builder should return false for Collection source"
-        );
+    /// Minimal `Connection` stub whose `metadata()` is driven entirely by the
+    /// category / query-language / capabilities passed at construction, so a
+    /// single stub serves every `can_open_builder` case without per-driver code.
+    struct StubBuilderConnection {
+        metadata: dbflux_core::DriverMetadata,
     }
 
-    #[gpui::test]
-    fn can_open_builder_true_for_sql_table_source(cx: &mut TestAppContext) {
-        use dbflux_core::{
-            ConnectedProfile, Connection, DatabaseCategory, DbConfig, DbError, DbKind,
-            DriverCapabilities, DriverMetadata, Icon as CoreIcon, QueryLanguage,
-            QueryResult as CoreQueryResult, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-        };
-        use std::path::PathBuf;
+    impl dbflux_core::Connection for StubBuilderConnection {
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            &self.metadata
+        }
 
+        fn kind(&self) -> dbflux_core::DbKind {
+            dbflux_core::DbKind::SQLite
+        }
+
+        fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
+            dbflux_core::SchemaLoadingStrategy::SingleDatabase
+        }
+
+        fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+            unimplemented!("StubBuilderConnection::dialect not needed for this test")
+        }
+
+        fn ping(&self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn execute(
+            &self,
+            _req: &dbflux_core::QueryRequest,
+        ) -> Result<QueryResult, dbflux_core::DbError> {
+            Err(dbflux_core::DbError::NotSupported("stub".to_string()))
+        }
+
+        fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, dbflux_core::DbError> {
+            Ok(dbflux_core::SchemaSnapshot::default())
+        }
+    }
+
+    /// Registers a `StubBuilderConnection` with the given capability metadata and
+    /// returns the app state plus the registered profile id.
+    fn register_builder_stub_connection(
+        cx: &mut TestAppContext,
+        category: dbflux_core::DatabaseCategory,
+        query_language: dbflux_core::QueryLanguage,
+        query: Option<dbflux_core::QueryCapabilities>,
+    ) -> (gpui::Entity<AppStateEntity>, Uuid) {
         init_test_runtime(cx);
 
-        struct StubSqlConnection;
-
-        impl Connection for StubSqlConnection {
-            fn metadata(&self) -> &DriverMetadata {
-                // Safety: returning a reference to a static value so the lifetime is valid.
-                static META: std::sync::OnceLock<DriverMetadata> = std::sync::OnceLock::new();
-                META.get_or_init(|| DriverMetadata {
-                    id: "stub-sql".to_string(),
-                    display_name: "Stub SQL".to_string(),
-                    description: "test stub".to_string(),
-                    category: DatabaseCategory::Relational,
-                    deployment_class: None,
-                    query_language: QueryLanguage::Sql,
-                    capabilities: DriverCapabilities::empty(),
-                    default_port: None,
-                    uri_scheme: "stub".to_string(),
-                    icon: CoreIcon::Database,
-                    syntax: None,
-                    query: Some(dbflux_core::QueryCapabilities::default()),
-                    mutation: None,
-                    ddl: None,
-                    transactions: None,
-                    limits: None,
-                    ssl_modes: None,
-                    ssl_cert_fields: None,
-                    classification_override: None,
-                    default_chunk_size: None,
-                    supports_lock_timeout: false,
-                    editor_profile: None,
-                })
-            }
-
-            fn kind(&self) -> DbKind {
-                DbKind::SQLite
-            }
-
-            fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
-                SchemaLoadingStrategy::SingleDatabase
-            }
-
-            fn dialect(&self) -> &dyn SqlDialect {
-                unimplemented!("StubSqlConnection::dialect not needed for this test")
-            }
-
-            fn ping(&self) -> Result<(), DbError> {
-                Ok(())
-            }
-
-            fn close(&mut self) -> Result<(), DbError> {
-                Ok(())
-            }
-
-            fn execute(
-                &self,
-                _req: &dbflux_core::QueryRequest,
-            ) -> Result<CoreQueryResult, DbError> {
-                Err(DbError::NotSupported("stub".to_string()))
-            }
-
-            fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), DbError> {
-                Ok(())
-            }
-
-            fn schema(&self) -> Result<SchemaSnapshot, DbError> {
-                Ok(SchemaSnapshot::default())
-            }
-        }
+        let metadata = dbflux_core::DriverMetadata {
+            id: "stub-builder".to_string(),
+            display_name: "Stub".to_string(),
+            description: "test stub".to_string(),
+            category,
+            deployment_class: None,
+            query_language,
+            capabilities: dbflux_core::DriverCapabilities::empty(),
+            default_port: None,
+            uri_scheme: "stub".to_string(),
+            icon: dbflux_core::Icon::Database,
+            syntax: None,
+            query,
+            mutation: None,
+            ddl: None,
+            transactions: None,
+            limits: None,
+            ssl_modes: None,
+            ssl_cert_fields: None,
+            classification_override: None,
+            default_chunk_size: None,
+            supports_lock_timeout: false,
+            editor_profile: None,
+        };
 
         let profile_id = Uuid::new_v4();
 
@@ -5040,14 +5150,14 @@ mod tests {
             app_state.update(cx, |app, _cx| {
                 let profile = dbflux_core::ConnectionProfile::new(
                     "test",
-                    DbConfig::SQLite {
-                        path: PathBuf::from(":memory:"),
+                    dbflux_core::DbConfig::SQLite {
+                        path: std::path::PathBuf::from(":memory:"),
                         connection_id: None,
                     },
                 );
-                let connected = ConnectedProfile {
+                let connected = dbflux_core::ConnectedProfile {
                     profile,
-                    connection: Arc::new(StubSqlConnection),
+                    connection: Arc::new(StubBuilderConnection { metadata }),
                     schema: None,
                     mutation_policy: dbflux_core::MutationPolicy::default(),
                     database_schemas: Default::default(),
@@ -5066,6 +5176,120 @@ mod tests {
                 app.connections_mut().insert(profile_id, connected);
             });
         });
+
+        (app_state, profile_id)
+    }
+
+    /// Builds a `DataGridPanel` over a `DataSource::Collection` for the given
+    /// profile and returns the panel entity.
+    fn build_panel_for_collection(
+        cx: &mut TestAppContext,
+        app_state: gpui::Entity<AppStateEntity>,
+        profile_id: Uuid,
+    ) -> gpui::Entity<DataGridPanel> {
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, _window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Collection {
+                    profile_id,
+                    collection: CollectionRef::new("db", "items"),
+                    pagination: Pagination::default(),
+                    total_docs: None,
+                };
+
+                DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx)
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created")
+    }
+
+    #[gpui::test]
+    fn can_open_builder_true_for_document_collection_source(cx: &mut TestAppContext) {
+        let (app_state, profile_id) = register_builder_stub_connection(
+            cx,
+            dbflux_core::DatabaseCategory::Document,
+            dbflux_core::QueryLanguage::MongoQuery,
+            Some(dbflux_core::QueryCapabilities::default()),
+        );
+
+        let panel = build_panel_for_collection(cx, app_state, profile_id);
+
+        let result = cx.update(|app| panel.read(app).can_open_builder(app));
+
+        assert!(
+            result,
+            "can_open_builder should be true for a Document collection with predicate operators"
+        );
+    }
+
+    #[gpui::test]
+    fn can_open_builder_false_for_keyvalue_collection_source(cx: &mut TestAppContext) {
+        // A key-value store publishes no predicate operators, so the builder is
+        // excluded on both the category and the predicate check.
+        let no_predicate_caps = dbflux_core::QueryCapabilities {
+            where_operators: Vec::new(),
+            ..dbflux_core::QueryCapabilities::default()
+        };
+        let (app_state, profile_id) = register_builder_stub_connection(
+            cx,
+            dbflux_core::DatabaseCategory::KeyValue,
+            dbflux_core::QueryLanguage::RedisCommands,
+            Some(no_predicate_caps),
+        );
+
+        let panel = build_panel_for_collection(cx, app_state, profile_id);
+
+        let result = cx.update(|app| panel.read(app).can_open_builder(app));
+
+        assert!(
+            !result,
+            "can_open_builder should be false for a non-Document collection without predicates"
+        );
+    }
+
+    #[gpui::test]
+    fn can_open_builder_false_for_document_collection_without_predicates(cx: &mut TestAppContext) {
+        let no_predicate_caps = dbflux_core::QueryCapabilities {
+            where_operators: vec![
+                dbflux_core::WhereOperator::And,
+                dbflux_core::WhereOperator::Or,
+            ],
+            ..dbflux_core::QueryCapabilities::default()
+        };
+        let (app_state, profile_id) = register_builder_stub_connection(
+            cx,
+            dbflux_core::DatabaseCategory::Document,
+            dbflux_core::QueryLanguage::MongoQuery,
+            Some(no_predicate_caps),
+        );
+
+        let panel = build_panel_for_collection(cx, app_state, profile_id);
+
+        let result = cx.update(|app| panel.read(app).can_open_builder(app));
+
+        assert!(
+            !result,
+            "can_open_builder should be false when only logical predicate operators are published"
+        );
+    }
+
+    #[gpui::test]
+    fn can_open_builder_true_for_sql_table_source(cx: &mut TestAppContext) {
+        let (app_state, profile_id) = register_builder_stub_connection(
+            cx,
+            dbflux_core::DatabaseCategory::Relational,
+            dbflux_core::QueryLanguage::Sql,
+            Some(dbflux_core::QueryCapabilities::default()),
+        );
 
         let panel_holder = Rc::new(RefCell::new(None));
         let panel_handle = panel_holder.clone();

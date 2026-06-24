@@ -142,7 +142,7 @@ fn render_sort_key_only(
     };
 
     let sort_key_label = panel
-        .sort_key_column(cx)
+        .sort_key_column()
         .filter(|name| !name.is_empty())
         .map(|name| format!("Sort key order ({name})"))
         .unwrap_or_else(|| "Sort key order".to_string());

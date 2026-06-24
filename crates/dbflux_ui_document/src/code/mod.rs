@@ -238,6 +238,14 @@ pub(super) struct EditorState {
     pub(super) original_content: String,
     pub(super) saved_query_id: Option<Uuid>,
     pub(super) current_editor_mode: String,
+    /// Cached `EditorLanguageProfile::supports_connection_context`, refreshed
+    /// whenever the effective profile changes (construction, connection change,
+    /// syntax/query-mode switch). Cached so per-render call sites do not re-resolve
+    /// and re-clone the profile every frame.
+    pub(super) cached_supports_connection_context: bool,
+    /// Cached `EditorLanguageProfile::comment_prefix`, refreshed alongside
+    /// `cached_supports_connection_context`.
+    pub(super) cached_comment_prefix: String,
     pub(super) diagnostic_request_id: u64,
     pub(super) _diagnostic_debounce: Option<Task<()>>,
     pub(super) path: Option<PathBuf>,
@@ -486,18 +494,20 @@ impl CodeDocument {
     /// Whether this document's editor is backed by a database connection
     /// (versus an in-process script such as Lua/Bash/Python).
     ///
-    /// Reads the connected driver's editor profile so drivers with a bespoke
-    /// query surface (e.g. DynamoDB) are recognized as connection-backed even
-    /// when their `QueryLanguage` is `Custom`, without the UI branching on a
-    /// driver id.
-    pub(super) fn supports_connection_context(&self, cx: &App) -> bool {
-        Self::resolve_editor_profile(
-            &self.app_state,
-            self.connection_id,
-            &self.editor.query_language,
-            cx,
-        )
-        .supports_connection_context
+    /// Returns the cached profile value (refreshed on construction and whenever
+    /// the effective language is re-bound via `sync_editor_language`) so the
+    /// render and execution paths do not re-resolve and re-clone the editor
+    /// profile every frame. Drivers with a bespoke query surface (e.g. DynamoDB)
+    /// are recognized as connection-backed even when their `QueryLanguage` is
+    /// `Custom`, without the UI branching on a driver id.
+    pub(super) fn supports_connection_context(&self) -> bool {
+        self.editor.cached_supports_connection_context
+    }
+
+    /// The cached line-comment prefix for the editor's effective profile,
+    /// refreshed alongside `cached_supports_connection_context`.
+    pub(super) fn comment_prefix(&self) -> &str {
+        &self.editor.cached_comment_prefix
     }
 
     /// Create a document with an explicit language (used when opening files).
@@ -825,6 +835,8 @@ impl CodeDocument {
                 original_content: String::new(),
                 saved_query_id: None,
                 current_editor_mode: editor_profile.editor_mode.clone(),
+                cached_supports_connection_context: editor_profile.supports_connection_context,
+                cached_comment_prefix: editor_profile.comment_prefix.clone(),
                 diagnostic_request_id: 0,
                 _diagnostic_debounce: None,
                 path: None,
