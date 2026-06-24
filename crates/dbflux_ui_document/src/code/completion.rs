@@ -23,18 +23,39 @@ impl QueryCompletionProvider {
         }
     }
 
+    /// Resolves the connected driver's editor mode (e.g. `"sql"`, `"javascript"`)
+    /// from its `DriverMetadata::editor_profile()`.
+    ///
+    /// This keys completion-style routing off a generic capability signal rather
+    /// than a driver id: any driver whose editor mode is `"sql"` (relational SQL
+    /// drivers and DynamoDB's PartiQL surface alike) gets SQL-style completion.
+    /// Falls back to deriving the mode from the provider's `QueryLanguage` when
+    /// the connection is absent or its language no longer matches (a
+    /// source-context query-mode override).
+    fn resolved_editor_mode(&self, cx: &App) -> String {
+        if let Some(connection_id) = self.connection_id
+            && let Some(connected) = self.app_state.read(cx).connections().get(&connection_id)
+        {
+            let metadata = connected.connection.metadata();
+            if metadata.query_language == self.query_language {
+                return metadata.editor_profile().editor_mode;
+            }
+        }
+
+        dbflux_core::EditorLanguageProfile::from_language(&self.query_language).editor_mode
+    }
+
+    /// True when the connected driver presents an SQL-style editor surface.
+    fn is_sql_style_editor(&self, cx: &App) -> bool {
+        self.resolved_editor_mode(cx) == "sql"
+    }
+
     fn keyword_candidates(&self) -> &'static [&'static str] {
         match self.query_language {
             dbflux_core::QueryLanguage::Sql
             | dbflux_core::QueryLanguage::OpenSearchSql
             | dbflux_core::QueryLanguage::Cql
-            | dbflux_core::QueryLanguage::InfluxQuery => &[
-                "SELECT", "FROM", "WHERE", "JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "ON",
-                "GROUP BY", "ORDER BY", "HAVING", "LIMIT", "OFFSET", "INSERT", "INTO", "VALUES",
-                "UPDATE", "SET", "DELETE", "CREATE", "ALTER", "DROP", "TRUNCATE", "BEGIN",
-                "COMMIT", "ROLLBACK", "COUNT", "SUM", "AVG", "MIN", "MAX", "DISTINCT", "AND", "OR",
-                "NOT", "NULL", "IS", "LIKE", "IN", "BETWEEN", "EXISTS",
-            ],
+            | dbflux_core::QueryLanguage::InfluxQuery => SQL_KEYWORDS,
             dbflux_core::QueryLanguage::CloudWatchLogsInsightsQl => &[
                 "fields", "filter", "parse", "stats", "sort", "limit", "display", "dedup",
                 "pattern", "diff", "anomaly", "unnest", "unmask", "SOURCE",
@@ -134,24 +155,30 @@ impl QueryCompletionProvider {
 
         let mut metadata = SqlCompletionMetadata::default();
 
-        if let Some(snapshot) = &connected.schema
-            && let Some(relational) = snapshot.as_relational()
-        {
-            for table in &relational.tables {
-                metadata.add_table(table);
-            }
-
-            for view in &relational.views {
-                metadata.add_view(view);
-            }
-
-            for schema in &relational.schemas {
-                for table in &schema.tables {
+        if let Some(snapshot) = &connected.schema {
+            if let Some(relational) = snapshot.as_relational() {
+                for table in &relational.tables {
                     metadata.add_table(table);
                 }
 
-                for view in &schema.views {
+                for view in &relational.views {
                     metadata.add_view(view);
+                }
+
+                for schema in &relational.schemas {
+                    for table in &schema.tables {
+                        metadata.add_table(table);
+                    }
+
+                    for view in &schema.views {
+                        metadata.add_view(view);
+                    }
+                }
+            }
+
+            if let Some(document) = snapshot.as_document() {
+                for collection in &document.collections {
+                    metadata.add_collection(collection);
                 }
             }
         }
@@ -260,129 +287,135 @@ impl QueryCompletionProvider {
         cx: &App,
     ) -> Vec<CompletionItem> {
         let metadata = self.sql_completion_metadata(cx);
-        let (prefix_start, prefix) = extract_identifier_prefix(source, cursor);
-        let prefix_upper = prefix.to_uppercase();
-        let before_cursor = &source[..cursor];
-        let replace_range = completion_replace_range(source, prefix_start, cursor);
+        sql_completion_items(&metadata, source, cursor)
+    }
+}
 
-        let mut seen = HashSet::new();
-        let mut items = Vec::new();
+fn sql_completion_items(
+    metadata: &SqlCompletionMetadata,
+    source: &str,
+    cursor: usize,
+) -> Vec<CompletionItem> {
+    let (prefix_start, prefix) = extract_identifier_prefix(source, cursor);
+    let prefix_upper = prefix.to_uppercase();
+    let before_cursor = &source[..cursor];
+    let replace_range = completion_replace_range(source, prefix_start, cursor);
 
-        let has_dot_before_prefix =
-            prefix_start > 0 && source.as_bytes().get(prefix_start - 1) == Some(&b'.');
+    let mut seen = HashSet::new();
+    let mut items = Vec::new();
 
-        if has_dot_before_prefix {
-            let qualifier_end = prefix_start - 1;
-            let qualifier_start = scan_identifier_start(source, qualifier_end);
-            let qualifier = &source[qualifier_start..qualifier_end];
+    let has_dot_before_prefix =
+        prefix_start > 0 && source.as_bytes().get(prefix_start - 1) == Some(&b'.');
 
-            let aliases = extract_sql_aliases(before_cursor);
-            let resolved_qualifier = aliases
-                .get(&normalize_identifier(qualifier))
-                .cloned()
-                .unwrap_or_else(|| normalize_identifier(qualifier));
+    if has_dot_before_prefix {
+        let qualifier_end = prefix_start - 1;
+        let qualifier_start = scan_identifier_start(source, qualifier_end);
+        let qualifier = &source[qualifier_start..qualifier_end];
 
-            for column_name in metadata.columns_for_table(&resolved_qualifier) {
-                if !prefix_upper.is_empty()
-                    && !column_name.to_uppercase().starts_with(&prefix_upper)
-                {
-                    continue;
-                }
+        let aliases = extract_sql_aliases(before_cursor);
+        let resolved_qualifier = aliases
+            .get(&normalize_identifier(qualifier))
+            .cloned()
+            .unwrap_or_else(|| normalize_identifier(qualifier));
 
-                push_completion_item(
-                    &mut items,
-                    &mut seen,
-                    column_name,
-                    CompletionItemKind::FIELD,
-                    &prefix,
-                    replace_range,
-                );
-            }
-
-            return items;
-        }
-
-        for keyword in self.keyword_candidates() {
-            if !prefix_upper.is_empty() && !keyword.to_uppercase().starts_with(&prefix_upper) {
+        for column_name in metadata.columns_for_table(&resolved_qualifier) {
+            if !prefix_upper.is_empty() && !column_name.to_uppercase().starts_with(&prefix_upper) {
                 continue;
             }
 
             push_completion_item(
                 &mut items,
                 &mut seen,
-                keyword,
-                CompletionItemKind::KEYWORD,
+                column_name,
+                CompletionItemKind::FIELD,
                 &prefix,
                 replace_range,
             );
         }
 
-        let in_table_context = is_sql_table_context(before_cursor);
-
-        for table_name in metadata.table_names_iter() {
-            if !prefix_upper.is_empty() && !table_name.to_uppercase().starts_with(&prefix_upper) {
-                continue;
-            }
-
-            if !in_table_context && prefix_upper.is_empty() {
-                continue;
-            }
-
-            push_completion_item(
-                &mut items,
-                &mut seen,
-                table_name,
-                CompletionItemKind::STRUCT,
-                &prefix,
-                replace_range,
-            );
-        }
-
-        for view_name in metadata.view_names_iter() {
-            if !prefix_upper.is_empty() && !view_name.to_uppercase().starts_with(&prefix_upper) {
-                continue;
-            }
-
-            if !in_table_context && prefix_upper.is_empty() {
-                continue;
-            }
-
-            push_completion_item(
-                &mut items,
-                &mut seen,
-                view_name,
-                CompletionItemKind::STRUCT,
-                &prefix,
-                replace_range,
-            );
-        }
-
-        if !in_table_context {
-            for column_name in metadata.all_columns_iter() {
-                if !prefix_upper.is_empty()
-                    && !column_name.to_uppercase().starts_with(&prefix_upper)
-                {
-                    continue;
-                }
-
-                if prefix_upper.is_empty() {
-                    continue;
-                }
-
-                push_completion_item(
-                    &mut items,
-                    &mut seen,
-                    column_name,
-                    CompletionItemKind::FIELD,
-                    &prefix,
-                    replace_range,
-                );
-            }
-        }
-
-        items
+        return items;
     }
 
+    for keyword in SQL_KEYWORDS {
+        if !prefix_upper.is_empty() && !keyword.to_uppercase().starts_with(&prefix_upper) {
+            continue;
+        }
+
+        push_completion_item(
+            &mut items,
+            &mut seen,
+            keyword,
+            CompletionItemKind::KEYWORD,
+            &prefix,
+            replace_range,
+        );
+    }
+
+    let in_table_context = is_sql_table_context(before_cursor);
+
+    for table_name in metadata.table_names_iter() {
+        if !prefix_upper.is_empty() && !table_name.to_uppercase().starts_with(&prefix_upper) {
+            continue;
+        }
+
+        if !in_table_context && prefix_upper.is_empty() {
+            continue;
+        }
+
+        push_completion_item(
+            &mut items,
+            &mut seen,
+            table_name,
+            CompletionItemKind::STRUCT,
+            &prefix,
+            replace_range,
+        );
+    }
+
+    for view_name in metadata.view_names_iter() {
+        if !prefix_upper.is_empty() && !view_name.to_uppercase().starts_with(&prefix_upper) {
+            continue;
+        }
+
+        if !in_table_context && prefix_upper.is_empty() {
+            continue;
+        }
+
+        push_completion_item(
+            &mut items,
+            &mut seen,
+            view_name,
+            CompletionItemKind::STRUCT,
+            &prefix,
+            replace_range,
+        );
+    }
+
+    if !in_table_context {
+        for column_name in metadata.all_columns_iter() {
+            if !prefix_upper.is_empty() && !column_name.to_uppercase().starts_with(&prefix_upper) {
+                continue;
+            }
+
+            if prefix_upper.is_empty() {
+                continue;
+            }
+
+            push_completion_item(
+                &mut items,
+                &mut seen,
+                column_name,
+                CompletionItemKind::FIELD,
+                &prefix,
+                replace_range,
+            );
+        }
+    }
+
+    items
+}
+
+impl QueryCompletionProvider {
     fn completion_items_for_mongo(
         &self,
         source: &str,
@@ -654,43 +687,43 @@ impl CompletionProvider for QueryCompletionProvider {
     ) -> Task<anyhow::Result<CompletionResponse>> {
         let source = text.to_string();
         let cursor = min(offset, source.len());
-        let items = match self.query_language {
-            dbflux_core::QueryLanguage::Sql
-            | dbflux_core::QueryLanguage::Cql
-            | dbflux_core::QueryLanguage::InfluxQuery => {
-                self.completion_items_for_sql(&source, cursor, _cx)
-            }
-            dbflux_core::QueryLanguage::MongoQuery => {
-                self.completion_items_for_mongo(&source, cursor, _cx)
-            }
-            dbflux_core::QueryLanguage::RedisCommands => {
-                self.completion_items_for_redis(&source, cursor, _cx)
-            }
-            _ => {
-                let (prefix_start, prefix) = extract_identifier_prefix(&source, cursor);
-                let prefix_upper = prefix.to_uppercase();
-                let replace_range = completion_replace_range(&source, prefix_start, cursor);
-                let mut items = Vec::new();
-                let mut seen = HashSet::new();
 
-                for candidate in self.keyword_candidates() {
-                    if !prefix_upper.is_empty()
-                        && !candidate.to_uppercase().starts_with(&prefix_upper)
-                    {
-                        continue;
+        let items = if self.is_sql_style_editor(_cx) {
+            self.completion_items_for_sql(&source, cursor, _cx)
+        } else {
+            match self.query_language {
+                dbflux_core::QueryLanguage::MongoQuery => {
+                    self.completion_items_for_mongo(&source, cursor, _cx)
+                }
+                dbflux_core::QueryLanguage::RedisCommands => {
+                    self.completion_items_for_redis(&source, cursor, _cx)
+                }
+                _ => {
+                    let (prefix_start, prefix) = extract_identifier_prefix(&source, cursor);
+                    let prefix_upper = prefix.to_uppercase();
+                    let replace_range = completion_replace_range(&source, prefix_start, cursor);
+                    let mut items = Vec::new();
+                    let mut seen = HashSet::new();
+
+                    for candidate in self.keyword_candidates() {
+                        if !prefix_upper.is_empty()
+                            && !candidate.to_uppercase().starts_with(&prefix_upper)
+                        {
+                            continue;
+                        }
+
+                        push_completion_item(
+                            &mut items,
+                            &mut seen,
+                            candidate,
+                            CompletionItemKind::KEYWORD,
+                            &prefix,
+                            replace_range,
+                        );
                     }
 
-                    push_completion_item(
-                        &mut items,
-                        &mut seen,
-                        candidate,
-                        CompletionItemKind::KEYWORD,
-                        &prefix,
-                        replace_range,
-                    );
+                    items
                 }
-
-                items
             }
         };
 
@@ -729,23 +762,29 @@ impl SqlCompletionMetadata {
                 .insert(format!("{}.{}", schema, table.name));
         }
 
-        let Some(columns) = &table.columns else {
-            return;
-        };
-
         let mut keys = vec![normalize_identifier(&table.name)];
         if let Some(schema) = &table.schema {
             keys.push(normalize_identifier(&format!("{}.{}", schema, table.name)));
         }
 
-        for column in columns {
-            self.all_columns.insert(column.name.clone());
+        if let Some(columns) = &table.columns {
+            for column in columns {
+                self.all_columns.insert(column.name.clone());
 
-            for key in &keys {
-                self.columns_by_table
-                    .entry(key.clone())
-                    .or_default()
-                    .insert(column.name.clone());
+                for key in &keys {
+                    self.columns_by_table
+                        .entry(key.clone())
+                        .or_default()
+                        .insert(column.name.clone());
+                }
+            }
+        }
+
+        if let Some(fields) = &table.sample_fields {
+            for field in fields {
+                for key in &keys {
+                    self.add_collection_field(key, field);
+                }
             }
         }
     }
@@ -755,6 +794,38 @@ impl SqlCompletionMetadata {
 
         if let Some(schema) = &view.schema {
             self.view_names.insert(format!("{}.{}", schema, view.name));
+        }
+    }
+
+    /// Folds a document-store collection into the SQL completion metadata so an
+    /// SQL-style editor over a Document-category driver (e.g. DynamoDB PartiQL)
+    /// suggests the collection as a table and its sampled attributes as columns.
+    fn add_collection(&mut self, collection: &dbflux_core::CollectionInfo) {
+        self.table_names.insert(collection.name.clone());
+
+        let Some(fields) = &collection.sample_fields else {
+            return;
+        };
+
+        let key = normalize_identifier(&collection.name);
+
+        for field in fields {
+            self.add_collection_field(&key, field);
+        }
+    }
+
+    fn add_collection_field(&mut self, table_key: &str, field: &dbflux_core::FieldInfo) {
+        self.all_columns.insert(field.name.clone());
+
+        self.columns_by_table
+            .entry(table_key.to_string())
+            .or_default()
+            .insert(field.name.clone());
+
+        if let Some(nested) = &field.nested_fields {
+            for child in nested {
+                self.add_collection_field(table_key, child);
+            }
         }
     }
 
@@ -854,6 +925,14 @@ enum MongoCompletionContext {
     Operator,
     General,
 }
+
+const SQL_KEYWORDS: &[&str] = &[
+    "SELECT", "FROM", "WHERE", "JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "ON", "GROUP BY",
+    "ORDER BY", "HAVING", "LIMIT", "OFFSET", "INSERT", "INTO", "VALUES", "UPDATE", "SET", "DELETE",
+    "CREATE", "ALTER", "DROP", "TRUNCATE", "BEGIN", "COMMIT", "ROLLBACK", "COUNT", "SUM", "AVG",
+    "MIN", "MAX", "DISTINCT", "AND", "OR", "NOT", "NULL", "IS", "LIKE", "IN", "BETWEEN", "EXISTS",
+    "ASC", "DESC",
+];
 
 const MONGO_METHODS: &[&str] = &[
     "find",
@@ -1131,4 +1210,170 @@ fn is_sql_table_context(sql_before_cursor: &str) -> bool {
         last.to_uppercase().as_str(),
         "FROM" | "JOIN" | "UPDATE" | "INTO" | "TABLE"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CompletionItem, SqlCompletionMetadata, sql_completion_items};
+    use crate::completion_support::normalize_identifier;
+    use dbflux_core::{CollectionInfo, ColumnInfo, FieldInfo, QueryLanguage, TableInfo};
+
+    fn column(name: &str, type_name: &str) -> ColumnInfo {
+        ColumnInfo {
+            name: name.to_string(),
+            type_name: type_name.to_string(),
+            nullable: true,
+            is_primary_key: false,
+            default_value: None,
+            enum_values: None,
+        }
+    }
+
+    fn field(name: &str) -> FieldInfo {
+        FieldInfo {
+            name: name.to_string(),
+            common_type: "S".to_string(),
+            occurrence_rate: None,
+            nested_fields: None,
+        }
+    }
+
+    fn dynamo_collection() -> CollectionInfo {
+        CollectionInfo {
+            name: "Orders".to_string(),
+            database: Some("default".to_string()),
+            document_count: None,
+            avg_document_size: None,
+            sample_fields: Some(vec![
+                field("pk"),
+                field("sk"),
+                FieldInfo {
+                    name: "shipping".to_string(),
+                    common_type: "M".to_string(),
+                    occurrence_rate: None,
+                    nested_fields: Some(vec![field("city"), field("zip")]),
+                },
+            ]),
+            indexes: None,
+            validator: None,
+            is_capped: false,
+            presentation: dbflux_core::CollectionPresentation::default(),
+            child_items: None,
+        }
+    }
+
+    fn labels(items: &[CompletionItem]) -> Vec<String> {
+        items.iter().map(|item| item.label.clone()).collect()
+    }
+
+    #[test]
+    fn add_collection_maps_name_and_sampled_attributes() {
+        let mut metadata = SqlCompletionMetadata::default();
+        metadata.add_collection(&dynamo_collection());
+
+        let tables: Vec<&str> = metadata.table_names_iter().collect();
+        assert!(tables.contains(&"Orders"));
+
+        let columns: Vec<&str> = metadata.all_columns_iter().collect();
+        assert!(columns.contains(&"pk"));
+        assert!(columns.contains(&"sk"));
+        assert!(
+            columns.contains(&"city"),
+            "nested fields should be folded in"
+        );
+        assert!(columns.contains(&"zip"));
+
+        let qualified = metadata.columns_for_table(&normalize_identifier("Orders"));
+        assert!(qualified.contains(&"pk"));
+        assert!(qualified.contains(&"city"));
+    }
+
+    #[test]
+    fn dynamo_document_completion_offers_table_after_from() {
+        let mut metadata = SqlCompletionMetadata::default();
+        metadata.add_collection(&dynamo_collection());
+
+        let source = "SELECT * FROM ";
+        let items = sql_completion_items(&metadata, source, source.len());
+
+        assert!(
+            labels(&items).contains(&"Orders".to_string()),
+            "table name should be suggested in FROM position"
+        );
+    }
+
+    #[test]
+    fn dynamo_document_completion_offers_attributes_in_where_position() {
+        let mut metadata = SqlCompletionMetadata::default();
+        metadata.add_collection(&dynamo_collection());
+
+        let qualified_source = "SELECT * FROM Orders o WHERE o.p";
+        let qualified_items =
+            sql_completion_items(&metadata, qualified_source, qualified_source.len());
+        assert!(
+            labels(&qualified_items).contains(&"pk".to_string()),
+            "qualified attribute should be suggested after the alias"
+        );
+
+        let bare_source = "SELECT * FROM Orders WHERE c";
+        let bare_items = sql_completion_items(&metadata, bare_source, bare_source.len());
+        assert!(
+            labels(&bare_items).contains(&"city".to_string()),
+            "unqualified attribute should be suggested in WHERE with a prefix"
+        );
+    }
+
+    #[test]
+    fn dynamo_document_completion_offers_partiql_keywords() {
+        let metadata = SqlCompletionMetadata::default();
+
+        let source = "SELE";
+        let items = sql_completion_items(&metadata, source, source.len());
+        assert!(labels(&items).contains(&"SELECT".to_string()));
+
+        let where_source = "SELECT * FROM Orders WHE";
+        let where_items = sql_completion_items(&metadata, where_source, where_source.len());
+        assert!(labels(&where_items).contains(&"WHERE".to_string()));
+    }
+
+    #[test]
+    fn relational_table_completion_unchanged_by_document_support() {
+        let table = TableInfo {
+            name: "users".to_string(),
+            schema: None,
+            columns: Some(vec![column("id", "integer"), column("email", "text")]),
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: dbflux_core::CollectionPresentation::default(),
+            child_items: None,
+        };
+
+        let mut metadata = SqlCompletionMetadata::default();
+        metadata.add_table(&table);
+
+        let tables: Vec<&str> = metadata.table_names_iter().collect();
+        assert_eq!(tables, vec!["users"]);
+
+        let columns = metadata.columns_for_table(&normalize_identifier("users"));
+        assert!(columns.contains(&"id"));
+        assert!(columns.contains(&"email"));
+
+        let from_source = "SELECT * FROM ";
+        let items = sql_completion_items(&metadata, from_source, from_source.len());
+        assert!(labels(&items).contains(&"users".to_string()));
+    }
+
+    #[test]
+    fn dynamo_editor_mode_resolves_to_sql_via_profile() {
+        let mongo_mode =
+            dbflux_core::EditorLanguageProfile::from_language(&QueryLanguage::MongoQuery)
+                .editor_mode;
+        assert_ne!(mongo_mode, "sql");
+
+        let sql_mode =
+            dbflux_core::EditorLanguageProfile::from_language(&QueryLanguage::Sql).editor_mode;
+        assert_eq!(sql_mode, "sql");
+    }
 }
