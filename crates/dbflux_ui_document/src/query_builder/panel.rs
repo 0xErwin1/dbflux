@@ -364,6 +364,16 @@ pub struct QueryBuilderPanel {
     /// case values stay textual.
     pub(crate) column_kinds: std::collections::HashMap<String, dbflux_core::ColumnKind>,
 
+    /// The single orderable key column for a `SortKeyOnly` driver, resolved once
+    /// at panel open from the browse result's key-schema metadata. `None` when
+    /// the source exposes no orderable key (e.g. a partition-key-only table).
+    ///
+    /// Cached deliberately: a builder-generated read can replace the live result
+    /// with one that no longer carries key markers (e.g. a PartiQL `SELECT *`),
+    /// so the key is captured up front rather than re-derived from whatever the
+    /// grid currently shows.
+    pub(crate) cached_sort_key_column: Option<String>,
+
     /// Serialized `(table, filter)` signature of the last mutation row-count
     /// request. Used so the count is recomputed only when the target rows
     /// actually change, not on every render or assignment edit. `None` while in
@@ -753,6 +763,7 @@ impl QueryBuilderPanel {
             join_cond_op_dropdowns: HashMap::new(),
             available_columns,
             column_kinds: std::collections::HashMap::new(),
+            cached_sort_key_column: None,
             count_signature: None,
             _count_debounce: None,
             schema_cache,
@@ -2139,6 +2150,62 @@ impl QueryBuilderPanel {
         }
     }
 
+    /// Sets the single sort-key direction for sort-key-only drivers.
+    ///
+    /// Drivers whose `order_by_mode` is `SortKeyOnly` (e.g. DynamoDB) can order
+    /// only on the sort key by direction, never by arbitrary columns. This keeps
+    /// exactly one sort row carrying the chosen direction so the builder never
+    /// offers a multi-column ORDER BY the driver cannot execute.
+    pub fn set_sort_key_direction(
+        &mut self,
+        direction: VisualSortDirection,
+        cx: &mut Context<Self>,
+    ) {
+        let sort_key_column = self.sort_key_column().unwrap_or_default();
+        self.apply_sort_key_direction(direction, sort_key_column);
+        self.rebuild_spec_and_notify(cx);
+    }
+
+    /// Updates the single sort-key row to the given direction, seeding the
+    /// orderable column name when the row carries none yet. Pure (no `cx`):
+    /// the resolved sort-key column is passed in so the seeding rule can be
+    /// unit-tested without a GPUI context.
+    fn apply_sort_key_direction(
+        &mut self,
+        direction: VisualSortDirection,
+        sort_key_column: String,
+    ) {
+        self.sort_validation_error = None;
+
+        let alias = self.current_spec.source.alias.clone();
+
+        match self.sort_rows.first_mut() {
+            Some(row) => {
+                row.direction = direction;
+                if row.column.is_empty() {
+                    row.column = sort_key_column;
+                    row.source_alias = alias;
+                }
+                self.sort_rows.truncate(1);
+            }
+            None => {
+                self.sort_rows.push(SortRow {
+                    source_alias: alias,
+                    column: sort_key_column,
+                    direction,
+                });
+            }
+        }
+    }
+
+    /// The currently selected sort-key direction (defaults to ascending).
+    pub(crate) fn sort_key_direction(&self) -> VisualSortDirection {
+        self.sort_rows
+            .first()
+            .map(|row| row.direction)
+            .unwrap_or(VisualSortDirection::Asc)
+    }
+
     /// Moves the sort row at `from_index` to `to_index`.
     pub fn reorder_sort(&mut self, from_index: usize, to_index: usize, cx: &mut Context<Self>) {
         if from_index < self.sort_rows.len() && to_index < self.sort_rows.len() {
@@ -2752,7 +2819,13 @@ impl QueryBuilderPanel {
         };
 
         let joins: Vec<JoinStep> = self.join_rows.iter().map(|r| r.to_join_step()).collect();
-        let sort: Vec<SortEntry> = self.sort_rows.iter().map(|r| r.to_sort_entry()).collect();
+
+        let sort: Vec<SortEntry> = self
+            .sort_rows
+            .iter()
+            .filter(|r| !r.column.is_empty())
+            .map(|r| r.to_sort_entry())
+            .collect();
 
         let group_by: Vec<GroupByEntry> = self
             .group_by_rows
@@ -2869,6 +2942,58 @@ impl QueryBuilderPanel {
             return false;
         }
         connected.connection.metadata().query_language == dbflux_core::QueryLanguage::Sql
+    }
+
+    /// Reads the connected driver's `QueryCapabilities`.
+    ///
+    /// Drives builder section visibility and sort UX so the builder stays
+    /// driver-agnostic: every section gate keys off these capability flags
+    /// rather than a driver id.
+    pub(crate) fn query_capabilities(&self, cx: &App) -> Option<dbflux_core::QueryCapabilities> {
+        let app_state = self.app_state_weak.upgrade()?;
+        let state = app_state.read(cx);
+        let connected = state.connections().get(&self.schema_profile_id)?;
+        connected.connection.metadata().query.clone()
+    }
+
+    /// Whether the builder should render the JOINS section for this driver.
+    pub(crate) fn shows_joins_section(&self, cx: &App) -> bool {
+        self.query_capabilities(cx)
+            .map(|q| q.supports_joins)
+            .unwrap_or(false)
+    }
+
+    /// Whether the builder should render the GROUP BY / aggregates section.
+    pub(crate) fn shows_group_by_section(&self, cx: &App) -> bool {
+        self.query_capabilities(cx)
+            .map(|q| q.supports_group_by)
+            .unwrap_or(false)
+    }
+
+    /// Whether the builder should render the HAVING section.
+    pub(crate) fn shows_having_section(&self, cx: &App) -> bool {
+        self.query_capabilities(cx)
+            .map(|q| q.supports_having)
+            .unwrap_or(false)
+    }
+
+    /// The driver's result-ordering mode, defaulting to multi-column ordering.
+    pub(crate) fn order_by_mode(&self, cx: &App) -> dbflux_core::OrderByMode {
+        self.query_capabilities(cx)
+            .map(|q| q.order_by_mode)
+            .unwrap_or(dbflux_core::OrderByMode::AnyColumns)
+    }
+
+    /// The name of the single orderable column for a `SortKeyOnly` driver.
+    ///
+    /// Returns the key resolved once at panel open from the source's key-schema
+    /// metadata (`cached_sort_key_column`), not from the live result — a builder
+    /// read can replace the grid with a result that no longer carries key markers
+    /// (e.g. a PartiQL `SELECT *`). `None` when the source has no orderable key
+    /// (e.g. a partition-key-only table), in which case no column is seeded and
+    /// no ORDER BY is emitted.
+    pub(crate) fn sort_key_column(&self) -> Option<String> {
+        self.cached_sort_key_column.clone()
     }
 
     /// Switches the panel to the given builder mode.
@@ -3833,6 +3958,7 @@ mod tests {
             join_cond_op_dropdowns: HashMap::new(),
             available_columns: Vec::new(),
             column_kinds: std::collections::HashMap::new(),
+            cached_sort_key_column: None,
             count_signature: None,
             _count_debounce: None,
             schema_cache: Rc::new(RefCell::new(SchemaCache::default())),
@@ -3969,6 +4095,23 @@ mod tests {
                 self.sort_rows.insert(to, row);
                 self.rebuild_spec_pure();
             }
+        }
+
+        fn t_set_sort_key_direction(
+            &mut self,
+            direction: VisualSortDirection,
+            sort_key_column: &str,
+        ) {
+            self.apply_sort_key_direction(direction, sort_key_column.to_string());
+            self.rebuild_spec_pure();
+        }
+
+        fn t_push_raw_sort_row(&mut self, source_alias: &str, column: &str) {
+            self.sort_rows.push(SortRow {
+                source_alias: source_alias.to_string(),
+                column: column.to_string(),
+                direction: VisualSortDirection::Asc,
+            });
         }
 
         fn t_add_join(&mut self, from_alias: &str) {
@@ -4378,6 +4521,56 @@ mod tests {
 
         assert_eq!(panel.sort_rows[0].column, "created_at");
         assert_eq!(panel.sort_rows[1].column, "name");
+    }
+
+    #[test]
+    fn sort_key_only_seeds_orderable_column() {
+        let mut panel = make_panel(make_spec(test_source()));
+
+        panel.t_set_sort_key_direction(VisualSortDirection::Desc, "created_at");
+
+        assert_eq!(panel.sort_rows.len(), 1);
+        assert_eq!(panel.sort_rows[0].column, "created_at");
+        assert_eq!(panel.sort_rows[0].direction, VisualSortDirection::Desc);
+
+        assert_eq!(panel.current_spec.sort.len(), 1);
+        assert_eq!(panel.current_spec.sort[0].column, "created_at");
+        assert_eq!(
+            panel.current_spec.sort[0].direction,
+            VisualSortDirection::Desc
+        );
+    }
+
+    #[test]
+    fn rebuild_spec_filters_empty_column_sort_row() {
+        let mut panel = make_panel(make_spec(test_source()));
+
+        panel.t_push_raw_sort_row("users", "");
+        panel.t_push_raw_sort_row("users", "created_at");
+        panel.rebuild_spec_pure();
+
+        assert_eq!(panel.current_spec.sort.len(), 1);
+        assert_eq!(panel.current_spec.sort[0].column, "created_at");
+    }
+
+    #[test]
+    fn sort_key_only_without_orderable_column_emits_no_sort() {
+        let mut panel = make_panel(make_spec(test_source()));
+
+        panel.t_set_sort_key_direction(VisualSortDirection::Asc, "");
+
+        assert_eq!(panel.sort_rows.len(), 1);
+        assert!(panel.sort_rows[0].column.is_empty());
+        assert!(panel.current_spec.sort.is_empty());
+    }
+
+    #[test]
+    fn sort_key_column_returns_cached_value() {
+        let mut panel = make_panel(make_spec(test_source()));
+        assert_eq!(panel.sort_key_column(), None);
+
+        panel.cached_sort_key_column = Some("created_at".to_string());
+        assert_eq!(panel.sort_key_column(), Some("created_at".to_string()));
     }
 
     // ---- 4.3: filter depth cap enforcement ---------------------------------

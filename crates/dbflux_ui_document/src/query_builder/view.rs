@@ -229,6 +229,11 @@ fn render_body(
         BuilderMode::Select => {
             let is_grouped = panel.is_grouped();
 
+            let shows_joins = panel.shows_joins_section(cx);
+            let shows_group_by = panel.shows_group_by_section(cx);
+            let shows_having = panel.shows_having_section(cx);
+            let shows_sort = panel.order_by_mode(cx) != dbflux_core::OrderByMode::None;
+
             let columns_body = if is_grouped {
                 render_effective_select_preview(panel, theme).into_any_element()
             } else {
@@ -236,9 +241,10 @@ fn render_body(
             };
 
             let filters_body = filters::render_filters(panel, cx).into_any_element();
-            let joins_body = joins::render_joins(panel, cx).into_any_element();
-            let group_by_body = group_by::render_group_by(panel, cx).into_any_element();
-            let sort_body = sort::render_sort(panel, cx).into_any_element();
+            let joins_body = shows_joins.then(|| joins::render_joins(panel, cx).into_any_element());
+            let group_by_body =
+                shows_group_by.then(|| group_by::render_group_by(panel, cx).into_any_element());
+            let sort_body = shows_sort.then(|| sort::render_sort(panel, cx).into_any_element());
             let limit_body = render_limit_offset_body(panel).into_any_element();
 
             let mut body = div()
@@ -257,15 +263,19 @@ fn render_body(
                     theme,
                     filters_body,
                 ))
-                .child(section_card("JOINS", AppIcon::Layers, theme, joins_body))
-                .child(section_card(
-                    "GROUP BY / AGGREGATES",
-                    AppIcon::Layers,
-                    theme,
-                    group_by_body,
-                ));
+                .when_some(joins_body, |body, joins_body| {
+                    body.child(section_card("JOINS", AppIcon::Layers, theme, joins_body))
+                })
+                .when_some(group_by_body, |body, group_by_body| {
+                    body.child(section_card(
+                        "GROUP BY / AGGREGATES",
+                        AppIcon::Layers,
+                        theme,
+                        group_by_body,
+                    ))
+                });
 
-            if is_grouped {
+            if is_grouped && shows_having {
                 let having_body = group_by::render_having(panel, cx).into_any_element();
                 body = body.child(section_card(
                     "HAVING",
@@ -275,14 +285,16 @@ fn render_body(
                 ));
             }
 
-            body.child(section_card("SORT", AppIcon::ArrowUpDown, theme, sort_body))
-                .child(section_card(
-                    "LIMIT & OFFSET",
-                    AppIcon::Hash,
-                    theme,
-                    limit_body,
-                ))
-                .into_any_element()
+            body.when_some(sort_body, |body, sort_body| {
+                body.child(section_card("SORT", AppIcon::ArrowUpDown, theme, sort_body))
+            })
+            .child(section_card(
+                "LIMIT & OFFSET",
+                AppIcon::Hash,
+                theme,
+                limit_body,
+            ))
+            .into_any_element()
         }
         BuilderMode::Update => {
             let assignments_body = assignments::render_assignments(panel, cx).into_any_element();
