@@ -50,6 +50,14 @@ impl QueryCompletionProvider {
         self.resolved_editor_mode(cx) == "sql"
     }
 
+    /// Reads the connected driver's `DatabaseCategory`, or `None` when no
+    /// connection is attached. Generic — no driver-id branching.
+    fn connection_category(&self, cx: &App) -> Option<dbflux_core::DatabaseCategory> {
+        let connection_id = self.connection_id?;
+        let connected = self.app_state.read(cx).connections().get(&connection_id)?;
+        Some(connected.connection.metadata().category)
+    }
+
     fn keyword_candidates(&self) -> &'static [&'static str] {
         match self.query_language {
             dbflux_core::QueryLanguage::Sql
@@ -153,51 +161,15 @@ impl QueryCompletionProvider {
             return SqlCompletionMetadata::default();
         };
 
-        let mut metadata = SqlCompletionMetadata::default();
+        let is_document_category =
+            connected.connection.metadata().category == dbflux_core::DatabaseCategory::Document;
 
-        if let Some(snapshot) = &connected.schema {
-            if let Some(relational) = snapshot.as_relational() {
-                for table in &relational.tables {
-                    metadata.add_table(table);
-                }
-
-                for view in &relational.views {
-                    metadata.add_view(view);
-                }
-
-                for schema in &relational.schemas {
-                    for table in &schema.tables {
-                        metadata.add_table(table);
-                    }
-
-                    for view in &schema.views {
-                        metadata.add_view(view);
-                    }
-                }
-            }
-
-            if let Some(document) = snapshot.as_document() {
-                for collection in &document.collections {
-                    metadata.add_collection(collection);
-                }
-            }
-        }
-
-        for schema in connected.database_schemas.values() {
-            for table in &schema.tables {
-                metadata.add_table(table);
-            }
-
-            for view in &schema.views {
-                metadata.add_view(view);
-            }
-        }
-
-        for table in connected.table_details.values() {
-            metadata.add_table(table);
-        }
-
-        metadata
+        build_sql_completion_metadata(
+            connected.schema.as_ref(),
+            connected.database_schemas.values(),
+            connected.table_details.values(),
+            is_document_category,
+        )
     }
 
     fn mongo_completion_metadata(&self, cx: &App) -> MongoCompletionMetadata {
@@ -289,6 +261,89 @@ impl QueryCompletionProvider {
         let metadata = self.sql_completion_metadata(cx);
         sql_completion_items(&metadata, source, cursor)
     }
+}
+
+/// Decides whether the editor should route to SQL-style completion.
+///
+/// The first clause preserves main's behavior exactly: `Sql`, `Cql`, and
+/// `InfluxQuery` always took the SQL path and fold their catalogs. The second
+/// clause is the generic DynamoDB case — a Document-category driver whose editor
+/// surface is SQL-style (PartiQL) — without any driver-id branching.
+///
+/// `OpenSearchSql` (CloudWatch's source-context query mode) is deliberately
+/// absent: CloudWatch is `DatabaseCategory::LogStream`, not `Document`, so it
+/// falls through to the keyword-only path exactly as on main, and its log-group
+/// names never fold as SQL table candidates.
+fn should_use_sql_completion(
+    query_language: &dbflux_core::QueryLanguage,
+    is_sql_style_editor: bool,
+    category: Option<dbflux_core::DatabaseCategory>,
+) -> bool {
+    matches!(
+        query_language,
+        dbflux_core::QueryLanguage::Sql
+            | dbflux_core::QueryLanguage::Cql
+            | dbflux_core::QueryLanguage::InfluxQuery
+    ) || (is_sql_style_editor && category == Some(dbflux_core::DatabaseCategory::Document))
+}
+
+/// Builds the SQL completion metadata from a connection's cached schema sources.
+///
+/// `is_document_category` gates whether document-snapshot collections are folded
+/// as SQL table candidates. Only `DatabaseCategory::Document` drivers fold them;
+/// other categories (e.g. a LogStream driver exposing an SQL editor over log
+/// groups) also build document snapshots, but their collections are not tables.
+fn build_sql_completion_metadata<'a>(
+    snapshot: Option<&dbflux_core::SchemaSnapshot>,
+    database_schemas: impl Iterator<Item = &'a dbflux_core::DbSchemaInfo>,
+    table_details: impl Iterator<Item = &'a dbflux_core::TableInfo>,
+    is_document_category: bool,
+) -> SqlCompletionMetadata {
+    let mut metadata = SqlCompletionMetadata::default();
+
+    if let Some(snapshot) = snapshot {
+        if let Some(relational) = snapshot.as_relational() {
+            for table in &relational.tables {
+                metadata.add_table(table);
+            }
+
+            for view in &relational.views {
+                metadata.add_view(view);
+            }
+
+            for schema in &relational.schemas {
+                for table in &schema.tables {
+                    metadata.add_table(table);
+                }
+
+                for view in &schema.views {
+                    metadata.add_view(view);
+                }
+            }
+        }
+
+        if is_document_category && let Some(document) = snapshot.as_document() {
+            for collection in &document.collections {
+                metadata.add_collection(collection);
+            }
+        }
+    }
+
+    for schema in database_schemas {
+        for table in &schema.tables {
+            metadata.add_table(table);
+        }
+
+        for view in &schema.views {
+            metadata.add_view(view);
+        }
+    }
+
+    for table in table_details {
+        metadata.add_table(table);
+    }
+
+    metadata
 }
 
 fn sql_completion_items(
@@ -688,7 +743,13 @@ impl CompletionProvider for QueryCompletionProvider {
         let source = text.to_string();
         let cursor = min(offset, source.len());
 
-        let items = if self.is_sql_style_editor(_cx) {
+        let use_sql = should_use_sql_completion(
+            &self.query_language,
+            self.is_sql_style_editor(_cx),
+            self.connection_category(_cx),
+        );
+
+        let items = if use_sql {
             self.completion_items_for_sql(&source, cursor, _cx)
         } else {
             match self.query_language {
@@ -799,7 +860,14 @@ impl SqlCompletionMetadata {
 
     /// Folds a document-store collection into the SQL completion metadata so an
     /// SQL-style editor over a Document-category driver (e.g. DynamoDB PartiQL)
-    /// suggests the collection as a table and its sampled attributes as columns.
+    /// suggests the collection NAME as a table.
+    ///
+    /// The collection name is the real source of the table-after-`FROM`
+    /// completion. The `sample_fields` loop is correct but dormant for drivers
+    /// whose schema snapshot leaves `sample_fields` empty (DynamoDB emits
+    /// `None` here); for those drivers the per-attribute completion arrives
+    /// instead through the lazily-fetched `table_details` `TableInfo`, whose
+    /// key-schema `sample_fields` are folded by `add_table`.
     fn add_collection(&mut self, collection: &dbflux_core::CollectionInfo) {
         self.table_names.insert(collection.name.clone());
 
@@ -1214,9 +1282,15 @@ fn is_sql_table_context(sql_before_cursor: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{CompletionItem, SqlCompletionMetadata, sql_completion_items};
+    use super::{
+        CompletionItem, SqlCompletionMetadata, build_sql_completion_metadata,
+        should_use_sql_completion, sql_completion_items,
+    };
     use crate::completion_support::normalize_identifier;
-    use dbflux_core::{CollectionInfo, ColumnInfo, FieldInfo, QueryLanguage, TableInfo};
+    use dbflux_core::{
+        CollectionInfo, ColumnInfo, DatabaseCategory, DatabaseInfo, DbSchemaInfo, DocumentSchema,
+        FieldInfo, QueryLanguage, SchemaSnapshot, TableInfo,
+    };
 
     fn column(name: &str, type_name: &str) -> ColumnInfo {
         ColumnInfo {
@@ -1238,25 +1312,46 @@ mod tests {
         }
     }
 
-    fn dynamo_collection() -> CollectionInfo {
+    /// Mirrors the collection DynamoDB's `schema()` actually emits: a named
+    /// collection with `sample_fields: None`. Per-attribute data is NOT carried
+    /// here; it arrives via the lazily-fetched `table_details` `TableInfo`.
+    fn dynamo_schema_collection() -> CollectionInfo {
         CollectionInfo {
             name: "Orders".to_string(),
             database: Some("default".to_string()),
             document_count: None,
             avg_document_size: None,
-            sample_fields: Some(vec![
-                field("pk"),
-                field("sk"),
-                FieldInfo {
-                    name: "shipping".to_string(),
-                    common_type: "M".to_string(),
-                    occurrence_rate: None,
-                    nested_fields: Some(vec![field("city"), field("zip")]),
-                },
-            ]),
+            sample_fields: None,
             indexes: None,
             validator: None,
             is_capped: false,
+            presentation: dbflux_core::CollectionPresentation::default(),
+            child_items: None,
+        }
+    }
+
+    fn dynamo_document_snapshot() -> SchemaSnapshot {
+        SchemaSnapshot::document(DocumentSchema {
+            databases: vec![DatabaseInfo {
+                name: "default".to_string(),
+                is_current: true,
+            }],
+            current_database: Some("default".to_string()),
+            collections: vec![dynamo_schema_collection()],
+        })
+    }
+
+    /// Mirrors the `TableInfo` DynamoDB's `table_details()` builds: `columns:
+    /// None` with the key-schema attributes carried in `sample_fields`.
+    fn dynamo_table_details() -> TableInfo {
+        TableInfo {
+            name: "Orders".to_string(),
+            schema: Some("dynamodb".to_string()),
+            columns: None,
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: Some(vec![field("pk"), field("sk")]),
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
         }
@@ -1267,59 +1362,99 @@ mod tests {
     }
 
     #[test]
-    fn add_collection_maps_name_and_sampled_attributes() {
-        let mut metadata = SqlCompletionMetadata::default();
-        metadata.add_collection(&dynamo_collection());
-
-        let tables: Vec<&str> = metadata.table_names_iter().collect();
-        assert!(tables.contains(&"Orders"));
-
-        let columns: Vec<&str> = metadata.all_columns_iter().collect();
-        assert!(columns.contains(&"pk"));
-        assert!(columns.contains(&"sk"));
-        assert!(
-            columns.contains(&"city"),
-            "nested fields should be folded in"
-        );
-        assert!(columns.contains(&"zip"));
-
-        let qualified = metadata.columns_for_table(&normalize_identifier("Orders"));
-        assert!(qualified.contains(&"pk"));
-        assert!(qualified.contains(&"city"));
-    }
-
-    #[test]
     fn dynamo_document_completion_offers_table_after_from() {
-        let mut metadata = SqlCompletionMetadata::default();
-        metadata.add_collection(&dynamo_collection());
+        // Document-category: the collection NAME folds as a table candidate
+        // even though its `sample_fields` are `None`.
+        let snapshot = dynamo_document_snapshot();
+        let metadata = build_sql_completion_metadata(
+            Some(&snapshot),
+            std::iter::empty::<&DbSchemaInfo>(),
+            std::iter::empty::<&TableInfo>(),
+            true,
+        );
 
         let source = "SELECT * FROM ";
         let items = sql_completion_items(&metadata, source, source.len());
 
         assert!(
             labels(&items).contains(&"Orders".to_string()),
-            "table name should be suggested in FROM position"
+            "table name should be suggested in FROM position via as_document"
         );
     }
 
     #[test]
-    fn dynamo_document_completion_offers_attributes_in_where_position() {
-        let mut metadata = SqlCompletionMetadata::default();
-        metadata.add_collection(&dynamo_collection());
+    fn dynamo_key_schema_attributes_complete_in_where_position() {
+        // Real DynamoDB path: the document snapshot collection has no
+        // `sample_fields`; the WHERE-position attributes (pk/sk) come from the
+        // lazily-fetched `table_details` `TableInfo` folded by `add_table`.
+        let snapshot = dynamo_document_snapshot();
+        let table_details = [dynamo_table_details()];
+        let metadata = build_sql_completion_metadata(
+            Some(&snapshot),
+            std::iter::empty::<&DbSchemaInfo>(),
+            table_details.iter(),
+            true,
+        );
 
         let qualified_source = "SELECT * FROM Orders o WHERE o.p";
         let qualified_items =
             sql_completion_items(&metadata, qualified_source, qualified_source.len());
         assert!(
             labels(&qualified_items).contains(&"pk".to_string()),
-            "qualified attribute should be suggested after the alias"
+            "qualified key-schema attribute should be suggested after the alias"
         );
 
-        let bare_source = "SELECT * FROM Orders WHERE c";
+        let bare_source = "SELECT * FROM Orders WHERE s";
         let bare_items = sql_completion_items(&metadata, bare_source, bare_source.len());
         assert!(
-            labels(&bare_items).contains(&"city".to_string()),
-            "unqualified attribute should be suggested in WHERE with a prefix"
+            labels(&bare_items).contains(&"sk".to_string()),
+            "unqualified key-schema attribute should be suggested in WHERE with a prefix"
+        );
+    }
+
+    #[test]
+    fn log_stream_document_snapshot_does_not_fold_collections_as_tables() {
+        // A LogStream-category driver (CloudWatch-shaped) also builds a document
+        // snapshot, but its collections are log groups, not SQL tables. With
+        // `is_document_category` false they must NOT fold as table candidates.
+        let snapshot = SchemaSnapshot::document(DocumentSchema {
+            databases: vec![DatabaseInfo {
+                name: "default".to_string(),
+                is_current: true,
+            }],
+            current_database: Some("default".to_string()),
+            collections: vec![CollectionInfo {
+                name: "/aws/lambda/my-fn".to_string(),
+                database: Some("default".to_string()),
+                document_count: None,
+                avg_document_size: None,
+                sample_fields: None,
+                indexes: None,
+                validator: None,
+                is_capped: false,
+                presentation: dbflux_core::CollectionPresentation::default(),
+                child_items: None,
+            }],
+        });
+
+        let metadata = build_sql_completion_metadata(
+            Some(&snapshot),
+            std::iter::empty::<&DbSchemaInfo>(),
+            std::iter::empty::<&TableInfo>(),
+            false,
+        );
+
+        let tables: Vec<&str> = metadata.table_names_iter().collect();
+        assert!(
+            tables.is_empty(),
+            "log-group names must not fold as SQL table candidates"
+        );
+
+        let source = "SELECT * FROM ";
+        let items = sql_completion_items(&metadata, source, source.len());
+        assert!(
+            !labels(&items).contains(&"/aws/lambda/my-fn".to_string()),
+            "log-group name must not be suggested as a table in FROM position"
         );
     }
 
@@ -1363,6 +1498,52 @@ mod tests {
         let from_source = "SELECT * FROM ";
         let items = sql_completion_items(&metadata, from_source, from_source.len());
         assert!(labels(&items).contains(&"users".to_string()));
+    }
+
+    #[test]
+    fn sql_completion_routing_preserves_main_and_adds_dynamodb() {
+        // Languages that took the SQL path on main: always SQL, any category.
+        assert!(should_use_sql_completion(
+            &QueryLanguage::Sql,
+            true,
+            Some(DatabaseCategory::Relational),
+        ));
+        assert!(should_use_sql_completion(
+            &QueryLanguage::InfluxQuery,
+            true,
+            Some(DatabaseCategory::TimeSeries),
+        ));
+        assert!(should_use_sql_completion(&QueryLanguage::Cql, false, None));
+
+        // New generic case: Document-category driver with an SQL-style editor
+        // (DynamoDB PartiQL).
+        assert!(should_use_sql_completion(
+            &QueryLanguage::Custom("DynamoDB".to_string()),
+            true,
+            Some(DatabaseCategory::Document),
+        ));
+
+        // Regression guard: CloudWatch's OpenSearchSql source-context mode is
+        // SQL-style but LogStream-category — must NOT route to the SQL catalog.
+        assert!(!should_use_sql_completion(
+            &QueryLanguage::OpenSearchSql,
+            true,
+            Some(DatabaseCategory::LogStream),
+        ));
+
+        // A document driver without an SQL-style editor stays off the SQL path.
+        assert!(!should_use_sql_completion(
+            &QueryLanguage::MongoQuery,
+            false,
+            Some(DatabaseCategory::Document),
+        ));
+
+        // DynamoDB without an SQL-style editor surface does not route to SQL.
+        assert!(!should_use_sql_completion(
+            &QueryLanguage::Custom("DynamoDB".to_string()),
+            false,
+            Some(DatabaseCategory::Document),
+        ));
     }
 
     #[test]
