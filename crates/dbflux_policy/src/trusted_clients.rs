@@ -157,4 +157,79 @@ mod tests {
             }
         );
     }
+
+    fn client(id: &str, issuer: Option<&str>) -> TrustedClient {
+        TrustedClient {
+            id: id.to_string(),
+            name: id.to_string(),
+            issuer: issuer.map(str::to_string),
+            active: true,
+        }
+    }
+
+    #[test]
+    fn issuer_none_in_config_accepts_regardless_of_identity_issuer() {
+        // TrustedClient::matches returns true for any identity issuer when the
+        // configured issuer is None (the `(None, _) => true` arm), so a wildcard
+        // client must accept a presented issuer it never declared.
+        let registry = TrustedClientRegistry::new(vec![client("agent-a", None)]);
+
+        let result = registry.evaluate(&ClientIdentity {
+            client_id: "agent-a".to_string(),
+            issuer: Some("some-issuer".to_string()),
+        });
+
+        assert!(matches!(result, TrustedClientMatch::Trusted(_)));
+    }
+
+    #[test]
+    fn registry_with_multiple_clients_resolves_the_matching_one() {
+        let registry = TrustedClientRegistry::new(vec![
+            client("agent-a", Some("issuer-a")),
+            client("agent-b", Some("issuer-b")),
+        ]);
+
+        let result = registry.evaluate(&ClientIdentity {
+            client_id: "agent-b".to_string(),
+            issuer: Some("issuer-b".to_string()),
+        });
+
+        match result {
+            TrustedClientMatch::Trusted(matched) => assert_eq!(matched.id, "agent-b"),
+            other => panic!("expected agent-b to be trusted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn replace_clients_swaps_the_active_set() {
+        let mut registry = TrustedClientRegistry::new(vec![client("agent-a", None)]);
+
+        let identity_a = ClientIdentity {
+            client_id: "agent-a".to_string(),
+            issuer: None,
+        };
+        let identity_b = ClientIdentity {
+            client_id: "agent-b".to_string(),
+            issuer: None,
+        };
+
+        assert!(matches!(
+            registry.evaluate(&identity_a),
+            TrustedClientMatch::Trusted(_)
+        ));
+
+        registry.replace_clients(vec![client("agent-b", None)]);
+
+        // The previously trusted client is gone, and the new one is now trusted.
+        assert_eq!(
+            registry.evaluate(&identity_a),
+            TrustedClientMatch::Untrusted {
+                reason: UNTRUSTED_CLIENT_AUDIT_REASON
+            }
+        );
+        assert!(matches!(
+            registry.evaluate(&identity_b),
+            TrustedClientMatch::Trusted(_)
+        ));
+    }
 }
