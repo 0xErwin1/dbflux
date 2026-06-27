@@ -14,10 +14,7 @@ use dbflux_core::{
     Value, parse_semantic_filter_json,
 };
 use rmcp::{
-    ErrorData,
-    handler::server::wrapper::Parameters,
-    model::{CallToolResult, Content},
-    schemars::JsonSchema,
+    ErrorData, handler::server::wrapper::Parameters, model::CallToolResult, schemars::JsonSchema,
     tool, tool_router,
 };
 use serde::Deserialize;
@@ -133,9 +130,7 @@ impl DbFluxServer {
                     .await
                     .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok(CallToolResult::success(vec![to_json_content(&result)?]))
                 },
             )
             .await
@@ -180,9 +175,7 @@ impl DbFluxServer {
                     .map_err(|e| e.into_error_data())?;
 
                     Ok((
-                        CallToolResult::success(vec![Content::text(
-                            serde_json::to_string_pretty(&result).unwrap(),
-                        )]),
+                        CallToolResult::success(vec![to_json_content(&result)?]),
                         AuditDetails { query: sql_text },
                     ))
                 },
@@ -224,9 +217,7 @@ impl DbFluxServer {
                     .map_err(|e| e.into_error_data())?;
 
                     Ok((
-                        CallToolResult::success(vec![Content::text(
-                            serde_json::to_string_pretty(&result).unwrap(),
-                        )]),
+                        CallToolResult::success(vec![to_json_content(&result)?]),
                         AuditDetails { query: sql_text },
                     ))
                 },

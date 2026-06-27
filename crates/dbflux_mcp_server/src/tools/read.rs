@@ -14,16 +14,13 @@ use dbflux_core::{
     TableBrowseRequest, TableCountRequest, TableRef, parse_semantic_filter_json,
 };
 use rmcp::{
-    ErrorData,
-    handler::server::wrapper::Parameters,
-    model::{CallToolResult, Content},
-    schemars::JsonSchema,
+    ErrorData, handler::server::wrapper::Parameters, model::CallToolResult, schemars::JsonSchema,
     tool, tool_router,
 };
 use serde::Deserialize;
 
 use crate::{
-    helper::{IntoErrorData, serialize_query_result},
+    helper::{IntoErrorData, serialize_query_result, to_json_content},
     server::DbFluxServer,
     state::ServerState,
 };
@@ -200,9 +197,7 @@ impl DbFluxServer {
                     .await
                     .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok(CallToolResult::success(vec![to_json_content(&result)?]))
                 },
             )
             .await
@@ -237,10 +232,9 @@ impl DbFluxServer {
                     .await
                     .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&serde_json::json!({ "count": count }))
-                            .unwrap(),
-                    )]))
+                    Ok(CallToolResult::success(vec![to_json_content(
+                        &serde_json::json!({ "count": count }),
+                    )?]))
                 },
             )
             .await
@@ -289,9 +283,7 @@ impl DbFluxServer {
                     .map_err(|e| e.into_error_data())?;
 
                     Ok((
-                        CallToolResult::success(vec![Content::text(
-                            serde_json::to_string_pretty(&result).unwrap(),
-                        )]),
+                        CallToolResult::success(vec![to_json_content(&result)?]),
                         AuditDetails { query: sql_text },
                     ))
                 },

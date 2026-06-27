@@ -27,6 +27,7 @@ use dbflux_core::{
 };
 use dbflux_ui_base::platform;
 use dbflux_ui_base::sso_wizard::SsoWizard;
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use dbflux_ui_base::{AppStateEntity, AuthProfileCreated};
 use gpui::*;
 use gpui_component::Root;
@@ -1201,37 +1202,37 @@ impl ConnectionManagerWindow {
         self.form
             .host_value_source_selector
             .update(cx, |selector, cx| {
-                let _ = selector.set_value_ref(None, window, cx);
+                let _previous = selector.set_value_ref(None, window, cx);
             });
         self.access
             .ssm_instance_id_value_source_selector
             .update(cx, |selector, cx| {
-                let _ = selector.set_value_ref(None, window, cx);
+                let _previous = selector.set_value_ref(None, window, cx);
             });
         self.access
             .ssm_region_value_source_selector
             .update(cx, |selector, cx| {
-                let _ = selector.set_value_ref(None, window, cx);
+                let _previous = selector.set_value_ref(None, window, cx);
             });
         self.access
             .ssm_remote_port_value_source_selector
             .update(cx, |selector, cx| {
-                let _ = selector.set_value_ref(None, window, cx);
+                let _previous = selector.set_value_ref(None, window, cx);
             });
         self.form
             .database_value_source_selector
             .update(cx, |selector, cx| {
-                let _ = selector.set_value_ref(None, window, cx);
+                let _previous = selector.set_value_ref(None, window, cx);
             });
         self.form
             .user_value_source_selector
             .update(cx, |selector, cx| {
-                let _ = selector.set_value_ref(None, window, cx);
+                let _previous = selector.set_value_ref(None, window, cx);
             });
         self.form
             .password_value_source_selector
             .update(cx, |selector, cx| {
-                let _ = selector.set_value_ref(None, window, cx);
+                let _previous = selector.set_value_ref(None, window, cx);
             });
     }
 
@@ -2560,14 +2561,20 @@ impl ConnectionManagerWindow {
         };
         platform::apply_window_options(&mut options, 600.0, 500.0);
 
-        let _ = cx.open_window(options, move |window, cx| {
+        if let Err(error) = cx.open_window(options, move |window, cx| {
             let wizard = cx.new(|cx| {
                 let mut wizard = SsoWizard::new(app_state.clone(), window, cx);
                 wizard.open(window, cx);
                 wizard
             });
             cx.new(|cx| Root::new(wizard, window, cx))
-        });
+        }) {
+            report_error(
+                UserFacingError::new(ErrorKind::User, "Failed to open AWS SSO wizard window")
+                    .with_cause(format!("{error}")),
+                cx,
+            );
+        }
     }
 
     fn handle_app_state_changed(&mut self, cx: &mut Context<Self>) {

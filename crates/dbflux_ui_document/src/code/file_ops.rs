@@ -235,7 +235,14 @@ impl CodeDocument {
                     .ok();
                 }
                 Err(e) => {
-                    log::error!("Auto-save failed for {}: {}", target.display(), e);
+                    report_error_async(
+                        UserFacingError::new(
+                            ErrorKind::Storage,
+                            format!("Auto-save failed for {}", target.display()),
+                        )
+                        .with_cause(format!("{e}")),
+                        cx,
+                    );
                 }
             }
         }));

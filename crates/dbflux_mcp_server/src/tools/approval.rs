@@ -10,16 +10,13 @@
 use dbflux_approval::store::ExecutionPlan;
 use dbflux_policy::ExecutionClassification;
 use rmcp::{
-    ErrorData,
-    handler::server::wrapper::Parameters,
-    model::{CallToolResult, Content},
-    schemars::JsonSchema,
+    ErrorData, handler::server::wrapper::Parameters, model::CallToolResult, schemars::JsonSchema,
     tool, tool_router,
 };
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::server::DbFluxServer;
+use crate::{helper::to_json_content, server::DbFluxServer};
 
 const DEFAULT_REJECTION_REASON: &str = "rejected by approver";
 
@@ -111,9 +108,7 @@ impl DbFluxServer {
                         "message": "Execution request created. Awaiting approval."
                     });
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&response).unwrap(),
-                    )]))
+                    Ok(CallToolResult::success(vec![to_json_content(&response)?]))
                 },
             )
             .await
@@ -155,9 +150,7 @@ impl DbFluxServer {
                         "count": filtered.len()
                     });
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&response).unwrap(),
-                    )]))
+                    Ok(CallToolResult::success(vec![to_json_content(&response)?]))
                 },
             )
             .await
@@ -191,9 +184,9 @@ impl DbFluxServer {
                     };
 
                     match pending {
-                        Some(pending) => Ok(CallToolResult::success(vec![Content::text(
-                            serde_json::to_string_pretty(&pending).unwrap(),
-                        )])),
+                        Some(pending) => {
+                            Ok(CallToolResult::success(vec![to_json_content(&pending)?]))
+                        }
                         None => Err(ErrorData::invalid_params(
                             format!("Pending execution not found: {}", pending_id),
                             None,
@@ -270,9 +263,7 @@ impl DbFluxServer {
                         )
                     });
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&response).unwrap(),
-                    )]))
+                    Ok(CallToolResult::success(vec![to_json_content(&response)?]))
                 },
             )
             .await
@@ -314,9 +305,7 @@ impl DbFluxServer {
                         "reason": rejection_reason
                     });
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&response).unwrap(),
-                    )]))
+                    Ok(CallToolResult::success(vec![to_json_content(&response)?]))
                 },
             )
             .await

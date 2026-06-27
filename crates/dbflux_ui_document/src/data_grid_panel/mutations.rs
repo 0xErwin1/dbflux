@@ -238,7 +238,13 @@ impl DataGridPanel {
                 }
                 Value::Text(value) => DocumentFilter::new(serde_json::json!({"_id": value})),
                 _ => {
-                    log::error!("[SAVE] Invalid _id value for document inline edit");
+                    report_error(
+                        UserFacingError::new(
+                            ErrorKind::User,
+                            "Cannot update document field: the document has an unsupported _id value",
+                        ),
+                        cx,
+                    );
                     return;
                 }
             }
@@ -448,7 +454,13 @@ impl DataGridPanel {
         }
 
         if pk_columns.len() != pk_indices.len() || pk_values.len() != pk_indices.len() {
-            log::error!("[SAVE] Failed to build row identity");
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::User,
+                    "Cannot save row: failed to build row identity from primary key columns",
+                ),
+                cx,
+            );
             return;
         }
 
@@ -588,7 +600,13 @@ impl DataGridPanel {
                 }
                 Value::Text(s) => DocumentFilter::new(serde_json::json!({"_id": s})),
                 _ => {
-                    log::error!("[SAVE] Invalid _id value for document");
+                    report_error(
+                        UserFacingError::new(
+                            ErrorKind::User,
+                            "Cannot save document: it has an unsupported _id value",
+                        ),
+                        cx,
+                    );
                     return;
                 }
             }
@@ -1114,7 +1132,13 @@ impl DataGridPanel {
                 }
                 Value::Text(s) => dbflux_core::DocumentFilter::new(serde_json::json!({"_id": s})),
                 _ => {
-                    log::error!("[DELETE] Invalid _id value for document");
+                    report_error(
+                        UserFacingError::new(
+                            ErrorKind::User,
+                            "Cannot delete document: it has an unsupported _id value",
+                        ),
+                        cx,
+                    );
                     return;
                 }
             }

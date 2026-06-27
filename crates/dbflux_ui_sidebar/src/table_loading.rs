@@ -1,6 +1,7 @@
 use super::*;
 use dbflux_core::TaskKind;
 use dbflux_ui_base::AsyncUpdateResultExt;
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 
 const COLLECTION_CHILDREN_PAGE_SIZE: u32 = 50;
 
@@ -394,7 +395,11 @@ impl Sidebar {
             Ok(p) => p,
             Err(e) => {
                 if e != "Schema types already cached" {
-                    log::warn!("Cannot fetch schema types: {}", e);
+                    report_error(
+                        UserFacingError::new(ErrorKind::Network, "Cannot load schema types")
+                            .with_cause(e),
+                        cx,
+                    );
                 }
                 return false;
             }
@@ -438,7 +443,11 @@ impl Sidebar {
             Ok(p) => p,
             Err(e) => {
                 if e != "Schema indexes already cached" {
-                    log::warn!("Cannot fetch schema indexes: {}", e);
+                    report_error(
+                        UserFacingError::new(ErrorKind::Network, "Cannot load schema indexes")
+                            .with_cause(e),
+                        cx,
+                    );
                 }
                 return false;
             }
@@ -482,7 +491,11 @@ impl Sidebar {
             Ok(p) => p,
             Err(e) => {
                 if e != "Schema foreign keys already cached" {
-                    log::warn!("Cannot fetch schema foreign keys: {}", e);
+                    report_error(
+                        UserFacingError::new(ErrorKind::Network, "Cannot load schema foreign keys")
+                            .with_cause(e),
+                        cx,
+                    );
                 }
                 return false;
             }
@@ -530,7 +543,11 @@ impl Sidebar {
             Ok(p) => p,
             Err(e) => {
                 if e != "Schema routines already cached" {
-                    log::warn!("Cannot fetch schema routines: {}", e);
+                    report_error(
+                        UserFacingError::new(ErrorKind::Network, "Cannot load schema routines")
+                            .with_cause(e),
+                        cx,
+                    );
                 }
                 return false;
             }

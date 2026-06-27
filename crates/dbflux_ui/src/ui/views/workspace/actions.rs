@@ -1860,7 +1860,7 @@ impl Workspace {
     }
 
     /// Write the current tab state to the session manifest (dbflux.db-backed).
-    pub(super) fn write_session_manifest(&self, cx: &App) {
+    pub(super) fn write_session_manifest(&self, cx: &mut App) {
         use dbflux_core::SessionTab;
 
         let runtime = self.app_state.read(cx).storage_runtime();
@@ -1902,7 +1902,11 @@ impl Workspace {
         };
 
         if let Err(e) = repo.save_workspace_session(&manifest) {
-            log::error!("Failed to save session manifest: {}", e);
+            report_error(
+                UserFacingError::new(ErrorKind::Storage, "Failed to save session manifest")
+                    .with_cause(format!("{e}")),
+                cx,
+            );
         }
     }
 

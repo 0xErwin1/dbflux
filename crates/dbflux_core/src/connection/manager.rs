@@ -1,3 +1,4 @@
+use crate::LogErr;
 use crate::{
     CollectionChildrenCache, CollectionChildrenPage, CollectionChildrenRequest, CollectionRef,
     Connection, ConnectionHooks, ConnectionProfile, CustomTypeInfo, DbDriver, DbKind, DbSchemaInfo,
@@ -690,9 +691,9 @@ impl ConnectionManager {
     pub fn disconnect(&mut self, profile_id: Uuid) {
         if let Some(connected) = self.connections.remove(&profile_id) {
             std::thread::spawn(move || {
-                let _ = connected.connection.cancel_active();
+                connected.connection.cancel_active().log_err();
                 for db_conn in connected.database_connections.values() {
-                    let _ = db_conn.connection.cancel_active();
+                    db_conn.connection.cancel_active().log_err();
                 }
                 drop(connected);
             });

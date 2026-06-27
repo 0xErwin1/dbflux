@@ -5,7 +5,11 @@
 //!
 //! All tools use `ScriptsDirectory` from `dbflux_core` to manage file operations.
 
-use crate::{DbFluxServer, helper::IntoErrorData, state::ServerState};
+use crate::{
+    DbFluxServer,
+    helper::{IntoErrorData, to_json_content},
+    state::ServerState,
+};
 use dbflux_core::{QueryLanguage, QueryRequest};
 use rmcp::{
     ErrorData,
@@ -143,9 +147,7 @@ impl DbFluxServer {
                         .await
                         .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok(CallToolResult::success(vec![to_json_content(&result)?]))
                 },
             )
             .await
@@ -171,9 +173,7 @@ impl DbFluxServer {
                         .await
                         .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok(CallToolResult::success(vec![to_json_content(&result)?]))
                 },
             )
             .await
@@ -208,9 +208,7 @@ impl DbFluxServer {
                     .await
                     .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok(CallToolResult::success(vec![to_json_content(&result)?]))
                 },
             )
             .await
@@ -237,9 +235,7 @@ impl DbFluxServer {
                         .await
                         .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok(CallToolResult::success(vec![to_json_content(&result)?]))
                 },
             )
             .await
@@ -306,9 +302,7 @@ impl DbFluxServer {
                             .await
                             .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok(CallToolResult::success(vec![to_json_content(&result)?]))
                 },
             )
             .await
