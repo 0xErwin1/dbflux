@@ -9,6 +9,7 @@
 //! source for scratch/shadow path ownership. Callers should never hardcode
 //! `sessions/` paths directly.
 
+use dbflux_core::LogErr;
 use log::info;
 use std::path::{Path, PathBuf};
 
@@ -97,7 +98,11 @@ impl ArtifactStore {
 
     /// Deletes a file at the given path, silently ignoring absence.
     pub fn delete_file(&self, path: &Path) {
-        let _ = std::fs::remove_file(path);
+        if let Err(error) = std::fs::remove_file(path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            log::error!("failed to delete file {}: {error}", path.display());
+        }
     }
 
     /// Returns the modification time of a file, if readable.
@@ -130,8 +135,7 @@ impl ArtifactStore {
                 continue;
             }
 
-            if !referenced.contains(&path) {
-                let _ = std::fs::remove_file(&path);
+            if !referenced.contains(&path) && std::fs::remove_file(&path).log_err().is_some() {
                 info!("Cleaned up orphan artifact: {}", path.display());
             }
         }

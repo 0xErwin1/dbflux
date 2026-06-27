@@ -1,5 +1,6 @@
 pub(crate) mod error;
 pub(crate) mod error_formatter;
+pub(crate) mod log_err;
 pub(crate) mod shutdown;
 pub(crate) mod task;
 pub(crate) mod traits;
@@ -10,6 +11,7 @@ pub use error_formatter::{
     ConnectionErrorFormatter, DefaultErrorFormatter, ErrorLocation, FormattedError,
     QueryErrorFormatter, sanitize_uri,
 };
+pub use log_err::LogErr;
 pub use shutdown::{ShutdownCoordinator, ShutdownPhase};
 pub use task::{
     CancelToken, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget,

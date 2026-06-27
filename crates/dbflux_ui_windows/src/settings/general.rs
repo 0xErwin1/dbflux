@@ -89,12 +89,20 @@ impl GeneralSection {
 
     /// Toggles whether this nightly build shares the stable database. The change
     /// is persisted to the pre-database marker immediately and applies on the
-    /// next launch; a write failure is logged and leaves the toggle unchanged.
-    fn set_share_stable_db(&mut self, value: bool) {
+    /// next launch; a write failure is surfaced to the user and leaves the toggle
+    /// unchanged.
+    fn set_share_stable_db(&mut self, value: bool, cx: &mut Context<Self>) {
         match dbflux_storage::paths::set_nightly_shares_stable_db(value) {
             Ok(()) => self.gen_share_stable_db = value,
             Err(error) => {
-                log::error!("Failed to update the shared-database setting: {error}")
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::Config,
+                        "Failed to update the shared-database setting",
+                    )
+                    .with_cause(format!("{error}")),
+                    cx,
+                );
             }
         }
     }
@@ -186,7 +194,7 @@ impl GeneralSection {
                 cx.notify();
             }
             Some(GeneralFormRow::ShareStableDb) => {
-                self.set_share_stable_db(!self.gen_share_stable_db);
+                self.set_share_stable_db(!self.gen_share_stable_db, cx);
                 cx.notify();
             }
             Some(GeneralFormRow::MaxHistory)
@@ -506,7 +514,7 @@ impl GeneralSection {
                     self.gen_settings.restore_session_on_startup,
                     is_at(GeneralFormRow::RestoreSession),
                     GeneralFormRow::RestoreSession,
-                    |this, value| this.gen_settings.restore_session_on_startup = value,
+                    |this, value, _cx| this.gen_settings.restore_session_on_startup = value,
                     cx,
                 ))
                 .child(self.render_gen_checkbox(
@@ -515,7 +523,7 @@ impl GeneralSection {
                     self.gen_settings.reopen_last_connections,
                     is_at(GeneralFormRow::ReopenConnections),
                     GeneralFormRow::ReopenConnections,
-                    |this, value| this.gen_settings.reopen_last_connections = value,
+                    |this, value, _cx| this.gen_settings.reopen_last_connections = value,
                     cx,
                 ))
                 .child(self.render_gen_dropdown(
@@ -573,7 +581,7 @@ impl GeneralSection {
                     self.gen_settings.auto_refresh_pause_on_error,
                     is_at(GeneralFormRow::PauseRefreshOnError),
                     GeneralFormRow::PauseRefreshOnError,
-                    |this, value| this.gen_settings.auto_refresh_pause_on_error = value,
+                    |this, value, _cx| this.gen_settings.auto_refresh_pause_on_error = value,
                     cx,
                 ))
                 .child(self.render_gen_checkbox(
@@ -582,7 +590,7 @@ impl GeneralSection {
                     self.gen_settings.auto_refresh_only_if_visible,
                     is_at(GeneralFormRow::RefreshOnlyIfVisible),
                     GeneralFormRow::RefreshOnlyIfVisible,
-                    |this, value| this.gen_settings.auto_refresh_only_if_visible = value,
+                    |this, value, _cx| this.gen_settings.auto_refresh_only_if_visible = value,
                     cx,
                 ))
                 .child(self.render_gen_group_header("Execution Safety", border, muted_fg))
@@ -592,7 +600,7 @@ impl GeneralSection {
                     self.gen_settings.confirm_dangerous_queries,
                     is_at(GeneralFormRow::ConfirmDangerous),
                     GeneralFormRow::ConfirmDangerous,
-                    |this, value| this.gen_settings.confirm_dangerous_queries = value,
+                    |this, value, _cx| this.gen_settings.confirm_dangerous_queries = value,
                     cx,
                 ))
                 .child(self.render_gen_checkbox(
@@ -601,7 +609,7 @@ impl GeneralSection {
                     self.gen_settings.dangerous_requires_where,
                     is_at(GeneralFormRow::RequiresWhere),
                     GeneralFormRow::RequiresWhere,
-                    |this, value| this.gen_settings.dangerous_requires_where = value,
+                    |this, value, _cx| this.gen_settings.dangerous_requires_where = value,
                     cx,
                 ))
                 .child(self.render_gen_checkbox(
@@ -610,7 +618,7 @@ impl GeneralSection {
                     self.gen_settings.dangerous_requires_preview,
                     is_at(GeneralFormRow::RequiresPreview),
                     GeneralFormRow::RequiresPreview,
-                    |this, value| this.gen_settings.dangerous_requires_preview = value,
+                    |this, value, _cx| this.gen_settings.dangerous_requires_preview = value,
                     cx,
                 ))
                 .when(Self::is_nightly(), |column| {
@@ -622,7 +630,7 @@ impl GeneralSection {
                             self.gen_share_stable_db,
                             is_at(GeneralFormRow::ShareStableDb),
                             GeneralFormRow::ShareStableDb,
-                            |this, value| this.set_share_stable_db(value),
+                            |this, value, cx| this.set_share_stable_db(value, cx),
                             cx,
                         ))
                         .child(
@@ -690,7 +698,7 @@ impl GeneralSection {
         checked: bool,
         is_focused: bool,
         row: GeneralFormRow,
-        setter: fn(&mut Self, bool),
+        setter: fn(&mut Self, bool, &mut Context<Self>),
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let primary = cx.theme().primary;
@@ -724,7 +732,7 @@ impl GeneralSection {
             )
             .child(Checkbox::new(id).checked(checked).on_click(cx.listener(
                 move |this, value: &bool, _, cx| {
-                    setter(this, *value);
+                    setter(this, *value, cx);
                     cx.notify();
                 },
             )))

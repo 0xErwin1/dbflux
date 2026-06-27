@@ -16,7 +16,10 @@ use rmcp::{
 };
 use serde::Deserialize;
 
-use crate::{helper::IntoErrorData, server::DbFluxServer};
+use crate::{
+    helper::{IntoErrorData, to_json_content},
+    server::DbFluxServer,
+};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct QueryAuditLogsParams {
@@ -219,9 +222,7 @@ impl DbFluxServer {
                         .map_err(|e| format!("Failed to query audit logs: {}", e))
                         .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&events).unwrap(),
-                    )]))
+                    Ok(CallToolResult::success(vec![to_json_content(&events)?]))
                 },
             )
             .await
@@ -253,9 +254,7 @@ impl DbFluxServer {
                         .map_err(|e| e.into_error_data())?;
 
                     match event {
-                        Some(entry) => Ok(CallToolResult::success(vec![Content::text(
-                            serde_json::to_string_pretty(&entry).unwrap(),
-                        )])),
+                        Some(entry) => Ok(CallToolResult::success(vec![to_json_content(&entry)?])),
                         None => {
                             Err(format!("Audit entry with ID {} not found", id).into_error_data())
                         }

@@ -22,7 +22,7 @@ use dbflux_core::{
 };
 use rmcp::{
     handler::server::wrapper::Parameters,
-    model::{CallToolResult, Content, ErrorData},
+    model::{CallToolResult, ErrorData},
     schemars::JsonSchema,
     tool, tool_router,
 };
@@ -992,9 +992,7 @@ impl DbFluxServer {
                     .map_err(|e| e.into_error_data())?;
 
                     Ok((
-                        CallToolResult::success(vec![Content::text(
-                            serde_json::to_string_pretty(&result).unwrap(),
-                        )]),
+                        CallToolResult::success(vec![to_json_content(&result)?]),
                         AuditDetails {
                             query: non_empty(sql),
                         },
@@ -1031,9 +1029,7 @@ impl DbFluxServer {
                             .map_err(|e| e.into_error_data())?;
 
                     Ok((
-                        CallToolResult::success(vec![Content::text(
-                            serde_json::to_string_pretty(&result).unwrap(),
-                        )]),
+                        CallToolResult::success(vec![to_json_content(&result)?]),
                         AuditDetails {
                             query: non_empty(sql),
                         },
@@ -1079,9 +1075,7 @@ impl DbFluxServer {
                     .map_err(|e| e.into_error_data())?;
 
                     Ok((
-                        CallToolResult::success(vec![Content::text(
-                            serde_json::to_string_pretty(&result).unwrap(),
-                        )]),
+                        CallToolResult::success(vec![to_json_content(&result)?]),
                         AuditDetails {
                             query: non_empty(sql),
                         },
@@ -1123,9 +1117,7 @@ impl DbFluxServer {
                     .map_err(|e| e.into_error_data())?;
 
                     Ok((
-                        CallToolResult::success(vec![Content::text(
-                            serde_json::to_string_pretty(&result).unwrap(),
-                        )]),
+                        CallToolResult::success(vec![to_json_content(&result)?]),
                         AuditDetails {
                             query: non_empty(sql),
                         },
@@ -1168,9 +1160,7 @@ impl DbFluxServer {
                         .map_err(|e| e.into_error_data())?;
 
                     Ok((
-                        CallToolResult::success(vec![Content::text(
-                            serde_json::to_string_pretty(&result).unwrap(),
-                        )]),
+                        CallToolResult::success(vec![to_json_content(&result)?]),
                         AuditDetails {
                             query: non_empty(sql),
                         },

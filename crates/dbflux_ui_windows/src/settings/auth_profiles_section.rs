@@ -15,7 +15,7 @@ use dbflux_components::tokens::{Heights, Radii, Spacing};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     AccessKind, AuthEditCapabilities, AuthEditSnapshot, AuthProfile, AuthSaveOutcome,
-    DanglingMessage, FetchOptionsError, FetchOptionsRequest, FormFieldKind, RefreshTrigger,
+    DanglingMessage, FetchOptionsError, FetchOptionsRequest, FormFieldKind, LogErr, RefreshTrigger,
 };
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
@@ -1732,7 +1732,7 @@ impl AuthProfilesSection {
         // of when the login future resolves.
         let (url_tx, url_rx) = std::sync::mpsc::sync_channel::<Option<String>>(1);
         let url_callback: dbflux_core::auth::UrlCallback = Box::new(move |url| {
-            let _ = url_tx.try_send(url);
+            url_tx.try_send(url).log_err();
         });
 
         // URL-forwarding task: poll the channel and push the verification URL
@@ -1979,7 +1979,7 @@ impl AuthProfilesSection {
                                 if let Some(profile) = this.current_form_profile(cx)
                                     && let Some(provider) = this.selected_provider(cx)
                                 {
-                                    let _ = provider.abort_login(&profile);
+                                    let _aborted = provider.abort_login(&profile);
                                 }
                                 this.active_login_url = None;
                                 this.provider_login_status = Some((

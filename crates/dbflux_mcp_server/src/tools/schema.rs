@@ -2,10 +2,7 @@ use std::sync::Arc;
 
 use dbflux_core::{Connection, DataStructure, DescribeRequest, TableRef};
 use rmcp::{
-    ErrorData,
-    handler::server::wrapper::Parameters,
-    model::{CallToolResult, Content},
-    schemars::JsonSchema,
+    ErrorData, handler::server::wrapper::Parameters, model::CallToolResult, schemars::JsonSchema,
     tool, tool_router,
 };
 use serde::Deserialize;
@@ -81,9 +78,7 @@ impl DbFluxServer {
                         .await
                         .map_err(|e| e.into_error_data())?;
 
-                    let json_str = serde_json::to_string_pretty(&result)
-                        .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-                    Ok(CallToolResult::success(vec![Content::text(json_str)]))
+                    Ok(CallToolResult::success(vec![to_json_content(&result)?]))
                 },
             )
             .await
@@ -111,9 +106,7 @@ impl DbFluxServer {
                             .await
                             .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok(CallToolResult::success(vec![to_json_content(&result)?]))
                 },
             )
             .await
@@ -146,9 +139,7 @@ impl DbFluxServer {
                     .await
                     .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok(CallToolResult::success(vec![to_json_content(&result)?]))
                 },
             )
             .await
@@ -195,9 +186,7 @@ impl DbFluxServer {
                     .await
                     .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok(CallToolResult::success(vec![to_json_content(&result)?]))
                 },
             )
             .await

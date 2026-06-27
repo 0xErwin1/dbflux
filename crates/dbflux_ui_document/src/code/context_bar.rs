@@ -3,6 +3,7 @@ use crate::result_view::ResultViewMode;
 use dbflux_components::composites::control_shell;
 use dbflux_components::primitives::{Icon, Text, focus_frame};
 use dbflux_ui_base::AsyncUpdateResultExt;
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 
 fn context_dropdown_min_width(index: usize) -> Pixels {
     match index {
@@ -826,7 +827,14 @@ impl CodeDocument {
         {
             Ok(p) => p,
             Err(e) => {
-                log::warn!("Cannot connect to database {}: {}", database, e);
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::Network,
+                        format!("Cannot connect to database '{database}'"),
+                    )
+                    .with_cause(e),
+                    cx,
+                );
                 self.revert_database_selection(prev_database, prev_schema, cx);
                 return;
             }
