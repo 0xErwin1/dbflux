@@ -17,23 +17,26 @@ pub fn export_entries(
     }
 }
 
+/// Quotes a string for RFC 4180 CSV output: wraps it in double quotes and
+/// doubles any embedded double quote. Commas and newlines are preserved
+/// verbatim inside the quotes, so the field never leaks into adjacent columns
+/// or rows. Audit text is never altered (no newline flattening) — the export
+/// is a compliance artifact and must round-trip the stored values exactly.
+fn csv_quote(field: &str) -> String {
+    format!("\"{}\"", field.replace('"', "\"\""))
+}
+
 fn export_csv(entries: &[AuditEvent]) -> String {
     let mut output = String::from("id,actor_id,tool_id,decision,reason,created_at_epoch_ms\n");
 
     for entry in entries {
-        let escaped_reason = entry
-            .reason
-            .as_deref()
-            .unwrap_or_default()
-            .replace('"', "\"\"");
-
         output.push_str(&format!(
-            "{},{},{},{},\"{}\",{}\n",
+            "{},{},{},{},{},{}\n",
             entry.id,
-            entry.actor_id,
-            entry.tool_id,
-            entry.decision,
-            escaped_reason,
+            csv_quote(&entry.actor_id),
+            csv_quote(&entry.tool_id),
+            csv_quote(&entry.decision),
+            csv_quote(entry.reason.as_deref().unwrap_or_default()),
             entry.created_at_epoch_ms
         ));
     }
@@ -81,43 +84,37 @@ fn export_extended_csv(events: &[AuditEventDto]) -> String {
     );
 
     for event in events {
-        let escape = |s: Option<&str>| {
-            s.unwrap_or_default()
-                .replace('"', "\"\"")
-                .replace('\n', " ")
-        };
+        let quote = |s: Option<&str>| csv_quote(s.unwrap_or_default());
 
         output.push_str(&format!(
-            "{},\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",{},{},{},\"{}\",\"{}\",\"{}\",\
-             \"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\
-             \"{}\",\"{}\",\"{}\"\n",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             event.id,
-            escape(Some(&event.actor_id)),
-            escape(Some(&event.tool_id)),
-            escape(Some(&event.decision)),
-            escape(event.reason.as_deref()),
-            escape(event.profile_id.as_deref()),
-            escape(event.classification.as_deref()),
+            quote(Some(&event.actor_id)),
+            quote(Some(&event.tool_id)),
+            quote(Some(&event.decision)),
+            quote(event.reason.as_deref()),
+            quote(event.profile_id.as_deref()),
+            quote(event.classification.as_deref()),
             event.duration_ms.map(|d| d.to_string()).unwrap_or_default(),
-            escape(Some(&event.created_at)),
+            quote(Some(&event.created_at)),
             event.created_at_epoch_ms,
-            escape(event.level.as_deref()),
-            escape(event.category.as_deref()),
-            escape(event.action.as_deref()),
-            escape(event.outcome.as_deref()),
-            escape(event.actor_type.as_deref()),
-            escape(event.source_id.as_deref()),
-            escape(event.summary.as_deref()),
-            escape(event.connection_id.as_deref()),
-            escape(event.database_name.as_deref()),
-            escape(event.driver_id.as_deref()),
-            escape(event.object_type.as_deref()),
-            escape(event.object_id.as_deref()),
-            escape(event.details_json.as_deref()),
-            escape(event.error_code.as_deref()),
-            escape(event.error_message.as_deref()),
-            escape(event.session_id.as_deref()),
-            escape(event.correlation_id.as_deref()),
+            quote(event.level.as_deref()),
+            quote(event.category.as_deref()),
+            quote(event.action.as_deref()),
+            quote(event.outcome.as_deref()),
+            quote(event.actor_type.as_deref()),
+            quote(event.source_id.as_deref()),
+            quote(event.summary.as_deref()),
+            quote(event.connection_id.as_deref()),
+            quote(event.database_name.as_deref()),
+            quote(event.driver_id.as_deref()),
+            quote(event.object_type.as_deref()),
+            quote(event.object_id.as_deref()),
+            quote(event.details_json.as_deref()),
+            quote(event.error_code.as_deref()),
+            quote(event.error_message.as_deref()),
+            quote(event.session_id.as_deref()),
+            quote(event.correlation_id.as_deref()),
         ));
     }
 
@@ -151,8 +148,8 @@ mod tests {
 
         let expected = format!(
             "{CSV_HEADER}\
-             1,alice,read_query,allow,\"first\",1700000000000\n\
-             2,alice,read_query,allow,\"\",1700000000000\n"
+             1,\"alice\",\"read_query\",\"allow\",\"first\",1700000000000\n\
+             2,\"alice\",\"read_query\",\"allow\",\"\",1700000000000\n"
         );
         assert_eq!(csv, expected);
     }
@@ -176,27 +173,35 @@ mod tests {
         );
     }
 
-    // FINDING: export_csv (the basic AuditEvent CSV) does NOT quote the
-    // id/actor_id/tool_id/decision fields and does NOT escape commas or newlines
-    // inside `reason` (it only doubles `"`). A reason containing a comma or
-    // newline produces malformed CSV (extra/leaked columns or rows). This test
-    // asserts the CURRENT (buggy) behavior so the suite is green and the gap is
-    // documented; it is intentionally not a "correct CSV" assertion.
+    // Special characters in any text column must stay contained: every text
+    // field is quoted, and commas / newlines are preserved verbatim inside the
+    // quotes rather than leaking into adjacent columns or rows.
     #[test]
-    fn csv_reason_with_comma_and_newline_is_not_escaped_finding() {
-        let events = vec![event(1, Some("a,b\nc"))];
+    fn csv_quotes_all_text_columns_and_contains_special_chars() {
+        let mut evt = event(1, Some("a,b\nc"));
+        evt.actor_id = "comma,actor".to_string();
+        evt.decision = "deny\nwrapped".to_string();
+
+        let csv = export_entries(&[evt], AuditExportFormat::Csv).expect("csv export");
+
+        let expected = format!(
+            "{CSV_HEADER}1,\"comma,actor\",\"read_query\",\"deny\nwrapped\",\"a,b\nc\",1700000000000\n"
+        );
+        assert_eq!(csv, expected);
+    }
+
+    #[test]
+    fn csv_reason_with_embedded_quote_and_comma_round_trips_as_single_field() {
+        // A reason that mixes a quote and a comma must double the quote and stay
+        // a single field; the trailing epoch column is not shifted.
+        let events = vec![event(1, Some(r#"a "b", c"#))];
 
         let csv = export_entries(&events, AuditExportFormat::Csv).expect("csv export");
 
-        // The comma and the raw newline survive verbatim inside the quoted field:
-        // a correct serializer would still keep them inside quotes (legal), but
-        // note the actor/tool/decision columns are emitted entirely unquoted.
-        let expected = format!("{CSV_HEADER}1,alice,read_query,allow,\"a,b\nc\",1700000000000\n");
-        assert_eq!(
-            csv, expected,
-            "documenting current behavior: reason is wrapped in quotes but the \
-             leading numeric/text columns are never quoted"
+        let expected = format!(
+            "{CSV_HEADER}1,\"alice\",\"read_query\",\"allow\",\"a \"\"b\"\", c\",1700000000000\n"
         );
+        assert_eq!(csv, expected);
     }
 
     #[test]
@@ -295,17 +300,18 @@ mod tests {
     }
 
     #[test]
-    fn extended_csv_escapes_quotes_and_flattens_newlines() {
+    fn extended_csv_escapes_quotes_and_preserves_newlines() {
         let mut dto = minimal_dto(1);
         dto.summary = Some("line one\nline two".to_string());
         dto.error_message = Some(r#"say "hi""#.to_string());
 
         let csv = export_extended(&[dto], AuditExportFormat::Csv).expect("extended csv");
 
-        // Newlines inside a field are replaced by spaces; quotes are doubled.
+        // Newlines are preserved verbatim inside the quoted field (lossless,
+        // not flattened); quotes are doubled.
         assert!(
-            csv.contains("\"line one line two\""),
-            "extended csv must flatten newlines to spaces; got: {csv}"
+            csv.contains("\"line one\nline two\""),
+            "extended csv must preserve newlines inside quotes; got: {csv}"
         );
         assert!(
             csv.contains(r#""say ""hi""""#),
