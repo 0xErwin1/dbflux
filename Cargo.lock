@@ -2756,6 +2756,7 @@ dependencies = [
  "dbflux_core",
  "dbflux_ssh",
  "dbflux_test_support",
+ "futures-util",
  "hex",
  "indexmap 2.14.0",
  "log",

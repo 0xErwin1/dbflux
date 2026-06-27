@@ -20,3 +20,39 @@ impl ConnectionPolicyAssignment {
         self.actor_id == actor_id && self.scope.connection_id == connection_id
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ConnectionPolicyAssignment, PolicyBindingScope};
+
+    fn assignment() -> ConnectionPolicyAssignment {
+        ConnectionPolicyAssignment {
+            actor_id: "alice".to_string(),
+            scope: PolicyBindingScope {
+                connection_id: "conn-a".to_string(),
+            },
+            role_ids: Vec::new(),
+            policy_ids: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn applies_to_matches_actor_and_connection() {
+        assert!(assignment().applies_to("alice", "conn-a"));
+    }
+
+    #[test]
+    fn applies_to_rejects_actor_mismatch() {
+        assert!(!assignment().applies_to("bob", "conn-a"));
+    }
+
+    #[test]
+    fn applies_to_rejects_connection_mismatch() {
+        assert!(!assignment().applies_to("alice", "conn-b"));
+    }
+
+    #[test]
+    fn applies_to_rejects_when_both_mismatch() {
+        assert!(!assignment().applies_to("bob", "conn-b"));
+    }
+}

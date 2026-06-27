@@ -17,6 +17,7 @@ async-trait = { workspace = true }
 dbflux_core = { path = "../dbflux_core" }
 dbflux_ssh = { path = "../dbflux_ssh" }
 chrono = { workspace = true }
+futures-util = "0.3"
 hex.workspace = true
 indexmap.workspace = true
 log = "0.4"
