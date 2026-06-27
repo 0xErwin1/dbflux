@@ -298,7 +298,10 @@ fn csv_extended(events: &[AuditEventDto]) -> String {
     output.push_str("id,actor_id,tool_id,decision,reason,profile_id,classification,duration_ms,created_at,created_at_epoch_ms,level,category,action,outcome,actor_type,source_id,summary,connection_id,database_name,driver_id,object_type,object_id,details_json,error_code,error_message,session_id,correlation_id\n");
 
     for event in events {
-        let escape = |s: &str| -> String { s.replace('"', "\"\"").replace('\n', " ") };
+        // Double embedded quotes per RFC 4180; commas and newlines are kept
+        // verbatim inside the surrounding quotes so audit text exports
+        // losslessly (no flattening) and never leaks into adjacent columns.
+        let escape = |s: &str| -> String { s.replace('"', "\"\"") };
 
         let reason = event.reason.as_deref().unwrap_or_default();
         let profile_id = event.profile_id.as_deref().unwrap_or_default();
