@@ -1250,27 +1250,25 @@ impl MssqlConnection {
 
         // Multi-statement batches in SQL Server can produce multiple result
         // sets (e.g. `SELECT 1; SELECT 2;` or a stored procedure with
-        // several `SELECT`s). We return the LAST non-empty set as the
-        // primary `QueryResult` (preserving the historical "last statement
-        // wins" UX) and attach every earlier non-empty set to
-        // `additional_results` in batch order, so callers that want the
-        // full batch can walk it via `QueryResult::iter_result_sets()`.
-        // Pure preparation batches (`SET LOCK_TIMEOUT 5000`) produce no
-        // result sets and surface as an empty primary, which is what
-        // callers already expect.
+        // several `SELECT`s). We return the LAST result set as the primary
+        // `QueryResult` (preserving the historical "last statement wins" UX)
+        // and attach every earlier set to `additional_results` in batch
+        // order, so callers that want the full batch can walk it via
+        // `QueryResult::iter_result_sets()`. Column metadata comes from each
+        // set's METADATA token, so a `SELECT` that returned zero rows still
+        // carries its column headers. Pure preparation batches
+        // (`SET LOCK_TIMEOUT 5000`) emit no metadata, produce no result set,
+        // and surface as an empty primary, which is what callers expect.
         let collected = self.with_client(|runtime, client| {
             runtime.block_on(async move {
-                let stream = client
+                let mut stream = client
                     .simple_query(sql_owned)
                     .await
                     .map_err(|e| format_mssql_query_error(&e))?;
 
-                let result_sets = stream
-                    .into_results()
-                    .await
-                    .map_err(|e| format_mssql_query_error(&e))?;
+                let result_sets = collect_result_sets(&mut stream).await?;
 
-                Ok::<_, DbError>(convert_result_sets(result_sets))
+                Ok::<_, DbError>(result_sets)
             })
         })?;
 
@@ -1289,32 +1287,64 @@ impl MssqlConnection {
     }
 }
 
-/// Convert tiberius's raw result sets into `(columns, rows)` pairs, dropping
-/// any empty sets so the multi-set splitter sees only meaningful output.
-fn convert_result_sets(result_sets: Vec<Vec<tiberius::Row>>) -> Vec<(Vec<ColumnMeta>, Vec<Row>)> {
-    result_sets
-        .into_iter()
-        .filter(|set| !set.is_empty())
-        .map(convert_single_result_set)
-        .collect()
+/// Drive a tiberius `QueryStream` item by item, capturing column metadata from
+/// the result-set METADATA tokens rather than from rows.
+///
+/// Each `Metadata` item starts a new `(columns, rows)` pair built from the
+/// declared columns, so a result set that produced zero rows still carries its
+/// columns. Each `Row` item is appended to the most recently started pair.
+/// Statements that emit no metadata (e.g. `SET LOCK_TIMEOUT 5000`) create no
+/// pair at all.
+///
+/// The returned pairs are passed through [`finalize_result_sets`] so empty,
+/// metadata-less batches are dropped while empty-but-columned sets are kept.
+async fn collect_result_sets(
+    stream: &mut tiberius::QueryStream<'_>,
+) -> Result<Vec<(Vec<ColumnMeta>, Vec<Row>)>, DbError> {
+    use futures_util::TryStreamExt;
+
+    let mut sets: Vec<(Vec<ColumnMeta>, Vec<Row>)> = Vec::new();
+
+    while let Some(item) = stream
+        .try_next()
+        .await
+        .map_err(|e| format_mssql_query_error(&e))?
+    {
+        if let Some(metadata) = item.as_metadata() {
+            let columns = metadata
+                .columns()
+                .iter()
+                .map(tiberius_column_to_meta)
+                .collect();
+            sets.push((columns, Vec::new()));
+            continue;
+        }
+
+        if let Some(row) = item.into_row() {
+            let converted: Row = (0..row.columns().len())
+                .map(|idx| tiberius_value_to_value(&row, idx))
+                .collect();
+
+            match sets.last_mut() {
+                Some((_, rows)) => rows.push(converted),
+                None => sets.push((Vec::new(), vec![converted])),
+            }
+        }
+    }
+
+    Ok(finalize_result_sets(sets))
 }
 
-fn convert_single_result_set(set: Vec<tiberius::Row>) -> (Vec<ColumnMeta>, Vec<Row>) {
-    let columns = set
-        .first()
-        .map(|row| row.columns().iter().map(tiberius_column_to_meta).collect())
-        .unwrap_or_default();
-
-    let rows: Vec<Row> = set
-        .iter()
-        .map(|row| {
-            (0..row.columns().len())
-                .map(|idx| tiberius_value_to_value(row, idx))
-                .collect::<Row>()
-        })
-        .collect();
-
-    (columns, rows)
+/// Drop result sets that carry neither columns nor rows, while preserving
+/// empty-but-columned sets (a `SELECT` that returned zero rows still has its
+/// column headers). Factored out so it can be unit-tested without a live
+/// SQL Server.
+fn finalize_result_sets(
+    sets: Vec<(Vec<ColumnMeta>, Vec<Row>)>,
+) -> Vec<(Vec<ColumnMeta>, Vec<Row>)> {
+    sets.into_iter()
+        .filter(|(columns, rows)| !columns.is_empty() || !rows.is_empty())
+        .collect()
 }
 
 fn tiberius_column_to_meta(column: &tiberius::Column) -> ColumnMeta {
@@ -1327,14 +1357,14 @@ fn tiberius_column_to_meta(column: &tiberius::Column) -> ColumnMeta {
     }
 }
 
-/// Splits a list of non-empty result sets into a primary `QueryResult` plus
-/// additional sets, mirroring the multi-result-set contract on
+/// Splits a list of result sets into a primary `QueryResult` plus additional
+/// sets, mirroring the multi-result-set contract on
 /// `QueryResult::additional_results`.
 ///
-/// The LAST non-empty set becomes the primary (this preserves the historical
-/// "last statement wins" UX for `SELECT 1; SELECT 2;` style batches), and
-/// every earlier non-empty set is attached to `additional_results` in batch
-/// order. Empty input yields an empty primary.
+/// The LAST set becomes the primary (this preserves the historical "last
+/// statement wins" UX for `SELECT 1; SELECT 2;` style batches), and every
+/// earlier set is attached to `additional_results` in batch order. Empty
+/// input yields an empty primary.
 ///
 /// Factored out of `execute_simple` so it can be unit-tested without a live
 /// SQL Server.
@@ -4190,6 +4220,38 @@ mod tests {
             names,
             vec!["c".to_string(), "a".to_string(), "b".to_string()]
         );
+    }
+
+    #[test]
+    fn finalize_drops_only_sets_without_columns_and_rows() {
+        let empty_columned: (Vec<ColumnMeta>, Vec<Row>) =
+            (vec![col("id"), col("name")], Vec::new());
+        let metadata_less: (Vec<ColumnMeta>, Vec<Row>) = (Vec::new(), Vec::new());
+
+        let kept = finalize_result_sets(vec![metadata_less, empty_columned, one_row_set("data")]);
+
+        // The metadata-less set (no columns, no rows) is dropped; the
+        // empty-but-columned set and the populated set are retained.
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0].0.len(), 2);
+        assert!(kept[0].1.is_empty());
+        assert_eq!(kept[1].0[0].name, "data");
+    }
+
+    #[test]
+    fn empty_but_columned_set_becomes_primary_with_columns() {
+        let empty_columned: (Vec<ColumnMeta>, Vec<Row>) =
+            (vec![col("user_id"), col("email")], Vec::new());
+
+        let collected = finalize_result_sets(vec![empty_columned]);
+        let result = build_multi_result(collected, std::time::Duration::ZERO);
+
+        // The regression guard: a zero-row SELECT keeps its column headers.
+        assert!(!result.columns.is_empty());
+        assert_eq!(result.columns.len(), 2);
+        assert_eq!(result.columns[0].name, "user_id");
+        assert_eq!(result.columns[1].name, "email");
+        assert!(result.rows.is_empty());
     }
 
     #[test]
