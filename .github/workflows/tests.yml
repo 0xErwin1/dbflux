@@ -100,6 +100,21 @@ jobs:
       - name: Run SQLite live integration tests
         run: cargo test -p dbflux_driver_sqlite --locked --test live_integration
 
+      # MSSQL and InfluxDB spin up one container per test (the SQL Server image
+      # is ~2 GB), so these suites run single-threaded to avoid exhausting the
+      # runner with concurrent containers.
+      - name: Run MSSQL live integration tests
+        run: cargo test -p dbflux_driver_mssql --locked --test live_integration -- --ignored --test-threads=1
+
+      - name: Run MSSQL DDL integration tests
+        run: cargo test -p dbflux_driver_mssql --locked --test ddl_integration -- --ignored --test-threads=1
+
+      - name: Run MSSQL instance catalog tests
+        run: cargo test -p dbflux_driver_mssql --locked --test instance_catalog -- --ignored --test-threads=1
+
+      - name: Run InfluxDB live integration tests
+        run: cargo test -p dbflux_driver_influxdb --locked --test live_integration -- --ignored --test-threads=1
+
   cross-platform-check:
     name: Cross-platform check ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
