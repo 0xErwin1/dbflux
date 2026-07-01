@@ -245,6 +245,32 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Prune existing nightly release assets
+        run: |
+          set -euo pipefail
+
+          # The rolling `nightly` release keeps the same tag forever. Some asset
+          # filenames include package versions, so updating the release can leave
+          # old nightly binaries attached unless we explicitly clear them first.
+          RELEASE_JSON=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly" 2>/dev/null || true)
+          if [ -z "$RELEASE_JSON" ]; then
+            echo "No existing nightly release found; nothing to prune."
+            exit 0
+          fi
+
+          ASSET_IDS=$(jq -r '.assets[].id' <<<"$RELEASE_JSON")
+          if [ -z "$ASSET_IDS" ]; then
+            echo "Existing nightly release has no assets to prune."
+            exit 0
+          fi
+
+          while IFS= read -r ASSET_ID; do
+            [ -n "$ASSET_ID" ] || continue
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${ASSET_ID}"
+          done <<<"$ASSET_IDS"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Publish rolling nightly release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b  # v3.0.1
         with:
