@@ -78,32 +78,38 @@ actions!(
     ]
 );
 
-/// Key context for DataTable - matches ContextId::Results.as_gpui_context()
+/// Key context for DataTable - matches ContextId::Results.as_gpui_context().
 const CONTEXT: &str = "Results";
+/// Key binding context for DataTable actions when no nested input is focused.
+const CONTEXT_WITHOUT_INPUT: &str = "Results && !Input";
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
         // Navigation
-        KeyBinding::new("up", MoveUp, Some(CONTEXT)),
-        KeyBinding::new("down", MoveDown, Some(CONTEXT)),
-        KeyBinding::new("left", MoveLeft, Some(CONTEXT)),
-        KeyBinding::new("right", MoveRight, Some(CONTEXT)),
-        KeyBinding::new("k", MoveUp, Some(CONTEXT)),
-        KeyBinding::new("j", MoveDown, Some(CONTEXT)),
-        KeyBinding::new("h", MoveLeft, Some(CONTEXT)),
-        KeyBinding::new("l", MoveRight, Some(CONTEXT)),
-        KeyBinding::new("shift-up", SelectUp, Some(CONTEXT)),
-        KeyBinding::new("shift-down", SelectDown, Some(CONTEXT)),
-        KeyBinding::new("shift-left", SelectLeft, Some(CONTEXT)),
-        KeyBinding::new("shift-right", SelectRight, Some(CONTEXT)),
-        KeyBinding::new("home", MoveToLineStart, Some(CONTEXT)),
-        KeyBinding::new("end", MoveToLineEnd, Some(CONTEXT)),
-        KeyBinding::new("ctrl-home", MoveToTop, Some(CONTEXT)),
-        KeyBinding::new("ctrl-end", MoveToBottom, Some(CONTEXT)),
-        KeyBinding::new("shift-home", SelectToLineStart, Some(CONTEXT)),
-        KeyBinding::new("shift-end", SelectToLineEnd, Some(CONTEXT)),
-        KeyBinding::new("ctrl-shift-home", SelectToTop, Some(CONTEXT)),
-        KeyBinding::new("ctrl-shift-end", SelectToBottom, Some(CONTEXT)),
+        KeyBinding::new("up", MoveUp, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("down", MoveDown, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("left", MoveLeft, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("right", MoveRight, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("k", MoveUp, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("j", MoveDown, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("h", MoveLeft, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("l", MoveRight, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("shift-up", SelectUp, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("shift-down", SelectDown, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("shift-left", SelectLeft, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("shift-right", SelectRight, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("home", MoveToLineStart, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("end", MoveToLineEnd, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("ctrl-home", MoveToTop, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("ctrl-end", MoveToBottom, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("shift-home", SelectToLineStart, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("shift-end", SelectToLineEnd, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("ctrl-shift-home", SelectToTop, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new(
+            "ctrl-shift-end",
+            SelectToBottom,
+            Some(CONTEXT_WITHOUT_INPUT),
+        ),
         // `secondary-*` is GPUI's platform-aware modifier: Cmd on macOS,
         // Ctrl elsewhere. Use it for the system-standard commands so macOS
         // gets the expected Cmd shortcut without binding the literal Ctrl
@@ -112,31 +118,31 @@ pub fn init(cx: &mut App) {
         // Scope this to "table without an active Input" so that ctrl-a /
         // cmd-a inside an inline cell editor (or any other Input nested in
         // the table) selects the input's text instead of all rows.
-        KeyBinding::new("secondary-a", SelectAll, Some("Results && !Input")),
-        KeyBinding::new("escape", ClearSelection, Some(CONTEXT)),
+        KeyBinding::new("secondary-a", SelectAll, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("escape", ClearSelection, Some(CONTEXT_WITHOUT_INPUT)),
         // Copy
-        KeyBinding::new("secondary-c", Copy, Some(CONTEXT)),
-        KeyBinding::new("y y", Copy, Some(CONTEXT)),
-        KeyBinding::new("shift-y shift-y", CopyRow, Some(CONTEXT)),
+        KeyBinding::new("secondary-c", Copy, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("y y", Copy, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("shift-y shift-y", CopyRow, Some(CONTEXT_WITHOUT_INPUT)),
         // Edit mode
-        KeyBinding::new("enter", StartEdit, Some(CONTEXT)),
-        KeyBinding::new("f2", StartEdit, Some(CONTEXT)),
-        KeyBinding::new("secondary-enter", SaveRow, Some(CONTEXT)),
+        KeyBinding::new("enter", StartEdit, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("f2", StartEdit, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("secondary-enter", SaveRow, Some(CONTEXT_WITHOUT_INPUT)),
         // Row operations (vim-style)
-        KeyBinding::new("d d", DeleteRow, Some(CONTEXT)),
-        KeyBinding::new("delete", DeleteRow, Some(CONTEXT)),
-        KeyBinding::new("a a", AddRow, Some(CONTEXT)),
-        KeyBinding::new("shift-a shift-a", DuplicateRow, Some(CONTEXT)),
+        KeyBinding::new("d d", DeleteRow, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("delete", DeleteRow, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("a a", AddRow, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("shift-a shift-a", DuplicateRow, Some(CONTEXT_WITHOUT_INPUT)),
         // SetNull — local mnemonic ("N" for NULL). Kept as literal Ctrl on
         // every platform; this isn't a system-standard shortcut and reusing
         // Cmd+N on macOS would clash with NewQueryTab.
-        KeyBinding::new("ctrl-n", SetNull, Some(CONTEXT)),
+        KeyBinding::new("ctrl-n", SetNull, Some(CONTEXT_WITHOUT_INPUT)),
         // Undo/Redo: standard Cmd/Ctrl variants via `secondary-`, plus
         // vim-style `u` / `ctrl-r` kept literal as familiar editor aliases.
-        KeyBinding::new("u", Undo, Some(CONTEXT)),
-        KeyBinding::new("secondary-z", Undo, Some(CONTEXT)),
-        KeyBinding::new("ctrl-r", Redo, Some(CONTEXT)),
-        KeyBinding::new("secondary-shift-z", Redo, Some(CONTEXT)),
+        KeyBinding::new("u", Undo, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("secondary-z", Undo, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("ctrl-r", Redo, Some(CONTEXT_WITHOUT_INPUT)),
+        KeyBinding::new("secondary-shift-z", Redo, Some(CONTEXT_WITHOUT_INPUT)),
     ]);
 }
 
