@@ -69,6 +69,8 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use uuid::Uuid;
 
+mod bootstrap;
+
 use crate::auth_provider_registry::{AuthProviderRegistry, RegistryAuthProviderWrapper};
 use crate::rpc_services::external_audit::{ExternalAuditSink, NoOpContextProvider};
 use crate::rpc_services::{
@@ -84,21 +86,13 @@ use crate::rpc_services::{
 #[cfg(test)]
 use dbflux_driver_ipc::driver::IpcDriverLaunchConfig;
 
+use bootstrap::BuiltDrivers;
+
 pub use dbflux_core::{
     ConnectProfileParams, ConnectedProfile, DangerousQuerySuppressions, FetchDatabaseSchemaParams,
     FetchSchemaForeignKeysParams, FetchSchemaIndexesParams, FetchSchemaRoutinesParams,
     FetchSchemaTypesParams, FetchTableDetailsParams, SwitchDatabaseParams,
 };
-
-struct BuiltDrivers {
-    drivers: HashMap<String, Arc<dyn DbDriver>>,
-    external_driver_diagnostics: HashMap<String, ExternalDriverDiagnostic>,
-    general_settings: GeneralSettings,
-    driver_overrides: HashMap<DriverKey, GlobalOverrides>,
-    driver_settings: HashMap<DriverKey, FormValues>,
-    hook_definitions: HashMap<String, ConnectionHook>,
-    services: Vec<ServiceConfig>,
-}
 
 pub struct AppState {
     pub facade: SessionFacade,

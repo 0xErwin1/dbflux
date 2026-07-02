@@ -50,7 +50,7 @@ fn ui_contains_trusted_client_and_connection_policy_controls() {
 fn ui_contains_approval_and_audit_controls_with_workspace_wiring() {
     let governance_view = read_workspace_file("../dbflux_ui_document/src/governance.rs");
     let workspace_actions = read_workspace_module("../dbflux_ui/src/ui/views/workspace/actions");
-    let workspace_dispatch = read_workspace_file("../dbflux_ui/src/ui/views/workspace/dispatch.rs");
+    let workspace_dispatch = read_workspace_module("../dbflux_ui/src/ui/views/workspace/dispatch");
     let workspace_mod = read_workspace_file("../dbflux_ui/src/ui/views/workspace/mod.rs");
 
     assert!(governance_view.contains("mcp-approval-approve"));

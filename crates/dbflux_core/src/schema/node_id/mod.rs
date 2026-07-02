@@ -2,6 +2,8 @@ use std::fmt;
 use std::str::FromStr;
 use uuid::Uuid;
 
+mod kind_flags;
+
 /// Typed representation of a sidebar tree node ID.
 ///
 /// Every node in the sidebar schema tree has a string ID that encodes its type
@@ -1731,107 +1733,6 @@ impl FromStr for SchemaNodeId {
     }
 }
 
-impl SchemaNodeKind {
-    pub fn needs_click_handler(&self) -> bool {
-        matches!(
-            self,
-            Self::Profile
-                | Self::DatabasesFolder
-                | Self::Database
-                | Self::Table
-                | Self::View
-                | Self::Collection
-                | Self::CollectionChild
-                | Self::CollectionChildrenMore
-                | Self::ConnectionFolder
-                | Self::Schema
-                | Self::TablesFolder
-                | Self::ViewsFolder
-                | Self::TypesFolder
-                | Self::ColumnsFolder
-                | Self::IndexesFolder
-                | Self::ForeignKeysFolder
-                | Self::ConstraintsFolder
-                | Self::SchemaIndexesFolder
-                | Self::SchemaForeignKeysFolder
-                | Self::RoutinesFolder
-                | Self::CollectionsFolder
-                | Self::CollectionFieldsFolder
-                | Self::CustomType
-                | Self::ScriptsFolder
-                | Self::ScriptFile
-                | Self::DependentsFolder
-                | Self::Routine
-                | Self::MetricsFolder
-                | Self::MetricNamespaceFolder
-                | Self::MetricLeaf
-                | Self::DashboardsFolder
-                | Self::DashboardItem
-                | Self::RemoteDashboardsFolder
-                | Self::RemoteDashboardItem
-                | Self::SavedChartsFolder
-                | Self::SavedChartItem
-                | Self::InstanceMetricsFolder
-                | Self::InstanceMetricLeaf
-                | Self::InstanceInspectorsFolder
-                | Self::InstanceInspectorLeaf
-                | Self::InstanceOverviewLeaf
-        )
-    }
-
-    pub fn is_expandable_folder(&self) -> bool {
-        matches!(
-            self,
-            Self::ConnectionFolder
-                | Self::DatabasesFolder
-                | Self::Schema
-                | Self::TablesFolder
-                | Self::ViewsFolder
-                | Self::TypesFolder
-                | Self::ColumnsFolder
-                | Self::IndexesFolder
-                | Self::ForeignKeysFolder
-                | Self::ConstraintsFolder
-                | Self::SchemaIndexesFolder
-                | Self::SchemaForeignKeysFolder
-                | Self::RoutinesFolder
-                | Self::CollectionsFolder
-                | Self::CollectionFieldsFolder
-                | Self::Database
-                | Self::CustomType
-                | Self::ScriptsFolder
-                | Self::DependentsFolder
-                | Self::MetricsFolder
-                | Self::MetricNamespaceFolder
-                | Self::DashboardsFolder
-                | Self::RemoteDashboardsFolder
-                | Self::SavedChartsFolder
-                | Self::InstanceMetricsFolder
-                | Self::InstanceInspectorsFolder
-        )
-    }
-
-    pub fn shows_pointer_cursor(&self) -> bool {
-        matches!(
-            self,
-            Self::Profile
-                | Self::Database
-                | Self::ConnectionFolder
-                | Self::CollectionChild
-                | Self::CollectionChildrenMore
-                | Self::ScriptFile
-                | Self::Routine
-                | Self::MetricLeaf
-                | Self::DashboardItem
-                | Self::RemoteDashboardItem
-                | Self::SavedChartItem
-                | Self::InstanceMetricLeaf
-                | Self::InstanceInspectorLeaf
-                | Self::InstanceOverviewLeaf
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2137,6 +2038,35 @@ mod tests {
             name: "users".into(),
         };
         assert_eq!(id.kind(), SchemaNodeKind::Table);
+    }
+
+    #[test]
+    fn schema_node_kind_flags_remain_stable_for_representative_nodes() {
+        assert!(SchemaNodeKind::ConnectionFolder.needs_click_handler());
+        assert!(SchemaNodeKind::ConnectionFolder.is_expandable_folder());
+        assert!(SchemaNodeKind::ConnectionFolder.shows_pointer_cursor());
+
+        assert!(SchemaNodeKind::TablesFolder.needs_click_handler());
+        assert!(SchemaNodeKind::TablesFolder.is_expandable_folder());
+        assert!(!SchemaNodeKind::TablesFolder.shows_pointer_cursor());
+
+        assert!(SchemaNodeKind::ScriptFile.needs_click_handler());
+        assert!(!SchemaNodeKind::ScriptFile.is_expandable_folder());
+        assert!(SchemaNodeKind::ScriptFile.shows_pointer_cursor());
+
+        assert!(!SchemaNodeKind::Column.needs_click_handler());
+        assert!(!SchemaNodeKind::Column.is_expandable_folder());
+        assert!(!SchemaNodeKind::Column.shows_pointer_cursor());
+    }
+
+    #[test]
+    fn pipe_preserving_paths_round_trip_for_script_nodes() {
+        roundtrip(SchemaNodeId::ScriptsFolder {
+            path: Some("/tmp/dbflux|scripts|archive".into()),
+        });
+        roundtrip(SchemaNodeId::ScriptFile {
+            path: "/tmp/dbflux|scripts|query.sql".into(),
+        });
     }
 
     #[test]
