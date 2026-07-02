@@ -544,17 +544,16 @@ impl DataGridPanel {
             return ContextId::TextInput;
         }
 
-        if self.context_menu.is_some() {
-            ContextId::ContextMenu
-        } else if self
+        let inline_text_input_active = self
             .grid_table
             .table_state
             .as_ref()
             .map(|ts| ts.read(cx).is_editing_text_input())
-            .unwrap_or(false)
-        {
-            ContextId::TextInput
-        } else if self.focus.edit_state == EditState::Editing {
+            .unwrap_or(false);
+
+        if self.context_menu.is_some() {
+            ContextId::ContextMenu
+        } else if inline_text_input_active || self.focus.edit_state == EditState::Editing {
             ContextId::TextInput
         } else {
             ContextId::Results
