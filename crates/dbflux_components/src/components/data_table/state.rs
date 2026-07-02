@@ -561,6 +561,10 @@ impl DataTableState {
         self.editing_cell.is_some()
     }
 
+    pub fn is_editing_text_input(&self) -> bool {
+        self.cell_input.is_some()
+    }
+
     /// Get the currently editing cell, if any.
     pub fn editing_cell(&self) -> Option<CellCoord> {
         self.editing_cell

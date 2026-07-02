@@ -534,7 +534,6 @@ impl DataGridPanel {
             .unwrap_or(false)
     }
 
-    /// Returns true if the context menu is currently open.
     /// Returns the active context for keyboard handling.
     pub fn active_context(&self, cx: &App) -> ContextId {
         if self.document_view.cell_editor.read(cx).is_visible()
@@ -547,9 +546,16 @@ impl DataGridPanel {
             return ContextId::TextInput;
         }
 
+        let inline_text_input_active = self
+            .grid_table
+            .table_state
+            .as_ref()
+            .map(|ts| ts.read(cx).is_editing_text_input())
+            .unwrap_or(false);
+
         if self.context_menu.is_some() {
             ContextId::ContextMenu
-        } else if self.focus.edit_state == EditState::Editing {
+        } else if inline_text_input_active || self.focus.edit_state == EditState::Editing {
             ContextId::TextInput
         } else {
             ContextId::Results
