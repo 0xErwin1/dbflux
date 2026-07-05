@@ -339,7 +339,13 @@ fn run_gui() {
 
                 let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
 
-                IpcServer::start_with_listener(listener, workspace.clone(), auth_token, cx);
+                IpcServer::start_with_listener(
+                    listener,
+                    workspace.clone(),
+                    window.window_handle(),
+                    auth_token,
+                    cx,
+                );
                 info!("IPC server started");
 
                 cx.new(|cx| Root::new(workspace, window, cx))
