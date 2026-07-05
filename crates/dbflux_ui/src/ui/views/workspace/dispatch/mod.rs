@@ -1,6 +1,14 @@
 use super::*;
 
+mod audit;
+mod charts_dashboards;
+mod connections;
+mod documents;
+mod navigation;
 mod preflight;
+mod query;
+mod scripts;
+mod settings;
 
 use preflight::sidebar_tree_command_is_blocked_by_search_focus;
 
@@ -72,784 +80,88 @@ impl CommandDispatcher for Workspace {
             }
         }
 
-        match cmd {
-            Command::ToggleCommandPalette => {
-                self.toggle_command_palette(window, cx);
-                true
-            }
-            Command::NewQueryTab => {
-                self.new_query_tab(window, cx);
-                true
-            }
-            Command::OpenScriptFile => {
-                self.open_script_file(window, cx);
-                true
-            }
-            Command::RunQuery => {
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(Command::RunQuery, window, cx);
-                });
-                true
-            }
-            Command::RunQueryInNewTab => {
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(Command::RunQueryInNewTab, window, cx);
-                });
-                true
-            }
-            Command::ExportResults => {
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(Command::ExportResults, window, cx);
-                });
-                true
-            }
-            Command::OpenConnectionManager => {
-                self.open_connection_manager(cx);
-                true
-            }
-            Command::ExportConnections => {
-                // Export is now per-connection: it is initiated from a
-                // connection's three-dots menu, which carries the profile id.
-                dbflux_ui_base::toast::Toast::info("Export a connection from its menu")
-                    .body("Right-click a connection in the sidebar and choose Export.")
-                    .push(cx);
-                true
-            }
-            Command::OpenLoginModal => {
-                self.open_login_modal(window, cx);
-                true
-            }
-            Command::OpenSsoWizard => {
-                self.open_sso_wizard(window, cx);
-                true
-            }
-            Command::OpenAuditViewer => {
-                self.open_audit_viewer(window, cx);
-                true
-            }
-            #[cfg(feature = "mcp")]
-            Command::OpenMcpApprovals => {
-                self.open_mcp_approvals(window, cx);
-                true
-            }
-            #[cfg(feature = "mcp")]
-            Command::RefreshMcpGovernance => {
-                self.refresh_mcp_governance(window, cx);
-                true
-            }
-            Command::Disconnect => {
-                self.disconnect_active(window, cx);
-                true
-            }
-            Command::RefreshSchema => {
-                self.refresh_schema(window, cx);
-                true
-            }
-            Command::ToggleEditor => {
-                // Route to active document for layout toggle
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(Command::ToggleEditor, window, cx);
-                });
-                true
-            }
-            Command::ToggleResults => {
-                // Route to active document for layout toggle
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(Command::ToggleResults, window, cx);
-                });
-                true
-            }
-            Command::ToggleTasks => {
-                self.toggle_tasks_panel(cx);
-                true
-            }
-            Command::ToggleSidebar => {
-                self.toggle_sidebar(cx);
-                true
-            }
-            Command::FocusSidebar => {
-                if self.is_sidebar_collapsed(cx) {
-                    self.toggle_sidebar(cx);
-                }
-                self.set_focus(FocusTarget::Sidebar, window, cx);
-                true
-            }
-            Command::FocusEditor => {
-                self.set_focus(FocusTarget::Document, window, cx);
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(Command::FocusUp, window, cx);
-                });
-                true
-            }
-            Command::FocusResults => {
-                self.set_focus(FocusTarget::Document, window, cx);
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(Command::FocusDown, window, cx);
-                });
-                true
-            }
-
-            Command::CycleFocusForward => {
-                let next = self.next_focus_target(cx);
-                self.set_focus(next, window, cx);
-                true
-            }
-            Command::CycleFocusBackward => {
-                let prev = self.prev_focus_target(cx);
-                self.set_focus(prev, window, cx);
-                true
-            }
-            Command::NextTab => {
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.next_visual_tab(cx);
-                });
-                // Focus the newly active document
-                self.tab_manager
-                    .update(cx, |mgr, cx| mgr.focus_active(window, cx));
-                true
-            }
-            Command::PrevTab => {
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.prev_visual_tab(cx);
-                });
-                // Focus the newly active document
-                self.tab_manager
-                    .update(cx, |mgr, cx| mgr.focus_active(window, cx));
-                true
-            }
-            Command::SwitchToTab(n) => {
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.switch_to_tab(n, cx);
-                });
-                // Focus the newly active document
-                self.tab_manager
-                    .update(cx, |mgr, cx| mgr.focus_active(window, cx));
-                true
-            }
-            Command::CloseCurrentTab => {
-                self.close_active_tab(window, cx);
-                // Focus the newly active document if any
-                self.tab_manager
-                    .update(cx, |mgr, cx| mgr.focus_active(window, cx));
-                true
-            }
-            Command::Cancel => {
-                if self.command_palette.read(cx).is_visible() {
-                    self.command_palette.update(cx, |p, cx| p.hide(cx));
-                    self.set_focus(self.focus_target, window, cx);
-                    return true;
-                }
-
-                // Cancel delete confirmation modal
-                if self.sidebar.read(cx).has_delete_modal() {
-                    self.sidebar.update(cx, |s, cx| s.cancel_modal_delete(cx));
-                    return true;
-                }
-
-                // Cancel pending delete (keyboard x)
-                if self.sidebar.read(cx).has_pending_delete() {
-                    self.sidebar.update(cx, |s, cx| s.cancel_pending_delete(cx));
-                    return true;
-                }
-
-                if self.sidebar.read(cx).has_context_menu_open() {
-                    self.sidebar.update(cx, |s, cx| s.close_context_menu(cx));
-                    return true;
-                }
-
-                // Clear multi-selection in sidebar
-                if self.sidebar.read(cx).has_multi_selection() {
-                    self.sidebar.update(cx, |s, cx| s.clear_selection(cx));
-                    return true;
-                }
-
-                // Route Cancel to active document (handles modals, edit modes, etc.).
-                if self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(Command::Cancel, window, cx)
-                }) {
-                    return true;
-                }
-
-                // Workspace-level inspector close fallback.
-                // Only fires after the document has declined Cancel.
-                if self.workspace_inspector.read(cx).is_open() {
-                    self.workspace_inspector.update(cx, |insp, cx| {
-                        insp.close(cx);
-                    });
-                    return true;
-                }
-
-                // Always focus workspace to blur any input and enable keyboard navigation
-                self.focus_handle.focus(window);
-                true
-            }
-
-            Command::CancelQuery => {
-                // Route to active document
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(Command::CancelQuery, window, cx);
-                });
-                true
-            }
-
-            Command::SelectNext => match self.focus_target {
-                FocusTarget::Sidebar => {
-                    if self.sidebar.read(cx).has_context_menu_open() {
-                        self.sidebar
-                            .update(cx, |s, cx| s.context_menu_select_next(cx));
-                    } else {
-                        self.sidebar.update(cx, |s, cx| s.select_next(cx));
-                    }
-                    true
-                }
-                FocusTarget::Document => {
-                    self.tab_manager.update(cx, |mgr, cx| {
-                        mgr.dispatch_active(Command::SelectNext, window, cx);
-                    });
-                    true
-                }
-                _ => false,
-            },
-
-            Command::SelectPrev => match self.focus_target {
-                FocusTarget::Sidebar => {
-                    if self.sidebar.read(cx).has_context_menu_open() {
-                        self.sidebar
-                            .update(cx, |s, cx| s.context_menu_select_prev(cx));
-                    } else {
-                        self.sidebar.update(cx, |s, cx| s.select_prev(cx));
-                    }
-                    true
-                }
-                FocusTarget::Document => {
-                    self.tab_manager.update(cx, |mgr, cx| {
-                        mgr.dispatch_active(Command::SelectPrev, window, cx);
-                    });
-                    true
-                }
-                _ => false,
-            },
-
-            Command::SelectFirst => match self.focus_target {
-                FocusTarget::Sidebar => {
-                    if self.sidebar.read(cx).has_context_menu_open() {
-                        self.sidebar
-                            .update(cx, |s, cx| s.context_menu_select_first(cx));
-                    } else {
-                        self.sidebar.update(cx, |s, cx| s.select_first(cx));
-                    }
-                    true
-                }
-                FocusTarget::Document => {
-                    self.tab_manager.update(cx, |mgr, cx| {
-                        mgr.dispatch_active(Command::SelectFirst, window, cx);
-                    });
-                    true
-                }
-                _ => false,
-            },
-
-            Command::SelectLast => match self.focus_target {
-                FocusTarget::Sidebar => {
-                    if self.sidebar.read(cx).has_context_menu_open() {
-                        self.sidebar
-                            .update(cx, |s, cx| s.context_menu_select_last(cx));
-                    } else {
-                        self.sidebar.update(cx, |s, cx| s.select_last(cx));
-                    }
-                    true
-                }
-                FocusTarget::Document => {
-                    self.tab_manager.update(cx, |mgr, cx| {
-                        mgr.dispatch_active(Command::SelectLast, window, cx);
-                    });
-                    true
-                }
-                _ => false,
-            },
-
-            Command::Execute => match self.focus_target {
-                FocusTarget::Sidebar => {
-                    if self.sidebar.read(cx).has_context_menu_open() {
-                        self.sidebar.update(cx, |s, cx| s.context_menu_execute(cx));
-                    } else {
-                        self.sidebar.update(cx, |s, cx| s.execute(cx));
-                    }
-                    true
-                }
-                FocusTarget::Document => {
-                    self.tab_manager.update(cx, |mgr, cx| {
-                        mgr.dispatch_active(Command::Execute, window, cx);
-                    });
-                    true
-                }
-                _ => false,
-            },
-
-            Command::ExpandCollapse => {
-                if self.focus_target == FocusTarget::Sidebar {
-                    self.sidebar.update(cx, |s, cx| s.expand_collapse(cx));
-                    true
-                } else {
-                    false
-                }
-            }
-
-            Command::ColumnLeft => match self.focus_target {
-                FocusTarget::Sidebar => {
-                    if self.sidebar.read(cx).has_context_menu_open() {
-                        let went_back = self.sidebar.update(cx, |s, cx| s.context_menu_go_back(cx));
-                        if !went_back {
-                            self.sidebar.update(cx, |s, cx| s.close_context_menu(cx));
-                        }
-                    } else {
-                        self.sidebar.update(cx, |s, cx| s.collapse(cx));
-                    }
-                    true
-                }
-                FocusTarget::Document => {
-                    self.tab_manager.update(cx, |mgr, cx| {
-                        mgr.dispatch_active(Command::ColumnLeft, window, cx);
-                    });
-                    true
-                }
-                _ => false,
-            },
-
-            Command::ColumnRight => match self.focus_target {
-                FocusTarget::Sidebar => {
-                    if self.sidebar.read(cx).has_context_menu_open() {
-                        self.sidebar.update(cx, |s, cx| s.context_menu_execute(cx));
-                    } else {
-                        self.sidebar.update(cx, |s, cx| s.expand(cx));
-                    }
-                    true
-                }
-                FocusTarget::Document => {
-                    self.tab_manager.update(cx, |mgr, cx| {
-                        mgr.dispatch_active(Command::ColumnRight, window, cx);
-                    });
-                    true
-                }
-                _ => false,
-            },
-
-            Command::TogglePanel => match self.focus_target {
-                FocusTarget::Document => {
-                    self.tab_manager.update(cx, |mgr, cx| {
-                        mgr.dispatch_active(Command::TogglePanel, window, cx);
-                    });
-                    true
-                }
-                FocusTarget::BackgroundTasks => {
-                    self.tasks_state.toggle();
-                    cx.notify();
-                    true
-                }
-                _ => false,
-            },
-
-            Command::FocusToolbar => {
-                // Route to active document
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(Command::FocusToolbar, window, cx);
-                });
-                true
-            }
-
-            Command::ToggleFavorite => false,
-
-            // Directional focus navigation
-            // Layout:  Sidebar | Document
-            //                  | BackgroundTasks
-            Command::FocusLeft => {
-                // Only try document dispatch when in context bar mode,
-                // otherwise FocusLeft would be swallowed by DataGridPanel column navigation.
-                let active_ctx = self
-                    .tab_manager
-                    .read(cx)
-                    .active_tab()
-                    .map(|tab| tab.active_context(cx));
-                if active_ctx == Some(ContextId::ContextBar)
-                    && self.tab_manager.update(cx, |mgr, cx| {
-                        mgr.dispatch_active(Command::FocusLeft, window, cx)
-                    })
-                {
-                    return true;
-                }
-
-                if self.is_sidebar_collapsed(cx) {
-                    return false;
-                }
-
-                // If a document is active (its context is visible), treat
-                // focus_target as Document even if the internal field is stale —
-                // this covers the case where the audit or results view received
-                // keyboard focus before any mouse click updated focus_target.
-                let effective_target = match active_ctx {
-                    Some(ctx)
-                        if ctx == ContextId::Audit
-                            || ctx == ContextId::Results
-                            || ctx == ContextId::Editor =>
-                    {
-                        FocusTarget::Document
-                    }
-                    _ => self.focus_target,
-                };
-
-                match effective_target {
-                    FocusTarget::Document | FocusTarget::BackgroundTasks => {
-                        self.set_focus(FocusTarget::Sidebar, window, cx);
-                        true
-                    }
-                    _ => false,
-                }
-            }
-
-            Command::FocusRight => {
-                // Only try document dispatch when in context bar mode,
-                // otherwise FocusRight would be swallowed by DataGridPanel column navigation.
-                let active_ctx = self
-                    .tab_manager
-                    .read(cx)
-                    .active_tab()
-                    .map(|tab| tab.active_context(cx));
-                if active_ctx == Some(ContextId::ContextBar)
-                    && self.tab_manager.update(cx, |mgr, cx| {
-                        mgr.dispatch_active(Command::FocusRight, window, cx)
-                    })
-                {
-                    return true;
-                }
-
-                match self.focus_target {
-                    FocusTarget::Sidebar => {
-                        self.set_focus(FocusTarget::Document, window, cx);
-                        true
-                    }
-                    _ => false,
-                }
-            }
-
-            Command::FocusDown => {
-                // First try the active document (for internal editor->results navigation)
-                if self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(Command::FocusDown, window, cx)
-                }) {
-                    return true;
-                }
-                // Workspace-level: Document -> BackgroundTasks
-                let next = match self.focus_target {
-                    FocusTarget::Document => FocusTarget::BackgroundTasks,
-                    FocusTarget::BackgroundTasks => FocusTarget::Document,
-                    _ => return false,
-                };
-                self.set_focus(next, window, cx);
-                true
-            }
-
-            Command::FocusUp => {
-                // First try the active document (for internal results->editor navigation)
-                if self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(Command::FocusUp, window, cx)
-                }) {
-                    return true;
-                }
-                // Workspace-level: BackgroundTasks -> Document
-                let prev = match self.focus_target {
-                    FocusTarget::BackgroundTasks => FocusTarget::Document,
-                    FocusTarget::Document => FocusTarget::BackgroundTasks,
-                    _ => return false,
-                };
-                self.set_focus(prev, window, cx);
-                true
-            }
-
-            Command::ToggleHistoryDropdown => {
-                // Route to active document
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(Command::ToggleHistoryDropdown, window, cx);
-                });
-                true
-            }
-
-            Command::OpenSavedQueries => {
-                // Route to active document
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(Command::OpenSavedQueries, window, cx);
-                });
-                true
-            }
-
-            Command::SaveQuery => {
-                // Route to active document
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(Command::SaveQuery, window, cx);
-                });
-                true
-            }
-
-            Command::SaveFileAs => {
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(Command::SaveFileAs, window, cx);
-                });
-                true
-            }
-
-            Command::FocusBackgroundTasks => {
-                self.set_focus(FocusTarget::BackgroundTasks, window, cx);
-                true
-            }
-
-            Command::OpenSettings => {
-                self.open_settings(cx);
-                true
-            }
-
-            Command::Rename => {
-                if self.focus_target == FocusTarget::Sidebar {
-                    self.sidebar
-                        .update(cx, |s, cx| s.start_rename_selected(window, cx));
-                    true
-                } else if self.focus_target == FocusTarget::Document {
-                    self.tab_manager.update(cx, |mgr, cx| {
-                        mgr.dispatch_active(Command::Rename, window, cx);
-                    });
-                    true
-                } else {
-                    false
-                }
-            }
-
-            Command::Delete => {
-                if self.focus_target == FocusTarget::Sidebar {
-                    self.sidebar
-                        .update(cx, |s, cx| s.request_delete_selected(cx));
-                    true
-                } else if self.focus_target == FocusTarget::Document {
-                    self.tab_manager.update(cx, |mgr, cx| {
-                        mgr.dispatch_active(Command::Delete, window, cx);
-                    });
-                    true
-                } else {
-                    false
-                }
-            }
-
-            Command::CreateFolder => {
-                if self.focus_target == FocusTarget::Sidebar {
-                    self.sidebar.update(cx, |s, cx| match s.active_tab() {
-                        dbflux_ui_sidebar::SidebarTab::Connections => {
-                            s.create_root_folder(cx);
-                        }
-                        dbflux_ui_sidebar::SidebarTab::Scripts => {
-                            s.create_script_folder(cx);
-                        }
-                    });
-                    true
-                } else {
-                    false
-                }
-            }
-
-            Command::SidebarNextTab => {
-                if self.focus_target == FocusTarget::Sidebar {
-                    self.sidebar.update(cx, |s, cx| s.cycle_tab(cx));
-                    true
-                } else {
-                    false
-                }
-            }
-
-            Command::FocusSearch => {
-                if self.focus_target == FocusTarget::Sidebar {
-                    self.sidebar.update(cx, |sidebar, cx| {
-                        sidebar.focus_active_search(window, cx);
-                    });
-                    true
-                } else if self.focus_target == FocusTarget::Document {
-                    self.tab_manager.update(cx, |mgr, cx| {
-                        mgr.dispatch_active(Command::FocusSearch, window, cx);
-                    });
-                    true
-                } else {
-                    false
-                }
-            }
-
-            Command::OpenItemMenu => {
-                if self.focus_target == FocusTarget::Sidebar {
-                    let position = self.sidebar.read(cx).selected_item_menu_position(cx);
-                    self.sidebar
-                        .update(cx, |s, cx| s.open_item_menu(position, cx));
-                    true
-                } else {
-                    false
-                }
-            }
-
-            Command::ResultsNextPage => {
-                // Route to active document
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(Command::ResultsNextPage, window, cx);
-                });
-                true
-            }
-
-            Command::ResultsPrevPage => {
-                // Route to active document
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(Command::ResultsPrevPage, window, cx);
-                });
-                true
-            }
-
-            Command::ExtendSelectNext => {
-                if self.focus_target == FocusTarget::Sidebar {
-                    self.sidebar.update(cx, |s, cx| s.extend_select_next(cx));
-                    true
-                } else {
-                    false
-                }
-            }
-
-            Command::ExtendSelectPrev => {
-                if self.focus_target == FocusTarget::Sidebar {
-                    self.sidebar.update(cx, |s, cx| s.extend_select_prev(cx));
-                    true
-                } else {
-                    false
-                }
-            }
-
-            Command::ToggleSelection => {
-                if self.focus_target == FocusTarget::Sidebar {
-                    self.sidebar
-                        .update(cx, |s, cx| s.toggle_current_selection(cx));
-                    true
-                } else {
-                    false
-                }
-            }
-
-            Command::MoveSelectedUp => {
-                if self.focus_target == FocusTarget::Sidebar {
-                    self.sidebar
-                        .update(cx, |s, cx| s.move_selected_items(-1, cx));
-                    true
-                } else {
-                    false
-                }
-            }
-
-            Command::MoveSelectedDown => {
-                if self.focus_target == FocusTarget::Sidebar {
-                    self.sidebar
-                        .update(cx, |s, cx| s.move_selected_items(1, cx));
-                    true
-                } else {
-                    false
-                }
-            }
-
-            Command::PageDown | Command::PageUp => {
-                log::debug!("Context-specific command {:?} not yet implemented", cmd);
-                false
-            }
-
-            Command::ResultsAddRow | Command::ResultsCopyRow | Command::ResultsCopyCell => {
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(cmd, window, cx);
-                });
-                true
-            }
-
-            // Row operations - handled via GPUI actions in DataTable
-            Command::ResultsDeleteRow | Command::ResultsDuplicateRow | Command::ResultsSetNull => {
-                log::debug!(
-                    "Row operation {:?} handled via GPUI actions in Results context",
-                    cmd
-                );
-                false
-            }
-
-            Command::OpenSavedChart => {
-                // Build a palette populated only with saved chart items,
-                // then open the command palette so the user can fuzzy-search them.
-                let chart_items = self.build_saved_chart_palette_items(cx);
-                if chart_items.is_empty() {
-                    Toast::warning("No saved charts for the current profile")
-                        .meta_right(now_hms())
-                        .push(cx);
-                } else {
-                    // Prepend the chart items before any other items so the
-                    // palette opens showing only charts (the user searched "open chart").
-                    self.command_palette.update(cx, |palette, cx| {
-                        palette.open_with_items(chart_items, window, cx);
-                    });
-                }
-                true
-            }
-
-            Command::ImportDashboard => {
-                // Only available when the active connection has DASHBOARD_IMPORT.
-                let has_capability = self
-                    .app_state
-                    .read(cx)
-                    .active_connection()
-                    .map(|conn| {
-                        conn.connection
-                            .metadata()
-                            .capabilities
-                            .contains(dbflux_core::DriverCapabilities::DASHBOARD_IMPORT)
-                    })
-                    .unwrap_or(false);
-
-                if has_capability {
-                    self.modal_import_dashboard.update(cx, |modal, cx| {
-                        modal.open(window, cx);
-                    });
-                } else {
-                    Toast::warning("The active connection does not support dashboard import.")
-                        .meta_right(now_hms())
-                        .push(cx);
-                }
-                true
-            }
-
-            Command::NewDashboard => {
-                self.create_dashboard_from_palette(window, cx);
-                true
-            }
-
-            Command::OpenTabMenu => {
-                self.tab_bar
-                    .update(cx, |tb, cx| tb.open_context_menu_for_active(cx));
-                true
-            }
-
-            // Context menu commands — route to tab bar if its menu is open,
-            // otherwise to the active document (DataGridPanel).
-            Command::OpenContextMenu
-            | Command::MenuUp
-            | Command::MenuDown
-            | Command::MenuSelect
-            | Command::MenuBack => {
-                if self.tab_bar.read(cx).has_context_menu_open() {
-                    self.tab_bar.update(cx, |tb, cx| match cmd {
-                        Command::MenuDown => tb.context_menu_select_next(cx),
-                        Command::MenuUp => tb.context_menu_select_prev(cx),
-                        Command::MenuSelect => tb.context_menu_execute(cx),
-                        Command::MenuBack => tb.close_context_menu(cx),
-                        _ => {}
-                    });
-                } else {
-                    self.tab_manager.update(cx, |mgr, cx| {
-                        mgr.dispatch_active(cmd, window, cx);
-                    });
-                }
-                true
-            }
+        if cmd == Command::Cancel {
+            return self.handle_cancel(window, cx);
         }
+
+        if let Some(result) = self.dispatch_connections(cmd, window, cx) {
+            return result;
+        }
+        if let Some(result) = self.dispatch_settings(cmd, window, cx) {
+            return result;
+        }
+        if let Some(result) = self.dispatch_audit(cmd, window, cx) {
+            return result;
+        }
+        if let Some(result) = self.dispatch_scripts(cmd, window, cx) {
+            return result;
+        }
+        if let Some(result) = self.dispatch_charts_dashboards(cmd, window, cx) {
+            return result;
+        }
+        if let Some(result) = self.dispatch_query(cmd, window, cx) {
+            return result;
+        }
+        if let Some(result) = self.dispatch_documents(cmd, window, cx) {
+            return result;
+        }
+        if let Some(result) = self.dispatch_navigation(cmd, window, cx) {
+            return result;
+        }
+
+        unreachable!("Command::{:?} not handled by any dispatch domain", cmd)
+    }
+}
+
+impl Workspace {
+    fn handle_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.command_palette.read(cx).is_visible() {
+            self.command_palette.update(cx, |p, cx| p.hide(cx));
+            self.set_focus(self.focus_target, window, cx);
+            return true;
+        }
+
+        // Cancel delete confirmation modal
+        if self.sidebar.read(cx).has_delete_modal() {
+            self.sidebar.update(cx, |s, cx| s.cancel_modal_delete(cx));
+            return true;
+        }
+
+        // Cancel pending delete (keyboard x)
+        if self.sidebar.read(cx).has_pending_delete() {
+            self.sidebar.update(cx, |s, cx| s.cancel_pending_delete(cx));
+            return true;
+        }
+
+        if self.sidebar.read(cx).has_context_menu_open() {
+            self.sidebar.update(cx, |s, cx| s.close_context_menu(cx));
+            return true;
+        }
+
+        // Clear multi-selection in sidebar
+        if self.sidebar.read(cx).has_multi_selection() {
+            self.sidebar.update(cx, |s, cx| s.clear_selection(cx));
+            return true;
+        }
+
+        // Route Cancel to active document (handles modals, edit modes, etc.).
+        if self.tab_manager.update(cx, |mgr, cx| {
+            mgr.dispatch_active(Command::Cancel, window, cx)
+        }) {
+            return true;
+        }
+
+        // Workspace-level inspector close fallback.
+        // Only fires after the document has declined Cancel.
+        if self.workspace_inspector.read(cx).is_open() {
+            self.workspace_inspector.update(cx, |insp, cx| {
+                insp.close(cx);
+            });
+            return true;
+        }
+
+        // Always focus workspace to blur any input and enable keyboard navigation
+        self.focus_handle.focus(window);
+        true
     }
 }
