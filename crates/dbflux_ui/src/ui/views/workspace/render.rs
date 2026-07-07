@@ -622,6 +622,9 @@ impl Render for Workspace {
             .when(self.modal_import_dashboard.read(cx).is_visible(), |root| {
                 root.child(self.modal_import_dashboard.clone())
             })
+            .when(self.import_wizard.read(cx).is_visible(), |root| {
+                root.child(self.import_wizard.clone())
+            })
             .when(self.modal_create_dashboard.read(cx).is_visible(), |root| {
                 root.child(self.modal_create_dashboard.clone())
             })

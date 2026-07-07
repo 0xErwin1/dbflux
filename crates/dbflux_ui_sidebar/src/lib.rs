@@ -258,6 +258,16 @@ pub enum SidebarEvent {
     RequestOpenConnectionManagerInFolder {
         folder_id: Uuid,
     },
+
+    /// Request to open the Import wizard, targeting the currently connected
+    /// profile (and, for `ConnectionPerDatabase` drivers, its active
+    /// database). The wizard itself lives in `dbflux_ui_document`; the
+    /// integrator (`dbflux_ui` Workspace) owns opening it, mirroring
+    /// `RequestExportConnection`'s layering.
+    RequestImportWizard {
+        profile_id: Uuid,
+        database: Option<String>,
+    },
 }
 
 /// Sentinel value for IDs that don't correspond to schema tree nodes
@@ -432,6 +442,10 @@ pub enum ContextMenuAction {
     /// format. Distinct from `Export` (connection-profile export) — gated on
     /// `TransferFamily::Sql` so it only appears for SQL-family connections.
     ExportTablesAs(dbflux_transfer::FileFormat),
+    /// Open the Import wizard for the connected profile this menu was opened
+    /// on. Gated the same way as `ExportTablesAs` — `TransferFamily::Sql`,
+    /// never a driver id.
+    ImportTables,
 }
 
 #[derive(Clone)]
@@ -519,6 +533,7 @@ impl ContextMenuAction {
             Self::RefreshInstanceCatalog => Some(AppIcon::RefreshCcw),
             Self::CopyItemId => Some(AppIcon::Copy),
             Self::ExportTablesAs(_) => Some(AppIcon::ArrowUp),
+            Self::ImportTables => Some(AppIcon::Download),
         }
     }
 }

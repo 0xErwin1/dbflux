@@ -3025,6 +3025,7 @@ dependencies = [
 name = "dbflux_transfer"
 version = "0.7.0-dev.0"
 dependencies = [
+ "csv",
  "dbflux_core",
  "dbflux_driver_postgres",
  "dbflux_export",
@@ -3106,6 +3107,7 @@ dependencies = [
  "dbflux_policy",
  "dbflux_storage",
  "dbflux_test_support",
+ "dbflux_transfer",
  "dbflux_ui_base",
  "gpui",
  "gpui-component",

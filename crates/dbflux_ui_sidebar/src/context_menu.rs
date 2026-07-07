@@ -106,6 +106,23 @@ impl Sidebar {
             })
     }
 
+    /// Whether the profile's connection supports the data-transfer Import
+    /// flow. Gated on `TransferFamily::Sql` (D1) — never on driver id — so
+    /// any current or future SQL driver picks this up for free (T24).
+    fn profile_supports_import(&self, item_id: &str, cx: &App) -> bool {
+        let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(item_id) else {
+            return false;
+        };
+
+        self.app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .is_some_and(|connected| {
+                connected.connection.metadata().transfer_family == dbflux_core::TransferFamily::Sql
+            })
+    }
+
     /// Returns "Delete N items" when the right-clicked node is part of a
     /// multi-selection that contains more than one deletable item, otherwise
     /// `None`. Used to relabel the per-node "Delete" entry into a batch action
@@ -371,6 +388,19 @@ impl Sidebar {
                         ContextMenuItem::item("Export\u{2026}", ContextMenuAction::Export),
                     ],
                 );
+
+                // Import (folder bundle -> tables) is offered for any connected
+                // SQL-family profile, gated on `TransferFamily::Sql` like Export —
+                // never on driver id (R7/R8).
+                if is_connected && self.profile_supports_import(item_id, cx) {
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Import\u{2026}",
+                            ContextMenuAction::ImportTables,
+                        )],
+                    );
+                }
 
                 // Add "Move to..." submenu with available folders
                 let move_to_items = self.build_move_to_submenu(item_id, cx);
@@ -1311,6 +1341,20 @@ impl Sidebar {
             }
             ContextMenuAction::ExportTablesAs(format) => {
                 self.export_selected_tables(&item_id, format, cx);
+            }
+            ContextMenuAction::ImportTables => {
+                if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(&item_id) {
+                    let database = self
+                        .app_state
+                        .read(cx)
+                        .connections()
+                        .get(&profile_id)
+                        .and_then(|connected| connected.active_database.clone());
+                    cx.emit(SidebarEvent::RequestImportWizard {
+                        profile_id,
+                        database,
+                    });
+                }
             }
             ContextMenuAction::Duplicate => {
                 self.duplicate_profile(&item_id, cx);
