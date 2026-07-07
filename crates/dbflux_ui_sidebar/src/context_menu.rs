@@ -89,6 +89,23 @@ impl Sidebar {
         cx.notify();
     }
 
+    /// Whether the table's connection supports the data-transfer Export flow.
+    /// Gated on `TransferFamily::Sql` (D1) — never on driver id — so any
+    /// current or future SQL driver picks this up for free.
+    fn table_supports_export(&self, item_id: &str, cx: &App) -> bool {
+        let Some(SchemaNodeId::Table { profile_id, .. }) = parse_node_id(item_id) else {
+            return false;
+        };
+
+        self.app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .is_some_and(|connected| {
+                connected.connection.metadata().transfer_family == dbflux_core::TransferFamily::Sql
+            })
+    }
+
     /// Returns "Delete N items" when the right-clicked node is part of a
     /// multi-selection that contains more than one deletable item, otherwise
     /// `None`. Used to relabel the per-node "Delete" entry into a batch action
@@ -159,6 +176,39 @@ impl Sidebar {
                             ContextMenuAction::Submenu(generators),
                         )
                         .with_icon(AppIcon::Code)],
+                    );
+                }
+
+                // Export (Table -> folder bundle) is gated on the connection's
+                // transfer_family, never on driver id (R7). Views are excluded —
+                // this batch scopes bulk export to writable tables only.
+                if node_kind == SchemaNodeKind::Table && self.table_supports_export(item_id, cx) {
+                    let count = self.export_table_selection_count(item_id);
+                    let label = if count > 1 {
+                        format!("Export {count} Tables…")
+                    } else {
+                        "Export Table…".to_string()
+                    };
+
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            label,
+                            ContextMenuAction::Submenu(vec![
+                                ContextMenuItem::item(
+                                    "as CSV",
+                                    ContextMenuAction::ExportTablesAs(
+                                        dbflux_transfer::FileFormat::Csv,
+                                    ),
+                                ),
+                                ContextMenuItem::item(
+                                    "as JSON",
+                                    ContextMenuAction::ExportTablesAs(
+                                        dbflux_transfer::FileFormat::Json,
+                                    ),
+                                ),
+                            ]),
+                        )],
                     );
                 }
 
@@ -1258,6 +1308,9 @@ impl Sidebar {
                 if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(&item_id) {
                     cx.emit(SidebarEvent::RequestExportConnection { profile_id });
                 }
+            }
+            ContextMenuAction::ExportTablesAs(format) => {
+                self.export_selected_tables(&item_id, format, cx);
             }
             ContextMenuAction::Duplicate => {
                 self.duplicate_profile(&item_id, cx);

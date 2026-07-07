@@ -427,6 +427,11 @@ pub enum ContextMenuAction {
     RefreshInstanceCatalog,
     /// Copy the string ID of the selected node to the clipboard.
     CopyItemId,
+    /// Export the selected table(s) (or the right-clicked table, when it is
+    /// not part of a larger selection) to a folder bundle in the given
+    /// format. Distinct from `Export` (connection-profile export) — gated on
+    /// `TransferFamily::Sql` so it only appears for SQL-family connections.
+    ExportTablesAs(dbflux_transfer::FileFormat),
 }
 
 #[derive(Clone)]
@@ -513,6 +518,7 @@ impl ContextMenuAction {
             // Instance catalog actions
             Self::RefreshInstanceCatalog => Some(AppIcon::RefreshCcw),
             Self::CopyItemId => Some(AppIcon::Copy),
+            Self::ExportTablesAs(_) => Some(AppIcon::ArrowUp),
         }
     }
 }

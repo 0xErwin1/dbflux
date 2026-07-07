@@ -211,6 +211,11 @@ impl Sidebar {
             Some(SchemaNodeId::Profile { .. }) | Some(SchemaNodeId::ConnectionFolder { .. }) => {
                 true
             }
+            // Tables are multi-selectable so a bulk Export can target several
+            // tables at once (R8). `deletable_multi_selection` already
+            // excludes `Table` from batch delete, so this cannot widen any
+            // other batch action's blast radius.
+            Some(SchemaNodeId::Table { .. }) => true,
             Some(SchemaNodeId::ScriptFile { .. }) => true,
             Some(SchemaNodeId::ScriptsFolder { path: Some(_) }) => true,
             Some(SchemaNodeId::ScriptsFolder { path: None }) => false,
