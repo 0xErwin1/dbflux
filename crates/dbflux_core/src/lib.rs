@@ -113,8 +113,9 @@ pub use driver::{
     FormSection, FormTab, FormValues, Icon, IsolationLevel, MutationCapabilities,
     OperationClassifier, OrderByMode, PaginationStyle, QueryCapabilities, QueryLanguage,
     RefreshTrigger, SelectOption, SslCertFields, SslModeOption, SyntaxInfo,
-    TransactionCapabilities, WhereOperator, field, field_file_path, field_password, field_required,
-    field_use_uri, ssh_tab, when_checked, when_unchecked, with_default, with_help,
+    TransactionCapabilities, TransferFamily, WhereOperator, field, field_file_path, field_password,
+    field_required, field_use_uri, ssh_tab, transfer_compatible, when_checked, when_unchecked,
+    with_default, with_help,
 };
 
 pub use facade::{DangerousQuerySuppressions, SessionFacade};

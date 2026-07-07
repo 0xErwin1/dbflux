@@ -25,7 +25,8 @@ use dbflux_core::{
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
     SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
     SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities,
-    TypeDefinition, Value, ViewInfo, WhereOperator, field_password, field_required, field_use_uri,
+    TransferFamily, TypeDefinition, Value, ViewInfo, WhereOperator, field_password,
+    field_required, field_use_uri,
     generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
     generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
     sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default, with_help,
@@ -44,6 +45,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     display_name: "PostgreSQL".into(),
     description: "Advanced open-source relational database".into(),
     category: DatabaseCategory::Relational,
+    transfer_family: TransferFamily::Sql,
     deployment_class: Some(DeploymentClass::SelfHosted),
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
@@ -4316,8 +4318,8 @@ mod tests {
     use dbflux_core::{
         CodeGenerator, CreateTypeRequest, DatabaseCategory, DbConfig, DbDriver, DbError,
         FormValues, MutationRequest, QueryLanguage, RowInsert, SemanticRequest, SqlDialect,
-        TableBrowseRequest, TableRef, TypeAttributeDefinition, TypeDefinition, Value,
-        WhereOperator,
+        TableBrowseRequest, TableRef, TransferFamily, TypeAttributeDefinition, TypeDefinition,
+        Value, WhereOperator,
     };
 
     #[test]
@@ -4472,6 +4474,7 @@ mod tests {
         let metadata = driver.metadata();
 
         assert_eq!(metadata.category, DatabaseCategory::Relational);
+        assert_eq!(metadata.transfer_family, TransferFamily::Sql);
         assert_eq!(metadata.query_language, QueryLanguage::Sql);
         assert_eq!(metadata.default_port, Some(5432));
         assert_eq!(metadata.uri_scheme, "postgresql");

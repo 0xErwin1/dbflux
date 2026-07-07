@@ -21,8 +21,9 @@ use dbflux_core::{
     RoutineKind, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
     SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
-    SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities, Value,
-    ViewInfo, WhereOperator, field, field_password, field_required, field_use_uri,
+    SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities,
+    TransferFamily, Value, ViewInfo, WhereOperator, field, field_password, field_required,
+    field_use_uri,
     generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
     generate_truncate, generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab,
     when_checked, when_unchecked, with_default,
@@ -37,6 +38,7 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
     display_name: "MySQL".into(),
     description: "Popular open-source relational database".into(),
     category: DatabaseCategory::Relational,
+    transfer_family: TransferFamily::Sql,
     deployment_class: Some(DeploymentClass::SelfHosted),
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
@@ -195,6 +197,7 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
     display_name: "MariaDB".into(),
     description: "Community-developed fork of MySQL".into(),
     category: DatabaseCategory::Relational,
+    transfer_family: TransferFamily::Sql,
     deployment_class: Some(DeploymentClass::SelfHosted),
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
@@ -3733,7 +3736,7 @@ mod tests {
     use dbflux_core::{
         DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, FormValues, MutationRequest,
         OrderByColumn, QueryLanguage, RoutineKind, RowInsert, SemanticRequest, SqlDialect,
-        TableBrowseRequest, TableRef, Value,
+        TableBrowseRequest, TableRef, TransferFamily, Value,
     };
 
     #[test]
@@ -3941,10 +3944,12 @@ mod tests {
         let mariadb = MysqlDriver::new(DbKind::MariaDB);
 
         assert_eq!(mysql.metadata().category, DatabaseCategory::Relational);
+        assert_eq!(mysql.metadata().transfer_family, TransferFamily::Sql);
         assert_eq!(mysql.metadata().query_language, QueryLanguage::Sql);
         assert_eq!(mysql.metadata().default_port, Some(3306));
 
         assert_eq!(mariadb.metadata().category, DatabaseCategory::Relational);
+        assert_eq!(mariadb.metadata().transfer_family, TransferFamily::Sql);
         assert_eq!(mariadb.metadata().query_language, QueryLanguage::Sql);
         assert_eq!(mariadb.metadata().default_port, Some(3306));
 

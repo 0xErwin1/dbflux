@@ -6,7 +6,7 @@ pub use capabilities::{
     DriverMetadata, DriverMetadataBuilder, EditorLanguageProfile, ExecutionClassification, Icon,
     IsolationLevel, MutationCapabilities, OperationClassifier, OrderByMode, PaginationStyle,
     QueryCapabilities, QueryLanguage, SslCertFields, SslModeOption, SyntaxInfo,
-    TransactionCapabilities, WhereOperator,
+    TransactionCapabilities, TransferFamily, WhereOperator, transfer_compatible,
 };
 pub use form::{
     DriverFormDef, ExportFieldHint, FieldExportTransform, FormFieldDef, FormFieldKind, FormSection,

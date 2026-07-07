@@ -34,7 +34,8 @@ use dbflux_core::{
     QueryResult, RelationalConnection, SchemaDropTarget, SchemaLoadingStrategy, SchemaObjectKind,
     SchemaSnapshot, SemanticFieldRef, SemanticFilter, SemanticPlan, SemanticPlanKind,
     SemanticRequest, SqlDialect, TableInfo, TextPosition, TextPositionRange,
-    TransactionCapabilities, ValidationResult, Value, WhereOperator, field, field_required,
+    TransactionCapabilities, TransferFamily, ValidationResult, Value, WhereOperator, field,
+    field_required,
 };
 
 use crate::query_generator::DynamoQueryGenerator;
@@ -282,6 +283,7 @@ pub static DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
     display_name: "DynamoDB".into(),
     description: "AWS managed NoSQL key-value and document database".into(),
     category: DatabaseCategory::Document,
+    transfer_family: TransferFamily::Incompatible,
     deployment_class: Some(DeploymentClass::CloudManaged),
     query_language: QueryLanguage::Custom("DynamoDB".into()),
     capabilities: DriverCapabilities::from_bits_truncate(

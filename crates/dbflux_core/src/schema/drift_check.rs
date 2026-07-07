@@ -296,6 +296,7 @@ mod tests {
             display_name: "Mock".to_string(),
             description: "test".to_string(),
             category: crate::DatabaseCategory::Relational,
+            transfer_family: crate::TransferFamily::Sql,
             deployment_class: None,
             query_language: QueryLanguage::Sql,
             capabilities: DriverCapabilities::empty(),

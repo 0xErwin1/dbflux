@@ -9,8 +9,8 @@ use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     Connection, ConnectionProfile, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
     DriverCapabilities, DriverFormDef, DriverKey, DriverMetadata, FormFieldKind, FormSection,
-    FormTab, FormValues, Icon, InfluxVersion, QueryLanguage, field, field_required, when_checked,
-    when_unchecked, with_default, with_help,
+    FormTab, FormValues, Icon, InfluxVersion, QueryLanguage, TransferFamily, field, field_required,
+    when_checked, when_unchecked, with_default, with_help,
 };
 
 use crate::connection::InfluxConnection;
@@ -27,6 +27,7 @@ pub static INFLUXDB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
     description: "InfluxDB v1 and v2 time-series database with InfluxQL and Flux query support"
         .into(),
     category: DatabaseCategory::TimeSeries,
+    transfer_family: TransferFamily::Incompatible,
     deployment_class: None,
     query_language: QueryLanguage::InfluxQuery,
     capabilities: DriverCapabilities::AUTHENTICATION

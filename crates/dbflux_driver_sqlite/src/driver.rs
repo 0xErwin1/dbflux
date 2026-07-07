@@ -19,8 +19,8 @@ use dbflux_core::{
     RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
     SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
-    SqlQueryBuilder, SyntaxInfo, TableInfo, TransactionCapabilities, Value, ViewInfo,
-    WhereOperator, field_file_path, generate_delete_template, generate_drop_table,
+    SqlQueryBuilder, SyntaxInfo, TableInfo, TransactionCapabilities, TransferFamily, Value,
+    ViewInfo, WhereOperator, field_file_path, generate_delete_template, generate_drop_table,
     generate_insert_template, generate_select_star, generate_update_template,
     render_semantic_filter_sql,
 };
@@ -48,6 +48,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     display_name: "SQLite".into(),
     description: "Embedded file-based database".into(),
     category: DatabaseCategory::Relational,
+    transfer_family: TransferFamily::Sql,
     deployment_class: Some(DeploymentClass::Embedded),
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
@@ -2195,7 +2196,7 @@ mod tests {
     use dbflux_core::{
         ColumnInfo, ColumnKind, DatabaseCategory, DbConfig, DbDriver, FormValues, MutationRequest,
         QueryLanguage, RowInsert, SemanticRequest, SqlDialect, TableBrowseRequest, TableInfo,
-        TableRef, Value, WhereOperator,
+        TableRef, TransferFamily, Value, WhereOperator,
     };
 
     // --- kind_from_decltype unit tests (TDD: RED → GREEN) ---
@@ -2387,6 +2388,7 @@ mod tests {
         let metadata = driver.metadata();
 
         assert_eq!(metadata.category, DatabaseCategory::Relational);
+        assert_eq!(metadata.transfer_family, TransferFamily::Sql);
         assert_eq!(metadata.query_language, QueryLanguage::Sql);
         assert_eq!(metadata.default_port, None);
         assert_eq!(metadata.uri_scheme, "sqlite");

@@ -336,6 +336,38 @@ impl DatabaseCategory {
     }
 }
 
+/// Same-family compatibility descriptor for the data-transfer engine.
+///
+/// Deliberately distinct from [`DatabaseCategory`]: `DatabaseCategory::KeyValue`
+/// conflates Redis and DynamoDB, which are not transfer-compatible with each
+/// other. `TransferFamily` lets a driver opt into a narrower compatibility
+/// group without disturbing the UI-facing category. Drivers that have not
+/// been evaluated for the transfer engine default to `Incompatible`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum TransferFamily {
+    Sql,
+    Document,
+    KeyValue,
+    Graph,
+    TimeSeries,
+    WideColumn,
+    /// The driver has not declared a transfer family, or its data model has
+    /// no compatible transfer target yet. Never compatible with anything,
+    /// including another `Incompatible` driver.
+    #[default]
+    Incompatible,
+}
+
+/// Whether two drivers can participate in the same Export/Import/Migration
+/// flow, per their declared [`TransferFamily`].
+///
+/// Same-family and not `Incompatible` is the only compatible case; a driver
+/// that has not opted into a transfer family (`Incompatible`) is never a
+/// valid transfer source or target, even against another `Incompatible` driver.
+pub fn transfer_compatible(a: &DriverMetadata, b: &DriverMetadata) -> bool {
+    a.transfer_family == b.transfer_family && a.transfer_family != TransferFamily::Incompatible
+}
+
 bitflags! {
     /// Capabilities that a database driver may support.
     ///
@@ -566,6 +598,21 @@ bitflags! {
         /// `InstanceCatalog` trait accessor on `Connection`. The sidebar renders
         /// an "Instance Inspector" folder gated exclusively on this bit.
         const INSTANCE_INSPECTOR = 1 << 55;
+
+        /// Driver can execute a native multi-row INSERT (`generate_bulk_insert`)
+        /// instead of one statement per row. The data-transfer engine gates its
+        /// bulk-insert path exclusively on this bit — `MutationCapabilities.supports_batch`
+        /// is unrelated and must not be used for this decision.
+        const BULK_INSERT = 1 << 56;
+
+        /// Driver supports `TRUNCATE TABLE` (or equivalent) as a distinct,
+        /// typically faster/cheaper operation than `DELETE FROM` with no `WHERE`.
+        /// Used by the data-transfer engine's `Truncate` load option.
+        const TRUNCATE_TABLE = 1 << 57;
+
+        /// Driver can temporarily disable referential-integrity (FK) checking
+        /// for the duration of a bulk load, via `Connection::set_referential_integrity`.
+        const DISABLE_FK_CHECKS = 1 << 58;
     }
 }
 
@@ -581,6 +628,21 @@ mod capability_bits_tests {
     #[test]
     fn instance_inspector_bit_value() {
         assert_eq!(DriverCapabilities::INSTANCE_INSPECTOR.bits(), 1u64 << 55);
+    }
+
+    #[test]
+    fn bulk_insert_bit_value() {
+        assert_eq!(DriverCapabilities::BULK_INSERT.bits(), 1u64 << 56);
+    }
+
+    #[test]
+    fn truncate_table_bit_value() {
+        assert_eq!(DriverCapabilities::TRUNCATE_TABLE.bits(), 1u64 << 57);
+    }
+
+    #[test]
+    fn disable_fk_checks_bit_value() {
+        assert_eq!(DriverCapabilities::DISABLE_FK_CHECKS.bits(), 1u64 << 58);
     }
 
     #[test]
@@ -642,6 +704,9 @@ mod capability_bits_tests {
             DriverCapabilities::CHART_AUTHORING,
             DriverCapabilities::INSTANCE_METRICS,
             DriverCapabilities::INSTANCE_INSPECTOR,
+            DriverCapabilities::BULK_INSERT,
+            DriverCapabilities::TRUNCATE_TABLE,
+            DriverCapabilities::DISABLE_FK_CHECKS,
         ];
 
         let mut seen_bits: u64 = 0;
@@ -659,6 +724,50 @@ mod capability_bits_tests {
             );
             seen_bits |= bits;
         }
+    }
+}
+
+#[cfg(test)]
+mod transfer_family_tests {
+    use super::*;
+
+    fn metadata_with_family(family: TransferFamily) -> DriverMetadata {
+        DriverMetadataBuilder::new("test", "Test", DatabaseCategory::Relational, QueryLanguage::Sql)
+            .transfer_family(family)
+            .build()
+    }
+
+    #[test]
+    fn same_family_is_compatible() {
+        let a = metadata_with_family(TransferFamily::Sql);
+        let b = metadata_with_family(TransferFamily::Sql);
+        assert!(transfer_compatible(&a, &b));
+    }
+
+    #[test]
+    fn cross_family_is_incompatible() {
+        let a = metadata_with_family(TransferFamily::Sql);
+        let b = metadata_with_family(TransferFamily::Document);
+        assert!(!transfer_compatible(&a, &b));
+    }
+
+    #[test]
+    fn both_incompatible_is_incompatible() {
+        let a = metadata_with_family(TransferFamily::Incompatible);
+        let b = metadata_with_family(TransferFamily::Incompatible);
+        assert!(!transfer_compatible(&a, &b));
+    }
+
+    #[test]
+    fn incompatible_against_anything_is_incompatible() {
+        let a = metadata_with_family(TransferFamily::Incompatible);
+        let b = metadata_with_family(TransferFamily::Sql);
+        assert!(!transfer_compatible(&a, &b));
+    }
+
+    #[test]
+    fn default_transfer_family_is_incompatible() {
+        assert_eq!(TransferFamily::default(), TransferFamily::Incompatible);
     }
 }
 
@@ -1672,6 +1781,14 @@ pub struct DriverMetadata {
     /// Database category (Relational, Document, etc.).
     pub category: DatabaseCategory,
 
+    /// Same-family compatibility descriptor for the data-transfer engine.
+    ///
+    /// Defaults to `TransferFamily::Incompatible` when absent from an older
+    /// serialized manifest (e.g. an external RPC-backed driver that predates
+    /// this field), which correctly excludes it from every transfer flow.
+    #[serde(default)]
+    pub transfer_family: TransferFamily,
+
     /// Operational deployment classification (Self-hosted, Embedded, Cloud-managed).
     ///
     /// `None` means the driver has not declared a deployment class — UI surfaces
@@ -1774,6 +1891,7 @@ impl Debug for DriverMetadata {
             .field("display_name", &self.display_name)
             .field("description", &self.description)
             .field("category", &self.category)
+            .field("transfer_family", &self.transfer_family)
             .field("deployment_class", &self.deployment_class)
             .field("query_language", &self.query_language)
             .field("capabilities", &self.capabilities)
@@ -1803,6 +1921,7 @@ impl Clone for DriverMetadata {
             display_name: self.display_name.clone(),
             description: self.description.clone(),
             category: self.category,
+            transfer_family: self.transfer_family,
             deployment_class: self.deployment_class,
             query_language: self.query_language.clone(),
             capabilities: self.capabilities,
@@ -1905,6 +2024,7 @@ pub struct DriverMetadataBuilder {
     display_name: String,
     description: String,
     category: DatabaseCategory,
+    transfer_family: TransferFamily,
     deployment_class: Option<DeploymentClass>,
     query_language: QueryLanguage,
     capabilities: DriverCapabilities,
@@ -1938,6 +2058,7 @@ impl DriverMetadataBuilder {
             display_name: display_name.into(),
             description: String::new(),
             category,
+            transfer_family: TransferFamily::default(),
             deployment_class: None,
             query_language,
             capabilities: DriverCapabilities::empty(),
@@ -1968,6 +2089,12 @@ impl DriverMetadataBuilder {
     /// Set the deployment class.
     pub fn deployment_class(mut self, class: DeploymentClass) -> Self {
         self.deployment_class = Some(class);
+        self
+    }
+
+    /// Set the transfer-compatibility family. Defaults to `TransferFamily::Incompatible`.
+    pub fn transfer_family(mut self, family: TransferFamily) -> Self {
+        self.transfer_family = family;
         self
     }
 
@@ -2062,6 +2189,7 @@ impl DriverMetadataBuilder {
             display_name: self.display_name,
             description: self.description,
             category: self.category,
+            transfer_family: self.transfer_family,
             deployment_class: self.deployment_class,
             query_language: self.query_language,
             capabilities: self.capabilities,

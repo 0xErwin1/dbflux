@@ -3409,6 +3409,7 @@ mod tests {
                     display_name: "Test".to_string(),
                     description: "test connection".to_string(),
                     category: dbflux_core::DatabaseCategory::Relational,
+                    transfer_family: dbflux_core::TransferFamily::Sql,
                     deployment_class: None,
                     query_language: dbflux_core::QueryLanguage::Sql,
                     capabilities,

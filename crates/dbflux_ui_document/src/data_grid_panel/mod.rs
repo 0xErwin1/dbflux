@@ -5115,6 +5115,7 @@ mod tests {
             display_name: "Stub".to_string(),
             description: "test stub".to_string(),
             category,
+            transfer_family: dbflux_core::TransferFamily::Incompatible,
             deployment_class: None,
             query_language,
             capabilities: dbflux_core::DriverCapabilities::empty(),
@@ -5839,6 +5840,7 @@ mod tests {
             ConnectedProfile, Connection, DatabaseCategory, DbConfig, DbError, DbKind,
             DriverCapabilities, DriverMetadata, Icon as CoreIcon, MutationPolicy, QueryLanguage,
             QueryResult as CoreQueryResult, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
+            TransferFamily,
         };
         use std::path::PathBuf;
 
@@ -5854,6 +5856,7 @@ mod tests {
                     display_name: "Stub SQL 2".to_string(),
                     description: "test stub for H-3".to_string(),
                     category: DatabaseCategory::Relational,
+                    transfer_family: TransferFamily::Sql,
                     deployment_class: None,
                     query_language: QueryLanguage::Sql,
                     capabilities: DriverCapabilities::empty(),
@@ -6282,7 +6285,7 @@ mod tests {
                             Connection, DatabaseCategory, DbError, DbKind, DriverCapabilities,
                             DriverMetadata, Icon as CoreIcon, QueryLanguage,
                             QueryResult as CoreQueryResult, SchemaLoadingStrategy, SchemaSnapshot,
-                            SqlDialect,
+                            SqlDialect, TransferFamily,
                         };
                         struct StubConn;
                         impl Connection for StubConn {
@@ -6294,6 +6297,7 @@ mod tests {
                                     display_name: "Stub".to_string(),
                                     description: "test".to_string(),
                                     category: DatabaseCategory::Relational,
+                                    transfer_family: TransferFamily::Sql,
                                     deployment_class: None,
                                     query_language: QueryLanguage::Sql,
                                     capabilities: DriverCapabilities::empty(),

@@ -271,6 +271,7 @@ mod tests {
         display_name: "Test".into(),
         description: "Test driver".into(),
         category: dbflux_core::DatabaseCategory::Relational,
+        transfer_family: dbflux_core::TransferFamily::Sql,
         deployment_class: None,
         query_language: QueryLanguage::Sql,
         capabilities: DriverCapabilities::empty(),

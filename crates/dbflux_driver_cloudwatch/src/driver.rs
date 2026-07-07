@@ -21,7 +21,7 @@ use dbflux_core::{
     FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, MetricCatalog,
     MetricQuerySeries, QueryLanguage, QueryRequest, QueryResult, SchemaFeatures,
     SchemaLoadingStrategy, SchemaSnapshot, SourceContextSpec, SourceQueryMode, TableInfo,
-    ValidationResult, Value, field, field_required,
+    TransferFamily, ValidationResult, Value, field, field_required,
 };
 
 use crate::dashboard_import::CloudWatchDashboardImporter;
@@ -33,6 +33,7 @@ pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driv
     display_name: "CloudWatch Logs".into(),
     description: "AWS CloudWatch Logs Insights queries with editor-managed source context".into(),
     category: DatabaseCategory::LogStream,
+    transfer_family: TransferFamily::Incompatible,
     deployment_class: Some(DeploymentClass::CloudManaged),
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::AUTHENTICATION

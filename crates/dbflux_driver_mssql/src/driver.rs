@@ -21,8 +21,9 @@ use dbflux_core::{
     RoutineKind, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
     SchemaForeignKeyInfo, SchemaIndexBuilder, SchemaIndexInfo, SchemaLoadingStrategy,
     SchemaSnapshot, SortDirection, SqlDialect, SqlMutationGenerator, SshTunnelConfig, SyntaxInfo,
-    TableBrowseRequest, TableCountRequest, TableInfo, TransactionCapabilities, Value, ViewInfo,
-    WhereOperator, field, field_password, field_required, field_use_uri, generate_delete_template,
+    TableBrowseRequest, TableCountRequest, TableInfo, TransactionCapabilities, TransferFamily,
+    Value, ViewInfo, WhereOperator, field, field_password, field_required, field_use_uri,
+    generate_delete_template,
     generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
     generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab, when_checked,
     when_unchecked, with_default,
@@ -113,6 +114,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     display_name: "SQL Server".into(),
     description: "Microsoft SQL Server relational database".into(),
     category: DatabaseCategory::Relational,
+    transfer_family: TransferFamily::Sql,
     deployment_class: Some(DeploymentClass::SelfHosted),
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
@@ -4273,6 +4275,12 @@ mod tests {
                 .contains(DriverCapabilities::INSTANCE_METRICS),
             "INSTANCE_METRICS must remain set on MSSQL driver"
         );
+    }
+
+    #[test]
+    fn mssql_metadata_declares_sql_transfer_family() {
+        assert_eq!(METADATA.category, DatabaseCategory::Relational);
+        assert_eq!(METADATA.transfer_family, TransferFamily::Sql);
     }
 
     // F-R3-1: T-SQL limit_clause must use OFFSET/FETCH, not LIMIT.

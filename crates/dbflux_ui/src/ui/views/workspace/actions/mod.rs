@@ -1167,7 +1167,9 @@ mod tests {
     // --- supports_metric_charts gating predicate ---
 
     use super::supports_metric_charts;
-    use dbflux_core::{DatabaseCategory, DriverCapabilities, DriverMetadata, Icon, QueryLanguage};
+    use dbflux_core::{
+        DatabaseCategory, DriverCapabilities, DriverMetadata, Icon, QueryLanguage, TransferFamily,
+    };
 
     fn make_metadata_with_caps(capabilities: DriverCapabilities) -> DriverMetadata {
         DriverMetadata {
@@ -1175,6 +1177,7 @@ mod tests {
             display_name: "Test Driver".into(),
             description: "Unit-test metadata stub".into(),
             category: DatabaseCategory::Relational,
+            transfer_family: TransferFamily::Sql,
             deployment_class: None,
             query_language: QueryLanguage::Sql,
             capabilities,

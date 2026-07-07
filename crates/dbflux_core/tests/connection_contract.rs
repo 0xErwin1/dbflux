@@ -257,6 +257,7 @@ impl dbflux_core::Connection for PlannedExecutionConnection {
                 display_name: "Planned Test".into(),
                 description: "planned test".into(),
                 category: dbflux_core::DatabaseCategory::Relational,
+                transfer_family: dbflux_core::TransferFamily::Sql,
                 deployment_class: None,
                 query_language: QueryLanguage::Sql,
                 capabilities: dbflux_core::DriverCapabilities::empty(),
