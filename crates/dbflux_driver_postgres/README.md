@@ -9,6 +9,7 @@
 - Supports query cancellation through PostgreSQL cancel tokens.
 - Includes PostgreSQL-specific SQL/code generation for CRUD, indexes, reindex, foreign keys, and type operations.
 - Multi-statement scripts (several `;`-separated statements) run as a batch via the simple query protocol, returning one result set per statement.
+- Data-transfer engine: native multi-row `INSERT` bulk-load (`BULK_INSERT`), driver-native `CREATE TABLE` DDL from a source table's columns, `TRUNCATE TABLE` support, and a referential-integrity toggle (`SET session_replication_role`) for FK-safe migrations.
 
 ### Instance Metrics
 

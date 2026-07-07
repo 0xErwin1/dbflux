@@ -3,6 +3,7 @@ use crate::data::crud::{
     ColumnAssignment, RecordIdentity, RowDelete, RowInsert, RowPatch, SqlDeleteRequest,
     SqlUpdateRequest, SqlUpsertRequest,
 };
+use crate::query::generator::CreateTableSpec;
 use crate::render_semantic_filter_sql;
 use crate::sql::dialect::SqlDialect;
 
@@ -112,6 +113,97 @@ impl<'a> SqlQueryBuilder<'a> {
         }
 
         Some(sql)
+    }
+
+    /// Build a native multi-row INSERT statement.
+    ///
+    /// Returns SQL like: `INSERT INTO "table" ("col1", "col2") VALUES (r1c1, r1c2), (r2c1, r2c2)`.
+    /// Returns `None` when `rows` is empty. Row-count caps (e.g. MSSQL's 1000-row
+    /// limit per statement) are the caller's responsibility via `DriverLimits`;
+    /// this builder emits exactly one `VALUES` tuple per row given.
+    pub fn build_bulk_insert(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        columns: &[String],
+        rows: &[&[Value]],
+    ) -> Option<String> {
+        if rows.is_empty() {
+            return None;
+        }
+
+        let table_ref = self.dialect.qualified_table(schema, table);
+        let columns_str = self.build_column_list(columns);
+
+        let values_str = rows
+            .iter()
+            .map(|row| {
+                let tuple = row
+                    .iter()
+                    .map(|v| self.dialect.value_to_literal(v))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({tuple})")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        Some(format!(
+            "INSERT INTO {table_ref} ({columns_str}) VALUES {values_str}"
+        ))
+    }
+
+    /// Build a `CREATE TABLE` statement from a same-engine [`CreateTableSpec`].
+    ///
+    /// Column type, nullability, and primary-key membership map 1:1 from
+    /// `spec.columns` since the source and target share the same SQL dialect
+    /// family; no cross-dialect type coercion is attempted.
+    pub fn build_create_table(&self, spec: &CreateTableSpec) -> String {
+        let table_ref = self
+            .dialect
+            .qualified_table(spec.schema.as_deref(), &spec.table);
+
+        let pk_columns: Vec<&str> = spec
+            .columns
+            .iter()
+            .filter(|c| c.is_primary_key)
+            .map(|c| c.name.as_str())
+            .collect();
+
+        let mut lines: Vec<String> = Vec::with_capacity(spec.columns.len() + 1);
+
+        for column in &spec.columns {
+            let mut line = match &column.type_name {
+                Some(type_name) => format!(
+                    "    {} {}",
+                    self.dialect.quote_identifier(&column.name),
+                    type_name
+                ),
+                None => format!("    {}", self.dialect.quote_identifier(&column.name)),
+            };
+
+            if !column.nullable {
+                line.push_str(" NOT NULL");
+            }
+
+            lines.push(line);
+        }
+
+        if !pk_columns.is_empty() {
+            let pk_quoted: Vec<String> = pk_columns
+                .iter()
+                .map(|name| self.dialect.quote_identifier(name))
+                .collect();
+            lines.push(format!("    PRIMARY KEY ({})", pk_quoted.join(", ")));
+        }
+
+        let prefix = if spec.if_not_exists {
+            "CREATE TABLE IF NOT EXISTS"
+        } else {
+            "CREATE TABLE"
+        };
+
+        format!("{prefix} {table_ref} (\n{}\n);", lines.join(",\n"))
     }
 
     /// Build an UPSERT statement from a semantic request.
@@ -381,6 +473,130 @@ mod tests {
             sql,
             "INSERT INTO \"users\" (\"name\", \"age\") VALUES ('Alice', 25)"
         );
+    }
+
+    #[test]
+    fn test_build_bulk_insert_multi_row() {
+        let dialect = DefaultSqlDialect;
+        let builder = SqlQueryBuilder::new(&dialect);
+
+        let columns = vec!["name".to_string(), "age".to_string()];
+        let owned_rows: Vec<Vec<Value>> = vec![
+            vec![Value::Text("Alice".to_string()), Value::Int(25)],
+            vec![Value::Text("Bob".to_string()), Value::Int(30)],
+        ];
+        let rows: Vec<&[Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
+
+        let sql = builder
+            .build_bulk_insert(None, "users", &columns, &rows)
+            .unwrap();
+        assert_eq!(
+            sql,
+            "INSERT INTO \"users\" (\"name\", \"age\") VALUES ('Alice', 25), ('Bob', 30)"
+        );
+    }
+
+    #[test]
+    fn test_build_bulk_insert_qualified_table() {
+        let dialect = DefaultSqlDialect;
+        let builder = SqlQueryBuilder::new(&dialect);
+
+        let columns = vec!["id".to_string()];
+        let owned_rows: Vec<Vec<Value>> =
+            vec![vec![Value::Int(1)], vec![Value::Int(2)], vec![Value::Int(3)]];
+        let rows: Vec<&[Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
+
+        let sql = builder
+            .build_bulk_insert(Some("public"), "users", &columns, &rows)
+            .unwrap();
+        assert_eq!(
+            sql,
+            "INSERT INTO \"public\".\"users\" (\"id\") VALUES (1), (2), (3)"
+        );
+    }
+
+    #[test]
+    fn test_build_bulk_insert_empty_rows_returns_none() {
+        let dialect = DefaultSqlDialect;
+        let builder = SqlQueryBuilder::new(&dialect);
+
+        let columns = vec!["id".to_string()];
+        let rows: Vec<&[Value]> = Vec::new();
+
+        assert!(
+            builder
+                .build_bulk_insert(None, "users", &columns, &rows)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_build_bulk_insert_does_not_truncate_row_count() {
+        let dialect = DefaultSqlDialect;
+        let builder = SqlQueryBuilder::new(&dialect);
+
+        let columns = vec!["id".to_string()];
+        let owned_rows: Vec<[Value; 1]> = (0..1000i64).map(|i| [Value::Int(i)]).collect();
+        let rows: Vec<&[Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
+
+        let sql = builder
+            .build_bulk_insert(None, "t", &columns, &rows)
+            .unwrap();
+
+        assert_eq!(sql.matches("), (").count() + 1, 1000);
+    }
+
+    #[test]
+    fn test_build_create_table_preserves_types_nullability_and_pk() {
+        let dialect = DefaultSqlDialect;
+        let builder = SqlQueryBuilder::new(&dialect);
+
+        let spec = CreateTableSpec {
+            schema: Some("public".to_string()),
+            table: "users".to_string(),
+            columns: vec![
+                crate::TransferColumn {
+                    name: "id".to_string(),
+                    type_name: Some("integer".to_string()),
+                    nullable: false,
+                    is_primary_key: true,
+                },
+                crate::TransferColumn {
+                    name: "name".to_string(),
+                    type_name: Some("text".to_string()),
+                    nullable: true,
+                    is_primary_key: false,
+                },
+            ],
+            if_not_exists: false,
+        };
+
+        let sql = builder.build_create_table(&spec);
+        assert_eq!(
+            sql,
+            "CREATE TABLE \"public\".\"users\" (\n    \"id\" integer NOT NULL,\n    \"name\" text,\n    PRIMARY KEY (\"id\")\n);"
+        );
+    }
+
+    #[test]
+    fn test_build_create_table_if_not_exists() {
+        let dialect = DefaultSqlDialect;
+        let builder = SqlQueryBuilder::new(&dialect);
+
+        let spec = CreateTableSpec {
+            schema: None,
+            table: "logs".to_string(),
+            columns: vec![crate::TransferColumn {
+                name: "id".to_string(),
+                type_name: None,
+                nullable: true,
+                is_primary_key: false,
+            }],
+            if_not_exists: true,
+        };
+
+        let sql = builder.build_create_table(&spec);
+        assert!(sql.starts_with("CREATE TABLE IF NOT EXISTS \"logs\" ("));
     }
 
     #[test]

@@ -41,7 +41,7 @@ impl CsvExporter {
     }
 }
 
-fn value_to_csv_field(value: &Value) -> String {
+pub(crate) fn value_to_csv_field(value: &Value) -> String {
     match value {
         Value::Null => String::new(),
         Value::Bool(b) => if *b { "true" } else { "false" }.to_string(),

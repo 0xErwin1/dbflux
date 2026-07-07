@@ -38,6 +38,10 @@ Microsoft SQL Server driver for DBFlux, built on the
   Pure preparation batches (`SET LOCK_TIMEOUT 5000`) still surface as a
   single empty primary. Callers that want to walk every set use
   `QueryResult::iter_result_sets()`.
+- Data-transfer engine: native multi-row `INSERT` bulk-load (`BULK_INSERT`,
+  capped at 1000 rows per statement per T-SQL's `VALUES` row limit, exposed
+  via `DriverLimits::max_bulk_insert_rows`) and driver-native `CREATE TABLE`
+  DDL from a source table's columns (`TRUNCATE_TABLE` is also supported).
 
 ### Instance Metrics
 
@@ -242,3 +246,9 @@ Requires the `VIEW SERVER STATE` permission.
   queried in this implementation.
 - SQL Server has no `Window` function kind in the `sys.objects.type` taxonomy;
   `RoutineKind::Window` is never emitted by this driver.
+- No referential-integrity toggle for the data-transfer engine's migration
+  path (`DriverCapabilities::DISABLE_FK_CHECKS` is not set;
+  `Connection::set_referential_integrity` returns `NotSupported`). SQL
+  Server disables FK checking per-table via `ALTER TABLE ... NOCHECK
+  CONSTRAINT`, which does not fit the engine's single global toggle; a
+  per-table variant is a possible future addition.

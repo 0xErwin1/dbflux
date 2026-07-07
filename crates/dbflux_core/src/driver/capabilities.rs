@@ -1699,6 +1699,11 @@ pub struct DriverLimits {
 
     /// Maximum number of indexes per table (0 = unlimited).
     pub max_indexes_per_table: u32,
+
+    /// Maximum number of rows a single native multi-row `INSERT` (`generate_bulk_insert`)
+    /// may carry in one statement (0 = unlimited). The data-transfer engine reads
+    /// this to cap chunk size instead of hardcoding a per-driver constant.
+    pub max_bulk_insert_rows: u32,
 }
 
 impl Default for DriverLimits {
@@ -1712,6 +1717,7 @@ impl Default for DriverLimits {
             max_identifier_length: 63,
             max_columns: 0,
             max_indexes_per_table: 0,
+            max_bulk_insert_rows: 0,
         }
     }
 }

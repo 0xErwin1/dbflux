@@ -131,7 +131,9 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::MULTI_STATEMENT.bits()
             | DriverCapabilities::INSTANCE_METRICS.bits()
             | DriverCapabilities::INSTANCE_INSPECTOR.bits()
-            | DriverCapabilities::CHART_AUTHORING.bits(),
+            | DriverCapabilities::CHART_AUTHORING.bits()
+            | DriverCapabilities::BULK_INSERT.bits()
+            | DriverCapabilities::TRUNCATE_TABLE.bits(),
     ),
     default_port: Some(1433),
     uri_scheme: "sqlserver".into(),
@@ -244,6 +246,8 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         max_identifier_length: 128,
         max_columns: 1024,
         max_indexes_per_table: 999,
+        // T-SQL caps a single multi-row INSERT ... VALUES statement at 1000 rows.
+        max_bulk_insert_rows: 1000,
     }),
     ssl_modes: Some(&[
         dbflux_core::SslModeOption {
@@ -4281,6 +4285,85 @@ mod tests {
     fn mssql_metadata_declares_sql_transfer_family() {
         assert_eq!(METADATA.category, DatabaseCategory::Relational);
         assert_eq!(METADATA.transfer_family, TransferFamily::Sql);
+    }
+
+    #[test]
+    fn mssql_metadata_advertises_bulk_insert_and_truncate() {
+        assert!(METADATA.capabilities.contains(DriverCapabilities::BULK_INSERT));
+        assert!(METADATA.capabilities.contains(DriverCapabilities::TRUNCATE_TABLE));
+    }
+
+    #[test]
+    fn mssql_limits_report_the_1000_row_bulk_insert_cap() {
+        let limits = METADATA.limits.as_ref().expect("mssql must declare limits");
+        assert_eq!(limits.max_bulk_insert_rows, 1000);
+    }
+
+    #[test]
+    fn mssql_referential_integrity_toggle_stays_unsupported() {
+        // Per the design's flagged open question: T-SQL's per-table NOCHECK
+        // model does not fit the global set_referential_integrity signature,
+        // so MSSQL does not override the default and must not set the
+        // DISABLE_FK_CHECKS capability bit.
+        assert!(
+            !METADATA
+                .capabilities
+                .contains(DriverCapabilities::DISABLE_FK_CHECKS)
+        );
+    }
+
+    #[test]
+    fn mssql_generate_bulk_insert_emits_multi_row_values() {
+        use dbflux_core::QueryGenerator;
+
+        let generator = SqlMutationGenerator::new(&MSSQL_DIALECT);
+        let columns = vec!["name".to_string(), "age".to_string()];
+        let owned_rows: Vec<Vec<dbflux_core::Value>> = vec![
+            vec![
+                dbflux_core::Value::Text("Alice".to_string()),
+                dbflux_core::Value::Int(25),
+            ],
+            vec![
+                dbflux_core::Value::Text("Bob".to_string()),
+                dbflux_core::Value::Int(30),
+            ],
+        ];
+        let rows: Vec<&[dbflux_core::Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
+
+        let generated = generator
+            .generate_bulk_insert(None, "users", &columns, &rows)
+            .unwrap()
+            .expect("mssql generator must support native bulk insert");
+
+        assert!(generated.text.starts_with("INSERT INTO "));
+        assert!(generated.text.contains("VALUES"));
+        assert_eq!(generated.text.matches("), (").count() + 1, 2);
+    }
+
+    #[test]
+    fn mssql_generate_create_table_preserves_types_and_pk() {
+        use dbflux_core::QueryGenerator;
+
+        let generator = SqlMutationGenerator::new(&MSSQL_DIALECT);
+        let spec = dbflux_core::CreateTableSpec {
+            schema: None,
+            table: "users".to_string(),
+            columns: vec![dbflux_core::TransferColumn {
+                name: "id".to_string(),
+                type_name: Some("INT".to_string()),
+                nullable: false,
+                is_primary_key: true,
+            }],
+            if_not_exists: false,
+        };
+
+        let generated = generator
+            .generate_create_table(&spec)
+            .unwrap()
+            .expect("mssql generator must support native CREATE TABLE");
+
+        assert!(generated.text.contains("PRIMARY KEY"));
+        assert!(generated.text.contains("NOT NULL"));
     }
 
     // F-R3-1: T-SQL limit_clause must use OFFSET/FETCH, not LIMIT.

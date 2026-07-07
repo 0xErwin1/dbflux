@@ -53,7 +53,10 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
             | DriverCapabilities::MULTI_STATEMENT.bits()
             | DriverCapabilities::INSTANCE_METRICS.bits()
             | DriverCapabilities::INSTANCE_INSPECTOR.bits()
-            | DriverCapabilities::CHART_AUTHORING.bits(),
+            | DriverCapabilities::CHART_AUTHORING.bits()
+            | DriverCapabilities::BULK_INSERT.bits()
+            | DriverCapabilities::TRUNCATE_TABLE.bits()
+            | DriverCapabilities::DISABLE_FK_CHECKS.bits(),
     ),
     default_port: Some(3306),
     uri_scheme: "mysql".into(),
@@ -158,6 +161,7 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
         max_identifier_length: 64,
         max_columns: 4096,
         max_indexes_per_table: 64,
+        max_bulk_insert_rows: 0,
     }),
     ssl_modes: Some(&[
         dbflux_core::SslModeOption {
@@ -211,7 +215,10 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
             | DriverCapabilities::ROUTINES.bits()
             | DriverCapabilities::MULTI_STATEMENT.bits()
             | DriverCapabilities::INSTANCE_METRICS.bits()
-            | DriverCapabilities::INSTANCE_INSPECTOR.bits(),
+            | DriverCapabilities::INSTANCE_INSPECTOR.bits()
+            | DriverCapabilities::BULK_INSERT.bits()
+            | DriverCapabilities::TRUNCATE_TABLE.bits()
+            | DriverCapabilities::DISABLE_FK_CHECKS.bits(),
     ),
     default_port: Some(3306),
     uri_scheme: "mariadb".into(),
@@ -318,6 +325,7 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
         max_identifier_length: 64,
         max_columns: 4096,
         max_indexes_per_table: 64,
+        max_bulk_insert_rows: 0,
     }),
     ssl_modes: Some(&[
         dbflux_core::SslModeOption {
@@ -1813,6 +1821,17 @@ impl Connection for MysqlConnection {
 
     fn close(&mut self) -> Result<(), DbError> {
         Ok(())
+    }
+
+    fn set_referential_integrity(&self, enabled: bool) -> Result<(), DbError> {
+        let value = if enabled { 1 } else { 0 };
+        let mut conn = self
+            .catalog_conn
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+
+        conn.query_drop(format!("SET FOREIGN_KEY_CHECKS = {value}"))
+            .map_err(|e| format_mysql_query_error(&e))
     }
 
     fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
@@ -3736,7 +3755,7 @@ mod tests {
     use dbflux_core::{
         DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, FormValues, MutationRequest,
         OrderByColumn, QueryLanguage, RoutineKind, RowInsert, SemanticRequest, SqlDialect,
-        TableBrowseRequest, TableRef, TransferFamily, Value,
+        SqlMutationGenerator, TableBrowseRequest, TableRef, TransferFamily, Value,
     };
 
     #[test]
@@ -3971,6 +3990,77 @@ mod tests {
                 .capabilities
                 .contains(DriverCapabilities::ROUTINES),
             "MariaDB metadata must declare ROUTINES capability"
+        );
+    }
+
+    #[test]
+    fn mysql_and_mariadb_metadata_advertise_bulk_transfer_capabilities() {
+        use dbflux_core::DriverCapabilities;
+
+        let mysql = MysqlDriver::new(DbKind::MySQL);
+        let mariadb = MysqlDriver::new(DbKind::MariaDB);
+
+        for metadata in [mysql.metadata(), mariadb.metadata()] {
+            assert!(metadata.capabilities.contains(DriverCapabilities::BULK_INSERT));
+            assert!(metadata.capabilities.contains(DriverCapabilities::TRUNCATE_TABLE));
+            assert!(metadata.capabilities.contains(DriverCapabilities::DISABLE_FK_CHECKS));
+        }
+    }
+
+    #[test]
+    fn mysql_generate_bulk_insert_emits_multi_row_values() {
+        use dbflux_core::QueryGenerator;
+
+        let generator = SqlMutationGenerator::new(&MysqlDialect);
+        let columns = vec!["name".to_string(), "age".to_string()];
+        let owned_rows: Vec<Vec<dbflux_core::Value>> = vec![
+            vec![
+                dbflux_core::Value::Text("Alice".to_string()),
+                dbflux_core::Value::Int(25),
+            ],
+            vec![
+                dbflux_core::Value::Text("Bob".to_string()),
+                dbflux_core::Value::Int(30),
+            ],
+        ];
+        let rows: Vec<&[dbflux_core::Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
+
+        let generated = generator
+            .generate_bulk_insert(None, "users", &columns, &rows)
+            .unwrap()
+            .expect("mysql generator must support native bulk insert");
+
+        assert_eq!(
+            generated.text,
+            "INSERT INTO `users` (`name`, `age`) VALUES ('Alice', 25), ('Bob', 30)"
+        );
+    }
+
+    #[test]
+    fn mysql_generate_create_table_preserves_types_and_pk() {
+        use dbflux_core::QueryGenerator;
+
+        let generator = SqlMutationGenerator::new(&MysqlDialect);
+        let spec = dbflux_core::CreateTableSpec {
+            schema: None,
+            table: "users".to_string(),
+            columns: vec![dbflux_core::TransferColumn {
+                name: "id".to_string(),
+                type_name: Some("int".to_string()),
+                nullable: false,
+                is_primary_key: true,
+            }],
+            if_not_exists: false,
+        };
+
+        let generated = generator
+            .generate_create_table(&spec)
+            .unwrap()
+            .expect("mysql generator must support native CREATE TABLE");
+
+        assert_eq!(
+            generated.text,
+            "CREATE TABLE `users` (\n    `id` int NOT NULL,\n    PRIMARY KEY (`id`)\n);"
         );
     }
 

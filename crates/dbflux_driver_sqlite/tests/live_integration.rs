@@ -358,3 +358,37 @@ fn sqlite_code_generators() -> Result<(), DbError> {
 
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Referential integrity toggle (data-transfer engine)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn sqlite_set_referential_integrity_disables_and_restores_fk_checks() -> Result<(), DbError> {
+    let connection = connect_sqlite()?;
+
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE parent_ri (id INTEGER PRIMARY KEY)",
+    ))?;
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE child_ri (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent_ri(id))",
+    ))?;
+    // SQLite disables FK enforcement per-connection by default.
+    connection.set_referential_integrity(true)?;
+
+    let violates = connection.execute(&QueryRequest::new("INSERT INTO child_ri VALUES (1, 999)"));
+    assert!(violates.is_err(), "FK violation must fail with RI enabled");
+
+    connection.set_referential_integrity(false)?;
+    connection.execute(&QueryRequest::new("INSERT INTO child_ri VALUES (1, 999)"))?;
+
+    connection.set_referential_integrity(true)?;
+    let still_violates =
+        connection.execute(&QueryRequest::new("INSERT INTO child_ri VALUES (2, 998)"));
+    assert!(
+        still_violates.is_err(),
+        "FK violation must fail again after RI is restored"
+    );
+
+    Ok(())
+}

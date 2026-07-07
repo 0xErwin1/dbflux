@@ -817,6 +817,18 @@ pub trait Connection: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Temporarily enable or disable referential-integrity (FK) checking for
+    /// the duration of a bulk load (the data-transfer engine's migration path).
+    ///
+    /// Gated by `DriverCapabilities::DISABLE_FK_CHECKS`. The default returns
+    /// `Err(DbError::NotSupported(..))`; drivers that override this MUST
+    /// restore the previous state after the load, including on error paths.
+    fn set_referential_integrity(&self, _enabled: bool) -> Result<(), DbError> {
+        Err(DbError::NotSupported(
+            "this driver does not support toggling referential integrity".to_string(),
+        ))
+    }
+
     /// Fetch all routines (stored procedures / user-defined functions) in a schema.
     ///
     /// Returns an empty `Vec` by default so drivers that do not support routines
@@ -1592,6 +1604,18 @@ mod tests {
         assert!(
             matches!(result, Ok(ref v) if v.is_empty()),
             "default schema_routines must return Ok(vec![]), got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn set_referential_integrity_default_returns_not_supported() {
+        let conn = StubConnection;
+        let result = conn.set_referential_integrity(false);
+
+        assert!(
+            matches!(result, Err(DbError::NotSupported(_))),
+            "default impl must return NotSupported, got: {:?}",
             result
         );
     }

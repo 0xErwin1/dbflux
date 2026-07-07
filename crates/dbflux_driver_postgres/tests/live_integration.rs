@@ -742,3 +742,40 @@ fn postgres_semantic_update_and_upsert_array_columns() -> Result<(), DbError> {
         Ok(())
     })
 }
+
+// ---------------------------------------------------------------------------
+// Referential integrity toggle (data-transfer engine)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_set_referential_integrity_disables_and_restores_fk_checks() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE parent_ri (id INT PRIMARY KEY)",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE child_ri (id INT PRIMARY KEY, parent_id INT REFERENCES parent_ri(id))",
+        ))?;
+
+        // With RI enabled (default), inserting a child with no matching parent fails.
+        let violates =
+            connection.execute(&QueryRequest::new("INSERT INTO child_ri VALUES (1, 999)"));
+        assert!(violates.is_err(), "FK violation must fail with RI enabled");
+
+        connection.set_referential_integrity(false)?;
+        connection.execute(&QueryRequest::new("INSERT INTO child_ri VALUES (1, 999)"))?;
+
+        connection.set_referential_integrity(true)?;
+        let still_violates =
+            connection.execute(&QueryRequest::new("INSERT INTO child_ri VALUES (2, 998)"));
+        assert!(
+            still_violates.is_err(),
+            "FK violation must fail again after RI is restored"
+        );
+
+        Ok(())
+    })
+}

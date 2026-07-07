@@ -7,16 +7,17 @@ pub(crate) mod safety;
 pub(crate) mod semantic;
 pub(crate) mod table_browser;
 pub(crate) mod time_macros;
+pub(crate) mod transfer;
 pub(crate) mod tx_vocab;
 pub(crate) mod types;
 pub(crate) mod visual_query;
 
 pub use column_kind::{infer_column_kind, project_aggregate_kinds};
 pub use generator::{
-    CollectionTemplateRequest, GeneratedMutation, GeneratedQuery, GeneratorError, MutationCategory,
-    MutationTemplateOperation, MutationTemplateRequest, QueryGenError, QueryGenerator,
-    ReadTemplateOperation, ReadTemplateRequest, SelectQuery, SqlMutationGenerator, inline_params,
-    render_filter_node_sql,
+    CollectionTemplateRequest, CreateTableSpec, GeneratedMutation, GeneratedQuery, GeneratorError,
+    MutationCategory, MutationTemplateOperation, MutationTemplateRequest, QueryGenError,
+    QueryGenerator, ReadTemplateOperation, ReadTemplateRequest, SelectQuery, SqlMutationGenerator,
+    inline_params, render_filter_node_sql,
 };
 pub use keyset::lower_keyset_predicate;
 pub use language_service::{
@@ -37,6 +38,7 @@ pub use table_browser::{
     TableCountRequest, TableRef,
 };
 pub use time_macros::{contains_time_macros, substitute_time_macros};
+pub use transfer::TransferColumn;
 pub use tx_vocab::TransactionVocab;
 pub use types::{
     ColumnKind, ColumnMeta, QueryHandle, QueryRequest, QueryResult, QueryResultShape,

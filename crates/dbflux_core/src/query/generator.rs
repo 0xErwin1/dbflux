@@ -1,6 +1,8 @@
+use crate::Value;
 use crate::data::crud::MutationRequest;
 use crate::driver::capabilities::QueryLanguage;
 use crate::query::semantic::{PlannedQuery, SemanticPlan, SemanticPlanKind};
+use crate::query::transfer::TransferColumn;
 use crate::query::visual_query::VisualQuerySpec;
 use crate::schema::types::ColumnInfo;
 use crate::sql::dialect::{PlaceholderStyle, SqlDialect};
@@ -280,6 +282,16 @@ impl GeneratedMutation {
     }
 }
 
+/// Spec for a driver-native `CREATE TABLE`, built from a same-engine source
+/// table's columns. Consumed by [`QueryGenerator::generate_create_table`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateTableSpec {
+    pub schema: Option<String>,
+    pub table: String,
+    pub columns: Vec<TransferColumn>,
+    pub if_not_exists: bool,
+}
+
 pub trait QueryGenerator: Send + Sync {
     fn supported_categories(&self) -> &'static [MutationCategory];
 
@@ -418,6 +430,34 @@ pub trait QueryGenerator: Send + Sync {
     /// [`SelectQuery::materialize_for_editor`] with the dialect.
     fn materialize_select_for_editor(&self, query: &SelectQuery) -> String {
         query.sql.clone()
+    }
+
+    /// Generate a native multi-row INSERT for the data-transfer engine's bulk-load path.
+    ///
+    /// The default returns `Ok(None)`, meaning "this generator has no native
+    /// multi-row INSERT" — the engine falls back to per-row inserts. Gated by
+    /// `DriverCapabilities::BULK_INSERT`; row-count caps are read from
+    /// `DriverLimits::max_bulk_insert_rows`, not hardcoded here.
+    fn generate_bulk_insert(
+        &self,
+        _schema: Option<&str>,
+        _table: &str,
+        _columns: &[String],
+        _rows: &[&[Value]],
+    ) -> Result<Option<GeneratedQuery>, GeneratorError> {
+        Ok(None)
+    }
+
+    /// Generate a driver-native `CREATE TABLE` from a same-engine source table's columns.
+    ///
+    /// The default returns `Ok(None)`, meaning "this generator has no native
+    /// CREATE TABLE support" — the engine's `Create` mapping mode is then
+    /// unavailable and the wizard falls back to `Existing`/`Skip`.
+    fn generate_create_table(
+        &self,
+        _spec: &CreateTableSpec,
+    ) -> Result<Option<GeneratedQuery>, GeneratorError> {
+        Ok(None)
     }
 }
 
@@ -775,6 +815,35 @@ impl QueryGenerator for SqlMutationGenerator {
         };
 
         rewrite_placeholders_if_needed(self.dialect, sql, params, used_raw_expression)
+    }
+
+    fn generate_bulk_insert(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        columns: &[String],
+        rows: &[&[Value]],
+    ) -> Result<Option<GeneratedQuery>, GeneratorError> {
+        let builder = SqlQueryBuilder::new(self.dialect);
+
+        Ok(builder
+            .build_bulk_insert(schema, table, columns, rows)
+            .map(|text| GeneratedQuery {
+                language: QueryLanguage::Sql,
+                text,
+            }))
+    }
+
+    fn generate_create_table(
+        &self,
+        spec: &CreateTableSpec,
+    ) -> Result<Option<GeneratedQuery>, GeneratorError> {
+        let builder = SqlQueryBuilder::new(self.dialect);
+
+        Ok(Some(GeneratedQuery {
+            language: QueryLanguage::Sql,
+            text: builder.build_create_table(spec),
+        }))
     }
 }
 

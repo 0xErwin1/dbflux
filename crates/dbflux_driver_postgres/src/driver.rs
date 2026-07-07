@@ -64,7 +64,10 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::MULTI_STATEMENT.bits()
             | DriverCapabilities::INSTANCE_METRICS.bits()
             | DriverCapabilities::INSTANCE_INSPECTOR.bits()
-            | DriverCapabilities::CHART_AUTHORING.bits(),
+            | DriverCapabilities::CHART_AUTHORING.bits()
+            | DriverCapabilities::BULK_INSERT.bits()
+            | DriverCapabilities::TRUNCATE_TABLE.bits()
+            | DriverCapabilities::DISABLE_FK_CHECKS.bits(),
     ),
     default_port: Some(5432),
     uri_scheme: "postgresql".into(),
@@ -174,6 +177,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         max_identifier_length: 63,
         max_columns: 250,
         max_indexes_per_table: 32,
+        max_bulk_insert_rows: 0,
     }),
     ssl_modes: Some(&[
         dbflux_core::SslModeOption {
@@ -1459,6 +1463,18 @@ impl Connection for PostgresConnection {
     }
 
     fn close(&mut self) -> Result<(), DbError> {
+        Ok(())
+    }
+
+    fn set_referential_integrity(&self, enabled: bool) -> Result<(), DbError> {
+        let role = if enabled { "origin" } else { "replica" };
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
+        client
+            .simple_query(&format!("SET session_replication_role = '{role}'"))
+            .map_err(|e| format_pg_query_error(&e))?;
         Ok(())
     }
 
@@ -4311,15 +4327,15 @@ fn get_schema_routines(
 #[cfg(test)]
 mod tests {
     use super::{
-        PgUriSslMode, PostgresCodeGenerator, PostgresDialect, PostgresDriver,
+        POSTGRES_DIALECT, PgUriSslMode, PostgresCodeGenerator, PostgresDialect, PostgresDriver,
         inject_password_into_pg_uri, parse_pg_uri_sslmode, plan_postgres_semantic_request,
         prokind_to_routine_kind,
     };
     use dbflux_core::{
-        CodeGenerator, CreateTypeRequest, DatabaseCategory, DbConfig, DbDriver, DbError,
-        FormValues, MutationRequest, QueryLanguage, RowInsert, SemanticRequest, SqlDialect,
-        TableBrowseRequest, TableRef, TransferFamily, TypeAttributeDefinition, TypeDefinition,
-        Value, WhereOperator,
+        CodeGenerator, CreateTableSpec, CreateTypeRequest, DatabaseCategory, DbConfig, DbDriver,
+        DbError, FormValues, MutationRequest, QueryLanguage, RowInsert, SemanticRequest,
+        SqlDialect, SqlMutationGenerator, TableBrowseRequest, TableRef, TransferFamily,
+        TypeAttributeDefinition, TypeDefinition, Value, WhereOperator,
     };
 
     #[test]
@@ -4810,6 +4826,81 @@ mod tests {
                 .capabilities
                 .contains(DriverCapabilities::INSTANCE_METRICS),
             "INSTANCE_METRICS must remain set on PostgreSQL driver"
+        );
+    }
+
+    #[test]
+    fn postgres_metadata_advertises_bulk_transfer_capabilities() {
+        use super::METADATA;
+        use dbflux_core::DriverCapabilities;
+
+        assert!(METADATA.capabilities.contains(DriverCapabilities::BULK_INSERT));
+        assert!(METADATA.capabilities.contains(DriverCapabilities::TRUNCATE_TABLE));
+        assert!(METADATA.capabilities.contains(DriverCapabilities::DISABLE_FK_CHECKS));
+    }
+
+    #[test]
+    fn postgres_generate_bulk_insert_emits_multi_row_values() {
+        use dbflux_core::QueryGenerator;
+
+        let generator = SqlMutationGenerator::new(&POSTGRES_DIALECT);
+        let columns = vec!["name".to_string(), "age".to_string()];
+        let owned_rows: Vec<Vec<dbflux_core::Value>> = vec![
+            vec![
+                dbflux_core::Value::Text("Alice".to_string()),
+                dbflux_core::Value::Int(25),
+            ],
+            vec![
+                dbflux_core::Value::Text("Bob".to_string()),
+                dbflux_core::Value::Int(30),
+            ],
+        ];
+        let rows: Vec<&[dbflux_core::Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
+
+        let generated = generator
+            .generate_bulk_insert(None, "users", &columns, &rows)
+            .unwrap()
+            .expect("postgres generator must support native bulk insert");
+
+        assert_eq!(
+            generated.text,
+            "INSERT INTO \"users\" (\"name\", \"age\") VALUES ('Alice', 25), ('Bob', 30)"
+        );
+    }
+
+    #[test]
+    fn postgres_generate_create_table_preserves_types_and_pk() {
+        use dbflux_core::QueryGenerator;
+
+        let generator = SqlMutationGenerator::new(&POSTGRES_DIALECT);
+        let spec = CreateTableSpec {
+            schema: Some("public".to_string()),
+            table: "users".to_string(),
+            columns: vec![
+                dbflux_core::TransferColumn {
+                    name: "id".to_string(),
+                    type_name: Some("integer".to_string()),
+                    nullable: false,
+                    is_primary_key: true,
+                },
+                dbflux_core::TransferColumn {
+                    name: "name".to_string(),
+                    type_name: Some("text".to_string()),
+                    nullable: true,
+                    is_primary_key: false,
+                },
+            ],
+            if_not_exists: false,
+        };
+
+        let generated = generator
+            .generate_create_table(&spec)
+            .unwrap()
+            .expect("postgres generator must support native CREATE TABLE");
+
+        assert_eq!(
+            generated.text,
+            "CREATE TABLE \"public\".\"users\" (\n    \"id\" integer NOT NULL,\n    \"name\" text,\n    PRIMARY KEY (\"id\")\n);"
         );
     }
 

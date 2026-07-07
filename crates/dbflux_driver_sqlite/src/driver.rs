@@ -68,7 +68,9 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::EXPORT_JSON.bits()
             | DriverCapabilities::QUERY_CANCELLATION.bits()
             | DriverCapabilities::TRANSACTIONAL_DDL.bits()
-            | DriverCapabilities::MULTI_STATEMENT.bits(),
+            | DriverCapabilities::MULTI_STATEMENT.bits()
+            | DriverCapabilities::BULK_INSERT.bits()
+            | DriverCapabilities::DISABLE_FK_CHECKS.bits(),
     ),
     default_port: None,
     uri_scheme: "sqlite".into(),
@@ -169,6 +171,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         max_identifier_length: 100_000,
         max_columns: 32766,
         max_indexes_per_table: 64,
+        max_bulk_insert_rows: 0,
     }),
     ssl_modes: None,
     ssl_cert_fields: None,
@@ -662,6 +665,16 @@ impl Connection for SqliteConnection {
 
     fn close(&mut self) -> Result<(), DbError> {
         Ok(())
+    }
+
+    fn set_referential_integrity(&self, enabled: bool) -> Result<(), DbError> {
+        let value = if enabled { "ON" } else { "OFF" };
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+        conn.execute_batch(&format!("PRAGMA foreign_keys = {value}"))
+            .map_err(|e| format_sqlite_query_error(&e))
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
@@ -2194,9 +2207,10 @@ mod tests {
         plan_sqlite_semantic_request, sqlite_generate_create_table,
     };
     use dbflux_core::{
-        ColumnInfo, ColumnKind, DatabaseCategory, DbConfig, DbDriver, FormValues, MutationRequest,
-        QueryLanguage, RowInsert, SemanticRequest, SqlDialect, TableBrowseRequest, TableInfo,
-        TableRef, TransferFamily, Value, WhereOperator,
+        ColumnInfo, ColumnKind, DatabaseCategory, DbConfig, DbDriver, DriverCapabilities,
+        FormValues, MutationRequest, QueryLanguage, RowInsert, SemanticRequest, SqlDialect,
+        SqlMutationGenerator, TableBrowseRequest, TableInfo, TableRef, TransferFamily, Value,
+        WhereOperator,
     };
 
     // --- kind_from_decltype unit tests (TDD: RED → GREEN) ---
@@ -2393,6 +2407,69 @@ mod tests {
         assert_eq!(metadata.default_port, None);
         assert_eq!(metadata.uri_scheme, "sqlite");
         assert!(!driver.form_definition().tabs.is_empty());
+    }
+
+    #[test]
+    fn sqlite_metadata_advertises_bulk_insert_and_fk_disable_but_not_truncate() {
+        let driver = SqliteDriver::new();
+        let capabilities = driver.metadata().capabilities;
+
+        assert!(capabilities.contains(DriverCapabilities::BULK_INSERT));
+        assert!(capabilities.contains(DriverCapabilities::DISABLE_FK_CHECKS));
+        // SQLite has no `TRUNCATE TABLE` statement; the engine's Truncate
+        // load option must not be offered for this driver.
+        assert!(!capabilities.contains(DriverCapabilities::TRUNCATE_TABLE));
+    }
+
+    #[test]
+    fn sqlite_generate_bulk_insert_emits_multi_row_values() {
+        use dbflux_core::QueryGenerator;
+
+        let generator = SqlMutationGenerator::new(&SqliteDialect);
+        let columns = vec!["name".to_string(), "age".to_string()];
+        let owned_rows: Vec<Vec<Value>> = vec![
+            vec![Value::Text("Alice".to_string()), Value::Int(25)],
+            vec![Value::Text("Bob".to_string()), Value::Int(30)],
+        ];
+        let rows: Vec<&[Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
+
+        let generated = generator
+            .generate_bulk_insert(None, "users", &columns, &rows)
+            .unwrap()
+            .expect("sqlite generator must support native bulk insert");
+
+        assert_eq!(
+            generated.text,
+            "INSERT INTO \"users\" (\"name\", \"age\") VALUES ('Alice', 25), ('Bob', 30)"
+        );
+    }
+
+    #[test]
+    fn sqlite_generate_create_table_preserves_types_and_pk() {
+        use dbflux_core::{CreateTableSpec, QueryGenerator, TransferColumn};
+
+        let generator = SqlMutationGenerator::new(&SqliteDialect);
+        let spec = CreateTableSpec {
+            schema: None,
+            table: "users".to_string(),
+            columns: vec![TransferColumn {
+                name: "id".to_string(),
+                type_name: Some("INTEGER".to_string()),
+                nullable: false,
+                is_primary_key: true,
+            }],
+            if_not_exists: false,
+        };
+
+        let generated = generator
+            .generate_create_table(&spec)
+            .unwrap()
+            .expect("sqlite generator must support native CREATE TABLE");
+
+        assert_eq!(
+            generated.text,
+            "CREATE TABLE \"users\" (\n    \"id\" INTEGER NOT NULL,\n    PRIMARY KEY (\"id\")\n);"
+        );
     }
 
     #[test]

@@ -386,6 +386,7 @@ pub static DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
         max_identifier_length: 0,
         max_columns: 0,
         max_indexes_per_table: 0,
+        max_bulk_insert_rows: 0,
     }),
     ssl_modes: None,
     ssl_cert_fields: None,
