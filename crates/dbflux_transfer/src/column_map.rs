@@ -19,33 +19,92 @@ pub struct AutoColumnMap {
     warnings: Vec<String>,
 }
 
+/// One user-adjusted column pairing from the Import column-mapping review
+/// step (T22): binds `target_column` to `source_column`, or clears it to
+/// always-`NULL` when `source_column` is `None` — overriding whatever the
+/// by-name auto-map resolved for that target column. Columns not mentioned
+/// here keep their auto-detected pairing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnMappingOverride {
+    pub target_column: String,
+    pub source_column: Option<String>,
+}
+
 impl AutoColumnMap {
     pub fn new(source_columns: &[TransferColumn], target_columns: &[TransferColumn]) -> Self {
-        let target_from_source = target_columns
-            .iter()
-            .map(|target| {
-                source_columns
-                    .iter()
-                    .position(|src| src.name == target.name)
-            })
-            .collect();
-
-        let warnings = source_columns
-            .iter()
-            .filter(|src| !target_columns.iter().any(|target| target.name == src.name))
-            .map(|src| {
-                format!(
-                    "source column '{}' has no matching target column and was skipped",
-                    src.name
-                )
-            })
-            .collect();
+        let target_from_source = auto_map(source_columns, target_columns);
+        let warnings = unmatched_source_warnings(source_columns, &target_from_source);
 
         Self {
             target_from_source,
             warnings,
         }
     }
+
+    /// Builds the by-name auto-map, then applies `overrides` on top — each
+    /// override replaces one target column's source binding regardless of
+    /// what auto-mapping resolved for it. Unmatched-source warnings are
+    /// recomputed from the final (post-override) mapping, so a source
+    /// column an override rescues out of "unmatched" no longer warns.
+    pub fn with_overrides(
+        source_columns: &[TransferColumn],
+        target_columns: &[TransferColumn],
+        overrides: &[ColumnMappingOverride],
+    ) -> Self {
+        let mut target_from_source = auto_map(source_columns, target_columns);
+
+        for override_entry in overrides {
+            let Some(target_index) = target_columns
+                .iter()
+                .position(|c| c.name == override_entry.target_column)
+            else {
+                continue;
+            };
+
+            target_from_source[target_index] = override_entry
+                .source_column
+                .as_ref()
+                .and_then(|name| source_columns.iter().position(|c| &c.name == name));
+        }
+
+        let warnings = unmatched_source_warnings(source_columns, &target_from_source);
+
+        Self {
+            target_from_source,
+            warnings,
+        }
+    }
+}
+
+fn auto_map(
+    source_columns: &[TransferColumn],
+    target_columns: &[TransferColumn],
+) -> Vec<Option<usize>> {
+    target_columns
+        .iter()
+        .map(|target| {
+            source_columns
+                .iter()
+                .position(|src| src.name == target.name)
+        })
+        .collect()
+}
+
+fn unmatched_source_warnings(
+    source_columns: &[TransferColumn],
+    target_from_source: &[Option<usize>],
+) -> Vec<String> {
+    source_columns
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !target_from_source.contains(&Some(*index)))
+        .map(|(_, src)| {
+            format!(
+                "source column '{}' has no matching target column and was skipped",
+                src.name
+            )
+        })
+        .collect()
 }
 
 impl ColumnMap for AutoColumnMap {
@@ -100,6 +159,74 @@ mod tests {
 
         assert_eq!(projected, vec![Value::Int(1), Value::Int(2), Value::Null]);
         assert!(map.warnings().is_empty());
+    }
+
+    #[test]
+    fn override_rebinds_a_target_column_to_an_explicit_source_column() {
+        let source = vec![column("first_name"), column("last_name")];
+        let target = vec![column("name")];
+        let overrides = vec![ColumnMappingOverride {
+            target_column: "name".to_string(),
+            source_column: Some("first_name".to_string()),
+        }];
+
+        let map = AutoColumnMap::with_overrides(&source, &target, &overrides);
+        let projected = map.project(&[
+            Value::Text("Ada".to_string()),
+            Value::Text("Lovelace".to_string()),
+        ]);
+
+        assert_eq!(projected, vec![Value::Text("Ada".to_string())]);
+    }
+
+    #[test]
+    fn override_with_no_source_clears_the_target_column_to_null() {
+        let source = vec![column("a")];
+        let target = vec![column("a")];
+        let overrides = vec![ColumnMappingOverride {
+            target_column: "a".to_string(),
+            source_column: None,
+        }];
+
+        let map = AutoColumnMap::with_overrides(&source, &target, &overrides);
+        let projected = map.project(&[Value::Int(1)]);
+
+        assert_eq!(projected, vec![Value::Null]);
+    }
+
+    #[test]
+    fn override_rescuing_an_unmatched_source_column_into_a_spare_target_clears_its_warning() {
+        // "a" auto-matches by name; "legacy_a" has no match, so it warns
+        // until an override binds it into the otherwise-unused "extra" slot.
+        let source = vec![column("a"), column("legacy_a")];
+        let target = vec![column("a"), column("extra")];
+        let overrides = vec![ColumnMappingOverride {
+            target_column: "extra".to_string(),
+            source_column: Some("legacy_a".to_string()),
+        }];
+
+        let map = AutoColumnMap::with_overrides(&source, &target, &overrides);
+
+        assert!(
+            map.warnings().is_empty(),
+            "the rebound source column must no longer warn as unmatched: {:?}",
+            map.warnings()
+        );
+    }
+
+    #[test]
+    fn override_naming_an_unknown_target_column_is_ignored() {
+        let source = vec![column("a")];
+        let target = vec![column("a")];
+        let overrides = vec![ColumnMappingOverride {
+            target_column: "does_not_exist".to_string(),
+            source_column: Some("a".to_string()),
+        }];
+
+        let map = AutoColumnMap::with_overrides(&source, &target, &overrides);
+        let projected = map.project(&[Value::Int(7)]);
+
+        assert_eq!(projected, vec![Value::Int(7)]);
     }
 
     #[test]
