@@ -177,8 +177,7 @@ fn tarjan_scc(nodes: &[usize], children: &[Vec<usize>]) -> Vec<Vec<usize>> {
 
             if self.lowlink[&v] == self.indices[&v] {
                 let mut component = Vec::new();
-                loop {
-                    let w = self.stack.pop().expect("strongconnect stack underflow");
+                while let Some(w) = self.stack.pop() {
                     self.on_stack.remove(&w);
                     component.push(w);
                     if w == v {
