@@ -26,6 +26,16 @@ impl FileFormat {
             Self::Json => "json",
         }
     }
+
+    /// Inverse of [`Self::extension`] — resolves the format a manifest table
+    /// entry's `format` field (e.g. `"csv"`) refers to, for Import.
+    pub fn from_extension(ext: &str) -> Option<Self> {
+        match ext {
+            "csv" => Some(Self::Csv),
+            "json" => Some(Self::Json),
+            _ => None,
+        }
+    }
 }
 
 enum StreamWriter {
@@ -237,6 +247,13 @@ mod tests {
     fn file_name_omits_schema_when_none() {
         let sink = FileSink::new("/tmp/whatever", None, "orders", FileFormat::Csv);
         assert_eq!(sink.file_name(), "orders.csv");
+    }
+
+    #[test]
+    fn from_extension_round_trips_with_extension() {
+        assert_eq!(FileFormat::from_extension("csv"), Some(FileFormat::Csv));
+        assert_eq!(FileFormat::from_extension("json"), Some(FileFormat::Json));
+        assert_eq!(FileFormat::from_extension("xml"), None);
     }
 
     #[test]

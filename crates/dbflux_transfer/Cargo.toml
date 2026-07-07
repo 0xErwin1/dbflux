@@ -18,6 +18,7 @@ dbflux_export.workspace = true
 thiserror = "2"
 serde.workspace = true
 serde_json.workspace = true
+csv.workspace = true
 
 [dev-dependencies]
 dbflux_test_support.workspace = true
