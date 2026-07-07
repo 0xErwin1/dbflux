@@ -13,6 +13,7 @@ mod column_map;
 mod file_sink;
 pub mod manifest;
 mod pipeline;
+mod table_sink;
 mod table_source;
 
 pub use column_map::AutoColumnMap;
@@ -22,4 +23,5 @@ pub use pipeline::{
     ColumnMap, RowChunk, RowSink, RowSource, TableMappingMode, TransferError, TransferOutcome,
     TransferReport, run_transfer,
 };
+pub use table_sink::TableSink;
 pub use table_source::TableSource;
