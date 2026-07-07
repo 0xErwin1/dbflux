@@ -32,6 +32,12 @@ pub struct TableSource {
 }
 
 impl TableSource {
+    /// `estimated_total` is a caller-supplied hint (skips the `COUNT(*)`
+    /// query below when already cheaply known). When `None`, a `SELECT
+    /// COUNT(*)` is issued once at construction so progress reporting has a
+    /// real denominator instead of running indeterminate; a failed count
+    /// query (e.g. insufficient privileges) falls back to `None` rather than
+    /// failing the whole transfer — an unknown total is not a fatal error.
     pub fn new(
         connection: Arc<dyn Connection>,
         schema: Option<String>,
@@ -40,12 +46,15 @@ impl TableSource {
         segment_size: u32,
         estimated_total: Option<u64>,
     ) -> Self {
+        let table = table.into();
         let keyset_pk = single_primary_key_column(&columns);
+        let estimated_total =
+            estimated_total.or_else(|| count_rows(&connection, schema.as_deref(), &table));
 
         Self {
             connection,
             schema,
-            table: table.into(),
+            table,
             columns,
             segment_size: segment_size.max(1),
             estimated_total,
@@ -102,6 +111,25 @@ impl TableSource {
                 )
             }
         }
+    }
+}
+
+/// Best-effort `SELECT COUNT(*)` against `schema.table`, gracefully
+/// swallowing any failure (missing privileges, driver quirks, an
+/// intentionally unreachable table in tests) into `None`.
+fn count_rows(connection: &Arc<dyn Connection>, schema: Option<&str>, table: &str) -> Option<u64> {
+    let dialect = connection.dialect();
+    let qualified = dialect.qualified_table(schema, table);
+    let sql = format!("SELECT COUNT(*) FROM {qualified}");
+
+    let result = connection.execute(&QueryRequest::new(sql)).ok()?;
+    let value = result.rows.first()?.first()?;
+
+    match value {
+        Value::Int(count) => u64::try_from(*count).ok(),
+        Value::Decimal(text) => text.parse().ok(),
+        Value::Float(count) if *count >= 0.0 => Some(*count as u64),
+        _ => None,
     }
 }
 
@@ -181,6 +209,7 @@ mod tests {
     struct FakeConnection {
         captured_sql: Mutex<Vec<String>>,
         responses: Mutex<VecDeque<Vec<Vec<Value>>>>,
+        always_fail: bool,
     }
 
     impl FakeConnection {
@@ -188,6 +217,15 @@ mod tests {
             Self {
                 captured_sql: Mutex::new(Vec::new()),
                 responses: Mutex::new(responses.into()),
+                always_fail: false,
+            }
+        }
+
+        fn always_failing() -> Self {
+            Self {
+                captured_sql: Mutex::new(Vec::new()),
+                responses: Mutex::new(VecDeque::new()),
+                always_fail: true,
             }
         }
     }
@@ -207,6 +245,11 @@ mod tests {
 
         fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
             self.captured_sql.lock().unwrap().push(req.sql.clone());
+
+            if self.always_fail {
+                return Err(DbError::NotSupported("count query failed".to_string()));
+            }
+
             let rows = self
                 .responses
                 .lock()
@@ -331,7 +374,9 @@ mod tests {
         let fake = Arc::new(FakeConnection::new(responses));
         let connection: Arc<dyn Connection> = fake;
         let columns = vec![pk_column("id")];
-        let mut source = TableSource::new(connection, None, "widgets", columns, 2, None);
+        // Some(4): this test's concern is pagination termination, not the
+        // auto-count query — an explicit estimate skips it.
+        let mut source = TableSource::new(connection, None, "widgets", columns, 2, Some(4));
         let cancel = CancelToken::new();
 
         assert!(source.next_chunk(&cancel).unwrap().is_some());
@@ -351,7 +396,9 @@ mod tests {
         let fake = Arc::new(FakeConnection::new(responses));
         let connection: Arc<dyn Connection> = fake.clone();
         let columns = vec![column("name")];
-        let mut source = TableSource::new(connection, None, "logs", columns, 2, None);
+        // Some(3): bypasses the auto-count query, isolating this test to the
+        // offset-fallback pagination it actually exercises.
+        let mut source = TableSource::new(connection, None, "logs", columns, 2, Some(3));
         let cancel = CancelToken::new();
 
         source.next_chunk(&cancel).unwrap();
@@ -381,7 +428,9 @@ mod tests {
         let mut pk_b = pk_column("b");
         pk_b.is_primary_key = true;
         let columns = vec![pk_a, pk_b];
-        let mut source = TableSource::new(connection, None, "composite", columns, 10, None);
+        // Some(0): bypasses the auto-count query so `captured[0]` below is
+        // the actual paginated SELECT, not the count.
+        let mut source = TableSource::new(connection, None, "composite", columns, 10, Some(0));
         let cancel = CancelToken::new();
 
         source.next_chunk(&cancel).unwrap();
@@ -395,13 +444,51 @@ mod tests {
     }
 
     #[test]
-    fn estimated_total_returns_the_constructor_value() {
-        let connection: Arc<dyn Connection> = Arc::new(FakeConnection::new(vec![]));
-        let source = TableSource::new(connection, None, "t", vec![column("a")], 10, Some(123));
-        assert_eq!(source.estimated_total(), Some(123));
+    fn estimated_total_uses_the_provided_value_without_querying() {
+        let fake = Arc::new(FakeConnection::new(vec![vec![vec![Value::Int(999)]]]));
+        let connection: Arc<dyn Connection> = fake.clone();
 
-        let connection: Arc<dyn Connection> = Arc::new(FakeConnection::new(vec![]));
+        let source = TableSource::new(connection, None, "t", vec![column("a")], 10, Some(123));
+
+        assert_eq!(source.estimated_total(), Some(123));
+        assert!(
+            fake.captured_sql.lock().unwrap().is_empty(),
+            "an explicit estimate must not trigger a COUNT(*) query"
+        );
+    }
+
+    #[test]
+    fn estimated_total_queries_count_when_not_provided() {
+        let fake = Arc::new(FakeConnection::new(vec![vec![vec![Value::Int(42)]]]));
+        let connection: Arc<dyn Connection> = fake.clone();
+
         let source = TableSource::new(connection, None, "t", vec![column("a")], 10, None);
+
+        assert_eq!(source.estimated_total(), Some(42));
+        let captured = fake.captured_sql.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert!(captured[0].contains("COUNT(*)"));
+    }
+
+    #[test]
+    fn estimated_total_falls_back_to_none_when_count_query_fails() {
+        let connection: Arc<dyn Connection> = Arc::new(FakeConnection::always_failing());
+
+        let source = TableSource::new(connection, None, "t", vec![column("a")], 10, None);
+
+        assert_eq!(
+            source.estimated_total(),
+            None,
+            "a failed COUNT(*) must fall back to indeterminate progress, not error the transfer"
+        );
+    }
+
+    #[test]
+    fn estimated_total_falls_back_to_none_when_count_query_returns_no_rows() {
+        let connection: Arc<dyn Connection> = Arc::new(FakeConnection::new(vec![vec![]]));
+
+        let source = TableSource::new(connection, None, "t", vec![column("a")], 10, None);
+
         assert_eq!(source.estimated_total(), None);
     }
 }

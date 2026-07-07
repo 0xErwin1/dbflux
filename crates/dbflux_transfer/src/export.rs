@@ -204,6 +204,20 @@ mod tests {
         }
 
         fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+            // TableSource issues a COUNT(*) probe before its first paginated
+            // SELECT (W1's real-progress-total fix); answer it with a single
+            // dummy row rather than letting it fall through to the
+            // table-name dispatch below and steal a page meant for an actual
+            // chunk.
+            if req.sql.contains("COUNT(*)") {
+                return Ok(QueryResult::table(
+                    Vec::new(),
+                    vec![vec![Value::Int(0)]],
+                    None,
+                    std::time::Duration::ZERO,
+                ));
+            }
+
             // Each table's SQL contains its (quoted) table name; use that to
             // dispatch to the right page queue without parsing SQL properly.
             let mut pages = self.pages_by_table.lock().unwrap();

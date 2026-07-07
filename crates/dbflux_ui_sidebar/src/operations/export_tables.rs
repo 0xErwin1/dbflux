@@ -37,19 +37,36 @@ fn table_node(item_id: &str) -> Option<SelectedTable> {
     }
 }
 
+/// Result of resolving an Export action's table selection: the tables that
+/// will actually be exported, plus how many candidate tables were dropped
+/// because they belong to a different profile/database than the anchor —
+/// surfaced to the user as a non-blocking notice rather than silently
+/// vanishing from the export (carry-forward WARNING from Batch 2's verify).
+struct SelectedTablesResolution {
+    tables: Vec<SelectedTable>,
+    skipped_other_profile_or_database: usize,
+}
+
 /// Resolves the tables an Export action rooted at `item_id` should cover: the
 /// active multi-selection when `item_id` is part of it, otherwise just
 /// `item_id` itself (matches `batch_delete_label`'s single-vs-batch pattern).
 /// Only tables sharing the right-clicked table's profile AND database are
 /// kept — a single `run_export` call uses one physical connection, and
 /// `ConnectionPerDatabase` drivers (MySQL/MariaDB) keep a separate connection
-/// per database. Returns an empty `Vec` when `item_id` is not itself a table.
+/// per database. Resolves to an empty selection when `item_id` is not itself
+/// a table.
 ///
 /// A pure function of `(item_id, active_selection)` — no GPUI context needed
 /// — so it is unit-testable without a `Sidebar` entity.
-fn select_export_tables(item_id: &str, active_selection: &HashSet<String>) -> Vec<SelectedTable> {
+fn select_export_tables(
+    item_id: &str,
+    active_selection: &HashSet<String>,
+) -> SelectedTablesResolution {
     let Some(anchor) = table_node(item_id) else {
-        return Vec::new();
+        return SelectedTablesResolution {
+            tables: Vec::new(),
+            skipped_other_profile_or_database: 0,
+        };
     };
 
     let mut ids: Vec<String> = if active_selection.contains(item_id) {
@@ -59,14 +76,19 @@ fn select_export_tables(item_id: &str, active_selection: &HashSet<String>) -> Ve
     };
     ids.sort();
 
-    ids.iter()
+    let (tables, skipped): (Vec<SelectedTable>, Vec<SelectedTable>) = ids
+        .iter()
         .filter_map(|id| table_node(id))
-        .filter(|t| t.profile_id == anchor.profile_id && t.database == anchor.database)
-        .collect()
+        .partition(|t| t.profile_id == anchor.profile_id && t.database == anchor.database);
+
+    SelectedTablesResolution {
+        tables,
+        skipped_other_profile_or_database: skipped.len(),
+    }
 }
 
 impl Sidebar {
-    fn resolve_export_table_selection(&self, item_id: &str) -> Vec<SelectedTable> {
+    fn resolve_export_table_selection(&self, item_id: &str) -> SelectedTablesResolution {
         select_export_tables(item_id, self.active_selection())
     }
 
@@ -74,7 +96,7 @@ impl Sidebar {
     /// used to relabel the context-menu entry ("Export Table…" vs
     /// "Export N Tables…"), mirroring `batch_delete_label`.
     pub(crate) fn export_table_selection_count(&self, item_id: &str) -> usize {
-        self.resolve_export_table_selection(item_id).len()
+        self.resolve_export_table_selection(item_id).tables.len()
     }
 
     pub(crate) fn export_selected_tables(
@@ -83,7 +105,18 @@ impl Sidebar {
         format: dbflux_transfer::FileFormat,
         cx: &mut Context<Self>,
     ) {
-        let tables = self.resolve_export_table_selection(item_id);
+        let resolution = self.resolve_export_table_selection(item_id);
+        let tables = resolution.tables;
+
+        if resolution.skipped_other_profile_or_database > 0 {
+            let count = resolution.skipped_other_profile_or_database;
+            let noun = if count == 1 { "table" } else { "tables" };
+            dbflux_ui_base::toast::Toast::warning(format!(
+                "{count} {noun} outside the active profile/database were skipped"
+            ))
+            .push(cx);
+        }
+
         let Some(profile_id) = tables.first().map(|t| t.profile_id) else {
             return;
         };
@@ -192,6 +225,11 @@ impl Sidebar {
                             schema: schema.clone(),
                             name: name.clone(),
                             columns,
+                            // `TableSource` auto-counts via `SELECT COUNT(*)`
+                            // when this is `None` (falling back to
+                            // indeterminate progress if that query fails),
+                            // so the export path's progress fraction is real
+                            // rather than permanently stuck at 0.
                             estimated_total: None,
                         });
                     }
@@ -371,8 +409,9 @@ mod tests {
 
         let resolved = select_export_tables(&item_id, &selection);
 
-        assert_eq!(resolved.len(), 1);
-        assert_eq!(resolved[0].name, "users");
+        assert_eq!(resolved.tables.len(), 1);
+        assert_eq!(resolved.tables[0].name, "users");
+        assert_eq!(resolved.skipped_other_profile_or_database, 0);
     }
 
     #[test]
@@ -387,13 +426,14 @@ mod tests {
 
         let resolved = select_export_tables(&users, &selection);
 
-        let mut names: Vec<&str> = resolved.iter().map(|t| t.name.as_str()).collect();
+        let mut names: Vec<&str> = resolved.tables.iter().map(|t| t.name.as_str()).collect();
         names.sort_unstable();
         assert_eq!(names, vec!["items", "orders", "users"]);
+        assert_eq!(resolved.skipped_other_profile_or_database, 0);
     }
 
     #[test]
-    fn tables_from_a_different_profile_are_excluded_from_the_selection() {
+    fn tables_from_a_different_profile_are_excluded_and_counted_as_skipped() {
         let profile_a = Uuid::new_v4();
         let profile_b = Uuid::new_v4();
         let anchor = table_id(profile_a, None, "public", "users");
@@ -403,13 +443,17 @@ mod tests {
 
         let resolved = select_export_tables(&anchor, &selection);
 
-        assert_eq!(resolved.len(), 1);
-        assert_eq!(resolved[0].name, "users");
-        assert_eq!(profile_id_of(&resolved[0]), profile_a);
+        assert_eq!(resolved.tables.len(), 1);
+        assert_eq!(resolved.tables[0].name, "users");
+        assert_eq!(profile_id_of(&resolved.tables[0]), profile_a);
+        assert_eq!(
+            resolved.skipped_other_profile_or_database, 1,
+            "the other-profile table must be reported as skipped, not silently dropped"
+        );
     }
 
     #[test]
-    fn tables_from_a_different_database_are_excluded_from_the_selection() {
+    fn tables_from_a_different_database_are_excluded_and_counted_as_skipped() {
         let profile_id = Uuid::new_v4();
         let anchor = table_id(profile_id, Some("app_db"), "public", "users");
         let other_db_table = table_id(profile_id, Some("other_db"), "public", "orders");
@@ -417,12 +461,13 @@ mod tests {
 
         let resolved = select_export_tables(&anchor, &selection);
 
-        assert_eq!(resolved.len(), 1);
-        assert_eq!(resolved[0].name, "users");
+        assert_eq!(resolved.tables.len(), 1);
+        assert_eq!(resolved.tables[0].name, "users");
+        assert_eq!(resolved.skipped_other_profile_or_database, 1);
     }
 
     #[test]
-    fn non_table_ids_in_the_selection_are_ignored() {
+    fn non_table_ids_in_the_selection_are_ignored_and_not_counted_as_skipped() {
         let profile_id = Uuid::new_v4();
         let anchor = table_id(profile_id, None, "public", "users");
         let profile_node_id = SchemaNodeId::Profile { profile_id }.to_string();
@@ -430,8 +475,12 @@ mod tests {
 
         let resolved = select_export_tables(&anchor, &selection);
 
-        assert_eq!(resolved.len(), 1);
-        assert_eq!(resolved[0].name, "users");
+        assert_eq!(resolved.tables.len(), 1);
+        assert_eq!(resolved.tables[0].name, "users");
+        assert_eq!(
+            resolved.skipped_other_profile_or_database, 0,
+            "a non-table selection member is not a data-transfer skip"
+        );
     }
 
     #[test]
@@ -442,6 +491,7 @@ mod tests {
 
         let resolved = select_export_tables(&profile_node_id, &selection);
 
-        assert!(resolved.is_empty());
+        assert!(resolved.tables.is_empty());
+        assert_eq!(resolved.skipped_other_profile_or_database, 0);
     }
 }
