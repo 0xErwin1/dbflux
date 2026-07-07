@@ -52,6 +52,11 @@ pub enum TableMappingMode {
     Recreate,
     /// Leave an existing target table untouched and report it skipped.
     Skip,
+    /// Empty the existing target table (`TRUNCATE`, gated on
+    /// `DriverCapabilities::TRUNCATE_TABLE`), then insert. Destructive like
+    /// `Recreate` — the caller must confirm before reaching here — but keeps
+    /// the table's existing DDL (indexes, constraints) instead of dropping it.
+    Truncate,
 }
 
 /// Pulls rows from a source (a table, a file, ...) in bounded-memory chunks.

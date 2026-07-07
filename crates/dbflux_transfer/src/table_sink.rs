@@ -92,6 +92,30 @@ impl TableSink {
             .map_err(|e| TransferError::Sink(e.to_string()))
     }
 
+    /// Empties the target table before loading, gated on
+    /// `DriverCapabilities::TRUNCATE_TABLE` — some dialects (SQLite) have no
+    /// `TRUNCATE` statement at all, so the wizard must not offer this mode
+    /// unless the target actually supports it (mirrors the `DISABLE_FK_CHECKS`
+    /// missing-capability pattern: unavailable, not a runtime surprise).
+    fn truncate_table(&self) -> Result<(), TransferError> {
+        if !self.connection.supports(DriverCapabilities::TRUNCATE_TABLE) {
+            return Err(TransferError::Sink(format!(
+                "driver does not support TRUNCATE TABLE for '{}'",
+                self.qualified_name()
+            )));
+        }
+
+        let qualified = self
+            .connection
+            .dialect()
+            .qualified_table(self.schema.as_deref(), &self.table);
+
+        self.connection
+            .execute(&QueryRequest::new(format!("TRUNCATE TABLE {qualified}")))
+            .map(|_| ())
+            .map_err(|e| TransferError::Sink(e.to_string()))
+    }
+
     /// `DriverLimits::max_bulk_insert_rows` interpreted as "0 = unlimited" —
     /// treating it as a literal zero-row cap would silently bulk-insert
     /// nothing.
@@ -188,6 +212,9 @@ impl RowSink for TableSink {
             TableMappingMode::Recreate => {
                 self.drop_table_if_exists()?;
                 self.create_table(columns)?;
+            }
+            TableMappingMode::Truncate => {
+                self.truncate_table()?;
             }
         }
 
@@ -586,6 +613,39 @@ mod tests {
 
         sink.begin(&[column("id", true)], TableMappingMode::Existing)
             .unwrap();
+        assert!(connection.executed_sql.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn truncate_mode_empties_the_table_before_insert_when_capability_present() {
+        let generator = RecordingGenerator {
+            batch_sizes: Mutex::new(Vec::new()),
+            bulk_insert_returns_none: false,
+        };
+        let connection = Arc::new(FakeConnection::new(
+            DriverCapabilities::BULK_INSERT | DriverCapabilities::TRUNCATE_TABLE,
+            None,
+            Some(generator),
+        ));
+        let conn: Arc<dyn Connection> = connection.clone();
+        let mut sink = TableSink::new(conn, Some("public".to_string()), "t");
+
+        sink.begin(&[column("id", true)], TableMappingMode::Truncate)
+            .unwrap();
+
+        let executed = connection.executed_sql.lock().unwrap();
+        assert_eq!(executed.len(), 1);
+        assert!(executed[0].starts_with("TRUNCATE TABLE"));
+    }
+
+    #[test]
+    fn truncate_mode_errors_when_capability_bit_absent() {
+        let connection = Arc::new(FakeConnection::new(DriverCapabilities::empty(), None, None));
+        let conn: Arc<dyn Connection> = connection.clone();
+        let mut sink = TableSink::new(conn, None, "t");
+
+        let result = sink.begin(&[column("id", true)], TableMappingMode::Truncate);
+        assert!(result.is_err());
         assert!(connection.executed_sql.lock().unwrap().is_empty());
     }
 
