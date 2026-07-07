@@ -546,7 +546,7 @@ impl Render for ImportWizard {
 
         let close_entity = cx.entity().downgrade();
         let close = move |_window: &mut Window, cx: &mut App| {
-            let _ = close_entity.update(cx, |this, cx| this.close(cx));
+            close_entity.update(cx, |this, cx| this.close(cx)).ok();
         };
 
         let mut frame = ModalFrame::new("import-wizard", &self.focus_handle, close)
