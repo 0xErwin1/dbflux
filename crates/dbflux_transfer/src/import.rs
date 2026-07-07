@@ -1,0 +1,682 @@
+//! Import orchestration (File -> Table): reads `manifest.json` first — via
+//! `manifest::read_manifest` — before touching any target table, so a
+//! missing or malformed manifest fails the whole import with zero writes
+//! (T20/R3's fast-fail). Then composes `FileSource -> ColumnMap -> TableSink`
+//! through `run_transfer` for every planned table.
+//!
+//! Recreate/Truncate are destructive `TableMappingMode`s (R4): the caller
+//! must set `ImportOptions::destructive_confirmed` before calling this
+//! function at all when any plan uses one of them — checked once, up front,
+//! before the per-table loop even starts, so an unconfirmed destructive plan
+//! touches zero tables rather than failing partway through.
+
+use std::path::Path;
+use std::sync::Arc;
+
+use dbflux_core::{CancelToken, Connection, TransferColumn};
+
+use crate::column_map::{AutoColumnMap, ColumnMappingOverride};
+use crate::file_sink::FileFormat;
+use crate::file_source::FileSource;
+use crate::manifest::{ManifestTable, read_manifest};
+use crate::pipeline::{ColumnMap, TableMappingMode, TransferError, TransferOutcome, run_transfer};
+use crate::table_sink::TableSink;
+
+/// Where and how one manifest table should land on the target connection.
+pub struct ImportTablePlan {
+    /// Name of the manifest table this plan applies to (`ManifestTable::name`).
+    pub source_table: String,
+    pub target_schema: Option<String>,
+    pub target_table: String,
+    pub mapping_mode: TableMappingMode,
+    /// User-adjusted column pairing from the T22 review step; `None` uses
+    /// the by-name auto-map untouched.
+    pub column_overrides: Option<Vec<ColumnMappingOverride>>,
+}
+
+/// Fixed per-run settings for [`run_import`].
+pub struct ImportOptions {
+    /// Maximum rows per chunk read from the file / written to the target.
+    pub segment_size: u32,
+    /// Database used to resolve existing target tables' columns
+    /// (`Connection::table_details`) for `Existing`/`Truncate`/`Skip` plans.
+    pub target_database: String,
+    /// Hard destructive-confirm gate (R4): must be `true` when any plan uses
+    /// `Recreate` or `Truncate`. Checked before any table is touched.
+    pub destructive_confirmed: bool,
+}
+
+/// Result of importing one planned table.
+pub struct ImportedTable {
+    pub source_table: String,
+    pub target_table: String,
+    pub rows_imported: u64,
+    pub skipped: bool,
+}
+
+/// Result of a completed or cancelled `run_import` call.
+pub struct ImportOutcome {
+    pub tables: Vec<ImportedTable>,
+    pub warnings: Vec<String>,
+    pub cancelled: bool,
+}
+
+/// Reads `manifest_dir/manifest.json` and imports every table with a
+/// matching [`ImportTablePlan`] into `connection`.
+///
+/// `on_progress` is invoked with `(plan_index, rows_done_in_table,
+/// estimated_total_in_table)` after each written chunk of any table.
+pub fn run_import(
+    connection: &Arc<dyn Connection>,
+    manifest_dir: &Path,
+    plans: &[ImportTablePlan],
+    options: &ImportOptions,
+    cancel: &CancelToken,
+    mut on_progress: impl FnMut(usize, u64, Option<u64>),
+) -> Result<ImportOutcome, TransferError> {
+    let manifest = read_manifest(&manifest_dir.join("manifest.json"))?;
+
+    let has_destructive_plan = plans.iter().any(|plan| {
+        matches!(
+            plan.mapping_mode,
+            TableMappingMode::Recreate | TableMappingMode::Truncate
+        )
+    });
+    if has_destructive_plan && !options.destructive_confirmed {
+        return Err(TransferError::Sink(
+            "import includes a Recreate or Truncate table and was not confirmed".to_string(),
+        ));
+    }
+
+    let mut imported = Vec::with_capacity(plans.len());
+    let mut warnings = Vec::new();
+
+    for (index, plan) in plans.iter().enumerate() {
+        if cancel.is_cancelled() {
+            break;
+        }
+
+        let manifest_table = manifest
+            .tables
+            .iter()
+            .find(|table| table.name == plan.source_table)
+            .ok_or_else(|| {
+                TransferError::Source(format!(
+                    "manifest has no table named '{}'",
+                    plan.source_table
+                ))
+            })?;
+
+        let report = import_one_table(
+            connection,
+            manifest_dir,
+            manifest_table,
+            plan,
+            options,
+            cancel,
+            |rows_done, estimated_total| on_progress(index, rows_done, estimated_total),
+        )?;
+
+        let was_cancelled = report.outcome == TransferOutcome::Cancelled;
+        warnings.extend(report.warnings);
+        imported.push(ImportedTable {
+            source_table: plan.source_table.clone(),
+            target_table: plan.target_table.clone(),
+            rows_imported: report.rows_transferred,
+            skipped: matches!(plan.mapping_mode, TableMappingMode::Skip),
+        });
+
+        if was_cancelled {
+            break;
+        }
+    }
+
+    Ok(ImportOutcome {
+        tables: imported,
+        warnings,
+        cancelled: cancel.is_cancelled(),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn import_one_table(
+    connection: &Arc<dyn Connection>,
+    manifest_dir: &Path,
+    manifest_table: &ManifestTable,
+    plan: &ImportTablePlan,
+    options: &ImportOptions,
+    cancel: &CancelToken,
+    on_progress: impl FnMut(u64, Option<u64>),
+) -> Result<crate::pipeline::TransferReport, TransferError> {
+    let format = FileFormat::from_extension(&manifest_table.format).ok_or_else(|| {
+        TransferError::Source(format!(
+            "manifest table '{}' has unknown format '{}'",
+            manifest_table.name, manifest_table.format
+        ))
+    })?;
+
+    let mut source = FileSource::open(
+        &manifest_dir.join(&manifest_table.file),
+        format,
+        manifest_table.columns.clone(),
+        options.segment_size,
+        Some(manifest_table.row_count),
+    )?;
+
+    let target_columns = resolve_target_columns(
+        connection,
+        plan,
+        &manifest_table.columns,
+        &options.target_database,
+    )?;
+
+    let column_map: Box<dyn ColumnMap> = match &plan.column_overrides {
+        Some(overrides) => Box::new(AutoColumnMap::with_overrides(
+            &manifest_table.columns,
+            &target_columns,
+            overrides,
+        )),
+        None => Box::new(AutoColumnMap::new(&manifest_table.columns, &target_columns)),
+    };
+
+    let mut sink = TableSink::new(
+        Arc::clone(connection),
+        plan.target_schema.clone(),
+        plan.target_table.clone(),
+    );
+
+    let mut on_progress = on_progress;
+    run_transfer(
+        &mut source,
+        column_map.as_ref(),
+        &mut sink,
+        plan.mapping_mode,
+        cancel,
+        &mut on_progress,
+    )
+}
+
+/// Resolves the target table's column shape for auto-mapping.
+///
+/// `Create`/`Recreate` build a fresh table from the source's own columns
+/// (same-engine ⇒ 1:1 types), so there is nothing to query yet. `Existing`/
+/// `Truncate` require the table to already exist — a failed lookup
+/// propagates, since inserting into a nonexistent table would fail anyway.
+/// `Skip` never writes, so a missing target table falls back to the
+/// manifest's columns rather than failing the whole import over an inert
+/// table.
+fn resolve_target_columns(
+    connection: &Arc<dyn Connection>,
+    plan: &ImportTablePlan,
+    manifest_columns: &[TransferColumn],
+    target_database: &str,
+) -> Result<Vec<TransferColumn>, TransferError> {
+    match plan.mapping_mode {
+        TableMappingMode::Create | TableMappingMode::Recreate => Ok(manifest_columns.to_vec()),
+        TableMappingMode::Existing | TableMappingMode::Truncate => {
+            query_target_columns(connection, plan, target_database)
+        }
+        TableMappingMode::Skip => Ok(query_target_columns(connection, plan, target_database)
+            .unwrap_or_else(|_| manifest_columns.to_vec())),
+    }
+}
+
+fn query_target_columns(
+    connection: &Arc<dyn Connection>,
+    plan: &ImportTablePlan,
+    target_database: &str,
+) -> Result<Vec<TransferColumn>, TransferError> {
+    let info = connection
+        .table_details(
+            target_database,
+            plan.target_schema.as_deref(),
+            &plan.target_table,
+        )
+        .map_err(|e| TransferError::Sink(e.to_string()))?;
+
+    Ok(info
+        .columns
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| TransferColumn {
+            name: c.name,
+            type_name: Some(c.type_name),
+            nullable: c.nullable,
+            is_primary_key: c.is_primary_key,
+        })
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::manifest::{ManifestSource, TransferManifest};
+    use dbflux_core::{
+        ColumnInfo, CreateTableSpec, DbError, DbKind, DefaultSqlDialect, DriverCapabilities,
+        DriverMetadata, DriverMetadataBuilder, GeneratedQuery, GeneratorError, MutationCategory,
+        MutationRequest, QueryGenerator, QueryLanguage, QueryRequest, QueryResult,
+        SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, TableInfo, Value,
+    };
+    use std::sync::Mutex;
+
+    static DIALECT: DefaultSqlDialect = DefaultSqlDialect;
+    static GENERATOR: FakeGenerator = FakeGenerator;
+
+    /// Minimal query generator so `Create`/`Recreate` plans have DDL/bulk-insert
+    /// text to execute (the fake connection's `execute` is a no-op recorder, so
+    /// the generated text's content doesn't need to be semantically valid SQL).
+    struct FakeGenerator;
+
+    impl QueryGenerator for FakeGenerator {
+        fn supported_categories(&self) -> &'static [MutationCategory] {
+            &[MutationCategory::Sql]
+        }
+
+        fn generate_mutation(&self, _mutation: &MutationRequest) -> Option<GeneratedQuery> {
+            None
+        }
+
+        fn generate_bulk_insert(
+            &self,
+            _schema: Option<&str>,
+            table: &str,
+            _columns: &[String],
+            rows: &[&[Value]],
+        ) -> Result<Option<GeneratedQuery>, GeneratorError> {
+            Ok(Some(GeneratedQuery {
+                language: QueryLanguage::Sql,
+                text: format!("INSERT INTO {table} VALUES (...) -- {} rows", rows.len()),
+            }))
+        }
+
+        fn generate_create_table(
+            &self,
+            spec: &CreateTableSpec,
+        ) -> Result<Option<GeneratedQuery>, GeneratorError> {
+            Ok(Some(GeneratedQuery {
+                language: QueryLanguage::Sql,
+                text: format!("CREATE TABLE {} (...)", spec.table),
+            }))
+        }
+    }
+
+    /// Fake connection recording every `execute()`/`table_details()` call —
+    /// used to prove the fast-fail and destructive-confirm gates touch zero
+    /// tables (a "spy sink" in effect, since every write goes through
+    /// `execute`/`insert_row`).
+    struct FakeConnection {
+        executed_sql: Mutex<Vec<String>>,
+        table_details_calls: Mutex<Vec<String>>,
+        existing_table_columns: Vec<ColumnInfo>,
+        metadata: DriverMetadata,
+    }
+
+    impl FakeConnection {
+        fn new(existing_table_columns: Vec<ColumnInfo>) -> Self {
+            let metadata = DriverMetadataBuilder::new(
+                "fake",
+                "Fake",
+                dbflux_core::DatabaseCategory::Relational,
+                QueryLanguage::Sql,
+            )
+            .capabilities(DriverCapabilities::BULK_INSERT | DriverCapabilities::TRUNCATE_TABLE)
+            .build();
+
+            Self {
+                executed_sql: Mutex::new(Vec::new()),
+                table_details_calls: Mutex::new(Vec::new()),
+                existing_table_columns,
+                metadata,
+            }
+        }
+    }
+
+    impl Connection for FakeConnection {
+        fn metadata(&self) -> &DriverMetadata {
+            &self.metadata
+        }
+
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+            self.executed_sql.lock().unwrap().push(req.sql.clone());
+            Ok(QueryResult::empty())
+        }
+
+        fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Err(DbError::NotSupported("stub".to_string()))
+        }
+
+        fn kind(&self) -> DbKind {
+            DbKind::SQLite
+        }
+
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            SchemaLoadingStrategy::SingleDatabase
+        }
+
+        fn dialect(&self) -> &dyn SqlDialect {
+            &DIALECT
+        }
+
+        fn query_generator(&self) -> Option<&dyn QueryGenerator> {
+            Some(&GENERATOR)
+        }
+
+        fn table_details(
+            &self,
+            _database: &str,
+            _schema: Option<&str>,
+            table: &str,
+        ) -> Result<TableInfo, DbError> {
+            self.table_details_calls
+                .lock()
+                .unwrap()
+                .push(table.to_string());
+            Ok(TableInfo {
+                name: table.to_string(),
+                schema: None,
+                columns: Some(self.existing_table_columns.clone()),
+                indexes: None,
+                foreign_keys: None,
+                constraints: None,
+                sample_fields: None,
+                presentation: Default::default(),
+                child_items: None,
+            })
+        }
+    }
+
+    fn temp_dir(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "dbflux_transfer_import_test_{label}_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).ok();
+        dir
+    }
+
+    fn pk_column() -> TransferColumn {
+        TransferColumn {
+            name: "id".to_string(),
+            type_name: Some("integer".to_string()),
+            nullable: false,
+            is_primary_key: true,
+        }
+    }
+
+    fn write_bundle(dir: &Path, table_name: &str, rows_csv: &str) {
+        std::fs::write(dir.join(format!("{table_name}.csv")), rows_csv).unwrap();
+
+        let manifest = TransferManifest {
+            version: TransferManifest::CURRENT_VERSION,
+            source: ManifestSource {
+                driver: "sqlite".to_string(),
+                database: "main".to_string(),
+                schema: None,
+            },
+            created_at: "2026-07-07T10:00:00+00:00".to_string(),
+            tables: vec![ManifestTable {
+                schema: None,
+                name: table_name.to_string(),
+                file: format!("{table_name}.csv"),
+                format: "csv".to_string(),
+                columns: vec![pk_column()],
+                row_count: 2,
+                fk_order_index: 0,
+            }],
+        };
+        std::fs::write(
+            dir.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn existing_column_info() -> ColumnInfo {
+        ColumnInfo {
+            name: "id".to_string(),
+            type_name: "integer".to_string(),
+            nullable: false,
+            is_primary_key: true,
+            default_value: None,
+            enum_values: None,
+        }
+    }
+
+    fn default_options(target_database: &str) -> ImportOptions {
+        ImportOptions {
+            segment_size: 500,
+            target_database: target_database.to_string(),
+            destructive_confirmed: false,
+        }
+    }
+
+    #[test]
+    fn missing_manifest_fails_fast_with_zero_writes() {
+        let dir = temp_dir("missing_manifest");
+        std::fs::remove_file(dir.join("manifest.json")).ok();
+        let connection: Arc<dyn Connection> = Arc::new(FakeConnection::new(vec![]));
+        let plans = vec![ImportTablePlan {
+            source_table: "users".to_string(),
+            target_schema: None,
+            target_table: "users".to_string(),
+            mapping_mode: TableMappingMode::Create,
+            column_overrides: None,
+        }];
+        let cancel = CancelToken::new();
+
+        let fake = connection.clone();
+        let result = run_import(
+            &connection,
+            &dir,
+            &plans,
+            &default_options("main"),
+            &cancel,
+            |_, _, _| {},
+        );
+
+        assert!(result.is_err());
+        // Downcast is unnecessary — assert through the same connection handle.
+        let _ = fake;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn malformed_manifest_fails_fast_with_zero_writes() {
+        let dir = temp_dir("malformed_manifest");
+        std::fs::write(dir.join("manifest.json"), "{ not valid json").unwrap();
+        let fake = Arc::new(FakeConnection::new(vec![]));
+        let connection: Arc<dyn Connection> = fake.clone();
+        let plans = vec![ImportTablePlan {
+            source_table: "users".to_string(),
+            target_schema: None,
+            target_table: "users".to_string(),
+            mapping_mode: TableMappingMode::Create,
+            column_overrides: None,
+        }];
+        let cancel = CancelToken::new();
+
+        let result = run_import(
+            &connection,
+            &dir,
+            &plans,
+            &default_options("main"),
+            &cancel,
+            |_, _, _| {},
+        );
+
+        assert!(result.is_err());
+        assert!(
+            fake.executed_sql.lock().unwrap().is_empty(),
+            "a malformed manifest must not touch any table"
+        );
+        assert!(fake.table_details_calls.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn recreate_without_confirmation_is_rejected_before_touching_any_table() {
+        let dir = temp_dir("recreate_unconfirmed");
+        write_bundle(&dir, "users", "id\n1\n2\n");
+        let fake = Arc::new(FakeConnection::new(vec![existing_column_info()]));
+        let connection: Arc<dyn Connection> = fake.clone();
+        let plans = vec![ImportTablePlan {
+            source_table: "users".to_string(),
+            target_schema: None,
+            target_table: "users".to_string(),
+            mapping_mode: TableMappingMode::Recreate,
+            column_overrides: None,
+        }];
+        let mut options = default_options("main");
+        options.destructive_confirmed = false;
+        let cancel = CancelToken::new();
+
+        let result = run_import(&connection, &dir, &plans, &options, &cancel, |_, _, _| {});
+
+        assert!(result.is_err());
+        assert!(
+            fake.executed_sql.lock().unwrap().is_empty(),
+            "an unconfirmed Recreate must not touch any table"
+        );
+        assert!(
+            fake.table_details_calls.lock().unwrap().is_empty(),
+            "the gate must trip before even resolving target columns"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn recreate_with_confirmation_proceeds() {
+        let dir = temp_dir("recreate_confirmed");
+        write_bundle(&dir, "users", "id\n1\n2\n");
+        let fake = Arc::new(FakeConnection::new(vec![existing_column_info()]));
+        let connection: Arc<dyn Connection> = fake.clone();
+        let plans = vec![ImportTablePlan {
+            source_table: "users".to_string(),
+            target_schema: None,
+            target_table: "users".to_string(),
+            mapping_mode: TableMappingMode::Recreate,
+            column_overrides: None,
+        }];
+        let mut options = default_options("main");
+        options.destructive_confirmed = true;
+        let cancel = CancelToken::new();
+
+        let outcome = run_import(&connection, &dir, &plans, &options, &cancel, |_, _, _| {})
+            .expect("confirmed Recreate must proceed");
+
+        assert!(!outcome.cancelled);
+        assert_eq!(outcome.tables.len(), 1);
+        assert_eq!(outcome.tables[0].rows_imported, 2);
+        let executed = fake.executed_sql.lock().unwrap();
+        assert!(executed.iter().any(|sql| sql.starts_with("DROP TABLE")));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn skip_mode_reports_zero_writes_and_is_marked_skipped() {
+        let dir = temp_dir("skip_mode");
+        write_bundle(&dir, "users", "id\n1\n2\n");
+        let fake = Arc::new(FakeConnection::new(vec![existing_column_info()]));
+        let connection: Arc<dyn Connection> = fake.clone();
+        let plans = vec![ImportTablePlan {
+            source_table: "users".to_string(),
+            target_schema: None,
+            target_table: "users".to_string(),
+            mapping_mode: TableMappingMode::Skip,
+            column_overrides: None,
+        }];
+        let cancel = CancelToken::new();
+
+        let outcome = run_import(
+            &connection,
+            &dir,
+            &plans,
+            &default_options("main"),
+            &cancel,
+            |_, _, _| {},
+        )
+        .unwrap();
+
+        assert_eq!(outcome.tables.len(), 1);
+        assert!(outcome.tables[0].skipped);
+        assert_eq!(outcome.tables[0].rows_imported, 0);
+        assert!(
+            fake.executed_sql.lock().unwrap().is_empty(),
+            "Skip must never write to the target"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn successful_import_reports_row_counts_per_table() {
+        let dir = temp_dir("success");
+        write_bundle(&dir, "users", "id\n1\n2\n");
+        let fake = Arc::new(FakeConnection::new(vec![existing_column_info()]));
+        let connection: Arc<dyn Connection> = fake.clone();
+        let plans = vec![ImportTablePlan {
+            source_table: "users".to_string(),
+            target_schema: None,
+            target_table: "users".to_string(),
+            mapping_mode: TableMappingMode::Existing,
+            column_overrides: None,
+        }];
+        let cancel = CancelToken::new();
+
+        let outcome = run_import(
+            &connection,
+            &dir,
+            &plans,
+            &default_options("main"),
+            &cancel,
+            |_, _, _| {},
+        )
+        .unwrap();
+
+        assert!(!outcome.cancelled);
+        assert_eq!(outcome.tables.len(), 1);
+        assert_eq!(outcome.tables[0].source_table, "users");
+        assert_eq!(outcome.tables[0].rows_imported, 2);
+        assert!(!outcome.tables[0].skipped);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn plan_referencing_an_unknown_manifest_table_errors() {
+        let dir = temp_dir("unknown_table");
+        write_bundle(&dir, "users", "id\n1\n");
+        let connection: Arc<dyn Connection> =
+            Arc::new(FakeConnection::new(vec![existing_column_info()]));
+        let plans = vec![ImportTablePlan {
+            source_table: "does_not_exist".to_string(),
+            target_schema: None,
+            target_table: "does_not_exist".to_string(),
+            mapping_mode: TableMappingMode::Existing,
+            column_overrides: None,
+        }];
+        let cancel = CancelToken::new();
+
+        let result = run_import(
+            &connection,
+            &dir,
+            &plans,
+            &default_options("main"),
+            &cancel,
+            |_, _, _| {},
+        );
+
+        assert!(result.is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

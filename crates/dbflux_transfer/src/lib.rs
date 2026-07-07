@@ -12,14 +12,18 @@
 mod column_map;
 pub mod export;
 mod file_sink;
+mod file_source;
+pub mod import;
 pub mod manifest;
 mod pipeline;
 mod table_sink;
 mod table_source;
+mod value_codec;
 
-pub use column_map::AutoColumnMap;
+pub use column_map::{AutoColumnMap, ColumnMappingOverride};
 pub use dbflux_core::TransferColumn;
 pub use file_sink::{FileFormat, FileSink};
+pub use file_source::FileSource;
 pub use pipeline::{
     ColumnMap, RowChunk, RowSink, RowSource, TableMappingMode, TransferError, TransferOutcome,
     TransferReport, run_transfer,
