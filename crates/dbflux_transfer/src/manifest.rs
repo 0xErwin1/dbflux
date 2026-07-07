@@ -1,9 +1,13 @@
 //! `TransferManifest`: the `manifest.json` written once per export folder,
-//! describing every table exported so Import (a later slice) can recreate
-//! tables, load order, and column shapes without re-querying the source.
+//! describing every table exported so Import can recreate tables, load
+//! order, and column shapes without re-querying the source.
+
+use std::path::Path;
 
 use dbflux_core::TransferColumn;
 use serde::{Deserialize, Serialize};
+
+use crate::pipeline::TransferError;
 
 /// Top-level `manifest.json` document for one export folder.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -45,6 +49,18 @@ pub struct ManifestTable {
     /// Export flow (no cross-table ordering constraint) this is simply the
     /// table's position in the export list.
     pub fk_order_index: usize,
+}
+
+/// Reads and parses `manifest.json` at `path`. Import (T20/R3) calls this
+/// first, before touching any target table — a missing or malformed
+/// manifest must fail the whole import with zero writes, not partway
+/// through loading tables.
+pub fn read_manifest(path: &Path) -> Result<TransferManifest, TransferError> {
+    let contents = std::fs::read_to_string(path)
+        .map_err(|e| TransferError::Source(format!("{}: {e}", path.display())))?;
+
+    serde_json::from_str(&contents)
+        .map_err(|e| TransferError::Source(format!("{}: invalid manifest: {e}", path.display())))
 }
 
 #[cfg(test)]
@@ -114,5 +130,51 @@ mod tests {
             serde_json::from_str(&json).expect("deserialize manifest");
 
         assert_eq!(round_tripped, manifest);
+    }
+
+    fn temp_manifest_path(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "dbflux_transfer_read_manifest_test_{label}_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir.join("manifest.json")
+    }
+
+    #[test]
+    fn read_manifest_fails_fast_when_the_file_is_missing() {
+        let path = temp_manifest_path("missing");
+        std::fs::remove_file(&path).ok();
+
+        let result = read_manifest(&path);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn read_manifest_fails_fast_when_the_file_is_malformed() {
+        let path = temp_manifest_path("malformed");
+        std::fs::write(&path, "{ not valid json").expect("write malformed manifest");
+
+        let result = read_manifest(&path);
+
+        assert!(result.is_err());
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn read_manifest_parses_a_valid_manifest() {
+        let path = temp_manifest_path("valid");
+        let manifest = sample_manifest();
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&manifest).expect("serialize manifest"),
+        )
+        .expect("write manifest");
+
+        let parsed = read_manifest(&path).expect("read_manifest must succeed");
+
+        assert_eq!(parsed, manifest);
+        std::fs::remove_file(&path).ok();
     }
 }
