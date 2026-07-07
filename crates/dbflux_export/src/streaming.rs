@@ -128,7 +128,12 @@ mod tests {
         let cols = columns();
         let all_rows = rows();
 
-        let result = QueryResult::table(cols.clone(), all_rows.clone(), None, Duration::from_millis(1));
+        let result = QueryResult::table(
+            cols.clone(),
+            all_rows.clone(),
+            None,
+            Duration::from_millis(1),
+        );
         let mut single_shot = Vec::new();
         CsvExporter.export(&result, &mut single_shot).unwrap();
 
@@ -148,7 +153,12 @@ mod tests {
         let cols = columns();
         let all_rows = rows();
 
-        let result = QueryResult::table(cols.clone(), all_rows.clone(), None, Duration::from_millis(1));
+        let result = QueryResult::table(
+            cols.clone(),
+            all_rows.clone(),
+            None,
+            Duration::from_millis(1),
+        );
         let mut single_shot = Vec::new();
         JsonExporter { pretty: false }
             .export(&result, &mut single_shot)

@@ -3022,6 +3022,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dbflux_transfer"
+version = "0.7.0-dev.0"
+dependencies = [
+ "dbflux_core",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "dbflux_tunnel_core"
 version = "0.7.0-dev.0"
 dependencies = [

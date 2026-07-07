@@ -25,6 +25,7 @@ members = [
     "crates/dbflux_proxy",
     "crates/dbflux_tunnel_core",
     "crates/dbflux_export",
+    "crates/dbflux_transfer",
     "crates/dbflux_driver_host",
     "crates/dbflux_aws",
     "crates/dbflux_ssm",

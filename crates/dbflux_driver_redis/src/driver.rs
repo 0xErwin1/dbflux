@@ -25,8 +25,8 @@ use dbflux_core::{
     SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig, StreamAddRequest,
     StreamDeleteRequest, StreamEntryId, TextPosition, TextPositionRange, TransactionCapabilities,
     TransferFamily, Value, ValueRepr, ZSetAddRequest, ZSetRemoveRequest, field, field_password,
-    field_required,
-    field_use_uri, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
+    field_required, field_use_uri, sanitize_uri, ssh_tab, when_checked, when_unchecked,
+    with_default,
 };
 use dbflux_ssh::SshTunnel;
 

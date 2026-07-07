@@ -23,10 +23,9 @@ use dbflux_core::{
     SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
     SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities,
     TransferFamily, Value, ViewInfo, WhereOperator, field, field_password, field_required,
-    field_use_uri,
-    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
-    generate_truncate, generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab,
-    when_checked, when_unchecked, with_default,
+    field_use_uri, generate_delete_template, generate_drop_table, generate_insert_template,
+    generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
+    sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
@@ -4001,9 +4000,21 @@ mod tests {
         let mariadb = MysqlDriver::new(DbKind::MariaDB);
 
         for metadata in [mysql.metadata(), mariadb.metadata()] {
-            assert!(metadata.capabilities.contains(DriverCapabilities::BULK_INSERT));
-            assert!(metadata.capabilities.contains(DriverCapabilities::TRUNCATE_TABLE));
-            assert!(metadata.capabilities.contains(DriverCapabilities::DISABLE_FK_CHECKS));
+            assert!(
+                metadata
+                    .capabilities
+                    .contains(DriverCapabilities::BULK_INSERT)
+            );
+            assert!(
+                metadata
+                    .capabilities
+                    .contains(DriverCapabilities::TRUNCATE_TABLE)
+            );
+            assert!(
+                metadata
+                    .capabilities
+                    .contains(DriverCapabilities::DISABLE_FK_CHECKS)
+            );
         }
     }
 

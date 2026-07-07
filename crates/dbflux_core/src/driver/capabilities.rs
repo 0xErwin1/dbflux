@@ -732,9 +732,14 @@ mod transfer_family_tests {
     use super::*;
 
     fn metadata_with_family(family: TransferFamily) -> DriverMetadata {
-        DriverMetadataBuilder::new("test", "Test", DatabaseCategory::Relational, QueryLanguage::Sql)
-            .transfer_family(family)
-            .build()
+        DriverMetadataBuilder::new(
+            "test",
+            "Test",
+            DatabaseCategory::Relational,
+            QueryLanguage::Sql,
+        )
+        .transfer_family(family)
+        .build()
     }
 
     #[test]

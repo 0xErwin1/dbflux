@@ -502,8 +502,11 @@ mod tests {
         let builder = SqlQueryBuilder::new(&dialect);
 
         let columns = vec!["id".to_string()];
-        let owned_rows: Vec<Vec<Value>> =
-            vec![vec![Value::Int(1)], vec![Value::Int(2)], vec![Value::Int(3)]];
+        let owned_rows: Vec<Vec<Value>> = vec![
+            vec![Value::Int(1)],
+            vec![Value::Int(2)],
+            vec![Value::Int(3)],
+        ];
         let rows: Vec<&[Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
 
         let sql = builder

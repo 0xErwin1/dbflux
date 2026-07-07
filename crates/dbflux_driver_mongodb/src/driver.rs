@@ -28,8 +28,7 @@ use dbflux_core::{
     SchemaSnapshot, SemanticFieldRef, SemanticFilter, SemanticPlan, SemanticPlanKind,
     SemanticRequest, SqlDialect, SshTunnelConfig, TableInfo, TransactionCapabilities,
     TransferFamily, Value, ViewInfo, WhereOperator, field, field_password, field_required,
-    field_use_uri, sanitize_uri,
-    ssh_tab, when_checked, when_unchecked, with_default,
+    field_use_uri, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};

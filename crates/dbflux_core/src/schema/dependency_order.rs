@@ -41,7 +41,10 @@ pub fn topological_order(tables: &[TableRef], fks: &[SchemaForeignKeyInfo]) -> O
 
     let mut name_to_indices: HashMap<&str, Vec<usize>> = HashMap::new();
     for (index, table) in tables.iter().enumerate() {
-        name_to_indices.entry(table.name.as_str()).or_default().push(index);
+        name_to_indices
+            .entry(table.name.as_str())
+            .or_default()
+            .push(index);
     }
 
     // Edges point parent -> child: the parent must be ordered first.
@@ -99,11 +102,18 @@ pub fn topological_order(tables: &[TableRef], fks: &[SchemaForeignKeyInfo]) -> O
     }
 
     if ordered_indices.len() == node_count {
-        return OrderResult::Ordered(ordered_indices.into_iter().map(|i| tables[i].clone()).collect());
+        return OrderResult::Ordered(
+            ordered_indices
+                .into_iter()
+                .map(|i| tables[i].clone())
+                .collect(),
+        );
     }
 
     let ordered_set: HashSet<usize> = ordered_indices.iter().copied().collect();
-    let remaining: Vec<usize> = (0..node_count).filter(|i| !ordered_set.contains(i)).collect();
+    let remaining: Vec<usize> = (0..node_count)
+        .filter(|i| !ordered_set.contains(i))
+        .collect();
 
     let mut cycle_indices: Vec<usize> = tarjan_scc(&remaining, &children)
         .into_iter()
@@ -112,8 +122,14 @@ pub fn topological_order(tables: &[TableRef], fks: &[SchemaForeignKeyInfo]) -> O
     cycle_indices.sort_by_key(|&i| sort_key(i));
 
     OrderResult::Cyclic {
-        ordered_prefix: ordered_indices.into_iter().map(|i| tables[i].clone()).collect(),
-        cycle: cycle_indices.into_iter().map(|i| tables[i].clone()).collect(),
+        ordered_prefix: ordered_indices
+            .into_iter()
+            .map(|i| tables[i].clone())
+            .collect(),
+        cycle: cycle_indices
+            .into_iter()
+            .map(|i| tables[i].clone())
+            .collect(),
     }
 }
 

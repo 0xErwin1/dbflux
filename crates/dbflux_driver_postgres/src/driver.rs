@@ -25,11 +25,11 @@ use dbflux_core::{
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
     SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
     SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities,
-    TransferFamily, TypeDefinition, Value, ViewInfo, WhereOperator, field_password,
-    field_required, field_use_uri,
-    generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
-    generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
-    sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default, with_help,
+    TransferFamily, TypeDefinition, Value, ViewInfo, WhereOperator, field_password, field_required,
+    field_use_uri, generate_create_table, generate_delete_template, generate_drop_table,
+    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
+    render_semantic_filter_sql, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
+    with_help,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -4834,9 +4834,21 @@ mod tests {
         use super::METADATA;
         use dbflux_core::DriverCapabilities;
 
-        assert!(METADATA.capabilities.contains(DriverCapabilities::BULK_INSERT));
-        assert!(METADATA.capabilities.contains(DriverCapabilities::TRUNCATE_TABLE));
-        assert!(METADATA.capabilities.contains(DriverCapabilities::DISABLE_FK_CHECKS));
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::BULK_INSERT)
+        );
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::TRUNCATE_TABLE)
+        );
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::DISABLE_FK_CHECKS)
+        );
     }
 
     #[test]

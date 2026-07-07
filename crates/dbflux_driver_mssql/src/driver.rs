@@ -23,10 +23,9 @@ use dbflux_core::{
     SchemaSnapshot, SortDirection, SqlDialect, SqlMutationGenerator, SshTunnelConfig, SyntaxInfo,
     TableBrowseRequest, TableCountRequest, TableInfo, TransactionCapabilities, TransferFamily,
     Value, ViewInfo, WhereOperator, field, field_password, field_required, field_use_uri,
-    generate_delete_template,
-    generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
-    generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab, when_checked,
-    when_unchecked, with_default,
+    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
+    generate_truncate, generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab,
+    when_checked, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 use tiberius::{AuthMethod, Client, Config, EncryptionLevel, SqlBrowser};
@@ -4289,8 +4288,16 @@ mod tests {
 
     #[test]
     fn mssql_metadata_advertises_bulk_insert_and_truncate() {
-        assert!(METADATA.capabilities.contains(DriverCapabilities::BULK_INSERT));
-        assert!(METADATA.capabilities.contains(DriverCapabilities::TRUNCATE_TABLE));
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::BULK_INSERT)
+        );
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::TRUNCATE_TABLE)
+        );
     }
 
     #[test]
