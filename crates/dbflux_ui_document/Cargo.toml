@@ -20,6 +20,7 @@ dbflux_app.workspace = true
 dbflux_audit.workspace = true
 dbflux_storage.workspace = true
 dbflux_export.workspace = true
+dbflux_transfer.workspace = true
 uuid.workspace = true
 log.workspace = true
 serde_json.workspace = true
