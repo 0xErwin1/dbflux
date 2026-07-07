@@ -20,3 +20,5 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+dbflux_test_support.workspace = true
+dbflux_driver_postgres.workspace = true

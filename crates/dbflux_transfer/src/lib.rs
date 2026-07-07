@@ -10,6 +10,7 @@
 //! pipeline, chunking, cancellation, and progress reporting live here.
 
 mod column_map;
+pub mod export;
 mod file_sink;
 pub mod manifest;
 mod pipeline;

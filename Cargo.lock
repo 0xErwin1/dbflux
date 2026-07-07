@@ -3026,7 +3026,9 @@ name = "dbflux_transfer"
 version = "0.7.0-dev.0"
 dependencies = [
  "dbflux_core",
+ "dbflux_driver_postgres",
  "dbflux_export",
+ "dbflux_test_support",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
