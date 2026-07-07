@@ -32,6 +32,8 @@ pub enum TaskKind {
     SchemaRefresh,
     SchemaDrop,
     Export,
+    Import,
+    Migrate,
     KeyScan,
     KeyGet,
     KeyMutation,
@@ -49,6 +51,8 @@ impl TaskKind {
             TaskKind::SchemaRefresh => "Schema Refresh",
             TaskKind::SchemaDrop => "Schema Drop",
             TaskKind::Export => "Export",
+            TaskKind::Import => "Import",
+            TaskKind::Migrate => "Migrate",
             TaskKind::KeyScan => "Key Scan",
             TaskKind::KeyGet => "Key Get",
             TaskKind::KeyMutation => "Key Mutation",
@@ -540,5 +544,39 @@ impl TaskSlot {
 
     pub fn active_token(&self) -> Option<&CancelToken> {
         self.active.as_ref().map(|(_, token)| token)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn import_and_migrate_labels() {
+        assert_eq!(TaskKind::Import.label(), "Import");
+        assert_eq!(TaskKind::Migrate.label(), "Migrate");
+    }
+
+    #[test]
+    fn every_task_kind_has_a_non_empty_label() {
+        let kinds = [
+            TaskKind::Query,
+            TaskKind::Connect,
+            TaskKind::Disconnect,
+            TaskKind::SwitchDatabase,
+            TaskKind::LoadSchema,
+            TaskKind::SchemaRefresh,
+            TaskKind::SchemaDrop,
+            TaskKind::Export,
+            TaskKind::Import,
+            TaskKind::Migrate,
+            TaskKind::KeyScan,
+            TaskKind::KeyGet,
+            TaskKind::KeyMutation,
+        ];
+
+        for kind in kinds {
+            assert!(!kind.label().is_empty());
+        }
     }
 }

@@ -1,4 +1,5 @@
 pub(crate) mod builder;
+pub mod dependency_order;
 pub mod dependents;
 pub mod drift_check;
 pub mod fingerprint;
@@ -8,6 +9,7 @@ pub mod schema_drift;
 pub(crate) mod types;
 
 pub use builder::{ForeignKeyBuilder, IndexBuilder, SchemaForeignKeyBuilder, SchemaIndexBuilder};
+pub use dependency_order::{OrderResult, topological_order};
 pub use dependents::{RelationKind, RelationRef};
 pub use drift_check::{DriftOutcome, check_drift_sync, check_schema_drift};
 pub use fingerprint::SchemaFingerprint;

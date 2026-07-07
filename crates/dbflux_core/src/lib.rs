@@ -184,7 +184,7 @@ pub use schema::{
     DocumentSchema, DriftOutcome, FieldInfo, ForeignKeyBuilder, ForeignKeyInfo, GraphInfo,
     GraphSchema, IndexBuilder, IndexData, IndexDirection, IndexInfo, KeyInfo, KeySpaceInfo,
     KeyValueSchema, MeasurementInfo, MultiModelCapabilities, MultiModelSchema, NodeLabelInfo,
-    ParseSchemaNodeIdError, PropertyInfo, QueryTableRef, RelationKind, RelationRef,
+    OrderResult, ParseSchemaNodeIdError, PropertyInfo, QueryTableRef, RelationKind, RelationRef,
     RelationalSchema, RelationshipTypeInfo, RetentionPolicyInfo, RoutineInfo, RoutineKind,
     SchemaChange, SchemaDiff, SchemaDriftDetected, SchemaFingerprint, SchemaForeignKeyBuilder,
     SchemaForeignKeyInfo, SchemaIndexBuilder, SchemaIndexInfo, SchemaNodeId, SchemaNodeKind,
@@ -192,6 +192,7 @@ pub use schema::{
     TimeSeriesFieldInfo, TimeSeriesSchema, VectorCollectionInfo, VectorMetadataField, VectorMetric,
     VectorSchema, ViewInfo, WideColumnInfo, WideColumnKeyspaceInfo, WideColumnSchema,
     check_drift_sync, check_schema_drift, diff_table_info, extract_referenced_tables,
+    topological_order,
 };
 
 pub use sql::{
