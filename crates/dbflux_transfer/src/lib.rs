@@ -10,11 +10,16 @@
 //! pipeline, chunking, cancellation, and progress reporting live here.
 
 mod column_map;
+mod file_sink;
+pub mod manifest;
 mod pipeline;
+mod table_source;
 
 pub use column_map::AutoColumnMap;
 pub use dbflux_core::TransferColumn;
+pub use file_sink::{FileFormat, FileSink};
 pub use pipeline::{
     ColumnMap, RowChunk, RowSink, RowSource, TableMappingMode, TransferError, TransferOutcome,
     TransferReport, run_transfer,
 };
+pub use table_source::TableSource;

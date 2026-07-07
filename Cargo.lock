@@ -3026,6 +3026,9 @@ name = "dbflux_transfer"
 version = "0.7.0-dev.0"
 dependencies = [
  "dbflux_core",
+ "dbflux_export",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
 ]
 
@@ -3120,6 +3123,7 @@ dependencies = [
  "dbflux_core",
  "dbflux_ssh",
  "dbflux_storage",
+ "dbflux_transfer",
  "dbflux_ui_base",
  "dirs 6.0.0",
  "gpui",

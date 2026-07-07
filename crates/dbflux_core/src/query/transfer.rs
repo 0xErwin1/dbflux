@@ -8,7 +8,11 @@
 /// One column as seen by an Export/Import/Migration flow: enough to render a
 /// same-engine `CREATE TABLE` column definition and to preserve nullability
 /// and primary-key membership across the transfer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Serializable so it can be embedded verbatim in a `TransferManifest`
+/// (`dbflux_transfer::manifest`), letting Import recreate a table without
+/// re-querying the source driver's schema.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TransferColumn {
     pub name: String,
     pub type_name: Option<String>,

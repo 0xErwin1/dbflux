@@ -332,6 +332,10 @@ impl SqlDialect for MssqlDialect {
         format!("OFFSET 0 ROWS FETCH NEXT {} ROWS ONLY", n)
     }
 
+    fn limit_offset_clause(&self, n: u32, offset: u64) -> String {
+        format!("OFFSET {} ROWS FETCH NEXT {} ROWS ONLY", offset, n)
+    }
+
     fn having_repeats_aggregate_expressions(&self) -> bool {
         true
     }
@@ -4396,6 +4400,25 @@ mod tests {
             !clause.to_ascii_uppercase().contains("LIMIT"),
             "must not contain LIMIT; got: {}",
             clause
+        );
+    }
+
+    // T15: the data-transfer engine's no-PK fallback pagination must use
+    // OFFSET/FETCH for MSSQL even for a non-zero offset, where plain
+    // `LIMIT n OFFSET m` (the trait's default) would be invalid T-SQL.
+    #[test]
+    fn mssql_limit_offset_clause_uses_offset_fetch_for_nonzero_offset() {
+        assert_eq!(
+            MSSQL_DIALECT.limit_offset_clause(5, 10),
+            "OFFSET 10 ROWS FETCH NEXT 5 ROWS ONLY"
+        );
+    }
+
+    #[test]
+    fn mssql_limit_offset_clause_uses_offset_fetch_for_zero_offset() {
+        assert_eq!(
+            MSSQL_DIALECT.limit_offset_clause(5, 0),
+            "OFFSET 0 ROWS FETCH NEXT 5 ROWS ONLY"
         );
     }
 

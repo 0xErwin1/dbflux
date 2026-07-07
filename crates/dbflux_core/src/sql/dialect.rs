@@ -103,6 +103,23 @@ pub trait SqlDialect: Send + Sync {
         format!("LIMIT {}", n)
     }
 
+    /// Returns the dialect-appropriate clause for OFFSET-based pagination
+    /// without a keyset predicate (used by the data-transfer engine's
+    /// `TableSource` when a table has no single-column primary key to page
+    /// by). Safe to append after `ORDER BY`.
+    ///
+    /// Most dialects use `LIMIT n OFFSET m`. SQL Server (T-SQL) has no LIMIT
+    /// keyword at all and requires `OFFSET m ROWS FETCH NEXT n ROWS ONLY`,
+    /// which is why this is a separate method from [`Self::limit_clause`]
+    /// rather than the caller concatenating `limit_clause` with a literal
+    /// `OFFSET m`.
+    fn limit_offset_clause(&self, n: u32, offset: u64) -> String {
+        if offset == 0 {
+            return self.limit_clause(n);
+        }
+        format!("LIMIT {} OFFSET {}", n, offset)
+    }
+
     /// Whether this dialect requires HAVING clauses to repeat the full aggregate
     /// expression rather than referencing the column alias.
     ///
@@ -305,5 +322,19 @@ mod tests {
     fn default_limit_clause_single_row() {
         let dialect = NopDialect;
         assert_eq!(dialect.limit_clause(1), "LIMIT 1");
+    }
+
+    // Data-transfer engine's offset-fallback pagination (T15): tables without a
+    // single-column PK page by LIMIT/OFFSET instead of a keyset predicate.
+    #[test]
+    fn default_limit_offset_clause_with_zero_offset_matches_limit_clause() {
+        let dialect = NopDialect;
+        assert_eq!(dialect.limit_offset_clause(5, 0), "LIMIT 5");
+    }
+
+    #[test]
+    fn default_limit_offset_clause_with_nonzero_offset_appends_offset() {
+        let dialect = NopDialect;
+        assert_eq!(dialect.limit_offset_clause(5, 10), "LIMIT 5 OFFSET 10");
     }
 }
