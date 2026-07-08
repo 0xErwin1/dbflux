@@ -15,6 +15,7 @@ mod file_sink;
 mod file_source;
 pub mod import;
 pub mod manifest;
+pub mod migration;
 mod pipeline;
 mod table_sink;
 mod table_source;
