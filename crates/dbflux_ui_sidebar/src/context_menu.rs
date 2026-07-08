@@ -89,10 +89,10 @@ impl Sidebar {
         cx.notify();
     }
 
-    /// Whether the table's connection supports the data-transfer Export flow.
-    /// Gated on `TransferFamily::Sql` (D1) — never on driver id — so any
-    /// current or future SQL driver picks this up for free.
-    fn table_supports_export(&self, item_id: &str, cx: &App) -> bool {
+    /// Whether the table's connection supports the data-transfer Export/
+    /// Migrate flows. Gated on `TransferFamily::Sql` (D1) — never on driver
+    /// id — so any current or future SQL driver picks this up for free.
+    fn table_supports_transfer(&self, item_id: &str, cx: &App) -> bool {
         let Some(SchemaNodeId::Table { profile_id, .. }) = parse_node_id(item_id) else {
             return false;
         };
@@ -199,7 +199,7 @@ impl Sidebar {
                 // Export (Table -> folder bundle) is gated on the connection's
                 // transfer_family, never on driver id (R7). Views are excluded —
                 // this batch scopes bulk export to writable tables only.
-                if node_kind == SchemaNodeKind::Table && self.table_supports_export(item_id, cx) {
+                if node_kind == SchemaNodeKind::Table && self.table_supports_transfer(item_id, cx) {
                     let count = self.export_table_selection_count(item_id);
                     let label = if count > 1 {
                         format!("Export {count} Tables…")
@@ -225,6 +225,28 @@ impl Sidebar {
                                     ),
                                 ),
                             ]),
+                        )],
+                    );
+                }
+
+                // Migrate (Table -> Table, cross-connection) is gated the
+                // same way as Export — `TransferFamily::Sql`, never driver id
+                // (R6/R7/R8). Opens the Migrate wizard pre-populated with the
+                // resolved table selection; the wizard itself filters valid
+                // targets to connected + transfer-compatible connections.
+                if node_kind == SchemaNodeKind::Table && self.table_supports_transfer(item_id, cx) {
+                    let count = self.migrate_table_selection_count(item_id);
+                    let label = if count > 1 {
+                        format!("Migrate {count} Tables…")
+                    } else {
+                        "Migrate Table…".to_string()
+                    };
+
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            label,
+                            ContextMenuAction::MigrateTables,
                         )],
                     );
                 }
@@ -1355,6 +1377,9 @@ impl Sidebar {
                         database,
                     });
                 }
+            }
+            ContextMenuAction::MigrateTables => {
+                self.migrate_selected_tables(&item_id, cx);
             }
             ContextMenuAction::Duplicate => {
                 self.duplicate_profile(&item_id, cx);

@@ -268,6 +268,18 @@ pub enum SidebarEvent {
         profile_id: Uuid,
         database: Option<String>,
     },
+
+    /// Request to open the Migrate wizard, pre-populated with the resolved
+    /// table selection from the sidebar (T28). `profile_id`/`database`
+    /// identify the source connection; the wizard itself resolves the target
+    /// connection via its own picker. The wizard lives in `dbflux_ui_document`;
+    /// the integrator (`dbflux_ui` Workspace) owns opening it, mirroring
+    /// `RequestImportWizard`'s layering.
+    RequestMigrateWizard {
+        profile_id: Uuid,
+        database: Option<String>,
+        tables: Vec<TableRef>,
+    },
 }
 
 /// Sentinel value for IDs that don't correspond to schema tree nodes
@@ -446,6 +458,11 @@ pub enum ContextMenuAction {
     /// on. Gated the same way as `ExportTablesAs` — `TransferFamily::Sql`,
     /// never a driver id.
     ImportTables,
+    /// Open the Migrate wizard for the selected table(s) (or the right-
+    /// clicked table, when it is not part of a larger selection). Gated the
+    /// same way as `ExportTablesAs`/`ImportTables` — `TransferFamily::Sql`,
+    /// never a driver id.
+    MigrateTables,
 }
 
 #[derive(Clone)]
@@ -534,6 +551,7 @@ impl ContextMenuAction {
             Self::CopyItemId => Some(AppIcon::Copy),
             Self::ExportTablesAs(_) => Some(AppIcon::ArrowUp),
             Self::ImportTables => Some(AppIcon::Download),
+            Self::MigrateTables => Some(AppIcon::ArrowUpDown),
         }
     }
 }
