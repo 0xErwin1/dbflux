@@ -297,6 +297,9 @@ pub struct Workspace {
     /// Import wizard (folder bundle -> tables), targeting the connection it
     /// was opened from.
     import_wizard: Entity<dbflux_ui_document::import_wizard::ImportWizard>,
+    /// Migrate wizard (table -> table, cross-connection), pre-populated from
+    /// the sidebar's multi-select Migrate action.
+    migrate_wizard: Entity<dbflux_ui_document::migrate_wizard::MigrateWizard>,
 
     tasks_state: PanelState,
     pending_command: Option<&'static str>,
@@ -391,6 +394,9 @@ impl Workspace {
         });
         let import_wizard = cx
             .new(|cx| dbflux_ui_document::import_wizard::ImportWizard::new(app_state.clone(), cx));
+        let migrate_wizard = cx.new(|cx| {
+            dbflux_ui_document::migrate_wizard::MigrateWizard::new(app_state.clone(), cx)
+        });
 
         // Subscribe: ModalDeleteConnection — on Confirmed, execute the pending delete.
         cx.subscribe(
@@ -1015,6 +1021,18 @@ impl Workspace {
                         wizard.open(profile_id, database, window, cx);
                     });
                 }
+                SidebarEvent::RequestMigrateWizard {
+                    profile_id,
+                    database,
+                    tables,
+                } => {
+                    let profile_id = *profile_id;
+                    let database = database.clone();
+                    let tables = tables.clone();
+                    this.migrate_wizard.update(cx, |wizard, cx| {
+                        wizard.open(profile_id, database, tables, window, cx);
+                    });
+                }
                 SidebarEvent::RequestOpenSettings => {
                     this.open_settings(cx);
                 }
@@ -1285,6 +1303,7 @@ impl Workspace {
             modal_add_panel,
             export_modal,
             import_wizard,
+            migrate_wizard,
             tasks_state: PanelState::Collapsed,
             pending_command: None,
             pending_sql: None,
