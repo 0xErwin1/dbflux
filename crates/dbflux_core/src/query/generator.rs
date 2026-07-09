@@ -438,11 +438,16 @@ pub trait QueryGenerator: Send + Sync {
     /// multi-row INSERT" — the engine falls back to per-row inserts. Gated by
     /// `DriverCapabilities::BULK_INSERT`; row-count caps are read from
     /// `DriverLimits::max_bulk_insert_rows`, not hardcoded here.
+    /// `column_types` runs parallel to `columns` (same length, same order):
+    /// the target column's driver-reported type name, when known, so the
+    /// generator can pick a type-aware literal (e.g. PostgreSQL array
+    /// columns) instead of a generic fallback.
     fn generate_bulk_insert(
         &self,
         _schema: Option<&str>,
         _table: &str,
         _columns: &[String],
+        _column_types: &[Option<String>],
         _rows: &[&[Value]],
     ) -> Result<Option<GeneratedQuery>, GeneratorError> {
         Ok(None)
@@ -822,12 +827,13 @@ impl QueryGenerator for SqlMutationGenerator {
         schema: Option<&str>,
         table: &str,
         columns: &[String],
+        column_types: &[Option<String>],
         rows: &[&[Value]],
     ) -> Result<Option<GeneratedQuery>, GeneratorError> {
         let builder = SqlQueryBuilder::new(self.dialect);
 
         Ok(builder
-            .build_bulk_insert(schema, table, columns, rows)
+            .build_bulk_insert(schema, table, columns, column_types, rows)
             .map(|text| GeneratedQuery {
                 language: QueryLanguage::Sql,
                 text,

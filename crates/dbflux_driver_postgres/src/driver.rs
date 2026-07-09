@@ -4332,10 +4332,10 @@ mod tests {
         prokind_to_routine_kind,
     };
     use dbflux_core::{
-        CodeGenerator, CreateTableSpec, CreateTypeRequest, DatabaseCategory, DbConfig, DbDriver,
-        DbError, FormValues, MutationRequest, QueryLanguage, RowInsert, SemanticRequest,
-        SqlDialect, SqlMutationGenerator, TableBrowseRequest, TableRef, TransferFamily,
-        TypeAttributeDefinition, TypeDefinition, Value, WhereOperator,
+        CodeGenerator, ColumnAssignment, CreateTableSpec, CreateTypeRequest, DatabaseCategory,
+        DbConfig, DbDriver, DbError, FormValues, MutationRequest, QueryLanguage, RowInsert,
+        SemanticRequest, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, TableBrowseRequest,
+        TableRef, TransferFamily, TypeAttributeDefinition, TypeDefinition, Value, WhereOperator,
     };
 
     #[test]
@@ -4870,7 +4870,7 @@ mod tests {
         let rows: Vec<&[dbflux_core::Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
 
         let generated = generator
-            .generate_bulk_insert(None, "users", &columns, &rows)
+            .generate_bulk_insert(None, "users", &columns, &[], &rows)
             .unwrap()
             .expect("postgres generator must support native bulk insert");
 
@@ -4878,6 +4878,67 @@ mod tests {
             generated.text,
             "INSERT INTO \"users\" (\"name\", \"age\") VALUES ('Alice', 25), ('Bob', 30)"
         );
+    }
+
+    /// JD-C2 regression (bulk route): a `text[]` column's `Value::Array` must
+    /// emit `ARRAY[...]::text[]` when the generator is given the column's
+    /// type, not the untyped `'...'::jsonb` fallback.
+    #[test]
+    fn postgres_generate_bulk_insert_emits_array_literal_when_column_type_is_known() {
+        use dbflux_core::QueryGenerator;
+
+        let generator = SqlMutationGenerator::new(&POSTGRES_DIALECT);
+        let columns = vec!["tags".to_string()];
+        let column_types = vec![Some("text[]".to_string())];
+        let owned_rows: Vec<Vec<Value>> = vec![vec![Value::Array(vec![
+            Value::Text("a".to_string()),
+            Value::Text("b".to_string()),
+        ])]];
+        let rows: Vec<&[Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
+
+        let generated = generator
+            .generate_bulk_insert(None, "t", &columns, &column_types, &rows)
+            .unwrap()
+            .expect("postgres generator must support native bulk insert");
+
+        assert_eq!(
+            generated.text,
+            "INSERT INTO \"t\" (\"tags\") VALUES (ARRAY['a', 'b']::text[])"
+        );
+        assert!(
+            !generated.text.contains("::jsonb"),
+            "a typed array column must never fall back to a jsonb cast: {}",
+            generated.text
+        );
+    }
+
+    /// JD-C2 regression (per-row route): the same `text[]` column must emit
+    /// `ARRAY[...]::text[]` through `RowInsert::with_typed_assignments` +
+    /// `build_insert` — the path `TableSink`'s per-row fallback now uses
+    /// instead of the untyped `RowInsert::new`.
+    #[test]
+    fn postgres_build_insert_emits_array_literal_for_typed_assignment() {
+        let insert = RowInsert::with_typed_assignments(
+            "t".to_string(),
+            None,
+            vec![ColumnAssignment {
+                name: "tags".to_string(),
+                value: Value::Array(vec![
+                    Value::Text("a".to_string()),
+                    Value::Text("b".to_string()),
+                ]),
+                type_name: Some("text[]".to_string()),
+            }],
+        );
+
+        let builder = SqlQueryBuilder::new(&POSTGRES_DIALECT);
+        let sql = builder.build_insert(&insert, false).unwrap();
+
+        assert_eq!(
+            sql,
+            "INSERT INTO \"t\" (\"tags\") VALUES (ARRAY['a', 'b']::text[])"
+        );
+        assert!(!sql.contains("::jsonb"));
     }
 
     #[test]

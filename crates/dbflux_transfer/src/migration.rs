@@ -441,6 +441,7 @@ mod tests {
             _schema: Option<&str>,
             table: &str,
             columns: &[String],
+            _column_types: &[Option<String>],
             rows: &[&[Value]],
         ) -> Result<Option<GeneratedQuery>, GeneratorError> {
             self.recorded_bulk_insert_columns

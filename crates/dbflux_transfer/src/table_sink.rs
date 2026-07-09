@@ -6,8 +6,8 @@
 use std::sync::Arc;
 
 use dbflux_core::{
-    Connection, CreateTableSpec, DriverCapabilities, DriverMetadata, QueryGenerator, QueryRequest,
-    RowInsert, TransferColumn, Value,
+    ColumnAssignment, Connection, CreateTableSpec, DriverCapabilities, DriverMetadata,
+    QueryGenerator, QueryRequest, RowInsert, TransferColumn, Value,
 };
 
 use crate::pipeline::TransferReport;
@@ -20,6 +20,10 @@ pub struct TableSink {
     schema: Option<String>,
     table: String,
     column_names: Vec<String>,
+    /// Runs parallel to `column_names` — each target column's driver-reported
+    /// type, threaded into typed literal formatting (e.g. PostgreSQL array
+    /// columns) instead of being dropped on the floor.
+    column_types: Vec<Option<String>>,
     skipped: bool,
     rows_written: u64,
     warnings: Vec<String>,
@@ -36,6 +40,7 @@ impl TableSink {
             schema,
             table: table.into(),
             column_names: Vec::new(),
+            column_types: Vec::new(),
             skipped: false,
             rows_written: 0,
             warnings: Vec::new(),
@@ -129,12 +134,14 @@ impl TableSink {
         (cap != 0).then_some(cap as usize)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn write_rows_bulk(
         connection: &Arc<dyn Connection>,
         generator: &dyn QueryGenerator,
         schema: Option<&str>,
         table: &str,
         column_names: &[String],
+        column_types: &[Option<String>],
         chunk: &RowChunk,
     ) -> Result<u64, TransferError> {
         let cap = Self::max_bulk_insert_rows(connection.metadata());
@@ -144,7 +151,13 @@ impl TableSink {
         for batch in chunk.0.chunks(batch_size) {
             let row_refs: Vec<&[Value]> = batch.iter().map(Vec::as_slice).collect();
 
-            match generator.generate_bulk_insert(schema, table, column_names, &row_refs) {
+            match generator.generate_bulk_insert(
+                schema,
+                table,
+                column_names,
+                column_types,
+                &row_refs,
+            ) {
                 Ok(Some(query)) => {
                     connection
                         .execute(&QueryRequest::new(query.text))
@@ -152,8 +165,14 @@ impl TableSink {
                     written += batch.len() as u64;
                 }
                 Ok(None) => {
-                    written +=
-                        Self::write_rows_per_row(connection, schema, table, column_names, batch)?;
+                    written += Self::write_rows_per_row(
+                        connection,
+                        schema,
+                        table,
+                        column_names,
+                        column_types,
+                        batch,
+                    )?;
                 }
                 Err(e) => return Err(TransferError::Sink(e.to_string())),
             }
@@ -167,16 +186,27 @@ impl TableSink {
         schema: Option<&str>,
         table: &str,
         column_names: &[String],
+        column_types: &[Option<String>],
         rows: &[Vec<Value>],
     ) -> Result<u64, TransferError> {
         let mut written = 0u64;
 
         for row in rows {
-            let insert = RowInsert::new(
+            let assignments: Vec<ColumnAssignment> = column_names
+                .iter()
+                .zip(row.iter())
+                .enumerate()
+                .map(|(index, (name, value))| ColumnAssignment {
+                    name: name.clone(),
+                    value: value.clone(),
+                    type_name: column_types.get(index).cloned().flatten(),
+                })
+                .collect();
+
+            let insert = RowInsert::with_typed_assignments(
                 table.to_string(),
                 schema.map(str::to_string),
-                column_names.to_vec(),
-                row.clone(),
+                assignments,
             );
 
             connection
@@ -196,6 +226,7 @@ impl RowSink for TableSink {
         mode: TableMappingMode,
     ) -> Result<(), TransferError> {
         self.column_names = columns.iter().map(|c| c.name.clone()).collect();
+        self.column_types = columns.iter().map(|c| c.type_name.clone()).collect();
 
         match mode {
             TableMappingMode::Skip => {
@@ -237,6 +268,7 @@ impl RowSink for TableSink {
                 self.schema.as_deref(),
                 &self.table,
                 &self.column_names,
+                &self.column_types,
                 chunk,
             )?
         } else {
@@ -245,6 +277,7 @@ impl RowSink for TableSink {
                 self.schema.as_deref(),
                 &self.table,
                 &self.column_names,
+                &self.column_types,
                 &chunk.0,
             )?
         };
@@ -288,6 +321,19 @@ mod tests {
     struct RecordingGenerator {
         batch_sizes: Mutex<Vec<usize>>,
         bulk_insert_returns_none: bool,
+        /// Every `column_types` slice this generator was asked to bulk-insert
+        /// with, one entry per `generate_bulk_insert` call.
+        recorded_column_types: Mutex<Vec<Vec<Option<String>>>>,
+    }
+
+    impl RecordingGenerator {
+        fn new(bulk_insert_returns_none: bool) -> Self {
+            Self {
+                batch_sizes: Mutex::new(Vec::new()),
+                bulk_insert_returns_none,
+                recorded_column_types: Mutex::new(Vec::new()),
+            }
+        }
     }
 
     impl QueryGenerator for RecordingGenerator {
@@ -307,9 +353,14 @@ mod tests {
             _schema: Option<&str>,
             _table: &str,
             _columns: &[String],
+            column_types: &[Option<String>],
             rows: &[&[Value]],
         ) -> Result<Option<GeneratedQuery>, GeneratorError> {
             self.batch_sizes.lock().unwrap().push(rows.len());
+            self.recorded_column_types
+                .lock()
+                .unwrap()
+                .push(column_types.to_vec());
 
             if self.bulk_insert_returns_none {
                 return Ok(None);
@@ -337,6 +388,10 @@ mod tests {
         generator: Option<RecordingGenerator>,
         executed_sql: Mutex<Vec<String>>,
         inserted_rows: Mutex<Vec<Vec<Value>>>,
+        /// Every `insert_row` call's assignment type names, in column order —
+        /// proves the per-row fallback threads `type_name` through instead of
+        /// discarding it.
+        inserted_type_names: Mutex<Vec<Vec<Option<String>>>>,
         metadata: DriverMetadata,
     }
 
@@ -363,6 +418,7 @@ mod tests {
                 generator,
                 executed_sql: Mutex::new(Vec::new()),
                 inserted_rows: Mutex::new(Vec::new()),
+                inserted_type_names: Mutex::new(Vec::new()),
                 metadata: builder.build(),
             }
         }
@@ -416,7 +472,13 @@ mod tests {
 
         fn insert_row(&self, insert: &RowInsert) -> Result<dbflux_core::CrudResult, DbError> {
             let values: Vec<Value> = insert.assignments.iter().map(|a| a.value.clone()).collect();
+            let type_names: Vec<Option<String>> = insert
+                .assignments
+                .iter()
+                .map(|a| a.type_name.clone())
+                .collect();
             self.inserted_rows.lock().unwrap().push(values);
+            self.inserted_type_names.lock().unwrap().push(type_names);
             Ok(dbflux_core::CrudResult::new(1, None))
         }
     }
@@ -427,10 +489,7 @@ mod tests {
 
     #[test]
     fn bulk_insert_used_when_capability_and_generator_present() {
-        let generator = RecordingGenerator {
-            batch_sizes: Mutex::new(Vec::new()),
-            bulk_insert_returns_none: false,
-        };
+        let generator = RecordingGenerator::new(false);
         let connection = Arc::new(FakeConnection::new(
             DriverCapabilities::BULK_INSERT,
             None,
@@ -449,12 +508,73 @@ mod tests {
         assert!(connection.inserted_rows.lock().unwrap().is_empty());
     }
 
+    /// JD-C2 regression: `begin()`'s per-column `type_name` must reach the
+    /// bulk-insert generator call, not be dropped on the floor — otherwise a
+    /// typed literal (e.g. PostgreSQL `text[]`) falls back to an untyped one.
+    #[test]
+    fn begin_threads_column_type_names_into_the_bulk_insert_call() {
+        let generator = RecordingGenerator::new(false);
+        let connection = Arc::new(FakeConnection::new(
+            DriverCapabilities::BULK_INSERT,
+            None,
+            Some(generator),
+        ));
+        let conn: Arc<dyn Connection> = connection.clone();
+        let mut sink = TableSink::new(conn, None, "t");
+
+        let mut tags_column = column("tags", false);
+        tags_column.type_name = Some("text[]".to_string());
+        sink.begin(
+            &[column("id", true), tags_column],
+            TableMappingMode::Existing,
+        )
+        .unwrap();
+        sink.write_chunk(&RowChunk(vec![vec![
+            Value::Int(1),
+            Value::Array(vec![Value::Text("a".to_string())]),
+        ]]))
+        .unwrap();
+
+        let generator = connection.generator.as_ref().unwrap();
+        assert_eq!(
+            generator.recorded_column_types.lock().unwrap()[0],
+            vec![Some("text".to_string()), Some("text[]".to_string())],
+            "column type names must reach generate_bulk_insert, not be dropped"
+        );
+    }
+
+    /// JD-C2 regression (per-row fallback): when the bulk path is
+    /// unavailable, `type_name` must still reach `insert_row` via
+    /// `RowInsert::with_typed_assignments`, not the untyped `RowInsert::new`.
+    #[test]
+    fn falls_back_to_per_row_insert_threading_column_type_names_into_typed_assignments() {
+        let connection = Arc::new(FakeConnection::new(DriverCapabilities::empty(), None, None));
+        let conn: Arc<dyn Connection> = connection.clone();
+        let mut sink = TableSink::new(conn, None, "t");
+
+        let mut tags_column = column("tags", false);
+        tags_column.type_name = Some("text[]".to_string());
+        sink.begin(
+            &[column("id", true), tags_column],
+            TableMappingMode::Existing,
+        )
+        .unwrap();
+        sink.write_chunk(&RowChunk(vec![vec![
+            Value::Int(1),
+            Value::Array(vec![Value::Text("a".to_string())]),
+        ]]))
+        .unwrap();
+
+        assert_eq!(
+            connection.inserted_type_names.lock().unwrap()[0],
+            vec![Some("text".to_string()), Some("text[]".to_string())],
+            "column type names must reach insert_row via typed assignments, not be dropped"
+        );
+    }
+
     #[test]
     fn zero_max_bulk_insert_rows_means_unlimited_not_a_literal_cap() {
-        let generator = RecordingGenerator {
-            batch_sizes: Mutex::new(Vec::new()),
-            bulk_insert_returns_none: false,
-        };
+        let generator = RecordingGenerator::new(false);
         let limits = DriverLimits {
             max_bulk_insert_rows: 0,
             ..default_limits()
@@ -480,10 +600,7 @@ mod tests {
 
     #[test]
     fn nonzero_cap_chunks_bulk_insert_batches_to_the_cap() {
-        let generator = RecordingGenerator {
-            batch_sizes: Mutex::new(Vec::new()),
-            bulk_insert_returns_none: false,
-        };
+        let generator = RecordingGenerator::new(false);
         let limits = DriverLimits {
             max_bulk_insert_rows: 1000,
             ..default_limits()
@@ -523,10 +640,7 @@ mod tests {
 
     #[test]
     fn falls_back_to_per_row_insert_when_generator_returns_none() {
-        let generator = RecordingGenerator {
-            batch_sizes: Mutex::new(Vec::new()),
-            bulk_insert_returns_none: true,
-        };
+        let generator = RecordingGenerator::new(true);
         let connection = Arc::new(FakeConnection::new(
             DriverCapabilities::BULK_INSERT,
             None,
@@ -544,10 +658,7 @@ mod tests {
 
     #[test]
     fn create_mode_issues_create_table_before_inserts() {
-        let generator = RecordingGenerator {
-            batch_sizes: Mutex::new(Vec::new()),
-            bulk_insert_returns_none: false,
-        };
+        let generator = RecordingGenerator::new(false);
         let connection = Arc::new(FakeConnection::new(
             DriverCapabilities::BULK_INSERT,
             None,
@@ -576,10 +687,7 @@ mod tests {
 
     #[test]
     fn recreate_mode_drops_then_creates() {
-        let generator = RecordingGenerator {
-            batch_sizes: Mutex::new(Vec::new()),
-            bulk_insert_returns_none: false,
-        };
+        let generator = RecordingGenerator::new(false);
         let connection = Arc::new(FakeConnection::new(
             DriverCapabilities::BULK_INSERT,
             None,
@@ -599,10 +707,7 @@ mod tests {
 
     #[test]
     fn existing_mode_issues_no_ddl() {
-        let generator = RecordingGenerator {
-            batch_sizes: Mutex::new(Vec::new()),
-            bulk_insert_returns_none: false,
-        };
+        let generator = RecordingGenerator::new(false);
         let connection = Arc::new(FakeConnection::new(
             DriverCapabilities::BULK_INSERT,
             None,
@@ -618,10 +723,7 @@ mod tests {
 
     #[test]
     fn truncate_mode_empties_the_table_before_insert_when_capability_present() {
-        let generator = RecordingGenerator {
-            batch_sizes: Mutex::new(Vec::new()),
-            bulk_insert_returns_none: false,
-        };
+        let generator = RecordingGenerator::new(false);
         let connection = Arc::new(FakeConnection::new(
             DriverCapabilities::BULK_INSERT | DriverCapabilities::TRUNCATE_TABLE,
             None,

@@ -4342,7 +4342,7 @@ mod tests {
         let rows: Vec<&[dbflux_core::Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
 
         let generated = generator
-            .generate_bulk_insert(None, "users", &columns, &rows)
+            .generate_bulk_insert(None, "users", &columns, &[], &rows)
             .unwrap()
             .expect("mssql generator must support native bulk insert");
 

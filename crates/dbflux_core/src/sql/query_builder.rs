@@ -121,11 +121,18 @@ impl<'a> SqlQueryBuilder<'a> {
     /// Returns `None` when `rows` is empty. Row-count caps (e.g. MSSQL's 1000-row
     /// limit per statement) are the caller's responsibility via `DriverLimits`;
     /// this builder emits exactly one `VALUES` tuple per row given.
+    ///
+    /// `column_types` runs parallel to `columns` — when present for a given
+    /// index, the dialect is asked to format that column's values with
+    /// [`SqlDialect::value_to_literal_typed`] instead of the untyped
+    /// fallback (e.g. PostgreSQL needs the column's type to emit
+    /// `ARRAY[...]::text[]` rather than a generic `::jsonb` cast).
     pub fn build_bulk_insert(
         &self,
         schema: Option<&str>,
         table: &str,
         columns: &[String],
+        column_types: &[Option<String>],
         rows: &[&[Value]],
     ) -> Option<String> {
         if rows.is_empty() {
@@ -140,7 +147,11 @@ impl<'a> SqlQueryBuilder<'a> {
             .map(|row| {
                 let tuple = row
                     .iter()
-                    .map(|v| self.dialect.value_to_literal(v))
+                    .enumerate()
+                    .map(|(index, v)| {
+                        let col_type = column_types.get(index).and_then(|t| t.as_deref());
+                        self.dialect.value_to_literal_typed(v, col_type)
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("({tuple})")
@@ -362,7 +373,7 @@ impl<'a> SqlQueryBuilder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sql::dialect::DefaultSqlDialect;
+    use crate::sql::dialect::{DefaultSqlDialect, PlaceholderStyle};
 
     #[test]
     fn test_build_where_clause() {
@@ -488,7 +499,7 @@ mod tests {
         let rows: Vec<&[Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
 
         let sql = builder
-            .build_bulk_insert(None, "users", &columns, &rows)
+            .build_bulk_insert(None, "users", &columns, &[], &rows)
             .unwrap();
         assert_eq!(
             sql,
@@ -510,7 +521,7 @@ mod tests {
         let rows: Vec<&[Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
 
         let sql = builder
-            .build_bulk_insert(Some("public"), "users", &columns, &rows)
+            .build_bulk_insert(Some("public"), "users", &columns, &[], &rows)
             .unwrap();
         assert_eq!(
             sql,
@@ -528,7 +539,7 @@ mod tests {
 
         assert!(
             builder
-                .build_bulk_insert(None, "users", &columns, &rows)
+                .build_bulk_insert(None, "users", &columns, &[], &rows)
                 .is_none()
         );
     }
@@ -543,10 +554,68 @@ mod tests {
         let rows: Vec<&[Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
 
         let sql = builder
-            .build_bulk_insert(None, "t", &columns, &rows)
+            .build_bulk_insert(None, "t", &columns, &[], &rows)
             .unwrap();
 
         assert_eq!(sql.matches("), (").count() + 1, 1000);
+    }
+
+    /// JD-C2 regression: `column_types` must thread through to
+    /// `value_to_literal_typed` per column index, not just be accepted and
+    /// ignored — proven with a dialect whose typed formatting diverges from
+    /// its untyped formatting.
+    #[test]
+    fn test_build_bulk_insert_threads_column_types_to_typed_literal() {
+        struct TypedDialect;
+
+        impl SqlDialect for TypedDialect {
+            fn quote_identifier(&self, name: &str) -> String {
+                format!("\"{name}\"")
+            }
+
+            fn qualified_table(&self, _schema: Option<&str>, table: &str) -> String {
+                self.quote_identifier(table)
+            }
+
+            fn value_to_literal(&self, _value: &Value) -> String {
+                "UNTYPED".to_string()
+            }
+
+            fn value_to_literal_typed(&self, _value: &Value, col_type: Option<&str>) -> String {
+                match col_type {
+                    Some(ty) => format!("TYPED({ty})"),
+                    None => "UNTYPED".to_string(),
+                }
+            }
+
+            fn escape_string(&self, s: &str) -> String {
+                s.to_string()
+            }
+
+            fn placeholder_style(&self) -> PlaceholderStyle {
+                PlaceholderStyle::QuestionMark
+            }
+        }
+
+        let dialect = TypedDialect;
+        let builder = SqlQueryBuilder::new(&dialect);
+
+        let columns = vec!["tags".to_string(), "name".to_string()];
+        let column_types = vec![Some("text[]".to_string()), None];
+        let owned_rows: Vec<Vec<Value>> = vec![vec![
+            Value::Array(vec![Value::Text("a".to_string())]),
+            Value::Text("Alice".to_string()),
+        ]];
+        let rows: Vec<&[Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
+
+        let sql = builder
+            .build_bulk_insert(None, "t", &columns, &column_types, &rows)
+            .unwrap();
+
+        assert_eq!(
+            sql,
+            "INSERT INTO \"t\" (\"tags\", \"name\") VALUES (TYPED(text[]), UNTYPED)"
+        );
     }
 
     #[test]
