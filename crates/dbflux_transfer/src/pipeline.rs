@@ -75,6 +75,13 @@ pub trait RowSource: Send {
 pub trait ColumnMap: Send {
     fn project(&self, src: &[Value]) -> Vec<Value>;
 
+    /// The target column shape every `project`ed row is shaped into, in the
+    /// exact order `project` emits values. This is what the sink must be
+    /// `begin()`-ed with — NOT the source's column shape — so the sink's
+    /// INSERT column list stays aligned with the projected values regardless
+    /// of how the source and target column order/arity differ.
+    fn target_columns(&self) -> &[TransferColumn];
+
     /// Non-blocking warnings accumulated while resolving the mapping (e.g. an
     /// unmatched source column). Folded into the final `TransferReport` once,
     /// not per row.
@@ -113,7 +120,7 @@ pub fn run_transfer(
     cancel: &CancelToken,
     on_progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<TransferReport, TransferError> {
-    sink.begin(source.columns(), mapping_mode)?;
+    sink.begin(column_map.target_columns(), mapping_mode)?;
 
     let estimated_total = source.estimated_total();
     let mut rows_done: u64 = 0;
@@ -160,11 +167,37 @@ mod tests {
         }
     }
 
-    struct IdentityMap;
+    /// Identity map whose target shape is simply the source's own columns —
+    /// used by tests that don't care about column mapping, only pipeline
+    /// control flow (chunking, cancellation).
+    struct IdentityMap {
+        columns: Vec<TransferColumn>,
+    }
 
     impl ColumnMap for IdentityMap {
         fn project(&self, src: &[Value]) -> Vec<Value> {
             src.to_vec()
+        }
+
+        fn target_columns(&self) -> &[TransferColumn] {
+            &self.columns
+        }
+    }
+
+    /// Reorders a two-column `[b, a]` source row into `[a, b]` target order —
+    /// a minimal stand-in for `AutoColumnMap` when a source and target
+    /// disagree on physical column order.
+    struct ReorderingMap {
+        target_columns: Vec<TransferColumn>,
+    }
+
+    impl ColumnMap for ReorderingMap {
+        fn project(&self, src: &[Value]) -> Vec<Value> {
+            vec![src[1].clone(), src[0].clone()]
+        }
+
+        fn target_columns(&self) -> &[TransferColumn] {
+            &self.target_columns
         }
     }
 
@@ -225,11 +258,14 @@ mod tests {
         }
     }
 
-    /// Fake sink recording every chunk it was asked to write.
+    /// Fake sink recording every chunk it was asked to write, plus the
+    /// column names it was `begin()`-ed with (so tests can prove those match
+    /// the column map's target shape, not the source's).
     struct VecSink {
         received_chunks: Vec<Vec<Vec<Value>>>,
         began: bool,
         finished: bool,
+        began_columns: Vec<String>,
     }
 
     impl VecSink {
@@ -238,6 +274,7 @@ mod tests {
                 received_chunks: Vec::new(),
                 began: false,
                 finished: false,
+                began_columns: Vec::new(),
             }
         }
     }
@@ -245,10 +282,11 @@ mod tests {
     impl RowSink for VecSink {
         fn begin(
             &mut self,
-            _columns: &[TransferColumn],
+            columns: &[TransferColumn],
             _mode: TableMappingMode,
         ) -> Result<(), TransferError> {
             self.began = true;
+            self.began_columns = columns.iter().map(|c| c.name.clone()).collect();
             Ok(())
         }
 
@@ -275,14 +313,15 @@ mod tests {
     fn full_row_count_transferred_with_identity_map_and_chunk_boundaries_respected() {
         let columns = vec![column("id")];
         let rows: Vec<Vec<Value>> = (0..7).map(row).collect();
-        let mut source = VecSource::new(columns, rows, 3);
+        let mut source = VecSource::new(columns.clone(), rows, 3);
+        let identity_map = IdentityMap { columns };
         let mut sink = VecSink::new();
         let cancel = CancelToken::new();
         let mut progress_calls: Vec<(u64, Option<u64>)> = Vec::new();
 
         let report = run_transfer(
             &mut source,
-            &IdentityMap,
+            &identity_map,
             &mut sink,
             TableMappingMode::Create,
             &cancel,
@@ -314,13 +353,14 @@ mod tests {
         let columns = vec![column("id")];
         let rows: Vec<Vec<Value>> = (0..3).map(row).collect();
         // 3 rows, chunk_size=1 -> 3 chunks total; cancel fires once chunk 1 is produced.
-        let mut source = VecSource::new(columns, rows, 1).cancel_after_chunk(1);
+        let mut source = VecSource::new(columns.clone(), rows, 1).cancel_after_chunk(1);
+        let identity_map = IdentityMap { columns };
         let mut sink = VecSink::new();
         let cancel = CancelToken::new();
 
         let report = run_transfer(
             &mut source,
-            &IdentityMap,
+            &identity_map,
             &mut sink,
             TableMappingMode::Create,
             &cancel,
@@ -340,13 +380,14 @@ mod tests {
     #[test]
     fn empty_source_completes_with_zero_rows_and_still_begins_and_finishes() {
         let columns = vec![column("id")];
-        let mut source = VecSource::new(columns, Vec::new(), 10);
+        let mut source = VecSource::new(columns.clone(), Vec::new(), 10);
+        let identity_map = IdentityMap { columns };
         let mut sink = VecSink::new();
         let cancel = CancelToken::new();
 
         let report = run_transfer(
             &mut source,
-            &IdentityMap,
+            &identity_map,
             &mut sink,
             TableMappingMode::Create,
             &cancel,
@@ -358,5 +399,45 @@ mod tests {
         assert!(sink.finished);
         assert_eq!(report.rows_transferred, 0);
         assert_eq!(report.outcome, TransferOutcome::Completed);
+    }
+
+    /// JD-C1 regression: when the column map's target shape differs in
+    /// order/arity from the source, `run_transfer` must `begin()` the sink
+    /// with the TARGET column list (matching what `project()` emits), not the
+    /// source's own column list — otherwise the sink's INSERT column list
+    /// names the wrong columns for the projected values.
+    #[test]
+    fn sink_begin_receives_target_columns_not_source_columns_when_order_differs() {
+        let source_columns = vec![column("b"), column("a")];
+        let target_columns = vec![column("a"), column("b")];
+        // Source row is [b_value, a_value] per source column order.
+        let rows = vec![vec![Value::Int(20), Value::Int(10)]];
+        let mut source = VecSource::new(source_columns, rows, 10);
+        let column_map = ReorderingMap {
+            target_columns: target_columns.clone(),
+        };
+        let mut sink = VecSink::new();
+        let cancel = CancelToken::new();
+
+        run_transfer(
+            &mut source,
+            &column_map,
+            &mut sink,
+            TableMappingMode::Existing,
+            &cancel,
+            &mut |_, _| {},
+        )
+        .unwrap();
+
+        assert_eq!(
+            sink.began_columns,
+            vec!["a".to_string(), "b".to_string()],
+            "the sink must be begin()-ed with the TARGET column order, not the source's"
+        );
+        assert_eq!(
+            sink.received_chunks[0][0],
+            vec![Value::Int(10), Value::Int(20)],
+            "values must already be projected into target order"
+        );
     }
 }

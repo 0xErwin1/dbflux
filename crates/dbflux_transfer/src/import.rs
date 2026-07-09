@@ -260,12 +260,23 @@ mod tests {
     use std::sync::Mutex;
 
     static DIALECT: DefaultSqlDialect = DefaultSqlDialect;
-    static GENERATOR: FakeGenerator = FakeGenerator;
 
     /// Minimal query generator so `Create`/`Recreate` plans have DDL/bulk-insert
     /// text to execute (the fake connection's `execute` is a no-op recorder, so
     /// the generated text's content doesn't need to be semantically valid SQL).
-    struct FakeGenerator;
+    /// Records every `columns` list it is asked to bulk-insert with, so tests
+    /// can prove the INSERT column list matches the resolved target shape.
+    struct FakeGenerator {
+        recorded_bulk_insert_columns: Mutex<Vec<Vec<String>>>,
+    }
+
+    impl FakeGenerator {
+        fn new() -> Self {
+            Self {
+                recorded_bulk_insert_columns: Mutex::new(Vec::new()),
+            }
+        }
+    }
 
     impl QueryGenerator for FakeGenerator {
         fn supported_categories(&self) -> &'static [MutationCategory] {
@@ -280,9 +291,13 @@ mod tests {
             &self,
             _schema: Option<&str>,
             table: &str,
-            _columns: &[String],
+            columns: &[String],
             rows: &[&[Value]],
         ) -> Result<Option<GeneratedQuery>, GeneratorError> {
+            self.recorded_bulk_insert_columns
+                .lock()
+                .unwrap()
+                .push(columns.to_vec());
             Ok(Some(GeneratedQuery {
                 language: QueryLanguage::Sql,
                 text: format!("INSERT INTO {table} VALUES (...) -- {} rows", rows.len()),
@@ -309,6 +324,7 @@ mod tests {
         table_details_calls: Mutex<Vec<String>>,
         existing_table_columns: Vec<ColumnInfo>,
         metadata: DriverMetadata,
+        generator: FakeGenerator,
     }
 
     impl FakeConnection {
@@ -327,6 +343,7 @@ mod tests {
                 table_details_calls: Mutex::new(Vec::new()),
                 existing_table_columns,
                 metadata,
+                generator: FakeGenerator::new(),
             }
         }
     }
@@ -370,7 +387,7 @@ mod tests {
         }
 
         fn query_generator(&self) -> Option<&dyn QueryGenerator> {
-            Some(&GENERATOR)
+            Some(&self.generator)
         }
 
         fn table_details(
@@ -677,6 +694,101 @@ mod tests {
         );
 
         assert!(result.is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// JD-C1 regression (Import/Existing): the target table's columns are
+    /// physically reordered relative to the manifest AND carry a target-only
+    /// column plus a source-only column with no match. The INSERT column
+    /// list must follow the resolved TARGET order/shape (not the source's),
+    /// the unmatched source column must be dropped with a warning (R5), and
+    /// the unmatched target column must simply receive NULL with no error.
+    #[test]
+    fn existing_target_with_reordered_and_mismatched_columns_aligns_insert_and_reports_unmatched_source()
+     {
+        let dir = temp_dir("column_alignment");
+        std::fs::write(dir.join("users.csv"), "id,legacy_extra\n1,x\n2,y\n").unwrap();
+
+        let manifest = TransferManifest {
+            version: TransferManifest::CURRENT_VERSION,
+            source: ManifestSource {
+                driver: "sqlite".to_string(),
+                database: "main".to_string(),
+                schema: None,
+            },
+            created_at: "2026-07-07T10:00:00+00:00".to_string(),
+            tables: vec![ManifestTable {
+                schema: None,
+                name: "users".to_string(),
+                file: "users.csv".to_string(),
+                format: "csv".to_string(),
+                columns: vec![
+                    pk_column(),
+                    TransferColumn {
+                        name: "legacy_extra".to_string(),
+                        type_name: Some("text".to_string()),
+                        nullable: true,
+                        is_primary_key: false,
+                    },
+                ],
+                row_count: 2,
+                fk_order_index: 0,
+            }],
+        };
+        std::fs::write(
+            dir.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        // Existing target columns in a DIFFERENT physical order than the
+        // source, plus a target-only column ("name") absent from the source.
+        let target_columns = vec![
+            ColumnInfo {
+                name: "name".to_string(),
+                type_name: "text".to_string(),
+                nullable: true,
+                is_primary_key: false,
+                default_value: None,
+                enum_values: None,
+            },
+            existing_column_info(),
+        ];
+        let fake = Arc::new(FakeConnection::new(target_columns));
+        let connection: Arc<dyn Connection> = fake.clone();
+        let plans = vec![ImportTablePlan {
+            source_table: "users".to_string(),
+            target_schema: None,
+            target_table: "users".to_string(),
+            mapping_mode: TableMappingMode::Existing,
+            column_overrides: None,
+        }];
+        let cancel = CancelToken::new();
+
+        let outcome = run_import(
+            &connection,
+            &dir,
+            &plans,
+            &default_options("main"),
+            &cancel,
+            |_, _, _| {},
+        )
+        .unwrap();
+
+        assert_eq!(outcome.tables[0].rows_imported, 2);
+        assert!(
+            outcome.warnings.iter().any(|w| w.contains("legacy_extra")),
+            "the unmatched source column must be reported as a non-blocking warning: {:?}",
+            outcome.warnings
+        );
+
+        let recorded = fake.generator.recorded_bulk_insert_columns.lock().unwrap();
+        assert_eq!(
+            recorded[0],
+            vec!["name".to_string(), "id".to_string()],
+            "the INSERT column list must follow the resolved TARGET order/shape"
+        );
+
         std::fs::remove_dir_all(&dir).ok();
     }
 }

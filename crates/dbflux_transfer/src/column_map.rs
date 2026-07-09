@@ -16,6 +16,9 @@ pub struct AutoColumnMap {
     /// For each target column, in target order: the index into a source row
     /// to read, or `None` when no source column matched.
     target_from_source: Vec<Option<usize>>,
+    /// The target column shape `project` emits values into, in that same
+    /// order — what the sink must be `begin()`-ed with.
+    target_columns: Vec<TransferColumn>,
     warnings: Vec<String>,
 }
 
@@ -37,6 +40,7 @@ impl AutoColumnMap {
 
         Self {
             target_from_source,
+            target_columns: target_columns.to_vec(),
             warnings,
         }
     }
@@ -71,6 +75,7 @@ impl AutoColumnMap {
 
         Self {
             target_from_source,
+            target_columns: target_columns.to_vec(),
             warnings,
         }
     }
@@ -116,6 +121,10 @@ impl ColumnMap for AutoColumnMap {
                 None => Value::Null,
             })
             .collect()
+    }
+
+    fn target_columns(&self) -> &[TransferColumn] {
+        &self.target_columns
     }
 
     fn warnings(&self) -> &[String] {

@@ -412,9 +412,20 @@ mod tests {
     use std::sync::Mutex;
 
     static DIALECT: DefaultSqlDialect = DefaultSqlDialect;
-    static GENERATOR: FakeGenerator = FakeGenerator;
 
-    struct FakeGenerator;
+    /// Records every `columns` list it is asked to bulk-insert with, so tests
+    /// can prove the INSERT column list matches the resolved target shape.
+    struct FakeGenerator {
+        recorded_bulk_insert_columns: Mutex<Vec<Vec<String>>>,
+    }
+
+    impl FakeGenerator {
+        fn new() -> Self {
+            Self {
+                recorded_bulk_insert_columns: Mutex::new(Vec::new()),
+            }
+        }
+    }
 
     impl QueryGenerator for FakeGenerator {
         fn supported_categories(&self) -> &'static [MutationCategory] {
@@ -429,9 +440,13 @@ mod tests {
             &self,
             _schema: Option<&str>,
             table: &str,
-            _columns: &[String],
+            columns: &[String],
             rows: &[&[Value]],
         ) -> Result<Option<GeneratedQuery>, GeneratorError> {
+            self.recorded_bulk_insert_columns
+                .lock()
+                .unwrap()
+                .push(columns.to_vec());
             Ok(Some(GeneratedQuery {
                 language: QueryLanguage::Sql,
                 text: format!("INSERT INTO {table} VALUES (...) -- {} rows", rows.len()),
@@ -569,6 +584,7 @@ mod tests {
         metadata: DriverMetadata,
         ri_toggle_fails: bool,
         has_generator: bool,
+        generator: FakeGenerator,
     }
 
     impl FakeTargetConnection {
@@ -590,6 +606,7 @@ mod tests {
                 metadata,
                 ri_toggle_fails: false,
                 has_generator: true,
+                generator: FakeGenerator::new(),
             }
         }
 
@@ -644,7 +661,7 @@ mod tests {
 
         fn query_generator(&self) -> Option<&dyn QueryGenerator> {
             self.has_generator
-                .then_some(&GENERATOR as &dyn QueryGenerator)
+                .then_some(&self.generator as &dyn QueryGenerator)
         }
 
         fn table_details(
@@ -1114,5 +1131,87 @@ mod tests {
         };
         assert!(run.cancelled);
         assert_eq!(run.tables.len(), 1, "the second table must never start");
+    }
+
+    /// JD-C1 regression (Migration): the target table's columns are
+    /// physically reordered relative to the source AND carry a target-only
+    /// column plus a source-only column with no match. The INSERT column
+    /// list must follow the resolved TARGET order/shape (not the source's),
+    /// the unmatched source column must be dropped with a warning (R5), and
+    /// the unmatched target column must simply receive NULL with no error.
+    #[test]
+    fn migration_aligns_insert_columns_with_reordered_and_mismatched_target_shape() {
+        let mut pages = std::collections::HashMap::new();
+        pages.insert(
+            "users".to_string(),
+            vec![vec![
+                vec![Value::Int(1), Value::Text("x".to_string())],
+                vec![Value::Int(2), Value::Text("y".to_string())],
+            ]],
+        );
+        let source: Arc<dyn Connection> = Arc::new(FakeSourceConnection::new(pages, vec![]));
+
+        // Existing target columns in a DIFFERENT physical order than the
+        // source, plus a target-only column ("name") absent from the source.
+        let target_columns = vec![
+            ColumnInfo {
+                name: "name".to_string(),
+                type_name: "text".to_string(),
+                nullable: true,
+                is_primary_key: false,
+                default_value: None,
+                enum_values: None,
+            },
+            existing_column_info(),
+        ];
+        let target = Arc::new(FakeTargetConnection::new(
+            target_columns,
+            DriverCapabilities::BULK_INSERT,
+        ));
+        let target_conn: Arc<dyn Connection> = target.clone();
+
+        let mut migration_plan = plan("users", TableMappingMode::Existing);
+        migration_plan.source_columns = vec![
+            pk_column(),
+            TransferColumn {
+                name: "legacy_extra".to_string(),
+                type_name: Some("text".to_string()),
+                nullable: true,
+                is_primary_key: false,
+            },
+        ];
+        let plans = vec![migration_plan];
+        let cancel = CancelToken::new();
+
+        let outcome = run_migration(
+            &source,
+            &target_conn,
+            &plans,
+            &default_options(),
+            &cancel,
+            |_, _, _| {},
+        )
+        .unwrap();
+
+        let MigrationOutcome::Completed(run) = outcome else {
+            panic!("expected Completed, no cycle in this fixture");
+        };
+        assert_eq!(run.tables[0].rows_migrated, 2);
+        assert!(
+            run.warnings.iter().any(|w| w.contains("legacy_extra")),
+            "the unmatched source column must be reported as a non-blocking warning: {:?}",
+            run.warnings
+        );
+
+        let recorded = target
+            .generator
+            .recorded_bulk_insert_columns
+            .lock()
+            .unwrap();
+        assert_eq!(
+            recorded[0],
+            vec!["name".to_string(), "id".to_string()],
+            "the INSERT column list must follow the resolved TARGET order/shape"
+        );
     }
 }
