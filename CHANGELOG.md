@@ -6,6 +6,21 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Data transfer — Export, Import, and same-engine Migration for SQL databases** —
+  A new transfer engine moves SQL data without leaving DBFlux. Multi-select
+  tables in the sidebar and **Export** them to a folder (one CSV or JSON file
+  per table plus a `manifest.json` that makes the bundle re-importable),
+  **Import** a previously exported bundle into a connected database, or
+  **Migrate** tables directly from one connection to another. Migration orders
+  tables by foreign-key dependencies (parents before children), with a manual
+  reorder step when the graph has cycles and an optional
+  disable-referential-integrity toggle during transfer. Target tables can be
+  auto-created from the source schema (Create / Use existing / Recreate / Skip),
+  columns auto-map by name with adjustable overrides, and destructive modes
+  (Recreate, Truncate) require explicit confirmation. This first release covers
+  same-engine SQL transfers (PostgreSQL, MySQL/MariaDB, SQLite, SQL Server);
+  cross-engine and NoSQL migration are not yet supported.
+
 * **Export / import standalone profiles from Settings (#214)** — SSH tunnels,
   proxies, and auth profiles can now be exported and imported directly from
   their Settings sections, building on the connection portability pipeline
