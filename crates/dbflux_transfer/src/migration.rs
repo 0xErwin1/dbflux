@@ -10,7 +10,7 @@
 //! guessing an order — the caller (wizard) is expected to show a manual
 //! sortable-list step and retry with `MigrationOptions::manual_order` set.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use dbflux_core::{
     CancelToken, Connection, DriverCapabilities, LogErr, OrderResult, SchemaForeignKeyInfo,
@@ -126,43 +126,59 @@ pub fn run_migration(
         }
     };
 
-    // The guard's `Drop` restores referential integrity on every exit path
-    // (success, a mid-loop `?` propagation, or cancellation) without needing
-    // matching cleanup code at each return point.
-    let _ri_guard = ReferentialIntegrityGuard::enable(
-        target_connection,
-        options.disable_referential_integrity,
-    )?;
-
     let mut migrated = Vec::with_capacity(ordered_plans.len());
     let mut warnings = Vec::new();
+    let restore_failure: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
-    for (index, plan) in ordered_plans.iter().enumerate() {
-        if cancel.is_cancelled() {
-            break;
-        }
-
-        let report = migrate_one_table(
-            source_connection,
+    {
+        // The guard's `Drop` restores referential integrity on every exit
+        // path (success, a mid-loop `?` propagation, or cancellation)
+        // without needing matching cleanup code at each return point. It is
+        // scoped to this block so it drops — and attempts the restore —
+        // before `restore_failure` is read below.
+        let _ri_guard = ReferentialIntegrityGuard::enable(
             target_connection,
-            plan,
-            options,
-            cancel,
-            |rows_done, estimated_total| on_progress(index, rows_done, estimated_total),
+            options.disable_referential_integrity,
+            Arc::clone(&restore_failure),
         )?;
 
-        let was_cancelled = report.outcome == TransferOutcome::Cancelled;
-        warnings.extend(report.warnings);
-        migrated.push(MigratedTable {
-            source_table: plan.source_table.name.clone(),
-            target_table: plan.target_table.clone(),
-            rows_migrated: report.rows_transferred,
-            skipped: matches!(plan.mapping_mode, TableMappingMode::Skip),
-        });
+        for (index, plan) in ordered_plans.iter().enumerate() {
+            if cancel.is_cancelled() {
+                break;
+            }
 
-        if was_cancelled {
-            break;
+            let report = migrate_one_table(
+                source_connection,
+                target_connection,
+                plan,
+                options,
+                cancel,
+                |rows_done, estimated_total| on_progress(index, rows_done, estimated_total),
+            )?;
+
+            let was_cancelled = report.outcome == TransferOutcome::Cancelled;
+            warnings.extend(report.warnings);
+            migrated.push(MigratedTable {
+                source_table: plan.source_table.name.clone(),
+                target_table: plan.target_table.clone(),
+                rows_migrated: report.rows_transferred,
+                skipped: matches!(plan.mapping_mode, TableMappingMode::Skip),
+            });
+
+            if was_cancelled {
+                break;
+            }
         }
+    }
+
+    if let Some(failure) = restore_failure
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .take()
+    {
+        warnings.push(format!(
+            "referential integrity could not be restored on the target after migration: {failure}"
+        ));
     }
 
     Ok(MigrationOutcome::Completed(MigrationRunOutcome {
@@ -361,17 +377,27 @@ fn query_target_columns(
 struct ReferentialIntegrityGuard<'a> {
     connection: &'a Arc<dyn Connection>,
     active: bool,
+    /// Written by `Drop` when the restore call fails, so the caller can fold
+    /// it into `MigrationRunOutcome.warnings` after the guard drops — `Drop`
+    /// itself cannot return a `Result`, so logging alone would leave the user
+    /// with no signal that RI is still disabled on the target.
+    restore_failure: Arc<Mutex<Option<String>>>,
 }
 
 impl<'a> ReferentialIntegrityGuard<'a> {
     /// When the target lacks `DriverCapabilities::DISABLE_FK_CHECKS`, the
     /// toggle is simply not attempted (R7: unavailable, not a runtime error)
     /// — the guard is created inert rather than returning an error.
-    fn enable(connection: &'a Arc<dyn Connection>, requested: bool) -> Result<Self, TransferError> {
+    fn enable(
+        connection: &'a Arc<dyn Connection>,
+        requested: bool,
+        restore_failure: Arc<Mutex<Option<String>>>,
+    ) -> Result<Self, TransferError> {
         if !requested || !connection.supports(DriverCapabilities::DISABLE_FK_CHECKS) {
             return Ok(Self {
                 connection,
                 active: false,
+                restore_failure,
             });
         }
 
@@ -382,6 +408,7 @@ impl<'a> ReferentialIntegrityGuard<'a> {
         Ok(Self {
             connection,
             active: true,
+            restore_failure,
         })
     }
 }
@@ -389,12 +416,20 @@ impl<'a> ReferentialIntegrityGuard<'a> {
 impl Drop for ReferentialIntegrityGuard<'_> {
     fn drop(&mut self) {
         if self.active {
+            let result = self.connection.set_referential_integrity(true);
+
+            if let Err(e) = &result
+                && let Ok(mut slot) = self.restore_failure.lock()
+            {
+                *slot = Some(e.to_string());
+            }
+
             // A dropped restore error would leave the target with RI checks
             // disabled and no path to propagate a `Result` from `Drop`; log
-            // it rather than silently discarding (project rule) — this is a
-            // GPUI-free engine crate, so `log` is the right level, not a
-            // user-facing toast.
-            self.connection.set_referential_integrity(true).log_err();
+            // it in addition to recording it above, rather than silently
+            // discarding (project rule) — this is a GPUI-free engine crate,
+            // so `log` is the right level, not a user-facing toast.
+            result.log_err();
         }
     }
 }
@@ -1060,8 +1095,12 @@ mod tests {
         );
     }
 
+    /// R4-001 regression: a restore-on-drop failure must not just be logged
+    /// — it must surface as a warning on the completed outcome so the wizard
+    /// (which renders `result_warnings`) tells the user RI is still disabled
+    /// on the target.
     #[test]
-    fn ri_restore_failure_is_logged_not_propagated() {
+    fn ri_restore_failure_surfaces_as_a_completion_warning() {
         let mut pages = std::collections::HashMap::new();
         pages.insert("users".to_string(), vec![vec![vec![Value::Int(1)]]]);
         let source: Arc<dyn Connection> = Arc::new(FakeSourceConnection::new(pages, vec![]));
@@ -1083,16 +1122,26 @@ mod tests {
         // the fake — only `enabled=true` (the restore-on-drop call) is
         // configured to fail — so the migration itself must still succeed
         // even though the restore errors internally.
-        let result = run_migration(
+        let outcome = run_migration(
             &source,
             &target_conn,
             &plans,
             &options,
             &cancel,
             |_, _, _| {},
-        );
+        )
+        .unwrap();
 
-        assert!(result.is_ok());
+        let MigrationOutcome::Completed(run) = outcome else {
+            panic!("expected Completed, no cycle in this fixture");
+        };
+        assert!(
+            run.warnings
+                .iter()
+                .any(|w| w.contains("referential integrity") && w.contains("restored")),
+            "a failed RI restore must surface as a completion warning, not only a log line: {:?}",
+            run.warnings
+        );
     }
 
     #[test]
