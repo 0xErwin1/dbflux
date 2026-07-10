@@ -116,7 +116,7 @@ fn postgres_export_streams_table_to_csv_and_manifest() -> Result<(), DbError> {
             .expect("run_export must succeed against a live Postgres table");
 
         assert!(!outcome.cancelled);
-        assert_eq!(outcome.tables_exported, 1);
+        assert_eq!(outcome.tables.len(), 1);
 
         let manifest = outcome.manifest.expect("manifest must be written");
         assert_eq!(manifest.tables.len(), 1);
@@ -227,7 +227,10 @@ fn postgres_export_then_import_round_trips_row_values() -> Result<(), DbError> {
 
         assert!(!outcome.cancelled);
         assert_eq!(outcome.tables.len(), 1);
-        assert_eq!(outcome.tables[0].rows_imported, 5);
+        assert_eq!(
+            outcome.tables[0].status,
+            dbflux_transfer::TableTransferStatus::Completed { rows: 5 }
+        );
 
         let imported_rows = connection
             .execute(&QueryRequest::new(

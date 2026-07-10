@@ -2,6 +2,13 @@
 //! `AutoColumnMap`, and `FileSink` through `run_transfer` for every selected
 //! table, then writes one `manifest.json` for the whole folder.
 //!
+//! A table failure partway through the run (R4-002/B-007) does NOT abort the
+//! whole run with a bare `Err`, which would discard every already-exported
+//! table's result. `run_export` always returns `Ok(ExportOutcome)`, itemizing
+//! every planned table's [`TableTransferStatus`]. Like a cancelled run, a run
+//! with any `Failed` table skips writing `manifest.json` — a manifest missing
+//! an entire table would misrepresent the bundle it points to.
+//!
 //! Deliberately GPUI-free (this crate has no GPUI dependency) — the caller
 //! (an app/UI layer with a `TaskManager`) supplies `on_progress` and is
 //! responsible for wiring it to real task-progress reporting, and for
@@ -15,7 +22,9 @@ use dbflux_core::{CancelToken, Connection, TransferColumn};
 use crate::column_map::AutoColumnMap;
 use crate::file_sink::{FileFormat, FileSink};
 use crate::manifest::{ManifestSource, ManifestTable, TransferManifest};
-use crate::pipeline::{TableMappingMode, TransferError, TransferOutcome, run_transfer};
+use crate::pipeline::{
+    TableMappingMode, TableTransferStatus, TransferError, TransferOutcome, run_transfer,
+};
 use crate::table_source::TableSource;
 
 /// One table selected for export, with its column shape already resolved by
@@ -38,20 +47,30 @@ pub struct ExportOptions<'a> {
     pub segment_size: u32,
 }
 
-/// Result of a completed or cancelled `run_export` call.
+/// Result of exporting one planned table.
+pub struct ExportedTable {
+    pub schema: Option<String>,
+    pub name: String,
+    pub status: TableTransferStatus,
+}
+
+/// Result of a `run_export` call. Always returned once `output_dir` is
+/// created — even when a table fails mid-run — so the caller never loses the
+/// itemized status of tables that already exported (R4-002/B-007).
 pub struct ExportOutcome {
-    /// `None` when the export was cancelled — a manifest describing a
-    /// partially-written bundle would misrepresent the (possibly truncated)
-    /// files it points to, so no `manifest.json` is written on cancellation.
+    /// `None` when the run was cancelled OR any table's status is `Failed` —
+    /// a manifest describing a partially-written bundle (truncated by
+    /// cancellation, or missing a whole failed table) would misrepresent the
+    /// files it points to, so no `manifest.json` is written in either case.
     pub manifest: Option<TransferManifest>,
     pub warnings: Vec<String>,
-    pub tables_exported: usize,
+    pub tables: Vec<ExportedTable>,
     pub cancelled: bool,
 }
 
 /// Exports every table in `tables` from `connection` into `output_dir`,
 /// writing one `schema.table.<ext>` file per table plus a `manifest.json`
-/// (unless cancelled), and returns the outcome.
+/// (unless cancelled or a table failed), and returns the outcome.
 ///
 /// `on_progress` is invoked with `(table_index, rows_done_in_table,
 /// estimated_total_in_table)` after each written chunk of any table.
@@ -68,7 +87,14 @@ pub fn run_export(
 
     let mut manifest_tables = Vec::with_capacity(tables.len());
     let mut warnings = Vec::new();
-    let mut tables_exported = 0usize;
+    let mut table_statuses: Vec<ExportedTable> = tables
+        .iter()
+        .map(|t| ExportedTable {
+            schema: t.schema.clone(),
+            name: t.name.clone(),
+            status: TableTransferStatus::NotStarted,
+        })
+        .collect();
 
     for (index, table) in tables.iter().enumerate() {
         if cancel.is_cancelled() {
@@ -94,18 +120,30 @@ pub fn run_export(
             options.format,
         );
 
-        let report = run_transfer(
+        let result = run_transfer(
             &mut source,
             &column_map,
             &mut sink,
             TableMappingMode::Existing,
             cancel,
             &mut |rows_done, estimated_total| on_progress(index, rows_done, estimated_total),
-        )?;
+        );
+
+        let report = match result {
+            Ok(report) => report,
+            Err(e) => {
+                table_statuses[index].status = TableTransferStatus::Failed {
+                    error: e.to_string(),
+                };
+                break;
+            }
+        };
 
         let was_cancelled = report.outcome == TransferOutcome::Cancelled;
         warnings.extend(report.warnings);
-        tables_exported += 1;
+        table_statuses[index].status = TableTransferStatus::Completed {
+            rows: report.rows_transferred,
+        };
 
         manifest_tables.push(ManifestTable {
             schema: table.schema.clone(),
@@ -123,8 +161,11 @@ pub fn run_export(
     }
 
     let cancelled = cancel.is_cancelled();
+    let any_failed = table_statuses
+        .iter()
+        .any(|t| matches!(t.status, TableTransferStatus::Failed { .. }));
 
-    let manifest = if cancelled {
+    let manifest = if cancelled || any_failed {
         None
     } else {
         let manifest = TransferManifest {
@@ -154,7 +195,7 @@ pub fn run_export(
     Ok(ExportOutcome {
         manifest,
         warnings,
-        tables_exported,
+        tables: table_statuses,
         cancelled,
     })
 }
@@ -175,6 +216,10 @@ mod tests {
     /// order tables are exported), then an empty page to signal exhaustion.
     struct FakeConnection {
         pages_by_table: Mutex<std::collections::HashMap<String, VecDeque<Vec<Vec<Value>>>>>,
+        /// When set, every query naming this table fails — a stand-in for a
+        /// mid-run table failure, used to prove `run_export` itemizes the
+        /// tables around the failure instead of discarding their status.
+        fail_for_table: Option<String>,
     }
 
     impl FakeConnection {
@@ -186,7 +231,13 @@ mod tests {
                         .map(|(k, v)| (k, v.into()))
                         .collect(),
                 ),
+                fail_for_table: None,
             }
+        }
+
+        fn failing_for_table(mut self, table: &str) -> Self {
+            self.fail_for_table = Some(table.to_string());
+            self
         }
     }
 
@@ -204,6 +255,12 @@ mod tests {
         }
 
         fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+            if let Some(name) = &self.fail_for_table
+                && req.sql.contains(name.as_str())
+            {
+                return Err(DbError::NotSupported("forced query failure".to_string()));
+            }
+
             // TableSource issues a COUNT(*) probe before its first paginated
             // SELECT (W1's real-progress-total fix); answer it with a single
             // dummy row rather than letting it fall through to the
@@ -318,7 +375,15 @@ mod tests {
             run_export(&connection, &tables, &dir, &options, &cancel, |_, _, _| {}).unwrap();
 
         assert!(!outcome.cancelled);
-        assert_eq!(outcome.tables_exported, 2);
+        assert_eq!(outcome.tables.len(), 2);
+        assert_eq!(
+            outcome.tables[0].status,
+            TableTransferStatus::Completed { rows: 2 }
+        );
+        assert_eq!(
+            outcome.tables[1].status,
+            TableTransferStatus::Completed { rows: 1 }
+        );
 
         let manifest = outcome.manifest.expect("manifest must be written");
         assert_eq!(manifest.tables.len(), 2);
@@ -400,6 +465,69 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// R4-002/B-007 regression: a table failure partway through the run must
+    /// not abort the whole export with a bare `Err` — the already-exported
+    /// table's status must survive in an itemized `Ok(ExportOutcome)`, and
+    /// (like cancellation) the manifest must not be written since it would
+    /// misrepresent a bundle missing an entire table.
+    #[test]
+    fn a_mid_run_table_failure_itemizes_tables_and_skips_the_manifest() {
+        let mut pages = std::collections::HashMap::new();
+        pages.insert(
+            "users".to_string(),
+            vec![vec![vec![Value::Int(1)], vec![Value::Int(2)]]],
+        );
+
+        let connection: Arc<dyn Connection> =
+            Arc::new(FakeConnection::new(pages).failing_for_table("orders"));
+        let tables = vec![
+            ExportTable {
+                schema: None,
+                name: "users".to_string(),
+                columns: vec![pk_column("id")],
+                estimated_total: None,
+            },
+            ExportTable {
+                schema: None,
+                name: "orders".to_string(),
+                columns: vec![pk_column("id")],
+                estimated_total: None,
+            },
+        ];
+        let dir = temp_dir("mid_run_failure");
+        let cancel = CancelToken::new();
+
+        let options = ExportOptions {
+            driver_id: "postgres",
+            database: "app",
+            format: FileFormat::Csv,
+            segment_size: 10,
+        };
+        let outcome = run_export(&connection, &tables, &dir, &options, &cancel, |_, _, _| {})
+            .expect("a per-table failure must not abort the whole run with Err");
+
+        assert!(!outcome.cancelled);
+        assert_eq!(outcome.tables.len(), 2);
+        assert_eq!(
+            outcome.tables[0].status,
+            TableTransferStatus::Completed { rows: 2 },
+            "users must stay reported as completed despite orders failing later"
+        );
+        assert!(
+            matches!(outcome.tables[1].status, TableTransferStatus::Failed { .. }),
+            "orders must be reported as Failed: {:?}",
+            outcome.tables[1].status
+        );
+        assert!(
+            outcome.manifest.is_none(),
+            "a run with a failed table must not write a manifest"
+        );
+        assert!(!dir.join("manifest.json").exists());
+        assert!(dir.join("users.csv").exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn empty_table_list_still_creates_the_output_dir() {
         let connection: Arc<dyn Connection> =
@@ -417,7 +545,7 @@ mod tests {
         let outcome = run_export(&connection, &[], &dir, &options, &cancel, |_, _, _| {}).unwrap();
 
         assert!(dir.exists());
-        assert_eq!(outcome.tables_exported, 0);
+        assert_eq!(outcome.tables.len(), 0);
         assert!(outcome.manifest.is_some());
 
         std::fs::remove_dir_all(&dir).ok();

@@ -19,7 +19,10 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::Spacing;
 use dbflux_core::{Connection, DriverCapabilities, TaskId, TaskKind, TaskStatus, TaskTarget};
-use dbflux_transfer::import::{ImportOptions, ImportOutcome, ImportTablePlan, run_import};
+use dbflux_transfer::TableTransferStatus;
+use dbflux_transfer::import::{
+    ImportOptions, ImportOutcome, ImportTablePlan, ImportedTable, run_import,
+};
 use dbflux_transfer::manifest::read_manifest;
 use dbflux_ui_base::app_state_entity::{AppStateChanged, AppStateEntity};
 use dbflux_ui_base::modal_frame::ModalFrame;
@@ -510,13 +513,36 @@ impl ImportWizard {
                         this.result_summary = Some("Import cancelled".to_string());
                     }
                     Ok(outcome) => {
-                        app_state.update(cx, |state, cx| {
-                            state.complete_task(task_id);
-                            cx.emit(AppStateChanged);
+                        let failed_table = outcome.tables.iter().find_map(|t| match &t.status {
+                            TableTransferStatus::Failed { error } => {
+                                Some((t.source_table.clone(), error.clone()))
+                            }
+                            _ => None,
                         });
+
+                        if let Some((table, error)) = &failed_table {
+                            app_state.update(cx, |state, cx| {
+                                state.fail_task(task_id, format!("{table}: {error}"));
+                                cx.emit(AppStateChanged);
+                            });
+                            report_error(
+                                UserFacingError::new(
+                                    ErrorKind::Driver,
+                                    format!("Import failed on table '{table}': {error}"),
+                                ),
+                                cx,
+                            );
+                        } else {
+                            app_state.update(cx, |state, cx| {
+                                state.complete_task(task_id);
+                                cx.emit(AppStateChanged);
+                            });
+                            Toast::success("Import completed").push(cx);
+                        }
+
                         this.result_summary = Some(Self::summarize(&outcome));
-                        this.result_warnings = outcome.warnings;
-                        Toast::success("Import completed").push(cx);
+                        this.result_warnings =
+                            Self::itemized_status_lines(&outcome.tables, &outcome.warnings);
                     }
                     Err(e) => {
                         app_state.update(cx, |state, cx| {
@@ -539,11 +565,73 @@ impl ImportWizard {
     }
 
     fn summarize(outcome: &ImportOutcome) -> String {
-        let imported = outcome.tables.iter().filter(|t| !t.skipped).count();
-        let skipped = outcome.tables.iter().filter(|t| t.skipped).count();
-        let rows: u64 = outcome.tables.iter().map(|t| t.rows_imported).sum();
+        let completed = outcome
+            .tables
+            .iter()
+            .filter(|t| matches!(t.status, TableTransferStatus::Completed { .. }))
+            .count();
+        let skipped = outcome
+            .tables
+            .iter()
+            .filter(|t| matches!(t.status, TableTransferStatus::Skipped))
+            .count();
+        let failed = outcome
+            .tables
+            .iter()
+            .filter(|t| matches!(t.status, TableTransferStatus::Failed { .. }))
+            .count();
+        let rows: u64 = outcome
+            .tables
+            .iter()
+            .map(|t| match &t.status {
+                TableTransferStatus::Completed { rows } => *rows,
+                _ => 0,
+            })
+            .sum();
 
-        format!("Imported {imported} table(s), {rows} row(s) total ({skipped} skipped)")
+        if failed > 0 {
+            format!(
+                "Imported {completed} table(s), {rows} row(s) total ({skipped} skipped, {failed} failed)"
+            )
+        } else {
+            format!("Imported {completed} table(s), {rows} row(s) total ({skipped} skipped)")
+        }
+    }
+
+    /// Renders one status line per planned table when the run left any table
+    /// `Failed` or `NotStarted`, so the user sees exactly which tables
+    /// succeeded, which one failed with what error, and which were never
+    /// attempted — not just the last error swallowed into a single toast
+    /// (R4-002/B-007). On a fully successful/skipped run, only the engine's
+    /// own warnings are shown, unchanged.
+    fn itemized_status_lines(tables: &[ImportedTable], engine_warnings: &[String]) -> Vec<String> {
+        let has_issue = tables.iter().any(|t| {
+            matches!(
+                t.status,
+                TableTransferStatus::Failed { .. } | TableTransferStatus::NotStarted
+            )
+        });
+
+        if !has_issue {
+            return engine_warnings.to_vec();
+        }
+
+        let mut lines: Vec<String> = tables.iter().map(Self::table_status_line).collect();
+        lines.extend(engine_warnings.iter().cloned());
+        lines
+    }
+
+    fn table_status_line(table: &ImportedTable) -> String {
+        match &table.status {
+            TableTransferStatus::Completed { rows } => {
+                format!("{}: completed ({rows} row(s))", table.source_table)
+            }
+            TableTransferStatus::Skipped => format!("{}: skipped", table.source_table),
+            TableTransferStatus::Failed { error } => {
+                format!("{}: FAILED — {error}", table.source_table)
+            }
+            TableTransferStatus::NotStarted => format!("{}: not attempted", table.source_table),
+        }
     }
 }
 

@@ -26,8 +26,8 @@ pub use dbflux_core::TransferColumn;
 pub use file_sink::{FileFormat, FileSink};
 pub use file_source::FileSource;
 pub use pipeline::{
-    ColumnMap, RowChunk, RowSink, RowSource, TableMappingMode, TransferError, TransferOutcome,
-    TransferReport, run_transfer,
+    ColumnMap, RowChunk, RowSink, RowSource, TableMappingMode, TableTransferStatus, TransferError,
+    TransferOutcome, TransferReport, run_transfer,
 };
 pub use table_sink::TableSink;
 pub use table_source::TableSource;

@@ -30,6 +30,25 @@ pub struct TransferReport {
     pub warnings: Vec<String>,
 }
 
+/// Per-table result classification for run-level outcomes
+/// (`import::ImportOutcome`, `migration::MigrationRunOutcome`) that itemize
+/// every planned table rather than discarding earlier progress the moment
+/// one table fails (R4-002/B-007).
+#[derive(Debug, Clone, PartialEq)]
+pub enum TableTransferStatus {
+    /// The table's row-load phase ran to completion (including zero rows).
+    Completed { rows: u64 },
+    /// The table's mapping mode was `Skip` — never written to, by design.
+    Skipped,
+    /// The table's DDL or row-load phase failed; `error` is the formatted
+    /// error that stopped it. Every table after this one in load order is
+    /// `NotStarted`.
+    Failed { error: String },
+    /// The table was never reached — an earlier table failed, or the run
+    /// was cancelled before this table's turn.
+    NotStarted,
+}
+
 impl TransferReport {
     pub fn new(outcome: TransferOutcome) -> Self {
         Self {

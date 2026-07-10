@@ -18,7 +18,9 @@ use dbflux_core::{
 };
 
 use crate::column_map::{AutoColumnMap, ColumnMappingOverride};
-use crate::pipeline::{ColumnMap, TableMappingMode, TransferError, TransferOutcome, run_transfer};
+use crate::pipeline::{
+    ColumnMap, TableMappingMode, TableTransferStatus, TransferError, TransferOutcome, run_transfer,
+};
 use crate::table_sink::TableSink;
 use crate::table_source::TableSource;
 
@@ -59,11 +61,15 @@ pub struct MigrationOptions {
 pub struct MigratedTable {
     pub source_table: String,
     pub target_table: String,
-    pub rows_migrated: u64,
-    pub skipped: bool,
+    pub status: TableTransferStatus,
 }
 
-/// Result of a migration run that actually executed (completed or cancelled).
+/// Result of a migration run that actually executed (completed or
+/// cancelled). A per-table failure mid-run (R4-002/B-007) does NOT abort the
+/// whole run — `run_migration` still returns `Ok(MigrationOutcome::Completed)`,
+/// itemizing every planned table's [`TableTransferStatus`]: tables migrated
+/// before the failure are `Completed`, the failing table is `Failed`, and
+/// every table after it in load order is `NotStarted`.
 pub struct MigrationRunOutcome {
     pub tables: Vec<MigratedTable>,
     pub warnings: Vec<String>,
@@ -126,16 +132,23 @@ pub fn run_migration(
         }
     };
 
-    let mut migrated = Vec::with_capacity(ordered_plans.len());
+    let mut migrated: Vec<MigratedTable> = ordered_plans
+        .iter()
+        .map(|plan| MigratedTable {
+            source_table: plan.source_table.name.clone(),
+            target_table: plan.target_table.clone(),
+            status: TableTransferStatus::NotStarted,
+        })
+        .collect();
     let mut warnings = Vec::new();
     let restore_failure: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
     {
         // The guard's `Drop` restores referential integrity on every exit
-        // path (success, a mid-loop `?` propagation, or cancellation)
-        // without needing matching cleanup code at each return point. It is
-        // scoped to this block so it drops — and attempts the restore —
-        // before `restore_failure` is read below.
+        // path (success, a mid-loop table failure, or cancellation) without
+        // needing matching cleanup code at each return point. It is scoped
+        // to this block so it drops — and attempts the restore — before
+        // `restore_failure` is read below.
         let _ri_guard = ReferentialIntegrityGuard::enable(
             target_connection,
             options.disable_referential_integrity,
@@ -147,23 +160,37 @@ pub fn run_migration(
                 break;
             }
 
-            let report = migrate_one_table(
+            let result = migrate_one_table(
                 source_connection,
                 target_connection,
                 plan,
                 options,
                 cancel,
                 |rows_done, estimated_total| on_progress(index, rows_done, estimated_total),
-            )?;
+            );
+
+            // A table failure (R4-002/B-007) stops the run here rather than
+            // propagating via `?`, which would discard every earlier table's
+            // itemized status along with the tables after it.
+            let report = match result {
+                Ok(report) => report,
+                Err(e) => {
+                    migrated[index].status = TableTransferStatus::Failed {
+                        error: e.to_string(),
+                    };
+                    break;
+                }
+            };
 
             let was_cancelled = report.outcome == TransferOutcome::Cancelled;
             warnings.extend(report.warnings);
-            migrated.push(MigratedTable {
-                source_table: plan.source_table.name.clone(),
-                target_table: plan.target_table.clone(),
-                rows_migrated: report.rows_transferred,
-                skipped: matches!(plan.mapping_mode, TableMappingMode::Skip),
-            });
+            migrated[index].status = if matches!(plan.mapping_mode, TableMappingMode::Skip) {
+                TableTransferStatus::Skipped
+            } else {
+                TableTransferStatus::Completed {
+                    rows: report.rows_transferred,
+                }
+            };
 
             if was_cancelled {
                 break;
@@ -831,9 +858,15 @@ mod tests {
         };
         assert!(!run.cancelled);
         assert_eq!(run.tables[0].source_table, "parent");
-        assert_eq!(run.tables[0].rows_migrated, 2);
+        assert_eq!(
+            run.tables[0].status,
+            TableTransferStatus::Completed { rows: 2 }
+        );
         assert_eq!(run.tables[1].source_table, "child");
-        assert_eq!(run.tables[1].rows_migrated, 1);
+        assert_eq!(
+            run.tables[1].status,
+            TableTransferStatus::Completed { rows: 1 }
+        );
     }
 
     #[test]
@@ -992,7 +1025,10 @@ mod tests {
         let MigrationOutcome::Completed(run) = outcome else {
             panic!("expected Completed");
         };
-        assert_eq!(run.tables[0].rows_migrated, 1);
+        assert_eq!(
+            run.tables[0].status,
+            TableTransferStatus::Completed { rows: 1 }
+        );
         let executed = target.executed_sql.lock().unwrap();
         assert!(executed.iter().any(|sql| sql.starts_with("DROP TABLE")));
     }
@@ -1033,8 +1069,8 @@ mod tests {
             vec![],
         ));
         // No query generator -> `Create` mode's `create_table` errors out of
-        // `migrate_one_table`, propagating through `run_migration` via `?`
-        // while `_ri_guard` is still in scope.
+        // `migrate_one_table`, captured as this table's `Failed` status while
+        // `_ri_guard` is still in scope.
         let target = Arc::new(
             FakeTargetConnection::new(vec![], DriverCapabilities::DISABLE_FK_CHECKS)
                 .without_generator(),
@@ -1046,16 +1082,24 @@ mod tests {
         options.disable_referential_integrity = true;
         let cancel = CancelToken::new();
 
-        let result = run_migration(
+        let outcome = run_migration(
             &source,
             &target_conn,
             &plans,
             &options,
             &cancel,
             |_, _, _| {},
-        );
+        )
+        .expect("a per-table failure must not abort the whole run with Err");
 
-        assert!(result.is_err());
+        let MigrationOutcome::Completed(run) = outcome else {
+            panic!("expected Completed, no cycle in this fixture");
+        };
+        assert!(
+            matches!(run.tables[0].status, TableTransferStatus::Failed { .. }),
+            "expected a Failed status, got: {:?}",
+            run.tables[0].status
+        );
         assert_eq!(
             *target.ri_calls.lock().unwrap(),
             vec![false, true],
@@ -1180,7 +1224,76 @@ mod tests {
             panic!("expected Completed(cancelled)");
         };
         assert!(run.cancelled);
-        assert_eq!(run.tables.len(), 1, "the second table must never start");
+        assert_eq!(run.tables.len(), 2, "every planned table must be itemized");
+        assert_eq!(
+            run.tables[0].status,
+            TableTransferStatus::Completed { rows: 1 }
+        );
+        assert_eq!(
+            run.tables[1].status,
+            TableTransferStatus::NotStarted,
+            "the second table must never start"
+        );
+    }
+
+    /// R4-002/B-007 regression (test requirement #1, Migration): when the
+    /// middle table of three fails mid-load, the first table's success and
+    /// the third table's `NotStarted` status must both survive in the
+    /// returned outcome — not be discarded by a bare `Err`.
+    #[test]
+    fn a_mid_run_table_failure_itemizes_completed_failed_and_not_started_tables() {
+        let mut pages = std::collections::HashMap::new();
+        pages.insert("t1".to_string(), vec![vec![vec![Value::Int(1)]]]);
+        pages.insert("t3".to_string(), vec![vec![vec![Value::Int(3)]]]);
+        let source: Arc<dyn Connection> = Arc::new(FakeSourceConnection::new(pages, vec![]));
+
+        // No `TRUNCATE_TABLE` capability: only t2's `Truncate` mode fails, in
+        // `begin()`'s DDL phase, before any row is written. t1 and t3 use
+        // `Existing`, which never touches `TRUNCATE_TABLE`.
+        let target = Arc::new(FakeTargetConnection::new(
+            vec![existing_column_info()],
+            DriverCapabilities::BULK_INSERT,
+        ));
+        let target_conn: Arc<dyn Connection> = target.clone();
+
+        let plans = vec![
+            plan("t1", TableMappingMode::Existing),
+            plan("t2", TableMappingMode::Truncate),
+            plan("t3", TableMappingMode::Existing),
+        ];
+        let mut options = default_options();
+        options.destructive_confirmed = true;
+        let cancel = CancelToken::new();
+
+        let outcome = run_migration(
+            &source,
+            &target_conn,
+            &plans,
+            &options,
+            &cancel,
+            |_, _, _| {},
+        )
+        .expect("a per-table failure must not abort the whole run with Err");
+
+        let MigrationOutcome::Completed(run) = outcome else {
+            panic!("expected Completed, no cycle in this fixture");
+        };
+        assert_eq!(run.tables.len(), 3);
+        assert_eq!(
+            run.tables[0].status,
+            TableTransferStatus::Completed { rows: 1 },
+            "table 1 must stay reported as completed despite table 2 failing later"
+        );
+        assert!(
+            matches!(run.tables[1].status, TableTransferStatus::Failed { .. }),
+            "table 2 must be reported as Failed: {:?}",
+            run.tables[1].status
+        );
+        assert_eq!(
+            run.tables[2].status,
+            TableTransferStatus::NotStarted,
+            "table 3 must never have been attempted"
+        );
     }
 
     /// JD-C1 regression (Migration): the target table's columns are
@@ -1246,7 +1359,10 @@ mod tests {
         let MigrationOutcome::Completed(run) = outcome else {
             panic!("expected Completed, no cycle in this fixture");
         };
-        assert_eq!(run.tables[0].rows_migrated, 2);
+        assert_eq!(
+            run.tables[0].status,
+            TableTransferStatus::Completed { rows: 2 }
+        );
         assert!(
             run.warnings.iter().any(|w| w.contains("legacy_extra")),
             "the unmatched source column must be reported as a non-blocking warning: {:?}",

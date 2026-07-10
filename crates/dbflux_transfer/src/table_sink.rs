@@ -2,12 +2,21 @@
 //! Migration. Prefers a driver's native multi-row `INSERT` (gated by
 //! `DriverCapabilities::BULK_INSERT`), falling back to per-row `insert_row`
 //! when the capability or generator is unavailable.
+//!
+//! When the target advertises `DriverCapabilities::TRANSACTIONS`, the row
+//! INSERT phase (and only that phase) runs inside one transaction per table:
+//! `begin()` issues any DDL (`CREATE`/`DROP`/`TRUNCATE`) first, autocommitted
+//! as its own statement, then opens the transaction; `finish()` commits it;
+//! a failed `write_chunk` rolls it back. DDL must stay outside the
+//! transaction because several dialects (MySQL among them) implicitly commit
+//! on DDL — wrapping it would silently defeat the rollback. Targets without
+//! the capability keep the pre-existing autocommit behavior untouched.
 
 use std::sync::Arc;
 
 use dbflux_core::{
-    ColumnAssignment, Connection, CreateTableSpec, DriverCapabilities, DriverMetadata,
-    QueryGenerator, QueryRequest, RowInsert, TransferColumn, Value,
+    ColumnAssignment, Connection, CreateTableSpec, DriverCapabilities, DriverMetadata, LogErr,
+    QueryGenerator, QueryRequest, RowInsert, TransactionVocab, TransferColumn, Value,
 };
 
 use crate::pipeline::TransferReport;
@@ -27,6 +36,10 @@ pub struct TableSink {
     skipped: bool,
     rows_written: u64,
     warnings: Vec<String>,
+    /// `Some` for the lifetime of an open per-table transaction: set by
+    /// `begin()` when the target supports `DriverCapabilities::TRANSACTIONS`,
+    /// consumed by `finish()` (COMMIT) or by a failed `write_chunk` (ROLLBACK).
+    transaction_vocab: Option<TransactionVocab>,
 }
 
 impl TableSink {
@@ -44,6 +57,7 @@ impl TableSink {
             skipped: false,
             rows_written: 0,
             warnings: Vec::new(),
+            transaction_vocab: None,
         }
     }
 
@@ -217,6 +231,43 @@ impl TableSink {
 
         Ok(written)
     }
+
+    /// Opens a transaction for the upcoming row-INSERT phase when the target
+    /// supports it. Must run AFTER any DDL `begin()` already issued — DDL
+    /// autocommits on several dialects, so opening the transaction first
+    /// would either fail or silently commit the DDL mid-transaction.
+    fn begin_transaction_if_supported(&mut self) -> Result<(), TransferError> {
+        if !self.connection.supports(DriverCapabilities::TRANSACTIONS) {
+            return Ok(());
+        }
+
+        let Some(vocab) = TransactionVocab::for_kind(self.connection.kind()) else {
+            return Ok(());
+        };
+
+        self.connection
+            .execute(&QueryRequest::new(vocab.begin))
+            .map_err(|e| {
+                TransferError::Sink(format!("BEGIN failed for '{}': {e}", self.qualified_name()))
+            })?;
+
+        self.transaction_vocab = Some(vocab);
+        Ok(())
+    }
+
+    /// Rolls back the open per-table transaction, if any, after a
+    /// `write_chunk` failure. A failed ROLLBACK is logged rather than
+    /// propagated — it must never replace or hide the original insert error
+    /// the caller is already returning.
+    fn rollback_on_error(&mut self) {
+        let Some(vocab) = self.transaction_vocab.take() else {
+            return;
+        };
+
+        self.connection
+            .execute(&QueryRequest::new(vocab.rollback))
+            .log_err();
+    }
 }
 
 impl RowSink for TableSink {
@@ -235,6 +286,7 @@ impl RowSink for TableSink {
                     "table '{}' skipped (mapping mode Skip)",
                     self.qualified_name()
                 ));
+                return Ok(());
             }
             TableMappingMode::Existing => {}
             TableMappingMode::Create => {
@@ -249,7 +301,7 @@ impl RowSink for TableSink {
             }
         }
 
-        Ok(())
+        self.begin_transaction_if_supported()
     }
 
     fn write_chunk(&mut self, chunk: &RowChunk) -> Result<u64, TransferError> {
@@ -259,7 +311,7 @@ impl RowSink for TableSink {
 
         let connection = Arc::clone(&self.connection);
 
-        let written = if connection.supports(DriverCapabilities::BULK_INSERT)
+        let result = if connection.supports(DriverCapabilities::BULK_INSERT)
             && let Some(generator) = connection.query_generator()
         {
             Self::write_rows_bulk(
@@ -270,7 +322,7 @@ impl RowSink for TableSink {
                 &self.column_names,
                 &self.column_types,
                 chunk,
-            )?
+            )
         } else {
             Self::write_rows_per_row(
                 &connection,
@@ -279,14 +331,33 @@ impl RowSink for TableSink {
                 &self.column_names,
                 &self.column_types,
                 &chunk.0,
-            )?
+            )
         };
 
-        self.rows_written += written;
-        Ok(written)
+        match result {
+            Ok(written) => {
+                self.rows_written += written;
+                Ok(written)
+            }
+            Err(e) => {
+                self.rollback_on_error();
+                Err(e)
+            }
+        }
     }
 
     fn finish(&mut self) -> Result<TransferReport, TransferError> {
+        if let Some(vocab) = self.transaction_vocab.take() {
+            self.connection
+                .execute(&QueryRequest::new(vocab.commit))
+                .map_err(|e| {
+                    TransferError::Sink(format!(
+                        "COMMIT failed for '{}': {e}",
+                        self.qualified_name()
+                    ))
+                })?;
+        }
+
         let mut report = TransferReport::new(TransferOutcome::Completed);
         report.rows_transferred = self.rows_written;
         report.warnings = std::mem::take(&mut self.warnings);
@@ -393,6 +464,11 @@ mod tests {
         /// discarding it.
         inserted_type_names: Mutex<Vec<Vec<Option<String>>>>,
         metadata: DriverMetadata,
+        /// When `true`, `insert_row` fails every call instead of recording the
+        /// row — a stand-in for a mid-load insert error, used to prove
+        /// `TableSink` rolls back its open transaction instead of leaving
+        /// partial rows committed.
+        insert_row_should_fail: bool,
     }
 
     impl FakeConnection {
@@ -420,7 +496,13 @@ mod tests {
                 inserted_rows: Mutex::new(Vec::new()),
                 inserted_type_names: Mutex::new(Vec::new()),
                 metadata: builder.build(),
+                insert_row_should_fail: false,
             }
+        }
+
+        fn with_insert_row_failing(mut self) -> Self {
+            self.insert_row_should_fail = true;
+            self
         }
     }
 
@@ -471,6 +553,12 @@ mod tests {
         }
 
         fn insert_row(&self, insert: &RowInsert) -> Result<dbflux_core::CrudResult, DbError> {
+            if self.insert_row_should_fail {
+                return Err(DbError::NotSupported(
+                    "insert_row forced failure".to_string(),
+                ));
+            }
+
             let values: Vec<Value> = insert.assignments.iter().map(|a| a.value.clone()).collect();
             let type_names: Vec<Option<String>> = insert
                 .assignments
@@ -768,6 +856,147 @@ mod tests {
         assert_eq!(report.rows_transferred, 0);
         assert_eq!(report.warnings.len(), 1);
         assert!(report.warnings[0].contains("skipped"));
+    }
+
+    /// R4-002/B-007 regression: DDL must autocommit BEFORE the transaction
+    /// opens — wrapping DDL in the same transaction would silently break
+    /// atomicity on dialects (MySQL) that implicitly commit on DDL.
+    #[test]
+    fn create_mode_issues_ddl_before_opening_the_transaction_when_target_supports_transactions() {
+        let generator = RecordingGenerator::new(false);
+        let connection = Arc::new(FakeConnection::new(
+            DriverCapabilities::BULK_INSERT | DriverCapabilities::TRANSACTIONS,
+            None,
+            Some(generator),
+        ));
+        let conn: Arc<dyn Connection> = connection.clone();
+        let mut sink = TableSink::new(conn, None, "t");
+
+        sink.begin(&[column("id", true)], TableMappingMode::Create)
+            .unwrap();
+
+        let executed = connection.executed_sql.lock().unwrap();
+        assert_eq!(executed.len(), 2);
+        assert!(
+            executed[0].starts_with("CREATE TABLE"),
+            "DDL must run first: {:?}",
+            *executed
+        );
+        assert!(
+            executed[1].starts_with("BEGIN"),
+            "BEGIN must follow DDL, not precede it: {:?}",
+            *executed
+        );
+    }
+
+    /// R4-002/B-007 regression: a successful table load commits the open
+    /// per-table transaction exactly once, in `finish()`.
+    #[test]
+    fn successful_table_load_commits_the_open_transaction_when_target_supports_transactions() {
+        let connection = Arc::new(FakeConnection::new(
+            DriverCapabilities::TRANSACTIONS,
+            None,
+            None,
+        ));
+        let conn: Arc<dyn Connection> = connection.clone();
+        let mut sink = TableSink::new(conn, None, "t");
+
+        sink.begin(&[column("id", true)], TableMappingMode::Existing)
+            .unwrap();
+        sink.write_chunk(&RowChunk(rows(2))).unwrap();
+        let report = sink.finish().unwrap();
+
+        assert_eq!(report.rows_transferred, 2);
+        let executed = connection.executed_sql.lock().unwrap();
+        assert_eq!(executed.len(), 2);
+        assert!(executed[0].starts_with("BEGIN"));
+        assert!(executed[1].starts_with("COMMIT"));
+    }
+
+    /// R4-002/B-007 regression: a failed `write_chunk` rolls back the open
+    /// transaction instead of leaving whatever rows were inserted so far
+    /// committed to the table.
+    #[test]
+    fn failed_write_chunk_rolls_back_the_open_transaction_when_target_supports_transactions() {
+        let connection = Arc::new(
+            FakeConnection::new(DriverCapabilities::TRANSACTIONS, None, None)
+                .with_insert_row_failing(),
+        );
+        let conn: Arc<dyn Connection> = connection.clone();
+        let mut sink = TableSink::new(conn, None, "t");
+
+        sink.begin(&[column("id", true)], TableMappingMode::Existing)
+            .unwrap();
+        let result = sink.write_chunk(&RowChunk(rows(2)));
+
+        assert!(result.is_err(), "the forced insert failure must propagate");
+        assert!(
+            connection.inserted_rows.lock().unwrap().is_empty(),
+            "no row must be recorded as inserted once the failure rolls back"
+        );
+        let executed = connection.executed_sql.lock().unwrap();
+        assert_eq!(
+            executed.len(),
+            2,
+            "BEGIN then ROLLBACK, no COMMIT: {:?}",
+            *executed
+        );
+        assert!(executed[0].starts_with("BEGIN"));
+        assert!(executed[1].starts_with("ROLLBACK"));
+    }
+
+    /// R4-002/B-007 regression (Recreate/destructive): the DROP/CREATE DDL
+    /// autocommits and is NOT rolled back, but a load failure still rolls
+    /// back the (re)created table's inserted rows, leaving it empty rather
+    /// than half-populated.
+    #[test]
+    fn recreate_mode_failure_mid_load_rolls_back_rows_but_leaves_ddl_in_place() {
+        let generator = RecordingGenerator::new(false);
+        let connection = Arc::new(
+            FakeConnection::new(DriverCapabilities::TRANSACTIONS, None, Some(generator))
+                .with_insert_row_failing(),
+        );
+        let conn: Arc<dyn Connection> = connection.clone();
+        let mut sink = TableSink::new(conn, None, "t");
+
+        sink.begin(&[column("id", true)], TableMappingMode::Recreate)
+            .unwrap();
+        let result = sink.write_chunk(&RowChunk(rows(2)));
+
+        assert!(result.is_err());
+        assert!(connection.inserted_rows.lock().unwrap().is_empty());
+
+        let executed = connection.executed_sql.lock().unwrap();
+        assert_eq!(executed.len(), 4, "{:?}", *executed);
+        assert!(executed[0].starts_with("DROP TABLE IF EXISTS"));
+        assert!(executed[1].starts_with("CREATE TABLE"));
+        assert!(executed[2].starts_with("BEGIN"));
+        assert!(
+            executed[3].starts_with("ROLLBACK"),
+            "the data ROLLBACK must not touch the already-autocommitted DDL: {:?}",
+            *executed
+        );
+    }
+
+    /// R4-002/B-007 regression: without the `TRANSACTIONS` capability, no
+    /// BEGIN/COMMIT/ROLLBACK is ever attempted — the pre-existing autocommit
+    /// behavior is preserved unchanged.
+    #[test]
+    fn falls_back_to_autocommit_without_attempting_any_transaction_when_capability_absent() {
+        let connection = Arc::new(FakeConnection::new(DriverCapabilities::empty(), None, None));
+        let conn: Arc<dyn Connection> = connection.clone();
+        let mut sink = TableSink::new(conn, None, "t");
+
+        sink.begin(&[column("id", true)], TableMappingMode::Existing)
+            .unwrap();
+        sink.write_chunk(&RowChunk(rows(2))).unwrap();
+        let report = sink.finish().unwrap();
+
+        assert_eq!(report.rows_transferred, 2);
+        assert!(
+            connection.executed_sql.lock().unwrap().is_empty(),
+            "no BEGIN/COMMIT/ROLLBACK must be attempted without the TRANSACTIONS capability"
+        );
     }
 
     /// Connection wired with the REAL SQL-backed generator (not a fake),

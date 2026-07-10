@@ -7,7 +7,8 @@
 
 use crate::*;
 use dbflux_core::{TaskKind, TaskStatus, TaskTarget, TransferColumn, TransferFamily};
-use dbflux_transfer::export::{ExportOptions, ExportTable, run_export};
+use dbflux_transfer::TableTransferStatus;
+use dbflux_transfer::export::{ExportOptions, ExportTable, ExportedTable, run_export};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use std::sync::{Arc, Mutex};
 
@@ -350,16 +351,45 @@ impl Sidebar {
                     });
                 }
                 Ok(outcome) => {
-                    app_state.update(cx, |state, cx| {
-                        state.complete_task(task_id);
-                        cx.emit(AppStateChanged);
+                    let failed_table = outcome.tables.iter().find_map(|t| match &t.status {
+                        TableTransferStatus::Failed { error } => {
+                            Some((t.name.clone(), error.clone()))
+                        }
+                        _ => None,
                     });
-                    dbflux_ui_base::toast::Toast::success(format!(
-                        "Exported {} table(s) to {}",
-                        outcome.tables_exported,
-                        output_dir.display()
-                    ))
-                    .push(cx);
+
+                    if let Some((table, error)) = &failed_table {
+                        app_state.update(cx, |state, cx| {
+                            state.fail_task_with_details(
+                                task_id,
+                                format!("{table}: {error}"),
+                                itemized_table_details(&outcome.tables),
+                            );
+                            cx.emit(AppStateChanged);
+                        });
+                        report_error(
+                            UserFacingError::new(
+                                ErrorKind::Driver,
+                                format!("Export failed on table '{table}': {error}"),
+                            ),
+                            cx,
+                        );
+                    } else {
+                        let completed = outcome
+                            .tables
+                            .iter()
+                            .filter(|t| matches!(t.status, TableTransferStatus::Completed { .. }))
+                            .count();
+                        app_state.update(cx, |state, cx| {
+                            state.complete_task(task_id);
+                            cx.emit(AppStateChanged);
+                        });
+                        dbflux_ui_base::toast::Toast::success(format!(
+                            "Exported {completed} table(s) to {}",
+                            output_dir.display()
+                        ))
+                        .push(cx);
+                    }
                 }
                 Err(e) => {
                     app_state.update(cx, |state, cx| {
@@ -376,6 +406,31 @@ impl Sidebar {
         })
         .detach();
     }
+}
+
+/// Renders one status line per planned table for the Tasks panel's expandable
+/// details, so a mid-run failure (R4-002/B-007) shows exactly which tables
+/// succeeded, which one failed with what error, and which were never
+/// attempted — instead of only the last error in a single toast.
+fn itemized_table_details(tables: &[ExportedTable]) -> String {
+    tables
+        .iter()
+        .map(|t| {
+            let label = match &t.schema {
+                Some(schema) => format!("{schema}.{}", t.name),
+                None => t.name.clone(),
+            };
+            match &t.status {
+                TableTransferStatus::Completed { rows } => {
+                    format!("{label}: completed ({rows} row(s))")
+                }
+                TableTransferStatus::Skipped => format!("{label}: skipped"),
+                TableTransferStatus::Failed { error } => format!("{label}: FAILED — {error}"),
+                TableTransferStatus::NotStarted => format!("{label}: not attempted"),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]

@@ -9,6 +9,16 @@
 //! function at all when any plan uses one of them — checked once, up front,
 //! before the per-table loop even starts, so an unconfirmed destructive plan
 //! touches zero tables rather than failing partway through.
+//!
+//! A failure partway through the per-table loop (R4-002/B-007) does NOT
+//! abort the whole run with a bare `Err`, which would discard every already
+//! -completed table's result. Instead `run_import` always returns
+//! `Ok(ImportOutcome)`, itemizing every planned table's
+//! [`TableTransferStatus`]: tables before the failure are `Completed`, the
+//! failing table is `Failed`, and every table after it is `NotStarted`. Only
+//! the up-front gates (missing/malformed manifest, unconfirmed destructive
+//! plan) still fail fast with a top-level `Err`, since those reject the
+//! whole run before any table is touched.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -19,7 +29,9 @@ use crate::column_map::{AutoColumnMap, ColumnMappingOverride};
 use crate::file_sink::FileFormat;
 use crate::file_source::FileSource;
 use crate::manifest::{ManifestTable, read_manifest};
-use crate::pipeline::{ColumnMap, TableMappingMode, TransferError, TransferOutcome, run_transfer};
+use crate::pipeline::{
+    ColumnMap, TableMappingMode, TableTransferStatus, TransferError, TransferOutcome, run_transfer,
+};
 use crate::table_sink::TableSink;
 
 /// Where and how one manifest table should land on the target connection.
@@ -50,11 +62,12 @@ pub struct ImportOptions {
 pub struct ImportedTable {
     pub source_table: String,
     pub target_table: String,
-    pub rows_imported: u64,
-    pub skipped: bool,
+    pub status: TableTransferStatus,
 }
 
-/// Result of a completed or cancelled `run_import` call.
+/// Result of a `run_import` call. Always returned once the up-front gates
+/// pass — even when a table fails mid-run — so the caller never loses the
+/// itemized status of tables that already completed (R4-002/B-007).
 pub struct ImportOutcome {
     pub tables: Vec<ImportedTable>,
     pub warnings: Vec<String>,
@@ -88,7 +101,14 @@ pub fn run_import(
         ));
     }
 
-    let mut imported = Vec::with_capacity(plans.len());
+    let mut tables: Vec<ImportedTable> = plans
+        .iter()
+        .map(|plan| ImportedTable {
+            source_table: plan.source_table.clone(),
+            target_table: plan.target_table.clone(),
+            status: TableTransferStatus::NotStarted,
+        })
+        .collect();
     let mut warnings = Vec::new();
 
     for (index, plan) in plans.iter().enumerate() {
@@ -96,18 +116,15 @@ pub fn run_import(
             break;
         }
 
-        let manifest_table = manifest
-            .tables
-            .iter()
-            .find(|table| table.name == plan.source_table)
-            .ok_or_else(|| {
-                TransferError::Source(format!(
-                    "manifest has no table named '{}'",
-                    plan.source_table
-                ))
-            })?;
+        let Some(manifest_table) = manifest.tables.iter().find(|t| t.name == plan.source_table)
+        else {
+            tables[index].status = TableTransferStatus::Failed {
+                error: format!("manifest has no table named '{}'", plan.source_table),
+            };
+            break;
+        };
 
-        let report = import_one_table(
+        let result = import_one_table(
             connection,
             manifest_dir,
             manifest_table,
@@ -115,16 +132,27 @@ pub fn run_import(
             options,
             cancel,
             |rows_done, estimated_total| on_progress(index, rows_done, estimated_total),
-        )?;
+        );
+
+        let report = match result {
+            Ok(report) => report,
+            Err(e) => {
+                tables[index].status = TableTransferStatus::Failed {
+                    error: e.to_string(),
+                };
+                break;
+            }
+        };
 
         let was_cancelled = report.outcome == TransferOutcome::Cancelled;
         warnings.extend(report.warnings);
-        imported.push(ImportedTable {
-            source_table: plan.source_table.clone(),
-            target_table: plan.target_table.clone(),
-            rows_imported: report.rows_transferred,
-            skipped: matches!(plan.mapping_mode, TableMappingMode::Skip),
-        });
+        tables[index].status = if matches!(plan.mapping_mode, TableMappingMode::Skip) {
+            TableTransferStatus::Skipped
+        } else {
+            TableTransferStatus::Completed {
+                rows: report.rows_transferred,
+            }
+        };
 
         if was_cancelled {
             break;
@@ -132,7 +160,7 @@ pub fn run_import(
     }
 
     Ok(ImportOutcome {
-        tables: imported,
+        tables,
         warnings,
         cancelled: cancel.is_cancelled(),
     })
@@ -596,7 +624,10 @@ mod tests {
 
         assert!(!outcome.cancelled);
         assert_eq!(outcome.tables.len(), 1);
-        assert_eq!(outcome.tables[0].rows_imported, 2);
+        assert_eq!(
+            outcome.tables[0].status,
+            TableTransferStatus::Completed { rows: 2 }
+        );
         let executed = fake.executed_sql.lock().unwrap();
         assert!(executed.iter().any(|sql| sql.starts_with("DROP TABLE")));
         std::fs::remove_dir_all(&dir).ok();
@@ -628,8 +659,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(outcome.tables.len(), 1);
-        assert!(outcome.tables[0].skipped);
-        assert_eq!(outcome.tables[0].rows_imported, 0);
+        assert_eq!(outcome.tables[0].status, TableTransferStatus::Skipped);
         assert!(
             fake.executed_sql.lock().unwrap().is_empty(),
             "Skip must never write to the target"
@@ -665,13 +695,19 @@ mod tests {
         assert!(!outcome.cancelled);
         assert_eq!(outcome.tables.len(), 1);
         assert_eq!(outcome.tables[0].source_table, "users");
-        assert_eq!(outcome.tables[0].rows_imported, 2);
-        assert!(!outcome.tables[0].skipped);
+        assert_eq!(
+            outcome.tables[0].status,
+            TableTransferStatus::Completed { rows: 2 }
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// R4-002/B-007 regression: a plan referencing an unknown manifest table
+    /// must NOT abort the whole run with a bare `Err` (which would discard
+    /// every other table's itemized status) — it must surface as that one
+    /// table's `Failed` status inside an `Ok(ImportOutcome)`.
     #[test]
-    fn plan_referencing_an_unknown_manifest_table_errors() {
+    fn plan_referencing_an_unknown_manifest_table_is_reported_as_failed_not_a_hard_error() {
         let dir = temp_dir("unknown_table");
         write_bundle(&dir, "users", "id\n1\n");
         let connection: Arc<dyn Connection> =
@@ -685,16 +721,134 @@ mod tests {
         }];
         let cancel = CancelToken::new();
 
-        let result = run_import(
+        let outcome = run_import(
             &connection,
             &dir,
             &plans,
             &default_options("main"),
             &cancel,
             |_, _, _| {},
-        );
+        )
+        .expect("an unknown manifest table must surface as a per-table Failed status, not Err");
 
-        assert!(result.is_err());
+        assert_eq!(outcome.tables.len(), 1);
+        assert!(
+            matches!(&outcome.tables[0].status, TableTransferStatus::Failed { error } if error.contains("does_not_exist")),
+            "expected a Failed status naming the unknown table, got: {:?}",
+            outcome.tables[0].status
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// R4-002/B-007 regression (test requirement #1): when table 2 of 3
+    /// fails mid-load, table 1's success and table 3's `NotStarted` status
+    /// must both be preserved in the returned outcome — not discarded by a
+    /// bare `Err` that only carries the last error.
+    #[test]
+    fn a_mid_run_table_failure_itemizes_completed_failed_and_not_started_tables() {
+        let dir = temp_dir("partial_failure");
+        std::fs::write(dir.join("t1.csv"), "id\n1\n2\n").unwrap();
+        std::fs::write(dir.join("t3.csv"), "id\n9\n").unwrap();
+
+        let manifest = TransferManifest {
+            version: TransferManifest::CURRENT_VERSION,
+            source: ManifestSource {
+                driver: "sqlite".to_string(),
+                database: "main".to_string(),
+                schema: None,
+            },
+            created_at: "2026-07-07T10:00:00+00:00".to_string(),
+            tables: vec![
+                ManifestTable {
+                    schema: None,
+                    name: "t1".to_string(),
+                    file: "t1.csv".to_string(),
+                    format: "csv".to_string(),
+                    columns: vec![pk_column()],
+                    row_count: 2,
+                    fk_order_index: 0,
+                },
+                ManifestTable {
+                    schema: None,
+                    name: "t2".to_string(),
+                    file: "t2.csv".to_string(),
+                    format: "csv".to_string(),
+                    columns: vec![pk_column()],
+                    row_count: 1,
+                    fk_order_index: 1,
+                },
+                ManifestTable {
+                    schema: None,
+                    name: "t3".to_string(),
+                    file: "t3.csv".to_string(),
+                    format: "csv".to_string(),
+                    columns: vec![pk_column()],
+                    row_count: 1,
+                    fk_order_index: 2,
+                },
+            ],
+        };
+        std::fs::write(
+            dir.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        // t2.csv is deliberately never written: FileSource::open must fail
+        // for that table specifically, mid-run.
+
+        let fake = Arc::new(FakeConnection::new(vec![existing_column_info()]));
+        let connection: Arc<dyn Connection> = fake.clone();
+        let plans = vec![
+            ImportTablePlan {
+                source_table: "t1".to_string(),
+                target_schema: None,
+                target_table: "t1".to_string(),
+                mapping_mode: TableMappingMode::Existing,
+                column_overrides: None,
+            },
+            ImportTablePlan {
+                source_table: "t2".to_string(),
+                target_schema: None,
+                target_table: "t2".to_string(),
+                mapping_mode: TableMappingMode::Existing,
+                column_overrides: None,
+            },
+            ImportTablePlan {
+                source_table: "t3".to_string(),
+                target_schema: None,
+                target_table: "t3".to_string(),
+                mapping_mode: TableMappingMode::Existing,
+                column_overrides: None,
+            },
+        ];
+        let cancel = CancelToken::new();
+
+        let outcome = run_import(
+            &connection,
+            &dir,
+            &plans,
+            &default_options("main"),
+            &cancel,
+            |_, _, _| {},
+        )
+        .expect("a per-table failure must not abort the whole run with Err");
+
+        assert_eq!(outcome.tables.len(), 3);
+        assert_eq!(
+            outcome.tables[0].status,
+            TableTransferStatus::Completed { rows: 2 },
+            "table 1 must stay reported as completed despite table 2 failing later"
+        );
+        assert!(
+            matches!(outcome.tables[1].status, TableTransferStatus::Failed { .. }),
+            "table 2 must be reported as Failed: {:?}",
+            outcome.tables[1].status
+        );
+        assert_eq!(
+            outcome.tables[2].status,
+            TableTransferStatus::NotStarted,
+            "table 3 must never have been attempted"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -776,7 +930,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(outcome.tables[0].rows_imported, 2);
+        assert_eq!(
+            outcome.tables[0].status,
+            TableTransferStatus::Completed { rows: 2 }
+        );
         assert!(
             outcome.warnings.iter().any(|w| w.contains("legacy_extra")),
             "the unmatched source column must be reported as a non-blocking warning: {:?}",
