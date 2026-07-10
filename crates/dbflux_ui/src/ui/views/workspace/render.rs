@@ -811,24 +811,30 @@ impl Render for Workspace {
                         let sidebar_click = sidebar_entity.clone();
                         let sidebar_hover = sidebar_entity.clone();
 
-                        d.child(div().absolute().top(menu_y).left(menu_x).child(
-                            ctx::render_menu_container(
-                                "parent-menu",
-                                &shared_items,
-                                Some(*parent_selected),
-                                move |idx, cx| {
-                                    sidebar_click.update(cx, |s, cx| {
-                                        s.context_menu_parent_execute_at(idx, cx);
-                                    });
-                                },
-                                move |idx, cx| {
-                                    sidebar_hover.update(cx, |s, cx| {
-                                        s.context_menu_parent_hover_at(idx, cx);
-                                    });
-                                },
-                                cx,
-                            ),
-                        ))
+                        d.child(
+                            deferred(
+                                anchored()
+                                    .position(point(menu_x, menu_y))
+                                    .snap_to_window()
+                                    .child(ctx::render_menu_container(
+                                        "parent-menu",
+                                        &shared_items,
+                                        Some(*parent_selected),
+                                        move |idx, cx| {
+                                            sidebar_click.update(cx, |s, cx| {
+                                                s.context_menu_parent_execute_at(idx, cx);
+                                            });
+                                        },
+                                        move |idx, cx| {
+                                            sidebar_hover.update(cx, |s, cx| {
+                                                s.context_menu_parent_hover_at(idx, cx);
+                                            });
+                                        },
+                                        cx,
+                                    )),
+                            )
+                            .with_priority(1),
+                        )
                     })
                     // Current menu (submenu to the right of parent, or main menu at click position)
                     .child({
@@ -836,30 +842,35 @@ impl Render for Workspace {
                         let sidebar_click = sidebar_entity.clone();
                         let sidebar_hover = sidebar_entity.clone();
 
-                        div()
-                            .absolute()
-                            .top(menu_y + submenu_y_offset)
-                            .left(if in_submenu {
-                                menu_x + menu_width + menu_gap
-                            } else {
-                                menu_x
-                            })
-                            .child(ctx::render_menu_container(
-                                "context-menu",
-                                &shared_items,
-                                Some(menu.selected_index),
-                                move |idx, cx| {
-                                    sidebar_click.update(cx, |s, cx| {
-                                        s.context_menu_execute_at(idx, cx);
-                                    });
-                                },
-                                move |idx, cx| {
-                                    sidebar_hover.update(cx, |s, cx| {
-                                        s.context_menu_hover_at(idx, cx);
-                                    });
-                                },
-                                cx,
-                            ))
+                        let menu_left = if in_submenu {
+                            menu_x + menu_width + menu_gap
+                        } else {
+                            menu_x
+                        };
+                        let menu_top = menu_y + submenu_y_offset;
+
+                        deferred(
+                            anchored()
+                                .position(point(menu_left, menu_top))
+                                .snap_to_window()
+                                .child(ctx::render_menu_container(
+                                    "context-menu",
+                                    &shared_items,
+                                    Some(menu.selected_index),
+                                    move |idx, cx| {
+                                        sidebar_click.update(cx, |s, cx| {
+                                            s.context_menu_execute_at(idx, cx);
+                                        });
+                                    },
+                                    move |idx, cx| {
+                                        sidebar_hover.update(cx, |s, cx| {
+                                            s.context_menu_hover_at(idx, cx);
+                                        });
+                                    },
+                                    cx,
+                                )),
+                        )
+                        .with_priority(1)
                     })
             })
             // Tab context menu rendered at workspace level for proper positioning
