@@ -63,6 +63,12 @@ pub struct ImportWizard {
     manifest_error: Option<String>,
     rows: Vec<TableImportRow>,
     supports_truncate: bool,
+    /// Set only by the Confirm step's "Yes, proceed" click; reset on
+    /// open()/cancel/back. This — not a derived `rows.any(is_destructive)` —
+    /// is what reaches `ImportOptions::destructive_confirmed`, so the
+    /// engine's destructive gate actually requires the explicit confirm
+    /// rather than being trivially satisfied by the plan itself (B-003).
+    confirmed_destructive: bool,
     loading: bool,
     running: bool,
     progress: Arc<Mutex<(u64, Option<u64>)>>,
@@ -85,6 +91,7 @@ impl ImportWizard {
             manifest_error: None,
             rows: Vec::new(),
             supports_truncate: false,
+            confirmed_destructive: false,
             loading: false,
             running: false,
             progress: Arc::new(Mutex::new((0, None))),
@@ -114,6 +121,7 @@ impl ImportWizard {
         self.manifest_error = None;
         self.rows.clear();
         self._row_subscriptions.clear();
+        self.confirmed_destructive = false;
         self.loading = false;
         self.running = false;
         self.active_task_id = None;
@@ -366,6 +374,7 @@ impl ImportWizard {
     }
 
     fn confirm_destructive_and_run(&mut self, cx: &mut Context<Self>) {
+        self.confirmed_destructive = true;
         self.start_import(cx);
         self.step = WizardStep::Running;
         cx.notify();
@@ -397,7 +406,7 @@ impl ImportWizard {
                 column_overrides: Some(row.config.to_overrides()),
             })
             .collect();
-        let destructive_confirmed = self.rows.iter().any(|row| row.config.is_destructive());
+        let destructive_confirmed = self.confirmed_destructive;
 
         self.running = true;
         self.result_summary = None;
@@ -679,6 +688,7 @@ impl ImportWizard {
                             .ghost()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.step = WizardStep::Configure;
+                                this.confirmed_destructive = false;
                                 cx.notify();
                             })),
                     )
@@ -724,5 +734,112 @@ impl ImportWizard {
                     .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // `use super::*` would re-glob the parent module's `use gpui::*`, and
+    // combining that wildcard with `#[gpui::test]` blows rustc's macro
+    // recursion limit in this crate — import only what the tests need.
+    use super::{AppStateEntity, ImportWizard, TableImportConfig, WizardStep};
+    use dbflux_transfer::TableMappingMode;
+    use dbflux_transfer::manifest::ManifestTable;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext, Entity};
+
+    fn isolated_test_app_state(cx: &mut gpui::TestAppContext) -> Entity<AppStateEntity> {
+        cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
+            })
+        })
+    }
+
+    fn init_test_runtime(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_cx| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+    }
+
+    /// One destructive (`Recreate`) table plan — the shape that must route
+    /// through the Confirm step before `confirmed_destructive` may become
+    /// `true`.
+    fn destructive_table_config() -> TableImportConfig {
+        let manifest_table = ManifestTable {
+            schema: None,
+            name: "users".to_string(),
+            file: "users.csv".to_string(),
+            format: "csv".to_string(),
+            columns: vec![dbflux_core::TransferColumn {
+                name: "id".to_string(),
+                type_name: Some("integer".to_string()),
+                nullable: false,
+                is_primary_key: true,
+            }],
+            row_count: 0,
+            fk_order_index: 0,
+        };
+        let mut config = TableImportConfig::new(&manifest_table, true, Vec::new());
+        config.mapping_mode = TableMappingMode::Recreate;
+        config
+    }
+
+    /// B-003/JD-W2 regression: a destructive plan routes to the Confirm step
+    /// — merely reaching it (without clicking "Yes, proceed") must NOT set
+    /// `confirmed_destructive`. Before the fix this flag didn't exist and the
+    /// engine gate was fed `rows.any(is_destructive)`, which is trivially
+    /// true for exactly this scenario — an always-satisfied (inert) gate.
+    #[gpui::test]
+    fn continue_from_configure_with_a_destructive_plan_leaves_the_confirm_flag_false(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let wizard = cx.update(|cx| cx.new(|cx| ImportWizard::new(app_state, cx)));
+
+        wizard.update(cx, |this, cx| {
+            this.build_rows(vec![destructive_table_config()], cx);
+        });
+        wizard.update(cx, |this, cx| this.continue_from_configure(cx));
+
+        let (step, confirmed) =
+            cx.update(|cx| (wizard.read(cx).step, wizard.read(cx).confirmed_destructive));
+
+        assert!(
+            matches!(step, WizardStep::Confirm),
+            "a destructive plan must route to the Confirm step, not start immediately"
+        );
+        assert!(
+            !confirmed,
+            "reaching the Confirm step must not itself set the confirm flag"
+        );
+    }
+
+    /// B-003/JD-W2 regression: only the explicit "Yes, proceed" action may
+    /// set `confirmed_destructive` — this is what `start_import` reads into
+    /// `ImportOptions::destructive_confirmed`.
+    #[gpui::test]
+    fn confirm_destructive_and_run_sets_the_confirm_flag(cx: &mut gpui::TestAppContext) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let wizard = cx.update(|cx| cx.new(|cx| ImportWizard::new(app_state, cx)));
+
+        wizard.update(cx, |this, cx| {
+            this.build_rows(vec![destructive_table_config()], cx);
+        });
+        wizard.update(cx, |this, cx| this.confirm_destructive_and_run(cx));
+
+        let confirmed = cx.update(|cx| wizard.read(cx).confirmed_destructive);
+        assert!(
+            confirmed,
+            "the explicit Yes-proceed action must set the confirm flag"
+        );
     }
 }
