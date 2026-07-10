@@ -386,20 +386,152 @@ impl<'a> SqlQueryBuilder<'a> {
     }
 }
 
-/// Conservative whitelist grammar for a `CREATE TABLE` column type spec
-/// (SEC-W1). Column types are same-engine strings such as `varchar(255)`,
-/// `numeric(10,2)`, or `int4[]` — never a full expression — so restricting
-/// the character set is sufficient to rule out statement terminators and
-/// comment markers without needing a real SQL parser. Anything outside
-/// letters, digits, underscore, space, parentheses, comma, and array
-/// brackets is rejected.
+/// Structural grammar for a `CREATE TABLE` column type spec (SEC-W1).
+///
+/// A same-engine `type_name` is never a full SQL expression, so this parses
+/// it as: an identifier (optionally schema-qualified with `.`, optionally a
+/// double-quoted identifier, optionally multi-word like `double precision`),
+/// followed by an optional single balanced `(...)` argument list (digits,
+/// commas, spaces, and single-quoted string literals — for `enum`/`set`
+/// values), followed by an optional trailing `[]`. A plain character
+/// whitelist is not enough here: it accepts unbalanced quotes/parens and
+/// still rejects legitimate specs like MySQL `enum('a','b')` or PostgreSQL
+/// `myschema.mytype`, so structure is validated instead of just the charset.
 fn is_safe_column_type_spec(type_name: &str) -> bool {
-    let trimmed = type_name.trim();
+    if type_name.is_empty()
+        || type_name.chars().any(|c| c.is_control())
+        || type_name.contains(';')
+        || type_name.contains("--")
+        || type_name.contains("/*")
+        || type_name.contains("*/")
+        || type_name.contains('\\')
+    {
+        return false;
+    }
 
-    !trimmed.is_empty()
-        && trimmed.chars().all(|c| {
-            c.is_ascii_alphanumeric() || matches!(c, '_' | ' ' | '(' | ')' | ',' | '[' | ']')
-        })
+    let trimmed = type_name.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let chars: Vec<char> = trimmed.chars().collect();
+
+    let Some(mut pos) = parse_type_name(&chars, 0) else {
+        return false;
+    };
+
+    pos = skip_ascii_spaces(&chars, pos);
+
+    if chars.get(pos) == Some(&'(') {
+        let Some(next) = parse_paren_args(&chars, pos) else {
+            return false;
+        };
+        pos = skip_ascii_spaces(&chars, next);
+    }
+
+    if chars.get(pos) == Some(&'[') {
+        if chars.get(pos + 1) != Some(&']') {
+            return false;
+        }
+        pos = skip_ascii_spaces(&chars, pos + 2);
+    }
+
+    pos == chars.len()
+}
+
+fn skip_ascii_spaces(chars: &[char], mut pos: usize) -> usize {
+    while chars.get(pos) == Some(&' ') {
+        pos += 1;
+    }
+    pos
+}
+
+/// Parses one or more identifier segments joined by `.` (schema
+/// qualification) or by whitespace (multi-word names such as
+/// `timestamp with time zone`), stopping right before `(`, `[`, or the end.
+fn parse_type_name(chars: &[char], pos: usize) -> Option<usize> {
+    let mut pos = parse_ident_segment(chars, pos)?;
+
+    loop {
+        if chars.get(pos) == Some(&'.') {
+            match parse_ident_segment(chars, pos + 1) {
+                Some(next) => {
+                    pos = next;
+                    continue;
+                }
+                None => return None,
+            }
+        }
+
+        let spaced = skip_ascii_spaces(chars, pos);
+        if spaced > pos {
+            match parse_ident_segment(chars, spaced) {
+                Some(next) => {
+                    pos = next;
+                    continue;
+                }
+                None => break,
+            }
+        }
+
+        break;
+    }
+
+    Some(pos)
+}
+
+/// Parses either a bare identifier (`[A-Za-z_][A-Za-z0-9_]*`) or a
+/// double-quoted identifier (balanced `"..."`, no embedded quote).
+fn parse_ident_segment(chars: &[char], pos: usize) -> Option<usize> {
+    if chars.get(pos) == Some(&'"') {
+        let mut end = pos + 1;
+        loop {
+            match chars.get(end) {
+                Some('"') if end > pos + 1 => return Some(end + 1),
+                Some(c) if c.is_ascii_alphanumeric() || *c == '_' || *c == ' ' => end += 1,
+                _ => return None,
+            }
+        }
+    }
+
+    let start = pos;
+    if !matches!(chars.get(start), Some(c) if c.is_ascii_alphabetic() || *c == '_') {
+        return None;
+    }
+
+    let mut end = start + 1;
+    while matches!(chars.get(end), Some(c) if c.is_ascii_alphanumeric() || *c == '_') {
+        end += 1;
+    }
+
+    Some(end)
+}
+
+/// Parses a balanced `(...)` argument list containing only digits, commas,
+/// spaces, and single-quoted string literals (`enum`/`set` values).
+fn parse_paren_args(chars: &[char], pos: usize) -> Option<usize> {
+    let mut end = pos + 1;
+
+    loop {
+        match chars.get(end) {
+            Some('\'') => {
+                end += 1;
+                loop {
+                    match chars.get(end) {
+                        Some('\'') => {
+                            end += 1;
+                            break;
+                        }
+                        Some(_) => end += 1,
+                        None => return None,
+                    }
+                }
+            }
+            Some(')') => return Some(end + 1),
+            Some(c) if c.is_ascii_digit() || *c == ',' || *c == ' ' => end += 1,
+            _ => return None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -733,6 +865,11 @@ mod tests {
 
     /// B-005/SEC-W1: legitimate type specs a same-engine schema query or a
     /// well-formed manifest could report must still pass.
+    ///
+    /// A-2-001/B2-001 regression: the original character-whitelist grammar
+    /// rejected MySQL `enum`/`set` type strings (single-quoted values) and
+    /// PostgreSQL schema-qualified or quoted user-defined types, hard-failing
+    /// legitimate same-engine transfers.
     #[test]
     fn test_build_create_table_accepts_legitimate_type_specs() {
         let dialect = DefaultSqlDialect;
@@ -743,6 +880,12 @@ mod tests {
             "numeric(10,2)",
             "int4[]",
             "double precision",
+            "timestamp with time zone",
+            "enum('active','inactive')",
+            "set('a','b','c')",
+            "myschema.mytype",
+            "\"MyEnum\"",
+            "character varying(50)",
         ] {
             let spec = CreateTableSpec {
                 schema: None,
@@ -759,6 +902,46 @@ mod tests {
             assert!(
                 builder.build_create_table(&spec).is_ok(),
                 "legitimate type spec '{type_name}' must be accepted"
+            );
+        }
+    }
+
+    /// A-2-001/B2-001 regression: the grammar rewrite must still reject DDL
+    /// injection attempts, including ones a naive quote/paren allowance could
+    /// otherwise let through (unbalanced quotes/parens, comment markers,
+    /// embedded control characters).
+    #[test]
+    fn test_build_create_table_rejects_additional_ddl_injection_type_names() {
+        let dialect = DefaultSqlDialect;
+        let builder = SqlQueryBuilder::new(&dialect);
+
+        for type_name in [
+            "int; DROP TABLE t",
+            "text -- comment",
+            "text /* c */",
+            "text\nDROP TABLE t",
+            "text\rDROP TABLE t",
+            "enum('a",
+            "text)",
+            "text(",
+        ] {
+            let spec = CreateTableSpec {
+                schema: None,
+                table: "t".to_string(),
+                columns: vec![crate::TransferColumn {
+                    name: "c".to_string(),
+                    type_name: Some(type_name.to_string()),
+                    nullable: true,
+                    is_primary_key: false,
+                }],
+                if_not_exists: false,
+            };
+
+            let result = builder.build_create_table(&spec);
+            assert!(
+                matches!(result, Err(GeneratorError::InvalidColumnType { .. })),
+                "type spec '{type_name}' must be rejected: {:?}",
+                result
             );
         }
     }
