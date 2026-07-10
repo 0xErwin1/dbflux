@@ -1824,12 +1824,17 @@ impl Connection for MysqlConnection {
 
     fn set_referential_integrity(&self, enabled: bool) -> Result<(), DbError> {
         let value = if enabled { 1 } else { 0 };
-        let mut conn = self
-            .catalog_conn
+        // FOREIGN_KEY_CHECKS is session-scoped, so it must be set on the same
+        // session that runs the data-loading INSERTs (query_conn) — not the
+        // separate catalog/metadata session — or the toggle has no effect.
+        let mut state = self
+            .query_conn
             .lock()
             .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
-        conn.query_drop(format!("SET FOREIGN_KEY_CHECKS = {value}"))
+        state
+            .conn
+            .query_drop(format!("SET FOREIGN_KEY_CHECKS = {value}"))
             .map_err(|e| format_mysql_query_error(&e))
     }
 
