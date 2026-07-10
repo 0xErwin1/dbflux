@@ -1,6 +1,9 @@
 //! Table -> File `RowSink`: streams rows into one `schema.table.<ext>` file
-//! per table via `dbflux_export`'s streaming writers, reusing the exact
-//! value-formatting single-shot export uses so output is byte-identical.
+//! per table via `dbflux_export`'s streaming writers. CSV reuses the exact
+//! value-formatting single-shot export uses, so CSV output is byte-identical.
+//! JSON is written as NDJSON (one compact object per line, see
+//! `dbflux_export::JsonStreamWriter`) so `file_source::FileSource` can import
+//! it back in bounded memory instead of buffering the whole file.
 
 use std::fs::File;
 use std::io::BufWriter;
@@ -238,7 +241,7 @@ mod tests {
         let path = dir.join("widgets.json");
         assert!(path.exists());
         let contents = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(contents, "[{\"id\":7}]");
+        assert_eq!(contents, "{\"id\":7}\n");
 
         std::fs::remove_dir_all(&dir).ok();
     }

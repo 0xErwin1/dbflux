@@ -21,8 +21,12 @@ pub struct TransferManifest {
 
 impl TransferManifest {
     /// Manifest schema version written by this build. Bump when the shape of
-    /// `TransferManifest`/`ManifestTable` changes in a way Import must branch on.
-    pub const CURRENT_VERSION: u32 = 1;
+    /// `TransferManifest`/`ManifestTable` changes in a way Import must branch
+    /// on, or when the on-disk table file format changes incompatibly (e.g.
+    /// v1 -> v2: JSON table files switched from a single top-level array to
+    /// NDJSON) — `read_manifest` rejects any other version outright rather
+    /// than letting `FileSource` silently misparse an old bundle.
+    pub const CURRENT_VERSION: u32 = 2;
 }
 
 /// Identifies the connection an export was taken from.
@@ -54,13 +58,27 @@ pub struct ManifestTable {
 /// Reads and parses `manifest.json` at `path`. Import (T20/R3) calls this
 /// first, before touching any target table — a missing or malformed
 /// manifest must fail the whole import with zero writes, not partway
-/// through loading tables.
+/// through loading tables. Also rejects a manifest whose `version` does not
+/// match [`TransferManifest::CURRENT_VERSION`], so an older-format bundle
+/// (e.g. v1's single-array JSON table files) fails fast instead of being
+/// silently misread as the current NDJSON format.
 pub fn read_manifest(path: &Path) -> Result<TransferManifest, TransferError> {
     let contents = std::fs::read_to_string(path)
         .map_err(|e| TransferError::Source(format!("{}: {e}", path.display())))?;
 
-    serde_json::from_str(&contents)
-        .map_err(|e| TransferError::Source(format!("{}: invalid manifest: {e}", path.display())))
+    let manifest: TransferManifest = serde_json::from_str(&contents)
+        .map_err(|e| TransferError::Source(format!("{}: invalid manifest: {e}", path.display())))?;
+
+    if manifest.version != TransferManifest::CURRENT_VERSION {
+        return Err(TransferError::Source(format!(
+            "{}: unsupported manifest version {} (this build reads version {})",
+            path.display(),
+            manifest.version,
+            TransferManifest::CURRENT_VERSION
+        )));
+    }
+
+    Ok(manifest)
 }
 
 #[cfg(test)]
@@ -159,6 +177,29 @@ mod tests {
         let result = read_manifest(&path);
 
         assert!(result.is_err());
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// JD-W1 regression: an older-format manifest (e.g. v1's single-array
+    /// JSON table files) must be rejected outright rather than silently
+    /// misread as the current NDJSON format.
+    #[test]
+    fn read_manifest_rejects_a_mismatched_version() {
+        let path = temp_manifest_path("mismatched_version");
+        let mut manifest = sample_manifest();
+        manifest.version = TransferManifest::CURRENT_VERSION - 1;
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&manifest).expect("serialize manifest"),
+        )
+        .expect("write manifest");
+
+        let result = read_manifest(&path);
+
+        assert!(
+            result.is_err(),
+            "a manifest version mismatch must fail fast, not be silently misread"
+        );
         std::fs::remove_file(&path).ok();
     }
 
