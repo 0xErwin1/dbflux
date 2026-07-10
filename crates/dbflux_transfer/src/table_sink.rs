@@ -365,6 +365,23 @@ impl RowSink for TableSink {
     }
 }
 
+impl Drop for TableSink {
+    /// Closes a transaction left open when the sink is dropped without
+    /// `finish()` or `rollback_on_error()` ever running — e.g. the
+    /// pipeline's SOURCE (not the sink) fails mid-transfer and the `?`
+    /// propagates before `write_chunk`/`finish` get a chance to close it.
+    /// Both normal exit paths already `.take()` `transaction_vocab`, so this
+    /// only fires on that leaked-transaction path. A failed rollback is
+    /// logged rather than propagated — `Drop` must never panic.
+    fn drop(&mut self) {
+        if let Some(vocab) = self.transaction_vocab.take() {
+            self.connection
+                .execute(&QueryRequest::new(vocab.rollback))
+                .log_err();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -974,6 +991,194 @@ mod tests {
         assert!(
             executed[3].starts_with("ROLLBACK"),
             "the data ROLLBACK must not touch the already-autocommitted DDL: {:?}",
+            *executed
+        );
+    }
+
+    /// JDB-001 regression: dropping a `TableSink` whose transaction was
+    /// opened but never closed via `finish()`/`rollback_on_error()` (the
+    /// leaked-transaction case: the pipeline stopped before either ran)
+    /// must still roll back the open transaction instead of leaving it open
+    /// on the shared, long-lived connection.
+    #[test]
+    fn dropping_the_sink_with_an_open_transaction_rolls_it_back() {
+        let connection = Arc::new(FakeConnection::new(
+            DriverCapabilities::TRANSACTIONS,
+            None,
+            None,
+        ));
+        let conn: Arc<dyn Connection> = connection.clone();
+        let mut sink = TableSink::new(conn, None, "t");
+
+        sink.begin(&[column("id", true)], TableMappingMode::Existing)
+            .unwrap();
+        drop(sink);
+
+        let executed = connection.executed_sql.lock().unwrap();
+        assert_eq!(executed.len(), 2, "BEGIN then ROLLBACK: {:?}", *executed);
+        assert!(executed[0].starts_with("BEGIN"));
+        assert!(
+            executed[1].starts_with("ROLLBACK"),
+            "dropping the sink must roll back a still-open transaction: {:?}",
+            *executed
+        );
+    }
+
+    /// JDB-001 regression guard: `Drop` must not double-close a transaction
+    /// that `finish()` already committed.
+    #[test]
+    fn dropping_the_sink_after_a_successful_commit_does_not_rollback_again() {
+        let connection = Arc::new(FakeConnection::new(
+            DriverCapabilities::TRANSACTIONS,
+            None,
+            None,
+        ));
+        let conn: Arc<dyn Connection> = connection.clone();
+        let mut sink = TableSink::new(conn, None, "t");
+
+        sink.begin(&[column("id", true)], TableMappingMode::Existing)
+            .unwrap();
+        sink.write_chunk(&RowChunk(rows(2))).unwrap();
+        sink.finish().unwrap();
+        drop(sink);
+
+        let executed = connection.executed_sql.lock().unwrap();
+        assert_eq!(
+            executed.len(),
+            2,
+            "BEGIN then COMMIT only; Drop must not rollback after a successful commit: {:?}",
+            *executed
+        );
+        assert!(executed[0].starts_with("BEGIN"));
+        assert!(executed[1].starts_with("COMMIT"));
+    }
+
+    /// JDB-001 regression guard: `Drop` must not double-close a transaction
+    /// that a failed `write_chunk` already rolled back.
+    #[test]
+    fn dropping_the_sink_after_a_failed_write_chunk_does_not_rollback_again() {
+        let connection = Arc::new(
+            FakeConnection::new(DriverCapabilities::TRANSACTIONS, None, None)
+                .with_insert_row_failing(),
+        );
+        let conn: Arc<dyn Connection> = connection.clone();
+        let mut sink = TableSink::new(conn, None, "t");
+
+        sink.begin(&[column("id", true)], TableMappingMode::Existing)
+            .unwrap();
+        let result = sink.write_chunk(&RowChunk(rows(2)));
+        assert!(result.is_err(), "the forced insert failure must propagate");
+        drop(sink);
+
+        let executed = connection.executed_sql.lock().unwrap();
+        assert_eq!(
+            executed.len(),
+            2,
+            "BEGIN then ROLLBACK only; Drop must not rollback again after write_chunk already did: {:?}",
+            *executed
+        );
+        assert!(executed[0].starts_with("BEGIN"));
+        assert!(executed[1].starts_with("ROLLBACK"));
+    }
+
+    /// JDB-001 end-to-end regression: when the SOURCE errors mid-transfer
+    /// (not the sink), `run_transfer`'s `?` drops the `TableSink` before
+    /// `write_chunk`'s failure path or `finish()` ever run. The sink's
+    /// `Drop` must still close the transaction opened in `begin()`, so no
+    /// partial load is left dangling open on the shared connection.
+    #[test]
+    fn source_error_mid_transfer_still_rolls_back_the_sinks_open_transaction() {
+        use crate::pipeline::{ColumnMap, RowSource, run_transfer};
+        use dbflux_core::CancelToken;
+
+        struct FailingSecondChunkSource {
+            columns: Vec<TransferColumn>,
+            calls: usize,
+        }
+
+        impl RowSource for FailingSecondChunkSource {
+            fn columns(&self) -> &[TransferColumn] {
+                &self.columns
+            }
+
+            fn next_chunk(
+                &mut self,
+                _cancel: &CancelToken,
+            ) -> Result<Option<RowChunk>, TransferError> {
+                self.calls += 1;
+                if self.calls == 1 {
+                    Ok(Some(RowChunk(rows(2))))
+                } else {
+                    Err(TransferError::Source(
+                        "simulated source read failure".to_string(),
+                    ))
+                }
+            }
+
+            fn estimated_total(&self) -> Option<u64> {
+                None
+            }
+        }
+
+        struct IdentityColumnMap {
+            columns: Vec<TransferColumn>,
+        }
+
+        impl ColumnMap for IdentityColumnMap {
+            fn project(&self, src: &[Value]) -> Vec<Value> {
+                src.to_vec()
+            }
+
+            fn target_columns(&self) -> &[TransferColumn] {
+                &self.columns
+            }
+        }
+
+        let connection = Arc::new(FakeConnection::new(
+            DriverCapabilities::TRANSACTIONS,
+            None,
+            None,
+        ));
+        let conn: Arc<dyn Connection> = connection.clone();
+        let columns = vec![column("id", true)];
+        let mut source = FailingSecondChunkSource {
+            columns: columns.clone(),
+            calls: 0,
+        };
+        let column_map = IdentityColumnMap {
+            columns: columns.clone(),
+        };
+        let mut sink = TableSink::new(conn, None, "t");
+        let cancel = CancelToken::new();
+
+        let result = run_transfer(
+            &mut source,
+            &column_map,
+            &mut sink,
+            TableMappingMode::Existing,
+            &cancel,
+            &mut |_, _| {},
+        );
+        assert!(
+            result.is_err(),
+            "the simulated source read failure must propagate"
+        );
+        drop(sink);
+
+        let executed = connection.executed_sql.lock().unwrap();
+        assert!(
+            executed[0].starts_with("BEGIN"),
+            "begin() must still open the transaction: {:?}",
+            *executed
+        );
+        assert!(
+            executed.iter().any(|s| s.starts_with("ROLLBACK")),
+            "the sink's Drop must roll back the transaction the source-error path left open: {:?}",
+            *executed
+        );
+        assert!(
+            !executed.iter().any(|s| s.starts_with("COMMIT")),
+            "chunk 1's insert must never be committed once the source fails on chunk 2: {:?}",
             *executed
         );
     }
