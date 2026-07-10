@@ -3,7 +3,7 @@ use crate::data::crud::{
     ColumnAssignment, RecordIdentity, RowDelete, RowInsert, RowPatch, SqlDeleteRequest,
     SqlUpdateRequest, SqlUpsertRequest,
 };
-use crate::query::generator::CreateTableSpec;
+use crate::query::generator::{CreateTableSpec, GeneratorError};
 use crate::render_semantic_filter_sql;
 use crate::sql::dialect::SqlDialect;
 
@@ -169,7 +169,14 @@ impl<'a> SqlQueryBuilder<'a> {
     /// Column type, nullability, and primary-key membership map 1:1 from
     /// `spec.columns` since the source and target share the same SQL dialect
     /// family; no cross-dialect type coercion is attempted.
-    pub fn build_create_table(&self, spec: &CreateTableSpec) -> String {
+    ///
+    /// Each column's `type_name` is validated against a conservative type-spec
+    /// grammar (SEC-W1) before interpolation: on Import, `type_name` comes
+    /// from an external `manifest.json` (bundles are shareable), so a crafted
+    /// value like `TEXT); DROP TABLE users; --` must be rejected rather than
+    /// emitted as arbitrary DDL. Column names are already escaped via
+    /// `quote_identifier`; this closes the same gap for the type string.
+    pub fn build_create_table(&self, spec: &CreateTableSpec) -> Result<String, GeneratorError> {
         let table_ref = self
             .dialect
             .qualified_table(spec.schema.as_deref(), &spec.table);
@@ -185,11 +192,20 @@ impl<'a> SqlQueryBuilder<'a> {
 
         for column in &spec.columns {
             let mut line = match &column.type_name {
-                Some(type_name) => format!(
-                    "    {} {}",
-                    self.dialect.quote_identifier(&column.name),
-                    type_name
-                ),
+                Some(type_name) => {
+                    if !is_safe_column_type_spec(type_name) {
+                        return Err(GeneratorError::InvalidColumnType {
+                            column: column.name.clone(),
+                            type_name: type_name.clone(),
+                        });
+                    }
+
+                    format!(
+                        "    {} {}",
+                        self.dialect.quote_identifier(&column.name),
+                        type_name
+                    )
+                }
                 None => format!("    {}", self.dialect.quote_identifier(&column.name)),
             };
 
@@ -214,7 +230,7 @@ impl<'a> SqlQueryBuilder<'a> {
             "CREATE TABLE"
         };
 
-        format!("{prefix} {table_ref} (\n{}\n);", lines.join(",\n"))
+        Ok(format!("{prefix} {table_ref} (\n{}\n);", lines.join(",\n")))
     }
 
     /// Build an UPSERT statement from a semantic request.
@@ -368,6 +384,22 @@ impl<'a> SqlQueryBuilder<'a> {
             .collect::<Vec<_>>()
             .join(", ")
     }
+}
+
+/// Conservative whitelist grammar for a `CREATE TABLE` column type spec
+/// (SEC-W1). Column types are same-engine strings such as `varchar(255)`,
+/// `numeric(10,2)`, or `int4[]` — never a full expression — so restricting
+/// the character set is sufficient to rule out statement terminators and
+/// comment markers without needing a real SQL parser. Anything outside
+/// letters, digits, underscore, space, parentheses, comma, and array
+/// brackets is rejected.
+fn is_safe_column_type_spec(type_name: &str) -> bool {
+    let trimmed = type_name.trim();
+
+    !trimmed.is_empty()
+        && trimmed.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '_' | ' ' | '(' | ')' | ',' | '[' | ']')
+        })
 }
 
 #[cfg(test)]
@@ -643,7 +675,7 @@ mod tests {
             if_not_exists: false,
         };
 
-        let sql = builder.build_create_table(&spec);
+        let sql = builder.build_create_table(&spec).unwrap();
         assert_eq!(
             sql,
             "CREATE TABLE \"public\".\"users\" (\n    \"id\" integer NOT NULL,\n    \"name\" text,\n    PRIMARY KEY (\"id\")\n);"
@@ -667,8 +699,68 @@ mod tests {
             if_not_exists: true,
         };
 
-        let sql = builder.build_create_table(&spec);
+        let sql = builder.build_create_table(&spec).unwrap();
         assert!(sql.starts_with("CREATE TABLE IF NOT EXISTS \"logs\" ("));
+    }
+
+    /// B-005/SEC-W1 regression: a column `type_name` carrying a statement
+    /// terminator/comment marker must be rejected instead of interpolated
+    /// into DDL — the manifest.json `type_name` on Import is external input.
+    #[test]
+    fn test_build_create_table_rejects_a_ddl_injection_type_name() {
+        let dialect = DefaultSqlDialect;
+        let builder = SqlQueryBuilder::new(&dialect);
+
+        let spec = CreateTableSpec {
+            schema: None,
+            table: "users".to_string(),
+            columns: vec![crate::TransferColumn {
+                name: "id".to_string(),
+                type_name: Some("TEXT); DROP TABLE users; --".to_string()),
+                nullable: true,
+                is_primary_key: false,
+            }],
+            if_not_exists: false,
+        };
+
+        let result = builder.build_create_table(&spec);
+        assert!(
+            matches!(result, Err(GeneratorError::InvalidColumnType { .. })),
+            "a crafted type_name must be rejected, not interpolated into DDL: {:?}",
+            result
+        );
+    }
+
+    /// B-005/SEC-W1: legitimate type specs a same-engine schema query or a
+    /// well-formed manifest could report must still pass.
+    #[test]
+    fn test_build_create_table_accepts_legitimate_type_specs() {
+        let dialect = DefaultSqlDialect;
+        let builder = SqlQueryBuilder::new(&dialect);
+
+        for type_name in [
+            "varchar(255)",
+            "numeric(10,2)",
+            "int4[]",
+            "double precision",
+        ] {
+            let spec = CreateTableSpec {
+                schema: None,
+                table: "t".to_string(),
+                columns: vec![crate::TransferColumn {
+                    name: "c".to_string(),
+                    type_name: Some(type_name.to_string()),
+                    nullable: true,
+                    is_primary_key: false,
+                }],
+                if_not_exists: false,
+            };
+
+            assert!(
+                builder.build_create_table(&spec).is_ok(),
+                "legitimate type spec '{type_name}' must be accepted"
+            );
+        }
     }
 
     #[test]

@@ -770,6 +770,105 @@ mod tests {
         assert!(report.warnings[0].contains("skipped"));
     }
 
+    /// Connection wired with the REAL SQL-backed generator (not a fake),
+    /// so `begin(..., Create)` exercises the actual `build_create_table`
+    /// DDL-safety validation (B-005/SEC-W1) end to end.
+    struct RealGeneratorConnection {
+        executed_sql: Mutex<Vec<String>>,
+        metadata: DriverMetadata,
+        generator: dbflux_core::SqlMutationGenerator,
+    }
+
+    impl RealGeneratorConnection {
+        fn new() -> Self {
+            let metadata = dbflux_core::DriverMetadataBuilder::new(
+                "fake",
+                "Fake",
+                dbflux_core::DatabaseCategory::Relational,
+                QueryLanguage::Sql,
+            )
+            .capabilities(DriverCapabilities::empty())
+            .build();
+
+            Self {
+                executed_sql: Mutex::new(Vec::new()),
+                metadata,
+                generator: dbflux_core::SqlMutationGenerator::new(&DIALECT),
+            }
+        }
+    }
+
+    impl Connection for RealGeneratorConnection {
+        fn metadata(&self) -> &DriverMetadata {
+            &self.metadata
+        }
+
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+            self.executed_sql.lock().unwrap().push(req.sql.clone());
+            Ok(QueryResult::empty())
+        }
+
+        fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Err(DbError::NotSupported("stub".to_string()))
+        }
+
+        fn kind(&self) -> DbKind {
+            DbKind::SQLite
+        }
+
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            SchemaLoadingStrategy::SingleDatabase
+        }
+
+        fn dialect(&self) -> &dyn SqlDialect {
+            &DIALECT
+        }
+
+        fn query_generator(&self) -> Option<&dyn QueryGenerator> {
+            Some(&self.generator)
+        }
+    }
+
+    /// B-005/SEC-W1 regression: `Create` mode must not execute DDL built
+    /// from a crafted `type_name` — `begin()` must error out before
+    /// `execute()` is ever called.
+    #[test]
+    fn create_mode_rejects_a_ddl_injection_type_name_without_touching_the_connection() {
+        let connection = Arc::new(RealGeneratorConnection::new());
+        let conn: Arc<dyn Connection> = connection.clone();
+        let mut sink = TableSink::new(conn, None, "t");
+
+        let malicious_column = TransferColumn {
+            name: "id".to_string(),
+            type_name: Some("TEXT); DROP TABLE users; --".to_string()),
+            nullable: true,
+            is_primary_key: false,
+        };
+
+        let result = sink.begin(&[malicious_column], TableMappingMode::Create);
+
+        assert!(
+            result.is_err(),
+            "a crafted type_name must reject Create mode, not build DDL from it"
+        );
+        assert!(
+            connection.executed_sql.lock().unwrap().is_empty(),
+            "no DDL must ever reach execute() for a rejected type_name"
+        );
+    }
+
     fn default_limits() -> DriverLimits {
         DriverLimits {
             max_query_length: 0,

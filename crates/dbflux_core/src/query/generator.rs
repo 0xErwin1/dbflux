@@ -252,6 +252,11 @@ pub enum GeneratorError {
     EmptyAssignments,
     #[error("unsupported spec: {0}")]
     Unsupported(String),
+    /// A column `type_name` failed the DDL-safety whitelist (SEC-W1) — most
+    /// commonly hit on Import, where `type_name` comes from an external
+    /// `manifest.json` rather than a same-engine schema query.
+    #[error("column '{column}' has an invalid type spec '{type_name}'")]
+    InvalidColumnType { column: String, type_name: String },
 }
 
 /// Output of `generate_update_from_spec` / `generate_delete_from_spec`.
@@ -848,7 +853,7 @@ impl QueryGenerator for SqlMutationGenerator {
 
         Ok(Some(GeneratedQuery {
             language: QueryLanguage::Sql,
-            text: builder.build_create_table(spec),
+            text: builder.build_create_table(spec)?,
         }))
     }
 }
