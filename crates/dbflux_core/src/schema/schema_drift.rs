@@ -1,5 +1,5 @@
 use crate::schema::query_parser::QueryTableRef;
-use crate::{IndexData, IndexInfo, TableInfo, TableRef};
+use crate::{ForeignKeyInfo, IndexData, IndexInfo, TableInfo, TableRef};
 
 /// Snapshot of a column's schema-relevant properties.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,19 +207,20 @@ pub fn diff_table_info(before: &TableInfo, after: &TableInfo) -> Vec<SchemaChang
         });
     }
 
-    // Detect foreign key set changes (simplified: any difference triggers the variant).
+    // Detect foreign key set changes (simplified: any difference triggers the
+    // variant). Compared as a SET rather than positionally: drivers are not
+    // guaranteed to return foreign keys in a stable order, so a positional
+    // zip would report a false change whenever the same FK set comes back in
+    // a different order.
     let before_fks = before.foreign_keys.as_deref().unwrap_or(&[]);
     let after_fks = after.foreign_keys.as_deref().unwrap_or(&[]);
 
-    let fk_changed = before_fks.len() != after_fks.len()
-        || before_fks.iter().zip(after_fks.iter()).any(|(b, a)| {
-            b.columns != a.columns
-                || b.referenced_table != a.referenced_table
-                || b.referenced_schema != a.referenced_schema
-                || b.referenced_columns != a.referenced_columns
-        });
+    let mut before_fk_signatures: Vec<_> = before_fks.iter().map(foreign_key_signature).collect();
+    let mut after_fk_signatures: Vec<_> = after_fks.iter().map(foreign_key_signature).collect();
+    before_fk_signatures.sort();
+    after_fk_signatures.sort();
 
-    if fk_changed {
+    if before_fk_signatures != after_fk_signatures {
         changes.push(SchemaChange::ForeignKeyChanged);
     }
 
@@ -241,6 +242,21 @@ pub fn diff_table_info(before: &TableInfo, after: &TableInfo) -> Vec<SchemaChang
     }
 
     changes
+}
+
+/// Comparable, order-independent identity for a foreign key: the fields that
+/// determine whether two FKs describe the same relationship. `name`,
+/// `on_delete`, and `on_update` are intentionally excluded, matching the
+/// fields the previous positional comparison inspected.
+fn foreign_key_signature(
+    fk: &ForeignKeyInfo,
+) -> (Vec<String>, String, Option<String>, Vec<String>) {
+    (
+        fk.columns.clone(),
+        fk.referenced_table.clone(),
+        fk.referenced_schema.clone(),
+        fk.referenced_columns.clone(),
+    )
 }
 
 /// Non-primary-key indexes declared on `table`, treating a missing/lazy or
@@ -615,6 +631,42 @@ mod tests {
             changes
                 .iter()
                 .any(|c| matches!(c, SchemaChange::ForeignKeyChanged))
+        );
+    }
+
+    #[test]
+    fn foreign_key_set_reordered_is_not_reported_as_changed() {
+        let fk_org = ForeignKeyInfo {
+            name: "fk_org".to_string(),
+            columns: vec!["org_id".to_string()],
+            referenced_table: "orgs".to_string(),
+            referenced_schema: None,
+            referenced_columns: vec!["id".to_string()],
+            on_delete: None,
+            on_update: None,
+        };
+        let fk_team = ForeignKeyInfo {
+            name: "fk_team".to_string(),
+            columns: vec!["team_id".to_string()],
+            referenced_table: "teams".to_string(),
+            referenced_schema: None,
+            referenced_columns: vec!["id".to_string()],
+            on_delete: None,
+            on_update: None,
+        };
+
+        let mut before = make_table(vec![col("id", "integer", false, true)]);
+        before.foreign_keys = Some(vec![fk_org.clone(), fk_team.clone()]);
+
+        let mut after = before.clone();
+        after.foreign_keys = Some(vec![fk_team, fk_org]);
+
+        let changes = diff_table_info(&before, &after);
+        assert!(
+            !changes
+                .iter()
+                .any(|c| matches!(c, SchemaChange::ForeignKeyChanged)),
+            "same FK set in a different order must not report ForeignKeyChanged, got {changes:?}"
         );
     }
 
