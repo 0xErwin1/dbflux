@@ -15,6 +15,7 @@ mod data_view;
 pub mod data_view_trait;
 pub mod dedup;
 pub mod query_builder;
+pub mod schema_diff;
 mod style_guardrails;
 
 #[cfg(feature = "mcp")]
