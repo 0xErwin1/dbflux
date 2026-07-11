@@ -70,6 +70,49 @@ struct SelectedTableWork {
     table_action: Option<(TableLevelAction, ExecutionClassification)>,
 }
 
+/// Explicit lifecycle of the diff computation. Separates a genuine failure
+/// (`Error`) from a clean, successful comparison that simply found no
+/// differences (`Empty`); the two were previously conflated behind a single
+/// `status_message`, which made an identical-schema result render as an error.
+enum ComputeState {
+    /// No comparison has run yet.
+    Idle,
+    /// A comparison (or an apply that re-runs the comparison) is in progress.
+    Loading,
+    /// The comparison failed with a fatal error to surface to the user.
+    Error(String),
+    /// The comparison succeeded and found no differences.
+    Empty,
+    /// The comparison succeeded and produced at least one diff group.
+    Diff,
+}
+
+/// Maps the compute lifecycle onto the document chrome state. A clean no-diff
+/// result (`Empty`) is a healthy `Clean` state — NOT an error — which is the
+/// whole point of separating `Empty` from `Error`.
+fn document_state_for(state: &ComputeState) -> DocumentState {
+    match state {
+        ComputeState::Loading => DocumentState::Loading,
+        ComputeState::Error(_) => DocumentState::Error,
+        ComputeState::Idle | ComputeState::Empty | ComputeState::Diff => DocumentState::Clean,
+    }
+}
+
+/// Successful multi-table apply summary (FIX-6 aggregate reporting).
+struct ApplyRunOutcome {
+    statements_applied: usize,
+    tables_applied: usize,
+}
+
+/// Multi-table apply failure carrying the running progress so the user learns
+/// how many tables committed before the stop and which one failed.
+struct ApplyRunFailure {
+    failed_table: String,
+    tables_applied: usize,
+    statements_applied: usize,
+    message: String,
+}
+
 /// The schema-diff & apply document entity.
 pub struct SchemaDiffDocument {
     id: DocumentId,
@@ -94,9 +137,7 @@ pub struct SchemaDiffDocument {
     /// snapshot-to-live mode is selected.
     snapshots: Vec<dbflux_storage::repositories::sch_schema_snapshots::SchemaSnapshotSummary>,
 
-    is_loading: bool,
-    has_computed: bool,
-    status_message: Option<String>,
+    compute_state: ComputeState,
     pending_toast: Option<PendingToast>,
 
     sql_preview_modal: Entity<SqlPreviewModal>,
@@ -145,9 +186,7 @@ impl SchemaDiffDocument {
             selected: HashSet::new(),
             selected_table_actions: HashSet::new(),
             snapshots: Vec::new(),
-            is_loading: false,
-            has_computed: false,
-            status_message: None,
+            compute_state: ComputeState::Idle,
             pending_toast: None,
             sql_preview_modal,
             confirm_modal,
@@ -170,13 +209,11 @@ impl SchemaDiffDocument {
     }
 
     pub fn state(&self) -> DocumentState {
-        if self.is_loading {
-            DocumentState::Loading
-        } else if self.status_message.is_some() && self.groups.is_empty() && self.has_computed {
-            DocumentState::Error
-        } else {
-            DocumentState::Clean
-        }
+        document_state_for(&self.compute_state)
+    }
+
+    fn is_busy(&self) -> bool {
+        matches!(self.compute_state, ComputeState::Loading)
     }
 
     pub fn connection_id(&self) -> Option<Uuid> {
@@ -218,7 +255,7 @@ impl SchemaDiffDocument {
             return;
         }
         self.picker.mode = mode;
-        self.has_computed = false;
+        self.compute_state = ComputeState::Idle;
         self.groups.clear();
         self.selected.clear();
         self.selected_table_actions.clear();
@@ -241,7 +278,7 @@ impl SchemaDiffDocument {
 
     fn select_snapshot(&mut self, snapshot_id: Uuid, cx: &mut Context<Self>) {
         self.picker.selected_snapshot = Some(snapshot_id);
-        self.has_computed = false;
+        self.compute_state = ComputeState::Idle;
         self.groups.clear();
         self.selected.clear();
         self.selected_table_actions.clear();
@@ -250,9 +287,8 @@ impl SchemaDiffDocument {
 
     fn select_reference_profile(&mut self, other_profile_id: Uuid, cx: &mut Context<Self>) {
         self.picker.mode = DiffMode::LiveVsLive;
-        // Reuse selected_snapshot? No — store reference profile separately.
         self.reference_profile = Some(other_profile_id);
-        self.has_computed = false;
+        self.compute_state = ComputeState::Idle;
         self.groups.clear();
         self.selected.clear();
         self.selected_table_actions.clear();
@@ -265,8 +301,8 @@ impl SchemaDiffDocument {
         let state = self.app_state.read(cx);
 
         let Some(target) = state.connections().get(&self.profile_id) else {
-            self.status_message = Some("Target connection is no longer available.".to_string());
-            self.has_computed = true;
+            self.compute_state =
+                ComputeState::Error("Target connection is no longer available.".to_string());
             cx.notify();
             return;
         };
@@ -283,16 +319,16 @@ impl SchemaDiffDocument {
         let reference_plan = match self.picker.mode {
             DiffMode::LiveVsLive => {
                 let Some(other_id) = self.reference_profile else {
-                    self.status_message =
-                        Some("Pick a second live connection to compare against.".to_string());
-                    self.has_computed = true;
+                    self.compute_state = ComputeState::Error(
+                        "Pick a second live connection to compare against.".to_string(),
+                    );
                     cx.notify();
                     return;
                 };
                 let Some(other) = state.connections().get(&other_id) else {
-                    self.status_message =
-                        Some("The chosen reference connection is not connected.".to_string());
-                    self.has_computed = true;
+                    self.compute_state = ComputeState::Error(
+                        "The chosen reference connection is not connected.".to_string(),
+                    );
                     cx.notify();
                     return;
                 };
@@ -310,23 +346,22 @@ impl SchemaDiffDocument {
             }
             DiffMode::SnapshotVsLive => {
                 let Some(snapshot_id) = self.picker.selected_snapshot else {
-                    self.status_message = Some("Pick a snapshot to compare against.".to_string());
-                    self.has_computed = true;
+                    self.compute_state =
+                        ComputeState::Error("Pick a snapshot to compare against.".to_string());
                     cx.notify();
                     return;
                 };
                 match state.schema_snapshots.get(&snapshot_id.to_string()) {
                     Ok(Some(record)) => SidePlan::Resolved(record.tables),
                     Ok(None) => {
-                        self.status_message =
-                            Some("Selected snapshot no longer exists.".to_string());
-                        self.has_computed = true;
+                        self.compute_state =
+                            ComputeState::Error("Selected snapshot no longer exists.".to_string());
                         cx.notify();
                         return;
                     }
                     Err(e) => {
-                        self.status_message = Some(format!("Failed to load snapshot: {e}"));
-                        self.has_computed = true;
+                        self.compute_state =
+                            ComputeState::Error(format!("Failed to load snapshot: {e}"));
                         cx.notify();
                         return;
                     }
@@ -334,44 +369,56 @@ impl SchemaDiffDocument {
             }
         };
 
-        self.is_loading = true;
-        self.status_message = None;
+        self.compute_state = ComputeState::Loading;
         cx.notify();
 
         let target_db_for_task = target_db.clone();
 
         let task = cx.background_executor().spawn(async move {
             // `before` = target live (DDL applies here); `after` = reference.
+            // A failed `table_details` on EITHER side aborts the comparison
+            // with a clear error instead of silently degrading to a
+            // column-less entry, which would produce a wrong/destructive diff.
             let before = deep_resolve(
                 &*target_connection,
                 target_db_for_task.as_deref(),
                 &target_shallow,
-            );
+            )?;
             let after = match reference_plan {
                 SidePlan::Live {
                     connection,
                     database,
                     shallow,
-                } => deep_resolve(&*connection, database.as_deref(), &shallow),
+                } => deep_resolve(&*connection, database.as_deref(), &shallow)?,
                 SidePlan::Resolved(tables) => tables,
             };
 
             let table_changes = diff_schema(&before, &after);
-            build_groups(&*target_connection, table_changes)
+            Ok::<Vec<TableDiffGroup>, String>(build_groups(&*target_connection, table_changes))
         });
 
         cx.spawn(async move |this, cx| {
-            let groups = task.await;
+            let result = task.await;
             cx.update(|cx| {
                 this.update(cx, |doc, cx| {
-                    doc.is_loading = false;
-                    doc.has_computed = true;
-                    doc.groups = groups;
-                    doc.selected = doc.default_selection();
-                    doc.selected_table_actions = doc.default_table_action_selection();
-                    if doc.groups.is_empty() {
-                        doc.status_message =
-                            Some("No differences found between the two schemas.".to_string());
+                    match result {
+                        Ok(groups) => {
+                            doc.groups = groups;
+                            doc.selected = doc.default_selection();
+                            doc.selected_table_actions = doc.default_table_action_selection();
+                            doc.compute_state = if doc.groups.is_empty() {
+                                ComputeState::Empty
+                            } else {
+                                ComputeState::Diff
+                            };
+                        }
+                        Err(message) => {
+                            doc.groups.clear();
+                            doc.selected.clear();
+                            doc.selected_table_actions.clear();
+                            doc.compute_state = ComputeState::Error(message.clone());
+                            report_error(UserFacingError::new(ErrorKind::Driver, message), cx);
+                        }
                     }
                     cx.notify();
                 })
@@ -485,24 +532,18 @@ impl SchemaDiffDocument {
 
     // ── Preview ───────────────────────────────────────────────────────────
 
-    fn open_preview(&mut self, cx: &mut Context<Self>) {
+    /// Builds the joined DDL string for the current selection, running the same
+    /// generation seam the apply path uses. Shared by both the preview surface
+    /// and the confirm-dialog body so the two can never drift in how they
+    /// build or error on the SQL.
+    fn build_selected_sql(&self, cx: &Context<Self>) -> Result<String, String> {
         let selected = self.selected_changes_by_table();
         if selected.is_empty() {
-            self.pending_toast = Some(PendingToast {
-                message: "Select at least one change to preview.".to_string(),
-                is_error: true,
-            });
-            cx.notify();
-            return;
+            return Err("Select at least one change first.".to_string());
         }
 
         let Some(connection) = self.app_state.read(cx).get_connection(self.profile_id) else {
-            self.pending_toast = Some(PendingToast {
-                message: "Target connection is no longer available.".to_string(),
-                is_error: true,
-            });
-            cx.notify();
-            return;
+            return Err("Target connection is no longer available.".to_string());
         };
 
         let mut statements: Vec<String> = Vec::new();
@@ -515,20 +556,25 @@ impl SchemaDiffDocument {
                     policy: MutationPolicy::Allowed,
                 },
             );
-            match executor.preview_statements() {
-                Ok(stmts) => statements.extend(stmts),
-                Err(e) => {
-                    self.pending_toast = Some(PendingToast {
-                        message: format!("Cannot build preview: {e}"),
-                        is_error: true,
-                    });
-                    cx.notify();
-                    return;
-                }
-            }
+            let stmts = executor
+                .preview_statements()
+                .map_err(|e| format!("Cannot build DDL: {e}"))?;
+            statements.extend(stmts);
         }
 
-        self.pending_preview = Some(statements.join(";\n\n") + ";");
+        Ok(statements.join(";\n\n") + ";")
+    }
+
+    fn open_preview(&mut self, cx: &mut Context<Self>) {
+        match self.build_selected_sql(cx) {
+            Ok(sql) => self.pending_preview = Some(sql),
+            Err(message) => {
+                self.pending_toast = Some(PendingToast {
+                    message,
+                    is_error: true,
+                });
+            }
+        }
         cx.notify();
     }
 
@@ -554,29 +600,20 @@ impl SchemaDiffDocument {
             self.database.as_deref().unwrap_or("this connection")
         );
 
-        // Build a read-only DDL preview string for the confirm body.
-        let sql_preview = self
-            .app_state
-            .read(cx)
-            .get_connection(self.profile_id)
-            .map(|connection| {
-                let mut statements = Vec::new();
-                for work in selected.iter().cloned() {
-                    let executor = build_executor_for_work(
-                        work,
-                        DdlApplyDeps {
-                            connection: Arc::clone(&connection),
-                            event_sink: None,
-                            policy: MutationPolicy::Allowed,
-                        },
-                    );
-                    if let Ok(stmts) = executor.preview_statements() {
-                        statements.extend(stmts);
-                    }
-                }
-                statements.join(";\n\n") + ";"
-            })
-            .unwrap_or_default();
+        // Build a read-only DDL preview string for the confirm body through the
+        // same helper the preview surface uses; if it cannot even be generated,
+        // refuse to open the confirm dialog rather than applying blind.
+        let sql_preview = match self.build_selected_sql(cx) {
+            Ok(sql) => sql,
+            Err(message) => {
+                self.pending_toast = Some(PendingToast {
+                    message,
+                    is_error: true,
+                });
+                cx.notify();
+                return;
+            }
+        };
 
         self.pending_confirm = Some(MutationConfirmHardRequest {
             summary,
@@ -634,14 +671,17 @@ impl SchemaDiffDocument {
             return;
         }
 
-        self.is_loading = true;
+        self.compute_state = ComputeState::Loading;
         cx.notify();
 
-        let cancel = crate::task_runner::MutationCancelHandle::new();
+        let total_tables = selected.len();
 
         let task = cx.background_executor().spawn(async move {
-            let mut applied = 0usize;
+            let mut statements_applied = 0usize;
+            let mut tables_applied = 0usize;
+
             for work in selected {
+                let table_label = qualified(&work.table);
                 let executor = build_executor_for_work(
                     work,
                     DdlApplyDeps {
@@ -650,38 +690,78 @@ impl SchemaDiffDocument {
                         policy,
                     },
                 );
-                match executor.apply(&cancel) {
+                match executor.apply() {
                     Ok(DdlApplyOutcome::Success {
                         statements_executed,
                         ..
-                    }) => applied += statements_executed,
-                    Ok(other) => {
-                        return Err(format!("Apply stopped: {other:?}"));
+                    }) => {
+                        statements_applied += statements_executed;
+                        tables_applied += 1;
                     }
-                    Err(e) => return Err(e.to_string()),
+                    Ok(other) => {
+                        return Err(ApplyRunFailure {
+                            failed_table: table_label,
+                            tables_applied,
+                            statements_applied,
+                            message: format!("apply stopped: {other:?}"),
+                        });
+                    }
+                    Err(e) => {
+                        return Err(ApplyRunFailure {
+                            failed_table: table_label,
+                            tables_applied,
+                            statements_applied,
+                            message: e.to_string(),
+                        });
+                    }
                 }
             }
-            Ok(applied)
+
+            Ok(ApplyRunOutcome {
+                statements_applied,
+                tables_applied,
+            })
         });
 
         cx.spawn(async move |this, cx| {
             let result = task.await;
             cx.update(|cx| {
                 this.update(cx, |doc, cx| {
-                    doc.is_loading = false;
                     match result {
-                        Ok(applied) => {
+                        Ok(outcome) => {
                             doc.pending_toast = Some(PendingToast {
-                                message: format!("Applied {applied} DDL statement(s)."),
+                                message: format!(
+                                    "Applied {} DDL statement(s) across {} table(s).",
+                                    outcome.statements_applied, outcome.tables_applied
+                                ),
                                 is_error: false,
                             });
                             // Re-run the diff so the list reflects the new state.
-                            doc.has_computed = false;
+                            doc.compute_state = ComputeState::Idle;
                             doc.groups.clear();
                             doc.selected.clear();
                             doc.selected_table_actions.clear();
                         }
-                        Err(message) => {
+                        Err(failure) => {
+                            let not_attempted = total_tables
+                                .saturating_sub(failure.tables_applied + 1);
+                            let message = format!(
+                                "Applied {} of {} table(s) ({} DDL statement(s)) before failing on {}: {}. \
+                                 {} table(s) were not attempted.",
+                                failure.tables_applied,
+                                total_tables,
+                                failure.statements_applied,
+                                failure.failed_table,
+                                failure.message,
+                                not_attempted
+                            );
+                            // Keep the current diff visible so the user can retry
+                            // the tables that did not apply.
+                            doc.compute_state = if doc.groups.is_empty() {
+                                ComputeState::Empty
+                            } else {
+                                ComputeState::Diff
+                            };
                             report_error(UserFacingError::new(ErrorKind::Driver, message), cx);
                         }
                     }
@@ -766,21 +846,35 @@ enum SidePlan {
 }
 
 /// Back-fills full column/index detail for every shallow table via
-/// `table_details`, keeping the shallow entry on a per-table failure.
+/// `table_details`. A failure is propagated as an error rather than silently
+/// degrading to the column-less shallow entry: a missing column set would make
+/// the diff engine see every column as dropped, producing a wrong and
+/// potentially destructive apply plan. Aborting the whole comparison is the
+/// only safe response.
 fn deep_resolve(
     connection: &dyn Connection,
     database: Option<&str>,
     shallow: &[TableInfo],
-) -> Vec<TableInfo> {
+) -> Result<Vec<TableInfo>, String> {
     let db = database.unwrap_or_default();
-    shallow
-        .iter()
-        .map(|table| {
-            connection
-                .table_details(db, table.schema.as_deref(), &table.name)
-                .unwrap_or_else(|_| table.clone())
-        })
-        .collect()
+    let mut resolved = Vec::with_capacity(shallow.len());
+
+    for table in shallow {
+        let details = connection
+            .table_details(db, table.schema.as_deref(), &table.name)
+            .map_err(|e| {
+                format!(
+                    "Failed to load column details for {}: {e}. The comparison was aborted to avoid a wrong diff.",
+                    qualified(&TableRef {
+                        schema: table.schema.clone(),
+                        name: table.name.clone(),
+                    })
+                )
+            })?;
+        resolved.push(details);
+    }
+
+    Ok(resolved)
 }
 
 /// Turns raw `TableChange`s into render groups, partitioning modified tables via
@@ -1027,7 +1121,7 @@ impl SchemaDiffDocument {
                     .child(self.primary_button(
                         "compute-diff",
                         "Compute Diff",
-                        self.can_compute() && !self.is_loading,
+                        self.can_compute() && !self.is_busy(),
                         cx,
                         |this, _w, cx| this.compute_diff(cx),
                     )),
@@ -1173,32 +1267,38 @@ impl SchemaDiffDocument {
     fn render_diff_list(&self, cx: &mut Context<Self>) -> AnyElement {
         let background = cx.theme().background;
 
-        if self.is_loading {
-            return div()
-                .p(Spacing::LG)
-                .child(Text::body("Computing diff…").muted_foreground())
-                .into_any_element();
-        }
-
-        if !self.has_computed {
-            return div()
-                .p(Spacing::LG)
-                .child(
-                    Text::body("Pick a source and run Compute Diff to see schema changes.")
-                        .muted_foreground(),
-                )
-                .into_any_element();
-        }
-
-        if self.groups.is_empty() {
-            let message = self
-                .status_message
-                .clone()
-                .unwrap_or_else(|| "No differences found.".to_string());
-            return div()
-                .p(Spacing::LG)
-                .child(Text::body(message).muted_foreground())
-                .into_any_element();
+        match &self.compute_state {
+            ComputeState::Loading => {
+                return div()
+                    .p(Spacing::LG)
+                    .child(Text::body("Computing diff…").muted_foreground())
+                    .into_any_element();
+            }
+            ComputeState::Idle => {
+                return div()
+                    .p(Spacing::LG)
+                    .child(
+                        Text::body("Pick a source and run Compute Diff to see schema changes.")
+                            .muted_foreground(),
+                    )
+                    .into_any_element();
+            }
+            ComputeState::Error(message) => {
+                return div()
+                    .p(Spacing::LG)
+                    .child(Text::body(message.clone()).danger())
+                    .into_any_element();
+            }
+            ComputeState::Empty => {
+                return div()
+                    .p(Spacing::LG)
+                    .child(
+                        Text::body("No differences found between the two schemas.")
+                            .muted_foreground(),
+                    )
+                    .into_any_element();
+            }
+            ComputeState::Diff => {}
         }
 
         let mut groups: Vec<AnyElement> = Vec::with_capacity(self.groups.len());
@@ -1393,14 +1493,14 @@ impl SchemaDiffDocument {
             .child(self.secondary_button(
                 "preview-ddl",
                 "Preview DDL",
-                has_selection && !self.is_loading,
+                has_selection && !self.is_busy(),
                 cx,
                 |this, _w, cx| this.open_preview(cx),
             ))
             .child(self.primary_button(
                 "apply-ddl",
                 "Apply…",
-                has_selection && !self.is_loading,
+                has_selection && !self.is_busy(),
                 cx,
                 |this, _w, cx| this.request_apply(cx),
             ))
@@ -1464,5 +1564,185 @@ impl Render for SchemaDiffDocument {
             .child(self.render_footer(cx))
             .child(self.sql_preview_modal.clone())
             .child(self.confirm_modal.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Import only what the tests need — deliberately NOT `use super::*`, which
+    // would re-glob `gpui::*` into this module and trigger pathological
+    // `#[test]` macro-expansion recursion in this GPUI-heavy crate.
+    use super::{ComputeState, deep_resolve, document_state_for};
+    use crate::types::DocumentState;
+    use dbflux_core::{
+        CodeGenerator, ColumnInfo, Connection, DatabaseCategory, DbError, DbKind,
+        DefaultSqlDialect, DriverCapabilities, DriverMetadata, DriverMetadataBuilder,
+        NoOpCodeGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+        SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, TableInfo,
+    };
+
+    // ── FIX-2: identical-schema comparison is Empty (Clean), not Error ──────
+
+    #[test]
+    fn empty_compute_state_is_clean_not_error() {
+        assert_eq!(
+            document_state_for(&ComputeState::Empty),
+            DocumentState::Clean,
+            "a clean no-diff result must not render as an error"
+        );
+    }
+
+    #[test]
+    fn error_and_loading_states_map_distinctly() {
+        assert_eq!(
+            document_state_for(&ComputeState::Error("boom".to_string())),
+            DocumentState::Error
+        );
+        assert_eq!(
+            document_state_for(&ComputeState::Loading),
+            DocumentState::Loading
+        );
+        assert_eq!(
+            document_state_for(&ComputeState::Idle),
+            DocumentState::Clean
+        );
+        assert_eq!(
+            document_state_for(&ComputeState::Diff),
+            DocumentState::Clean
+        );
+    }
+
+    // ── FIX-3: deep_resolve propagates table_details failures ───────────────
+
+    struct DeepResolveFake {
+        meta: DriverMetadata,
+        dialect: DefaultSqlDialect,
+        codegen: NoOpCodeGenerator,
+        fail_table_details: bool,
+    }
+
+    impl DeepResolveFake {
+        fn new(fail_table_details: bool) -> Self {
+            let meta = DriverMetadataBuilder::new(
+                "test",
+                "Test",
+                DatabaseCategory::Relational,
+                QueryLanguage::Sql,
+            )
+            .capabilities(DriverCapabilities::empty())
+            .build();
+            Self {
+                meta,
+                dialect: DefaultSqlDialect,
+                codegen: NoOpCodeGenerator,
+                fail_table_details,
+            }
+        }
+    }
+
+    impl Connection for DeepResolveFake {
+        fn metadata(&self) -> &DriverMetadata {
+            &self.meta
+        }
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+        fn execute(&self, _req: &QueryRequest) -> Result<QueryResult, DbError> {
+            Ok(QueryResult::empty())
+        }
+        fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Err(DbError::NotSupported("stub".to_string()))
+        }
+        fn kind(&self) -> DbKind {
+            DbKind::Postgres
+        }
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            SchemaLoadingStrategy::SingleDatabase
+        }
+        fn dialect(&self) -> &dyn SqlDialect {
+            &self.dialect
+        }
+        fn code_generator(&self) -> &dyn CodeGenerator {
+            &self.codegen
+        }
+        fn table_details(
+            &self,
+            _database: &str,
+            schema: Option<&str>,
+            table: &str,
+        ) -> Result<TableInfo, DbError> {
+            if self.fail_table_details {
+                return Err(DbError::NotSupported("cannot introspect".to_string()));
+            }
+            Ok(TableInfo {
+                name: table.to_string(),
+                schema: schema.map(str::to_string),
+                columns: Some(vec![ColumnInfo {
+                    name: "id".to_string(),
+                    type_name: "integer".to_string(),
+                    nullable: false,
+                    is_primary_key: true,
+                    default_value: None,
+                    enum_values: None,
+                }]),
+                indexes: None,
+                foreign_keys: None,
+                constraints: None,
+                sample_fields: None,
+                presentation: Default::default(),
+                child_items: None,
+            })
+        }
+    }
+
+    fn shallow_table(name: &str) -> TableInfo {
+        TableInfo {
+            name: name.to_string(),
+            schema: Some("public".to_string()),
+            // Deliberately column-less: this is the shallow entry the old code
+            // silently degraded to on failure.
+            columns: None,
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: Default::default(),
+            child_items: None,
+        }
+    }
+
+    #[test]
+    fn deep_resolve_propagates_table_details_error() {
+        let connection = DeepResolveFake::new(true);
+        let shallow = vec![shallow_table("users")];
+
+        let result = deep_resolve(&connection, Some("app"), &shallow);
+
+        assert!(
+            result.is_err(),
+            "a failed table_details must abort the comparison, not degrade to the shallow entry"
+        );
+        assert!(result.unwrap_err().contains("users"));
+    }
+
+    #[test]
+    fn deep_resolve_backfills_columns_on_success() {
+        let connection = DeepResolveFake::new(false);
+        let shallow = vec![shallow_table("users")];
+
+        let resolved = deep_resolve(&connection, Some("app"), &shallow)
+            .expect("resolution should succeed when table_details succeeds");
+
+        assert_eq!(resolved.len(), 1);
+        assert!(
+            resolved[0].columns.is_some(),
+            "the resolved table must carry the fetched columns, not the column-less shallow entry"
+        );
     }
 }

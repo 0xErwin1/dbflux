@@ -23,9 +23,6 @@ pub enum DdlApplyOutcome {
         failed_at: usize,
         error: String,
     },
-    /// The run was cancelled before all statements executed. On the
-    /// transactional path, any partial work was rolled back.
-    Cancelled { statements_executed: usize },
     /// `MutationPolicy::ApprovalRequired` — apply deferred without touching
     /// the connection. The caller is responsible for enqueueing the request
     /// through the approval flow, as done for row mutations.
@@ -39,6 +36,15 @@ pub enum DdlApplyOutcome {
 pub enum ExecutorError {
     Generation(String),
     Transaction(String),
+    /// A statement failed AND the subsequent ROLLBACK also failed, so the
+    /// transaction was NOT cleanly rolled back and the database is left in an
+    /// uncertain state. Distinct from `Transaction` (a clean abort) so the
+    /// outcome never claims a rollback that did not happen.
+    RollbackFailed {
+        context: String,
+        error: String,
+        rollback_error: String,
+    },
 }
 
 impl std::fmt::Display for ExecutorError {
@@ -46,6 +52,15 @@ impl std::fmt::Display for ExecutorError {
         match self {
             Self::Generation(msg) => write!(f, "DDL generation failed: {}", msg),
             Self::Transaction(msg) => write!(f, "transaction error: {}", msg),
+            Self::RollbackFailed {
+                context,
+                error,
+                rollback_error,
+            } => write!(
+                f,
+                "DDL apply failed {context} ({error}) and ROLLBACK also failed ({rollback_error}); \
+                 the transaction was not rolled back and the schema state is uncertain"
+            ),
         }
     }
 }
@@ -301,10 +316,7 @@ impl DdlApplyExecutor {
     /// `DataGridPanel::on_mutation_run_requested` does before ever
     /// constructing a `MutationExecutor`. `MutationPolicy::ReadOnly` refuses
     /// outright for the same reason.
-    pub fn apply(
-        &self,
-        cancel: &crate::task_runner::MutationCancelHandle,
-    ) -> Result<DdlApplyOutcome, ExecutorError> {
+    pub fn apply(&self) -> Result<DdlApplyOutcome, ExecutorError> {
         match self.deps.policy {
             MutationPolicy::ApprovalRequired => return Ok(DdlApplyOutcome::Deferred),
             MutationPolicy::ReadOnly => {
@@ -348,9 +360,9 @@ impl DdlApplyExecutor {
         self.emit_event(pending_event);
 
         if self.deps.connection.supports_transactional_ddl() {
-            self.apply_transactional(&statements, &run_id, cancel)
+            self.apply_transactional(&statements, &run_id)
         } else {
-            self.apply_non_atomic(&statements, &run_id, cancel)
+            self.apply_non_atomic(&statements, &run_id)
         }
     }
 
@@ -360,18 +372,10 @@ impl DdlApplyExecutor {
         &self,
         statements: &[String],
         run_id: &str,
-        cancel: &crate::task_runner::MutationCancelHandle,
     ) -> Result<DdlApplyOutcome, ExecutorError> {
         let vocab = TransactionVocab::for_kind(self.deps.connection.kind()).ok_or_else(|| {
             ExecutorError::Transaction("driver does not support SQL transactions".to_string())
         })?;
-
-        if cancel.is_cancelled() {
-            self.emit_cancelled_event(run_id, 0);
-            return Ok(DdlApplyOutcome::Cancelled {
-                statements_executed: 0,
-            });
-        }
 
         let begin_req = QueryRequest::new(vocab.begin);
         if let Err(e) = self.deps.connection.execute(&begin_req) {
@@ -381,32 +385,22 @@ impl DdlApplyExecutor {
         }
 
         for (index, statement) in statements.iter().enumerate() {
-            if cancel.is_cancelled() {
-                self.rollback_best_effort(&vocab);
-                self.emit_cancelled_event(run_id, index as u64);
-                return Ok(DdlApplyOutcome::Cancelled {
-                    statements_executed: index,
-                });
-            }
-
             let request = QueryRequest::new(statement.clone());
             if let Err(e) = self.deps.connection.execute(&request) {
                 let err_msg = e.to_string();
-                self.rollback_best_effort(&vocab);
-                self.emit_failure_event(run_id, &err_msg);
-                return Err(ExecutorError::Transaction(format!(
-                    "DDL apply aborted and rolled back at statement {}: {}",
-                    index, err_msg
-                )));
+                return Err(self.rollback_and_classify(
+                    &vocab,
+                    run_id,
+                    &format!("at statement {index}"),
+                    &err_msg,
+                ));
             }
         }
 
         let commit_req = QueryRequest::new(vocab.commit);
         if let Err(e) = self.deps.connection.execute(&commit_req) {
             let err_msg = e.to_string();
-            self.rollback_best_effort(&vocab);
-            self.emit_failure_event(run_id, &err_msg);
-            return Err(ExecutorError::Transaction(err_msg));
+            return Err(self.rollback_and_classify(&vocab, run_id, "during COMMIT", &err_msg));
         }
 
         self.emit_success_event(run_id, statements.len(), true);
@@ -426,18 +420,10 @@ impl DdlApplyExecutor {
         &self,
         statements: &[String],
         run_id: &str,
-        cancel: &crate::task_runner::MutationCancelHandle,
     ) -> Result<DdlApplyOutcome, ExecutorError> {
         let mut executed = 0usize;
 
         for statement in statements {
-            if cancel.is_cancelled() {
-                self.emit_cancelled_event(run_id, executed as u64);
-                return Ok(DdlApplyOutcome::Cancelled {
-                    statements_executed: executed,
-                });
-            }
-
             let request = QueryRequest::new(statement.clone());
             if let Err(e) = self.deps.connection.execute(&request) {
                 let err_msg = e.to_string();
@@ -459,10 +445,44 @@ impl DdlApplyExecutor {
         })
     }
 
-    fn rollback_best_effort(&self, vocab: &TransactionVocab) {
+    /// Attempts a ROLLBACK, returning the driver error string when it fails so
+    /// the caller can treat a failed rollback as a distinct, observable outcome
+    /// rather than silently assuming the transaction was undone.
+    fn attempt_rollback(&self, vocab: &TransactionVocab) -> Result<(), String> {
         let rollback_req = QueryRequest::new(vocab.rollback);
-        if let Err(e) = self.deps.connection.execute(&rollback_req) {
-            log::warn!("ROLLBACK failed during DDL apply error recovery: {}", e);
+        self.deps
+            .connection
+            .execute(&rollback_req)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// Rolls back after a mid-transaction failure and classifies the result: a
+    /// clean rollback keeps the honest "aborted and rolled back" error, while a
+    /// failed rollback surfaces `RollbackFailed` and its own audit event so the
+    /// outcome never claims a rollback that did not happen.
+    fn rollback_and_classify(
+        &self,
+        vocab: &TransactionVocab,
+        run_id: &str,
+        context: &str,
+        original_error: &str,
+    ) -> ExecutorError {
+        match self.attempt_rollback(vocab) {
+            Ok(()) => {
+                self.emit_failure_event(run_id, original_error);
+                ExecutorError::Transaction(format!(
+                    "DDL apply aborted and rolled back {context}: {original_error}"
+                ))
+            }
+            Err(rollback_error) => {
+                self.emit_rollback_failed_event(run_id, original_error, &rollback_error);
+                ExecutorError::RollbackFailed {
+                    context: context.to_string(),
+                    error: original_error.to_string(),
+                    rollback_error,
+                }
+            }
         }
     }
 
@@ -523,17 +543,18 @@ impl DdlApplyExecutor {
         self.emit_event(event);
     }
 
-    fn emit_cancelled_event(&self, run_id: &str, statements_executed: u64) {
+    fn emit_rollback_failed_event(&self, run_id: &str, error: &str, rollback_error: &str) {
         let event = EventRecord::new(
             Self::now_ms(),
-            EventSeverity::Info,
+            EventSeverity::Error,
             EventCategory::Query,
-            EventOutcome::Cancelled,
+            EventOutcome::Failure,
         )
         .with_action("schema_diff.apply")
         .with_summary(format!(
-            "DDL apply to {} cancelled after {} statement(s)",
-            self.table.name, statements_executed
+            "DDL apply to {} failed ({}) and ROLLBACK also failed ({}); \
+             transaction not rolled back, schema state uncertain",
+            self.table.name, error, rollback_error
         ))
         .with_correlation_id(run_id.to_string());
         self.emit_event(event);
@@ -561,10 +582,6 @@ mod tests {
         SchemaSnapshot,
     };
     use std::sync::Mutex;
-
-    fn no_cancel() -> crate::task_runner::MutationCancelHandle {
-        crate::task_runner::MutationCancelHandle::new()
-    }
 
     fn column(
         name: &str,
@@ -912,26 +929,38 @@ mod tests {
         code_generator: RecordingCodeGenerator,
         calls: Mutex<Vec<String>>,
         fail_on_sql_containing: Option<&'static str>,
+        fail_rollback: bool,
         supports_table_ddl: bool,
     }
 
     impl FakeConnection {
         fn new(kind: DbKind, transactional_ddl: bool) -> Arc<Self> {
-            Self::build(kind, transactional_ddl, None, true)
+            Self::build(kind, transactional_ddl, None, false, true)
         }
 
         fn with_failure(kind: DbKind, transactional_ddl: bool, fail_on: &'static str) -> Arc<Self> {
-            Self::build(kind, transactional_ddl, Some(fail_on), true)
+            Self::build(kind, transactional_ddl, Some(fail_on), false, true)
+        }
+
+        /// A connection whose `fail_on` statement fails AND whose subsequent
+        /// ROLLBACK also fails, to exercise the `RollbackFailed` path.
+        fn with_failing_rollback(
+            kind: DbKind,
+            transactional_ddl: bool,
+            fail_on: &'static str,
+        ) -> Arc<Self> {
+            Self::build(kind, transactional_ddl, Some(fail_on), true, true)
         }
 
         fn without_table_ddl_support(kind: DbKind, transactional_ddl: bool) -> Arc<Self> {
-            Self::build(kind, transactional_ddl, None, false)
+            Self::build(kind, transactional_ddl, None, false, false)
         }
 
         fn build(
             kind: DbKind,
             transactional_ddl: bool,
             fail_on_sql_containing: Option<&'static str>,
+            fail_rollback: bool,
             supports_table_ddl: bool,
         ) -> Arc<Self> {
             let meta = DriverMetadataBuilder::new(
@@ -949,6 +978,7 @@ mod tests {
                 code_generator: RecordingCodeGenerator,
                 calls: Mutex::new(Vec::new()),
                 fail_on_sql_containing,
+                fail_rollback,
                 supports_table_ddl,
             })
         }
@@ -973,6 +1003,12 @@ mod tests {
 
         fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
             self.calls.lock().unwrap().push(req.sql.clone());
+
+            if self.fail_rollback && req.sql.contains("ROLLBACK") {
+                return Err(DbError::QueryFailed(FormattedError::new(
+                    "simulated ROLLBACK failure",
+                )));
+            }
 
             if let Some(needle) = self.fail_on_sql_containing
                 && req.sql.contains(needle)
@@ -1088,7 +1124,7 @@ mod tests {
         let changes = vec![add_column_change("email"), add_column_change("age")];
         let executor = DdlApplyExecutor::new(users_table(), changes, deps(conn, None));
 
-        let outcome = executor.apply(&no_cancel()).unwrap();
+        let outcome = executor.apply().unwrap();
         assert_eq!(
             outcome,
             DdlApplyOutcome::Success {
@@ -1112,7 +1148,7 @@ mod tests {
         let changes = vec![add_column_change("email"), add_column_change("age")];
         let executor = DdlApplyExecutor::new(users_table(), changes, deps(conn, None));
 
-        let result = executor.apply(&no_cancel());
+        let result = executor.apply();
         assert!(matches!(result, Err(ExecutorError::Transaction(_))));
 
         let calls = conn_ref.recorded_calls();
@@ -1139,7 +1175,7 @@ mod tests {
         let changes = vec![add_column_change("email"), add_column_change("age")];
         let executor = DdlApplyExecutor::new(users_table(), changes, deps(conn, None));
 
-        let outcome = executor.apply(&no_cancel()).unwrap();
+        let outcome = executor.apply().unwrap();
         assert_eq!(
             outcome,
             DdlApplyOutcome::PartialFailure {
@@ -1165,7 +1201,7 @@ mod tests {
         let changes = vec![add_column_change("email")];
         let executor = DdlApplyExecutor::new(users_table(), changes, deps(conn, None));
 
-        let outcome = executor.apply(&no_cancel()).unwrap();
+        let outcome = executor.apply().unwrap();
         assert_eq!(
             outcome,
             DdlApplyOutcome::Success {
@@ -1185,7 +1221,7 @@ mod tests {
         d.policy = MutationPolicy::ApprovalRequired;
         let executor = DdlApplyExecutor::new(users_table(), changes, d);
 
-        let outcome = executor.apply(&no_cancel()).unwrap();
+        let outcome = executor.apply().unwrap();
         assert_eq!(outcome, DdlApplyOutcome::Deferred);
         assert!(
             conn_ref.recorded_calls().is_empty(),
@@ -1203,7 +1239,7 @@ mod tests {
         d.policy = MutationPolicy::ReadOnly;
         let executor = DdlApplyExecutor::new(users_table(), changes, d);
 
-        let outcome = executor.apply(&no_cancel()).unwrap();
+        let outcome = executor.apply().unwrap();
         assert!(matches!(outcome, DdlApplyOutcome::Blocked { .. }));
         assert!(conn_ref.recorded_calls().is_empty());
     }
@@ -1217,7 +1253,7 @@ mod tests {
         let changes = vec![add_column_change("email")];
         let executor = DdlApplyExecutor::new(users_table(), changes, deps(conn, Some(sink)));
 
-        executor.apply(&no_cancel()).unwrap();
+        executor.apply().unwrap();
 
         let events = sink_ref.recorded();
         let pending = events
@@ -1243,7 +1279,7 @@ mod tests {
         let changes = vec![add_column_change("email")];
         let executor = DdlApplyExecutor::new(users_table(), changes, deps(conn, Some(sink)));
 
-        let result = executor.apply(&no_cancel());
+        let result = executor.apply();
         assert!(result.is_err());
 
         let events = sink_ref.recorded();
@@ -1251,6 +1287,57 @@ mod tests {
             events.iter().any(|e| e.outcome == EventOutcome::Failure),
             "expected a Failure event; got: {:?}",
             events.iter().map(|e| &e.outcome).collect::<Vec<_>>()
+        );
+    }
+
+    // FIX-5 — a failed ROLLBACK is a distinct, observable outcome and must not
+    // be reported as a clean "rolled back" abort.
+    #[test]
+    fn failed_rollback_yields_distinct_outcome_and_audit() {
+        let conn = FakeConnection::with_failing_rollback(DbKind::Postgres, true, "age");
+        let conn_ref = Arc::clone(&conn);
+        let sink = FakeEventSink::new();
+        let sink_ref = Arc::clone(&sink);
+        let changes = vec![add_column_change("email"), add_column_change("age")];
+        let executor = DdlApplyExecutor::new(users_table(), changes, deps(conn, Some(sink)));
+
+        let result = executor.apply();
+
+        match result {
+            Err(ExecutorError::RollbackFailed {
+                error,
+                rollback_error,
+                ..
+            }) => {
+                assert!(
+                    error.contains("simulated failure"),
+                    "original error: {error}"
+                );
+                assert!(
+                    rollback_error.contains("ROLLBACK"),
+                    "rollback error: {rollback_error}"
+                );
+            }
+            other => panic!("expected RollbackFailed, got {other:?}"),
+        }
+
+        // The ROLLBACK was attempted (and failed) — not silently skipped.
+        assert!(
+            conn_ref.recorded_calls().iter().any(|c| c == "ROLLBACK"),
+            "expected a ROLLBACK attempt: {:?}",
+            conn_ref.recorded_calls()
+        );
+
+        // The failure is captured in the audit trail.
+        let events = sink_ref.recorded();
+        let failure = events
+            .iter()
+            .find(|e| e.outcome == EventOutcome::Failure)
+            .expect("expected a Failure audit event for the rollback failure");
+        assert!(
+            failure.summary.contains("ROLLBACK"),
+            "audit summary should name the rollback failure: {:?}",
+            failure.summary
         );
     }
 
@@ -1266,7 +1353,7 @@ mod tests {
         d.policy = MutationPolicy::ApprovalRequired;
         let executor = DdlApplyExecutor::new(users_table(), changes, d);
 
-        executor.apply(&no_cancel()).unwrap();
+        executor.apply().unwrap();
         assert!(sink_ref.recorded().is_empty());
     }
 
@@ -1277,7 +1364,7 @@ mod tests {
         let conn_ref = Arc::clone(&conn);
         let executor = DdlApplyExecutor::new(users_table(), vec![], deps(conn, None));
 
-        let outcome = executor.apply(&no_cancel()).unwrap();
+        let outcome = executor.apply().unwrap();
         assert_eq!(
             outcome,
             DdlApplyOutcome::Success {
@@ -1299,7 +1386,7 @@ mod tests {
         )];
         let executor = DdlApplyExecutor::new(users_table(), changes, deps(conn, None));
 
-        let result = executor.apply(&no_cancel());
+        let result = executor.apply();
         assert!(matches!(result, Err(ExecutorError::Generation(_))));
         assert!(conn_ref.recorded_calls().is_empty());
     }
@@ -1330,7 +1417,7 @@ mod tests {
         let executor = DdlApplyExecutor::new(table, vec![], deps(conn, None))
             .with_table_action(TableLevelAction::Create(table_info));
 
-        let outcome = executor.apply(&no_cancel()).unwrap();
+        let outcome = executor.apply().unwrap();
         assert_eq!(
             outcome,
             DdlApplyOutcome::Success {
@@ -1356,7 +1443,7 @@ mod tests {
         let executor = DdlApplyExecutor::new(table.clone(), vec![], deps(conn, None))
             .with_table_action(TableLevelAction::Drop(table));
 
-        let outcome = executor.apply(&no_cancel()).unwrap();
+        let outcome = executor.apply().unwrap();
         assert_eq!(
             outcome,
             DdlApplyOutcome::Success {
@@ -1391,7 +1478,7 @@ mod tests {
         let executor = DdlApplyExecutor::new(table, vec![], deps(conn, None))
             .with_table_action(TableLevelAction::Create(table_info));
 
-        let result = executor.apply(&no_cancel());
+        let result = executor.apply();
         assert!(matches!(result, Err(ExecutorError::Generation(_))));
         assert!(conn_ref.recorded_calls().is_empty());
     }
