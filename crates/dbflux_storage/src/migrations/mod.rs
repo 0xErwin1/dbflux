@@ -19,6 +19,7 @@
 //! - `st_*`  — State domain (sessions, query history, UI state)
 //! - `aud_*` — Audit domain (audit events)
 //! - `sys_*` — System domain (migrations, metadata)
+//! - `sch_*` — Schema domain (persisted schema snapshots)
 //!
 //! ## Usage
 //!
@@ -161,6 +162,8 @@ impl MigrationRegistry {
         registry.register(mod_017_qry_saved_queries::MigrationImpl);
         registry.register(mod_018_app_pending_executions::MigrationImpl);
         registry.register(mod_019_hook_env_denylist::MigrationImpl);
+        registry.register(mod_020_sch_schema_snapshots::MigrationImpl);
+        registry.register(mod_021_general_settings_schema_snapshot_retention::MigrationImpl);
         registry
     }
 
@@ -363,6 +366,8 @@ mod mod_016_viz_divider_saved_chart_id_constraint;
 mod mod_017_qry_saved_queries;
 mod mod_018_app_pending_executions;
 mod mod_019_hook_env_denylist;
+mod mod_020_sch_schema_snapshots;
+mod mod_021_general_settings_schema_snapshot_retention;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -961,6 +966,8 @@ mod tests {
             "017_qry_saved_queries",
             "018_app_pending_executions",
             "019_hook_env_denylist",
+            "020_sch_schema_snapshots",
+            "021_general_settings_schema_snapshot_retention",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();

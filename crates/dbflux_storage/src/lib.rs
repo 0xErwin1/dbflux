@@ -17,6 +17,7 @@ pub use repositories::audit::{
     AuditGroupColumn, AuditQueryFilter, AuditRepository,
 };
 pub use repositories::qry_saved_queries::{SavedQueryRepo, SavedQuerySummary};
+pub use repositories::sch_schema_snapshots::{SchemaSnapshotRepo, SchemaSnapshotSummary};
 pub use repositories::state::{
     query_history::QueryHistoryRepository, recent_items::RecentItemsRepository,
     saved_queries::SavedQueriesRepository, sessions::SessionRepository,
