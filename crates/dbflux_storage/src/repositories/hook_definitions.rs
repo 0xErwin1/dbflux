@@ -777,6 +777,22 @@ mod tests {
         repo.insert(&removed).expect("should insert removed row");
         repo.insert(&protected)
             .expect("should insert protected row");
+        repo.set_command(
+            &removed.id,
+            &HookCommandDto::new(removed.id.clone(), "echo removed".to_string()),
+        )
+        .expect("should seed removed command");
+        repo.set_env(
+            &removed.id,
+            &HashMap::from([("REMOVED".to_string(), "value".to_string())]),
+        )
+        .expect("should seed removed environment");
+        repo.conn()
+            .execute(
+                "UPDATE cfg_hook_definitions SET kind_json = ?1 WHERE id = ?2",
+                params![r#"{"opaque":"protected"}"#, protected.id],
+            )
+            .expect("should seed protected bytes");
 
         let replacement = HookDefinitionReplacement {
             id: Some(existing.id.clone()),
@@ -802,6 +818,7 @@ mod tests {
             environment: HashMap::new(),
         };
 
+        let requested_created_id = created.definition.id.clone();
         let saved = repo
             .replace_all_atomic(
                 &[replacement, created],
@@ -810,6 +827,23 @@ mod tests {
             .expect("should replace rows atomically");
 
         assert_eq!(saved.len(), 2);
+        let saved_existing = saved
+            .iter()
+            .find(|definition| definition.name == "Renamed")
+            .expect("existing replacement should be returned");
+        let saved_created = saved
+            .iter()
+            .find(|definition| definition.name == "Created")
+            .expect("created replacement should be returned");
+        assert_eq!(saved_existing.id, existing.id);
+        assert_ne!(saved_created.id, requested_created_id);
+        assert!(Uuid::parse_str(&saved_created.id).is_ok());
+        let persisted_created = repo
+            .get(&saved_created.id)
+            .expect("should fetch created row")
+            .expect("created row should persist");
+        assert_eq!(persisted_created.id, saved_created.id);
+        assert_eq!(persisted_created.name, saved_created.name);
         assert!(
             repo.get(&removed.id)
                 .expect("should fetch removed row")
@@ -840,6 +874,26 @@ mod tests {
                 .expect("protected row should exist")
                 .name,
             "Protected"
+        );
+        assert_eq!(
+            repo.conn()
+                .query_row(
+                    "SELECT kind_json FROM cfg_hook_definitions WHERE id = ?1",
+                    [&protected.id],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("should fetch protected bytes"),
+            r#"{"opaque":"protected"}"#
+        );
+        assert!(
+            repo.get_command(&removed.id)
+                .expect("should fetch removed command")
+                .is_none()
+        );
+        assert_eq!(
+            repo.get_env(&removed.id)
+                .expect("should fetch removed environment"),
+            HashMap::new()
         );
 
         let _ = std::fs::remove_file(&path);
@@ -943,6 +997,220 @@ mod tests {
                 .expect("existing row should remain")
                 .name,
             "Existing"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
+    }
+
+    #[test]
+    fn replace_all_atomic_rejects_all_name_and_identity_preflight_failures() {
+        let path = temp_db("replace_all_complete_preflight");
+        let _ = std::fs::remove_file(&path);
+
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = HookDefinitionRepository::new(Arc::new(conn));
+        let readable = HookDefinitionDto::new(
+            Uuid::new_v4(),
+            "Readable".to_string(),
+            "Command".to_string(),
+        );
+        let protected = HookDefinitionDto::new(
+            Uuid::new_v4(),
+            "Protected".to_string(),
+            "Command".to_string(),
+        );
+        repo.insert(&readable).expect("should insert readable row");
+        repo.insert(&protected)
+            .expect("should insert protected row");
+        repo.conn()
+            .execute(
+                "UPDATE cfg_hook_definitions SET kind_json = ?1 WHERE id = ?2",
+                params![r#"{"opaque":"preserved"}"#, protected.id],
+            )
+            .expect("should seed protected bytes");
+
+        let replacement =
+            |id: Option<String>, definition_id: String, name: &str| HookDefinitionReplacement {
+                id,
+                definition: HookDefinitionDto {
+                    id: definition_id,
+                    name: name.to_string(),
+                    ..readable.clone()
+                },
+                command: None,
+                environment: HashMap::new(),
+            };
+        let protected_ids = HashSet::from([protected.id.clone()]);
+        let invalid_cases = vec![
+            (
+                "duplicate hook name",
+                vec![
+                    replacement(Some(readable.id.clone()), readable.id.clone(), "Same"),
+                    replacement(None, Uuid::new_v4().to_string(), "Same"),
+                ],
+            ),
+            (
+                "hook ID mismatch",
+                vec![replacement(
+                    Some(readable.id.clone()),
+                    Uuid::new_v4().to_string(),
+                    "Changed",
+                )],
+            ),
+            (
+                "hook name already exists",
+                vec![replacement(None, Uuid::new_v4().to_string(), "Readable")],
+            ),
+            (
+                "hook name already exists",
+                vec![replacement(None, Uuid::new_v4().to_string(), "Protected")],
+            ),
+        ];
+
+        for (expected_error, desired) in invalid_cases {
+            let error = repo
+                .replace_all_atomic(&desired, &protected_ids)
+                .expect_err("invalid replacements must fail before mutation");
+            assert!(error.to_string().contains(expected_error));
+            assert_eq!(
+                repo.get(&readable.id)
+                    .expect("should fetch readable row")
+                    .expect("readable row should remain")
+                    .name,
+                "Readable"
+            );
+            assert_eq!(
+                repo.conn()
+                    .query_row(
+                        "SELECT kind_json FROM cfg_hook_definitions WHERE id = ?1",
+                        [&protected.id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .expect("should read protected bytes"),
+                r#"{"opaque":"preserved"}"#
+            );
+        }
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
+    }
+
+    #[test]
+    fn replace_all_atomic_rolls_back_parent_payload_children_and_deletions() {
+        let path = temp_db("replace_all_rollback");
+        let _ = std::fs::remove_file(&path);
+
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = HookDefinitionRepository::new(Arc::new(conn));
+        let retained = HookDefinitionDto::new(
+            Uuid::new_v4(),
+            "Retained".to_string(),
+            "Command".to_string(),
+        );
+        let deleted =
+            HookDefinitionDto::new(Uuid::new_v4(), "Deleted".to_string(), "Command".to_string());
+        repo.insert(&retained).expect("should insert retained row");
+        repo.insert(&deleted).expect("should insert deleted row");
+        repo.set_command(
+            &retained.id,
+            &HookCommandDto::new(retained.id.clone(), "echo original".to_string()),
+        )
+        .expect("should seed retained command");
+        repo.set_command(
+            &deleted.id,
+            &HookCommandDto::new(deleted.id.clone(), "echo deleted".to_string()),
+        )
+        .expect("should seed deleted command");
+        repo.set_env(
+            &retained.id,
+            &HashMap::from([("ORIGINAL".to_string(), "value".to_string())]),
+        )
+        .expect("should seed retained environment");
+        repo.conn()
+            .execute(
+                "UPDATE cfg_hook_definitions SET kind_json = ?1 WHERE id = ?2",
+                params![r#"{"kind":"original"}"#, retained.id],
+            )
+            .expect("should seed original payload");
+        repo.conn()
+            .execute_batch(&format!(
+                "CREATE TRIGGER abort_hook_deletion BEFORE DELETE ON cfg_hook_definitions
+                 WHEN OLD.id = '{}' BEGIN SELECT RAISE(ABORT, 'forced rollback'); END",
+                deleted.id
+            ))
+            .expect("should create rollback trigger");
+
+        let replacement = HookDefinitionReplacement {
+            id: Some(retained.id.clone()),
+            definition: HookDefinitionDto {
+                name: "Changed".to_string(),
+                kind_json: Some(r#"{"kind":"changed"}"#.to_string()),
+                ..retained.clone()
+            },
+            command: Some(HookCommandDto::new(
+                retained.id.clone(),
+                "echo changed".to_string(),
+            )),
+            environment: HashMap::from([("CHANGED".to_string(), "value".to_string())]),
+        };
+        let error = repo
+            .replace_all_atomic(&[replacement], &HashSet::new())
+            .expect_err("a late delete failure must roll back the replacement");
+        assert!(error.to_string().contains("forced rollback"));
+
+        assert_eq!(
+            repo.get(&retained.id)
+                .expect("should fetch retained row")
+                .expect("retained row should survive")
+                .name,
+            "Retained"
+        );
+        assert_eq!(
+            repo.get(&retained.id)
+                .expect("should fetch retained payload")
+                .expect("retained row should survive")
+                .kind_json
+                .as_deref(),
+            Some(r#"{"kind":"original"}"#)
+        );
+        assert_eq!(
+            repo.get_command(&retained.id)
+                .expect("should fetch retained command")
+                .expect("retained command should survive")
+                .command,
+            "echo original"
+        );
+        assert_eq!(
+            repo.get_env(&retained.id)
+                .expect("should fetch retained environment"),
+            HashMap::from([("ORIGINAL".to_string(), "value".to_string())])
+        );
+        assert_eq!(
+            repo.get(&deleted.id)
+                .expect("should fetch deleted row")
+                .expect("omitted row deletion should roll back")
+                .name,
+            "Deleted"
+        );
+        assert_eq!(
+            repo.get_command(&deleted.id)
+                .expect("should fetch omitted row command")
+                .expect("omitted row command should roll back")
+                .command,
+            "echo deleted"
         );
 
         let _ = std::fs::remove_file(&path);
