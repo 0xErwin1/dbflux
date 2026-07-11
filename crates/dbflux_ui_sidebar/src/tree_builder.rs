@@ -308,7 +308,8 @@ impl Sidebar {
                 // exposes a single trivial database the wrapper adds no information.
                 // In that case extend profile_children with the DB's direct children,
                 // not the wrapper node itself.
-                let collapse_single_db = should_collapse_database_wrapper(schema.databases());
+                let collapse_single_db =
+                    should_collapse_database_wrapper(schema.databases(), strategy);
 
                 if collapse_single_db {
                     for db_item in named_items {
@@ -2537,8 +2538,11 @@ fn build_schema_routines_folder(
 ///
 /// Multi-database drivers (Postgres, MySQL, MongoDB) are unaffected: with two
 /// or more databases the wrapper still discriminates between them.
-fn should_collapse_database_wrapper(databases: &[dbflux_core::DatabaseInfo]) -> bool {
-    databases.len() == 1
+fn should_collapse_database_wrapper(
+    databases: &[dbflux_core::DatabaseInfo],
+    strategy: SchemaLoadingStrategy,
+) -> bool {
+    databases.len() == 1 && strategy != SchemaLoadingStrategy::LazyPerDatabase
 }
 
 fn build_collection_field_items(
@@ -3139,14 +3143,33 @@ mod tests {
     }
 
     #[test]
-    fn collapse_wrapper_when_single_database() {
+    fn collapse_wrapper_when_single_non_lazy_database() {
         let dbs = vec![dbflux_core::DatabaseInfo {
             name: "logs".to_string(),
             is_current: true,
         }];
         assert!(
-            super::should_collapse_database_wrapper(&dbs),
+            super::should_collapse_database_wrapper(
+                &dbs,
+                dbflux_core::SchemaLoadingStrategy::SingleDatabase
+            ),
             "single database must collapse (CloudWatch/DynamoDB/SQLite case)"
+        );
+    }
+
+    #[test]
+    fn keep_wrapper_when_single_lazy_database_is_cold() {
+        let dbs = vec![dbflux_core::DatabaseInfo {
+            name: "app".to_string(),
+            is_current: true,
+        }];
+
+        assert!(
+            !super::should_collapse_database_wrapper(
+                &dbs,
+                dbflux_core::SchemaLoadingStrategy::LazyPerDatabase
+            ),
+            "single lazy database must remain visible so it can be loaded"
         );
     }
 
@@ -3163,7 +3186,10 @@ mod tests {
             },
         ];
         assert!(
-            !super::should_collapse_database_wrapper(&dbs),
+            !super::should_collapse_database_wrapper(
+                &dbs,
+                dbflux_core::SchemaLoadingStrategy::SingleDatabase
+            ),
             "multiple databases must remain visible to discriminate them"
         );
     }
@@ -3172,7 +3198,10 @@ mod tests {
     fn keep_wrapper_when_zero_databases() {
         let dbs: Vec<dbflux_core::DatabaseInfo> = vec![];
         assert!(
-            !super::should_collapse_database_wrapper(&dbs),
+            !super::should_collapse_database_wrapper(
+                &dbs,
+                dbflux_core::SchemaLoadingStrategy::SingleDatabase
+            ),
             "zero databases must not trigger collapse path (falls through to fallback branch)"
         );
     }
