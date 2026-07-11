@@ -52,11 +52,14 @@ impl std::fmt::Display for ExecutorError {
 impl std::error::Error for ExecutorError {}
 
 /// Maps a single schema change onto driver-owned DDL via the `CodeGenerator`
-/// column seam. Constraint and index changes (`PrimaryKeyChanged`,
-/// `ForeignKeyChanged`, `IndexAdded`, `IndexRemoved`) are not yet expressible
-/// through this seam and are rejected rather than silently skipped — callers
-/// are expected to filter these out of the changes passed to the executor and
-/// surface them separately.
+/// column and index seams. Constraint changes (`PrimaryKeyChanged`,
+/// `ForeignKeyChanged`) are not yet expressible through this seam and are
+/// rejected rather than silently skipped — callers are expected to filter
+/// these out of the changes passed to the executor and surface them
+/// separately. Index changes go through `generate_create_index` /
+/// `generate_drop_index`; a driver returning `None` (meaning it cannot
+/// express the operation) is likewise surfaced as a named rejection rather
+/// than silently skipped.
 fn build_statements_for_change(
     table: &TableRef,
     change: &SchemaChange,
@@ -113,14 +116,37 @@ fn build_statements_for_change(
                 default,
             })
         }
-        SchemaChange::PrimaryKeyChanged { .. }
-        | SchemaChange::ForeignKeyChanged
-        | SchemaChange::IndexAdded(_)
-        | SchemaChange::IndexRemoved(_) => Err(DdlRejection {
-            reason: "constraint and index changes are not yet supported by automatic DDL apply"
-                .to_string(),
-            followup: None,
-        }),
+        SchemaChange::IndexAdded(index) => code_generator
+            .generate_create_index(&dbflux_core::CreateIndexRequest {
+                index_name: &index.name,
+                table_name: &table.name,
+                schema_name: table.schema.as_deref(),
+                columns: &index.columns,
+                unique: index.is_unique,
+            })
+            .map(|stmt| vec![stmt])
+            .ok_or_else(|| DdlRejection {
+                reason: format!("driver cannot generate CREATE INDEX for {}", index.name),
+                followup: None,
+            }),
+        SchemaChange::IndexRemoved(index) => code_generator
+            .generate_drop_index(&dbflux_core::DropIndexRequest {
+                index_name: &index.name,
+                table_name: Some(&table.name),
+                schema_name: table.schema.as_deref(),
+            })
+            .map(|stmt| vec![stmt])
+            .ok_or_else(|| DdlRejection {
+                reason: format!("driver cannot generate DROP INDEX for {}", index.name),
+                followup: None,
+            }),
+        SchemaChange::PrimaryKeyChanged { .. } | SchemaChange::ForeignKeyChanged => {
+            Err(DdlRejection {
+                reason: "constraint changes are not yet supported by automatic DDL apply"
+                    .to_string(),
+                followup: None,
+            })
+        }
     }
 }
 
@@ -485,6 +511,30 @@ mod tests {
                 dbflux_core::CodeGenCapabilities::ADD_COLUMN
                     | dbflux_core::CodeGenCapabilities::DROP_COLUMN
                     | dbflux_core::CodeGenCapabilities::ALTER_COLUMN
+                    | dbflux_core::CodeGenCapabilities::CREATE_INDEX
+                    | dbflux_core::CodeGenCapabilities::DROP_INDEX
+            }
+
+            fn generate_create_index(
+                &self,
+                request: &dbflux_core::CreateIndexRequest,
+            ) -> Option<String> {
+                let unique = if request.unique { "UNIQUE " } else { "" };
+                Some(format!(
+                    "CREATE {}INDEX {} ON {} ({})",
+                    unique,
+                    request.index_name,
+                    request.table_name,
+                    request.columns.join(", ")
+                ))
+            }
+
+            fn generate_drop_index(
+                &self,
+                request: &dbflux_core::DropIndexRequest,
+            ) -> Option<String> {
+                let table = request.table_name.unwrap_or_default();
+                Some(format!("DROP INDEX {} ON {}", request.index_name, table))
             }
 
             fn generate_add_column(
@@ -589,23 +639,13 @@ mod tests {
         }
 
         #[test]
-        fn constraint_and_index_changes_are_rejected() {
+        fn constraint_changes_are_rejected() {
             let changes = vec![
                 SchemaChange::PrimaryKeyChanged {
                     before: vec!["id".to_string()],
                     after: vec!["uuid".to_string()],
                 },
                 SchemaChange::ForeignKeyChanged,
-                SchemaChange::IndexAdded(IndexSnapshot {
-                    name: "idx_email".to_string(),
-                    columns: vec!["email".to_string()],
-                    is_unique: true,
-                }),
-                SchemaChange::IndexRemoved(IndexSnapshot {
-                    name: "idx_email".to_string(),
-                    columns: vec!["email".to_string()],
-                    is_unique: true,
-                }),
             ];
 
             for change in changes {
@@ -617,6 +657,68 @@ mod tests {
                     result
                 );
             }
+        }
+
+        #[test]
+        fn index_added_maps_to_generate_create_index() {
+            let change = SchemaChange::IndexAdded(IndexSnapshot {
+                name: "idx_email".to_string(),
+                columns: vec!["email".to_string()],
+                is_unique: true,
+            });
+            let stmts = build_statements_for_change(&table(), &change, &StubCodeGenerator).unwrap();
+            assert_eq!(
+                stmts,
+                vec!["CREATE UNIQUE INDEX idx_email ON users (email)"]
+            );
+        }
+
+        #[test]
+        fn index_removed_maps_to_generate_drop_index() {
+            let change = SchemaChange::IndexRemoved(IndexSnapshot {
+                name: "idx_email".to_string(),
+                columns: vec!["email".to_string()],
+                is_unique: false,
+            });
+            let stmts = build_statements_for_change(&table(), &change, &StubCodeGenerator).unwrap();
+            assert_eq!(stmts, vec!["DROP INDEX idx_email ON users"]);
+        }
+
+        #[test]
+        fn index_generator_returning_none_surfaces_as_rejection() {
+            struct NoneCodeGenerator;
+
+            impl CodeGenerator for NoneCodeGenerator {
+                fn capabilities(&self) -> dbflux_core::CodeGenCapabilities {
+                    dbflux_core::CodeGenCapabilities::empty()
+                }
+            }
+
+            let added = SchemaChange::IndexAdded(IndexSnapshot {
+                name: "idx_email".to_string(),
+                columns: vec!["email".to_string()],
+                is_unique: true,
+            });
+            let removed = SchemaChange::IndexRemoved(IndexSnapshot {
+                name: "idx_email".to_string(),
+                columns: vec!["email".to_string()],
+                is_unique: true,
+            });
+
+            let added_result = build_statements_for_change(&table(), &added, &NoneCodeGenerator);
+            let removed_result =
+                build_statements_for_change(&table(), &removed, &NoneCodeGenerator);
+
+            assert!(
+                added_result.is_err(),
+                "expected None from generate_create_index to surface as a rejection, got {:?}",
+                added_result
+            );
+            assert!(
+                removed_result.is_err(),
+                "expected None from generate_drop_index to surface as a rejection, got {:?}",
+                removed_result
+            );
         }
     }
 
