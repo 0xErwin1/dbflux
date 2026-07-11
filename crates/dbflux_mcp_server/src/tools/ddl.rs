@@ -751,21 +751,33 @@ fn build_alter_op_sql(
                 .ok_or_else(|| "ADD_COLUMN requires definition".to_string())?;
             let col_name = op.column.as_deref().unwrap_or("");
             let col_type = def.get("type").and_then(|v| v.as_str()).unwrap_or("TEXT");
-            Ok(vec![format!(
-                "ALTER TABLE {} ADD COLUMN {} {}",
-                table_quoted,
-                dialect.quote_identifier(col_name),
-                col_type
-            )])
+
+            let request = dbflux_core::AddColumnRequest {
+                table_name: &table_ref.name,
+                schema_name: table_ref.schema.as_deref(),
+                column_name: col_name,
+                type_name: col_type,
+                nullable: true,
+                default: None,
+            };
+
+            code_generator
+                .generate_add_column(&request)
+                .map_err(|rejection| rejection.reason)
         }
 
         "DROP_COLUMN" | "DROP COLUMN" => {
             let col_name = op.column.as_deref().unwrap_or("");
-            Ok(vec![format!(
-                "ALTER TABLE {} DROP COLUMN {}",
-                table_quoted,
-                dialect.quote_identifier(col_name)
-            )])
+
+            let request = dbflux_core::DropColumnRequest {
+                table_name: &table_ref.name,
+                schema_name: table_ref.schema.as_deref(),
+                column_name: col_name,
+            };
+
+            code_generator
+                .generate_drop_column(&request)
+                .map_err(|rejection| rejection.reason)
         }
 
         "RENAME_COLUMN" | "RENAME COLUMN" => {
@@ -789,55 +801,39 @@ fn build_alter_op_sql(
                 .as_ref()
                 .ok_or_else(|| "ALTER_COLUMN requires definition".to_string())?;
             let col_name = op.column.as_deref().unwrap_or("");
-            let mut parts = Vec::new();
 
-            if let Some(new_type) = def.get("type").and_then(|v| v.as_str()) {
-                parts.push(format!(
-                    "ALTER TABLE {} ALTER COLUMN {} TYPE {}",
-                    table_quoted,
-                    dialect.quote_identifier(col_name),
-                    new_type
-                ));
-            }
+            let new_type = def.get("type").and_then(|v| v.as_str());
+            let nullable = def.get("nullable").and_then(|v| v.as_bool());
 
-            if let Some(nullable) = def.get("nullable").and_then(|v| v.as_bool()) {
-                let null_clause = if nullable {
-                    "DROP NOT NULL"
+            // Three-state per JSON: key absent (`None`) means no change; a
+            // `null` value means drop the default; any other value means
+            // set it, pre-formatted through the same literal conversion the
+            // old inline builder used.
+            let default_literal: Option<Option<String>> = def.get("default").map(|value| {
+                if value.is_null() {
+                    None
                 } else {
-                    "SET NOT NULL"
-                };
-                parts.push(format!(
-                    "ALTER TABLE {} ALTER COLUMN {} {}",
-                    table_quoted,
-                    dialect.quote_identifier(col_name),
-                    null_clause
-                ));
-            }
-
-            if let Some(default_val) = def.get("default") {
-                if default_val.is_null() {
-                    parts.push(format!(
-                        "ALTER TABLE {} ALTER COLUMN {} DROP DEFAULT",
-                        table_quoted,
-                        dialect.quote_identifier(col_name)
-                    ));
-                } else {
-                    parts.push(format!(
-                        "ALTER TABLE {} ALTER COLUMN {} SET DEFAULT {}",
-                        table_quoted,
-                        dialect.quote_identifier(col_name),
-                        json_to_sql_literal(default_val, dialect)
-                    ));
+                    Some(json_to_sql_literal(value, dialect))
                 }
-            }
+            });
+            let default = match &default_literal {
+                None => None,
+                Some(None) => Some(dbflux_core::DefaultSpec::Drop),
+                Some(Some(literal)) => Some(dbflux_core::DefaultSpec::Set(literal.as_str())),
+            };
 
-            if parts.is_empty() {
-                return Err(
-                    "ALTER_COLUMN requires at least one of: type, nullable, default".to_string(),
-                );
-            }
+            let request = dbflux_core::AlterColumnRequest {
+                table_name: &table_ref.name,
+                schema_name: table_ref.schema.as_deref(),
+                column_name: col_name,
+                new_type,
+                nullable,
+                default,
+            };
 
-            Ok(parts)
+            code_generator
+                .generate_alter_column(&request)
+                .map_err(|rejection| rejection.reason)
         }
 
         "ADD_CONSTRAINT" | "ADD CONSTRAINT" => {
@@ -2495,7 +2491,8 @@ mod alter_table_integration_tests {
     #[tokio::test]
     async fn alter_table_marks_non_atomic_flag() {
         use dbflux_core::{
-            Connection, DatabaseCategory, DbError, DbKind, DefaultSqlDialect, DriverMetadata,
+            AddColumnRequest, CodeGenCapabilities, CodeGenerator, Connection, DatabaseCategory,
+            DbError, DbKind, DdlRejection, DefaultSqlDialect, DriverMetadata,
             DriverMetadataBuilder, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
             SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
         };
@@ -2507,6 +2504,30 @@ mod alter_table_integration_tests {
 
         static FAKE_DIALECT: DefaultSqlDialect = DefaultSqlDialect;
         static FAKE_METADATA: std::sync::OnceLock<DriverMetadata> = std::sync::OnceLock::new();
+
+        // The stub only needs to prove `run_alter_non_atomic`'s stop-on-first-
+        // failure semantics; ADD_COLUMN is the only operation these ops use.
+        struct FakeAddColumnGenerator;
+
+        impl CodeGenerator for FakeAddColumnGenerator {
+            fn capabilities(&self) -> CodeGenCapabilities {
+                CodeGenCapabilities::ADD_COLUMN
+            }
+
+            fn generate_add_column(
+                &self,
+                req: &AddColumnRequest,
+            ) -> Result<Vec<String>, DdlRejection> {
+                Ok(vec![format!(
+                    "ALTER TABLE {} ADD COLUMN {} {}",
+                    FAKE_DIALECT.quote_identifier(req.table_name),
+                    FAKE_DIALECT.quote_identifier(req.column_name),
+                    req.type_name
+                )])
+            }
+        }
+
+        static FAKE_CODE_GENERATOR: FakeAddColumnGenerator = FakeAddColumnGenerator;
 
         impl Connection for FakeNonAtomicConnection {
             fn supports_transactional_ddl(&self) -> bool {
@@ -2526,6 +2547,10 @@ mod alter_table_integration_tests {
 
             fn dialect(&self) -> &dyn SqlDialect {
                 &FAKE_DIALECT
+            }
+
+            fn code_generator(&self) -> &dyn CodeGenerator {
+                &FAKE_CODE_GENERATOR
             }
 
             fn kind(&self) -> DbKind {
@@ -2601,10 +2626,102 @@ mod alter_table_integration_tests {
 #[cfg(test)]
 mod build_alter_op_sql_tests {
     use super::*;
-    use dbflux_core::{DefaultSqlDialect, NoOpCodeGenerator, SqlDialect, TableRef};
+    use dbflux_core::{
+        AddColumnRequest, AlterColumnRequest, CodeGenCapabilities, CodeGenerator, DdlRejection,
+        DefaultSpec, DefaultSqlDialect, DropColumnRequest, SqlDialect, TableRef,
+    };
 
     static DIALECT: DefaultSqlDialect = DefaultSqlDialect;
-    static CODEGEN: NoOpCodeGenerator = NoOpCodeGenerator;
+
+    /// Generic ANSI-style column DDL generator standing in for a real
+    /// driver's `CodeGenerator`. `build_alter_op_sql` is driver-agnostic
+    /// dispatch/parsing logic; the tests below assert on the dispatch
+    /// behavior (which branch runs, which fields are read from JSON), not on
+    /// a specific driver's exact dialect output — that per-driver output is
+    /// covered by each driver crate's own `generate_*_column` tests.
+    struct GenericColumnCodeGenerator;
+
+    impl CodeGenerator for GenericColumnCodeGenerator {
+        fn capabilities(&self) -> CodeGenCapabilities {
+            CodeGenCapabilities::ADD_COLUMN
+                | CodeGenCapabilities::DROP_COLUMN
+                | CodeGenCapabilities::ALTER_COLUMN
+        }
+
+        fn generate_add_column(&self, req: &AddColumnRequest) -> Result<Vec<String>, DdlRejection> {
+            let table = DIALECT.qualified_table(req.schema_name, req.table_name);
+            Ok(vec![format!(
+                "ALTER TABLE {} ADD COLUMN {} {}",
+                table,
+                DIALECT.quote_identifier(req.column_name),
+                req.type_name
+            )])
+        }
+
+        fn generate_drop_column(
+            &self,
+            req: &DropColumnRequest,
+        ) -> Result<Vec<String>, DdlRejection> {
+            let table = DIALECT.qualified_table(req.schema_name, req.table_name);
+            Ok(vec![format!(
+                "ALTER TABLE {} DROP COLUMN {}",
+                table,
+                DIALECT.quote_identifier(req.column_name)
+            )])
+        }
+
+        fn generate_alter_column(
+            &self,
+            req: &AlterColumnRequest,
+        ) -> Result<Vec<String>, DdlRejection> {
+            let table = DIALECT.qualified_table(req.schema_name, req.table_name);
+            let column = DIALECT.quote_identifier(req.column_name);
+            let mut parts = Vec::new();
+
+            if let Some(new_type) = req.new_type {
+                parts.push(format!(
+                    "ALTER TABLE {} ALTER COLUMN {} TYPE {}",
+                    table, column, new_type
+                ));
+            }
+
+            if let Some(nullable) = req.nullable {
+                let clause = if nullable {
+                    "DROP NOT NULL"
+                } else {
+                    "SET NOT NULL"
+                };
+                parts.push(format!(
+                    "ALTER TABLE {} ALTER COLUMN {} {}",
+                    table, column, clause
+                ));
+            }
+
+            match req.default {
+                Some(DefaultSpec::Drop) => parts.push(format!(
+                    "ALTER TABLE {} ALTER COLUMN {} DROP DEFAULT",
+                    table, column
+                )),
+                Some(DefaultSpec::Set(value)) => parts.push(format!(
+                    "ALTER TABLE {} ALTER COLUMN {} SET DEFAULT {}",
+                    table, column, value
+                )),
+                None => {}
+            }
+
+            if parts.is_empty() {
+                return Err(DdlRejection {
+                    reason: "ALTER COLUMN requires at least one of: type, nullable, default"
+                        .to_string(),
+                    followup: None,
+                });
+            }
+
+            Ok(parts)
+        }
+    }
+
+    static CODEGEN: GenericColumnCodeGenerator = GenericColumnCodeGenerator;
 
     fn table_ref() -> TableRef {
         TableRef::new("users")
