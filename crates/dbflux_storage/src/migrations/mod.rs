@@ -161,6 +161,7 @@ impl MigrationRegistry {
         registry.register(mod_017_qry_saved_queries::MigrationImpl);
         registry.register(mod_018_app_pending_executions::MigrationImpl);
         registry.register(mod_019_hook_env_denylist::MigrationImpl);
+        registry.register(mod_020_hook_kind_json::MigrationImpl);
         registry
     }
 
@@ -363,6 +364,7 @@ mod mod_016_viz_divider_saved_chart_id_constraint;
 mod mod_017_qry_saved_queries;
 mod mod_018_app_pending_executions;
 mod mod_019_hook_env_denylist;
+mod mod_020_hook_kind_json;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -578,6 +580,12 @@ mod tests {
         assert!(tables.contains("sys_app_meta"), "missing sys_app_meta");
 
         // Migration 010: dangling_origin column on cfg_auth_profiles
+        let hook_columns = column_names(&conn, "cfg_hook_definitions");
+        assert!(
+            hook_columns.contains("kind_json"),
+            "cfg_hook_definitions missing kind_json column"
+        );
+
         let auth_columns = column_names(&conn, "cfg_auth_profiles");
         assert!(
             auth_columns.contains("dangling_origin"),
@@ -961,6 +969,7 @@ mod tests {
             "017_qry_saved_queries",
             "018_app_pending_executions",
             "019_hook_env_denylist",
+            "020_hook_kind_json",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();
