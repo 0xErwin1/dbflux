@@ -1,6 +1,61 @@
 use super::*;
 use dbflux_core::DdlCapabilities;
 
+impl ContextMenuState {
+    /// Transition the menu when the still-visible parent (left) menu is hovered at
+    /// `index` while a submenu is open. Returns `true` when the menu changed and the
+    /// view must redraw.
+    ///
+    /// Behaves like a standard nested menu instead of trailing the cursor: hovering the
+    /// item that owns the open submenu leaves it fixed, hovering a different item that
+    /// itself opens a submenu switches to (and re-anchors on) that item's submenu, and
+    /// hovering a plain item collapses the submenu back to the parent menu.
+    fn hover_parent_item(&mut self, index: usize) -> bool {
+        let Some((parent_items, owner_index)) = self.parent_stack.last() else {
+            return false;
+        };
+
+        if index == *owner_index {
+            return false;
+        }
+
+        let Some(item) = parent_items.get(index) else {
+            return false;
+        };
+
+        if !item.is_selectable() {
+            return false;
+        }
+
+        let submenu_items = match &item.action {
+            ContextMenuAction::Submenu(sub_items) => Some(sub_items.clone()),
+            _ => None,
+        };
+
+        match submenu_items {
+            Some(sub_items) => {
+                if let Some((_, owner_index)) = self.parent_stack.last_mut() {
+                    *owner_index = index;
+                }
+                self.items = sub_items;
+                self.selected_index = self
+                    .items
+                    .iter()
+                    .position(ContextMenuItem::is_selectable)
+                    .unwrap_or(0);
+            }
+            None => {
+                if let Some((parent_items, _)) = self.parent_stack.pop() {
+                    self.items = parent_items;
+                    self.selected_index = index;
+                }
+            }
+        }
+
+        true
+    }
+}
+
 impl Sidebar {
     fn append_menu_section(
         items: &mut Vec<ContextMenuItem>,
@@ -1265,18 +1320,9 @@ impl Sidebar {
     }
 
     pub fn context_menu_parent_hover_at(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(ref mut menu) = self.context_menu
-            && let Some((parent_items, parent_selected)) = menu.parent_stack.last_mut()
+        if let Some(menu) = self.context_menu.as_mut()
+            && menu.hover_parent_item(index)
         {
-            let Some(item) = parent_items.get(index) else {
-                return;
-            };
-
-            if !item.is_selectable() || *parent_selected == index {
-                return;
-            }
-
-            *parent_selected = index;
             cx.notify();
         }
     }
@@ -1643,5 +1689,84 @@ impl Sidebar {
         let y = header_height + (row_height * (index as f32));
 
         Point::new(menu_x, y)
+    }
+}
+
+#[cfg(test)]
+mod parent_hover_tests {
+    use super::{ContextMenuAction, ContextMenuItem, ContextMenuState};
+    use gpui::{point, px};
+
+    fn item(label: &str) -> ContextMenuItem {
+        ContextMenuItem::item(label, ContextMenuAction::Open)
+    }
+
+    fn submenu_item(label: &str, children: Vec<ContextMenuItem>) -> ContextMenuItem {
+        ContextMenuItem::item(label, ContextMenuAction::Submenu(children))
+    }
+
+    /// Top-level menu with two submenu items and one plain item, opened into the first
+    /// submenu (owner index 0).
+    fn state_in_first_submenu() -> ContextMenuState {
+        let export_children = vec![item("as CSV"), item("as JSON")];
+        let migrate_children = vec![item("to Postgres"), item("to MySQL")];
+
+        let top_items = vec![
+            submenu_item("Export Table", export_children.clone()),
+            submenu_item("Migrate Table", migrate_children),
+            item("Drop Table"),
+        ];
+
+        ContextMenuState {
+            item_id: "table".to_string(),
+            selected_index: 0,
+            items: export_children,
+            parent_stack: vec![(top_items, 0)],
+            position: point(px(0.0), px(0.0)),
+        }
+    }
+
+    #[test]
+    fn hovering_the_owning_item_keeps_the_submenu_fixed() {
+        let mut state = state_in_first_submenu();
+
+        let changed = state.hover_parent_item(0);
+
+        assert!(!changed);
+        assert_eq!(state.parent_stack.last().unwrap().1, 0);
+        assert_eq!(state.items.len(), 2);
+        assert_eq!(state.items[0].label, "as CSV");
+    }
+
+    #[test]
+    fn hovering_another_submenu_item_switches_and_reanchors() {
+        let mut state = state_in_first_submenu();
+
+        let changed = state.hover_parent_item(1);
+
+        assert!(changed);
+        assert_eq!(state.parent_stack.last().unwrap().1, 1);
+        assert_eq!(state.items[0].label, "to Postgres");
+        assert_eq!(state.selected_index, 0);
+    }
+
+    #[test]
+    fn hovering_a_plain_item_collapses_the_submenu() {
+        let mut state = state_in_first_submenu();
+
+        let changed = state.hover_parent_item(2);
+
+        assert!(changed);
+        assert!(state.parent_stack.is_empty());
+        assert_eq!(state.selected_index, 2);
+        assert_eq!(state.items[0].label, "Export Table");
+    }
+
+    #[test]
+    fn hovering_with_no_submenu_open_does_nothing() {
+        let mut state = state_in_first_submenu();
+        state.parent_stack.clear();
+
+        assert!(!state.hover_parent_item(1));
     }
 }
