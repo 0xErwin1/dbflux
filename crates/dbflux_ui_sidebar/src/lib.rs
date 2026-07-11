@@ -280,6 +280,15 @@ pub enum SidebarEvent {
         database: Option<String>,
         tables: Vec<TableRef>,
     },
+
+    /// Request to open the schema-diff & apply document for a connection (and,
+    /// for multi-database drivers, a specific database). The document itself
+    /// lives in `dbflux_ui_document`; the integrator (`dbflux_ui` Workspace)
+    /// owns opening it, mirroring `RequestMigrateWizard`'s layering.
+    RequestSchemaDiff {
+        profile_id: Uuid,
+        database: Option<String>,
+    },
 }
 
 /// Sentinel value for IDs that don't correspond to schema tree nodes
@@ -463,6 +472,10 @@ pub enum ContextMenuAction {
     /// same way as `ExportTablesAs`/`ImportTables` — `TransferFamily::Sql`,
     /// never a driver id.
     MigrateTables,
+    /// Open the schema-diff document for the connection (or database) this
+    /// menu was opened on. Gated on `DatabaseCategory::Relational` — never a
+    /// driver id; non-relational nodes surface an explicit "unsupported" toast.
+    CompareSchema,
 }
 
 #[derive(Clone)]
@@ -552,6 +565,7 @@ impl ContextMenuAction {
             Self::ExportTablesAs(_) => Some(AppIcon::ArrowUp),
             Self::ImportTables => Some(AppIcon::Download),
             Self::MigrateTables => Some(AppIcon::ArrowUpDown),
+            Self::CompareSchema => Some(AppIcon::Columns),
         }
     }
 }

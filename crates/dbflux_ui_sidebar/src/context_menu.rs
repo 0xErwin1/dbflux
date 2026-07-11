@@ -123,6 +123,58 @@ impl Sidebar {
             })
     }
 
+    /// Whether the connection/database node supports the schema-diff workflow.
+    /// Gated on `DatabaseCategory::Relational` — never a driver id — so any
+    /// current or future relational driver picks it up for free.
+    fn node_supports_schema_diff(&self, item_id: &str, cx: &App) -> bool {
+        let profile_id = match parse_node_id(item_id) {
+            Some(SchemaNodeId::Profile { profile_id }) => profile_id,
+            Some(SchemaNodeId::Database { profile_id, .. }) => profile_id,
+            _ => return false,
+        };
+
+        self.app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .is_some_and(|connected| {
+                connected.connection.metadata().category
+                    == dbflux_core::DatabaseCategory::Relational
+            })
+    }
+
+    /// Emits `SidebarEvent::RequestSchemaDiff` for a connection or database
+    /// node. Non-relational nodes get an explicit "unsupported" toast rather
+    /// than a silent no-op.
+    fn open_schema_diff_from_context(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let (profile_id, database) = match parse_node_id(item_id) {
+            Some(SchemaNodeId::Profile { profile_id }) => {
+                let database = self
+                    .app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .and_then(|connected| connected.active_database.clone());
+                (profile_id, database)
+            }
+            Some(SchemaNodeId::Database { profile_id, name }) => (profile_id, Some(name)),
+            _ => return,
+        };
+
+        if !self.node_supports_schema_diff(item_id, cx) {
+            dbflux_ui_base::toast::Toast::warning(
+                "Schema diff is only available for relational connections.",
+            )
+            .push(cx);
+            return;
+        }
+
+        cx.emit(SidebarEvent::RequestSchemaDiff {
+            profile_id,
+            database,
+        });
+    }
+
     /// Returns "Delete N items" when the right-clicked node is part of a
     /// multi-selection that contains more than one deletable item, otherwise
     /// `None`. Used to relabel the per-node "Delete" entry into a batch action
@@ -424,6 +476,19 @@ impl Sidebar {
                     );
                 }
 
+                // Compare Schema (relational only) — opens the schema-diff
+                // document with this connection as the live target. Gated on
+                // `DatabaseCategory::Relational`, never a driver id.
+                if is_connected && self.node_supports_schema_diff(item_id, cx) {
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Compare Schema\u{2026}",
+                            ContextMenuAction::CompareSchema,
+                        )],
+                    );
+                }
+
                 // Add "Move to..." submenu with available folders
                 let move_to_items = self.build_move_to_submenu(item_id, cx);
                 if !move_to_items.is_empty() {
@@ -473,6 +538,17 @@ impl Sidebar {
                             ContextMenuAction::RefreshDatabase,
                         )],
                     );
+
+                    // Compare Schema (relational only), scoped to this database.
+                    if self.node_supports_schema_diff(item_id, cx) {
+                        Self::append_menu_section(
+                            &mut items,
+                            [ContextMenuItem::item(
+                                "Compare Schema\u{2026}",
+                                ContextMenuAction::CompareSchema,
+                            )],
+                        );
+                    }
 
                     // "New Query" opens an empty code document with this bucket/database
                     // pre-selected in the source-context dropdown. Available for any
@@ -1562,6 +1638,9 @@ impl Sidebar {
                     };
                     cx.write_to_clipboard(ClipboardItem::new_string(id_str));
                 }
+            }
+            ContextMenuAction::CompareSchema => {
+                self.open_schema_diff_from_context(&item_id, cx);
             }
         }
 
