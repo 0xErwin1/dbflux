@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use dbflux_app::keymap::{Command, ContextId};
+use dbflux_components::common::time_range::{TimestampDisplayMode, format_timestamp_ms};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::{
     ModalMutationConfirmHard, MutationConfirmHardRequest, MutationConfirmOutcome,
@@ -46,7 +47,7 @@ struct TableDiffGroup {
     /// Human header, e.g. "public.users".
     header: String,
     /// Changes the driver can apply, with a stable index used for selection.
-    appliable: Vec<RiskedChange>,
+    applicable: Vec<RiskedChange>,
     /// Changes surfaced explicitly as unsupported (never applied).
     unsupported: Vec<UnsupportedChange>,
     /// Present for whole-table add/remove (`TableChange::TableAdded`/
@@ -56,7 +57,7 @@ struct TableDiffGroup {
 
 impl TableDiffGroup {
     fn is_empty(&self) -> bool {
-        self.appliable.is_empty() && self.unsupported.is_empty() && self.table_action.is_none()
+        self.applicable.is_empty() && self.unsupported.is_empty() && self.table_action.is_none()
     }
 }
 
@@ -129,7 +130,7 @@ pub struct SchemaDiffDocument {
     /// Second live connection chosen as the reference in `LiveVsLive` mode.
     reference_profile: Option<Uuid>,
     groups: Vec<TableDiffGroup>,
-    /// Selected appliable changes as `(group_index, appliable_index)`.
+    /// Selected applicable changes as `(group_index, applicable_index)`.
     selected: HashSet<(usize, usize)>,
     /// Selected whole-table actions, as `group_index`.
     selected_table_actions: HashSet<usize>,
@@ -428,19 +429,19 @@ impl SchemaDiffDocument {
         .detach();
     }
 
-    /// Default selection = every appliable change checked.
+    /// Default selection = every applicable change checked.
     fn default_selection(&self) -> HashSet<(usize, usize)> {
         let mut set = HashSet::new();
         for (group_index, group) in self.groups.iter().enumerate() {
-            for change_index in 0..group.appliable.len() {
+            for change_index in 0..group.applicable.len() {
                 set.insert((group_index, change_index));
             }
         }
         set
     }
 
-    /// Default selection = every appliable whole-table action checked,
-    /// mirroring `default_selection`'s "select every appliable change" rule.
+    /// Default selection = every applicable whole-table action checked,
+    /// mirroring `default_selection`'s "select every applicable change" rule.
     fn default_table_action_selection(&self) -> HashSet<usize> {
         self.groups
             .iter()
@@ -448,7 +449,7 @@ impl SchemaDiffDocument {
             .filter_map(|(index, group)| {
                 matches!(
                     group.table_action,
-                    Some(TableActionOutcome::Appliable { .. })
+                    Some(TableActionOutcome::Applicable { .. })
                 )
                 .then_some(index)
             })
@@ -475,14 +476,14 @@ impl SchemaDiffDocument {
         cx.notify();
     }
 
-    /// Collects the selected appliable changes and whole-table actions,
+    /// Collects the selected applicable changes and whole-table actions,
     /// grouped by table.
     fn selected_changes_by_table(&self) -> Vec<SelectedTableWork> {
         let mut out: Vec<SelectedTableWork> = Vec::new();
 
         for (group_index, group) in self.groups.iter().enumerate() {
             let mut picked = Vec::new();
-            for (change_index, change) in group.appliable.iter().enumerate() {
+            for (change_index, change) in group.applicable.iter().enumerate() {
                 if self.selected.contains(&(group_index, change_index)) {
                     picked.push(change.clone());
                 }
@@ -490,7 +491,7 @@ impl SchemaDiffDocument {
 
             let table_action = if self.selected_table_actions.contains(&group_index) {
                 match &group.table_action {
-                    Some(TableActionOutcome::Appliable { action, risk }) => {
+                    Some(TableActionOutcome::Applicable { action, risk }) => {
                         Some((action.clone(), *risk))
                     }
                     _ => None,
@@ -513,7 +514,7 @@ impl SchemaDiffDocument {
 
     fn has_destructive_selection(&self) -> bool {
         for (group_index, group) in self.groups.iter().enumerate() {
-            for (change_index, change) in group.appliable.iter().enumerate() {
+            for (change_index, change) in group.applicable.iter().enumerate() {
                 if self.selected.contains(&(group_index, change_index))
                     && RiskBadge::from_classification(change.risk) == RiskBadge::Destructive
                 {
@@ -521,7 +522,7 @@ impl SchemaDiffDocument {
                 }
             }
             if self.selected_table_actions.contains(&group_index)
-                && let Some(TableActionOutcome::Appliable { risk, .. }) = &group.table_action
+                && let Some(TableActionOutcome::Applicable { risk, .. }) = &group.table_action
                 && RiskBadge::from_classification(*risk) == RiskBadge::Destructive
             {
                 return true;
@@ -902,7 +903,7 @@ fn build_groups(
                 groups.push(TableDiffGroup {
                     header: qualified(&table),
                     table,
-                    appliable: Vec::new(),
+                    applicable: Vec::new(),
                     unsupported: Vec::new(),
                     table_action: Some(outcome),
                 });
@@ -914,20 +915,20 @@ fn build_groups(
                 groups.push(TableDiffGroup {
                     header: qualified(&table),
                     table,
-                    appliable: Vec::new(),
+                    applicable: Vec::new(),
                     unsupported: Vec::new(),
                     table_action: Some(outcome),
                 });
             }
             TableChange::TableModified { table, changes } => {
                 let PartitionedChanges {
-                    appliable,
+                    applicable,
                     unsupported,
                 } = partition_table_changes(&table, &changes, code_generator);
                 groups.push(TableDiffGroup {
                     header: qualified(&table),
                     table,
-                    appliable,
+                    applicable,
                     unsupported,
                     table_action: None,
                 });
@@ -1236,7 +1237,7 @@ impl SchemaDiffDocument {
             let selected = self.picker.selected_snapshot == Some(snapshot_id);
             let label = format!(
                 "{}  ·  {:?}",
-                format_millis(summary.captured_at),
+                format_captured_at(summary.captured_at),
                 summary.depth
             );
             rows.push(
@@ -1324,7 +1325,7 @@ impl SchemaDiffDocument {
 
         let mut rows: Vec<AnyElement> = Vec::new();
 
-        for (change_index, change) in group.appliable.iter().enumerate() {
+        for (change_index, change) in group.applicable.iter().enumerate() {
             rows.push(self.render_change_row(group_index, change_index, change, cx));
         }
 
@@ -1410,7 +1411,7 @@ impl SchemaDiffDocument {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         match outcome {
-            TableActionOutcome::Appliable { action, risk } => {
+            TableActionOutcome::Applicable { action, risk } => {
                 let (border, primary, primary_foreground) = {
                     let theme = cx.theme();
                     (theme.border, theme.primary, theme.primary_foreground)
@@ -1524,9 +1525,11 @@ fn render_unsupported_row(unsupported: &UnsupportedChange) -> AnyElement {
         .into_any_element()
 }
 
-fn format_millis(millis: i64) -> String {
-    let secs = (millis.max(0) as u64) / 1000;
-    format!("captured @ {secs}")
+fn format_captured_at(millis: i64) -> String {
+    format!(
+        "captured {}",
+        format_timestamp_ms(millis, TimestampDisplayMode::Local)
+    )
 }
 
 impl Render for SchemaDiffDocument {

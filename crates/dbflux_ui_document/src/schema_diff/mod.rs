@@ -8,5 +8,5 @@ pub mod diff_source;
 pub mod pane;
 pub mod view;
 
-pub use diff_source::{DiffMode, DiffSource, RiskBadge, SourcePicker};
+pub use diff_source::{DiffMode, RiskBadge, SourcePicker};
 pub use view::SchemaDiffDocument;

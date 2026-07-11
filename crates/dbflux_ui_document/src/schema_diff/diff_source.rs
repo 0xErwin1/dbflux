@@ -2,7 +2,7 @@
 //! schema-diff document.
 //!
 //! Everything here is free of GPUI so it can be unit-tested directly: the
-//! `DiffSource`/`DiffMode` picker model, the risk-to-badge mapping, and the
+//! `SourcePicker`/`DiffMode` picker model, the risk-to-badge mapping, and the
 //! partition that separates changes the driver can apply from the ones it must
 //! surface as unsupported.
 
@@ -14,21 +14,6 @@ use uuid::Uuid;
 
 use super::apply::{TableLevelAction, build_statements_for_change};
 
-/// One side of a schema comparison.
-///
-/// `Live` resolves through the driver (shallow tree plus lazy `table_details`);
-/// `Snapshot` resolves from the persisted `SchemaSnapshotRepo`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum DiffSource {
-    Live {
-        profile_id: Uuid,
-        database: Option<String>,
-    },
-    Snapshot {
-        snapshot_id: Uuid,
-    },
-}
-
 /// Which pair of sources the picker compares. The default — and the primary
 /// workflow — is two live connections; snapshot-to-live is the secondary mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -38,26 +23,14 @@ pub enum DiffMode {
     SnapshotVsLive,
 }
 
-/// Selection state for the source picker. `before` is the reference side and
-/// `after` is the target the DDL would bring in line with `before` (for
-/// snapshot-to-live the snapshot is the reference `before`).
+/// Selection state for the source picker. `before` is the live target the DDL
+/// applies to and `after` is the reference schema `before` is brought in line
+/// with (for snapshot-to-live the snapshot is the reference `after`).
 #[derive(Clone, Debug, Default)]
 pub struct SourcePicker {
     pub mode: DiffMode,
     /// Snapshot chosen as the reference side in `SnapshotVsLive` mode.
     pub selected_snapshot: Option<Uuid>,
-}
-
-impl SourcePicker {
-    /// Returns `true` when the current selection is complete enough to run a
-    /// diff. Live-to-live is always ready (both live schemas are known from the
-    /// open connection); snapshot-to-live needs a chosen snapshot first.
-    pub fn is_ready(&self) -> bool {
-        match self.mode {
-            DiffMode::LiveVsLive => true,
-            DiffMode::SnapshotVsLive => self.selected_snapshot.is_some(),
-        }
-    }
 }
 
 /// Three-level risk badge shown per change, derived from the shared governance
@@ -109,13 +82,13 @@ pub struct UnsupportedChange {
 /// and what must be surfaced as unsupported.
 #[derive(Clone, Debug, Default)]
 pub struct PartitionedChanges {
-    pub appliable: Vec<RiskedChange>,
+    pub applicable: Vec<RiskedChange>,
     pub unsupported: Vec<UnsupportedChange>,
 }
 
 impl PartitionedChanges {
     pub fn is_empty(&self) -> bool {
-        self.appliable.is_empty() && self.unsupported.is_empty()
+        self.applicable.is_empty() && self.unsupported.is_empty()
     }
 }
 
@@ -124,7 +97,7 @@ impl PartitionedChanges {
 /// `CodeGenerator` mapping the apply path uses.
 ///
 /// This keeps the executor's all-or-nothing contract intact: only the
-/// `appliable` half is ever handed to `DdlApplyExecutor`, and every rejection
+/// `applicable` half is ever handed to `DdlApplyExecutor`, and every rejection
 /// (constraint changes, SQLite rebuild-only column changes, index ops a driver
 /// cannot express) lands in `unsupported` with its reason preserved.
 pub fn partition_table_changes(
@@ -136,7 +109,7 @@ pub fn partition_table_changes(
 
     for risked in changes {
         match build_statements_for_change(table, &risked.change, code_generator) {
-            Ok(_) => partitioned.appliable.push(risked.clone()),
+            Ok(_) => partitioned.applicable.push(risked.clone()),
             Err(rejection) => partitioned.unsupported.push(UnsupportedChange {
                 change: risked.change.clone(),
                 risk: risked.risk,
@@ -149,13 +122,6 @@ pub fn partition_table_changes(
     partitioned
 }
 
-/// Resolves a persisted snapshot's stored tables into the `Vec<TableInfo>` the
-/// diff engine consumes. Kept as a named seam so the Snapshot resolution path
-/// is testable without a live connection.
-pub fn tables_from_snapshot(record: &dbflux_core::SchemaSnapshotRecord) -> Vec<TableInfo> {
-    record.tables.clone()
-}
-
 /// The result of classifying a whole-table add/remove: its governance risk,
 /// and whether the driver's `generate_code` seam (`"create_table"`/
 /// `"drop_table"`) can express it. Table-level counterpart to
@@ -163,7 +129,7 @@ pub fn tables_from_snapshot(record: &dbflux_core::SchemaSnapshotRecord) -> Vec<T
 /// `TableChange::TableAdded`/`TableRemoved` each carry exactly one action.
 #[derive(Clone, Debug)]
 pub enum TableActionOutcome {
-    Appliable {
+    Applicable {
         action: TableLevelAction,
         risk: ExecutionClassification,
     },
@@ -192,7 +158,7 @@ pub fn classify_table_action(
     };
 
     match probe {
-        Ok(_) => TableActionOutcome::Appliable { action, risk },
+        Ok(_) => TableActionOutcome::Applicable { action, risk },
         Err(rejection) => TableActionOutcome::Unsupported {
             is_create,
             risk,
@@ -321,31 +287,10 @@ mod tests {
         }
     }
 
-    // -- Source picker state ---------------------------------------------------
-
-    #[test]
-    fn default_mode_is_live_vs_live_and_ready() {
-        let picker = SourcePicker::default();
-        assert_eq!(picker.mode, DiffMode::LiveVsLive);
-        assert!(picker.is_ready());
-    }
-
-    #[test]
-    fn snapshot_mode_is_not_ready_until_a_snapshot_is_selected() {
-        let mut picker = SourcePicker {
-            mode: DiffMode::SnapshotVsLive,
-            selected_snapshot: None,
-        };
-        assert!(!picker.is_ready());
-
-        picker.selected_snapshot = Some(Uuid::now_v7());
-        assert!(picker.is_ready());
-    }
-
     // -- Partitioning ----------------------------------------------------------
 
     #[test]
-    fn appliable_column_changes_are_kept_appliable() {
+    fn applicable_column_changes_are_kept_applicable() {
         let changes = vec![
             risked(
                 SchemaChange::ColumnAdded(column("email")),
@@ -359,7 +304,7 @@ mod tests {
 
         let partitioned = partition_table_changes(&table(), &changes, &RebuildRejectingGenerator);
 
-        assert_eq!(partitioned.appliable.len(), 2);
+        assert_eq!(partitioned.applicable.len(), 2);
         assert!(partitioned.unsupported.is_empty());
     }
 
@@ -384,7 +329,7 @@ mod tests {
 
         let partitioned = partition_table_changes(&table(), &changes, &RebuildRejectingGenerator);
 
-        assert_eq!(partitioned.appliable.len(), 1);
+        assert_eq!(partitioned.applicable.len(), 1);
         assert_eq!(partitioned.unsupported.len(), 1);
 
         let unsupported = &partitioned.unsupported[0];
@@ -401,7 +346,7 @@ mod tests {
 
         let partitioned = partition_table_changes(&table(), &changes, &RebuildRejectingGenerator);
 
-        assert!(partitioned.appliable.is_empty());
+        assert!(partitioned.applicable.is_empty());
         assert_eq!(partitioned.unsupported.len(), 1);
     }
 
@@ -422,30 +367,30 @@ mod tests {
     }
 
     #[test]
-    fn table_added_probe_ok_is_appliable_with_admin_safe_risk() {
+    fn table_added_probe_ok_is_applicable_with_admin_safe_risk() {
         let action = TableLevelAction::Create(table_info());
 
         let outcome = classify_table_action(action, Ok(vec!["CREATE TABLE orders ()".to_string()]));
 
         match outcome {
-            TableActionOutcome::Appliable { risk, .. } => {
+            TableActionOutcome::Applicable { risk, .. } => {
                 assert_eq!(risk, ExecutionClassification::AdminSafe);
             }
-            other => panic!("expected Appliable, got {other:?}"),
+            other => panic!("expected Applicable, got {other:?}"),
         }
     }
 
     #[test]
-    fn table_removed_probe_ok_is_appliable_with_admin_destructive_risk() {
+    fn table_removed_probe_ok_is_applicable_with_admin_destructive_risk() {
         let action = TableLevelAction::Drop(table());
 
         let outcome = classify_table_action(action, Ok(vec!["DROP TABLE users".to_string()]));
 
         match outcome {
-            TableActionOutcome::Appliable { risk, .. } => {
+            TableActionOutcome::Applicable { risk, .. } => {
                 assert_eq!(risk, ExecutionClassification::AdminDestructive);
             }
-            other => panic!("expected Appliable, got {other:?}"),
+            other => panic!("expected Applicable, got {other:?}"),
         }
     }
 
