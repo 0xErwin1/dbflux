@@ -11,7 +11,12 @@ All notable changes to DBFlux will be documented in this file.
   tables in the sidebar and **Export** them to a folder (one CSV or JSON file
   per table plus a `manifest.json` that makes the bundle re-importable),
   **Import** a previously exported bundle into a connected database, or
-  **Migrate** tables directly from one connection to another. Migration orders
+  **Migrate** tables directly from one connection to another through a guided,
+  multi-phase wizard — pick the source tables and the target database from a
+  connection → database → schema → table tree, review the mapping in a
+  Source / Target / Mapping / Transform grid, and move through Options,
+  Confirm, and Run steps tracked in a phase sidebar, in a larger centered
+  modal. Migration orders
   tables by foreign-key dependencies (parents before children), with a manual
   reorder step when the graph has cycles and an optional
   disable-referential-integrity toggle during transfer. Target tables can be
