@@ -5,7 +5,7 @@
 //! multi-select. `TreeNav` itself is a pure nav model that renders nothing,
 //! so checkbox state has no business living there (design ADR #3) — it
 //! lives here instead. Pure data, no GPUI, unit testable without a wizard
-//! entity. A later slice turns live metadata into `TreeNavNode`s keyed by
+//! entity. `source_target` turns live metadata into `TreeNavNode`s keyed by
 //! these same ids and hands them to `TreeNav::set_nodes`.
 
 use std::collections::{HashMap, HashSet};
@@ -35,9 +35,9 @@ pub enum TreePayload {
     },
 }
 
-/// Per-node lazy-load state. Reused by the Tables Mapping grid (a later
-/// slice) for its own target-table-existence lookup, so `Loaded` carries no
-/// payload here — the grid reads the result from its own row state.
+/// Per-node lazy-load state. Reused by the Tables Mapping grid for its own
+/// target-table-existence lookup, so `Loaded` carries no payload here — the
+/// grid reads the result from its own row state.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum NodeLoad {
     #[default]

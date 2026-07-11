@@ -14,8 +14,7 @@
 //! checkbox glyph is drawn here over `TreeModel::is_checked`, and an
 //! unexpanded/loading/failed branch surfaces a synthetic child row
 //! (`Loading…` / `Retry`) so the branch stays expandable and its state is
-//! visible. This phase is a self-contained entity so it compiles and is
-//! reviewable on its own; the wizard entity rewrite mounts it later.
+//! visible. The wizard entity mounts this phase as the first step of the flow.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
@@ -289,6 +288,34 @@ fn split_tables_by_schema(tables: Vec<TableEntry>) -> (Vec<TableEntry>, Vec<Sche
     (schemaless, schemas)
 }
 
+/// Whether a source-side node may be checked: a migration reads from exactly
+/// one database, so only a table leaf that lives in `source_database` is
+/// selectable. Gating both the checkbox and the toggle on this makes it
+/// impossible to check a same-named table in another browsed database — which
+/// would otherwise be silently migrated in place of the intended one.
+fn is_source_table_checkable(payload: Option<&TreePayload>, source_database: &str) -> bool {
+    matches!(
+        payload,
+        Some(TreePayload::Table { database, .. }) if database == source_database
+    )
+}
+
+/// Resolves the wizard-owned checked set to `TableRef`s, keeping only tables
+/// that live in `source_database`. Any stray check from another browsed
+/// database is dropped, so the returned tables always resolve against the
+/// single source the plan is built for.
+fn checked_tables_in_database(model: &TreeModel, source_database: &str) -> Vec<TableRef> {
+    model
+        .checked_ids()
+        .filter_map(|id| match model.payload(id) {
+            Some(TreePayload::Table {
+                database, table, ..
+            }) if database == source_database => Some(table.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Per-side runtime state: the known structure, the payload/load/checked
 /// model, and the `TreeNav` nav state built from them.
 struct SideState {
@@ -301,6 +328,11 @@ pub struct SourceTargetPhase {
     app_state: Entity<AppStateEntity>,
     focus_handle: FocusHandle,
     source_profile_id: Uuid,
+    /// The single database the migration reads from. A migration has exactly
+    /// one source database, so only tables that live in it are checkable —
+    /// checking a same-named table in another browsed database would silently
+    /// migrate the wrong table (the plan resolves one source database only).
+    source_database: String,
     source: SideState,
     target: SideState,
     active_side: TreeSide,
@@ -342,6 +374,7 @@ impl SourceTargetPhase {
             app_state,
             focus_handle: cx.focus_handle(),
             source_profile_id,
+            source_database: resolved_database,
             source: SideState {
                 roots: source_roots,
                 model: source_model,
@@ -364,15 +397,19 @@ impl SourceTargetPhase {
 
     /// The tables the user has checked in the source tree, resolved from the
     /// wizard-owned checked set back to `TableRef`s via the payload map.
+    /// Constrained to the single [`source_database`](Self::source_database):
+    /// a migration reads from exactly one database, so a stray check in
+    /// another browsed database is never returned as a source table.
     pub fn checked_source_tables(&self) -> Vec<TableRef> {
-        self.source
-            .model
-            .checked_ids()
-            .filter_map(|id| match self.source.model.payload(id) {
-                Some(TreePayload::Table { table, .. }) => Some(table.clone()),
-                _ => None,
-            })
-            .collect()
+        checked_tables_in_database(&self.source.model, &self.source_database)
+    }
+
+    /// The single database this migration reads from. Downstream plan
+    /// assembly must use exactly this database so that every table from
+    /// [`checked_source_tables`](Self::checked_source_tables) resolves against
+    /// the same source — see the cross-database check guard in `on_select`.
+    pub fn source_database(&self) -> &str {
+        &self.source_database
     }
 
     pub fn target_profile_id(&self) -> Option<Uuid> {
@@ -520,10 +557,20 @@ impl SourceTargetPhase {
         }
 
         match self.side(side).model.payload(&id).cloned() {
-            Some(TreePayload::Table { .. }) if side == TreeSide::Source => {
-                self.source.model.toggle_checked(&id);
-                cx.emit(SourceTargetChanged);
-                cx.notify();
+            Some(TreePayload::Table { database, .. }) if side == TreeSide::Source => {
+                if database == self.source_database {
+                    self.source.model.toggle_checked(&id);
+                    self.error = None;
+                    cx.emit(SourceTargetChanged);
+                    cx.notify();
+                } else {
+                    self.error = Some(format!(
+                        "A migration has a single source database. Only tables in \
+                         '{}' can be selected — tables in '{database}' can't be mixed in.",
+                        self.source_database
+                    ));
+                    cx.notify();
+                }
             }
             Some(TreePayload::Database {
                 profile_id,
@@ -923,9 +970,9 @@ impl SourceTargetPhase {
         let row_id = row.id.clone();
         let synthetic = is_status_id(&row_id) || is_retry_id(&row_id);
         let is_checkable = side == TreeSide::Source
-            && matches!(
+            && is_source_table_checkable(
                 self.side(side).model.payload(&row_id),
-                Some(TreePayload::Table { .. })
+                &self.source_database,
             );
         let is_checked = is_checkable && self.side(side).model.is_checked(&row_id);
         let is_target_selected = side == TreeSide::Target
@@ -1065,13 +1112,15 @@ fn current_database_node(database: &str, relational: &dbflux_core::RelationalSch
 #[cfg(test)]
 mod tests {
     use super::{
-        ConnRoot, DbNode, SchemaNode, TableEntry, TreeSide, build_side_nodes, is_retry_id,
-        is_status_id, parent_of_synthetic, split_tables_by_schema,
+        ConnRoot, DbNode, SchemaNode, TableEntry, TreeSide, build_side_nodes,
+        checked_tables_in_database, is_retry_id, is_source_table_checkable, is_status_id,
+        parent_of_synthetic, split_tables_by_schema,
     };
     use crate::migrate_wizard::tree_model::{
         NodeLoad, TreeModel, TreePayload, connection_node_id, database_node_id, schema_node_id,
         table_node_id,
     };
+    use dbflux_core::TableRef;
     use uuid::Uuid;
 
     fn uuid(seed: u8) -> Uuid {
@@ -1226,6 +1275,74 @@ mod tests {
         assert_eq!(public.tables.len(), 2);
         let audit = schemas.iter().find(|s| s.name == "audit").unwrap();
         assert_eq!(audit.tables.len(), 1);
+    }
+
+    fn table_payload(
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+        name: &str,
+    ) -> TreePayload {
+        TreePayload::Table {
+            profile_id,
+            database: database.to_string(),
+            schema: schema.map(str::to_string),
+            table: TableRef {
+                schema: schema.map(str::to_string),
+                name: name.to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn checked_source_tables_never_cross_the_resolved_source_database() {
+        let profile_id = uuid(9);
+        let mut model = TreeModel::new();
+
+        // Same table name in two different databases — the exact silent
+        // cross-database mismatch W1 guards against.
+        let active_users = table_node_id(profile_id, "app", Some("public"), "users");
+        let other_users = table_node_id(profile_id, "archive", Some("public"), "users");
+        let other_orders = table_node_id(profile_id, "archive", Some("public"), "orders");
+
+        model.insert_payload(
+            active_users.clone(),
+            table_payload(profile_id, "app", Some("public"), "users"),
+        );
+        model.insert_payload(
+            other_users.clone(),
+            table_payload(profile_id, "archive", Some("public"), "users"),
+        );
+        model.insert_payload(
+            other_orders.clone(),
+            table_payload(profile_id, "archive", Some("public"), "orders"),
+        );
+
+        model.toggle_checked(&active_users);
+        model.toggle_checked(&other_users);
+        model.toggle_checked(&other_orders);
+        assert_eq!(model.checked_count(), 3);
+
+        let resolved = checked_tables_in_database(&model, "app");
+
+        // Only the table in the active source database survives — the
+        // same-named "users" and the "orders" in "archive" are dropped, so a
+        // cross-database source table can never reach the plan.
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].name, "users");
+
+        assert!(is_source_table_checkable(
+            model.payload(&active_users),
+            "app"
+        ));
+        assert!(!is_source_table_checkable(
+            model.payload(&other_users),
+            "app"
+        ));
+        assert!(!is_source_table_checkable(
+            model.payload(&other_orders),
+            "app"
+        ));
     }
 
     #[test]

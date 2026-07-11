@@ -3,8 +3,8 @@
 //! reorder interrupt overlay, and run-state tracking. No GPUI — unit
 //! testable without a wizard entity. Rendering (`render_phase_rail`) and the
 //! metadata-dependent transitions (`Options` → `Confirm`, which needs a real
-//! `topological_order` result) are built in later slices; this module only
-//! owns the state shapes and the guards that do not require live metadata.
+//! `topological_order` result) live in `mod.rs`; this module owns only the
+//! state shapes and the guards that do not require live metadata.
 
 use dbflux_core::TableRef;
 
@@ -88,7 +88,7 @@ pub fn can_advance_from_source_target(
 }
 
 /// One mapping-grid row's readiness to advance past `TablesMapping`,
-/// decoupled from the grid's full row type (built in a later slice).
+/// decoupled from the grid's full row type in `mapping.rs`.
 pub struct MappingRowReadiness<'a> {
     pub target_name: &'a str,
     pub target_lookup: NodeLoad,

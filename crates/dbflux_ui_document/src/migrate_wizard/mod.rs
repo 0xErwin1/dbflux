@@ -27,8 +27,8 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::Spacing;
 use dbflux_core::{
-    ColumnInfo, Connection, DriverCapabilities, SchemaCacheKey, SchemaForeignKeyInfo, TableInfo,
-    TableRef, TransferColumn, topological_order,
+    ColumnInfo, Connection, DriverCapabilities, LogErr, SchemaCacheKey, SchemaForeignKeyInfo,
+    TableInfo, TableRef, TransferColumn, topological_order,
 };
 use dbflux_transfer::TableTransferStatus;
 use dbflux_transfer::migration::{MigratedTable, MigrationOptions, MigrationTablePlan};
@@ -449,6 +449,11 @@ pub struct MigrateWizard {
     error: Option<String>,
     advancing: bool,
 
+    /// The phase whose child tree/grid currently holds keyboard focus. Drives
+    /// the render-time focus routing so the active phase receives arrow-key
+    /// focus on entry without a click-in first (keyboard-first identity).
+    focused_phase: Option<WizardPhase>,
+
     /// Resolved once the `Source & Target` phase is left, then fed to the
     /// downstream phases and the run without re-deriving them.
     resolved_source_database: Option<String>,
@@ -480,6 +485,7 @@ impl MigrateWizard {
             phase: WizardPhase::SourceTarget,
             error: None,
             advancing: false,
+            focused_phase: None,
             resolved_source_database: None,
             target_profile_id: None,
             target_database: None,
@@ -515,6 +521,7 @@ impl MigrateWizard {
         self.phase = WizardPhase::SourceTarget;
         self.error = None;
         self.advancing = false;
+        self.focused_phase = None;
 
         self.resolved_source_database = None;
         self.target_profile_id = None;
@@ -695,6 +702,7 @@ impl MigrateWizard {
         }
 
         let checked = source_target.checked_source_tables();
+        let resolved_source_database = source_target.source_database().to_string();
         let Some(target_profile_id) = source_target.target_profile_id() else {
             return;
         };
@@ -722,11 +730,15 @@ impl MigrateWizard {
             return;
         };
 
-        let source_database = self
-            .source_database
-            .clone()
-            .or_else(|| source_connection.active_database())
-            .unwrap_or_default();
+        // Bind the plan's source database to exactly the database the phase
+        // resolved the checked tables against, so every checked table lines up
+        // with the single source the engine reads from. Fall back to the
+        // live connection only when the phase could not resolve one.
+        let source_database = if resolved_source_database.is_empty() {
+            source_connection.active_database().unwrap_or_default()
+        } else {
+            resolved_source_database
+        };
 
         self.resolved_source_database = Some(source_database.clone());
         self.target_profile_id = Some(target_profile_id);
@@ -771,10 +783,19 @@ impl MigrateWizard {
                 this.advancing = false;
                 match configs {
                     Ok(configs) => {
-                        let existing_target_tables = match existing {
-                            Ok(info) => info.tables.into_iter().map(|table| table.name).collect(),
-                            Err(_) => Vec::new(),
-                        };
+                        // A failed listing only affects Create/Existing
+                        // classification while the user types a new name, so
+                        // the empty-list fallback is safe — but the error is
+                        // traced rather than silently dropped.
+                        let existing_target_tables = existing
+                            .map(|info| {
+                                info.tables
+                                    .into_iter()
+                                    .map(|table| table.name)
+                                    .collect::<Vec<_>>()
+                            })
+                            .log_err_with("Could not list existing target tables for mapping")
+                            .unwrap_or_default();
                         this.mount_mapping(
                             configs,
                             existing_target_tables,
@@ -993,6 +1014,44 @@ impl MigrateWizard {
         .detach();
     }
 
+    /// The focus handle of the child entity backing the current phase, so the
+    /// wizard can route keyboard focus into the active tree/grid on entry.
+    /// `Confirm` and `Run` share the confirm/run child.
+    fn active_phase_focus_handle(&self, cx: &App) -> Option<FocusHandle> {
+        match self.phase {
+            WizardPhase::SourceTarget => self
+                .source_target
+                .as_ref()
+                .map(|entity| entity.read(cx).focus_handle().clone()),
+            WizardPhase::TablesMapping => self
+                .mapping
+                .as_ref()
+                .map(|entity| entity.read(cx).focus_handle().clone()),
+            WizardPhase::Options => self
+                .options
+                .as_ref()
+                .map(|entity| entity.read(cx).focus_handle().clone()),
+            WizardPhase::Confirm | WizardPhase::Run => self
+                .confirm_run
+                .as_ref()
+                .map(|entity| entity.read(cx).focus_handle().clone()),
+        }
+    }
+
+    /// Moves keyboard focus into the active phase's child once per phase
+    /// change, so arrow-key navigation works without clicking into the tree
+    /// first. Focus stays put across re-renders of the same phase, so tabbing
+    /// to the footer button is never stolen back.
+    fn focus_active_phase_on_entry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.focused_phase == Some(self.phase) {
+            return;
+        }
+        if let Some(handle) = self.active_phase_focus_handle(cx) {
+            handle.focus(window);
+            self.focused_phase = Some(self.phase);
+        }
+    }
+
     fn mount_confirm_run(&mut self, inputs: ConfirmRunInputs, cx: &mut Context<Self>) {
         let confirm_run = cx.new(|cx| ConfirmRunPhase::new(inputs, cx));
         self._confirm_run_sub = Some(cx.subscribe(
@@ -1074,10 +1133,12 @@ impl MigrateWizard {
 }
 
 impl Render for MigrateWizard {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.visible {
             return div().into_any_element();
         }
+
+        self.focus_active_phase_on_entry(window, cx);
 
         let close_entity = cx.entity().downgrade();
         let close = move |_window: &mut Window, cx: &mut App| {

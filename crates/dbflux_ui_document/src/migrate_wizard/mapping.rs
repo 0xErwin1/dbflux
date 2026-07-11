@@ -331,6 +331,17 @@ impl MappingPhase {
             .await;
 
             this.update(cx, |this, cx| {
+                // Drop a stale result: if the row's target changed while this
+                // fetch was in flight, a newer reseed owns the row and
+                // applying this schema would clobber the current state.
+                let still_current = this.rows.get(row_index).is_some_and(|row| {
+                    row.config.target_schema == table_ref.schema
+                        && row.config.target_table == table_ref.name
+                });
+                if !still_current {
+                    return;
+                }
+
                 if let Some(row) = this.rows.get_mut(row_index) {
                     match result {
                         Ok(super::TableDetailsFetch::Found(info)) => {

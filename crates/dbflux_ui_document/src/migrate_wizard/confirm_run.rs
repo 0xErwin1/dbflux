@@ -454,6 +454,13 @@ impl ConfirmRunPhase {
                     state.fail_task(task_id, "FK order became cyclic mid-run".to_string());
                     cx.emit(AppStateChanged);
                 });
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::Driver,
+                        "Migration failed: FK order became cyclic mid-run".to_string(),
+                    ),
+                    cx,
+                );
                 self.result_summary =
                     Some("Migration failed: FK order became cyclic mid-run".to_string());
             }
