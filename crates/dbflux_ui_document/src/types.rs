@@ -26,6 +26,8 @@ pub enum DocumentKind {
     Chart,
     // Dashboard document (named collection of chart panels)
     Dashboard,
+    // Schema diff & apply document
+    SchemaDiff,
 }
 
 /// Source kind for DataDocument (affects icon and behavior).

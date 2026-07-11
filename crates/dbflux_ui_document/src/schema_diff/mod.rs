@@ -4,3 +4,9 @@
 //! The document, pane, and view live here as the subsystem grows.
 
 pub mod apply;
+pub mod diff_source;
+pub mod pane;
+pub mod view;
+
+pub use diff_source::{DiffMode, DiffSource, RiskBadge, SourcePicker};
+pub use view::SchemaDiffDocument;

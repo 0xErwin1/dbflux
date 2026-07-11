@@ -80,6 +80,14 @@ pub enum DocumentKey {
     /// The synthesized read-only "Instance Overview" dashboard opened from the
     /// sidebar leaf. Deduplicated by `profile_id` — one per connection.
     InstanceOverview { profile_id: Uuid },
+
+    /// A schema-diff & apply document opened from a connection or database
+    /// sidebar node. Deduplicated by `(profile_id, database)` so opening the
+    /// comparison again for the same target focuses the existing tab.
+    SchemaDiff {
+        profile_id: Uuid,
+        database: Option<String>,
+    },
 }
 
 #[cfg(test)]

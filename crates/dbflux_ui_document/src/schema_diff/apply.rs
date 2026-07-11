@@ -60,7 +60,7 @@ impl std::error::Error for ExecutorError {}
 /// `generate_drop_index`; a driver returning `None` (meaning it cannot
 /// express the operation) is likewise surfaced as a named rejection rather
 /// than silently skipped.
-fn build_statements_for_change(
+pub(crate) fn build_statements_for_change(
     table: &TableRef,
     change: &SchemaChange,
     code_generator: &dyn CodeGenerator,
@@ -203,6 +203,21 @@ impl DdlApplyExecutor {
             changes,
             deps,
         }
+    }
+
+    /// Builds the full ordered DDL statement list without executing anything.
+    ///
+    /// This is the read-only feed for the preview surface: it runs the same
+    /// `CodeGenerator` mapping the apply path uses, so the preview shows the
+    /// exact statements that would run, but it never touches the connection and
+    /// never mutates any database. A change the driver cannot express fails
+    /// generation here exactly as it would on apply.
+    pub fn preview_statements(&self) -> Result<Vec<String>, ExecutorError> {
+        build_all_statements(
+            &self.table,
+            &self.changes,
+            self.deps.connection.code_generator(),
+        )
     }
 
     /// Applies the executor's changes, gated by governance and dispatched to
