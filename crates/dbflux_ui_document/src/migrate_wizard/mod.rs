@@ -9,6 +9,7 @@
 //! pre-populates `source_profile_id` / `source_database` / `source_tables`.
 
 mod column_mapping;
+pub mod mapping;
 pub mod phases;
 pub mod source_target;
 pub mod tree_model;
