@@ -13,6 +13,7 @@ use dbflux_core::{
 
 use dbflux_storage::SavedQueryRepo;
 use dbflux_storage::bootstrap::StorageRuntime;
+use dbflux_storage::repositories::sch_schema_snapshots::SchemaSnapshotRepo;
 use dbflux_storage::repositories::viz_dashboard_panels::DashboardPanelsRepository;
 use dbflux_storage::repositories::viz_dashboards::DashboardsRepository;
 use dbflux_storage::repositories::viz_saved_chart_binding_y::SavedChartBindingYRepository;
@@ -180,6 +181,7 @@ impl AppState {
             dashboards_repo,
             dashboard_panels_repo,
             saved_query_repo,
+            schema_snapshot_repo,
         ) = Self::build_viz_repositories(&storage_runtime)?;
 
         let mut state = Self {
@@ -209,6 +211,7 @@ impl AppState {
             dashboards_repo,
             dashboard_panels_repo,
             saved_query_repo,
+            schema_snapshot_repo,
         };
 
         Self::run_post_construction_bootstraps(&mut state);
@@ -345,6 +348,7 @@ impl AppState {
             Arc<DashboardsRepository>,
             Arc<DashboardPanelsRepository>,
             Arc<SavedQueryRepo>,
+            Arc<SchemaSnapshotRepo>,
         ),
         dbflux_storage::error::StorageError,
     > {
@@ -357,6 +361,7 @@ impl AppState {
         let dashboards_repo = Arc::new(DashboardsRepository::new(Arc::clone(&viz_conn)));
         let dashboard_panels_repo = Arc::new(DashboardPanelsRepository::new(Arc::clone(&viz_conn)));
         let saved_query_repo = Arc::new(SavedQueryRepo::new(Arc::clone(&viz_conn)));
+        let schema_snapshot_repo = Arc::new(SchemaSnapshotRepo::new(Arc::clone(&viz_conn)));
 
         Ok((
             saved_charts_repo,
@@ -365,6 +370,7 @@ impl AppState {
             dashboards_repo,
             dashboard_panels_repo,
             saved_query_repo,
+            schema_snapshot_repo,
         ))
     }
 

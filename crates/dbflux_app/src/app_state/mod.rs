@@ -19,6 +19,7 @@ use dbflux_core::{
 };
 use dbflux_storage::SavedQueryRepo;
 use dbflux_storage::bootstrap::StorageRuntime;
+use dbflux_storage::repositories::sch_schema_snapshots::SchemaSnapshotRepo;
 use dbflux_storage::repositories::viz_dashboard_panels::DashboardPanelsRepository;
 use dbflux_storage::repositories::viz_dashboards::DashboardsRepository;
 use dbflux_storage::repositories::viz_saved_chart_binding_y::SavedChartBindingYRepository;
@@ -97,6 +98,8 @@ pub struct AppState {
     pub dashboard_panels_repo: Arc<DashboardPanelsRepository>,
     /// Repository for `qry_saved_queries` and its child tables.
     pub saved_query_repo: Arc<SavedQueryRepo>,
+    /// Repository for `sch_schema_snapshots` and its child tables.
+    pub schema_snapshot_repo: Arc<SchemaSnapshotRepo>,
 }
 
 impl AppState {
