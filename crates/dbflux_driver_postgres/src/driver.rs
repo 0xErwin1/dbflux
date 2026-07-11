@@ -8,14 +8,15 @@ use std::time::Instant;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
-    AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator,
-    CodeGeneratorInfo, ColumnInfo, ColumnKind, ColumnMeta, Connection, ConnectionErrorFormatter,
-    ConnectionExt, ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest,
-    CreateTypeRequest, CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo,
-    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DeploymentClass,
+    AddColumnRequest, AddEnumValueRequest, AddForeignKeyRequest, AlterColumnRequest,
+    CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo, ColumnInfo, ColumnKind,
+    ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile,
+    ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest, CrudResult,
+    CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError,
+    DbKind, DbSchemaInfo, DdlCapabilities, DdlRejection, DefaultSpec, DeploymentClass,
     DescribeRequest, DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits,
-    DriverMetadata, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation,
-    ExecutionSourceContext, ExplainRequest, FieldExportTransform, ForeignKeyBuilder,
+    DriverMetadata, DropColumnRequest, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest,
+    ErrorLocation, ExecutionSourceContext, ExplainRequest, FieldExportTransform, ForeignKeyBuilder,
     ForeignKeyInfo, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon,
     IndexData, IndexInfo, InstanceCatalog, IsolationLevel, KeyValueConnection,
     MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
@@ -341,6 +342,9 @@ impl PostgresCodeGenerator {
 impl CodeGenerator for PostgresCodeGenerator {
     fn capabilities(&self) -> CodeGenCapabilities {
         CodeGenCapabilities::POSTGRES_FULL
+            | CodeGenCapabilities::ADD_COLUMN
+            | CodeGenCapabilities::DROP_COLUMN
+            | CodeGenCapabilities::ALTER_COLUMN
     }
 
     fn generate_create_index(&self, req: &CreateIndexRequest) -> Option<String> {
@@ -480,6 +484,86 @@ impl CodeGenerator for PostgresCodeGenerator {
             "ALTER TYPE {} ADD VALUE '{}';",
             type_name, req.new_value
         ))
+    }
+
+    fn generate_add_column(&self, req: &AddColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        let table = self.qualified(req.schema_name, req.table_name);
+        let mut sql = format!(
+            "ALTER TABLE {} ADD COLUMN {} {}",
+            table,
+            self.quote(req.column_name),
+            req.type_name
+        );
+
+        if !req.nullable {
+            sql.push_str(" NOT NULL");
+        }
+        if let Some(default) = req.default {
+            sql.push_str(&format!(" DEFAULT {}", default));
+        }
+        sql.push(';');
+
+        Ok(vec![sql])
+    }
+
+    fn generate_drop_column(&self, req: &DropColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        let table = self.qualified(req.schema_name, req.table_name);
+        Ok(vec![format!(
+            "ALTER TABLE {} DROP COLUMN {};",
+            table,
+            self.quote(req.column_name)
+        )])
+    }
+
+    fn generate_alter_column(&self, req: &AlterColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        let table = self.qualified(req.schema_name, req.table_name);
+        let column = self.quote(req.column_name);
+        let mut statements = Vec::new();
+
+        if let Some(new_type) = req.new_type {
+            statements.push(format!(
+                "ALTER TABLE {} ALTER COLUMN {} TYPE {};",
+                table, column, new_type
+            ));
+        }
+
+        if let Some(nullable) = req.nullable {
+            let clause = if nullable {
+                "DROP NOT NULL"
+            } else {
+                "SET NOT NULL"
+            };
+            statements.push(format!(
+                "ALTER TABLE {} ALTER COLUMN {} {};",
+                table, column, clause
+            ));
+        }
+
+        match req.default {
+            Some(DefaultSpec::Drop) => {
+                statements.push(format!(
+                    "ALTER TABLE {} ALTER COLUMN {} DROP DEFAULT;",
+                    table, column
+                ));
+            }
+            Some(DefaultSpec::Set(value)) => {
+                statements.push(format!(
+                    "ALTER TABLE {} ALTER COLUMN {} SET DEFAULT {};",
+                    table, column, value
+                ));
+            }
+            None => {}
+        }
+
+        if statements.is_empty() {
+            return Err(DdlRejection {
+                reason: "ALTER COLUMN requires at least one of: type, nullable, default"
+                    .to_string(),
+                followup: None,
+            });
+        }
+
+        Ok(statements)
     }
 }
 
@@ -4332,8 +4416,9 @@ mod tests {
         prokind_to_routine_kind,
     };
     use dbflux_core::{
-        CodeGenerator, ColumnAssignment, CreateTableSpec, CreateTypeRequest, DatabaseCategory,
-        DbConfig, DbDriver, DbError, FormValues, MutationRequest, QueryLanguage, RowInsert,
+        AddColumnRequest, AlterColumnRequest, CodeGenerator, ColumnAssignment, CreateTableSpec,
+        CreateTypeRequest, DatabaseCategory, DbConfig, DbDriver, DbError, DdlRejection,
+        DefaultSpec, DropColumnRequest, FormValues, MutationRequest, QueryLanguage, RowInsert,
         SemanticRequest, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, TableBrowseRequest,
         TableRef, TransferFamily, TypeAttributeDefinition, TypeDefinition, Value, WhereOperator,
     };
@@ -4660,6 +4745,143 @@ mod tests {
         };
 
         assert!(generator.generate_create_type(&request).is_none());
+    }
+
+    // ===== Column ALTER seam (DBF-24) =====
+
+    #[test]
+    fn postgres_codegen_generates_add_column_with_default() {
+        let generator = PostgresCodeGenerator;
+        let request = AddColumnRequest {
+            table_name: "users",
+            schema_name: Some("public"),
+            column_name: "age",
+            type_name: "INTEGER",
+            nullable: false,
+            default: Some("0"),
+        };
+
+        let statements = generator
+            .generate_add_column(&request)
+            .expect("postgres should generate add column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE \"public\".\"users\" ADD COLUMN \"age\" INTEGER NOT NULL DEFAULT 0;"]
+        );
+    }
+
+    #[test]
+    fn postgres_codegen_generates_add_column_nullable_without_default() {
+        let generator = PostgresCodeGenerator;
+        let request = AddColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "nickname",
+            type_name: "TEXT",
+            nullable: true,
+            default: None,
+        };
+
+        let statements = generator
+            .generate_add_column(&request)
+            .expect("postgres should generate add column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE \"users\" ADD COLUMN \"nickname\" TEXT;"]
+        );
+    }
+
+    #[test]
+    fn postgres_codegen_generates_drop_column() {
+        let generator = PostgresCodeGenerator;
+        let request = DropColumnRequest {
+            table_name: "users",
+            schema_name: Some("public"),
+            column_name: "age",
+        };
+
+        let statements = generator
+            .generate_drop_column(&request)
+            .expect("postgres should generate drop column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE \"public\".\"users\" DROP COLUMN \"age\";"]
+        );
+    }
+
+    #[test]
+    fn postgres_codegen_alter_column_emits_independent_type_nullable_default_clauses() {
+        let generator = PostgresCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: Some("public"),
+            column_name: "age",
+            new_type: Some("BIGINT"),
+            nullable: Some(true),
+            default: Some(DefaultSpec::Set("0")),
+        };
+
+        let statements = generator
+            .generate_alter_column(&request)
+            .expect("postgres should generate alter column sql");
+
+        assert_eq!(
+            statements,
+            vec![
+                "ALTER TABLE \"public\".\"users\" ALTER COLUMN \"age\" TYPE BIGINT;",
+                "ALTER TABLE \"public\".\"users\" ALTER COLUMN \"age\" DROP NOT NULL;",
+                "ALTER TABLE \"public\".\"users\" ALTER COLUMN \"age\" SET DEFAULT 0;",
+            ]
+        );
+    }
+
+    #[test]
+    fn postgres_codegen_alter_column_can_drop_default_alone() {
+        let generator = PostgresCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+            new_type: None,
+            nullable: None,
+            default: Some(DefaultSpec::Drop),
+        };
+
+        let statements = generator
+            .generate_alter_column(&request)
+            .expect("postgres should generate alter column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE \"users\" ALTER COLUMN \"age\" DROP DEFAULT;"]
+        );
+    }
+
+    #[test]
+    fn postgres_codegen_alter_column_rejects_when_nothing_to_change() {
+        let generator = PostgresCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+            new_type: None,
+            nullable: None,
+            default: None,
+        };
+
+        let result = generator.generate_alter_column(&request);
+
+        assert_eq!(
+            result,
+            Err(DdlRejection {
+                reason: "ALTER COLUMN requires at least one of: type, nullable, default"
+                    .to_string(),
+                followup: None,
+            })
+        );
     }
 
     // ===== Array literal emission (#76) =====
