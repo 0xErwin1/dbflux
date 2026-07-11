@@ -9,6 +9,8 @@
 //! pre-populates `source_profile_id` / `source_database` / `source_tables`.
 
 mod column_mapping;
+pub mod phases;
+pub mod tree_model;
 
 use std::sync::{Arc, Mutex};
 
