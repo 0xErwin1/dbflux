@@ -6,6 +6,7 @@ pub mod fingerprint;
 pub mod node_id;
 pub mod query_parser;
 pub mod schema_drift;
+pub mod snapshot_record;
 pub(crate) mod types;
 
 pub use builder::{ForeignKeyBuilder, IndexBuilder, SchemaForeignKeyBuilder, SchemaIndexBuilder};
@@ -19,6 +20,7 @@ pub use schema_drift::{
     ColumnDiff, ColumnSnapshot, IndexSnapshot, RiskedChange, SchemaChange, SchemaDiff,
     SchemaDriftDetected, TableChange, diff_schema, diff_table_info,
 };
+pub use snapshot_record::{SchemaSnapshotRecord, SnapshotDepth};
 pub use types::{
     CollectionChildInfo, CollectionChildrenCache, CollectionChildrenPage,
     CollectionChildrenRequest, CollectionIndexInfo, CollectionInfo, CollectionPresentation,
