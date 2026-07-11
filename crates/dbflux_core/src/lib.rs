@@ -196,13 +196,14 @@ pub use schema::{
 };
 
 pub use sql::{
-    AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenerator,
-    CreateIndexRequest, CreateTypeRequest, DefaultSqlDialect, DropForeignKeyRequest,
-    DropIndexRequest, DropTypeRequest, NoOpCodeGenerator, PlaceholderStyle, ReindexRequest,
-    SqlDialect, SqlGenerationOptions, SqlGenerationRequest, SqlOperation, SqlQueryBuilder,
-    SqlValueMode, TypeAttributeDefinition, TypeDefinition, generate_create_table,
-    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
-    generate_sql, generate_truncate, generate_update_template,
+    AddColumnRequest, AddEnumValueRequest, AddForeignKeyRequest, AlterColumnRequest,
+    CodeGenCapabilities, CodeGenerator, CreateIndexRequest, CreateTypeRequest, DdlRejection,
+    DefaultSpec, DefaultSqlDialect, DropColumnRequest, DropForeignKeyRequest, DropIndexRequest,
+    DropTypeRequest, NoOpCodeGenerator, PlaceholderStyle, ReindexRequest, SqlDialect,
+    SqlGenerationOptions, SqlGenerationRequest, SqlOperation, SqlQueryBuilder, SqlValueMode,
+    TypeAttributeDefinition, TypeDefinition, generate_create_table, generate_delete_template,
+    generate_drop_table, generate_insert_template, generate_select_star, generate_sql,
+    generate_truncate, generate_update_template,
 };
 
 pub use pipeline::{

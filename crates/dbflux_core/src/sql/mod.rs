@@ -4,9 +4,10 @@ pub(crate) mod generation;
 pub(crate) mod query_builder;
 
 pub use code_generation::{
-    AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenerator,
-    CreateIndexRequest, CreateTypeRequest, DropForeignKeyRequest, DropIndexRequest,
-    DropTypeRequest, NoOpCodeGenerator, ReindexRequest, TypeAttributeDefinition, TypeDefinition,
+    AddColumnRequest, AddEnumValueRequest, AddForeignKeyRequest, AlterColumnRequest,
+    CodeGenCapabilities, CodeGenerator, CreateIndexRequest, CreateTypeRequest, DdlRejection,
+    DefaultSpec, DropColumnRequest, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest,
+    NoOpCodeGenerator, ReindexRequest, TypeAttributeDefinition, TypeDefinition,
 };
 pub use dialect::{DefaultSqlDialect, PlaceholderStyle, SqlDialect};
 pub use generation::{
