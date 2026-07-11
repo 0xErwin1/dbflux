@@ -21,8 +21,8 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::Spacing;
 use dbflux_core::{
-    Connection, DriverCapabilities, SchemaForeignKeyInfo, TableRef, TaskId, TaskKind, TaskStatus,
-    TaskTarget, TransferColumn, topological_order,
+    ColumnInfo, Connection, DriverCapabilities, SchemaCacheKey, SchemaForeignKeyInfo, TableInfo,
+    TableRef, TaskId, TaskKind, TaskStatus, TaskTarget, TransferColumn, topological_order,
 };
 use dbflux_transfer::TableTransferStatus;
 use dbflux_transfer::migration::{
@@ -38,6 +38,226 @@ use uuid::Uuid;
 
 pub use column_mapping::TableMigrationConfig;
 use column_mapping::mapping_mode_options;
+
+/// Whether an `Err(String)` returned by one of the shared
+/// `AppStateEntity::prepare_fetch_*` seams means "the data is already cached"
+/// rather than a real failure — mirrors the sidebar's `spawn_fetch_*`
+/// handling (`crates/dbflux_ui_sidebar/src/table_loading.rs`), where the same
+/// sentinel strings gate whether to report an error or simply proceed with
+/// what is already cached.
+fn is_already_cached_sentinel(error: &str) -> bool {
+    matches!(
+        error,
+        "Table details already cached" | "Schema foreign keys already cached"
+    )
+}
+
+/// Converts driver-reported column metadata into the transfer engine's
+/// column shape — identical to the wizard's original inline conversion.
+fn to_transfer_columns(columns: Vec<ColumnInfo>) -> Vec<TransferColumn> {
+    columns
+        .into_iter()
+        .map(|c| TransferColumn {
+            name: c.name,
+            type_name: Some(c.type_name),
+            nullable: c.nullable,
+            is_primary_key: c.is_primary_key,
+        })
+        .collect()
+}
+
+/// Assembles the engine's per-table migration plans from the wizard's
+/// adjustable [`TableMigrationConfig`] rows — the same field mapping the
+/// wizard previously built inline in `start_migration`, extracted here so
+/// it is unit-testable without a live wizard entity or GPUI context.
+fn build_migration_table_plans<'a>(
+    configs: impl IntoIterator<Item = &'a TableMigrationConfig>,
+) -> Vec<MigrationTablePlan> {
+    configs
+        .into_iter()
+        .map(|config| MigrationTablePlan {
+            source_table: config.source_table.clone(),
+            source_columns: config.source_columns.clone(),
+            target_schema: config.target_schema.clone(),
+            target_table: config.target_table.clone(),
+            mapping_mode: config.mapping_mode,
+            column_overrides: Some(config.to_overrides()),
+            estimated_total: None,
+        })
+        .collect()
+}
+
+/// Assembles [`MigrationOptions`] from the wizard's resolved run settings.
+/// `target_database` is taken as an explicit parameter (rather than
+/// re-derived from a live connection here) so a future target-container
+/// picker can feed it directly without this function changing shape.
+#[allow(clippy::too_many_arguments)]
+fn build_migration_options(
+    segment_size: u32,
+    source_database: String,
+    target_database: String,
+    destructive_confirmed: bool,
+    disable_referential_integrity: bool,
+    manual_order: Option<Vec<TableRef>>,
+) -> MigrationOptions {
+    MigrationOptions {
+        segment_size,
+        source_database,
+        target_database,
+        destructive_confirmed,
+        disable_referential_integrity,
+        manual_order,
+    }
+}
+
+/// Outcome of fetching one table's details through the shared
+/// `prepare_fetch_table_details` seam. `NotFound` covers both a
+/// driver-reported lookup failure (the common "target table does not exist
+/// yet" case) and any other execute-time error — the caller decides whether
+/// that is fatal (source tables must already exist) or an expected signal
+/// (target tables may not exist yet, see [`TableMigrationConfig::new`]'s
+/// `target_exists` flag).
+enum TableDetailsFetch {
+    Found(TableInfo),
+    NotFound(String),
+}
+
+/// Reads (or fetches, on the background executor) one table's details
+/// through the shared `AppStateEntity::prepare_fetch_table_details` seam,
+/// treating the "already cached" sentinel as success by reading the already
+/// populated `ConnectedProfile` cache instead of re-fetching — mirrors the
+/// sidebar's `spawn_fetch_table_details` (Reuse Audit: replaces the wizard's
+/// former bespoke `Connection::table_details` closure).
+async fn fetch_table_details_via_seam(
+    app_state: &Entity<AppStateEntity>,
+    profile_id: Uuid,
+    database: &str,
+    table_ref: &TableRef,
+    cx: &mut AsyncApp,
+) -> Result<TableDetailsFetch, String> {
+    let prepared = cx
+        .update(|cx| {
+            app_state.read(cx).prepare_fetch_table_details(
+                profile_id,
+                database,
+                table_ref.schema.as_deref(),
+                &table_ref.name,
+            )
+        })
+        .map_err(|e| e.to_string())?;
+
+    let params = match prepared {
+        Ok(params) => params,
+        Err(e) if is_already_cached_sentinel(&e) => {
+            let cached = cx
+                .update(|cx| {
+                    app_state
+                        .read(cx)
+                        .get_table_details(profile_id, database, &table_ref.name)
+                        .cloned()
+                })
+                .map_err(|e| e.to_string())?;
+            return Ok(match cached {
+                Some(info) => TableDetailsFetch::Found(info),
+                None => TableDetailsFetch::NotFound(
+                    "Table details reported as cached but the cache was empty".to_string(),
+                ),
+            });
+        }
+        Err(e) => return Err(e),
+    };
+
+    let execute_result = cx
+        .background_executor()
+        .spawn(async move { params.execute() })
+        .await;
+
+    match execute_result {
+        Ok(result) => {
+            let details = result.details.clone();
+            cx.update(|cx| {
+                app_state.update(cx, |state, _| {
+                    state.set_table_details(
+                        result.profile_id,
+                        result.database.clone(),
+                        result.table.clone(),
+                        result.details,
+                    );
+                    state.set_dependents(
+                        result.profile_id,
+                        result.database,
+                        result.table,
+                        result.dependents,
+                    );
+                });
+            })
+            .map_err(|e| e.to_string())?;
+            Ok(TableDetailsFetch::Found(details))
+        }
+        Err(e) => Ok(TableDetailsFetch::NotFound(e)),
+    }
+}
+
+/// Reads (or fetches, on the background executor) one schema's foreign keys
+/// through the shared `AppStateEntity::prepare_fetch_schema_foreign_keys`
+/// seam, treating the "already cached" sentinel as success by reading the
+/// already populated `ConnectedProfile` cache — mirrors
+/// [`fetch_table_details_via_seam`]. Replaces the wizard's former
+/// synchronous foreground `Connection::schema_foreign_keys` call.
+async fn fetch_schema_foreign_keys_via_seam(
+    app_state: &Entity<AppStateEntity>,
+    profile_id: Uuid,
+    database: &str,
+    schema: Option<&str>,
+    cx: &mut AsyncApp,
+) -> Result<Vec<SchemaForeignKeyInfo>, String> {
+    let prepared = cx
+        .update(|cx| {
+            app_state
+                .read(cx)
+                .prepare_fetch_schema_foreign_keys(profile_id, database, schema)
+        })
+        .map_err(|e| e.to_string())?;
+
+    let params = match prepared {
+        Ok(params) => params,
+        Err(e) if is_already_cached_sentinel(&e) => {
+            let key = SchemaCacheKey::new(database, schema.map(str::to_string));
+            return cx
+                .update(|cx| {
+                    app_state
+                        .read(cx)
+                        .connections()
+                        .get(&profile_id)
+                        .and_then(|connected| connected.schema_foreign_keys.get(&key))
+                        .cloned()
+                        .unwrap_or_default()
+                })
+                .map_err(|e| e.to_string());
+        }
+        Err(e) => return Err(e),
+    };
+
+    let execute_result = cx
+        .background_executor()
+        .spawn(async move { params.execute() })
+        .await?;
+
+    let foreign_keys = execute_result.foreign_keys.clone();
+    cx.update(|cx| {
+        app_state.update(cx, |state, _| {
+            state.set_schema_foreign_keys(
+                execute_result.profile_id,
+                execute_result.database,
+                execute_result.schema,
+                execute_result.foreign_keys,
+            );
+        });
+    })
+    .map_err(|e| e.to_string())?;
+
+    Ok(foreign_keys)
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WizardStep {
@@ -254,6 +474,11 @@ impl MigrateWizard {
             cx.notify();
             return;
         };
+        let Some(source_profile_id) = self.source_profile_id else {
+            self.error = Some("No active connection for the source profile".to_string());
+            cx.notify();
+            return;
+        };
         let Some(source_connection) = self.resolve_source_connection(cx) else {
             self.error = Some("No active connection for the source profile".to_string());
             cx.notify();
@@ -279,71 +504,67 @@ impl MigrateWizard {
         self.error = None;
         cx.notify();
 
+        let app_state = self.app_state.clone();
+
         cx.spawn(async move |this, cx| {
-            let build_result = cx
-                .background_executor()
-                .spawn(async move {
-                    let mut configs = Vec::with_capacity(source_tables.len());
-                    for table_ref in &source_tables {
-                        let source_columns: Vec<TransferColumn> = source_connection
-                            .table_details(
-                                &source_database,
-                                table_ref.schema.as_deref(),
-                                &table_ref.name,
-                            )
-                            .map_err(|e| format!("{}: {e}", table_ref.qualified_name()))?
-                            .columns
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(|c| TransferColumn {
-                                name: c.name,
-                                type_name: Some(c.type_name),
-                                nullable: c.nullable,
-                                is_primary_key: c.is_primary_key,
-                            })
-                            .collect();
+            let mut configs = Vec::with_capacity(source_tables.len());
+            let mut build_error: Option<String> = None;
 
-                        let target_lookup = target_connection.table_details(
-                            &target_database,
-                            table_ref.schema.as_deref(),
-                            &table_ref.name,
-                        );
-                        let target_exists = target_lookup.is_ok();
-                        let target_columns = target_lookup
-                            .ok()
-                            .and_then(|info| info.columns)
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(|c| TransferColumn {
-                                name: c.name,
-                                type_name: Some(c.type_name),
-                                nullable: c.nullable,
-                                is_primary_key: c.is_primary_key,
-                            })
-                            .collect::<Vec<_>>();
-
-                        configs.push(TableMigrationConfig::new(
-                            table_ref.clone(),
-                            source_columns,
-                            target_exists,
-                            target_columns,
-                        ));
-                    }
-
-                    Ok::<Vec<TableMigrationConfig>, String>(configs)
-                })
+            for table_ref in &source_tables {
+                let source_details = fetch_table_details_via_seam(
+                    &app_state,
+                    source_profile_id,
+                    &source_database,
+                    table_ref,
+                    cx,
+                )
                 .await;
+                let source_info = match source_details {
+                    Ok(TableDetailsFetch::Found(info)) => info,
+                    Ok(TableDetailsFetch::NotFound(e)) | Err(e) => {
+                        build_error = Some(format!("{}: {e}", table_ref.qualified_name()));
+                        break;
+                    }
+                };
+                let source_columns = to_transfer_columns(source_info.columns.unwrap_or_default());
+
+                let target_details = fetch_table_details_via_seam(
+                    &app_state,
+                    target_profile_id,
+                    &target_database,
+                    table_ref,
+                    cx,
+                )
+                .await;
+                let (target_exists, target_columns) = match target_details {
+                    Ok(TableDetailsFetch::Found(info)) => {
+                        (true, to_transfer_columns(info.columns.unwrap_or_default()))
+                    }
+                    Ok(TableDetailsFetch::NotFound(_)) => (false, Vec::new()),
+                    Err(e) => {
+                        build_error = Some(format!("{}: {e}", table_ref.qualified_name()));
+                        break;
+                    }
+                };
+
+                configs.push(TableMigrationConfig::new(
+                    table_ref.clone(),
+                    source_columns,
+                    target_exists,
+                    target_columns,
+                ));
+            }
 
             this.update(cx, |this, cx| {
                 this.loading = false;
-                match build_result {
-                    Ok(configs) => {
+                match build_error {
+                    None => {
                         this.supports_truncate = supports_truncate;
                         this.supports_disable_ri = supports_disable_ri;
                         this.build_rows(configs, cx);
                         this.step = WizardStep::Configure;
                     }
-                    Err(e) => {
+                    Some(e) => {
                         this.error = Some(format!("Could not read table schema: {e}"));
                     }
                 }
@@ -467,6 +688,11 @@ impl MigrateWizard {
     /// transitions to `ReorderCycle` instead of proceeding — the caller must
     /// never guess an order across a cyclic FK graph (R6).
     fn continue_from_configure(&mut self, cx: &mut Context<Self>) {
+        let Some(source_profile_id) = self.source_profile_id else {
+            self.error = Some("No active connection for the source profile".to_string());
+            cx.notify();
+            return;
+        };
         let Some(source_connection) = self.resolve_source_connection(cx) else {
             self.error = Some("No active connection for the source profile".to_string());
             cx.notify();
@@ -489,33 +715,63 @@ impl MigrateWizard {
         schemas.sort();
         schemas.dedup();
 
-        let mut fks: Vec<SchemaForeignKeyInfo> = Vec::new();
-        for schema in schemas {
-            match source_connection.schema_foreign_keys(&source_database, schema.as_deref()) {
-                Ok(batch) => fks.extend(batch),
-                Err(e) => {
-                    self.error = Some(format!("Could not read foreign keys: {e}"));
-                    cx.notify();
-                    return;
+        self.error = None;
+        cx.notify();
+
+        let app_state = self.app_state.clone();
+
+        cx.spawn(async move |this, cx| {
+            let mut fks: Vec<SchemaForeignKeyInfo> = Vec::new();
+            let mut fetch_error: Option<String> = None;
+
+            for schema in &schemas {
+                match fetch_schema_foreign_keys_via_seam(
+                    &app_state,
+                    source_profile_id,
+                    &source_database,
+                    schema.as_deref(),
+                    cx,
+                )
+                .await
+                {
+                    Ok(batch) => fks.extend(batch),
+                    Err(e) => {
+                        fetch_error = Some(e);
+                        break;
+                    }
                 }
             }
-        }
 
-        match topological_order(&table_refs, &fks) {
-            dbflux_core::OrderResult::Ordered(order) => {
-                self.final_order = Some(order);
-                self.advance_past_ordering(cx);
-            }
-            dbflux_core::OrderResult::Cyclic {
-                ordered_prefix,
-                cycle,
-            } => {
-                self.cyclic_prefix = ordered_prefix;
-                self.reorder_list = cycle;
-                self.step = WizardStep::ReorderCycle;
-                cx.notify();
-            }
-        }
+            let order_result = match fetch_error {
+                Some(e) => Err(e),
+                None => Ok(cx
+                    .background_executor()
+                    .spawn(async move { topological_order(&table_refs, &fks) })
+                    .await),
+            };
+
+            this.update(cx, |this, cx| match order_result {
+                Ok(dbflux_core::OrderResult::Ordered(order)) => {
+                    this.final_order = Some(order);
+                    this.advance_past_ordering(cx);
+                }
+                Ok(dbflux_core::OrderResult::Cyclic {
+                    ordered_prefix,
+                    cycle,
+                }) => {
+                    this.cyclic_prefix = ordered_prefix;
+                    this.reorder_list = cycle;
+                    this.step = WizardStep::ReorderCycle;
+                    cx.notify();
+                }
+                Err(e) => {
+                    this.error = Some(format!("Could not read foreign keys: {e}"));
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn move_reorder_row(&mut self, index: usize, delta: isize, cx: &mut Context<Self>) {
@@ -586,19 +842,7 @@ impl MigrateWizard {
         let target_database = target_connection.active_database().unwrap_or_default();
         let manual_order = self.final_order.clone();
 
-        let plans: Vec<MigrationTablePlan> = self
-            .rows
-            .iter()
-            .map(|row| MigrationTablePlan {
-                source_table: row.config.source_table.clone(),
-                source_columns: row.config.source_columns.clone(),
-                target_schema: row.config.target_schema.clone(),
-                target_table: row.config.target_table.clone(),
-                mapping_mode: row.config.mapping_mode,
-                column_overrides: Some(row.config.to_overrides()),
-                estimated_total: None,
-            })
-            .collect();
+        let plans = build_migration_table_plans(self.rows.iter().map(|row| &row.config));
         let destructive_confirmed = self.confirmed_destructive;
         let disable_referential_integrity = self.disable_ri && self.supports_disable_ri;
 
@@ -670,14 +914,14 @@ impl MigrateWizard {
             let migration_result = cx
                 .background_executor()
                 .spawn(async move {
-                    let options = MigrationOptions {
-                        segment_size: 500,
+                    let options = build_migration_options(
+                        500,
                         source_database,
                         target_database,
                         destructive_confirmed,
                         disable_referential_integrity,
                         manual_order,
-                    };
+                    );
 
                     run_migration(
                         &source_connection,
@@ -1097,5 +1341,114 @@ impl MigrateWizard {
                     .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        TableMigrationConfig, build_migration_options, build_migration_table_plans,
+        is_already_cached_sentinel,
+    };
+    use dbflux_core::{TableRef, TransferColumn};
+
+    fn transfer_column(name: &str) -> TransferColumn {
+        TransferColumn {
+            name: name.to_string(),
+            type_name: Some("text".to_string()),
+            nullable: true,
+            is_primary_key: false,
+        }
+    }
+
+    #[test]
+    fn is_already_cached_sentinel_matches_only_the_known_sentinel_strings() {
+        assert!(is_already_cached_sentinel("Table details already cached"));
+        assert!(is_already_cached_sentinel(
+            "Schema foreign keys already cached"
+        ));
+        assert!(!is_already_cached_sentinel("Profile not connected"));
+        assert!(!is_already_cached_sentinel(""));
+    }
+
+    #[test]
+    fn build_migration_table_plans_maps_every_config_field_and_defaults_estimate_to_none() {
+        let source_columns = vec![transfer_column("id"), transfer_column("legacy_x")];
+        let target_columns = vec![transfer_column("id"), transfer_column("y")];
+        let mut config = TableMigrationConfig::new(
+            TableRef::new("users"),
+            source_columns.clone(),
+            true,
+            target_columns,
+        );
+        config.target_schema = Some("public".to_string());
+        config.set_binding(1, Some(1));
+        let expected_overrides = config.to_overrides();
+
+        let plans = build_migration_table_plans(std::slice::from_ref(&config));
+
+        assert_eq!(plans.len(), 1);
+        let plan = &plans[0];
+        assert_eq!(plan.source_table, config.source_table);
+        assert_eq!(plan.source_columns, source_columns);
+        assert_eq!(plan.target_schema, Some("public".to_string()));
+        assert_eq!(plan.target_table, config.target_table);
+        assert_eq!(plan.mapping_mode, config.mapping_mode);
+        assert_eq!(plan.column_overrides, Some(expected_overrides));
+        assert_eq!(plan.estimated_total, None);
+    }
+
+    #[test]
+    fn build_migration_table_plans_assembles_one_plan_per_config_in_order() {
+        let users = TableMigrationConfig::new(
+            TableRef::new("users"),
+            vec![transfer_column("id")],
+            true,
+            vec![transfer_column("id")],
+        );
+        let orders = TableMigrationConfig::new(
+            TableRef::new("orders"),
+            vec![transfer_column("id")],
+            false,
+            Vec::new(),
+        );
+        let configs = vec![users, orders];
+
+        let plans = build_migration_table_plans(&configs);
+
+        assert_eq!(plans.len(), 2);
+        assert_eq!(plans[0].target_table, "users");
+        assert_eq!(plans[1].target_table, "orders");
+    }
+
+    #[test]
+    fn build_migration_options_maps_every_field_including_target_database() {
+        let options = build_migration_options(
+            500,
+            "source_db".to_string(),
+            "target_db".to_string(),
+            true,
+            false,
+            Some(vec![TableRef::new("a"), TableRef::new("b")]),
+        );
+
+        assert_eq!(options.segment_size, 500);
+        assert_eq!(options.source_database, "source_db");
+        assert_eq!(options.target_database, "target_db");
+        assert!(options.destructive_confirmed);
+        assert!(!options.disable_referential_integrity);
+        assert_eq!(
+            options.manual_order,
+            Some(vec![TableRef::new("a"), TableRef::new("b")])
+        );
+    }
+
+    #[test]
+    fn build_migration_options_with_no_manual_order_leaves_it_none() {
+        let options =
+            build_migration_options(250, "src".to_string(), "dst".to_string(), false, true, None);
+
+        assert_eq!(options.manual_order, None);
+        assert!(options.disable_referential_integrity);
     }
 }
