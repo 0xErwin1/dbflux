@@ -9,7 +9,7 @@
 use log::info;
 use rusqlite::{Connection, Transaction, params};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use crate::bootstrap::OwnedConnection;
@@ -517,6 +517,157 @@ impl HookDefinitionRepository {
         Ok(())
     }
 
+    /// Replaces readable hook definitions and their normalized children in one transaction.
+    pub fn replace_all_atomic(
+        &self,
+        desired: &[HookDefinitionReplacement],
+        protected_ids: &HashSet<String>,
+    ) -> Result<Vec<HookDefinitionDto>, StorageError> {
+        let existing = self.all()?;
+        let existing_by_id: HashMap<_, _> = existing.iter().map(|hook| (&hook.id, hook)).collect();
+        let existing_by_name: HashMap<_, _> =
+            existing.iter().map(|hook| (&hook.name, hook)).collect();
+        let mut desired_ids = HashSet::new();
+        let mut desired_names = HashSet::new();
+
+        for replacement in desired {
+            if !desired_names.insert(&replacement.definition.name) {
+                return Err(StorageError::Data(format!(
+                    "duplicate hook name: {}",
+                    replacement.definition.name
+                )));
+            }
+
+            if let Some(id) = &replacement.id {
+                if replacement.definition.id != *id {
+                    return Err(StorageError::Data(format!("hook ID mismatch: {id}")));
+                }
+                if !desired_ids.insert(id.clone()) {
+                    return Err(StorageError::Data(format!("duplicate hook ID: {id}")));
+                }
+                if protected_ids.contains(id) {
+                    return Err(StorageError::Data(format!("protected hook ID: {id}")));
+                }
+                if !existing_by_id.contains_key(id) {
+                    return Err(StorageError::Data(format!("unknown hook ID: {id}")));
+                }
+            }
+
+            if let Some(existing) = existing_by_name.get(&replacement.definition.name)
+                && replacement.id.as_deref() != Some(existing.id.as_str())
+            {
+                return Err(StorageError::Data(format!(
+                    "hook name already exists: {}",
+                    replacement.definition.name
+                )));
+            }
+        }
+
+        let tx = self
+            .conn()
+            .unchecked_transaction()
+            .map_err(|source| StorageError::Sqlite {
+                path: "dbflux.db".into(),
+                source,
+            })?;
+        let mut saved = Vec::with_capacity(desired.len());
+        let mut retained_ids = desired_ids;
+
+        for replacement in desired {
+            let mut definition = replacement.definition.clone();
+            definition.id = replacement
+                .id
+                .clone()
+                .unwrap_or_else(|| Uuid::new_v4().to_string());
+            retained_ids.insert(definition.id.clone());
+            Self::upsert_in_transaction(&tx, &definition)?;
+
+            match &replacement.command {
+                Some(command) => {
+                    let mut command = command.clone();
+                    command.hook_id = definition.id.clone();
+                    Self::write_command_in_transaction(&tx, &command)?;
+                }
+                None => Self::delete_command_in_transaction(&tx, &definition.id)?,
+            }
+            Self::write_environment_in_transaction(&tx, &definition.id, &replacement.environment)?;
+            saved.push(definition);
+        }
+
+        for existing in existing {
+            if !protected_ids.contains(&existing.id) && !retained_ids.contains(&existing.id) {
+                tx.execute(
+                    "DELETE FROM cfg_hook_definitions WHERE id = ?1",
+                    [&existing.id],
+                )
+                .map_err(|source| StorageError::Sqlite {
+                    path: "dbflux.db".into(),
+                    source,
+                })?;
+            }
+        }
+
+        tx.commit().map_err(|source| StorageError::Sqlite {
+            path: "dbflux.db".into(),
+            source,
+        })?;
+        Ok(saved)
+    }
+
+    fn upsert_in_transaction(
+        tx: &Transaction<'_>,
+        hook: &HookDefinitionDto,
+    ) -> Result<(), StorageError> {
+        let env_denylist_json =
+            serde_json::to_string(&hook.env_denylist).unwrap_or_else(|_| "[]".to_string());
+
+        tx.execute(
+            r#"
+            INSERT INTO cfg_hook_definitions (
+                id, name, execution_mode, script_ref, cwd,
+                inherit_env, timeout_ms, ready_signal, on_failure,
+                enabled, created_at, updated_at, env_denylist_json, kind_json
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                datetime('now'), datetime('now'), ?11, ?12
+            )
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                execution_mode = excluded.execution_mode,
+                script_ref = excluded.script_ref,
+                cwd = excluded.cwd,
+                inherit_env = excluded.inherit_env,
+                timeout_ms = excluded.timeout_ms,
+                ready_signal = excluded.ready_signal,
+                on_failure = excluded.on_failure,
+                enabled = excluded.enabled,
+                env_denylist_json = excluded.env_denylist_json,
+                kind_json = COALESCE(excluded.kind_json, cfg_hook_definitions.kind_json),
+                updated_at = datetime('now')
+            "#,
+            params![
+                hook.id,
+                hook.name,
+                hook.execution_mode,
+                hook.script_ref,
+                hook.cwd,
+                hook.inherit_env as i32,
+                hook.timeout_ms,
+                hook.ready_signal,
+                hook.on_failure,
+                hook.enabled as i32,
+                env_denylist_json,
+                hook.kind_json,
+            ],
+        )
+        .map_err(|source| StorageError::Sqlite {
+            path: "dbflux.db".into(),
+            source,
+        })?;
+
+        Ok(())
+    }
+
     /// Returns the count of hooks.
     pub fn count(&self) -> Result<i64, StorageError> {
         let count: i64 = self
@@ -531,6 +682,15 @@ impl HookDefinitionRepository {
 
         Ok(count)
     }
+}
+
+/// A requested hook replacement including its normalized child data.
+#[derive(Debug, Clone)]
+pub struct HookDefinitionReplacement {
+    pub id: Option<String>,
+    pub definition: HookDefinitionDto,
+    pub command: Option<HookCommandDto>,
+    pub environment: HashMap<String, String>,
 }
 
 /// DTO for hook definition storage.
@@ -587,6 +747,207 @@ mod tests {
 
     fn temp_db(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("dbflux_repo_hook_{}_{}", name, std::process::id()))
+    }
+
+    #[test]
+    fn replace_all_atomic_replaces_rows_and_children_after_preflight() {
+        let path = temp_db("replace_all_atomic");
+        let _ = std::fs::remove_file(&path);
+
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = HookDefinitionRepository::new(Arc::new(conn));
+        let existing = HookDefinitionDto::new(
+            Uuid::new_v4(),
+            "Existing".to_string(),
+            "Command".to_string(),
+        );
+        let removed =
+            HookDefinitionDto::new(Uuid::new_v4(), "Removed".to_string(), "Command".to_string());
+        let protected = HookDefinitionDto::new(
+            Uuid::new_v4(),
+            "Protected".to_string(),
+            "Command".to_string(),
+        );
+        repo.insert(&existing).expect("should insert existing row");
+        repo.insert(&removed).expect("should insert removed row");
+        repo.insert(&protected)
+            .expect("should insert protected row");
+
+        let replacement = HookDefinitionReplacement {
+            id: Some(existing.id.clone()),
+            definition: HookDefinitionDto {
+                name: "Renamed".to_string(),
+                kind_json: Some(r#"{\"kind\":\"command\"}"#.to_string()),
+                ..existing.clone()
+            },
+            command: Some(HookCommandDto::new(
+                existing.id.clone(),
+                "echo updated".to_string(),
+            )),
+            environment: HashMap::from([("KEY".to_string(), "VALUE".to_string())]),
+        };
+        let created = HookDefinitionReplacement {
+            id: None,
+            definition: HookDefinitionDto::new(
+                Uuid::new_v4(),
+                "Created".to_string(),
+                "Script".to_string(),
+            ),
+            command: None,
+            environment: HashMap::new(),
+        };
+
+        let saved = repo
+            .replace_all_atomic(
+                &[replacement, created],
+                &HashSet::from([protected.id.clone()]),
+            )
+            .expect("should replace rows atomically");
+
+        assert_eq!(saved.len(), 2);
+        assert!(
+            repo.get(&removed.id)
+                .expect("should fetch removed row")
+                .is_none()
+        );
+        assert_eq!(
+            repo.get(&existing.id)
+                .expect("should fetch renamed row")
+                .expect("renamed row should exist")
+                .name,
+            "Renamed"
+        );
+        assert_eq!(
+            repo.get_command(&existing.id)
+                .expect("should fetch command")
+                .expect("command should exist")
+                .command,
+            "echo updated"
+        );
+        assert_eq!(
+            repo.get_env(&existing.id)
+                .expect("should fetch environment"),
+            HashMap::from([("KEY".to_string(), "VALUE".to_string())])
+        );
+        assert_eq!(
+            repo.get(&protected.id)
+                .expect("should fetch protected row")
+                .expect("protected row should exist")
+                .name,
+            "Protected"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
+    }
+
+    #[test]
+    fn replace_all_atomic_rejects_invalid_desired_rows_without_mutation() {
+        let path = temp_db("replace_all_preflight");
+        let _ = std::fs::remove_file(&path);
+
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = HookDefinitionRepository::new(Arc::new(conn));
+        let existing = HookDefinitionDto::new(
+            Uuid::new_v4(),
+            "Existing".to_string(),
+            "Command".to_string(),
+        );
+        repo.insert(&existing).expect("should insert existing row");
+
+        let unknown_id = Uuid::new_v4().to_string();
+        let invalid = HookDefinitionReplacement {
+            id: Some(unknown_id.clone()),
+            definition: HookDefinitionDto {
+                id: unknown_id,
+                name: "Changed".to_string(),
+                ..existing.clone()
+            },
+            command: None,
+            environment: HashMap::new(),
+        };
+        let error = repo
+            .replace_all_atomic(&[invalid], &HashSet::new())
+            .expect_err("unknown IDs must fail preflight");
+
+        assert!(error.to_string().contains("unknown hook ID"));
+        let persisted = repo
+            .get(&existing.id)
+            .expect("should fetch existing row")
+            .expect("existing row should remain");
+        assert_eq!(persisted.name, "Existing");
+        assert_eq!(repo.count().expect("should count rows"), 1);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
+    }
+
+    #[test]
+    fn replace_all_atomic_rejects_duplicate_and_protected_identities() {
+        let path = temp_db("replace_all_identity_preflight");
+        let _ = std::fs::remove_file(&path);
+
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = HookDefinitionRepository::new(Arc::new(conn));
+        let existing = HookDefinitionDto::new(
+            Uuid::new_v4(),
+            "Existing".to_string(),
+            "Command".to_string(),
+        );
+        repo.insert(&existing).expect("should insert existing row");
+
+        let replacement = |name: &str| HookDefinitionReplacement {
+            id: Some(existing.id.clone()),
+            definition: HookDefinitionDto {
+                name: name.to_string(),
+                ..existing.clone()
+            },
+            command: None,
+            environment: HashMap::new(),
+        };
+        let duplicate_id = repo
+            .replace_all_atomic(
+                &[replacement("First"), replacement("Second")],
+                &HashSet::new(),
+            )
+            .expect_err("duplicate IDs must fail preflight");
+        assert!(duplicate_id.to_string().contains("duplicate hook ID"));
+
+        let protected_id = repo
+            .replace_all_atomic(
+                &[replacement("Changed")],
+                &HashSet::from([existing.id.clone()]),
+            )
+            .expect_err("protected IDs must fail preflight");
+        assert!(protected_id.to_string().contains("protected hook ID"));
+        assert_eq!(
+            repo.get(&existing.id)
+                .expect("should fetch existing row")
+                .expect("existing row should remain")
+                .name,
+            "Existing"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
     }
 
     #[test]
@@ -732,13 +1093,16 @@ mod tests {
             .expect("should fetch legacy hook")
             .expect("legacy hook should exist");
         updated.name = "Renamed Legacy Hook".to_string();
+        updated.kind_json = None;
         repo.update(&updated).expect("should update legacy hook");
+        updated.name = "Upserted Legacy Hook".to_string();
+        repo.upsert(&updated).expect("should upsert legacy hook");
 
         let fetched = repo
             .get(&dto.id)
             .expect("should fetch updated legacy hook")
             .expect("updated legacy hook should exist");
-        assert_eq!(fetched.name, "Renamed Legacy Hook");
+        assert_eq!(fetched.name, "Upserted Legacy Hook");
         assert_eq!(
             fetched.kind_json.as_deref(),
             Some(r#"{"legacy":"payload"}"#)
