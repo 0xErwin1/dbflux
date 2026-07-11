@@ -434,7 +434,11 @@ fn is_add_column_safe(op: &AlterOperation) -> bool {
             .get("nullable")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
-        let has_default = def.get("default").is_some();
+        // A `default` key holding JSON `null` means "no default", matching
+        // the diff-side classifier (`SchemaChange::ColumnAdded`'s
+        // `default_value: Option<String>`), so it must not count as "has
+        // default" the way a real value would.
+        let has_default = def.get("default").is_some_and(|v| !v.is_null());
         nullable || has_default
     } else {
         true // No definition means using driver defaults (usually nullable)
@@ -2238,6 +2242,37 @@ mod diff_parity_tests {
 
         assert_eq!(mcp_risk, diff_risk);
         assert_eq!(mcp_risk, ExecutionClassification::AdminDestructive);
+    }
+
+    // FIX-16: a `default` key holding JSON `null` (as sent by clients that
+    // always emit the field) must NOT be treated as "has a default" — it
+    // must classify identically to a not-null ADD COLUMN with no `default`
+    // key at all, matching the diff side's `default_value: Option<String>`.
+    #[test]
+    fn add_not_null_column_with_json_null_default_parity() {
+        let mcp_op = AlterOperation {
+            action: "ADD_COLUMN".to_string(),
+            column: Some("status".to_string()),
+            definition: Some(serde_json::json!({
+                "type": "TEXT",
+                "nullable": false,
+                "default": null
+            })),
+        };
+        let mcp_risk = classify_alter_operations(&[mcp_op]);
+
+        let before = table("users", vec![col("id", "integer", false, None)]);
+        let after = table(
+            "users",
+            vec![
+                col("id", "integer", false, None),
+                col("status", "text", false, None),
+            ],
+        );
+        let diff_risk = diff_risk_for(before, after);
+
+        assert_eq!(mcp_risk, diff_risk);
+        assert_eq!(mcp_risk, ExecutionClassification::Admin);
     }
 
     #[test]
