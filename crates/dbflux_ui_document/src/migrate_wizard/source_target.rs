@@ -32,6 +32,7 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use uuid::Uuid;
 
+use crate::migrate_wizard::phases::can_advance_from_source_target;
 use crate::migrate_wizard::tree_model::{
     NodeLoad, TreeModel, TreePayload, connection_node_id, database_node_id, schema_node_id,
     table_node_id,
@@ -39,6 +40,23 @@ use crate::migrate_wizard::tree_model::{
 
 const ROW_HEIGHT: Pixels = Heights::ROW_COMPACT;
 const INDENT_PX: f32 = 14.0;
+
+/// Display label for the implicit, empty-named database of a single-database
+/// driver (e.g. SQLite, whose one database is conventionally called `main`), so
+/// its tree row is never blank. Keyed off an empty database name, not a driver
+/// id, so it stays driver-agnostic.
+const IMPLICIT_DATABASE_LABEL: &str = "main";
+
+/// The label shown for a database node. Falls back to [`IMPLICIT_DATABASE_LABEL`]
+/// for the empty-named implicit database so the row is readable; the node's
+/// payload keeps the real (possibly empty) database identity untouched.
+fn database_display_label(name: &str) -> SharedString {
+    if name.trim().is_empty() {
+        SharedString::from(IMPLICIT_DATABASE_LABEL)
+    } else {
+        SharedString::from(name.to_string())
+    }
+}
 
 /// Which of the two trees an operation targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,10 +203,12 @@ fn build_database_node(
         },
     );
 
+    let label = database_display_label(&db.name);
+
     if side == TreeSide::Target {
         // The target tree stops at the database — that is the container the
         // migration loads into; per-table mapping is the grid's job.
-        return TreeNavNode::leaf(id, db.name.clone(), Some(AppIcon::Database));
+        return TreeNavNode::leaf(id, label, Some(AppIcon::Database));
     }
 
     let mut children = build_database_children(profile_id, db, model);
@@ -196,7 +216,7 @@ fn build_database_node(
         children.extend(status_child(&id, &model.load(&id)));
     }
 
-    TreeNavNode::group(id, db.name.clone(), Some(AppIcon::Database), children)
+    TreeNavNode::group(id, label, Some(AppIcon::Database), children)
 }
 
 fn build_database_children(
@@ -303,9 +323,11 @@ fn is_source_table_checkable(payload: Option<&TreePayload>, source_database: &st
 /// Resolves the wizard-owned checked set to `TableRef`s, keeping only tables
 /// that live in `source_database`. Any stray check from another browsed
 /// database is dropped, so the returned tables always resolve against the
-/// single source the plan is built for.
+/// single source the plan is built for. Sorted by qualified name — the
+/// checked set is a `HashSet`, and grid rows, Confirm rows, and the
+/// FK-independent run order must be deterministic across openings.
 fn checked_tables_in_database(model: &TreeModel, source_database: &str) -> Vec<TableRef> {
-    model
+    let mut tables: Vec<TableRef> = model
         .checked_ids()
         .filter_map(|id| match model.payload(id) {
             Some(TreePayload::Table {
@@ -313,7 +335,10 @@ fn checked_tables_in_database(model: &TreeModel, source_database: &str) -> Vec<T
             }) if database == source_database => Some(table.clone()),
             _ => None,
         })
-        .collect()
+        .collect();
+
+    tables.sort_by_key(|table| table.qualified_name());
+    tables
 }
 
 /// Per-side runtime state: the known structure, the payload/load/checked
@@ -370,7 +395,7 @@ impl SourceTargetPhase {
         let target_nodes = build_side_nodes(TreeSide::Target, &target_roots, &mut target_model);
         let target_tree = TreeNav::new(target_nodes, HashSet::new());
 
-        Self {
+        let mut phase = Self {
             app_state,
             focus_handle: cx.focus_handle(),
             source_profile_id,
@@ -388,7 +413,37 @@ impl SourceTargetPhase {
             active_side: TreeSide::Source,
             target_selection: None,
             error: None,
+        };
+
+        phase.ensure_resolved_database_loaded(cx);
+        phase
+    }
+
+    /// Kicks the lazy fetch for the resolved source database when no local
+    /// data describes it (sidebar multi-select on a non-current database):
+    /// the node arrives pre-expanded with pre-checked tables, so without an
+    /// immediate fetch the seeded checks would stay unresolvable ghosts and
+    /// the placeholder row would read "Loading…" with nothing in flight.
+    fn ensure_resolved_database_loaded(&mut self, cx: &mut Context<Self>) {
+        if self.source_database.is_empty() {
+            return;
         }
+
+        let populated = self.source.roots.iter().any(|root| {
+            root.databases.iter().any(|db| {
+                db.name == self.source_database && (!db.schemas.is_empty() || !db.tables.is_empty())
+            })
+        });
+        if populated {
+            return;
+        }
+
+        let node_id = database_node_id(self.source_profile_id, &self.source_database);
+        if self.source.model.load(&node_id) != NodeLoad::NotLoaded {
+            return;
+        }
+
+        self.fetch_source_database(node_id, self.source_database.clone(), cx);
     }
 
     pub fn focus_handle(&self) -> &FocusHandle {
@@ -420,11 +475,39 @@ impl SourceTargetPhase {
         self.target_selection.as_ref().map(|t| t.database.clone())
     }
 
-    /// Whether the phase's advance guard is satisfied: at least one checked
-    /// source table and a chosen target container. Transfer compatibility is
-    /// already guaranteed — only compatible targets appear in the tree.
-    pub fn is_ready(&self) -> bool {
-        self.source.model.checked_count() > 0 && self.target_selection.is_some()
+    /// Whether the phase's advance guard is satisfied, via the tested pure
+    /// guard [`can_advance_from_source_target`]: at least one checked source
+    /// table that actually resolves to a real table payload in the source
+    /// database (a raw checked count would let ghost checks enable Continue
+    /// for a "migrate 0 tables" run), a chosen target container, and live
+    /// transfer compatibility between the two connections.
+    pub fn is_ready(&self, cx: &App) -> bool {
+        can_advance_from_source_target(
+            self.checked_source_tables().len(),
+            self.target_selection.is_some(),
+            self.target_is_transfer_compatible(cx),
+        )
+    }
+
+    /// Re-verifies transfer compatibility against the live connections. The
+    /// target tree only lists compatible profiles, but either side can
+    /// disconnect while the phase is open.
+    fn target_is_transfer_compatible(&self, cx: &App) -> bool {
+        let Some(selection) = self.target_selection.as_ref() else {
+            return false;
+        };
+
+        let state = self.app_state.read(cx);
+        let connections = state.connections();
+        match (
+            connections.get(&self.source_profile_id),
+            connections.get(&selection.profile_id),
+        ) {
+            (Some(source), Some(target)) => {
+                transfer_compatible(source.connection.metadata(), target.connection.metadata())
+            }
+            _ => false,
+        }
     }
 
     fn source_roots_from_state(
@@ -439,36 +522,43 @@ impl SourceTargetPhase {
         };
 
         let relational = connected.schema.as_ref().and_then(relational_schema);
-        let current_database = source_database
-            .or_else(|| relational.and_then(|r| r.current_database.clone()))
-            .or_else(|| connected.connection.active_database())
+        let connection_database = relational
+            .and_then(|r| r.current_database.clone())
+            .or_else(|| connected.connection.active_database());
+        let resolved_database = source_database
+            .or_else(|| connection_database.clone())
             .unwrap_or_default();
 
-        let mut databases = Vec::new();
+        let mut names: Vec<String> = Vec::new();
+        if !resolved_database.is_empty() {
+            names.push(resolved_database.clone());
+        }
         if let Some(relational) = relational {
-            databases.push(current_database_node(&current_database, relational));
-
             for database in &relational.databases {
-                if database.name != current_database {
-                    databases.push(DbNode {
-                        name: database.name.clone(),
-                        ..Default::default()
-                    });
+                if !names.contains(&database.name) {
+                    names.push(database.name.clone());
                 }
             }
-        } else if !current_database.is_empty() {
-            databases.push(DbNode {
-                name: current_database.clone(),
-                ..Default::default()
-            });
         }
+        if let Some(connection_database) = &connection_database
+            && !names.contains(connection_database)
+        {
+            names.push(connection_database.clone());
+        }
+
+        let databases = names
+            .into_iter()
+            .map(|name| {
+                source_database_node(name, connected, relational, connection_database.as_deref())
+            })
+            .collect();
 
         let root = ConnRoot {
             profile_id: source_profile_id,
             label: connected.profile.name.clone(),
             databases,
         };
-        (vec![root], current_database)
+        (vec![root], resolved_database)
     }
 
     fn target_roots_from_state(
@@ -489,7 +579,7 @@ impl SourceTargetPhase {
                 transfer_compatible(source_metadata, connected.connection.metadata())
             })
             .map(|(profile_id, connected)| {
-                let databases = connected
+                let listed = connected
                     .schema
                     .as_ref()
                     .and_then(relational_schema)
@@ -497,18 +587,17 @@ impl SourceTargetPhase {
                         relational
                             .databases
                             .iter()
-                            .map(|database| DbNode {
-                                name: database.name.clone(),
-                                ..Default::default()
-                            })
+                            .map(|database| database.name.clone())
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
 
+                let implicit = connected.connection.active_database().unwrap_or_default();
+
                 ConnRoot {
                     profile_id: *profile_id,
                     label: connected.profile.name.clone(),
-                    databases,
+                    databases: target_database_nodes(listed, implicit),
                 }
             })
             .collect();
@@ -576,11 +665,17 @@ impl SourceTargetPhase {
                 profile_id,
                 database,
             }) if side == TreeSide::Target => {
-                self.target_selection = Some(TargetSelection {
+                let selection = TargetSelection {
                     profile_id,
                     database,
-                });
-                cx.emit(SourceTargetChanged);
+                };
+
+                // Re-selecting the already-chosen target is a no-op: emitting
+                // would make the host discard downstream mapping work.
+                if self.target_selection.as_ref() != Some(&selection) {
+                    self.target_selection = Some(selection);
+                    cx.emit(SourceTargetChanged);
+                }
                 cx.notify();
             }
             _ => {}
@@ -667,6 +762,11 @@ impl SourceTargetPhase {
                         this.source
                             .model
                             .set_load(node_id.clone(), NodeLoad::Loaded);
+
+                        // Freshly inserted payloads can turn seeded checks
+                        // into resolvable tables (or reveal ghosts), so the
+                        // host must re-evaluate its advance guard.
+                        cx.emit(SourceTargetChanged);
                     }
                     Err(error) => {
                         this.source
@@ -717,7 +817,7 @@ impl SourceTargetPhase {
                             .into_iter()
                             .map(|database| database.name)
                             .collect();
-                        this.populate_target_databases(profile_id, names);
+                        this.populate_target_databases(profile_id, names, cx);
                         this.target
                             .model
                             .set_load(node_id.clone(), NodeLoad::Loaded);
@@ -754,7 +854,15 @@ impl SourceTargetPhase {
         db.schemas = schemas;
     }
 
-    fn populate_target_databases(&mut self, profile_id: Uuid, names: Vec<String>) {
+    fn populate_target_databases(&mut self, profile_id: Uuid, names: Vec<String>, cx: &App) {
+        let implicit = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .and_then(|connected| connected.connection.active_database())
+            .unwrap_or_default();
+
         let Some(root) = self
             .target
             .roots
@@ -764,13 +872,7 @@ impl SourceTargetPhase {
             return;
         };
 
-        root.databases = names
-            .into_iter()
-            .map(|name| DbNode {
-                name,
-                ..Default::default()
-            })
-            .collect();
+        root.databases = target_database_nodes(names, implicit);
     }
 
     fn resolve_source_connection(&self, database: &str, cx: &App) -> Option<Arc<dyn Connection>> {
@@ -799,7 +901,21 @@ impl SourceTargetPhase {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if event.keystroke.modifiers != Modifiers::none() {
+        let modifiers = event.keystroke.modifiers;
+
+        // Shift+Tab switches the active tree; plain Tab is deliberately left
+        // unhandled so it can move focus onward to the footer's Continue button
+        // (keyboard-first — the wizard must never trap Tab on this phase).
+        if modifiers.shift && event.keystroke.key == "tab" {
+            self.active_side = match self.active_side {
+                TreeSide::Source => TreeSide::Target,
+                TreeSide::Target => TreeSide::Source,
+            };
+            cx.notify();
+            return;
+        }
+
+        if modifiers != Modifiers::none() {
             return;
         }
 
@@ -816,13 +932,6 @@ impl SourceTargetPhase {
             "left" => self.collapse_cursor(side, cx),
             "right" => self.expand_cursor(side, cx),
             "enter" | "space" => self.activate_current(side, cx),
-            "tab" => {
-                self.active_side = match side {
-                    TreeSide::Source => TreeSide::Target,
-                    TreeSide::Target => TreeSide::Source,
-                };
-                cx.notify();
-            }
             _ => {}
         }
     }
@@ -874,7 +983,7 @@ impl Render for SourceTargetPhase {
                     .child(self.render_tree_panel(TreeSide::Target, "Target", cx)),
             )
             .when_some(self.error.clone(), |parent, error| {
-                parent.child(Text::caption(error))
+                parent.child(Text::caption(error).danger())
             })
     }
 }
@@ -1062,6 +1171,29 @@ fn checkbox_glyph(checked: bool, theme: &gpui_component::Theme) -> impl IntoElem
         })
 }
 
+/// The target tree's database nodes for one connection: the listed databases,
+/// or — when the driver exposes no database list (a single implicit database,
+/// e.g. SQLite) — one node for the implicit database so it can still be chosen
+/// as a migration target. Keyed off "empty list", not a driver id, so it stays
+/// driver-agnostic; the implicit database's (possibly empty) identity is
+/// preserved in the node while [`database_display_label`] handles the label.
+fn target_database_nodes(listed: Vec<String>, implicit_database: String) -> Vec<DbNode> {
+    if listed.is_empty() {
+        return vec![DbNode {
+            name: implicit_database,
+            ..Default::default()
+        }];
+    }
+
+    listed
+        .into_iter()
+        .map(|name| DbNode {
+            name,
+            ..Default::default()
+        })
+        .collect()
+}
+
 /// The relational view of a schema snapshot, or `None` for non-relational
 /// paradigms (which are not transfer-compatible migration targets anyway).
 fn relational_schema(
@@ -1070,6 +1202,57 @@ fn relational_schema(
     match &snapshot.structure {
         dbflux_core::DataStructure::Relational(relational) => Some(relational),
         _ => None,
+    }
+}
+
+/// Populates one source database node from whichever local data actually
+/// describes that database: the connection's live snapshot describes only its
+/// current database, per-database connections carry their own snapshot, and
+/// lazy-per-database drivers cache a `DbSchemaInfo` per browsed database. A
+/// database with no local data stays empty and lazy-loads on expand — it must
+/// never be pre-populated with the current database's tables, which describe
+/// a different container.
+fn source_database_node(
+    name: String,
+    connected: &dbflux_core::ConnectedProfile,
+    relational: Option<&dbflux_core::RelationalSchema>,
+    connection_database: Option<&str>,
+) -> DbNode {
+    if connection_database == Some(name.as_str())
+        && let Some(relational) = relational
+    {
+        return current_database_node(&name, relational);
+    }
+
+    if let Some(snapshot) = connected
+        .database_connection(&name)
+        .and_then(|db_connection| db_connection.schema.as_ref())
+        && let Some(relational) = relational_schema(snapshot)
+    {
+        return current_database_node(&name, relational);
+    }
+
+    if let Some(db_schema) = connected.database_schemas.get(&name) {
+        let tables = db_schema
+            .tables
+            .iter()
+            .map(|table| TableEntry {
+                schema: table.schema.clone(),
+                name: table.name.clone(),
+            })
+            .collect();
+
+        let (schemaless, schemas) = split_tables_by_schema(tables);
+        return DbNode {
+            name,
+            schemas,
+            tables: schemaless,
+        };
+    }
+
+    DbNode {
+        name,
+        ..Default::default()
     }
 }
 
@@ -1113,8 +1296,8 @@ fn current_database_node(database: &str, relational: &dbflux_core::RelationalSch
 mod tests {
     use super::{
         ConnRoot, DbNode, SchemaNode, TableEntry, TreeSide, build_side_nodes,
-        checked_tables_in_database, is_retry_id, is_source_table_checkable, is_status_id,
-        parent_of_synthetic, split_tables_by_schema,
+        checked_tables_in_database, database_display_label, is_retry_id, is_source_table_checkable,
+        is_status_id, parent_of_synthetic, split_tables_by_schema, target_database_nodes,
     };
     use crate::migrate_wizard::tree_model::{
         NodeLoad, TreeModel, TreePayload, connection_node_id, database_node_id, schema_node_id,
@@ -1343,6 +1526,34 @@ mod tests {
             model.payload(&other_orders),
             "app"
         ));
+    }
+
+    #[test]
+    fn target_database_nodes_falls_back_to_a_single_implicit_database_when_list_is_empty() {
+        let nodes = target_database_nodes(Vec::new(), "main".to_string());
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].name, "main");
+
+        let empty_identity = target_database_nodes(Vec::new(), String::new());
+        assert_eq!(empty_identity.len(), 1);
+        assert_eq!(empty_identity[0].name, "");
+    }
+
+    #[test]
+    fn target_database_nodes_uses_the_listed_databases_when_present() {
+        let nodes = target_database_nodes(
+            vec!["app".to_string(), "warehouse".to_string()],
+            String::new(),
+        );
+        let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, vec!["app", "warehouse"]);
+    }
+
+    #[test]
+    fn database_display_label_falls_back_for_the_empty_named_implicit_database() {
+        assert_eq!(database_display_label(""), "main");
+        assert_eq!(database_display_label("   "), "main");
+        assert_eq!(database_display_label("app"), "app");
     }
 
     #[test]

@@ -11,7 +11,7 @@ pub(crate) mod types;
 pub use builder::{ForeignKeyBuilder, IndexBuilder, SchemaForeignKeyBuilder, SchemaIndexBuilder};
 pub use dependency_order::{OrderResult, topological_order};
 pub use dependents::{RelationKind, RelationRef};
-pub use drift_check::{DriftOutcome, check_drift_sync, check_schema_drift};
+pub use drift_check::{DriftOutcome, TableKey, check_drift_sync, check_schema_drift};
 pub use fingerprint::SchemaFingerprint;
 pub use node_id::{ParseSchemaNodeIdError, SchemaNodeId, SchemaNodeKind};
 pub use query_parser::{QueryTableRef, extract_referenced_tables};

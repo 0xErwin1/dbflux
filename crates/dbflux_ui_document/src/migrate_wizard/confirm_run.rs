@@ -17,7 +17,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use dbflux_components::controls::Button;
+use dbflux_components::controls::{Button, Checkbox};
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::Spacing;
 use dbflux_core::{
@@ -138,6 +138,10 @@ pub struct ConfirmRunInputs {
     pub disable_referential_integrity: bool,
     pub order: OrderDecision,
     pub configs: Vec<TableMigrationConfig>,
+    /// Non-blocking warnings computed on the `Options` → `Confirm` transition
+    /// (e.g. a non-destructive same-container source-as-target write), shown on
+    /// the Confirm screen so the user sees them before starting the run.
+    pub pre_run_warnings: Vec<String>,
 }
 
 /// Emitted to the host wizard so it can flip the rail's current phase to `Run`
@@ -166,14 +170,17 @@ pub struct ConfirmRunPhase {
 
     configs: Vec<TableMigrationConfig>,
     summary: PlanSummary,
+    pre_run_warnings: Vec<String>,
 
     reorder: Option<ReorderState>,
     final_order: Option<Vec<TableRef>>,
     confirmed_destructive: bool,
+    /// Explicit user acknowledgment required before a destructive plan can be
+    /// started; unused (and irrelevant) for non-destructive plans.
+    destructive_ack: bool,
 
     run_state: RunState,
     progress: Arc<Mutex<(u64, Option<u64>)>>,
-    active_task_id: Option<TaskId>,
     cancel_token: Option<CancelToken>,
     result_summary: Option<String>,
     result_warnings: Vec<String>,
@@ -206,12 +213,13 @@ impl ConfirmRunPhase {
             disable_referential_integrity: inputs.disable_referential_integrity,
             configs: inputs.configs,
             summary,
+            pre_run_warnings: inputs.pre_run_warnings,
             reorder,
             final_order,
             confirmed_destructive: false,
+            destructive_ack: false,
             run_state: RunState::Idle,
             progress: Arc::new(Mutex::new((0, None))),
-            active_task_id: None,
             cancel_token: None,
             result_summary: None,
             result_warnings: Vec::new(),
@@ -244,7 +252,17 @@ impl ConfirmRunPhase {
     }
 
     fn on_start_migration(&mut self, cx: &mut Context<Self>) {
-        self.confirmed_destructive = true;
+        // Never start a second concurrent run from the same phase.
+        if self.run_state == RunState::Running {
+            return;
+        }
+
+        // The engine's destructive backstop is satisfied only for a plan that
+        // actually contains destructive operations — and only then after the
+        // user's explicit acknowledgment (which gates this button). A
+        // non-destructive plan leaves the flag `false` and needs no ack.
+        self.confirmed_destructive = self.summary.has_destructive();
+
         cx.emit(ConfirmRunEvent::RunStarted);
         self.start_migration(cx);
     }
@@ -278,7 +296,6 @@ impl ConfirmRunPhase {
             cx.emit(AppStateChanged);
             pair
         });
-        self.active_task_id = Some(task_id);
         self.cancel_token = Some(cancel_token.clone());
 
         self.spawn_progress_ticker(task_id, cx);
@@ -391,89 +408,136 @@ impl ConfirmRunPhase {
                 })
                 .await;
 
+            let RunResolution {
+                task_action,
+                report,
+                toast_success,
+                summary,
+                warnings,
+            } = resolve_run_outcome(migration_result);
+
+            // The run's task MUST reach a terminal state and any failure MUST
+            // reach the foreground even if the phase entity was dropped (modal
+            // closed/reopened, rail-back attempt) — so finalize the task and
+            // report through the app directly, never gated on `this` being
+            // alive. `cx.update` only fails if the whole app is gone.
+            cx.update(|cx| {
+                app_state.update(cx, |state, cx| {
+                    match &task_action {
+                        RunTaskAction::Complete => {
+                            state.complete_task(task_id);
+                        }
+                        RunTaskAction::Cancel => {
+                            state.tasks_mut().cancel(task_id);
+                        }
+                        RunTaskAction::Fail(message) => {
+                            state.fail_task(task_id, message.clone());
+                        }
+                    }
+                    cx.emit(AppStateChanged);
+                });
+
+                if let Some(message) = &report {
+                    report_error(UserFacingError::new(ErrorKind::Driver, message.clone()), cx);
+                }
+                if toast_success {
+                    Toast::success("Migration completed").push(cx);
+                }
+            })
+            .ok();
+
+            // Best-effort UI reflection: if the phase is gone the run has
+            // already been finalized above.
             this.update(cx, |this, cx| {
                 this.run_state = RunState::Done;
                 this.cancel_token = None;
-                this.apply_run_outcome(migration_result, task_id, &app_state, cx);
+                this.result_summary = Some(summary);
+                this.result_warnings = warnings;
                 cx.notify();
             })
             .ok();
         })
         .detach();
     }
+}
 
-    fn apply_run_outcome(
-        &mut self,
-        result: Result<MigrationOutcome, dbflux_transfer::TransferError>,
-        task_id: TaskId,
-        app_state: &Entity<AppStateEntity>,
-        cx: &mut Context<Self>,
-    ) {
-        match result {
-            Ok(MigrationOutcome::Completed(outcome)) if outcome.cancelled => {
-                app_state.update(cx, |state, cx| {
-                    state.tasks_mut().cancel(task_id);
-                    cx.emit(AppStateChanged);
-                });
-                self.result_summary = Some("Migration cancelled".to_string());
-            }
-            Ok(MigrationOutcome::Completed(outcome)) => {
-                let failed_table = outcome.tables.iter().find_map(|t| match &t.status {
-                    TableTransferStatus::Failed { error } => {
-                        Some((t.source_table.clone(), error.clone()))
-                    }
-                    _ => None,
-                });
+/// The terminal action to apply to the run's task registry entry.
+enum RunTaskAction {
+    Complete,
+    Cancel,
+    Fail(String),
+}
 
-                if let Some((table, error)) = &failed_table {
-                    app_state.update(cx, |state, cx| {
-                        state.fail_task(task_id, format!("{table}: {error}"));
-                        cx.emit(AppStateChanged);
-                    });
-                    report_error(
-                        UserFacingError::new(
-                            ErrorKind::Driver,
-                            format!("Migration failed on table '{table}': {error}"),
-                        ),
-                        cx,
-                    );
-                } else {
-                    app_state.update(cx, |state, cx| {
-                        state.complete_task(task_id);
-                        cx.emit(AppStateChanged);
-                    });
-                    Toast::success("Migration completed").push(cx);
+/// The fully-resolved outcome of a migration run: the task action, an optional
+/// user-facing error to report, whether to toast success, and the summary /
+/// per-table lines for the Done screen. Computed once so the task-finalization
+/// path and the UI-reflection path stay consistent even if the phase entity is
+/// dropped between them.
+struct RunResolution {
+    task_action: RunTaskAction,
+    report: Option<String>,
+    toast_success: bool,
+    summary: String,
+    warnings: Vec<String>,
+}
+
+fn resolve_run_outcome(
+    result: Result<MigrationOutcome, dbflux_transfer::TransferError>,
+) -> RunResolution {
+    match result {
+        Ok(MigrationOutcome::Completed(outcome)) if outcome.cancelled => RunResolution {
+            task_action: RunTaskAction::Cancel,
+            report: None,
+            toast_success: false,
+            summary: "Migration cancelled".to_string(),
+            warnings: Vec::new(),
+        },
+        Ok(MigrationOutcome::Completed(outcome)) => {
+            let failed_table = outcome.tables.iter().find_map(|t| match &t.status {
+                TableTransferStatus::Failed { error } => {
+                    Some((t.source_table.clone(), error.clone()))
                 }
+                _ => None,
+            });
 
-                self.result_summary = Some(MigrateWizard::summarize(&outcome));
-                self.result_warnings =
-                    MigrateWizard::itemized_status_lines(&outcome.tables, &outcome.warnings);
+            let summary = MigrateWizard::summarize(&outcome);
+            let warnings = MigrateWizard::itemized_status_lines(&outcome.tables, &outcome.warnings);
+
+            match failed_table {
+                Some((table, error)) => RunResolution {
+                    task_action: RunTaskAction::Fail(format!("{table}: {error}")),
+                    report: Some(format!("Migration failed on table '{table}': {error}")),
+                    toast_success: false,
+                    summary,
+                    warnings,
+                },
+                None => RunResolution {
+                    task_action: RunTaskAction::Complete,
+                    report: None,
+                    toast_success: true,
+                    summary,
+                    warnings,
+                },
             }
-            Ok(MigrationOutcome::CyclicOrderRequired { .. }) => {
-                app_state.update(cx, |state, cx| {
-                    state.fail_task(task_id, "FK order became cyclic mid-run".to_string());
-                    cx.emit(AppStateChanged);
-                });
-                report_error(
-                    UserFacingError::new(
-                        ErrorKind::Driver,
-                        "Migration failed: FK order became cyclic mid-run".to_string(),
-                    ),
-                    cx,
-                );
-                self.result_summary =
-                    Some("Migration failed: FK order became cyclic mid-run".to_string());
+        }
+        Ok(MigrationOutcome::CyclicOrderRequired { .. }) => {
+            let message = "Migration failed: FK order became cyclic mid-run".to_string();
+            RunResolution {
+                task_action: RunTaskAction::Fail("FK order became cyclic mid-run".to_string()),
+                report: Some(message.clone()),
+                toast_success: false,
+                summary: message,
+                warnings: Vec::new(),
             }
-            Err(e) => {
-                app_state.update(cx, |state, cx| {
-                    state.fail_task(task_id, e.to_string());
-                    cx.emit(AppStateChanged);
-                });
-                report_error(
-                    UserFacingError::new(ErrorKind::Driver, format!("Migration failed: {e}")),
-                    cx,
-                );
-                self.result_summary = Some(format!("Migration failed: {e}"));
+        }
+        Err(e) => {
+            let message = format!("Migration failed: {e}");
+            RunResolution {
+                task_action: RunTaskAction::Fail(e.to_string()),
+                report: Some(message.clone()),
+                toast_success: false,
+                summary: message,
+                warnings: Vec::new(),
             }
         }
     }
@@ -532,12 +596,23 @@ impl ConfirmRunPhase {
             false => self.render_start_action(cx),
         };
 
+        let warnings = self.pre_run_warnings.clone();
+
         div()
             .flex()
             .flex_col()
             .gap(Spacing::MD)
             .size_full()
             .child(summary)
+            .when(!warnings.is_empty(), |parent| {
+                parent.child(
+                    div().flex().flex_col().gap(px(2.0)).children(
+                        warnings
+                            .into_iter()
+                            .map(|warning| Text::caption(warning).warning().into_any_element()),
+                    ),
+                )
+            })
             .child(action)
             .into_any_element()
     }
@@ -578,10 +653,29 @@ impl ConfirmRunPhase {
     }
 
     fn render_start_action(&self, cx: &mut Context<Self>) -> AnyElement {
+        let has_destructive = self.summary.has_destructive();
+        let start_enabled = !has_destructive || self.destructive_ack;
+
         div()
             .flex()
+            .flex_col()
+            .gap(Spacing::SM)
+            .when(has_destructive, |parent| {
+                parent.child(
+                    Checkbox::new("migrate-confirm-destructive-ack")
+                        .checked(self.destructive_ack)
+                        .label(
+                            "I understand this plan will drop or empty existing data in the target.",
+                        )
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                            this.destructive_ack = *checked;
+                            cx.notify();
+                        })),
+                )
+            })
             .child(
                 Button::new("migrate-confirm-start", "Start Migration")
+                    .disabled(!start_enabled)
                     .on_click(cx.listener(|this, _event, _window, cx| this.on_start_migration(cx))),
             )
             .into_any_element()

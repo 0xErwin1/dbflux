@@ -622,10 +622,10 @@ impl QueryBuilderPanel {
                     let db_name = conn
                         .active_database
                         .clone()
-                        .or(source_schema)
+                        .or_else(|| source_schema.clone())
                         .unwrap_or_else(|| "default".to_string());
                     conn.table_details
-                        .get(&(db_name, source_table_name))
+                        .get(&(db_name, source_schema, source_table_name))
                         .and_then(|info| info.columns.clone())
                 })
                 .unwrap_or_default()

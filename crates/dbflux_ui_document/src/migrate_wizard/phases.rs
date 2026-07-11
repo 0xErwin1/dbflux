@@ -6,6 +6,8 @@
 //! `topological_order` result) live in `mod.rs`; this module owns only the
 //! state shapes and the guards that do not require live metadata.
 
+use std::collections::HashSet;
+
 use dbflux_core::TableRef;
 
 use crate::migrate_wizard::tree_model::NodeLoad;
@@ -102,6 +104,104 @@ pub fn can_advance_from_tables_mapping(rows: &[MappingRowReadiness]) -> bool {
         !row.target_name.trim().is_empty()
             && !matches!(row.target_lookup, NodeLoad::Loading | NodeLoad::Failed(_))
     })
+}
+
+/// Cross-row view of one mapping row, for the collision checks that
+/// [`MappingRowReadiness`] cannot express (they compare rows against each
+/// other and against the shared source container).
+pub struct MappingRowPlan<'a> {
+    pub source_table: &'a str,
+    pub target_schema: Option<&'a str>,
+    pub target_table: &'a str,
+    pub destructive: bool,
+}
+
+fn target_label(schema: Option<&str>, table: &str) -> String {
+    match schema {
+        Some(schema) if !schema.is_empty() => format!("{schema}.{table}"),
+        _ => table.to_string(),
+    }
+}
+
+/// Blocking, cross-row validations for `TablesMapping` → `Options` beyond
+/// per-row readiness:
+/// - **Duplicate targets**: two rows writing the same `(schema, table)` would
+///   silently have the second clobber the first.
+/// - **Source-as-target destructive collision**: when source and target are the
+///   same container, a destructive row (Recreate/Truncate) whose target is one
+///   of the source tables would drop or empty that table before it is read.
+///
+/// Each returned string is a user-facing error; a non-empty result must block
+/// advancing. Non-destructive same-container collisions are intentionally not
+/// blocked here — they surface as a warning on the Confirm screen instead.
+pub fn tables_mapping_blocking_errors(
+    rows: &[MappingRowPlan],
+    same_container: bool,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+
+    let mut seen: HashSet<(Option<&str>, &str)> = HashSet::new();
+    let mut reported: HashSet<(Option<&str>, &str)> = HashSet::new();
+    for row in rows {
+        let key = (row.target_schema, row.target_table);
+        if !seen.insert(key) && reported.insert(key) {
+            errors.push(format!(
+                "Two source tables map to the same target '{}'. Give each a unique target name.",
+                target_label(row.target_schema, row.target_table)
+            ));
+        }
+    }
+
+    if same_container {
+        let source_names: HashSet<&str> = rows.iter().map(|row| row.source_table).collect();
+        let mut collided: HashSet<&str> = HashSet::new();
+        for row in rows {
+            if row.destructive
+                && source_names.contains(row.target_table)
+                && collided.insert(row.target_table)
+            {
+                errors.push(format!(
+                    "'{}' uses a destructive mode but its target is source table '{}' in the \
+                     same connection — it would be dropped or emptied before it is read.",
+                    row.source_table, row.target_table
+                ));
+            }
+        }
+    }
+
+    errors
+}
+
+/// Non-blocking, cross-row warnings surfaced on the Confirm screen: a
+/// non-destructive row whose target is one of the source tables in the same
+/// container appends rows into a table that is also being read. Destructive
+/// same-container collisions are blocked earlier by
+/// [`tables_mapping_blocking_errors`].
+pub fn tables_mapping_confirm_warnings(
+    rows: &[MappingRowPlan],
+    same_container: bool,
+) -> Vec<String> {
+    if !same_container {
+        return Vec::new();
+    }
+
+    let source_names: HashSet<&str> = rows.iter().map(|row| row.source_table).collect();
+    let mut warned: HashSet<&str> = HashSet::new();
+
+    rows.iter()
+        .filter(|row| {
+            !row.destructive
+                && source_names.contains(row.target_table)
+                && warned.insert(row.target_table)
+        })
+        .map(|row| {
+            format!(
+                "'{}' writes into source table '{}' in the same connection; rows are appended to \
+                 a table you are also reading.",
+                row.source_table, row.target_table
+            )
+        })
+        .collect()
 }
 
 /// The FK-cycle reorder interrupt shown inside `Confirm` when
@@ -223,6 +323,54 @@ mod tests {
             target_lookup: NodeLoad::Failed("boom".to_string()),
         }];
         assert!(!can_advance_from_tables_mapping(&lookup_failed));
+    }
+
+    fn plan<'a>(source: &'a str, target: &'a str, destructive: bool) -> MappingRowPlan<'a> {
+        MappingRowPlan {
+            source_table: source,
+            target_schema: None,
+            target_table: target,
+            destructive,
+        }
+    }
+
+    #[test]
+    fn tables_mapping_blocking_errors_flags_duplicate_targets() {
+        let rows = vec![
+            plan("users", "accounts", false),
+            plan("members", "accounts", false),
+        ];
+        let errors = tables_mapping_blocking_errors(&rows, false);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("accounts"));
+    }
+
+    #[test]
+    fn tables_mapping_blocking_errors_flags_destructive_source_as_target_only_in_same_container() {
+        let rows = vec![plan("orders", "orders", true)];
+
+        assert!(tables_mapping_blocking_errors(&rows, false).is_empty());
+
+        let errors = tables_mapping_blocking_errors(&rows, true);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("orders"));
+    }
+
+    #[test]
+    fn tables_mapping_blocking_errors_ignores_non_destructive_source_as_target() {
+        let rows = vec![plan("orders", "orders", false)];
+        assert!(tables_mapping_blocking_errors(&rows, true).is_empty());
+    }
+
+    #[test]
+    fn tables_mapping_confirm_warnings_flags_non_destructive_same_container_collision() {
+        let rows = vec![plan("orders", "orders", false)];
+
+        assert!(tables_mapping_confirm_warnings(&rows, false).is_empty());
+
+        let warnings = tables_mapping_confirm_warnings(&rows, true);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("orders"));
     }
 
     #[test]

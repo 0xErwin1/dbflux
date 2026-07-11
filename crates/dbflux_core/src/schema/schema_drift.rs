@@ -55,9 +55,9 @@ pub struct SchemaDiff {
 pub struct SchemaDriftDetected {
     pub diffs: Vec<SchemaDiff>,
     /// Unchanged tables whose fresh `TableInfo` should be written into the
-    /// cache transparently, keyed by `(database, table)`. Provided so that
-    /// the "Refresh & re-run" handler can update all tables in one pass.
-    pub refreshes: Vec<((String, String), crate::TableInfo)>,
+    /// cache transparently, keyed by `(database, schema, table)`. Provided so
+    /// that the "Refresh & re-run" handler can update all tables in one pass.
+    pub refreshes: Vec<(crate::schema::TableKey, crate::TableInfo)>,
 }
 
 /// Compute the list of schema changes between `before` and `after` for one table.

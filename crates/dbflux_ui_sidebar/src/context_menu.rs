@@ -1108,7 +1108,7 @@ impl Sidebar {
 
         let state = self.app_state.read(cx);
         let conn = state.connections().get(&profile_id)?;
-        let cache_key = (database.clone(), name.clone());
+        let cache_key = (database.clone(), Some(database.clone()), name.clone());
 
         if let Some(details) = conn.table_details.get(&cache_key) {
             return Some(details.clone());

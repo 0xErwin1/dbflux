@@ -27,8 +27,8 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::Spacing;
 use dbflux_core::{
-    ColumnInfo, Connection, DriverCapabilities, LogErr, SchemaCacheKey, SchemaForeignKeyInfo,
-    TableInfo, TableRef, TransferColumn, topological_order,
+    ColumnInfo, Connection, DbError, DriverCapabilities, LogErr, SchemaCacheKey,
+    SchemaForeignKeyInfo, TableInfo, TableRef, TransferColumn, topological_order,
 };
 use dbflux_transfer::TableTransferStatus;
 use dbflux_transfer::migration::{MigratedTable, MigrationOptions, MigrationTablePlan};
@@ -44,7 +44,9 @@ pub use column_mapping::TableMigrationConfig;
 use confirm_run::{ConfirmRunEvent, ConfirmRunInputs, ConfirmRunPhase, decide_order};
 use mapping::{MappingChanged, MappingPhase};
 use options::{OptionsChanged, OptionsPhase};
-use phases::{RailEntry, WizardPhase, can_advance_from_tables_mapping, rail_entries};
+use phases::{
+    MappingRowPlan, RailEntry, RunState, WizardPhase, rail_entries, tables_mapping_confirm_warnings,
+};
 use source_target::{SourceTargetChanged, SourceTargetPhase};
 
 /// Whether an `Err(String)` returned by one of the shared
@@ -208,12 +210,12 @@ where
 }
 
 /// Outcome of fetching one table's details through the shared
-/// `prepare_fetch_table_details` seam. `NotFound` covers both a
-/// driver-reported lookup failure (the common "target table does not exist
-/// yet" case) and any other execute-time error — the caller decides whether
-/// that is fatal (source tables must already exist) or an expected signal
-/// (target tables may not exist yet, see [`TableMigrationConfig::new`]'s
-/// `target_exists` flag).
+/// `prepare_fetch_table_details` seam. `NotFound` maps only a genuine
+/// driver-reported "object does not exist" (`DbError::ObjectNotFound`) — the
+/// expected "target table will be created" signal, see
+/// [`TableMigrationConfig::new`]'s `target_exists` flag. Any other
+/// execute-time failure is returned as a real error so a transient fetch
+/// failure is never silently classified as "will be created".
 enum TableDetailsFetch {
     Found(TableInfo),
     NotFound(String),
@@ -250,7 +252,12 @@ async fn fetch_table_details_via_seam(
                 .update(|cx| {
                     app_state
                         .read(cx)
-                        .get_table_details(profile_id, database, &table_ref.name)
+                        .get_table_details(
+                            profile_id,
+                            database,
+                            table_ref.schema.as_deref(),
+                            &table_ref.name,
+                        )
                         .cloned()
                 })
                 .map_err(|e| e.to_string())?;
@@ -277,12 +284,14 @@ async fn fetch_table_details_via_seam(
                     state.set_table_details(
                         result.profile_id,
                         result.database.clone(),
+                        result.schema.clone(),
                         result.table.clone(),
                         result.details,
                     );
                     state.set_dependents(
                         result.profile_id,
                         result.database,
+                        result.schema,
                         result.table,
                         result.dependents,
                     );
@@ -291,7 +300,10 @@ async fn fetch_table_details_via_seam(
             .map_err(|e| e.to_string())?;
             Ok(TableDetailsFetch::Found(details))
         }
-        Err(e) => Ok(TableDetailsFetch::NotFound(e)),
+        Err(error @ DbError::ObjectNotFound(_)) => {
+            Ok(TableDetailsFetch::NotFound(error.to_string()))
+        }
+        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -449,6 +461,20 @@ pub struct MigrateWizard {
     error: Option<String>,
     advancing: bool,
 
+    /// Monotonic epoch bumped whenever the inputs an in-flight advance was
+    /// spawned against are invalidated (selection/mapping/options edits,
+    /// re-open). Each advance spawn captures the value at spawn time and
+    /// discards its result if the epoch moved — a stale completion must never
+    /// mount a phase built from abandoned inputs or force a phase jump.
+    generation: u64,
+
+    /// The effective Source & Target selection (checked tables + target
+    /// container) the downstream phases were last built from. Used to ignore
+    /// no-op `SourceTargetChanged` events (re-selecting the same target,
+    /// toggling a check off and back on) so mapping/options work is only
+    /// discarded on a real change.
+    built_selection: Option<(Vec<TableRef>, Uuid, String)>,
+
     /// The phase whose child tree/grid currently holds keyboard focus. Drives
     /// the render-time focus routing so the active phase receives arrow-key
     /// focus on entry without a click-in first (keyboard-first identity).
@@ -485,6 +511,8 @@ impl MigrateWizard {
             phase: WizardPhase::SourceTarget,
             error: None,
             advancing: false,
+            generation: 0,
+            built_selection: None,
             focused_phase: None,
             resolved_source_database: None,
             target_profile_id: None,
@@ -514,6 +542,18 @@ impl MigrateWizard {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A migration already in flight owns the wizard until it terminates.
+        // Re-entering would drop the run's owner (orphaning its task and
+        // progress) and could start a second concurrent migration, so instead
+        // surface the in-progress run and ignore the new request.
+        if self.is_running(cx) {
+            self.visible = true;
+            self.phase = WizardPhase::Run;
+            self.focus_handle.focus(window);
+            cx.notify();
+            return;
+        }
+
         self.visible = true;
         self.source_profile_id = Some(source_profile_id);
         self.source_database = source_database.clone();
@@ -521,6 +561,8 @@ impl MigrateWizard {
         self.phase = WizardPhase::SourceTarget;
         self.error = None;
         self.advancing = false;
+        self.generation = self.generation.wrapping_add(1);
+        self.built_selection = None;
         self.focused_phase = None;
 
         self.resolved_source_database = None;
@@ -565,26 +607,78 @@ impl MigrateWizard {
 
     /// A changed source selection or target container invalidates every
     /// downstream phase — the mapping configs, the options' capability
-    /// gating, and the confirm/run plan all derive from it.
+    /// gating, and the confirm/run plan all derive from it. Invalidation is
+    /// deferred to the next advance (see [`Self::advance_from_source_target`])
+    /// so a no-op round trip — a check toggled off and back on, the same
+    /// target re-selected — never discards the user's mapping/options work.
+    /// A real deviation still orphans any in-flight advance immediately: its
+    /// result was spawned against inputs that no longer hold.
     fn on_source_target_changed(&mut self, cx: &mut Context<Self>) {
-        self.mapping = None;
-        self._mapping_sub = None;
-        self.options = None;
-        self._options_sub = None;
-        self.confirm_run = None;
-        self._confirm_run_sub = None;
+        // A live run owns the wizard; a late tree-fetch completion must not
+        // disturb it (and there is nothing downstream to rebuild).
+        if self.is_running(cx) {
+            return;
+        }
+        if !self.selection_matches_built(cx) {
+            self.invalidate_in_flight_advance();
+        }
         cx.notify();
+    }
+
+    /// Whether the confirm/run phase currently owns a migration in the
+    /// `Running` state. Drives the guards that keep the run's owner alive and
+    /// the rail frozen on `Run` for the duration of the run.
+    fn is_running(&self, cx: &App) -> bool {
+        self.confirm_run
+            .as_ref()
+            .is_some_and(|phase| phase.read(cx).run_state() == RunState::Running)
+    }
+
+    /// Whether the Source & Target phase's current effective selection equals
+    /// the one the downstream phases were built from.
+    fn selection_matches_built(&self, cx: &App) -> bool {
+        let Some((built_tables, built_profile_id, built_database)) = self.built_selection.as_ref()
+        else {
+            return false;
+        };
+        let Some(source_target) = self.source_target.as_ref() else {
+            return false;
+        };
+
+        let phase = source_target.read(cx);
+        phase.checked_source_tables() == *built_tables
+            && phase.target_profile_id() == Some(*built_profile_id)
+            && phase.target_database().as_deref() == Some(built_database.as_str())
+    }
+
+    /// Orphans any in-flight advance spawn: bumping the generation makes its
+    /// completion discard itself, and the footer stops showing "Loading…" for
+    /// work whose inputs no longer exist.
+    fn invalidate_in_flight_advance(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.advancing = false;
     }
 
     /// Edited mappings only invalidate the confirm/run plan and its FK order;
     /// the options phase is independent of the per-table mapping.
     fn on_mapping_changed(&mut self, cx: &mut Context<Self>) {
+        // Never drop the confirm/run phase while it owns a live run — that
+        // would orphan the migration. Edits are impossible during a run anyway
+        // (the rail is frozen on Run), but a late async reseed could still emit.
+        if self.is_running(cx) {
+            return;
+        }
+        self.invalidate_in_flight_advance();
         self.confirm_run = None;
         self._confirm_run_sub = None;
         cx.notify();
     }
 
     fn on_options_changed(&mut self, cx: &mut Context<Self>) {
+        if self.is_running(cx) {
+            return;
+        }
+        self.invalidate_in_flight_advance();
         self.confirm_run = None;
         self._confirm_run_sub = None;
         cx.notify();
@@ -612,15 +706,19 @@ impl MigrateWizard {
         })
     }
 
-    fn resolve_target_connection(&self, profile_id: Uuid, cx: &App) -> Option<Arc<dyn Connection>> {
-        Some(
-            self.app_state
-                .read(cx)
-                .connections()
-                .get(&profile_id)?
-                .connection
-                .clone(),
-        )
+    /// Resolves the target connection scoped to the chosen target database
+    /// (for `ConnectionPerDatabase` drivers), mirroring
+    /// [`Self::resolve_source_connection`] and the import wizard — the
+    /// profile's primary connection may be bound to a different database, and
+    /// the sink would silently write the migrated rows there.
+    fn resolve_target_connection(
+        &self,
+        profile_id: Uuid,
+        target_database: &str,
+        cx: &App,
+    ) -> Option<Arc<dyn Connection>> {
+        let connected = self.app_state.read(cx).connections().get(&profile_id)?;
+        Some(connected.connection_for_database(target_database))
     }
 
     /// A human-readable `profile / database` label for the Confirm summary.
@@ -643,6 +741,11 @@ impl MigrateWizard {
     /// Back-navigation from the rail: only ever returns to an already-passed
     /// phase, keeping the downstream entities intact so re-advancing is free.
     fn go_to_phase(&mut self, phase: WizardPhase, cx: &mut Context<Self>) {
+        // The rail is frozen on `Run` while a migration is live: navigating
+        // back would drop the run's owner and orphan the in-flight task.
+        if self.phase == WizardPhase::Run && self.is_running(cx) {
+            return;
+        }
         if phase < self.phase {
             self.phase = phase;
             cx.notify();
@@ -657,11 +760,11 @@ impl MigrateWizard {
             WizardPhase::SourceTarget => self
                 .source_target
                 .as_ref()
-                .is_some_and(|phase| phase.read(cx).is_ready()),
+                .is_some_and(|phase| phase.read(cx).is_ready(cx)),
             WizardPhase::TablesMapping => self
                 .mapping
                 .as_ref()
-                .is_some_and(|phase| can_advance_from_tables_mapping(&phase.read(cx).readiness())),
+                .is_some_and(|phase| phase.read(cx).can_advance()),
             WizardPhase::Options => true,
             WizardPhase::Confirm | WizardPhase::Run => false,
         }
@@ -697,7 +800,7 @@ impl MigrateWizard {
             return;
         };
         let source_target = source_target.read(cx);
-        if !source_target.is_ready() {
+        if !source_target.is_ready(cx) {
             return;
         }
 
@@ -721,7 +824,9 @@ impl MigrateWizard {
             );
             return;
         };
-        let Some(target_connection) = self.resolve_target_connection(target_profile_id, cx) else {
+        let Some(target_connection) =
+            self.resolve_target_connection(target_profile_id, &target_database, cx)
+        else {
             self.report_advance_error(
                 ErrorKind::Storage,
                 "No active connection for the target profile",
@@ -747,6 +852,20 @@ impl MigrateWizard {
         self.supports_disable_ri =
             target_connection.supports(DriverCapabilities::DISABLE_FK_CHECKS);
 
+        // Deferred invalidation of downstream phases: only a selection that
+        // actually differs from the one they were built from discards them —
+        // a no-op round trip through the trees keeps the mapping work intact.
+        let new_selection = (checked.clone(), target_profile_id, target_database.clone());
+        if self.built_selection.as_ref() != Some(&new_selection) {
+            self.mapping = None;
+            self._mapping_sub = None;
+            self.options = None;
+            self._options_sub = None;
+            self.confirm_run = None;
+            self._confirm_run_sub = None;
+        }
+        self.built_selection = Some(new_selection);
+
         if self.mapping.is_some() {
             self.phase = WizardPhase::TablesMapping;
             cx.notify();
@@ -761,6 +880,8 @@ impl MigrateWizard {
         let supports_truncate = self.supports_truncate;
         let list_connection = Arc::clone(&target_connection);
         let list_database = target_database.clone();
+        let mapping_source_database = source_database.clone();
+        let generation = self.generation;
 
         cx.spawn_in(window, async move |this, cx| {
             let configs = build_configs_via_seam(
@@ -780,6 +901,10 @@ impl MigrateWizard {
                 .await;
 
             this.update_in(cx, |this, window, cx| {
+                if this.generation != generation {
+                    return;
+                }
+
                 this.advancing = false;
                 match configs {
                     Ok(configs) => {
@@ -800,6 +925,8 @@ impl MigrateWizard {
                             configs,
                             existing_target_tables,
                             supports_truncate,
+                            source_profile_id,
+                            mapping_source_database,
                             target_profile_id,
                             target_database,
                             window,
@@ -828,6 +955,8 @@ impl MigrateWizard {
         configs: Vec<TableMigrationConfig>,
         existing_target_tables: Vec<String>,
         supports_truncate: bool,
+        source_profile_id: Uuid,
+        source_database: String,
         target_profile_id: Uuid,
         target_database: String,
         window: &mut Window,
@@ -837,6 +966,8 @@ impl MigrateWizard {
         let mapping = cx.new(|cx| {
             MappingPhase::new(
                 app_state,
+                source_profile_id,
+                source_database,
                 target_profile_id,
                 target_database,
                 existing_target_tables,
@@ -858,7 +989,7 @@ impl MigrateWizard {
         let Some(mapping) = self.mapping.as_ref() else {
             return;
         };
-        if !can_advance_from_tables_mapping(&mapping.read(cx).readiness()) {
+        if !mapping.read(cx).can_advance() {
             return;
         }
 
@@ -917,7 +1048,9 @@ impl MigrateWizard {
             );
             return;
         };
-        let Some(target_connection) = self.resolve_target_connection(target_profile_id, cx) else {
+        let Some(target_connection) =
+            self.resolve_target_connection(target_profile_id, &target_database, cx)
+        else {
             self.report_advance_error(
                 ErrorKind::Storage,
                 "No active connection for the target profile",
@@ -936,6 +1069,25 @@ impl MigrateWizard {
         let source_container_label = self.container_label(source_profile_id, &source_database, cx);
         let target_container_label = self.container_label(target_profile_id, &target_database, cx);
 
+        // A non-destructive row whose target is one of the source tables in the
+        // same container appends into a table that is also being read; that is
+        // allowed but worth flagging on the Confirm screen (the destructive
+        // variant is already blocked at the mapping step, LD-14).
+        let same_container =
+            source_profile_id == target_profile_id && source_database == target_database;
+        let pre_run_warnings = {
+            let plans: Vec<MappingRowPlan> = configs
+                .iter()
+                .map(|config| MappingRowPlan {
+                    source_table: config.source_table.name.as_str(),
+                    target_schema: config.target_schema.as_deref(),
+                    target_table: config.target_table.as_str(),
+                    destructive: config.is_destructive(),
+                })
+                .collect();
+            tables_mapping_confirm_warnings(&plans, same_container)
+        };
+
         let table_refs: Vec<TableRef> = configs.iter().map(|c| c.source_table.clone()).collect();
         let mut schemas: Vec<Option<String>> =
             table_refs.iter().map(|t| t.schema.clone()).collect();
@@ -947,6 +1099,7 @@ impl MigrateWizard {
         cx.notify();
 
         let app_state = self.app_state.clone();
+        let generation = self.generation;
 
         cx.spawn(async move |this, cx| {
             let mut foreign_keys: Vec<SchemaForeignKeyInfo> = Vec::new();
@@ -979,6 +1132,10 @@ impl MigrateWizard {
             };
 
             this.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+
                 this.advancing = false;
                 match order_result {
                     Ok(order) => {
@@ -995,6 +1152,7 @@ impl MigrateWizard {
                             disable_referential_integrity,
                             order: decide_order(order),
                             configs,
+                            pre_run_warnings,
                         };
                         this.mount_confirm_run(inputs, cx);
                         this.phase = WizardPhase::Confirm;

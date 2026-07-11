@@ -233,7 +233,11 @@ impl Sidebar {
             };
 
             let cache_db = parts.cache_database();
-            let cache_key = (cache_db.to_string(), parts.object_name.clone());
+            let cache_key = (
+                cache_db.to_string(),
+                Some(parts.schema_name.clone()),
+                parts.object_name.clone(),
+            );
 
             if let Some(table) = conn.table_details.get(&cache_key) {
                 Some(table.clone())

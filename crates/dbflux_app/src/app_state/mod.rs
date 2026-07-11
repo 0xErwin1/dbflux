@@ -215,11 +215,12 @@ impl AppState {
         &self,
         profile_id: Uuid,
         database: &str,
+        schema: Option<&str>,
         table: &str,
     ) -> Option<&dbflux_core::TableInfo> {
         self.facade
             .connections
-            .get_table_details(profile_id, database, table)
+            .get_table_details(profile_id, database, schema, table)
     }
 
     #[allow(dead_code)]
@@ -227,31 +228,39 @@ impl AppState {
         &mut self,
         profile_id: Uuid,
         database: String,
+        schema: Option<String>,
         table: String,
         details: dbflux_core::TableInfo,
     ) {
         self.facade
             .connections
-            .set_table_details(profile_id, database, table, details);
+            .set_table_details(profile_id, database, schema, table, details);
     }
 
     pub fn set_dependents(
         &mut self,
         profile_id: Uuid,
         database: String,
+        schema: Option<String>,
         table: String,
         deps: Vec<dbflux_core::RelationRef>,
     ) {
         self.facade
             .connections
-            .set_dependents(profile_id, database, table, deps);
+            .set_dependents(profile_id, database, schema, table, deps);
     }
 
     #[allow(dead_code)]
-    pub fn needs_table_details(&self, profile_id: Uuid, database: &str, table: &str) -> bool {
+    pub fn needs_table_details(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> bool {
         self.facade
             .connections
-            .needs_table_details(profile_id, database, table)
+            .needs_table_details(profile_id, database, schema, table)
     }
 
     #[allow(dead_code)]

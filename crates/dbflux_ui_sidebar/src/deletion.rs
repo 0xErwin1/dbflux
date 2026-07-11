@@ -222,7 +222,7 @@ impl Sidebar {
                     .read(cx)
                     .connections()
                     .get(profile_id)
-                    .map(|conn| conn.dependents(&effective_db, name))
+                    .map(|conn| conn.dependents(&effective_db, Some(schema.as_str()), name))
                     .unwrap_or_default();
 
                 let schema_name = Some(schema.clone());

@@ -188,7 +188,7 @@ pub use schema::{
     RelationalSchema, RelationshipTypeInfo, RetentionPolicyInfo, RoutineInfo, RoutineKind,
     SchemaChange, SchemaDiff, SchemaDriftDetected, SchemaFingerprint, SchemaForeignKeyBuilder,
     SchemaForeignKeyInfo, SchemaIndexBuilder, SchemaIndexInfo, SchemaNodeId, SchemaNodeKind,
-    SchemaSnapshot, SearchIndexInfo, SearchMappingInfo, SearchSchema, TableInfo,
+    SchemaSnapshot, SearchIndexInfo, SearchMappingInfo, SearchSchema, TableInfo, TableKey,
     TimeSeriesFieldInfo, TimeSeriesSchema, VectorCollectionInfo, VectorMetadataField, VectorMetric,
     VectorSchema, ViewInfo, WideColumnInfo, WideColumnKeyspaceInfo, WideColumnSchema,
     check_drift_sync, check_schema_drift, diff_table_info, extract_referenced_tables,

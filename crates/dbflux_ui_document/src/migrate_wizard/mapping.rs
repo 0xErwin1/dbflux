@@ -39,7 +39,10 @@ use uuid::Uuid;
 use crate::migrate_wizard::column_mapping::{
     TableMigrationConfig, default_mapping_mode, mapping_mode_options,
 };
-use crate::migrate_wizard::phases::MappingRowReadiness;
+use crate::migrate_wizard::phases::{
+    MappingRowPlan, MappingRowReadiness, can_advance_from_tables_mapping,
+    tables_mapping_blocking_errors,
+};
 use crate::migrate_wizard::tree_model::NodeLoad;
 
 const TARGET_COL_W: Pixels = px(220.0);
@@ -140,6 +143,8 @@ struct BindingEditor {
 pub struct MappingPhase {
     app_state: Entity<AppStateEntity>,
     focus_handle: FocusHandle,
+    source_profile_id: Uuid,
+    source_database: String,
     target_profile_id: Uuid,
     target_database: String,
     existing_target_tables: Vec<String>,
@@ -156,6 +161,8 @@ impl MappingPhase {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         app_state: Entity<AppStateEntity>,
+        source_profile_id: Uuid,
+        source_database: String,
         target_profile_id: Uuid,
         target_database: String,
         existing_target_tables: Vec<String>,
@@ -167,6 +174,8 @@ impl MappingPhase {
         let mut phase = Self {
             app_state,
             focus_handle: cx.focus_handle(),
+            source_profile_id,
+            source_database,
             target_profile_id,
             target_database,
             existing_target_tables,
@@ -200,6 +209,38 @@ impl MappingPhase {
                 target_lookup: row.target_lookup.clone(),
             })
             .collect()
+    }
+
+    /// Whether the source and target refer to the same container — the same
+    /// connection and database — so a target table can collide with a source
+    /// table (see [`tables_mapping_blocking_errors`]).
+    fn same_container(&self) -> bool {
+        self.source_profile_id == self.target_profile_id
+            && self.source_database == self.target_database
+    }
+
+    fn row_plans(&self) -> Vec<MappingRowPlan<'_>> {
+        self.rows
+            .iter()
+            .map(|row| MappingRowPlan {
+                source_table: row.config.source_table.name.as_str(),
+                target_schema: row.config.target_schema.as_deref(),
+                target_table: row.config.target_table.as_str(),
+                destructive: row.config.is_destructive(),
+            })
+            .collect()
+    }
+
+    /// Cross-row blocking validation errors (duplicate targets, destructive
+    /// source-as-target collisions) that must prevent advancing.
+    pub fn blocking_errors(&self) -> Vec<String> {
+        tables_mapping_blocking_errors(&self.row_plans(), self.same_container())
+    }
+
+    /// The single guard the host uses for the `TablesMapping` → `Options`
+    /// advance: every row ready AND no blocking cross-row collision.
+    pub fn can_advance(&self) -> bool {
+        can_advance_from_tables_mapping(&self.readiness()) && self.blocking_errors().is_empty()
     }
 
     fn build_rows(
@@ -271,12 +312,24 @@ impl MappingPhase {
         cx: &mut Context<Self>,
     ) {
         let existing = self.existing_target_tables.clone();
+        let supports_truncate = self.supports_truncate;
         let Some(row) = self.rows.get_mut(row_index) else {
             return;
         };
 
         let typed = row.target_input.read(cx).value().to_string();
         let resolution = apply_target_name(&mut row.config, &typed, &existing);
+
+        // `apply_target_name` may reset the mapping mode (Create vs Existing);
+        // keep the row's mode dropdown in lockstep so the grid never shows a
+        // mode different from the one that will actually run.
+        let mode_options = mapping_mode_options(supports_truncate);
+        let selected_mode = mode_options
+            .iter()
+            .position(|(_, mode)| *mode == row.config.mapping_mode);
+        row.mode_dropdown.update(cx, |dropdown, cx| {
+            dropdown.set_selected_index(selected_mode, cx)
+        });
 
         match resolution {
             TargetResolution::Create => {
@@ -498,6 +551,8 @@ impl MappingPhase {
             .map(|(index, row)| self.render_grid_row(index, row, cx))
             .collect();
 
+        let blocking_errors = self.blocking_errors();
+
         div()
             .flex()
             .flex_col()
@@ -515,6 +570,15 @@ impl MappingPhase {
                     .overflow_y_scroll()
                     .children(rows),
             )
+            .when(!blocking_errors.is_empty(), |parent| {
+                parent.child(
+                    div().flex().flex_col().gap(px(2.0)).children(
+                        blocking_errors
+                            .into_iter()
+                            .map(|error| Text::caption(error).danger().into_any_element()),
+                    ),
+                )
+            })
     }
 
     fn render_bulk_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {

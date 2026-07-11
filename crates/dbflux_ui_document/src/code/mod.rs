@@ -431,7 +431,7 @@ struct PendingDriftQuery {
     action: DriftAction,
     /// Cache updates to apply before execution when action is `ExecuteNow` or
     /// after "Refresh & re-run". Each entry is `(database, table, TableInfo)`.
-    cache_updates: Vec<(String, String, dbflux_core::TableInfo)>,
+    cache_updates: Vec<(dbflux_core::TableKey, dbflux_core::TableInfo)>,
 }
 
 /// Record of a query execution.

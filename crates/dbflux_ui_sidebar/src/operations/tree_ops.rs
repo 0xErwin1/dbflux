@@ -12,7 +12,7 @@ struct HeldSidebarDatabaseRefreshState {
     database: String,
     primary_schema: Option<SchemaSnapshot>,
     cached_schema: Option<DbSchemaInfo>,
-    table_details: HashMap<(String, String), TableInfo>,
+    table_details: HashMap<(String, Option<String>, String), TableInfo>,
     schema_types: HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
     schema_indexes: HashMap<SchemaCacheKey, Vec<SchemaIndexInfo>>,
     schema_foreign_keys: HashMap<SchemaCacheKey, Vec<SchemaForeignKeyInfo>>,
@@ -54,6 +54,7 @@ enum SchemaObjectRefreshResult {
 struct HeldSidebarObjectRefreshState {
     profile_id: Uuid,
     cache_database: String,
+    schema_name: String,
     object_name: String,
     previous_details: Option<TableInfo>,
 }
@@ -176,7 +177,7 @@ impl Sidebar {
                 let existing = std::mem::take(&mut connected.table_details);
                 let (removed, kept): (Vec<_>, Vec<_>) = existing
                     .into_iter()
-                    .partition(|((cache_db, _), _)| cache_db == database);
+                    .partition(|((cache_db, _, _), _)| cache_db == database);
                 connected.table_details = kept.into_iter().collect();
                 removed.into_iter().collect()
             };
@@ -1190,15 +1191,18 @@ impl Sidebar {
                 .connections_mut()
                 .get_mut(&parts.profile_id)
                 .and_then(|connected| {
-                    connected
-                        .table_details
-                        .remove(&(cache_db.clone(), parts.object_name.clone()))
+                    connected.table_details.remove(&(
+                        cache_db.clone(),
+                        Some(parts.schema_name.clone()),
+                        parts.object_name.clone(),
+                    ))
                 })
         });
 
         let held_state = HeldSidebarObjectRefreshState {
             profile_id: parts.profile_id,
             cache_database: cache_db.clone(),
+            schema_name: parts.schema_name.clone(),
             object_name: parts.object_name.clone(),
             previous_details,
         };
@@ -1243,6 +1247,7 @@ impl Sidebar {
                     state.set_table_details(
                         held_state.profile_id,
                         held_state.cache_database.clone(),
+                        Some(held_state.schema_name.clone()),
                         held_state.object_name.clone(),
                         previous_details,
                     );
@@ -1284,6 +1289,7 @@ impl Sidebar {
                             params
                                 .execute()
                                 .map(|r| SchemaObjectRefreshResult::TableDetails(Box::new(r)))
+                                .map_err(|e| e.to_string())
                         })
                         .await
                 }
@@ -1327,6 +1333,7 @@ impl Sidebar {
                                 state.set_table_details(
                                     held_state.profile_id,
                                     held_state.cache_database.clone(),
+                                    Some(held_state.schema_name.clone()),
                                     held_state.object_name.clone(),
                                     previous_details,
                                 );
@@ -1344,12 +1351,14 @@ impl Sidebar {
                                 state.set_table_details(
                                     result.profile_id,
                                     result.database.clone(),
+                                    result.schema.clone(),
                                     result.table.clone(),
                                     result.details,
                                 );
                                 state.set_dependents(
                                     result.profile_id,
                                     result.database,
+                                    result.schema,
                                     result.table,
                                     result.dependents,
                                 );
@@ -1417,6 +1426,7 @@ impl Sidebar {
                                     state.set_table_details(
                                         held_state.profile_id,
                                         held_state.cache_database.clone(),
+                                        Some(held_state.schema_name.clone()),
                                         held_state.object_name.clone(),
                                         previous_details,
                                     );
