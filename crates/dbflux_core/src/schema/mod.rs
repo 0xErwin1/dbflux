@@ -16,7 +16,8 @@ pub use fingerprint::SchemaFingerprint;
 pub use node_id::{ParseSchemaNodeIdError, SchemaNodeId, SchemaNodeKind};
 pub use query_parser::{QueryTableRef, extract_referenced_tables};
 pub use schema_drift::{
-    ColumnDiff, ColumnSnapshot, SchemaChange, SchemaDiff, SchemaDriftDetected, diff_table_info,
+    ColumnDiff, ColumnSnapshot, IndexSnapshot, RiskedChange, SchemaChange, SchemaDiff,
+    SchemaDriftDetected, TableChange, diff_schema, diff_table_info,
 };
 pub use types::{
     CollectionChildInfo, CollectionChildrenCache, CollectionChildrenPage,

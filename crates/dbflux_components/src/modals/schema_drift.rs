@@ -4,7 +4,9 @@ use crate::primitives::Icon;
 use crate::semantic::BannerColors as SemBannerColors;
 use crate::tokens::{FontSizes, Spacing};
 use crate::typography::AppFonts;
-use dbflux_core::{ColumnSnapshot, QueryTableRef, SchemaChange, SchemaDriftDetected};
+use dbflux_core::{
+    ColumnSnapshot, IndexSnapshot, QueryTableRef, SchemaChange, SchemaDriftDetected,
+};
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::button::{Button, ButtonVariants};
@@ -294,6 +296,34 @@ fn render_change_row(
             "FK changed",
             muted,
         ),
+        SchemaChange::DefaultChanged {
+            column,
+            before,
+            after,
+        } => drift_row(
+            warning_bg,
+            column,
+            before.as_deref().unwrap_or("—"),
+            after.as_deref().unwrap_or("—"),
+            "default changed",
+            muted,
+        ),
+        SchemaChange::IndexAdded(snap) => drift_row(
+            warning_bg,
+            &snap.name,
+            "—",
+            &index_label(snap),
+            "index added",
+            muted,
+        ),
+        SchemaChange::IndexRemoved(snap) => drift_row(
+            warning_bg,
+            &snap.name,
+            &index_label(snap),
+            "—",
+            "index removed",
+            muted,
+        ),
     }
 }
 
@@ -301,6 +331,11 @@ fn snap_label(snap: &ColumnSnapshot) -> String {
     let pk = if snap.is_primary_key { " PK" } else { "" };
     let null_mark = if snap.nullable { "" } else { " NOT NULL" };
     format!("{}{}{}", snap.type_name, pk, null_mark)
+}
+
+fn index_label(snap: &IndexSnapshot) -> String {
+    let unique = if snap.is_unique { " UNIQUE" } else { "" };
+    format!("({}){}", snap.columns.join(", "), unique)
 }
 
 fn drift_row(
