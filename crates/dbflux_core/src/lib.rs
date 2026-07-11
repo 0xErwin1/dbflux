@@ -204,7 +204,7 @@ pub use sql::{
     SqlGenerationOptions, SqlGenerationRequest, SqlOperation, SqlQueryBuilder, SqlValueMode,
     TypeAttributeDefinition, TypeDefinition, generate_create_table, generate_delete_template,
     generate_drop_table, generate_insert_template, generate_select_star, generate_sql,
-    generate_truncate, generate_update_template,
+    generate_truncate, generate_update_template, validate_ddl_fragment,
 };
 
 pub use pipeline::{

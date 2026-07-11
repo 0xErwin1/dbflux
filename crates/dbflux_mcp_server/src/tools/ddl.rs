@@ -1178,6 +1178,15 @@ impl DbFluxServer {
 
         let if_not_exists_clause = if if_not_exists { "IF NOT EXISTS " } else { "" };
 
+        // Column types are interpolated verbatim (they cannot be blanket-quoted:
+        // `VARCHAR(255)` etc. are legitimate), so gate them through the shared
+        // validator to keep a crafted type like `TEXT; DROP TABLE x; --` from
+        // smuggling a second statement into the generated DDL.
+        for col in columns {
+            dbflux_core::validate_ddl_fragment(&col.r#type, "column type")
+                .map_err(|rejection| rejection.reason)?;
+        }
+
         // Build column definitions
         let column_defs: Vec<String> = columns
             .iter()

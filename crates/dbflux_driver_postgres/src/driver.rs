@@ -29,8 +29,8 @@ use dbflux_core::{
     TransferFamily, TypeDefinition, Value, ViewInfo, WhereOperator, field_password, field_required,
     field_use_uri, generate_create_table, generate_delete_template, generate_drop_table,
     generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
-    render_semantic_filter_sql, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
-    with_help,
+    render_semantic_filter_sql, sanitize_uri, ssh_tab, validate_ddl_fragment, when_checked,
+    when_unchecked, with_default, with_help,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -487,6 +487,11 @@ impl CodeGenerator for PostgresCodeGenerator {
     }
 
     fn generate_add_column(&self, req: &AddColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        validate_ddl_fragment(req.type_name, "column type")?;
+        if let Some(default) = req.default {
+            validate_ddl_fragment(default, "column default")?;
+        }
+
         let table = self.qualified(req.schema_name, req.table_name);
         let mut sql = format!(
             "ALTER TABLE {} ADD COLUMN {} {}",
@@ -516,6 +521,13 @@ impl CodeGenerator for PostgresCodeGenerator {
     }
 
     fn generate_alter_column(&self, req: &AlterColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        if let Some(new_type) = req.new_type {
+            validate_ddl_fragment(new_type, "column type")?;
+        }
+        if let Some(DefaultSpec::Set(value)) = req.default {
+            validate_ddl_fragment(value, "column default")?;
+        }
+
         let table = self.qualified(req.schema_name, req.table_name);
         let column = self.quote(req.column_name);
         let mut statements = Vec::new();
@@ -4768,6 +4780,50 @@ mod tests {
         assert_eq!(
             statements,
             vec!["ALTER TABLE \"public\".\"users\" ADD COLUMN \"age\" INTEGER NOT NULL DEFAULT 0;"]
+        );
+    }
+
+    #[test]
+    fn postgres_codegen_rejects_injected_default_and_type() {
+        let generator = PostgresCodeGenerator;
+
+        let injected_default = AddColumnRequest {
+            table_name: "users",
+            schema_name: Some("public"),
+            column_name: "age",
+            type_name: "INTEGER",
+            nullable: true,
+            default: Some("0; DROP TABLE users; --"),
+        };
+        assert!(
+            generator.generate_add_column(&injected_default).is_err(),
+            "a default carrying a stacked statement must be rejected, not emitted"
+        );
+
+        let injected_type = AlterColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+            new_type: Some("TEXT; DROP TABLE users; --"),
+            nullable: None,
+            default: None,
+        };
+        assert!(
+            generator.generate_alter_column(&injected_type).is_err(),
+            "a type carrying a stacked statement must be rejected, not emitted"
+        );
+
+        let legit = AddColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "name",
+            type_name: "VARCHAR(255)",
+            nullable: false,
+            default: Some("now()"),
+        };
+        assert!(
+            generator.generate_add_column(&legit).is_ok(),
+            "legitimate VARCHAR(255)/now() must still pass"
         );
     }
 

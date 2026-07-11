@@ -8,6 +8,7 @@ pub use code_generation::{
     CodeGenCapabilities, CodeGenerator, CreateIndexRequest, CreateTypeRequest, DdlRejection,
     DefaultSpec, DropColumnRequest, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest,
     NoOpCodeGenerator, ReindexRequest, TypeAttributeDefinition, TypeDefinition,
+    validate_ddl_fragment,
 };
 pub use dialect::{DefaultSqlDialect, PlaceholderStyle, SqlDialect};
 pub use generation::{

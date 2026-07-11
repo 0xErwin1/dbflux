@@ -23,7 +23,7 @@ use dbflux_core::{
     SqlQueryBuilder, SyntaxInfo, TableInfo, TransactionCapabilities, TransferFamily, Value,
     ViewInfo, WhereOperator, field_file_path, generate_delete_template, generate_drop_table,
     generate_insert_template, generate_select_star, generate_update_template,
-    render_semantic_filter_sql,
+    render_semantic_filter_sql, validate_ddl_fragment,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 
@@ -331,6 +331,11 @@ impl CodeGenerator for SqliteCodeGenerator {
     }
 
     fn generate_add_column(&self, req: &AddColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        validate_ddl_fragment(req.type_name, "column type")?;
+        if let Some(default) = req.default {
+            validate_ddl_fragment(default, "column default")?;
+        }
+
         let table = self.qualified(req.schema_name, req.table_name);
         let mut sql = format!(
             "ALTER TABLE {} ADD COLUMN {} {}",

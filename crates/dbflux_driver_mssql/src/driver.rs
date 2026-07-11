@@ -26,7 +26,7 @@ use dbflux_core::{
     Value, ViewInfo, WhereOperator, field, field_password, field_required, field_use_uri,
     generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
     generate_truncate, generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab,
-    when_checked, when_unchecked, with_default,
+    validate_ddl_fragment, when_checked, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 use tiberius::{AuthMethod, Client, Config, EncryptionLevel, SqlBrowser};
@@ -463,6 +463,11 @@ impl CodeGenerator for MssqlCodeGenerator {
     /// T-SQL's `ALTER TABLE ... ADD` grammar has no `COLUMN` keyword (unlike
     /// `DROP COLUMN` / `ALTER COLUMN`, which both require it).
     fn generate_add_column(&self, req: &AddColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        validate_ddl_fragment(req.type_name, "column type")?;
+        if let Some(default) = req.default {
+            validate_ddl_fragment(default, "column default")?;
+        }
+
         let table = self.qualified(req.schema_name, req.table_name);
         let mut sql = format!(
             "ALTER TABLE {} ADD {} {}",
@@ -506,6 +511,10 @@ impl CodeGenerator for MssqlCodeGenerator {
                 reason: "SQL Server default constraints must be dropped and re-added by name; not derivable from this request".to_string(),
                 followup: None,
             });
+        }
+
+        if let Some(new_type) = req.new_type {
+            validate_ddl_fragment(new_type, "column type")?;
         }
 
         let table = self.qualified(req.schema_name, req.table_name);

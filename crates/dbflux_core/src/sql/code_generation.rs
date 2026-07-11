@@ -224,6 +224,32 @@ impl DdlRejection {
     }
 }
 
+/// SQL fragments (a column type or a raw default expression) that a driver
+/// interpolates verbatim into generated DDL cannot be blanket-quoted —
+/// `VARCHAR(255)`, `now()` and `nextval('seq')` are all legitimate. To keep
+/// that seam from becoming a DDL-injection vector, a fragment must not carry a
+/// statement terminator or comment sequence that would let it smuggle a second
+/// statement past the generator. Any of `;`, `--`, `/*` or `*/` is rejected.
+///
+/// This is the single shared gate every driver and the MCP DDL re-route call,
+/// so a crafted source-schema default such as `0; DROP TABLE x; --` cannot be
+/// emitted through any per-driver path.
+pub fn validate_ddl_fragment(value: &str, field: &str) -> Result<(), DdlRejection> {
+    const FORBIDDEN: [&str; 4] = [";", "--", "/*", "*/"];
+
+    if let Some(marker) = FORBIDDEN.iter().find(|marker| value.contains(*marker)) {
+        return Err(DdlRejection {
+            reason: format!(
+                "{field} contains a disallowed SQL sequence ({marker:?}); \
+                 statement terminators and comment markers are rejected to prevent DDL injection"
+            ),
+            followup: None,
+        });
+    }
+
+    Ok(())
+}
+
 // =============================================================================
 // CodeGenerator Trait
 // =============================================================================
@@ -381,6 +407,38 @@ mod tests {
         let result = generator.generate_drop_column(&request);
 
         assert_eq!(result, Err(DdlRejection::unsupported()));
+    }
+
+    #[test]
+    fn validate_ddl_fragment_accepts_legitimate_types_and_defaults() {
+        for value in [
+            "VARCHAR(255)",
+            "now()",
+            "nextval('users_id_seq')",
+            "BIGINT",
+            "0",
+        ] {
+            assert!(
+                validate_ddl_fragment(value, "type").is_ok(),
+                "expected {value:?} to pass validation"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_ddl_fragment_rejects_statement_terminator() {
+        let result = validate_ddl_fragment("0; DROP TABLE x", "default");
+        assert!(
+            result.is_err(),
+            "expected a stacked statement to be rejected"
+        );
+    }
+
+    #[test]
+    fn validate_ddl_fragment_rejects_comment_sequences() {
+        assert!(validate_ddl_fragment("TEXT -- inject", "type").is_err());
+        assert!(validate_ddl_fragment("TEXT /* inject", "type").is_err());
+        assert!(validate_ddl_fragment("TEXT */ inject", "type").is_err());
     }
 
     #[test]
