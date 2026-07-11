@@ -29,10 +29,13 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use uuid::Uuid;
 
-use super::apply::{DdlApplyDeps, DdlApplyExecutor, DdlApplyOutcome};
+use super::apply::{
+    DdlApplyDeps, DdlApplyExecutor, DdlApplyOutcome, TableLevelAction,
+    build_statements_for_table_action,
+};
 use super::diff_source::{
-    DiffMode, PartitionedChanges, RiskBadge, SourcePicker, UnsupportedChange,
-    partition_table_changes,
+    DiffMode, PartitionedChanges, RiskBadge, SourcePicker, TableActionOutcome, UnsupportedChange,
+    classify_table_action, partition_table_changes,
 };
 use crate::handle::DocumentEvent;
 use crate::types::{DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot, DocumentState};
@@ -46,14 +49,25 @@ struct TableDiffGroup {
     appliable: Vec<RiskedChange>,
     /// Changes surfaced explicitly as unsupported (never applied).
     unsupported: Vec<UnsupportedChange>,
-    /// Present for whole-table add/remove, which this executor does not apply.
-    table_level_note: Option<String>,
+    /// Present for whole-table add/remove (`TableChange::TableAdded`/
+    /// `TableRemoved`), which carry no per-column `RiskedChange` of their own.
+    table_action: Option<TableActionOutcome>,
 }
 
 impl TableDiffGroup {
     fn is_empty(&self) -> bool {
-        self.appliable.is_empty() && self.unsupported.is_empty() && self.table_level_note.is_none()
+        self.appliable.is_empty() && self.unsupported.is_empty() && self.table_action.is_none()
     }
+}
+
+/// One table's selected work: individual column/index changes plus, if
+/// selected, the whole-table action and its risk (for approval-routing
+/// classification).
+#[derive(Clone)]
+struct SelectedTableWork {
+    table: TableRef,
+    changes: Vec<RiskedChange>,
+    table_action: Option<(TableLevelAction, ExecutionClassification)>,
 }
 
 /// The schema-diff & apply document entity.
@@ -74,6 +88,8 @@ pub struct SchemaDiffDocument {
     groups: Vec<TableDiffGroup>,
     /// Selected appliable changes as `(group_index, appliable_index)`.
     selected: HashSet<(usize, usize)>,
+    /// Selected whole-table actions, as `group_index`.
+    selected_table_actions: HashSet<usize>,
     /// Snapshot summaries for the target profile/database, loaded when the
     /// snapshot-to-live mode is selected.
     snapshots: Vec<dbflux_storage::repositories::sch_schema_snapshots::SchemaSnapshotSummary>,
@@ -127,6 +143,7 @@ impl SchemaDiffDocument {
             reference_profile: None,
             groups: Vec::new(),
             selected: HashSet::new(),
+            selected_table_actions: HashSet::new(),
             snapshots: Vec::new(),
             is_loading: false,
             has_computed: false,
@@ -204,6 +221,7 @@ impl SchemaDiffDocument {
         self.has_computed = false;
         self.groups.clear();
         self.selected.clear();
+        self.selected_table_actions.clear();
         if mode == DiffMode::SnapshotVsLive {
             self.load_snapshots(cx);
         }
@@ -226,6 +244,7 @@ impl SchemaDiffDocument {
         self.has_computed = false;
         self.groups.clear();
         self.selected.clear();
+        self.selected_table_actions.clear();
         cx.notify();
     }
 
@@ -236,6 +255,7 @@ impl SchemaDiffDocument {
         self.has_computed = false;
         self.groups.clear();
         self.selected.clear();
+        self.selected_table_actions.clear();
         cx.notify();
     }
 
@@ -348,6 +368,7 @@ impl SchemaDiffDocument {
                     doc.has_computed = true;
                     doc.groups = groups;
                     doc.selected = doc.default_selection();
+                    doc.selected_table_actions = doc.default_table_action_selection();
                     if doc.groups.is_empty() {
                         doc.status_message =
                             Some("No differences found between the two schemas.".to_string());
@@ -371,6 +392,22 @@ impl SchemaDiffDocument {
         set
     }
 
+    /// Default selection = every appliable whole-table action checked,
+    /// mirroring `default_selection`'s "select every appliable change" rule.
+    fn default_table_action_selection(&self) -> HashSet<usize> {
+        self.groups
+            .iter()
+            .enumerate()
+            .filter_map(|(index, group)| {
+                matches!(
+                    group.table_action,
+                    Some(TableActionOutcome::Appliable { .. })
+                )
+                .then_some(index)
+            })
+            .collect()
+    }
+
     fn toggle_selection(
         &mut self,
         group_index: usize,
@@ -384,9 +421,17 @@ impl SchemaDiffDocument {
         cx.notify();
     }
 
-    /// Collects the selected appliable changes grouped by table.
-    fn selected_changes_by_table(&self) -> Vec<(TableRef, Vec<RiskedChange>)> {
-        let mut out: Vec<(TableRef, Vec<RiskedChange>)> = Vec::new();
+    fn toggle_table_action_selection(&mut self, group_index: usize, cx: &mut Context<Self>) {
+        if !self.selected_table_actions.remove(&group_index) {
+            self.selected_table_actions.insert(group_index);
+        }
+        cx.notify();
+    }
+
+    /// Collects the selected appliable changes and whole-table actions,
+    /// grouped by table.
+    fn selected_changes_by_table(&self) -> Vec<SelectedTableWork> {
+        let mut out: Vec<SelectedTableWork> = Vec::new();
 
         for (group_index, group) in self.groups.iter().enumerate() {
             let mut picked = Vec::new();
@@ -395,8 +440,24 @@ impl SchemaDiffDocument {
                     picked.push(change.clone());
                 }
             }
-            if !picked.is_empty() {
-                out.push((group.table.clone(), picked));
+
+            let table_action = if self.selected_table_actions.contains(&group_index) {
+                match &group.table_action {
+                    Some(TableActionOutcome::Appliable { action, risk }) => {
+                        Some((action.clone(), *risk))
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+
+            if !picked.is_empty() || table_action.is_some() {
+                out.push(SelectedTableWork {
+                    table: group.table.clone(),
+                    changes: picked,
+                    table_action,
+                });
             }
         }
 
@@ -411,6 +472,12 @@ impl SchemaDiffDocument {
                 {
                     return true;
                 }
+            }
+            if self.selected_table_actions.contains(&group_index)
+                && let Some(TableActionOutcome::Appliable { risk, .. }) = &group.table_action
+                && RiskBadge::from_classification(*risk) == RiskBadge::Destructive
+            {
+                return true;
             }
         }
         false
@@ -439,10 +506,9 @@ impl SchemaDiffDocument {
         };
 
         let mut statements: Vec<String> = Vec::new();
-        for (table, changes) in selected {
-            let executor = DdlApplyExecutor::new(
-                table,
-                changes,
+        for work in selected {
+            let executor = build_executor_for_work(
+                work,
                 DdlApplyDeps {
                     connection: Arc::clone(&connection),
                     event_sink: None,
@@ -479,7 +545,10 @@ impl SchemaDiffDocument {
             return;
         }
 
-        let total: usize = selected.iter().map(|(_, c)| c.len()).sum();
+        let total: usize = selected
+            .iter()
+            .map(|w| w.changes.len() + w.table_action.is_some() as usize)
+            .sum();
         let summary = format!(
             "Apply {total} schema change(s) to {}",
             self.database.as_deref().unwrap_or("this connection")
@@ -492,10 +561,9 @@ impl SchemaDiffDocument {
             .get_connection(self.profile_id)
             .map(|connection| {
                 let mut statements = Vec::new();
-                for (table, changes) in &selected {
-                    let executor = DdlApplyExecutor::new(
-                        table.clone(),
-                        changes.clone(),
+                for work in selected.iter().cloned() {
+                    let executor = build_executor_for_work(
+                        work,
                         DdlApplyDeps {
                             connection: Arc::clone(&connection),
                             event_sink: None,
@@ -573,10 +641,9 @@ impl SchemaDiffDocument {
 
         let task = cx.background_executor().spawn(async move {
             let mut applied = 0usize;
-            for (table, changes) in selected {
-                let executor = DdlApplyExecutor::new(
-                    table,
-                    changes,
+            for work in selected {
+                let executor = build_executor_for_work(
+                    work,
                     DdlApplyDeps {
                         connection: Arc::clone(&connection),
                         event_sink: event_sink.clone(),
@@ -612,6 +679,7 @@ impl SchemaDiffDocument {
                             doc.has_computed = false;
                             doc.groups.clear();
                             doc.selected.clear();
+                            doc.selected_table_actions.clear();
                         }
                         Err(message) => {
                             report_error(UserFacingError::new(ErrorKind::Driver, message), cx);
@@ -626,15 +694,15 @@ impl SchemaDiffDocument {
     }
 
     #[cfg(feature = "mcp")]
-    fn route_to_approval(
-        &mut self,
-        selected: &[(TableRef, Vec<RiskedChange>)],
-        cx: &mut Context<Self>,
-    ) {
+    fn route_to_approval(&mut self, selected: &[SelectedTableWork], cx: &mut Context<Self>) {
         let classification = selected
             .iter()
-            .flat_map(|(_, changes)| changes.iter())
-            .map(|c| c.risk)
+            .flat_map(|w| {
+                w.changes
+                    .iter()
+                    .map(|c| c.risk)
+                    .chain(w.table_action.as_ref().map(|(_, risk)| *risk))
+            })
             .fold(ExecutionClassification::AdminSafe, |acc, risk| {
                 acc.max(risk)
             });
@@ -642,7 +710,10 @@ impl SchemaDiffDocument {
         let payload = serde_json::json!({
             "profile_id": self.profile_id.to_string(),
             "database": self.database,
-            "change_count": selected.iter().map(|(_, c)| c.len()).sum::<usize>(),
+            "change_count": selected
+                .iter()
+                .map(|w| w.changes.len() + w.table_action.is_some() as usize)
+                .sum::<usize>(),
         });
         let connection_id = self.profile_id.to_string();
 
@@ -674,11 +745,7 @@ impl SchemaDiffDocument {
     }
 
     #[cfg(not(feature = "mcp"))]
-    fn route_to_approval(
-        &mut self,
-        _selected: &[(TableRef, Vec<RiskedChange>)],
-        cx: &mut Context<Self>,
-    ) {
+    fn route_to_approval(&mut self, _selected: &[SelectedTableWork], cx: &mut Context<Self>) {
         self.pending_toast = Some(PendingToast {
             message: "This connection requires approval, which is unavailable in this build."
                 .to_string(),
@@ -717,7 +784,8 @@ fn deep_resolve(
 }
 
 /// Turns raw `TableChange`s into render groups, partitioning modified tables via
-/// the target driver's code generator.
+/// the target driver's code generator and probing whole-table add/remove
+/// through the driver's `generate_code` seam.
 fn build_groups(
     connection: &dyn Connection,
     table_changes: Vec<dbflux_core::TableChange>,
@@ -734,25 +802,27 @@ fn build_groups(
                     schema: info.schema.clone(),
                     name: info.name.clone(),
                 };
+                let action = TableLevelAction::Create(info);
+                let probe = build_statements_for_table_action(connection, &action);
+                let outcome = classify_table_action(action, probe);
                 groups.push(TableDiffGroup {
                     header: qualified(&table),
                     table,
                     appliable: Vec::new(),
                     unsupported: Vec::new(),
-                    table_level_note: Some(
-                        "New table — creating whole tables is not applied here.".to_string(),
-                    ),
+                    table_action: Some(outcome),
                 });
             }
             TableChange::TableRemoved(table) => {
+                let action = TableLevelAction::Drop(table.clone());
+                let probe = build_statements_for_table_action(connection, &action);
+                let outcome = classify_table_action(action, probe);
                 groups.push(TableDiffGroup {
                     header: qualified(&table),
                     table,
                     appliable: Vec::new(),
                     unsupported: Vec::new(),
-                    table_level_note: Some(
-                        "Removed table — dropping whole tables is not applied here.".to_string(),
-                    ),
+                    table_action: Some(outcome),
                 });
             }
             TableChange::TableModified { table, changes } => {
@@ -765,7 +835,7 @@ fn build_groups(
                     table,
                     appliable,
                     unsupported,
-                    table_level_note: None,
+                    table_action: None,
                 });
             }
         }
@@ -775,10 +845,33 @@ fn build_groups(
     groups
 }
 
+/// Builds a `DdlApplyExecutor` for one table's selected work, attaching the
+/// whole-table action when present.
+fn build_executor_for_work(work: SelectedTableWork, deps: DdlApplyDeps) -> DdlApplyExecutor {
+    let executor = DdlApplyExecutor::new(work.table, work.changes, deps);
+    match work.table_action {
+        Some((action, _risk)) => executor.with_table_action(action),
+        None => executor,
+    }
+}
+
 fn qualified(table: &TableRef) -> String {
     match &table.schema {
         Some(schema) => format!("{schema}.{}", table.name),
         None => table.name.clone(),
+    }
+}
+
+fn describe_table_action(action: &TableLevelAction) -> String {
+    match action {
+        TableLevelAction::Create(info) => format!(
+            "Create table {}",
+            qualified(&TableRef {
+                schema: info.schema.clone(),
+                name: info.name.clone(),
+            })
+        ),
+        TableLevelAction::Drop(table) => format!("Drop table {}", qualified(table)),
     }
 }
 
@@ -1139,17 +1232,8 @@ impl SchemaDiffDocument {
             rows.push(render_unsupported_row(unsupported));
         }
 
-        if let Some(note) = &group.table_level_note {
-            rows.push(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .py(Spacing::XS)
-                    .child(Badge::new("Unsupported", BadgeVariant::Neutral))
-                    .child(Text::caption(note.clone()).muted_foreground())
-                    .into_any_element(),
-            );
+        if let Some(outcome) = &group.table_action {
+            rows.push(self.render_table_action_row(group_index, outcome, cx));
         }
 
         div()
@@ -1219,9 +1303,83 @@ impl SchemaDiffDocument {
             .into_any_element()
     }
 
+    fn render_table_action_row(
+        &self,
+        group_index: usize,
+        outcome: &TableActionOutcome,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        match outcome {
+            TableActionOutcome::Appliable { action, risk } => {
+                let (border, primary, primary_foreground) = {
+                    let theme = cx.theme();
+                    (theme.border, theme.primary, theme.primary_foreground)
+                };
+                let checked = self.selected_table_actions.contains(&group_index);
+                let badge = RiskBadge::from_classification(*risk);
+                let description = describe_table_action(action);
+
+                let checkbox = div()
+                    .id(SharedString::from(format!("chk-table-{group_index}")))
+                    .size(px(16.0)) // guardrail-allow: 16px checkbox box, no checkbox-size token
+                    .rounded(Radii::SM)
+                    .border_1()
+                    .border_color(border)
+                    .cursor_pointer()
+                    .when(checked, |d| d.bg(primary))
+                    .when(checked, |d| {
+                        d.child(
+                            Icon::new(AppIcon::Check)
+                                .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
+                                .color(primary_foreground),
+                        )
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.toggle_table_action_selection(group_index, cx)
+                    }));
+
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::SM)
+                    .py(Spacing::XS)
+                    .child(checkbox)
+                    .child(Badge::new(badge.label(), badge_variant(badge)))
+                    .child(Text::body(description))
+                    .into_any_element()
+            }
+            TableActionOutcome::Unsupported {
+                is_create,
+                reason,
+                followup,
+                ..
+            } => {
+                let description = if *is_create {
+                    "Create table"
+                } else {
+                    "Drop table"
+                };
+                let mut reason_text = reason.clone();
+                if let Some(followup) = followup {
+                    reason_text = format!("{reason_text} (see {followup})");
+                }
+
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::SM)
+                    .py(Spacing::XS)
+                    .child(Badge::new("Unsupported", BadgeVariant::Neutral))
+                    .child(Text::body(description))
+                    .child(Text::caption(reason_text).muted_foreground())
+                    .into_any_element()
+            }
+        }
+    }
+
     fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let border = cx.theme().border;
-        let has_selection = !self.selected.is_empty();
+        let has_selection = !self.selected.is_empty() || !self.selected_table_actions.is_empty();
 
         div()
             .flex()

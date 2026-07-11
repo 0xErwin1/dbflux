@@ -7,11 +7,12 @@
 //! surface as unsupported.
 
 use dbflux_core::{
-    CodeGenerator, ExecutionClassification, RiskedChange, SchemaChange, TableInfo, TableRef,
+    CodeGenerator, DdlRejection, ExecutionClassification, RiskedChange, SchemaChange, TableInfo,
+    TableRef, classify_table_added, classify_table_removed,
 };
 use uuid::Uuid;
 
-use super::apply::build_statements_for_change;
+use super::apply::{TableLevelAction, build_statements_for_change};
 
 /// One side of a schema comparison.
 ///
@@ -153,6 +154,52 @@ pub fn partition_table_changes(
 /// is testable without a live connection.
 pub fn tables_from_snapshot(record: &dbflux_core::SchemaSnapshotRecord) -> Vec<TableInfo> {
     record.tables.clone()
+}
+
+/// The result of classifying a whole-table add/remove: its governance risk,
+/// and whether the driver's `generate_code` seam (`"create_table"`/
+/// `"drop_table"`) can express it. Table-level counterpart to
+/// `PartitionedChanges` — a single item rather than a list, since
+/// `TableChange::TableAdded`/`TableRemoved` each carry exactly one action.
+#[derive(Clone, Debug)]
+pub enum TableActionOutcome {
+    Appliable {
+        action: TableLevelAction,
+        risk: ExecutionClassification,
+    },
+    Unsupported {
+        is_create: bool,
+        risk: ExecutionClassification,
+        reason: String,
+        followup: Option<String>,
+    },
+}
+
+/// Risk-classifies a whole-table add/remove and folds in the outcome of
+/// probing `Connection::generate_code` (via `build_statements_for_table_action`).
+/// The probe result is passed in rather than a live `Connection` so this stays
+/// a pure, easily unit-tested classification step, mirroring
+/// `partition_table_changes` for column/index changes.
+pub fn classify_table_action(
+    action: TableLevelAction,
+    probe: Result<Vec<String>, DdlRejection>,
+) -> TableActionOutcome {
+    let is_create = matches!(action, TableLevelAction::Create(_));
+    let risk = if is_create {
+        classify_table_added()
+    } else {
+        classify_table_removed()
+    };
+
+    match probe {
+        Ok(_) => TableActionOutcome::Appliable { action, risk },
+        Err(rejection) => TableActionOutcome::Unsupported {
+            is_create,
+            risk,
+            reason: rejection.reason,
+            followup: rejection.followup.map(|s| s.to_string()),
+        },
+    }
 }
 
 // =============================================================================
@@ -356,5 +403,96 @@ mod tests {
 
         assert!(partitioned.appliable.is_empty());
         assert_eq!(partitioned.unsupported.len(), 1);
+    }
+
+    // -- Table-level action classification --------------------------------
+
+    fn table_info() -> TableInfo {
+        TableInfo {
+            name: "orders".to_string(),
+            schema: Some("public".to_string()),
+            columns: None,
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: Default::default(),
+            child_items: None,
+        }
+    }
+
+    #[test]
+    fn table_added_probe_ok_is_appliable_with_admin_safe_risk() {
+        let action = TableLevelAction::Create(table_info());
+
+        let outcome = classify_table_action(action, Ok(vec!["CREATE TABLE orders ()".to_string()]));
+
+        match outcome {
+            TableActionOutcome::Appliable { risk, .. } => {
+                assert_eq!(risk, ExecutionClassification::AdminSafe);
+            }
+            other => panic!("expected Appliable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn table_removed_probe_ok_is_appliable_with_admin_destructive_risk() {
+        let action = TableLevelAction::Drop(table());
+
+        let outcome = classify_table_action(action, Ok(vec!["DROP TABLE users".to_string()]));
+
+        match outcome {
+            TableActionOutcome::Appliable { risk, .. } => {
+                assert_eq!(risk, ExecutionClassification::AdminDestructive);
+            }
+            other => panic!("expected Appliable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn table_added_probe_err_is_unsupported_with_reason_and_followup() {
+        let action = TableLevelAction::Create(table_info());
+        let probe = Err(DdlRejection {
+            reason: "Code generator 'create_table' not supported".to_string(),
+            followup: Some("DBF-999"),
+        });
+
+        let outcome = classify_table_action(action, probe);
+
+        match outcome {
+            TableActionOutcome::Unsupported {
+                is_create,
+                risk,
+                reason,
+                followup,
+            } => {
+                assert!(is_create);
+                assert_eq!(risk, ExecutionClassification::AdminSafe);
+                assert!(reason.contains("create_table"));
+                assert_eq!(followup.as_deref(), Some("DBF-999"));
+            }
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn table_removed_probe_err_is_unsupported_with_is_create_false() {
+        let action = TableLevelAction::Drop(table());
+        let probe = Err(DdlRejection {
+            reason: "Code generator 'drop_table' not supported".to_string(),
+            followup: None,
+        });
+
+        let outcome = classify_table_action(action, probe);
+
+        match outcome {
+            TableActionOutcome::Unsupported {
+                is_create, risk, ..
+            } => {
+                assert!(!is_create);
+                assert_eq!(risk, ExecutionClassification::AdminDestructive);
+            }
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
     }
 }

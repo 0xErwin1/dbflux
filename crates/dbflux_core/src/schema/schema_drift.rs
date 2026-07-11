@@ -272,6 +272,26 @@ fn classify_schema_change(change: &SchemaChange) -> dbflux_policy::ExecutionClas
     classify_schema_alter(kind)
 }
 
+/// Risk classification for a whole-table `CREATE`, using the same
+/// `dbflux_policy` governance ladder as `classify_schema_change` for
+/// column/index changes. Exposed publicly (unlike `classify_schema_change`)
+/// so callers outside `dbflux_core` — which may not depend on `dbflux_policy`
+/// directly, e.g. non-`mcp` builds of `dbflux_ui_document` — can classify
+/// `TableChange::TableAdded`/`TableRemoved` without a direct `dbflux_policy`
+/// dependency.
+pub fn classify_table_added() -> dbflux_policy::ExecutionClassification {
+    use dbflux_policy::{SchemaAlterKind, classify_schema_alter};
+
+    classify_schema_alter(SchemaAlterKind::AddTable)
+}
+
+/// Risk classification for a whole-table `DROP`. See `classify_table_added`.
+pub fn classify_table_removed() -> dbflux_policy::ExecutionClassification {
+    use dbflux_policy::{SchemaAlterKind, classify_schema_alter};
+
+    classify_schema_alter(SchemaAlterKind::DropTable)
+}
+
 fn table_identity(table: &TableInfo) -> (Option<&str>, &str) {
     (table.schema.as_deref(), table.name.as_str())
 }
@@ -678,6 +698,23 @@ mod tests {
             changes
                 .iter()
                 .any(|c| matches!(c, TableChange::TableAdded(t) if t.name == "users"))
+        );
+    }
+
+    #[test]
+    fn classify_table_added_is_admin_safe() {
+        use dbflux_policy::ExecutionClassification;
+
+        assert_eq!(classify_table_added(), ExecutionClassification::AdminSafe);
+    }
+
+    #[test]
+    fn classify_table_removed_is_admin_destructive() {
+        use dbflux_policy::ExecutionClassification;
+
+        assert_eq!(
+            classify_table_removed(),
+            ExecutionClassification::AdminDestructive
         );
     }
 }

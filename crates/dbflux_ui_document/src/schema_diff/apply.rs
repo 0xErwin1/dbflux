@@ -3,7 +3,8 @@ use std::sync::Arc;
 use dbflux_core::{
     AddColumnRequest, AlterColumnRequest, CodeGenerator, Connection, DdlRejection, DefaultSpec,
     DropColumnRequest, EventCategory, EventOutcome, EventRecord, EventSeverity, EventSink,
-    MutationPolicy, QueryRequest, RiskedChange, SchemaChange, TableRef, TransactionVocab,
+    MutationPolicy, QueryRequest, RiskedChange, SchemaChange, TableInfo, TableRef,
+    TransactionVocab,
 };
 
 /// Outcome of a completed (or short-circuited) `DdlApplyExecutor::apply` run.
@@ -150,17 +151,77 @@ pub(crate) fn build_statements_for_change(
     }
 }
 
-/// Builds the full ordered statement list for `changes`, failing fast on the
-/// first change the driver cannot express. Mirrors the MCP
-/// `run_alter_transactional` template of building all SQL before any
-/// statement executes, so a rejection never leaves a partially-applied change.
+/// A whole-table `CREATE` or `DROP`, generated through `Connection::generate_code`
+/// rather than the column/index `CodeGenerator` seam: driver-specific type
+/// mapping for `CREATE TABLE` (auto-increment PKs, dialect-specific column
+/// types, ...) already lives in each driver's `"create_table"`/`"drop_table"`
+/// `generate_code` implementation, which this reuses instead of duplicating.
+#[derive(Debug, Clone)]
+pub enum TableLevelAction {
+    Create(TableInfo),
+    Drop(TableRef),
+}
+
+/// Builds a minimal `TableInfo` (name + schema only) for `generate_code`,
+/// which the `"drop_table"` generator only reads those two fields from.
+fn table_info_from_ref(table: &TableRef) -> TableInfo {
+    TableInfo {
+        name: table.name.clone(),
+        schema: table.schema.clone(),
+        columns: None,
+        indexes: None,
+        foreign_keys: None,
+        constraints: None,
+        sample_fields: None,
+        presentation: Default::default(),
+        child_items: None,
+    }
+}
+
+/// Maps a whole-table add/remove onto the driver-owned `Connection::generate_code`
+/// seam. A driver that does not implement `"create_table"`/`"drop_table"` for
+/// this generator id returns `DbError::NotSupported`, surfaced here as a named
+/// `DdlRejection` exactly like the column/index seam does, rather than a
+/// silent skip.
+pub(crate) fn build_statements_for_table_action(
+    connection: &dyn Connection,
+    action: &TableLevelAction,
+) -> Result<Vec<String>, DdlRejection> {
+    let (generator_id, table) = match action {
+        TableLevelAction::Create(table) => ("create_table", table.clone()),
+        TableLevelAction::Drop(table_ref) => ("drop_table", table_info_from_ref(table_ref)),
+    };
+
+    connection
+        .generate_code(generator_id, &table)
+        .map(|sql| vec![sql])
+        .map_err(|e| DdlRejection {
+            reason: e.to_string(),
+            followup: None,
+        })
+}
+
+/// Builds the full ordered statement list for `changes` (and, if present, a
+/// whole-table `table_action` run first), failing fast on the first change
+/// the driver cannot express. Mirrors the MCP `run_alter_transactional`
+/// template of building all SQL before any statement executes, so a
+/// rejection never leaves a partially-applied change.
 fn build_all_statements(
     table: &TableRef,
     changes: &[RiskedChange],
-    code_generator: &dyn CodeGenerator,
+    table_action: Option<&TableLevelAction>,
+    connection: &dyn Connection,
 ) -> Result<Vec<String>, ExecutorError> {
     let mut statements = Vec::new();
 
+    if let Some(action) = table_action {
+        let stmts = build_statements_for_table_action(connection, action).map_err(|rejection| {
+            ExecutorError::Generation(format!("table action rejected: {}", rejection.reason))
+        })?;
+        statements.extend(stmts);
+    }
+
+    let code_generator = connection.code_generator();
     for (index, risked) in changes.iter().enumerate() {
         let stmts = build_statements_for_change(table, &risked.change, code_generator).map_err(
             |rejection| {
@@ -193,6 +254,7 @@ pub struct DdlApplyDeps {
 pub struct DdlApplyExecutor {
     table: TableRef,
     changes: Vec<RiskedChange>,
+    table_action: Option<TableLevelAction>,
     deps: DdlApplyDeps,
 }
 
@@ -201,22 +263,32 @@ impl DdlApplyExecutor {
         Self {
             table,
             changes,
+            table_action: None,
             deps,
         }
+    }
+
+    /// Adds a whole-table `CREATE`/`DROP` to run alongside `changes`, for
+    /// `TableChange::TableAdded`/`TableRemoved`, which carry no `RiskedChange`
+    /// list of their own.
+    pub fn with_table_action(mut self, action: TableLevelAction) -> Self {
+        self.table_action = Some(action);
+        self
     }
 
     /// Builds the full ordered DDL statement list without executing anything.
     ///
     /// This is the read-only feed for the preview surface: it runs the same
-    /// `CodeGenerator` mapping the apply path uses, so the preview shows the
-    /// exact statements that would run, but it never touches the connection and
+    /// generation seams the apply path uses, so the preview shows the exact
+    /// statements that would run, but it never touches the connection and
     /// never mutates any database. A change the driver cannot express fails
     /// generation here exactly as it would on apply.
     pub fn preview_statements(&self) -> Result<Vec<String>, ExecutorError> {
         build_all_statements(
             &self.table,
             &self.changes,
-            self.deps.connection.code_generator(),
+            self.table_action.as_ref(),
+            self.deps.connection.as_ref(),
         )
     }
 
@@ -247,7 +319,8 @@ impl DdlApplyExecutor {
         let statements = build_all_statements(
             &self.table,
             &self.changes,
-            self.deps.connection.code_generator(),
+            self.table_action.as_ref(),
+            self.deps.connection.as_ref(),
         )?;
 
         if statements.is_empty() {
@@ -738,6 +811,79 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
+    // build_statements_for_table_action — whole-table CREATE/DROP mapping
+    // -----------------------------------------------------------------
+
+    mod table_action_mapping_tests {
+        use super::*;
+
+        fn table_info() -> TableInfo {
+            TableInfo {
+                name: "orders".to_string(),
+                schema: Some("public".to_string()),
+                columns: None,
+                indexes: None,
+                foreign_keys: None,
+                constraints: None,
+                sample_fields: None,
+                presentation: Default::default(),
+                child_items: None,
+            }
+        }
+
+        #[test]
+        fn table_added_maps_to_generate_code_create_table() {
+            let conn = FakeConnection::new(DbKind::Postgres, true);
+            let action = TableLevelAction::Create(table_info());
+
+            let stmts = build_statements_for_table_action(conn.as_ref(), &action).unwrap();
+
+            assert_eq!(stmts, vec!["CREATE TABLE orders (id INT)"]);
+        }
+
+        #[test]
+        fn table_removed_maps_to_generate_code_drop_table() {
+            let conn = FakeConnection::new(DbKind::Postgres, true);
+            let action = TableLevelAction::Drop(TableRef {
+                schema: Some("public".to_string()),
+                name: "orders".to_string(),
+            });
+
+            let stmts = build_statements_for_table_action(conn.as_ref(), &action).unwrap();
+
+            assert_eq!(stmts, vec!["DROP TABLE orders"]);
+        }
+
+        #[test]
+        fn driver_without_table_ddl_support_surfaces_as_rejection() {
+            let conn = FakeConnection::without_table_ddl_support(DbKind::SqlServer, true);
+
+            let create_result = build_statements_for_table_action(
+                conn.as_ref(),
+                &TableLevelAction::Create(table_info()),
+            );
+            let drop_result = build_statements_for_table_action(
+                conn.as_ref(),
+                &TableLevelAction::Drop(TableRef {
+                    schema: Some("public".to_string()),
+                    name: "orders".to_string(),
+                }),
+            );
+
+            assert!(
+                create_result.is_err(),
+                "expected NotSupported from generate_code to surface as a rejection, got {:?}",
+                create_result
+            );
+            assert!(
+                drop_result.is_err(),
+                "expected NotSupported from generate_code to surface as a rejection, got {:?}",
+                drop_result
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------
     // DdlApplyExecutor — end-to-end apply() tests
     // -----------------------------------------------------------------
 
@@ -766,21 +912,27 @@ mod tests {
         code_generator: RecordingCodeGenerator,
         calls: Mutex<Vec<String>>,
         fail_on_sql_containing: Option<&'static str>,
+        supports_table_ddl: bool,
     }
 
     impl FakeConnection {
         fn new(kind: DbKind, transactional_ddl: bool) -> Arc<Self> {
-            Self::build(kind, transactional_ddl, None)
+            Self::build(kind, transactional_ddl, None, true)
         }
 
         fn with_failure(kind: DbKind, transactional_ddl: bool, fail_on: &'static str) -> Arc<Self> {
-            Self::build(kind, transactional_ddl, Some(fail_on))
+            Self::build(kind, transactional_ddl, Some(fail_on), true)
+        }
+
+        fn without_table_ddl_support(kind: DbKind, transactional_ddl: bool) -> Arc<Self> {
+            Self::build(kind, transactional_ddl, None, false)
         }
 
         fn build(
             kind: DbKind,
             transactional_ddl: bool,
             fail_on_sql_containing: Option<&'static str>,
+            supports_table_ddl: bool,
         ) -> Arc<Self> {
             let meta = DriverMetadataBuilder::new(
                 "test",
@@ -797,6 +949,7 @@ mod tests {
                 code_generator: RecordingCodeGenerator,
                 calls: Mutex::new(Vec::new()),
                 fail_on_sql_containing,
+                supports_table_ddl,
             })
         }
 
@@ -858,6 +1011,27 @@ mod tests {
 
         fn supports_transactional_ddl(&self) -> bool {
             self.transactional_ddl
+        }
+
+        fn generate_code(
+            &self,
+            generator_id: &str,
+            table: &dbflux_core::TableInfo,
+        ) -> Result<String, DbError> {
+            if !self.supports_table_ddl {
+                return Err(DbError::NotSupported(format!(
+                    "Code generator '{}' not supported",
+                    generator_id
+                )));
+            }
+            match generator_id {
+                "create_table" => Ok(format!("CREATE TABLE {} (id INT)", table.name)),
+                "drop_table" => Ok(format!("DROP TABLE {}", table.name)),
+                _ => Err(DbError::NotSupported(format!(
+                    "Code generator '{}' not supported",
+                    generator_id
+                ))),
+            }
         }
     }
 
@@ -1124,6 +1298,98 @@ mod tests {
             ExecutionClassification::Admin,
         )];
         let executor = DdlApplyExecutor::new(users_table(), changes, deps(conn, None));
+
+        let result = executor.apply(&no_cancel());
+        assert!(matches!(result, Err(ExecutorError::Generation(_))));
+        assert!(conn_ref.recorded_calls().is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // DdlApplyExecutor::with_table_action — whole-table CREATE/DROP apply
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn with_table_action_create_executes_create_table_transactionally() {
+        let conn = FakeConnection::new(DbKind::Postgres, true);
+        let conn_ref = Arc::clone(&conn);
+        let table_info = TableInfo {
+            name: "orders".to_string(),
+            schema: Some("public".to_string()),
+            columns: None,
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: Default::default(),
+            child_items: None,
+        };
+        let table = TableRef {
+            schema: Some("public".to_string()),
+            name: "orders".to_string(),
+        };
+        let executor = DdlApplyExecutor::new(table, vec![], deps(conn, None))
+            .with_table_action(TableLevelAction::Create(table_info));
+
+        let outcome = executor.apply(&no_cancel()).unwrap();
+        assert_eq!(
+            outcome,
+            DdlApplyOutcome::Success {
+                statements_executed: 1,
+                atomic: true,
+            }
+        );
+
+        let calls = conn_ref.recorded_calls();
+        assert_eq!(calls[0], "BEGIN");
+        assert!(calls[1].contains("CREATE TABLE orders"));
+        assert_eq!(calls[2], "COMMIT");
+    }
+
+    #[test]
+    fn with_table_action_drop_executes_drop_table_transactionally() {
+        let conn = FakeConnection::new(DbKind::Postgres, true);
+        let conn_ref = Arc::clone(&conn);
+        let table = TableRef {
+            schema: Some("public".to_string()),
+            name: "orders".to_string(),
+        };
+        let executor = DdlApplyExecutor::new(table.clone(), vec![], deps(conn, None))
+            .with_table_action(TableLevelAction::Drop(table));
+
+        let outcome = executor.apply(&no_cancel()).unwrap();
+        assert_eq!(
+            outcome,
+            DdlApplyOutcome::Success {
+                statements_executed: 1,
+                atomic: true,
+            }
+        );
+
+        let calls = conn_ref.recorded_calls();
+        assert!(calls[1].contains("DROP TABLE orders"));
+    }
+
+    #[test]
+    fn table_action_unsupported_by_driver_fails_generation_before_touching_connection() {
+        let conn = FakeConnection::without_table_ddl_support(DbKind::SqlServer, true);
+        let conn_ref = Arc::clone(&conn);
+        let table_info = TableInfo {
+            name: "orders".to_string(),
+            schema: None,
+            columns: None,
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: Default::default(),
+            child_items: None,
+        };
+        let table = TableRef {
+            schema: None,
+            name: "orders".to_string(),
+        };
+        let executor = DdlApplyExecutor::new(table, vec![], deps(conn, None))
+            .with_table_action(TableLevelAction::Create(table_info));
 
         let result = executor.apply(&no_cancel());
         assert!(matches!(result, Err(ExecutorError::Generation(_))));
