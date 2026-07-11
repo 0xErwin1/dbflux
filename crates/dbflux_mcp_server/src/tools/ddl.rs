@@ -384,33 +384,40 @@ fn validate_unique_trimmed_values(values: &[String], field_name: &str) -> Result
     Ok(())
 }
 
+/// Map a single ALTER TABLE operation onto the transport-neutral
+/// `SchemaAlterKind` ladder shared with `dbflux_core`'s schema diff. Unknown
+/// actions have no `SchemaAlterKind` equivalent and fall back to `Admin`
+/// directly, matching the pre-existing default classification.
+fn schema_alter_kind_for_op(op: &AlterOperation) -> Option<dbflux_policy::SchemaAlterKind> {
+    use dbflux_policy::SchemaAlterKind;
+
+    let action_upper = op.action.to_uppercase();
+    match action_upper.as_str() {
+        "ADD_COLUMN" | "ADD COLUMN" => Some(SchemaAlterKind::AddColumn {
+            safe: is_add_column_safe(op),
+        }),
+        "DROP_COLUMN" | "DROP COLUMN" => Some(SchemaAlterKind::DropColumn),
+        "RENAME_COLUMN" | "RENAME COLUMN" => Some(SchemaAlterKind::RenameColumn),
+        "ALTER_COLUMN" | "ALTER COLUMN" => Some(SchemaAlterKind::AlterColumn),
+        "ADD_CONSTRAINT" | "ADD CONSTRAINT" => Some(SchemaAlterKind::AddConstraint),
+        "DROP_CONSTRAINT" | "DROP CONSTRAINT" => Some(SchemaAlterKind::DropConstraint),
+        _ => None,
+    }
+}
+
 /// Classify ALTER TABLE operations based on their risk level.
 ///
 /// Returns the highest (most restrictive) classification among all operations.
 pub fn classify_alter_operations(
     operations: &[AlterOperation],
 ) -> dbflux_policy::ExecutionClassification {
-    use dbflux_policy::ExecutionClassification;
+    use dbflux_policy::{ExecutionClassification, classify_schema_alter};
 
     let classifications: Vec<ExecutionClassification> = operations
         .iter()
-        .map(|op| {
-            let action_upper = op.action.to_uppercase();
-            match action_upper.as_str() {
-                "ADD_COLUMN" | "ADD COLUMN" => {
-                    if is_add_column_safe(op) {
-                        ExecutionClassification::AdminSafe
-                    } else {
-                        ExecutionClassification::Admin
-                    }
-                }
-                "DROP_COLUMN" | "DROP COLUMN" => ExecutionClassification::AdminDestructive,
-                "RENAME_COLUMN" | "RENAME COLUMN" => ExecutionClassification::AdminSafe,
-                "ALTER_COLUMN" | "ALTER COLUMN" => classify_alter_column(op),
-                "ADD_CONSTRAINT" | "ADD CONSTRAINT" => ExecutionClassification::Admin,
-                "DROP_CONSTRAINT" | "DROP CONSTRAINT" => ExecutionClassification::AdminDestructive,
-                _ => ExecutionClassification::Admin,
-            }
+        .map(|op| match schema_alter_kind_for_op(op) {
+            Some(kind) => classify_schema_alter(kind),
+            None => ExecutionClassification::Admin,
         })
         .collect();
 
@@ -432,18 +439,6 @@ fn is_add_column_safe(op: &AlterOperation) -> bool {
     } else {
         true // No definition means using driver defaults (usually nullable)
     }
-}
-
-/// Classify ALTER_COLUMN operation.
-///
-/// MVP: All ALTER_COLUMN operations are Admin level.
-/// Future: Detect widening vs narrowing types for more granular classification.
-fn classify_alter_column(_op: &AlterOperation) -> dbflux_policy::ExecutionClassification {
-    use dbflux_policy::ExecutionClassification;
-
-    // MVP: Treat all column alterations as Admin
-    // Future: Detect type widening (safe) vs narrowing (destructive)
-    ExecutionClassification::Admin
 }
 
 fn normalize_foreign_key_constraint_type(definition: &serde_json::Value) -> Option<String> {
@@ -2047,13 +2042,19 @@ mod tests {
     }
 }
 
+// The full ALTER TABLE risk ladder (per-action-kind classification) is now
+// tested exhaustively in `dbflux_policy::schema_alter` against
+// `SchemaAlterKind` directly. These thin tests only prove that
+// `classify_alter_operations` routes `AlterOperation`s onto that ladder
+// correctly, plus the MCP-specific "unknown action" fallback and multi-op
+// max-classification behavior that has no `SchemaAlterKind` equivalent.
 #[cfg(test)]
 mod classification_tests {
     use super::*;
     use dbflux_policy::ExecutionClassification;
 
     #[test]
-    fn test_add_nullable_column_is_safe() {
+    fn test_add_nullable_column_maps_to_admin_safe() {
         let op = AlterOperation {
             action: "ADD_COLUMN".to_string(),
             column: Some("new_col".to_string()),
@@ -2068,23 +2069,7 @@ mod classification_tests {
     }
 
     #[test]
-    fn test_add_column_with_default_is_safe() {
-        let op = AlterOperation {
-            action: "ADD_COLUMN".to_string(),
-            column: Some("new_col".to_string()),
-            definition: Some(serde_json::json!({
-                "type": "INTEGER",
-                "nullable": false,
-                "default": 0
-            })),
-        };
-
-        let classification = classify_alter_operations(&[op]);
-        assert_eq!(classification, ExecutionClassification::AdminSafe);
-    }
-
-    #[test]
-    fn test_add_not_null_no_default_is_admin() {
+    fn test_add_not_null_no_default_maps_to_admin() {
         let op = AlterOperation {
             action: "ADD_COLUMN".to_string(),
             column: Some("new_col".to_string()),
@@ -2099,7 +2084,7 @@ mod classification_tests {
     }
 
     #[test]
-    fn test_drop_column_is_destructive() {
+    fn test_drop_column_maps_to_admin_destructive() {
         let op = AlterOperation {
             action: "DROP_COLUMN".to_string(),
             column: Some("old_col".to_string()),
@@ -2111,62 +2096,15 @@ mod classification_tests {
     }
 
     #[test]
-    fn test_rename_column_is_safe() {
+    fn test_unknown_action_falls_back_to_admin() {
         let op = AlterOperation {
-            action: "RENAME_COLUMN".to_string(),
+            action: "REORGANIZE".to_string(),
             column: None,
-            definition: Some(serde_json::json!({
-                "old_name": "old_col",
-                "new_name": "new_col"
-            })),
-        };
-
-        let classification = classify_alter_operations(&[op]);
-        assert_eq!(classification, ExecutionClassification::AdminSafe);
-    }
-
-    #[test]
-    fn test_alter_column_is_admin() {
-        let op = AlterOperation {
-            action: "ALTER_COLUMN".to_string(),
-            column: Some("col".to_string()),
-            definition: Some(serde_json::json!({
-                "type": "BIGINT"
-            })),
+            definition: None,
         };
 
         let classification = classify_alter_operations(&[op]);
         assert_eq!(classification, ExecutionClassification::Admin);
-    }
-
-    #[test]
-    fn test_add_constraint_is_admin() {
-        let op = AlterOperation {
-            action: "ADD_CONSTRAINT".to_string(),
-            column: None,
-            definition: Some(serde_json::json!({
-                "name": "chk_positive",
-                "type": "CHECK",
-                "condition": "value > 0"
-            })),
-        };
-
-        let classification = classify_alter_operations(&[op]);
-        assert_eq!(classification, ExecutionClassification::Admin);
-    }
-
-    #[test]
-    fn test_drop_constraint_is_destructive() {
-        let op = AlterOperation {
-            action: "DROP_CONSTRAINT".to_string(),
-            column: None,
-            definition: Some(serde_json::json!({
-                "name": "chk_positive"
-            })),
-        };
-
-        let classification = classify_alter_operations(&[op]);
-        assert_eq!(classification, ExecutionClassification::AdminDestructive);
     }
 
     #[test]
@@ -2198,30 +2136,120 @@ mod classification_tests {
         let classification = classify_alter_operations(&ops);
         assert_eq!(classification, ExecutionClassification::AdminDestructive);
     }
+}
+
+/// Parity between the MCP `AlterOperation` classification path and
+/// `dbflux_core`'s schema-diff classification path: both map onto
+/// `dbflux_policy::classify_schema_alter`, so equivalent operations must
+/// agree on risk.
+#[cfg(test)]
+mod diff_parity_tests {
+    use super::*;
+    use dbflux_core::{ColumnInfo, TableChange, TableInfo, diff_schema};
+    use dbflux_policy::ExecutionClassification;
+
+    fn table(name: &str, columns: Vec<ColumnInfo>) -> TableInfo {
+        TableInfo {
+            name: name.to_string(),
+            schema: Some("public".to_string()),
+            columns: Some(columns),
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: Default::default(),
+            child_items: None,
+        }
+    }
+
+    fn col(name: &str, type_name: &str, nullable: bool, default_value: Option<&str>) -> ColumnInfo {
+        ColumnInfo {
+            name: name.to_string(),
+            type_name: type_name.to_string(),
+            nullable,
+            is_primary_key: false,
+            default_value: default_value.map(str::to_string),
+            enum_values: None,
+        }
+    }
+
+    fn diff_risk_for(before: TableInfo, after: TableInfo) -> ExecutionClassification {
+        let changes = diff_schema(&[before], &[after]);
+        let TableChange::TableModified { changes, .. } = changes
+            .into_iter()
+            .next()
+            .expect("expected exactly one table-level change")
+        else {
+            panic!("expected a TableModified change");
+        };
+        changes
+            .into_iter()
+            .next()
+            .expect("expected exactly one column-level change")
+            .risk
+    }
 
     #[test]
-    fn test_all_safe_operations_remain_safe() {
-        let ops = vec![
-            AlterOperation {
-                action: "ADD_COLUMN".to_string(),
-                column: Some("col1".to_string()),
-                definition: Some(serde_json::json!({
-                    "type": "TEXT",
-                    "nullable": true
-                })),
-            },
-            AlterOperation {
-                action: "RENAME_COLUMN".to_string(),
-                column: None,
-                definition: Some(serde_json::json!({
-                    "old_name": "old",
-                    "new_name": "new"
-                })),
-            },
-        ];
+    fn add_nullable_column_parity() {
+        let mcp_op = AlterOperation {
+            action: "ADD_COLUMN".to_string(),
+            column: Some("email".to_string()),
+            definition: Some(serde_json::json!({ "type": "TEXT", "nullable": true })),
+        };
+        let mcp_risk = classify_alter_operations(&[mcp_op]);
 
-        let classification = classify_alter_operations(&ops);
-        assert_eq!(classification, ExecutionClassification::AdminSafe);
+        let before = table("users", vec![col("id", "integer", false, None)]);
+        let after = table(
+            "users",
+            vec![
+                col("id", "integer", false, None),
+                col("email", "text", true, None),
+            ],
+        );
+        let diff_risk = diff_risk_for(before, after);
+
+        assert_eq!(mcp_risk, diff_risk);
+        assert_eq!(mcp_risk, ExecutionClassification::AdminSafe);
+    }
+
+    #[test]
+    fn drop_column_parity() {
+        let mcp_op = AlterOperation {
+            action: "DROP_COLUMN".to_string(),
+            column: Some("email".to_string()),
+            definition: None,
+        };
+        let mcp_risk = classify_alter_operations(&[mcp_op]);
+
+        let before = table(
+            "users",
+            vec![
+                col("id", "integer", false, None),
+                col("email", "text", true, None),
+            ],
+        );
+        let after = table("users", vec![col("id", "integer", false, None)]);
+        let diff_risk = diff_risk_for(before, after);
+
+        assert_eq!(mcp_risk, diff_risk);
+        assert_eq!(mcp_risk, ExecutionClassification::AdminDestructive);
+    }
+
+    #[test]
+    fn alter_column_type_parity() {
+        let mcp_op = AlterOperation {
+            action: "ALTER_COLUMN".to_string(),
+            column: Some("id".to_string()),
+            definition: Some(serde_json::json!({ "type": "BIGINT" })),
+        };
+        let mcp_risk = classify_alter_operations(&[mcp_op]);
+
+        let before = table("users", vec![col("id", "integer", false, None)]);
+        let after = table("users", vec![col("id", "bigint", false, None)]);
+        let diff_risk = diff_risk_for(before, after);
+
+        assert_eq!(mcp_risk, diff_risk);
+        assert_eq!(mcp_risk, ExecutionClassification::Admin);
     }
 }
 
