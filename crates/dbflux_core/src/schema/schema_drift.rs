@@ -154,7 +154,14 @@ pub fn diff_table_info(before: &TableInfo, after: &TableInfo) -> Vec<SchemaChang
                         before: bc.clone(),
                         after: ac.clone(),
                     });
-                } else if ac.nullable != bc.nullable {
+                }
+
+                // A column can change both its type and its nullability at
+                // once (e.g. `text NULL` -> `varchar NOT NULL`). These are
+                // independent deltas: coupling them with `else if` would drop
+                // the NOT NULL change whenever the type also changed, so the
+                // apply plan would silently keep the column nullable.
+                if ac.nullable != bc.nullable {
                     changes.push(SchemaChange::NullabilityChanged {
                         column: bc.name.clone(),
                         before: bc.nullable,
@@ -490,6 +497,86 @@ mod tests {
             SchemaChange::NullabilityChanged { column, before: b, after: a }
             if column == "email" && *b && !*a
         )));
+    }
+
+    #[test]
+    fn combined_type_and_nullability_change_emits_both() {
+        let before = make_table(vec![col("age", "text", true, false)]);
+        let after = make_table(vec![col("age", "bigint", false, false)]);
+        let changes = diff_table_info(&before, &after);
+
+        assert!(
+            changes.iter().any(|c| matches!(
+                c,
+                SchemaChange::ColumnTypeChanged { before, after }
+                if before.type_name == "text" && after.type_name == "bigint"
+            )),
+            "expected a type change, got {changes:?}"
+        );
+        assert!(
+            changes.iter().any(|c| matches!(
+                c,
+                SchemaChange::NullabilityChanged { column, before: b, after: a }
+                if column == "age" && *b && !*a
+            )),
+            "expected the NOT NULL delta to survive alongside the type change, got {changes:?}"
+        );
+    }
+
+    #[test]
+    fn combined_type_and_default_change_emits_both() {
+        let before = make_table(vec![col_with_default("age", "text", false, false, None)]);
+        let after = make_table(vec![col_with_default(
+            "age",
+            "bigint",
+            false,
+            false,
+            Some("0"),
+        )]);
+        let changes = diff_table_info(&before, &after);
+
+        assert!(
+            changes
+                .iter()
+                .any(|c| matches!(c, SchemaChange::ColumnTypeChanged { .. }))
+        );
+        assert!(changes.iter().any(|c| matches!(
+            c,
+            SchemaChange::DefaultChanged { column, after, .. }
+            if column == "age" && after.as_deref() == Some("0")
+        )));
+    }
+
+    #[test]
+    fn combined_type_nullability_and_default_change_emits_all_three() {
+        let before = make_table(vec![col_with_default("age", "text", true, false, None)]);
+        let after = make_table(vec![col_with_default(
+            "age",
+            "bigint",
+            false,
+            false,
+            Some("0"),
+        )]);
+        let changes = diff_table_info(&before, &after);
+
+        assert!(
+            changes
+                .iter()
+                .any(|c| matches!(c, SchemaChange::ColumnTypeChanged { .. })),
+            "missing type change: {changes:?}"
+        );
+        assert!(
+            changes
+                .iter()
+                .any(|c| matches!(c, SchemaChange::NullabilityChanged { .. })),
+            "missing nullability change: {changes:?}"
+        );
+        assert!(
+            changes
+                .iter()
+                .any(|c| matches!(c, SchemaChange::DefaultChanged { .. })),
+            "missing default change: {changes:?}"
+        );
     }
 
     #[test]
