@@ -1248,8 +1248,9 @@ impl MysqlDriver {
                         "[SSL] SSL connection failed ({}), falling back to non-SSL",
                         ssl_err
                     );
-                    let no_ssl_opts =
-                        build_mysql_opts(host, port, user, database, password, "DISABLED", ssl_paths);
+                    let no_ssl_opts = build_mysql_opts(
+                        host, port, user, database, password, "DISABLED", ssl_paths,
+                    );
                     let c = Conn::new(no_ssl_opts.clone())
                         .map_err(|e| format_mysql_error(&e, host, port))?;
                     (no_ssl_opts, c)
