@@ -15,6 +15,7 @@ use uuid::Uuid;
 use crate::dashboard_manager::DashboardManager;
 use crate::saved_chart_manager::SavedChartManager;
 use crate::saved_query_manager::SavedQueryManager;
+use crate::schema_snapshot_manager::SchemaSnapshotManager;
 
 // ============================================================================
 // GPUI-coupled event types
@@ -90,6 +91,10 @@ pub struct AppStateEntity {
     /// `save`, `rename`, `fork`, `delete`, and `import_to`.
     pub saved_queries: SavedQueryManager,
 
+    /// Persisted schema-snapshot manager — mutated via `capture`/`capture_deep`
+    /// (on-connect auto-capture and the explicit deep-capture path).
+    pub schema_snapshots: SchemaSnapshotManager,
+
     /// Set by the Connection Manager after editing a profile that is currently
     /// connected. The sidebar consumes this on the next `AppStateChanged` to
     /// surface a "Reconnect now / Later" prompt — the edit itself is already
@@ -122,6 +127,7 @@ impl AppStateEntity {
             Arc::clone(&inner.dashboard_panels_repo),
         );
         let saved_queries = SavedQueryManager::new(Arc::clone(&inner.saved_query_repo));
+        let schema_snapshots = SchemaSnapshotManager::new(Arc::clone(&inner.schema_snapshot_repo));
 
         Ok(Self {
             inner,
@@ -129,6 +135,7 @@ impl AppStateEntity {
             saved_charts,
             dashboards,
             saved_queries,
+            schema_snapshots,
             pending_edit_reconnect_prompt: None,
             pending_reconnect_request: None,
             unread_error_count: 0,
@@ -151,6 +158,7 @@ impl AppStateEntity {
             Arc::clone(&inner.dashboard_panels_repo),
         );
         let saved_queries = SavedQueryManager::new(Arc::clone(&inner.saved_query_repo));
+        let schema_snapshots = SchemaSnapshotManager::new(Arc::clone(&inner.schema_snapshot_repo));
 
         Ok(Self {
             inner,
@@ -158,6 +166,7 @@ impl AppStateEntity {
             saved_charts,
             dashboards,
             saved_queries,
+            schema_snapshots,
             pending_edit_reconnect_prompt: None,
             pending_reconnect_request: None,
             unread_error_count: 0,

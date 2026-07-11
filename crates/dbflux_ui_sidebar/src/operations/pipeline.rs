@@ -3,6 +3,8 @@ use crate::*;
 use dbflux_core::observability::actions::{CONNECTION_CONNECT, CONNECTION_CONNECT_FAILED};
 use dbflux_core::{CancelToken, HookContext, HookPhase, PipelineState, TaskId, TaskKind};
 use dbflux_ui_base::toast::PendingToast;
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
+use std::sync::Arc;
 
 fn pipeline_stage_task_description(state: &PipelineState) -> Option<String> {
     match state {
@@ -622,6 +624,28 @@ impl Sidebar {
                 }
             });
 
+            let capture_category = connection.metadata().category;
+            let capture_tables: Vec<dbflux_core::TableInfo> = schema
+                .as_ref()
+                .map(|s| s.tables().to_vec())
+                .unwrap_or_default();
+            let capture_database = schema
+                .as_ref()
+                .and_then(|s| s.current_database().map(str::to_string));
+
+            let capture_ctx = if capture_category == dbflux_core::DatabaseCategory::Relational {
+                cx.update(|cx| {
+                    let state = app_state.read(cx);
+                    (
+                        Arc::clone(&state.schema_snapshot_repo),
+                        state.general_settings().schema_snapshot_retention,
+                    )
+                })
+                .ok()
+            } else {
+                None
+            };
+
             if let Err(update_error) = cx.update(|cx| {
                 for warning in &hook_warnings {
                     log::warn!("{}", warning);
@@ -664,6 +688,33 @@ impl Sidebar {
                     "Failed to apply pipeline connection result: {:?}",
                     update_error
                 );
+            }
+
+            if let Some((capture_repo, capture_retention)) = capture_ctx {
+                let profile_id_string = profile_id.to_string();
+
+                let capture_result = cx
+                    .background_executor()
+                    .spawn(async move {
+                        dbflux_ui_base::SchemaSnapshotManager::new(capture_repo).capture(
+                            &profile_id_string,
+                            capture_database.as_deref(),
+                            &capture_tables,
+                            dbflux_core::SnapshotDepth::Shallow,
+                            capture_retention,
+                        )
+                    })
+                    .await;
+
+                if let Err(e) = capture_result {
+                    report_error_async(
+                        UserFacingError::new(
+                            ErrorKind::Storage,
+                            format!("Failed to capture schema snapshot: {e}"),
+                        ),
+                        cx,
+                    );
+                }
             }
         })
         .detach();

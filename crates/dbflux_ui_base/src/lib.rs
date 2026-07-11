@@ -16,6 +16,7 @@ pub mod modals;
 pub mod platform;
 pub mod saved_chart_manager;
 pub mod saved_query_manager;
+pub mod schema_snapshot_manager;
 pub mod sql_preview_modal;
 pub mod sso_wizard;
 pub mod toast;
@@ -37,4 +38,5 @@ pub use dashboard_manager::{
 pub use keymap::{default_keymap, key_chord_from_gpui};
 pub use saved_chart_manager::SavedChartManager;
 pub use saved_query_manager::{ConnectionTableProbe, SavedQueryManager, TableProbe};
+pub use schema_snapshot_manager::{CaptureOutcome, SchemaSnapshotManager};
 pub use user_error::{ErrorKind, UserFacingError, report_error, report_error_async};
