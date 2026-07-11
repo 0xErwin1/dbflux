@@ -24,6 +24,11 @@ dbflux_audit.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
 log.workspace = true
 interprocess.workspace = true
+# rustls 0.23 refuses to auto-select a crypto provider when more than one
+# backend is linked. This workspace links several (the AWS SDK pulls `ring`,
+# reqwest and the TLS drivers pull `aws-lc-rs`), so the binary installs a
+# process-wide default in `main`. Declared here to reach `rustls::crypto`.
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

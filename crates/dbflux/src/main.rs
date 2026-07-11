@@ -147,8 +147,27 @@ fn emit_system_shutdown(audit_service: &AuditService) {
     }
 }
 
+/// Installs a process-wide rustls crypto provider.
+///
+/// rustls 0.23 only auto-selects a provider when exactly one backend is
+/// compiled in. Several are linked here (the AWS SDK enables `ring`, reqwest
+/// and the TLS drivers enable `aws-lc-rs`), so any consumer that builds a
+/// rustls client via the auto path — notably the `mysql` driver — would panic
+/// with "Could not automatically determine the process-level CryptoProvider".
+/// Installing one explicitly, before any handshake, resolves that for every
+/// consumer that relies on the process default.
+fn install_default_crypto_provider() {
+    if rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .is_err()
+    {
+        log::debug!("rustls crypto provider was already installed");
+    }
+}
+
 fn main() {
     install_panic_hook();
+    install_default_crypto_provider();
 
     let args: Vec<String> = std::env::args().collect();
 

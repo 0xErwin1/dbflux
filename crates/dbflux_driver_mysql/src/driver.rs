@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -29,7 +30,7 @@ use dbflux_core::{
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
-use mysql::{Conn, Opts, OptsBuilder, SslOpts};
+use mysql::{ClientIdentity, Conn, Opts, OptsBuilder, SslOpts};
 
 /// MySQL driver metadata.
 pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -668,6 +669,7 @@ impl DbDriver for MysqlDriver {
                 config.database.as_deref(),
                 password,
                 &config.ssl_mode,
+                &config.ssl_paths,
             )
         } else {
             self.connect_direct(
@@ -677,6 +679,7 @@ impl DbDriver for MysqlDriver {
                 config.database.as_deref(),
                 password,
                 &config.ssl_mode,
+                &config.ssl_paths,
             )
         }
     }
@@ -885,7 +888,20 @@ struct ExtractedMysqlConfig {
     database: Option<String>,
     /// MySQL native ssl-mode identifier (e.g. `"PREFERRED"`, `"VERIFY_CA"`). Defaults to `"PREFERRED"` when absent.
     ssl_mode: String,
+    ssl_paths: MysqlSslPaths,
     ssh_tunnel: Option<SshTunnelConfig>,
+}
+
+/// Filesystem paths for TLS certificate material, populated by the generic
+/// connection-manager SSL section (see `SslCertFields` in the driver metadata).
+///
+/// `root_cert` verifies the server chain for the `VERIFY_CA` / `VERIFY_IDENTITY`
+/// modes; `client_cert` + `client_key` present a client identity for mutual TLS.
+#[derive(Clone, Default)]
+struct MysqlSslPaths {
+    root_cert: Option<String>,
+    client_cert: Option<String>,
+    client_key: Option<String>,
 }
 
 /// Map a MySQL column to a canonical SQL type label (e.g. `VARCHAR`,
@@ -1030,6 +1046,9 @@ fn extract_mysql_config(config: &DbConfig) -> Result<ExtractedMysqlConfig, DbErr
             user,
             database,
             ssl_mode,
+            ssl_root_cert_path,
+            ssl_client_cert_path,
+            ssl_client_key_path,
             ssh_tunnel,
             ..
         } => Ok(ExtractedMysqlConfig {
@@ -1040,6 +1059,11 @@ fn extract_mysql_config(config: &DbConfig) -> Result<ExtractedMysqlConfig, DbErr
             user: user.clone(),
             database: database.clone(),
             ssl_mode: ssl_mode.clone().unwrap_or_else(|| "PREFERRED".to_string()),
+            ssl_paths: MysqlSslPaths {
+                root_cert: ssl_root_cert_path.clone(),
+                client_cert: ssl_client_cert_path.clone(),
+                client_key: ssl_client_key_path.clone(),
+            },
             ssh_tunnel: ssh_tunnel.clone(),
         }),
         _ => Err(DbError::InvalidProfile(
@@ -1052,9 +1076,15 @@ fn extract_mysql_config(config: &DbConfig) -> Result<ExtractedMysqlConfig, DbErr
 ///
 /// Maps MySQL native ssl-mode identifiers to the appropriate `SslOpts`:
 /// - `"DISABLED"` — no TLS
-/// - `"PREFERRED"` — TLS preferred, accept self-signed certs (fall back handled by the mysql crate)
-/// - `"REQUIRED"` — TLS required, self-signed certs accepted
-/// - `"VERIFY_CA"` / `"VERIFY_IDENTITY"` — TLS with full certificate validation
+/// - `"PREFERRED"` — TLS preferred, server cert not verified (crate may fall back to plain)
+/// - `"REQUIRED"` — TLS required, server cert not verified
+/// - `"VERIFY_CA"` — TLS required, verify the server chain but skip hostname validation
+/// - `"VERIFY_IDENTITY"` — TLS required, verify both the server chain and the hostname
+///
+/// For every TLS mode a client identity (mutual TLS) is attached when both a
+/// client cert and key are configured. For the verifying modes a custom root
+/// certificate replaces the system trust store when one is configured.
+#[allow(clippy::too_many_arguments)]
 fn build_mysql_opts(
     host: &str,
     port: u16,
@@ -1062,6 +1092,7 @@ fn build_mysql_opts(
     database: Option<&str>,
     password: Option<&str>,
     ssl_mode: &str,
+    ssl_paths: &MysqlSslPaths,
 ) -> Opts {
     let host = normalize_mysql_tcp_host(host);
 
@@ -1080,29 +1111,56 @@ fn build_mysql_opts(
         "DISABLED" => {
             // No SSL — leave ssl_opts unset.
         }
-        "PREFERRED" => {
-            // TLS preferred; accept self-signed certs so the crate can fall back to plain.
+        "PREFERRED" | "REQUIRED" => {
+            // TLS without server verification; still present a client identity
+            // for mutual TLS when one is configured.
             let ssl_opts = SslOpts::default().with_danger_accept_invalid_certs(true);
-            builder = builder.ssl_opts(ssl_opts);
+            builder = builder.ssl_opts(apply_client_identity(ssl_opts, ssl_paths));
         }
-        "REQUIRED" => {
-            // TLS required; accept self-signed certs.
-            let ssl_opts = SslOpts::default().with_danger_accept_invalid_certs(true);
-            builder = builder.ssl_opts(ssl_opts);
+        "VERIFY_CA" => {
+            // Verify the server chain against the (optionally custom) CA, but do
+            // not require the hostname to match the certificate.
+            let ssl_opts = SslOpts::default().with_danger_skip_domain_validation(true);
+            let ssl_opts = apply_root_cert(ssl_opts, ssl_paths);
+            builder = builder.ssl_opts(apply_client_identity(ssl_opts, ssl_paths));
         }
-        "VERIFY_CA" | "VERIFY_IDENTITY" => {
-            // TLS required with full certificate validation.
-            let ssl_opts = SslOpts::default();
-            builder = builder.ssl_opts(ssl_opts);
+        "VERIFY_IDENTITY" => {
+            // Full validation: verify the server chain and the hostname.
+            let ssl_opts = apply_root_cert(SslOpts::default(), ssl_paths);
+            builder = builder.ssl_opts(apply_client_identity(ssl_opts, ssl_paths));
         }
         _ => {
             // Unknown mode — treat as PREFERRED (accept-invalid, allow fallback).
             let ssl_opts = SslOpts::default().with_danger_accept_invalid_certs(true);
-            builder = builder.ssl_opts(ssl_opts);
+            builder = builder.ssl_opts(apply_client_identity(ssl_opts, ssl_paths));
         }
     }
 
     builder.into()
+}
+
+/// Attaches a custom root certificate to `ssl_opts` when one is configured,
+/// so the verifying SSL modes trust a private CA instead of the system store.
+fn apply_root_cert(ssl_opts: SslOpts, ssl_paths: &MysqlSslPaths) -> SslOpts {
+    match ssl_paths.root_cert.as_deref().filter(|p| !p.is_empty()) {
+        Some(path) => ssl_opts.with_root_cert_path(Some(PathBuf::from(path))),
+        None => ssl_opts,
+    }
+}
+
+/// Attaches a client identity (cert chain + private key) for mutual TLS when
+/// both paths are configured; otherwise leaves `ssl_opts` unchanged.
+fn apply_client_identity(ssl_opts: SslOpts, ssl_paths: &MysqlSslPaths) -> SslOpts {
+    match (
+        ssl_paths.client_cert.as_deref().filter(|p| !p.is_empty()),
+        ssl_paths.client_key.as_deref().filter(|p| !p.is_empty()),
+    ) {
+        (Some(cert), Some(key)) => ssl_opts.with_client_identity(Some(ClientIdentity::new(
+            PathBuf::from(cert),
+            PathBuf::from(key),
+        ))),
+        _ => ssl_opts,
+    }
 }
 
 fn normalize_mysql_tcp_host(host: &str) -> &str {
@@ -1156,6 +1214,7 @@ impl MysqlDriver {
         }))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn connect_direct(
         &self,
         host: &str,
@@ -1164,6 +1223,7 @@ impl MysqlDriver {
         database: Option<&str>,
         password: Option<&str>,
         ssl_mode: &str,
+        ssl_paths: &MysqlSslPaths,
     ) -> Result<Box<dyn Connection>, DbError> {
         log::info!(
             "Connecting directly to MySQL at {}:{} as {} (database: {:?}, ssl: {})",
@@ -1176,7 +1236,8 @@ impl MysqlDriver {
 
         // For PREFERRED mode: attempt SSL first, fall back to plain on failure.
         let (opts, catalog_conn) = if ssl_mode == "PREFERRED" {
-            let ssl_opts = build_mysql_opts(host, port, user, database, password, "PREFERRED");
+            let ssl_opts =
+                build_mysql_opts(host, port, user, database, password, "PREFERRED", ssl_paths);
             match Conn::new(ssl_opts.clone()) {
                 Ok(c) => {
                     log::info!("[SSL] Catalog connection established with SSL (PREFERRED mode)");
@@ -1188,14 +1249,14 @@ impl MysqlDriver {
                         ssl_err
                     );
                     let no_ssl_opts =
-                        build_mysql_opts(host, port, user, database, password, "DISABLED");
+                        build_mysql_opts(host, port, user, database, password, "DISABLED", ssl_paths);
                     let c = Conn::new(no_ssl_opts.clone())
                         .map_err(|e| format_mysql_error(&e, host, port))?;
                     (no_ssl_opts, c)
                 }
             }
         } else {
-            let opts = build_mysql_opts(host, port, user, database, password, ssl_mode);
+            let opts = build_mysql_opts(host, port, user, database, password, ssl_mode, ssl_paths);
             let c = Conn::new(opts.clone()).map_err(|e| format_mysql_error(&e, host, port))?;
             (opts, c)
         };
@@ -1243,6 +1304,7 @@ impl MysqlDriver {
         database: Option<&str>,
         db_password: Option<&str>,
         ssl_mode: &str,
+        ssl_paths: &MysqlSslPaths,
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
 
@@ -1273,6 +1335,7 @@ impl MysqlDriver {
                 database,
                 db_password,
                 "PREFERRED",
+                ssl_paths,
             );
             match Conn::new(ssl_opts) {
                 Ok(c) => {
@@ -1288,6 +1351,7 @@ impl MysqlDriver {
                         database,
                         db_password,
                         "DISABLED",
+                        ssl_paths,
                     );
                     let c = Conn::new(no_ssl_opts)
                         .map_err(|e| format_mysql_error(&e, "127.0.0.1", local_port1))?;
@@ -1302,6 +1366,7 @@ impl MysqlDriver {
                 database,
                 db_password,
                 ssl_mode,
+                ssl_paths,
             );
             let c =
                 Conn::new(opts).map_err(|e| format_mysql_error(&e, "127.0.0.1", local_port1))?;
@@ -1325,6 +1390,7 @@ impl MysqlDriver {
             database,
             db_password,
             working_ssl_mode,
+            ssl_paths,
         );
         let mut query_conn = Conn::new(query_opts.clone())
             .map_err(|e| format_mysql_error(&e, "127.0.0.1", local_port2))?;

@@ -2516,6 +2516,7 @@ dependencies = [
  "interprocess",
  "libc",
  "log",
+ "rustls 0.23.40",
  "tokio",
 ]
 
@@ -6591,9 +6592,13 @@ dependencies = [
  "named_pipe",
  "pem",
  "percent-encoding",
+ "rustls 0.23.40",
+ "rustls-pemfile 2.2.0",
  "socket2 0.6.3",
  "twox-hash",
  "url",
+ "webpki",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -11545,6 +11550,16 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "webpki"
+version = "0.22.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed63aea5ce73d0ff405984102c42de94fc55a6b75765d621c65262469b3c9b53"
+dependencies = [
+ "ring",
+ "untrusted",
 ]
 
 [[package]]
