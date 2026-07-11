@@ -205,6 +205,7 @@ pub fn save_hook_definitions(
             enabled: hook.enabled,
             created_at: String::new(),
             updated_at: String::new(),
+            kind_json: None,
             env_denylist: hook.env_denylist.clone(),
         };
 

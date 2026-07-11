@@ -7,7 +7,7 @@
 //! normalized hook_commands and hook_environment child tables for the transition period.
 
 use log::info;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, Transaction, params};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -86,7 +86,7 @@ impl HookDefinitionRepository {
                 SELECT id, name, execution_mode, script_ref, cwd,
                        inherit_env, timeout_ms, ready_signal, on_failure,
                        enabled, created_at, updated_at,
-                       COALESCE(env_denylist_json, '[]')
+                       COALESCE(env_denylist_json, '[]'), kind_json
                 FROM cfg_hook_definitions
                 ORDER BY name ASC
                 "#,
@@ -116,6 +116,7 @@ impl HookDefinitionRepository {
                     created_at: row.get(10)?,
                     updated_at: row.get(11)?,
                     env_denylist,
+                    kind_json: row.get(13)?,
                 })
             })
             .map_err(|source| StorageError::Sqlite {
@@ -151,7 +152,7 @@ impl HookDefinitionRepository {
                 SELECT id, name, execution_mode, script_ref, cwd,
                        inherit_env, timeout_ms, ready_signal, on_failure,
                        enabled, created_at, updated_at,
-                       COALESCE(env_denylist_json, '[]')
+                       COALESCE(env_denylist_json, '[]'), kind_json
                 FROM cfg_hook_definitions
                 WHERE id = ?1
                 "#,
@@ -180,6 +181,7 @@ impl HookDefinitionRepository {
                 created_at: row.get(10)?,
                 updated_at: row.get(11)?,
                 env_denylist,
+                kind_json: row.get(13)?,
             })
         });
 
@@ -211,10 +213,10 @@ impl HookDefinitionRepository {
                 INSERT INTO cfg_hook_definitions (
                     id, name, execution_mode, script_ref, cwd,
                     inherit_env, timeout_ms, ready_signal, on_failure,
-                    enabled, created_at, updated_at, env_denylist_json
+                    enabled, created_at, updated_at, env_denylist_json, kind_json
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                    datetime('now'), datetime('now'), ?11
+                    datetime('now'), datetime('now'), ?11, ?12
                 )
                 "#,
                 params![
@@ -229,6 +231,7 @@ impl HookDefinitionRepository {
                     hook.on_failure,
                     hook.enabled as i32,
                     env_denylist_json,
+                    hook.kind_json,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -258,10 +261,10 @@ impl HookDefinitionRepository {
                 INSERT INTO cfg_hook_definitions (
                     id, name, execution_mode, script_ref, cwd,
                     inherit_env, timeout_ms, ready_signal, on_failure,
-                    enabled, created_at, updated_at, env_denylist_json
+                    enabled, created_at, updated_at, env_denylist_json, kind_json
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                    datetime('now'), datetime('now'), ?11
+                    datetime('now'), datetime('now'), ?11, ?12
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     name = excluded.name,
@@ -274,6 +277,7 @@ impl HookDefinitionRepository {
                     on_failure = excluded.on_failure,
                     enabled = excluded.enabled,
                     env_denylist_json = excluded.env_denylist_json,
+                    kind_json = COALESCE(excluded.kind_json, cfg_hook_definitions.kind_json),
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -288,6 +292,7 @@ impl HookDefinitionRepository {
                     hook.on_failure,
                     hook.enabled as i32,
                     env_denylist_json,
+                    hook.kind_json,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -326,6 +331,7 @@ impl HookDefinitionRepository {
                     on_failure = ?9,
                     enabled = ?10,
                     env_denylist_json = ?11,
+                    kind_json = COALESCE(?12, kind_json),
                     updated_at = datetime('now')
                 WHERE id = ?1
                 "#,
@@ -341,6 +347,7 @@ impl HookDefinitionRepository {
                     hook.on_failure,
                     hook.enabled as i32,
                     env_denylist_json,
+                    hook.kind_json,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -370,6 +377,146 @@ impl HookDefinitionRepository {
         Ok(())
     }
 
+    pub fn read_command_in_transaction(
+        tx: &Transaction<'_>,
+        hook_id: &str,
+    ) -> Result<Option<HookCommandDto>, StorageError> {
+        let result = tx.query_row(
+            "SELECT id, hook_id, command, working_directory, timeout_ms, ready_signal
+             FROM cfg_hook_commands WHERE hook_id = ?1",
+            [hook_id],
+            |row| {
+                Ok(HookCommandDto {
+                    id: row.get(0)?,
+                    hook_id: row.get(1)?,
+                    command: row.get(2)?,
+                    working_directory: row.get(3)?,
+                    timeout_ms: row.get(4)?,
+                    ready_signal: row.get(5)?,
+                })
+            },
+        );
+
+        match result {
+            Ok(command) => Ok(Some(command)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(source) => Err(StorageError::Sqlite {
+                path: "dbflux.db".into(),
+                source,
+            }),
+        }
+    }
+
+    pub fn write_command_in_transaction(
+        tx: &Transaction<'_>,
+        command: &HookCommandDto,
+    ) -> Result<(), StorageError> {
+        tx.execute(
+            "INSERT INTO cfg_hook_commands (
+                id, hook_id, command, working_directory, timeout_ms, ready_signal
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(hook_id) DO UPDATE SET
+                command = excluded.command,
+                working_directory = excluded.working_directory,
+                timeout_ms = excluded.timeout_ms,
+                ready_signal = excluded.ready_signal",
+            params![
+                command.id,
+                command.hook_id,
+                command.command,
+                command.working_directory,
+                command.timeout_ms,
+                command.ready_signal,
+            ],
+        )
+        .map_err(|source| StorageError::Sqlite {
+            path: "dbflux.db".into(),
+            source,
+        })?;
+
+        Ok(())
+    }
+
+    pub fn delete_command_in_transaction(
+        tx: &Transaction<'_>,
+        hook_id: &str,
+    ) -> Result<(), StorageError> {
+        tx.execute(
+            "DELETE FROM cfg_hook_commands WHERE hook_id = ?1",
+            [hook_id],
+        )
+        .map_err(|source| StorageError::Sqlite {
+            path: "dbflux.db".into(),
+            source,
+        })?;
+
+        Ok(())
+    }
+
+    pub fn read_environment_in_transaction(
+        tx: &Transaction<'_>,
+        hook_id: &str,
+    ) -> Result<HashMap<String, String>, StorageError> {
+        let mut statement = tx
+            .prepare(
+                "SELECT key, value FROM cfg_hook_environment WHERE hook_id = ?1 ORDER BY key ASC",
+            )
+            .map_err(|source| StorageError::Sqlite {
+                path: "dbflux.db".into(),
+                source,
+            })?;
+        let rows = statement
+            .query_map([hook_id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|source| StorageError::Sqlite {
+                path: "dbflux.db".into(),
+                source,
+            })?;
+
+        rows.collect::<Result<HashMap<_, _>, _>>()
+            .map_err(|source| StorageError::Sqlite {
+                path: "dbflux.db".into(),
+                source,
+            })
+    }
+
+    pub fn write_environment_in_transaction(
+        tx: &Transaction<'_>,
+        hook_id: &str,
+        environment: &HashMap<String, String>,
+    ) -> Result<(), StorageError> {
+        Self::delete_environment_in_transaction(tx, hook_id)?;
+
+        for (key, value) in environment {
+            tx.execute(
+                "INSERT INTO cfg_hook_environment (id, hook_id, key, value)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![Uuid::new_v4().to_string(), hook_id, key, value],
+            )
+            .map_err(|source| StorageError::Sqlite {
+                path: "dbflux.db".into(),
+                source,
+            })?;
+        }
+
+        Ok(())
+    }
+
+    pub fn delete_environment_in_transaction(
+        tx: &Transaction<'_>,
+        hook_id: &str,
+    ) -> Result<(), StorageError> {
+        tx.execute(
+            "DELETE FROM cfg_hook_environment WHERE hook_id = ?1",
+            [hook_id],
+        )
+        .map_err(|source| StorageError::Sqlite {
+            path: "dbflux.db".into(),
+            source,
+        })?;
+
+        Ok(())
+    }
+
     /// Returns the count of hooks.
     pub fn count(&self) -> Result<i64, StorageError> {
         let count: i64 = self
@@ -387,10 +534,8 @@ impl HookDefinitionRepository {
 }
 
 /// DTO for hook definition storage.
-/// Note: kind is stored in child tables (cfg_hook_definitions already has execution_mode).
-/// command is stored in hook_commands child table.
-/// env is stored in hook_environment child table.
-/// The kind_json, command_json, env_json columns were dropped in migration v10.
+/// Canonical hook-kind data is stored in `kind_json`; command and environment
+/// values remain in their normalized child tables for compatibility.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookDefinitionDto {
     pub id: String,
@@ -405,6 +550,8 @@ pub struct HookDefinitionDto {
     pub enabled: bool,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind_json: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env_denylist: Vec<String>,
 }
@@ -425,6 +572,7 @@ impl HookDefinitionDto {
             enabled: true,
             created_at: String::new(),
             updated_at: String::new(),
+            kind_json: None,
             env_denylist: Vec::new(),
         }
     }
@@ -451,11 +599,13 @@ mod tests {
             .run_all(&conn)
             .expect("migration should run");
 
-        let dto = HookDefinitionDto::new(
+        let mut dto = HookDefinitionDto::new(
             Uuid::new_v4(),
             "PreConnect Test".to_string(),
             "Command".to_string(),
         );
+        dto.kind_json =
+            Some(r#"{"kind":"command","command":"echo hello","args":["world"]}"#.to_string());
 
         #[allow(clippy::arc_with_non_send_sync)]
         let repo = HookDefinitionRepository::new(Arc::new(conn));
@@ -464,6 +614,135 @@ mod tests {
         let fetched = repo.all().expect("should fetch");
         assert_eq!(fetched.len(), 1);
         assert_eq!(fetched[0].name, "PreConnect Test");
+        assert_eq!(fetched[0].kind_json, dto.kind_json);
+
+        dto.kind_json = Some(r#"{"kind":"script","language":"bash"}"#.to_string());
+        repo.update(&dto).expect("should update canonical kind");
+
+        let updated = repo
+            .get(&dto.id)
+            .expect("should fetch updated hook")
+            .expect("updated hook should exist");
+        assert_eq!(updated.kind_json, dto.kind_json);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
+    }
+
+    #[test]
+    fn transaction_local_child_helpers_replace_command_and_environment() {
+        let path = temp_db("transaction_children");
+        let _ = std::fs::remove_file(&path);
+
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        let hook = HookDefinitionDto::new(
+            Uuid::new_v4(),
+            "PreConnect Test".to_string(),
+            "Command".to_string(),
+        );
+        #[allow(clippy::arc_with_non_send_sync)]
+        let mut conn = Arc::new(conn);
+        let repo = HookDefinitionRepository::new(conn.clone());
+        repo.insert(&hook).expect("should insert hook");
+        drop(repo);
+
+        let tx = Arc::get_mut(&mut conn)
+            .expect("repository references should be released")
+            .unchecked_transaction()
+            .expect("should start transaction");
+        let command = HookCommandDto::new(hook.id.clone(), "echo replacement".to_string());
+        let environment = HashMap::from([
+            ("FIRST".to_string(), "one".to_string()),
+            ("SECOND".to_string(), "two".to_string()),
+        ]);
+
+        HookDefinitionRepository::write_command_in_transaction(&tx, &command)
+            .expect("should write command");
+        HookDefinitionRepository::write_environment_in_transaction(&tx, &hook.id, &environment)
+            .expect("should write environment");
+
+        assert_eq!(
+            HookDefinitionRepository::read_command_in_transaction(&tx, &hook.id)
+                .expect("should read command")
+                .expect("command should exist")
+                .command,
+            "echo replacement"
+        );
+        assert_eq!(
+            HookDefinitionRepository::read_environment_in_transaction(&tx, &hook.id)
+                .expect("should read environment"),
+            environment
+        );
+
+        HookDefinitionRepository::delete_command_in_transaction(&tx, &hook.id)
+            .expect("should delete command");
+        HookDefinitionRepository::delete_environment_in_transaction(&tx, &hook.id)
+            .expect("should delete environment");
+
+        assert!(
+            HookDefinitionRepository::read_command_in_transaction(&tx, &hook.id)
+                .expect("should read deleted command")
+                .is_none()
+        );
+        assert_eq!(
+            HookDefinitionRepository::read_environment_in_transaction(&tx, &hook.id)
+                .expect("should read deleted environment"),
+            HashMap::new()
+        );
+
+        tx.commit().expect("should commit transaction");
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
+    }
+
+    #[test]
+    fn update_retains_legacy_kind_json_when_no_canonical_payload_is_provided() {
+        let path = temp_db("legacy_kind_json");
+        let _ = std::fs::remove_file(&path);
+
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        let dto = HookDefinitionDto::new(
+            Uuid::new_v4(),
+            "Legacy Hook".to_string(),
+            "Command".to_string(),
+        );
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = HookDefinitionRepository::new(Arc::new(conn));
+        repo.insert(&dto).expect("should insert legacy hook");
+        repo.conn()
+            .execute(
+                "UPDATE cfg_hook_definitions SET kind_json = ?1 WHERE id = ?2",
+                params![r#"{"legacy":"payload"}"#, dto.id],
+            )
+            .expect("should seed legacy bytes");
+
+        let mut updated = repo
+            .get(&dto.id)
+            .expect("should fetch legacy hook")
+            .expect("legacy hook should exist");
+        updated.name = "Renamed Legacy Hook".to_string();
+        repo.update(&updated).expect("should update legacy hook");
+
+        let fetched = repo
+            .get(&dto.id)
+            .expect("should fetch updated legacy hook")
+            .expect("updated legacy hook should exist");
+        assert_eq!(fetched.name, "Renamed Legacy Hook");
+        assert_eq!(
+            fetched.kind_json.as_deref(),
+            Some(r#"{"legacy":"payload"}"#)
+        );
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
