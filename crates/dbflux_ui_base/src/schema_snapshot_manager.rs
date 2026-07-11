@@ -93,6 +93,10 @@ impl SchemaSnapshotManager {
         depth: SnapshotDepth,
         retention: usize,
     ) -> Result<CaptureOutcome, StorageError> {
+        // A retention of 0 would prune the row just inserted, silently
+        // disabling persistence; always keep at least the latest snapshot.
+        let retention = retention.max(1);
+
         let fingerprint = SchemaFingerprint::stable_hex_many(tables);
 
         let latest = self.repo.list(profile_id, database)?.into_iter().next();
@@ -341,6 +345,25 @@ mod tests {
             mgr.list(&profile_id, Some("db1")).len(),
             2,
             "must prune down to retention=2 after each insert"
+        );
+    }
+
+    #[test]
+    fn capture_with_zero_retention_still_keeps_the_latest_snapshot() {
+        let (mut mgr, profile_id) = make_manager();
+
+        for i in 0..3 {
+            let mut t = table("users");
+            // Force a distinct fingerprint per iteration so every capture inserts.
+            t.columns.as_mut().unwrap()[0].type_name = format!("integer_{i}");
+            mgr.capture(&profile_id, Some("db1"), &[t], SnapshotDepth::Shallow, 0)
+                .expect("capture");
+        }
+
+        assert_eq!(
+            mgr.list(&profile_id, Some("db1")).len(),
+            1,
+            "a retention of 0 must not prune the just-inserted snapshot away"
         );
     }
 

@@ -138,7 +138,7 @@ impl SchemaSnapshotRepo {
                  AND id NOT IN (
                      SELECT id FROM sch_schema_snapshots
                      WHERE profile_id = ?1 AND database IS ?2
-                     ORDER BY captured_at DESC
+                     ORDER BY captured_at DESC, rowid DESC
                      LIMIT ?3
                  )",
                 rusqlite::params![profile_id, database, keep as i64],
@@ -488,6 +488,36 @@ mod tests {
         assert_eq!(
             pruned_children, 0,
             "children of pruned snapshot must cascade"
+        );
+    }
+
+    #[test]
+    fn prune_tie_break_on_equal_captured_at_is_deterministic() {
+        let (_, repo, profile_id) = setup("prune_tie_break");
+
+        let older = sample_record(profile_id, Some("db1"), 1000);
+        let tied_first = sample_record(profile_id, Some("db1"), 2000);
+        let tied_second = sample_record(profile_id, Some("db1"), 2000);
+
+        repo.insert(&older).expect("insert older");
+        repo.insert(&tied_first).expect("insert tied_first");
+        repo.insert(&tied_second).expect("insert tied_second");
+
+        let deleted = repo
+            .prune(&profile_id.to_string(), Some("db1"), 1)
+            .expect("prune");
+
+        assert_eq!(deleted, 2);
+
+        let remaining = repo
+            .list(&profile_id.to_string(), Some("db1"))
+            .expect("list");
+
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(
+            remaining[0].id,
+            tied_second.id.to_string(),
+            "the later-inserted row of a captured_at tie must survive deterministically"
         );
     }
 
