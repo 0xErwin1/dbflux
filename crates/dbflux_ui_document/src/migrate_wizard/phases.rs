@@ -24,6 +24,19 @@ pub enum WizardPhase {
     Run,
 }
 
+impl WizardPhase {
+    /// The rail's display label for this phase.
+    pub fn label(self) -> &'static str {
+        match self {
+            WizardPhase::SourceTarget => "Source & Target",
+            WizardPhase::TablesMapping => "Tables Mapping",
+            WizardPhase::Options => "Options",
+            WizardPhase::Confirm => "Confirm",
+            WizardPhase::Run => "Run",
+        }
+    }
+}
+
 /// All rail entries in display order, for `render_phase_rail` to iterate.
 pub const RAIL_PHASES: [WizardPhase; 5] = [
     WizardPhase::SourceTarget,
@@ -37,6 +50,30 @@ pub const RAIL_PHASES: [WizardPhase; 5] = [
 /// on `current` — an already-passed rail entry.
 pub fn is_completed(entry: WizardPhase, current: WizardPhase) -> bool {
     entry < current
+}
+
+/// One rail row's presentation state: a completed entry shows a checkmark and
+/// is clickable for back-navigation; the current entry is highlighted. Derived
+/// purely from the linear phase ordering so `render_phase_rail` stays a thin
+/// view over this model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RailEntry {
+    pub phase: WizardPhase,
+    pub completed: bool,
+    pub current: bool,
+}
+
+/// The rail's five entries with their completion/current flags resolved
+/// against `current` — the single source of truth the renderer iterates.
+pub fn rail_entries(current: WizardPhase) -> Vec<RailEntry> {
+    RAIL_PHASES
+        .iter()
+        .map(|&phase| RailEntry {
+            phase,
+            completed: is_completed(phase, current),
+            current: phase == current,
+        })
+        .collect()
 }
 
 /// Guard for `SourceTarget` → `TablesMapping`: at least one source table is
@@ -224,5 +261,51 @@ mod tests {
     #[test]
     fn run_state_defaults_to_idle() {
         assert_eq!(RunState::default(), RunState::Idle);
+    }
+
+    #[test]
+    fn phase_labels_cover_every_rail_entry() {
+        assert_eq!(WizardPhase::SourceTarget.label(), "Source & Target");
+        assert_eq!(WizardPhase::TablesMapping.label(), "Tables Mapping");
+        assert_eq!(WizardPhase::Options.label(), "Options");
+        assert_eq!(WizardPhase::Confirm.label(), "Confirm");
+        assert_eq!(WizardPhase::Run.label(), "Run");
+    }
+
+    #[test]
+    fn rail_entries_mark_passed_phases_completed_and_only_current_as_current() {
+        let entries = rail_entries(WizardPhase::Options);
+
+        assert_eq!(entries.len(), RAIL_PHASES.len());
+
+        let completed: Vec<WizardPhase> = entries
+            .iter()
+            .filter(|entry| entry.completed)
+            .map(|entry| entry.phase)
+            .collect();
+        assert_eq!(
+            completed,
+            vec![WizardPhase::SourceTarget, WizardPhase::TablesMapping]
+        );
+
+        let current: Vec<WizardPhase> = entries
+            .iter()
+            .filter(|entry| entry.current)
+            .map(|entry| entry.phase)
+            .collect();
+        assert_eq!(current, vec![WizardPhase::Options]);
+
+        assert!(
+            entries
+                .iter()
+                .all(|entry| !(entry.completed && entry.current))
+        );
+    }
+
+    #[test]
+    fn rail_entries_on_first_phase_have_no_completed_entries() {
+        let entries = rail_entries(WizardPhase::SourceTarget);
+        assert!(entries.iter().all(|entry| !entry.completed));
+        assert!(entries[0].current);
     }
 }

@@ -9,6 +9,7 @@
 //! pre-populates `source_profile_id` / `source_database` / `source_tables`.
 
 mod column_mapping;
+pub mod confirm_run;
 pub mod mapping;
 pub mod options;
 pub mod phases;
@@ -21,7 +22,7 @@ use dbflux_components::controls::{
     Button, Checkbox, Dropdown, DropdownItem, DropdownSelectionChanged,
 };
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::Spacing;
 use dbflux_core::{
     ColumnInfo, Connection, DriverCapabilities, SchemaCacheKey, SchemaForeignKeyInfo, TableInfo,
@@ -37,10 +38,12 @@ use dbflux_ui_base::toast::Toast;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use gpui_component::ActiveTheme;
 use uuid::Uuid;
 
 pub use column_mapping::TableMigrationConfig;
 use column_mapping::mapping_mode_options;
+use phases::{RailEntry, WizardPhase, rail_entries};
 
 /// Whether an `Err(String)` returned by one of the shared
 /// `AppStateEntity::prepare_fetch_*` seams means "the data is already cached"
@@ -111,6 +114,95 @@ fn build_migration_options(
         disable_referential_integrity,
         manual_order,
     }
+}
+
+/// Renders the wizard's left phase rail: the five fixed [`WizardPhase`]
+/// entries in order, a checkmark on every completed phase, a highlight on the
+/// current one, and click-to-return back-navigation on completed entries.
+/// `on_select` is invoked with the clicked phase; only completed (already
+/// passed) entries are interactive, so the caller cannot jump ahead. The FK
+/// reorder interrupt is deliberately absent — it is a conditional overlay
+/// inside `Confirm`, never a listed rail phase.
+pub fn render_phase_rail<F>(current: WizardPhase, on_select: F, cx: &App) -> impl IntoElement
+where
+    F: Fn(WizardPhase, &mut Window, &mut App) + Clone + 'static,
+{
+    let theme = cx.theme();
+    let accent = theme.accent;
+    let muted = theme.muted_foreground;
+    let border = theme.border;
+
+    let entries = rail_entries(current)
+        .into_iter()
+        .map(move |entry| render_rail_entry(entry, accent, muted, on_select.clone()));
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(Spacing::XS)
+        .p(Spacing::MD)
+        .min_w(px(180.0))
+        .border_r_1()
+        .border_color(border)
+        .children(entries)
+}
+
+fn render_rail_entry<F>(
+    entry: RailEntry,
+    accent: Hsla,
+    muted: Hsla,
+    on_select: F,
+) -> impl IntoElement
+where
+    F: Fn(WizardPhase, &mut Window, &mut App) + Clone + 'static,
+{
+    let phase = entry.phase;
+
+    let marker = if entry.completed {
+        Icon::new(AppIcon::CircleCheck)
+            .size(px(14.0))
+            .color(accent)
+            .into_any_element()
+    } else {
+        let dot_color = if entry.current { accent } else { muted };
+        div()
+            .size(px(8.0)) // guardrail-allow: decorative status-dot diameter, not a spacing token
+            .rounded_full()
+            .bg(dot_color)
+            .into_any_element()
+    };
+
+    let mut label = Text::body(phase.label());
+    if entry.current {
+        label = label.color(accent);
+    } else if !entry.completed {
+        label = label.muted_foreground();
+    }
+
+    div()
+        .id(SharedString::from(format!(
+            "migrate-rail-{}",
+            phase.label()
+        )))
+        .flex()
+        .items_center()
+        .gap(Spacing::SM)
+        .px(Spacing::SM)
+        .py(Spacing::XS)
+        .rounded_md()
+        .child(
+            div()
+                .w(px(16.0)) // guardrail-allow: fixed rail marker gutter width for label alignment
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(marker),
+        )
+        .child(label)
+        .when(entry.completed, |el| {
+            el.cursor_pointer()
+                .on_click(move |_event, window, app| on_select(phase, window, app))
+        })
 }
 
 /// Outcome of fetching one table's details through the shared
