@@ -10,6 +10,7 @@
 
 mod column_mapping;
 pub mod mapping;
+pub mod options;
 pub mod phases;
 pub mod source_target;
 pub mod tree_model;
