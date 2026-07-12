@@ -12,6 +12,7 @@ use gpui::*;
 use log::info;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 
 use super::{ConnectionManagerWindow, DismissEvent, TestStatus};
 
@@ -772,6 +773,7 @@ impl ConnectionManagerWindow {
         cx.spawn(async move |_this, cx| {
             let profile_id = profile.id;
             let profile_name_for_hooks = profile_name.clone();
+            let profile_name_for_cleanup = profile_name.clone();
             let phase_cx = cx.clone();
             let cleanup_cx = cx.clone();
             let background_executor = cx.background_executor().clone();
@@ -800,7 +802,7 @@ impl ConnectionManagerWindow {
                         .await
                     })
                 },
-                move || {
+                move |drop_guards| {
                     let driver = driver.clone();
                     let profile = profile.clone();
                     let password = password.clone();
@@ -832,10 +834,22 @@ impl ConnectionManagerWindow {
 
                                     let overrides =
                                         ConnectionOverrides::new(pipeline_output.resolved_password);
+                                    let access_handle_drop = TestConnectionProbeResource {
+                                        name: "pipeline access handle",
+                                        drop_guard: drop_guards.access_handle,
+                                    };
                                     let connection = driver
                                         .connect_with_overrides(&profile, &overrides)
                                         .map_err(|error| error.to_string())?;
+                                    let connection_drop = TestConnectionProbeResource {
+                                        name: "probe connection",
+                                        drop_guard: drop_guards.connection,
+                                    };
+
                                     drop(connection);
+                                    drop(connection_drop);
+                                    drop(pipeline_output.access_handle);
+                                    drop(access_handle_drop);
 
                                     Ok(dbflux_core::TestConnectionResult::default())
                                 })
@@ -874,7 +888,13 @@ impl ConnectionManagerWindow {
                         cleanup_detached_hook_scope
                             .cancel_and_wait(cleanup_app_state, &mut cleanup_cx)
                             .await
-                            .map_err(|_| "failed to release detached test hook tasks".to_string())
+                            .map_err(|error| {
+                                format_detached_hook_cleanup_failure(
+                                    profile_id,
+                                    &profile_name_for_cleanup,
+                                    &error,
+                                )
+                            })
                     })
                 },
                 hook_context,
@@ -918,6 +938,37 @@ impl ConnectionManagerWindow {
 
 type TestConnectionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
+type TestConnectionDropGuard = Arc<Mutex<Vec<&'static str>>>;
+
+#[derive(Default)]
+struct TestConnectionProbeDropGuards {
+    connection: Option<TestConnectionDropGuard>,
+    access_handle: Option<TestConnectionDropGuard>,
+}
+
+struct TestConnectionProbeResource {
+    name: &'static str,
+    drop_guard: Option<TestConnectionDropGuard>,
+}
+
+impl TestConnectionProbeResource {
+    #[cfg(test)]
+    fn new(name: &'static str, drop_guard: Option<TestConnectionDropGuard>) -> Self {
+        Self { name, drop_guard }
+    }
+}
+
+impl Drop for TestConnectionProbeResource {
+    fn drop(&mut self) {
+        if let Some(drop_guard) = &self.drop_guard {
+            drop_guard
+                .lock()
+                .expect("drop log poisoned")
+                .push(self.name);
+        }
+    }
+}
+
 struct TestConnectionOrchestrationResult {
     test_result: dbflux_core::TestConnectionResult,
     warnings: Vec<String>,
@@ -925,7 +976,7 @@ struct TestConnectionOrchestrationResult {
 
 async fn run_test_connection_orchestration<'a, RunPhase, RunProbe, RunCleanup>(
     hooks: dbflux_core::ConnectionHooks,
-    mut run_phase: RunPhase,
+    run_phase: RunPhase,
     run_probe: RunProbe,
     run_cleanup: RunCleanup,
     hook_context: dbflux_core::HookContext,
@@ -936,11 +987,46 @@ where
         Vec<dbflux_core::ConnectionHook>,
         dbflux_core::HookContext,
     ) -> TestConnectionFuture<'a, HookPhaseState>,
-    RunProbe:
-        FnOnce() -> TestConnectionFuture<'a, Result<dbflux_core::TestConnectionResult, String>>,
+    RunProbe: FnOnce(
+        TestConnectionProbeDropGuards,
+    )
+        -> TestConnectionFuture<'a, Result<dbflux_core::TestConnectionResult, String>>,
     RunCleanup: FnOnce() -> TestConnectionFuture<'a, Result<(), String>>,
 {
-    let outcome = run_test_connection_phases(hooks, &mut run_phase, run_probe, hook_context).await;
+    run_test_connection_orchestration_with_drop_guards(
+        hooks,
+        run_phase,
+        run_probe,
+        run_cleanup,
+        hook_context,
+        TestConnectionProbeDropGuards::default(),
+    )
+    .await
+}
+
+async fn run_test_connection_orchestration_with_drop_guards<'a, RunPhase, RunProbe, RunCleanup>(
+    hooks: dbflux_core::ConnectionHooks,
+    mut run_phase: RunPhase,
+    run_probe: RunProbe,
+    run_cleanup: RunCleanup,
+    hook_context: dbflux_core::HookContext,
+    drop_guards: TestConnectionProbeDropGuards,
+) -> Result<TestConnectionOrchestrationResult, String>
+where
+    RunPhase: FnMut(
+        HookPhase,
+        Vec<dbflux_core::ConnectionHook>,
+        dbflux_core::HookContext,
+    ) -> TestConnectionFuture<'a, HookPhaseState>,
+    RunProbe: FnOnce(
+        TestConnectionProbeDropGuards,
+    )
+        -> TestConnectionFuture<'a, Result<dbflux_core::TestConnectionResult, String>>,
+    RunCleanup: FnOnce() -> TestConnectionFuture<'a, Result<(), String>>,
+{
+    let outcome =
+        run_test_connection_phases(hooks, &mut run_phase, run_probe, hook_context, drop_guards)
+            .await;
     let cleanup = run_cleanup().await;
 
     match (outcome, cleanup) {
@@ -960,6 +1046,7 @@ async fn run_test_connection_phases<'a, RunPhase, RunProbe>(
     run_phase: &mut RunPhase,
     run_probe: RunProbe,
     hook_context: dbflux_core::HookContext,
+    drop_guards: TestConnectionProbeDropGuards,
 ) -> Result<TestConnectionOrchestrationResult, String>
 where
     RunPhase: FnMut(
@@ -967,8 +1054,10 @@ where
         Vec<dbflux_core::ConnectionHook>,
         dbflux_core::HookContext,
     ) -> TestConnectionFuture<'a, HookPhaseState>,
-    RunProbe:
-        FnOnce() -> TestConnectionFuture<'a, Result<dbflux_core::TestConnectionResult, String>>,
+    RunProbe: FnOnce(
+        TestConnectionProbeDropGuards,
+    )
+        -> TestConnectionFuture<'a, Result<dbflux_core::TestConnectionResult, String>>,
 {
     let pre_connect = run_phase(
         HookPhase::PreConnect,
@@ -984,7 +1073,7 @@ where
         }
     };
 
-    let result = run_probe().await?;
+    let result = run_probe(drop_guards).await?;
 
     let post_connect = run_phase(HookPhase::PostConnect, hooks.post_connect, hook_context).await;
     match post_connect {
@@ -1002,6 +1091,24 @@ where
             Err("Test connection cancelled by post-connect hook".to_string())
         }
     }
+}
+
+fn format_detached_hook_cleanup_failure(
+    profile_id: uuid::Uuid,
+    profile_name: &str,
+    error: &dbflux_ui_base::hook_phase_runner::DetachedHookCleanupError,
+) -> String {
+    let task_ids = error
+        .task_ids()
+        .iter()
+        .map(uuid::Uuid::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        "Failed to release detached test hook tasks for profile '{profile_name}' ({profile_id}); scoped task IDs [{task_ids}]: {}",
+        error.source()
+    )
 }
 
 /// Detect AWS SDK credential-resolution failures and replace them with a
@@ -1118,7 +1225,7 @@ mod tests {
                     }
                 })
             },
-            || {
+            |_| {
                 let calls = calls.clone();
                 Box::pin(async move {
                     calls
@@ -1184,7 +1291,7 @@ mod tests {
                     }
                 })
             },
-            || {
+            |_| {
                 let calls = calls.clone();
                 Box::pin(async move {
                     calls
@@ -1221,7 +1328,7 @@ mod tests {
                     }
                 })
             },
-            || Box::pin(async { Err("driver probe failed".to_string()) }),
+            |_| Box::pin(async { Err("driver probe failed".to_string()) }),
             || {
                 let cleanup_calls = cleanup_calls.clone();
                 Box::pin(async move {
@@ -1251,7 +1358,7 @@ mod tests {
                     }
                 })
             },
-            || {
+            |_| {
                 Box::pin(async {
                     Ok(dbflux_core::TestConnectionResult {
                         engine: Some("reachable".to_string()),
@@ -1285,7 +1392,7 @@ mod tests {
         let result = block_on(run_test_connection_orchestration(
             ConnectionHooks::default(),
             |_phase, _hooks, _context| Box::pin(async { HookPhaseState::Cancelled }),
-            || Box::pin(async { panic!("cancelled pre-connect hook must skip probe") }),
+            |_| Box::pin(async { panic!("cancelled pre-connect hook must skip probe") }),
             || {
                 let cleanup_calls = cleanup_calls.clone();
                 Box::pin(async move {
@@ -1313,7 +1420,7 @@ mod tests {
                     }
                 })
             },
-            || Box::pin(async { Ok(dbflux_core::TestConnectionResult::default()) }),
+            |_| Box::pin(async { Ok(dbflux_core::TestConnectionResult::default()) }),
             || Box::pin(async { Err("access handle did not close".to_string()) }),
             current_unsaved_hook_context(),
         ));
@@ -1321,6 +1428,77 @@ mod tests {
         assert!(
             matches!(result, Err(error) if error == "Test connection cleanup failed: access handle did not close")
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn test_connection_orchestration_drops_probe_connection_and_access_handle_before_cleanup() {
+        let drops = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+        let cleanup_observed_drops = drops.clone();
+
+        let result = block_on(run_test_connection_orchestration_with_drop_guards(
+            ConnectionHooks::default(),
+            |_phase, _hooks, _context| {
+                Box::pin(async move {
+                    HookPhaseState::Continue {
+                        warnings: Vec::new(),
+                    }
+                })
+            },
+            |drop_guards| {
+                Box::pin(async move {
+                    let connection = TestConnectionProbeResource::new(
+                        "probe connection",
+                        drop_guards.connection,
+                    );
+                    let access_handle = TestConnectionProbeResource::new(
+                        "pipeline access handle",
+                        drop_guards.access_handle,
+                    );
+
+                    drop(connection);
+                    drop(access_handle);
+
+                    Ok(dbflux_core::TestConnectionResult::default())
+                })
+            },
+            move || {
+                Box::pin(async move {
+                    assert_eq!(
+                        *cleanup_observed_drops.lock().expect("drop log poisoned"),
+                        vec!["probe connection", "pipeline access handle"],
+                        "the actual probe resources must drop before cleanup starts",
+                    );
+                    Ok(())
+                })
+            },
+            current_unsaved_hook_context(),
+            TestConnectionProbeDropGuards {
+                connection: Some(drops.clone()),
+                access_handle: Some(drops),
+            },
+        ));
+
+        assert!(result.is_ok(), "cleanup follows the dropped resources");
+    }
+
+    #[::core::prelude::v1::test]
+    fn detached_hook_cleanup_failure_keeps_scope_and_source_context() {
+        let task_id = uuid::Uuid::from_u128(0x2_500);
+        let error = dbflux_ui_base::hook_phase_runner::DetachedHookCleanupError::new(
+            vec![task_id],
+            "app state was released",
+        );
+
+        let message = format_detached_hook_cleanup_failure(
+            uuid::Uuid::from_u128(0x295),
+            "current unsaved profile",
+            &error,
+        );
+
+        assert!(message.contains("current unsaved profile"));
+        assert!(message.contains("00000000-0000-0000-0000-000000000295"));
+        assert!(message.contains(&task_id.to_string()));
+        assert!(message.contains("app state was released"));
     }
 
     #[::core::prelude::v1::test]

@@ -26,6 +26,29 @@ enum DetachedCleanupState {
     Cancel(Vec<TaskId>),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetachedHookCleanupError {
+    task_ids: Vec<TaskId>,
+    source: String,
+}
+
+impl DetachedHookCleanupError {
+    pub fn new(task_ids: Vec<TaskId>, source: impl Into<String>) -> Self {
+        Self {
+            task_ids,
+            source: source.into(),
+        }
+    }
+
+    pub fn task_ids(&self) -> &[TaskId] {
+        &self.task_ids
+    }
+
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct DetachedHookScope {
     task_ids: Arc<Mutex<BTreeSet<TaskId>>>,
@@ -50,7 +73,7 @@ impl DetachedHookScope {
         &self,
         app_state: Entity<AppStateEntity>,
         cx: &mut AsyncApp,
-    ) -> Result<(), ()> {
+    ) -> Result<(), DetachedHookCleanupError> {
         loop {
             let DetachedCleanupState::Cancel(task_ids) = self.cleanup_state() else {
                 return Ok(());
@@ -64,7 +87,12 @@ impl DetachedHookScope {
                     cx.emit(AppStateChanged);
                 });
             })
-            .map_err(|_| ())?;
+            .map_err(|error| {
+                DetachedHookCleanupError::new(
+                    task_ids,
+                    format!("failed to update application state: {error:?}"),
+                )
+            })?;
 
             cx.background_executor()
                 .timer(Duration::from_millis(50))
