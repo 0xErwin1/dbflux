@@ -866,11 +866,11 @@ impl ConnectionManagerWindow {
             if let Err(error) = cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     match result {
-                        Ok(rich) => {
+                        Ok(result) => {
                             info!("Test connection successful for {}", profile_name);
                             this.test_status = TestStatus::Success;
                             this.test_error = None;
-                            this.test_result = Some(rich);
+                            this.test_result = Some(result.test_result);
                         }
                         Err(error) => {
                             info!("Test connection failed: {}", error);
@@ -895,12 +895,16 @@ impl ConnectionManagerWindow {
 
 type TestConnectionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
+struct TestConnectionOrchestrationResult {
+    test_result: dbflux_core::TestConnectionResult,
+}
+
 async fn run_test_connection_orchestration<'a, RunPhase, RunProbe>(
     hooks: dbflux_core::ConnectionHooks,
     mut run_phase: RunPhase,
     run_probe: RunProbe,
     hook_context: dbflux_core::HookContext,
-) -> Result<dbflux_core::TestConnectionResult, String>
+) -> Result<TestConnectionOrchestrationResult, String>
 where
     RunPhase: FnMut(
         HookPhase,
@@ -928,7 +932,9 @@ where
 
     let post_connect = run_phase(HookPhase::PostConnect, hooks.post_connect, hook_context).await;
     match post_connect {
-        HookPhaseState::Continue { .. } => Ok(result),
+        HookPhaseState::Continue { .. } => Ok(TestConnectionOrchestrationResult {
+            test_result: result,
+        }),
         HookPhaseState::Aborted { error } => Err(error),
         HookPhaseState::Cancelled => {
             Err("Test connection cancelled by post-connect hook".to_string())
@@ -993,11 +999,11 @@ mod tests {
         }
     }
 
-    fn hook_context() -> dbflux_core::HookContext {
+    fn current_unsaved_hook_context() -> dbflux_core::HookContext {
         dbflux_core::HookContext {
-            profile_id: uuid::Uuid::nil(),
+            profile_id: uuid::Uuid::from_u128(0x295),
             profile_name: "current unsaved profile".to_string(),
-            db_kind: "test".to_string(),
+            db_kind: "postgres".to_string(),
             host: None,
             port: None,
             database: None,
@@ -1025,8 +1031,9 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
-    fn test_connection_orchestration_runs_current_hooks_around_direct_probe() {
+    fn test_connection_orchestration_passes_current_unsaved_context_and_returns_only_test_result() {
         let calls = Arc::new(Mutex::new(Vec::new()));
+        let contexts = Arc::new(Mutex::new(Vec::new()));
         let hooks = ConnectionHooks {
             pre_connect: vec![hook("current-pre")],
             post_connect: vec![hook("current-post")],
@@ -1035,13 +1042,15 @@ mod tests {
 
         let result = block_on(run_test_connection_orchestration(
             hooks,
-            |phase, hooks, _| {
+            |phase, hooks, context| {
                 let calls = calls.clone();
+                let contexts = contexts.clone();
                 Box::pin(async move {
                     calls
                         .lock()
                         .expect("call log poisoned")
                         .push((phase, hooks[0].display_command()));
+                    contexts.lock().expect("context log poisoned").push(context);
                     HookPhaseState::Continue {
                         warnings: Vec::new(),
                     }
@@ -1054,13 +1063,23 @@ mod tests {
                         .lock()
                         .expect("call log poisoned")
                         .push((HookPhase::PreConnect, "direct-probe".to_string()));
-                    Ok(dbflux_core::TestConnectionResult::default())
+                    Ok(dbflux_core::TestConnectionResult {
+                        engine: Some("direct probe".to_string()),
+                        ..Default::default()
+                    })
                 })
             },
-            hook_context(),
+            current_unsaved_hook_context(),
         ));
 
-        assert!(result.is_ok());
+        assert_eq!(
+            result
+                .expect("direct probe succeeds")
+                .test_result
+                .engine
+                .as_deref(),
+            Some("direct probe"),
+        );
         assert_eq!(
             *calls.lock().expect("call log poisoned"),
             vec![
@@ -1069,6 +1088,13 @@ mod tests {
                 (HookPhase::PostConnect, "current-post".to_string()),
             ],
         );
+        let contexts = contexts.lock().expect("context log poisoned");
+        assert_eq!(contexts.len(), 2);
+        for context in contexts.iter() {
+            assert_eq!(context.profile_id, uuid::Uuid::from_u128(0x295));
+            assert_eq!(context.profile_name, "current unsaved profile");
+            assert_eq!(context.db_kind, "postgres");
+        }
     }
 
     #[::core::prelude::v1::test]
@@ -1105,7 +1131,7 @@ mod tests {
                     Err("pipeline probe failed".to_string())
                 })
             },
-            hook_context(),
+            current_unsaved_hook_context(),
         ));
 
         assert!(matches!(result, Err(error) if error == "pipeline probe failed"));
