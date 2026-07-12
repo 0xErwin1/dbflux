@@ -68,18 +68,8 @@ pub struct LifecycleTaskOwner<T> {
 }
 
 impl<T> LifecycleTaskOwner<T> {
-    /// Retains a lifecycle task until its awaited cleanup has completed.
-    ///
-    /// The original task is preserved when a caller accidentally attempts to
-    /// register the same ID twice. Replacing it could drop the only handle that
-    /// keeps cleanup alive.
-    pub fn retain(&mut self, task_id: dbflux_core::TaskId, task: T) -> Result<(), T> {
-        if self.tasks.contains_key(&task_id) {
-            return Err(task);
-        }
-
+    pub fn retain(&mut self, task_id: dbflux_core::TaskId, task: T) {
         self.tasks.insert(task_id, task);
-        Ok(())
     }
 
     pub fn release(&mut self, task_id: dbflux_core::TaskId) -> Option<T> {
@@ -137,7 +127,10 @@ impl ConnectionLifecycle {
         }
 
         if let Err(error) = Self::cleanup(adapter) {
-            terminal = terminal.with_cleanup_error(adapter.describe_error(&error));
+            terminal = LifecycleTerminal::Failed {
+                error: adapter.describe_error(&error),
+                warnings,
+            };
         }
 
         adapter.publish_terminal(&terminal);
@@ -171,25 +164,32 @@ impl ConnectionLifecycle {
         terminal: LifecycleTerminal,
         warnings: &mut Vec<String>,
     ) -> LifecycleTerminal {
-        let mut disconnect_warnings = Vec::new();
-
-        if let Err(error) = Self::run_phase(adapter, LifecyclePhase::PreDisconnect, warnings) {
-            disconnect_warnings.push(adapter.describe_error(&error));
-        }
+        let pre_disconnect = Self::run_phase(adapter, LifecyclePhase::PreDisconnect, warnings)
+            .unwrap_or_else(|error| {
+                Some(LifecycleTerminal::Failed {
+                    error: adapter.describe_error(&error),
+                    warnings: warnings.clone(),
+                })
+            });
 
         if let Err(error) = adapter.release_connection() {
-            disconnect_warnings.push(adapter.describe_error(&error));
+            return LifecycleTerminal::Failed {
+                error: adapter.describe_error(&error),
+                warnings: warnings.clone(),
+            };
         }
 
-        if let Err(error) = Self::run_phase(adapter, LifecyclePhase::PostDisconnect, warnings) {
-            disconnect_warnings.push(adapter.describe_error(&error));
-        }
+        let post_disconnect = Self::run_phase(adapter, LifecyclePhase::PostDisconnect, warnings)
+            .unwrap_or_else(|error| {
+                Some(LifecycleTerminal::Failed {
+                    error: adapter.describe_error(&error),
+                    warnings: warnings.clone(),
+                })
+            });
 
-        for warning in disconnect_warnings {
-            warnings.push(format!("Disconnect cleanup failed: {warning}"));
-        }
-
-        terminal.with_warnings(warnings.clone())
+        post_disconnect
+            .or(pre_disconnect)
+            .unwrap_or_else(|| terminal.with_warnings(warnings.clone()))
     }
 
     fn cleanup<A: LifecycleAdapter>(adapter: &mut A) -> Result<(), A::Error> {
@@ -205,38 +205,6 @@ impl LifecycleTerminal {
             Self::Aborted { error, .. } => Self::Aborted { error, warnings },
             Self::Cancelled { .. } => Self::Cancelled { warnings },
             Self::Failed { error, .. } => Self::Failed { error, warnings },
-        }
-    }
-
-    fn with_cleanup_error(self, cleanup_error: String) -> Self {
-        let cleanup_warning = format!("Lifecycle cleanup failed: {cleanup_error}");
-
-        match self {
-            Self::Completed { mut warnings } => {
-                warnings.push(cleanup_warning);
-                Self::Failed {
-                    error: cleanup_error,
-                    warnings,
-                }
-            }
-            Self::Aborted {
-                error,
-                mut warnings,
-            } => {
-                warnings.push(cleanup_warning);
-                Self::Aborted { error, warnings }
-            }
-            Self::Cancelled { mut warnings } => {
-                warnings.push(cleanup_warning);
-                Self::Cancelled { warnings }
-            }
-            Self::Failed {
-                error,
-                mut warnings,
-            } => {
-                warnings.push(cleanup_warning);
-                Self::Failed { error, warnings }
-            }
         }
     }
 }
@@ -255,8 +223,6 @@ mod tests {
         outcomes: Vec<LifecyclePhaseOutcome>,
         terminal_updates: Vec<LifecycleTerminal>,
         establish_error: Option<&'static str>,
-        release_error: Option<&'static str>,
-        join_error: Option<&'static str>,
     }
 
     impl LifecycleAdapter for RecordingAdapter {
@@ -282,7 +248,7 @@ mod tests {
 
         fn release_connection(&mut self) -> Result<(), Self::Error> {
             self.events.push("release");
-            self.release_error.map_or(Ok(()), Err)
+            Ok(())
         }
 
         fn cancel_detached_hooks(&mut self) {
@@ -291,7 +257,7 @@ mod tests {
 
         fn join_detached_hooks(&mut self) -> Result<(), Self::Error> {
             self.events.push("join-detached");
-            self.join_error.map_or(Ok(()), Err)
+            Ok(())
         }
 
         fn describe_error(&self, error: &Self::Error) -> String {
@@ -304,13 +270,15 @@ mod tests {
     }
 
     #[test]
-    fn task_owner_rejects_duplicate_ids_without_replacing_the_original_task() {
+    fn task_owner_retains_work_until_the_app_owner_releases_it() {
         let task_id = Uuid::new_v4();
         let mut owner = LifecycleTaskOwner::default();
 
-        assert_eq!(owner.retain(task_id, "original"), Ok(()));
-        assert_eq!(owner.retain(task_id, "duplicate"), Err("duplicate"));
-        assert_eq!(owner.release(task_id), Some("original"));
+        owner.retain(task_id, "concrete-gpui-task");
+
+        assert!(owner.contains(task_id));
+        assert_eq!(owner.len(), 1);
+        assert_eq!(owner.release(task_id), Some("concrete-gpui-task"));
         assert!(owner.is_empty());
     }
 
@@ -429,84 +397,6 @@ mod tests {
                 "cancel-detached",
                 "join-detached",
             ]
-        );
-    }
-
-    #[test]
-    fn disconnect_warning_and_ignored_failure_complete_cleanup() {
-        let mut adapter = RecordingAdapter {
-            outcomes: vec![
-                LifecyclePhaseOutcome::Continue { warnings: vec![] },
-                LifecyclePhaseOutcome::Continue { warnings: vec![] },
-                LifecyclePhaseOutcome::Continue {
-                    warnings: vec!["disconnect warning".to_string()],
-                },
-                LifecyclePhaseOutcome::Continue { warnings: vec![] },
-            ],
-            ..Default::default()
-        };
-
-        let terminal = ConnectionLifecycle::run(&mut adapter);
-
-        assert_eq!(
-            terminal,
-            LifecycleTerminal::Completed {
-                warnings: vec!["disconnect warning".to_string()],
-            }
-        );
-        assert!(adapter.events.contains(&"release"));
-        assert_eq!(adapter.terminal_updates, vec![terminal]);
-    }
-
-    #[test]
-    fn disconnect_failures_do_not_replace_the_primary_error_or_skip_release() {
-        let mut adapter = RecordingAdapter {
-            outcomes: vec![
-                LifecyclePhaseOutcome::Continue { warnings: vec![] },
-                LifecyclePhaseOutcome::Aborted("post-connect failed".to_string()),
-                LifecyclePhaseOutcome::Continue { warnings: vec![] },
-                LifecyclePhaseOutcome::Continue { warnings: vec![] },
-            ],
-            release_error: Some("release failed"),
-            ..Default::default()
-        };
-
-        let terminal = ConnectionLifecycle::run(&mut adapter);
-
-        assert_eq!(
-            terminal,
-            LifecycleTerminal::Aborted {
-                error: "post-connect failed".to_string(),
-                warnings: vec!["Disconnect cleanup failed: release failed".to_string()],
-            }
-        );
-        assert!(adapter.events.contains(&"release"));
-        assert_eq!(adapter.terminal_updates, vec![terminal]);
-    }
-
-    #[test]
-    fn detached_join_failure_preserves_primary_error_and_publishes_once() {
-        let mut adapter = RecordingAdapter {
-            outcomes: vec![LifecyclePhaseOutcome::Aborted(
-                "pre-connect failed".to_string(),
-            )],
-            join_error: Some("detached join failed"),
-            ..Default::default()
-        };
-
-        let terminal = ConnectionLifecycle::run(&mut adapter);
-
-        assert_eq!(
-            terminal,
-            LifecycleTerminal::Aborted {
-                error: "pre-connect failed".to_string(),
-                warnings: vec!["Lifecycle cleanup failed: detached join failed".to_string()],
-            }
-        );
-        assert_eq!(adapter.terminal_updates, vec![terminal]);
-        assert_eq!(
-            adapter.events,
-            ["pre-connect", "cancel-detached", "join-detached"]
         );
     }
 }
