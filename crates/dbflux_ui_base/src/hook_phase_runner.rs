@@ -21,6 +21,11 @@ struct DetachedHookTaskStart {
     ready_receiver: Option<DetachedReadyReceiver>,
 }
 
+enum DetachedCleanupState {
+    Complete,
+    Cancel(Vec<TaskId>),
+}
+
 #[derive(Clone, Default)]
 pub struct DetachedHookScope {
     task_ids: Arc<Mutex<BTreeSet<TaskId>>>,
@@ -47,10 +52,9 @@ impl DetachedHookScope {
         cx: &mut AsyncApp,
     ) -> Result<(), ()> {
         loop {
-            let task_ids = self.task_ids();
-            if task_ids.is_empty() {
+            let DetachedCleanupState::Cancel(task_ids) = self.cleanup_state() else {
                 return Ok(());
-            }
+            };
 
             cx.update(|cx| {
                 app_state.update(cx, |state, cx| {
@@ -68,6 +72,7 @@ impl DetachedHookScope {
         }
     }
 
+    #[cfg_attr(test, allow(dead_code))]
     fn task_ids(&self) -> Vec<TaskId> {
         self.task_ids
             .lock()
@@ -76,12 +81,65 @@ impl DetachedHookScope {
             .copied()
             .collect()
     }
+
+    fn cleanup_state(&self) -> DetachedCleanupState {
+        let task_ids = self.task_ids();
+
+        if task_ids.is_empty() {
+            DetachedCleanupState::Complete
+        } else {
+            DetachedCleanupState::Cancel(task_ids)
+        }
+    }
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum HookPhaseState {
     Continue { warnings: Vec<String> },
     Aborted { error: String },
     Cancelled,
+}
+
+#[derive(Default)]
+struct HookPhasePolicy {
+    warnings: Vec<String>,
+}
+
+impl HookPhasePolicy {
+    fn extend_warnings(&mut self, warnings: impl IntoIterator<Item = String>) {
+        self.warnings.extend(warnings);
+    }
+
+    fn record(
+        &mut self,
+        on_failure: dbflux_core::HookFailureMode,
+        succeeded: bool,
+        failure_message: &str,
+    ) -> Option<HookPhaseState> {
+        if succeeded {
+            return None;
+        }
+
+        match on_failure {
+            dbflux_core::HookFailureMode::Disconnect => Some(HookPhaseState::Aborted {
+                error: failure_message.to_string(),
+            }),
+            dbflux_core::HookFailureMode::Warn => {
+                self.warnings.push(failure_message.to_string());
+                None
+            }
+            dbflux_core::HookFailureMode::Ignore => {
+                log::warn!("{failure_message}");
+                None
+            }
+        }
+    }
+
+    fn finish(self) -> HookPhaseState {
+        HookPhaseState::Continue {
+            warnings: self.warnings,
+        }
+    }
 }
 
 fn hook_task_details(
@@ -560,7 +618,7 @@ pub async fn run_hook_phase(
     scope: &DetachedHookScope,
     cx: &mut AsyncApp,
 ) -> HookPhaseState {
-    let mut warnings = Vec::new();
+    let mut policy = HookPhasePolicy::default();
     let executor = CompositeExecutor::new();
 
     for hook in hooks {
@@ -677,7 +735,7 @@ pub async fn run_hook_phase(
         let detached_handles: Vec<_> = detached_receiver.try_iter().collect();
 
         if let Ok(output) = &hook_result {
-            warnings.extend(output.warnings.iter().cloned());
+            policy.extend_warnings(output.warnings.iter().cloned());
         }
 
         let detached_started = !detached_handles.is_empty();
@@ -723,7 +781,7 @@ pub async fn run_hook_phase(
             return HookPhaseState::Aborted { error };
         }
 
-        let (succeeded, failure_message, abort_error, cancelled) = if detached_started {
+        let (succeeded, failure_message, cancelled) = if detached_started {
             let mut readiness_error = None;
             for receiver in ready_receivers {
                 if let Err(state) =
@@ -744,11 +802,9 @@ pub async fn run_hook_phase(
             }
 
             match readiness_error {
-                None => (true, None, None, false),
-                Some(HookPhaseState::Cancelled) => (false, None, None, true),
-                Some(HookPhaseState::Aborted { error }) => {
-                    (false, Some(error.clone()), Some(error), false)
-                }
+                None => (true, None, false),
+                Some(HookPhaseState::Cancelled) => (false, None, true),
+                Some(HookPhaseState::Aborted { error }) => (false, Some(error), false),
                 Some(HookPhaseState::Continue { warnings }) => {
                     let message = if warnings.is_empty() {
                         "Unexpected hook readiness state: continue without warning".to_string()
@@ -756,7 +812,7 @@ pub async fn run_hook_phase(
                         format!("Unexpected hook readiness state: {}", warnings.join("; "))
                     };
                     log::error!("[HOOK] {}", message);
-                    (false, Some(message.clone()), Some(message), false)
+                    (false, Some(message), false)
                 }
             }
         } else {
@@ -768,14 +824,7 @@ pub async fn run_hook_phase(
             } else {
                 Some(hook.failure_message(phase, &hook_result))
             };
-            let abort_error =
-                if succeeded || hook.on_failure != dbflux_core::HookFailureMode::Disconnect {
-                    None
-                } else {
-                    failure_message.clone()
-                };
-
-            (succeeded, failure_message, abort_error, false)
+            (succeeded, failure_message, false)
         };
 
         let details = if detached_started {
@@ -881,29 +930,59 @@ pub async fn run_hook_phase(
         {
             return HookPhaseState::Cancelled;
         }
-        if let Some(error) = abort_error {
-            return HookPhaseState::Aborted { error };
-        }
-
-        match hook.on_failure {
-            dbflux_core::HookFailureMode::Warn => {
-                warnings.push(hook.failure_message(phase, &hook_result));
-            }
-            dbflux_core::HookFailureMode::Ignore => {
-                log::warn!("{}", hook.failure_message(phase, &hook_result));
-            }
-            dbflux_core::HookFailureMode::Disconnect => {}
+        if let Some(failure_message) = failure_message
+            && let Some(state) = policy.record(hook.on_failure, succeeded, &failure_message)
+        {
+            return state;
         }
     }
 
-    HookPhaseState::Continue { warnings }
+    policy.finish()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::DetachedHookScope;
-    use dbflux_core::TaskId;
+    use super::{DetachedCleanupState, DetachedHookScope, HookPhasePolicy, HookPhaseState};
+    use dbflux_core::{HookFailureMode, TaskId};
     use uuid::Uuid;
+
+    #[test]
+    fn phase_policy_keeps_invoking_after_warn_and_ignore_failures_in_order() {
+        let mut policy = HookPhasePolicy::default();
+
+        assert_eq!(
+            policy.record(HookFailureMode::Warn, false, "first warning"),
+            None
+        );
+        assert_eq!(
+            policy.record(HookFailureMode::Ignore, false, "ignored"),
+            None
+        );
+        assert_eq!(
+            policy.record(HookFailureMode::Disconnect, true, "unused"),
+            None
+        );
+
+        assert_eq!(
+            policy.finish(),
+            HookPhaseState::Continue {
+                warnings: vec!["first warning".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn phase_policy_stops_at_a_disconnect_failure() {
+        let mut policy = HookPhasePolicy::default();
+
+        assert_eq!(policy.record(HookFailureMode::Warn, false, "warning"), None);
+        assert_eq!(
+            policy.record(HookFailureMode::Disconnect, false, "disconnect failed"),
+            Some(HookPhaseState::Aborted {
+                error: "disconnect failed".to_string(),
+            })
+        );
+    }
 
     #[test]
     fn detached_scope_tracks_only_its_own_tasks() {
@@ -932,5 +1011,43 @@ mod tests {
 
         assert_eq!(first_scope.task_ids(), vec![first_task]);
         assert_eq!(second_scope.task_ids(), vec![second_task]);
+    }
+
+    #[test]
+    fn detached_scope_removes_completed_tasks_before_scoped_cleanup() {
+        let completed_task = TaskId::from(Uuid::new_v4());
+        let active_task = TaskId::from(Uuid::new_v4());
+        let scope = DetachedHookScope::default();
+
+        scope.register(completed_task);
+        scope.register(active_task);
+        scope.unregister(completed_task);
+
+        assert_eq!(scope.task_ids(), vec![active_task]);
+    }
+
+    #[test]
+    fn scoped_cleanup_cancels_only_active_tasks_then_waits_for_unregistration() {
+        let completed_task = TaskId::from(Uuid::new_v4());
+        let active_task = TaskId::from(Uuid::new_v4());
+        let unrelated_task = TaskId::from(Uuid::new_v4());
+        let scope = DetachedHookScope::default();
+
+        scope.register(completed_task);
+        scope.register(active_task);
+        scope.unregister(completed_task);
+
+        let DetachedCleanupState::Cancel(task_ids) = scope.cleanup_state() else {
+            panic!("an active scoped task must be cancelled before cleanup completes");
+        };
+        assert_eq!(task_ids, vec![active_task]);
+        assert!(!task_ids.contains(&unrelated_task));
+
+        scope.unregister(active_task);
+
+        assert!(matches!(
+            scope.cleanup_state(),
+            DetachedCleanupState::Complete
+        ));
     }
 }
