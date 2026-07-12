@@ -132,7 +132,10 @@ impl HooksSection {
     }
 
     fn set_hook_kind_dropdown(&mut self, kind: HookKindSelection, cx: &mut Context<Self>) {
-        self.hook_kind_selection = kind;
+        let mut selection = self.hook_editor_selection();
+        selection.set_keyboard_kind(kind);
+        self.apply_hook_editor_selection(selection, cx);
+
         let index = match kind {
             HookKindSelection::Command => 0,
             HookKindSelection::Script => 1,
@@ -176,7 +179,10 @@ impl HooksSection {
         mode: HookExecutionMode,
         cx: &mut Context<Self>,
     ) {
-        self.hook_execution_mode = mode;
+        let mut selection = self.hook_editor_selection();
+        selection.set_keyboard_execution_mode(mode);
+        self.apply_hook_editor_selection(selection, cx);
+
         let index = match mode {
             HookExecutionMode::Blocking => 0,
             HookExecutionMode::Detached => 1,
@@ -614,7 +620,8 @@ impl HooksSection {
             return Err("Hook ID is required".to_string());
         }
 
-        let selected_kind = self.selected_hook_kind(cx);
+        let selected = self.hook_editor_selection().save_selection();
+        let selected_kind = selected.kind;
 
         let timeout_ms = if timeout_text.is_empty() {
             None
@@ -714,11 +721,7 @@ impl HooksSection {
             },
             env_denylist,
             timeout_ms,
-            execution_mode: if selected_kind == HookKindSelection::Lua {
-                HookExecutionMode::Blocking
-            } else {
-                self.selected_hook_execution_mode(cx)
-            },
+            execution_mode: selected.execution_mode,
             ready_signal: if selected_kind == HookKindSelection::Lua || ready_signal.is_empty() {
                 None
             } else {
@@ -833,6 +836,13 @@ impl HooksSection {
         self.hook_list_idx = ids.iter().position(|id| id == hook_id);
         self.hook_enabled = hook.enabled;
         self.hook_inherit_env = hook.inherit_env;
+        self.apply_hook_editor_selection(
+            super::hooks_section::HookEditorSelectionState::from_saved_hook(
+                &hook.kind,
+                hook.execution_mode,
+            ),
+            cx,
+        );
 
         self.input_hook_id.update(cx, |input, cx| {
             input.set_value(hook_id.to_string(), window, cx)
@@ -1002,6 +1012,13 @@ impl HooksSection {
         self.hook_list_idx = ids.iter().position(|id| id == hook_id);
         self.hook_enabled = hook.enabled;
         self.hook_inherit_env = hook.inherit_env;
+        self.apply_hook_editor_selection(
+            super::hooks_section::HookEditorSelectionState::from_saved_hook(
+                &hook.kind,
+                hook.execution_mode,
+            ),
+            cx,
+        );
 
         self.input_hook_id.update(cx, |input, cx| {
             input.set_value(hook_id.to_string(), window, cx)

@@ -22,43 +22,145 @@ pub(super) enum HookKindSelection {
     Lua,
 }
 
-fn hook_kind_selection_from_dropdown_index(index: usize) -> Option<HookKindSelection> {
-    match index {
-        0 => Some(HookKindSelection::Command),
-        1 => Some(HookKindSelection::Script),
-        #[cfg(feature = "lua")]
-        2 => Some(HookKindSelection::Lua),
-        _ => None,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct HookEditorSelectionState {
+    pub(super) kind: HookKindSelection,
+    pub(super) execution_mode: HookExecutionMode,
+}
+
+impl Default for HookKindSelection {
+    fn default() -> Self {
+        Self::Command
     }
 }
 
-fn hook_execution_mode_from_dropdown_index(index: usize) -> Option<HookExecutionMode> {
-    match index {
-        0 => Some(HookExecutionMode::Blocking),
-        1 => Some(HookExecutionMode::Detached),
-        _ => None,
+impl Default for HookEditorSelectionState {
+    fn default() -> Self {
+        Self {
+            kind: HookKindSelection::Command,
+            execution_mode: HookExecutionMode::Blocking,
+        }
     }
 }
 
-fn apply_hook_kind_dropdown_selection(selection: &mut HookKindSelection, index: usize) -> bool {
-    let Some(kind) = hook_kind_selection_from_dropdown_index(index) else {
-        return false;
-    };
+impl HookEditorSelectionState {
+    pub(super) fn apply_dropdown_kind_index(&mut self, index: usize) -> bool {
+        let kind = match index {
+            0 => HookKindSelection::Command,
+            1 => HookKindSelection::Script,
+            #[cfg(feature = "lua")]
+            2 => HookKindSelection::Lua,
+            _ => return false,
+        };
 
-    *selection = kind;
-    true
+        self.set_keyboard_kind(kind);
+        true
+    }
+
+    pub(super) fn apply_dropdown_execution_mode_index(&mut self, index: usize) -> bool {
+        let mode = match index {
+            0 => HookExecutionMode::Blocking,
+            1 => HookExecutionMode::Detached,
+            _ => return false,
+        };
+
+        self.set_keyboard_execution_mode(mode);
+        true
+    }
+
+    pub(super) fn set_keyboard_kind(&mut self, kind: HookKindSelection) {
+        self.kind = kind;
+        if kind == HookKindSelection::Lua {
+            self.execution_mode = HookExecutionMode::Blocking;
+        }
+    }
+
+    pub(super) fn set_keyboard_execution_mode(&mut self, mode: HookExecutionMode) {
+        if self.kind != HookKindSelection::Lua {
+            self.execution_mode = mode;
+        }
+    }
+
+    pub(super) fn save_selection(self) -> Self {
+        self
+    }
+
+    pub(super) fn from_saved_hook(kind: &dbflux_core::HookKind, mode: HookExecutionMode) -> Self {
+        let kind = match kind {
+            dbflux_core::HookKind::Command { .. } => HookKindSelection::Command,
+            dbflux_core::HookKind::Script { .. } => HookKindSelection::Script,
+            dbflux_core::HookKind::Lua { .. } => HookKindSelection::Lua,
+        };
+        let mut selection = Self::default();
+        selection.set_keyboard_kind(kind);
+        selection.set_keyboard_execution_mode(mode);
+        selection
+    }
 }
 
-fn apply_hook_execution_mode_dropdown_selection(
-    selection: &mut HookExecutionMode,
-    index: usize,
-) -> bool {
-    let Some(mode) = hook_execution_mode_from_dropdown_index(index) else {
-        return false;
-    };
+pub(super) fn hook_form_rows_for_selection(
+    selection: HookEditorSelectionState,
+    editing_hook: bool,
+) -> Vec<Vec<HookFormField>> {
+    let is_command = selection.kind == HookKindSelection::Command;
+    let is_script = selection.kind == HookKindSelection::Script;
+    let is_lua = selection.kind == HookKindSelection::Lua;
+    let is_detached = !is_lua && selection.execution_mode == HookExecutionMode::Detached;
 
-    *selection = mode;
-    true
+    let mut rows = vec![vec![HookFormField::HookId]];
+
+    #[cfg(feature = "lua")]
+    rows.push(vec![
+        HookFormField::KindCommand,
+        HookFormField::KindScript,
+        HookFormField::KindLua,
+    ]);
+
+    #[cfg(not(feature = "lua"))]
+    rows.push(vec![HookFormField::KindCommand, HookFormField::KindScript]);
+
+    if is_command {
+        rows.push(vec![HookFormField::Command]);
+        rows.push(vec![HookFormField::Arguments]);
+    }
+    if is_script {
+        rows.push(vec![HookFormField::ScriptLanguage]);
+    }
+    if is_script || is_lua {
+        rows.push(vec![HookFormField::FilePath]);
+        rows.push(vec![HookFormField::OpenInApp, HookFormField::OpenInEditor]);
+    }
+    if is_script {
+        rows.push(vec![HookFormField::Interpreter]);
+    }
+    #[cfg(feature = "lua")]
+    if is_lua {
+        rows.push(vec![HookFormField::LuaLogging]);
+        rows.push(vec![HookFormField::LuaEnvRead]);
+        rows.push(vec![HookFormField::LuaConnectionMetadata]);
+        rows.push(vec![HookFormField::LuaProcessRun]);
+    }
+    if !is_lua {
+        rows.push(vec![HookFormField::ExecutionMode]);
+        if is_detached {
+            rows.push(vec![HookFormField::ReadySignal]);
+        }
+        rows.push(vec![HookFormField::WorkingDirectory]);
+        rows.push(vec![HookFormField::Environment]);
+        rows.push(vec![HookFormField::EnvDenylist]);
+    }
+    rows.push(vec![HookFormField::Timeout]);
+    rows.push(vec![HookFormField::Enabled]);
+    if !is_lua {
+        rows.push(vec![HookFormField::InheritEnv]);
+    }
+    rows.push(vec![HookFormField::OnFailure]);
+    rows.push(if editing_hook {
+        vec![HookFormField::DeleteButton, HookFormField::SaveButton]
+    } else {
+        vec![HookFormField::SaveButton]
+    });
+    rows
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -269,10 +371,12 @@ impl HooksSection {
             &hook_kind_dropdown,
             window,
             |this, _, event: &DropdownSelectionChanged, window, cx| {
-                if !apply_hook_kind_dropdown_selection(&mut this.hook_kind_selection, event.index) {
+                let mut selection = this.hook_editor_selection();
+                if !selection.apply_dropdown_kind_index(event.index) {
                     return;
                 }
 
+                this.apply_hook_editor_selection(selection, cx);
                 this.refresh_hook_script_content_editor(window, cx);
             },
         );
@@ -287,13 +391,12 @@ impl HooksSection {
             &hook_execution_mode_dropdown,
             window,
             |this, _, event: &DropdownSelectionChanged, _window, cx| {
-                if !apply_hook_execution_mode_dropdown_selection(
-                    &mut this.hook_execution_mode,
-                    event.index,
-                ) {
+                let mut selection = this.hook_editor_selection();
+                if !selection.apply_dropdown_execution_mode_index(event.index) {
                     return;
                 }
 
+                this.apply_hook_editor_selection(selection, cx);
                 cx.notify();
             },
         );
@@ -387,6 +490,23 @@ impl HooksSection {
         section
     }
 
+    pub(super) fn hook_editor_selection(&self) -> HookEditorSelectionState {
+        HookEditorSelectionState {
+            kind: self.hook_kind_selection,
+            execution_mode: self.hook_execution_mode,
+        }
+    }
+
+    pub(super) fn apply_hook_editor_selection(
+        &mut self,
+        selection: HookEditorSelectionState,
+        cx: &mut Context<Self>,
+    ) {
+        self.hook_kind_selection = selection.kind;
+        self.hook_execution_mode = selection.execution_mode;
+        cx.notify();
+    }
+
     pub(crate) fn hook_sync_selection_from_ids(&mut self, ids: &[String]) {
         self.hook_list_idx = self
             .hook_selected_id
@@ -465,78 +585,7 @@ impl FormSection for HooksSection {
     }
 
     fn form_rows(&self) -> Vec<Vec<Self::FormField>> {
-        let hook_kind = self.hook_kind_selection;
-        let is_command = hook_kind == HookKindSelection::Command;
-        let is_script = hook_kind == HookKindSelection::Script;
-        let is_lua = hook_kind == HookKindSelection::Lua;
-        let is_detached = !is_lua && self.hook_execution_mode == HookExecutionMode::Detached;
-
-        let mut rows = vec![vec![HookFormField::HookId]];
-
-        #[cfg(feature = "lua")]
-        {
-            rows.push(vec![
-                HookFormField::KindCommand,
-                HookFormField::KindScript,
-                HookFormField::KindLua,
-            ]);
-        }
-
-        #[cfg(not(feature = "lua"))]
-        {
-            rows.push(vec![HookFormField::KindCommand, HookFormField::KindScript]);
-        }
-
-        if is_command {
-            rows.push(vec![HookFormField::Command]);
-            rows.push(vec![HookFormField::Arguments]);
-        }
-
-        if is_script {
-            rows.push(vec![HookFormField::ScriptLanguage]);
-        }
-
-        if is_script || is_lua {
-            rows.push(vec![HookFormField::FilePath]);
-            rows.push(vec![HookFormField::OpenInApp, HookFormField::OpenInEditor]);
-        }
-
-        if is_script {
-            rows.push(vec![HookFormField::Interpreter]);
-        }
-
-        #[cfg(feature = "lua")]
-        if is_lua {
-            rows.push(vec![HookFormField::LuaLogging]);
-            rows.push(vec![HookFormField::LuaEnvRead]);
-            rows.push(vec![HookFormField::LuaConnectionMetadata]);
-            rows.push(vec![HookFormField::LuaProcessRun]);
-        }
-
-        if !is_lua {
-            rows.push(vec![HookFormField::ExecutionMode]);
-            if is_detached {
-                rows.push(vec![HookFormField::ReadySignal]);
-            }
-            rows.push(vec![HookFormField::WorkingDirectory]);
-            rows.push(vec![HookFormField::Environment]);
-            rows.push(vec![HookFormField::EnvDenylist]);
-        }
-
-        rows.push(vec![HookFormField::Timeout]);
-        rows.push(vec![HookFormField::Enabled]);
-        if !is_lua {
-            rows.push(vec![HookFormField::InheritEnv]);
-        }
-        rows.push(vec![HookFormField::OnFailure]);
-
-        if self.editing_hook_id.is_some() {
-            rows.push(vec![HookFormField::DeleteButton, HookFormField::SaveButton]);
-        } else {
-            rows.push(vec![HookFormField::SaveButton]);
-        }
-
-        rows
+        hook_form_rows_for_selection(self.hook_editor_selection(), self.editing_hook_id.is_some())
     }
 
     fn is_input_field(field: Self::FormField) -> bool {
@@ -720,54 +769,108 @@ impl EventEmitter<SettingsEvent> for HooksSection {}
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "lua")]
-    use super::hook_kind_selection_from_dropdown_index;
     use super::{
-        HookKindSelection, apply_hook_execution_mode_dropdown_selection,
-        apply_hook_kind_dropdown_selection,
+        HookEditorSelectionState, HookFormField, HookKindSelection, hook_form_rows_for_selection,
     };
-    use dbflux_core::HookExecutionMode;
+    use dbflux_core::{HookExecutionMode, HookKind, ScriptLanguage, ScriptSource};
+    use std::path::PathBuf;
 
     #[test]
-    fn dropdown_indices_select_the_same_editable_hook_state_as_keyboard_navigation() {
-        let mut hook_kind = HookKindSelection::Command;
-        let mut execution_mode = HookExecutionMode::Blocking;
+    fn dropdown_and_keyboard_selection_paths_converge_on_the_same_state() {
+        let mut dropdown = HookEditorSelectionState::default();
+        let mut keyboard = HookEditorSelectionState::default();
 
-        assert!(apply_hook_kind_dropdown_selection(&mut hook_kind, 1));
-        assert!(apply_hook_execution_mode_dropdown_selection(
-            &mut execution_mode,
-            1
-        ));
+        assert!(dropdown.apply_dropdown_kind_index(1));
+        assert!(dropdown.apply_dropdown_execution_mode_index(1));
+        keyboard.set_keyboard_kind(HookKindSelection::Script);
+        keyboard.set_keyboard_execution_mode(HookExecutionMode::Detached);
 
-        assert_eq!(hook_kind, HookKindSelection::Script);
-        assert_eq!(execution_mode, HookExecutionMode::Detached);
+        assert_eq!(dropdown, keyboard);
     }
 
     #[test]
     fn invalid_dropdown_indices_do_not_change_editable_hook_state() {
-        let mut hook_kind = HookKindSelection::Script;
-        let mut execution_mode = HookExecutionMode::Detached;
+        let mut selection = HookEditorSelectionState {
+            kind: HookKindSelection::Script,
+            execution_mode: HookExecutionMode::Detached,
+        };
 
-        assert!(!apply_hook_kind_dropdown_selection(
-            &mut hook_kind,
-            usize::MAX
-        ));
-        assert!(!apply_hook_execution_mode_dropdown_selection(
-            &mut execution_mode,
-            usize::MAX
-        ));
+        assert!(!selection.apply_dropdown_kind_index(usize::MAX));
+        assert!(!selection.apply_dropdown_execution_mode_index(usize::MAX));
 
-        assert_eq!(hook_kind, HookKindSelection::Script);
-        assert_eq!(execution_mode, HookExecutionMode::Detached);
+        assert_eq!(
+            selection,
+            HookEditorSelectionState {
+                kind: HookKindSelection::Script,
+                execution_mode: HookExecutionMode::Detached,
+            }
+        );
+    }
+
+    #[test]
+    fn selection_state_save_and_reopen_preserves_script_and_detached_mode() {
+        let selected = HookEditorSelectionState {
+            kind: HookKindSelection::Script,
+            execution_mode: HookExecutionMode::Detached,
+        };
+        let saved = selected.save_selection();
+        let reopened = HookEditorSelectionState::from_saved_hook(
+            &HookKind::Script {
+                language: ScriptLanguage::Python,
+                source: ScriptSource::File {
+                    path: PathBuf::from("hook.py"),
+                },
+                interpreter: None,
+            },
+            saved.execution_mode,
+        );
+
+        assert_eq!(reopened, selected);
+    }
+
+    #[test]
+    fn form_rows_follow_authoritative_command_and_script_selection_state() {
+        let command_rows = hook_form_rows_for_selection(HookEditorSelectionState::default(), false);
+        let script_rows = hook_form_rows_for_selection(
+            HookEditorSelectionState {
+                kind: HookKindSelection::Script,
+                execution_mode: HookExecutionMode::Detached,
+            },
+            false,
+        );
+
+        assert!(command_rows.contains(&vec![HookFormField::Command]));
+        assert!(!command_rows.contains(&vec![HookFormField::FilePath]));
+        assert!(!command_rows.contains(&vec![HookFormField::ReadySignal]));
+        assert!(script_rows.contains(&vec![HookFormField::ScriptLanguage]));
+        assert!(script_rows.contains(&vec![HookFormField::FilePath]));
+        assert!(script_rows.contains(&vec![HookFormField::ReadySignal]));
     }
 
     #[cfg(feature = "lua")]
     #[test]
-    fn lua_dropdown_index_remains_available_when_lua_is_enabled() {
-        assert_eq!(
-            hook_kind_selection_from_dropdown_index(2),
-            Some(HookKindSelection::Lua)
+    fn lua_selection_round_trips_and_refreshes_visible_rows() {
+        let mut selected = HookEditorSelectionState::default();
+        assert!(selected.apply_dropdown_kind_index(2));
+        selected.set_keyboard_execution_mode(HookExecutionMode::Detached);
+
+        let saved = selected.save_selection();
+        let reopened = HookEditorSelectionState::from_saved_hook(
+            &HookKind::Lua {
+                source: ScriptSource::File {
+                    path: PathBuf::from("hook.lua"),
+                },
+                capabilities: dbflux_core::LuaCapabilities::default(),
+            },
+            saved.execution_mode,
         );
+        let rows = hook_form_rows_for_selection(reopened, false);
+
+        assert_eq!(reopened.kind, HookKindSelection::Lua);
+        assert_eq!(reopened.execution_mode, HookExecutionMode::Blocking);
+        assert!(rows.contains(&vec![HookFormField::LuaLogging]));
+        assert!(!rows.contains(&vec![HookFormField::ExecutionMode]));
+        assert!(!rows.contains(&vec![HookFormField::ReadySignal]));
     }
 }
 
