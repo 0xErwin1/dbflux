@@ -35,8 +35,9 @@ use super::apply::{
     build_statements_for_table_action,
 };
 use super::diff_source::{
-    DiffMode, PartitionedChanges, RiskBadge, SourcePicker, TableActionOutcome, UnsupportedChange,
-    classify_table_action, partition_table_changes,
+    DiffMode, PartitionedChanges, ReferenceTarget, RiskBadge, SourcePicker, TableActionOutcome,
+    UnsupportedChange, classify_table_action, live_reference_ready, partition_table_changes,
+    resolve_same_connection_shallow, same_connection_reference_databases,
 };
 use crate::handle::DocumentEvent;
 use crate::types::{DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot, DocumentState};
@@ -127,8 +128,12 @@ pub struct SchemaDiffDocument {
     title: String,
 
     picker: SourcePicker,
-    /// Second live connection chosen as the reference in `LiveVsLive` mode.
-    reference_profile: Option<Uuid>,
+    /// Reference side chosen in `LiveVsLive` mode: either another database on
+    /// this same connection or a different open relational connection.
+    reference: Option<ReferenceTarget>,
+    /// Database names known on the target's own connection, used to offer
+    /// same-connection reference databases. Loaded off the UI thread.
+    connection_databases: Vec<String>,
     groups: Vec<TableDiffGroup>,
     /// Selected applicable changes as `(group_index, applicable_index)`.
     selected: HashSet<(usize, usize)>,
@@ -176,14 +181,15 @@ impl SchemaDiffDocument {
             None => "Schema Diff".to_string(),
         };
 
-        Self {
+        let mut document = Self {
             id: DocumentId::new(),
             app_state,
             profile_id,
             database,
             title,
             picker: SourcePicker::default(),
-            reference_profile: None,
+            reference: None,
+            connection_databases: Vec::new(),
             groups: Vec::new(),
             selected: HashSet::new(),
             selected_table_actions: HashSet::new(),
@@ -198,7 +204,70 @@ impl SchemaDiffDocument {
             focus_handle: cx.focus_handle(),
             diff_scroll: ScrollHandle::new(),
             _subscriptions: vec![confirm_sub],
+        };
+
+        document.load_connection_databases(cx);
+        document
+    }
+
+    /// Loads the target connection's database names off the UI thread so the
+    /// picker can offer same-connection reference databases. Enriches the
+    /// already-cached database names with the full server listing; a listing
+    /// failure degrades gracefully to whatever is cached rather than surfacing
+    /// an error, since this only populates a picker. When nothing is selected
+    /// yet and the connection has more than one database, the first other
+    /// database is pre-selected — the common comparison case.
+    fn load_connection_databases(&mut self, cx: &mut Context<Self>) {
+        let Some(connected) = self.app_state.read(cx).connections().get(&self.profile_id) else {
+            return;
+        };
+
+        let connection = Arc::clone(&connected.connection);
+        let mut baseline: Vec<String> = connected.database_schemas.keys().cloned().collect();
+        if let Some(active) = &connected.active_database
+            && !baseline.contains(active)
+        {
+            baseline.push(active.clone());
         }
+
+        let task = cx.background_executor().spawn(async move {
+            connection
+                .list_databases()
+                .map(|dbs| dbs.into_iter().map(|d| d.name).collect::<Vec<String>>())
+        });
+
+        cx.spawn(async move |this, cx| {
+            let listed = task.await;
+            cx.update(|cx| {
+                this.update(cx, |doc, cx| {
+                    let mut names = baseline;
+                    if let Ok(listed) = listed {
+                        for name in listed {
+                            if !names.contains(&name) {
+                                names.push(name);
+                            }
+                        }
+                    }
+                    names.sort();
+                    names.dedup();
+                    doc.connection_databases = names;
+
+                    if doc.reference.is_none() {
+                        let candidates = same_connection_reference_databases(
+                            &doc.connection_databases,
+                            doc.database.as_deref(),
+                        );
+                        if let Some(first) = candidates.into_iter().next() {
+                            doc.reference = Some(ReferenceTarget::SameConnectionDatabase(first));
+                        }
+                    }
+
+                    cx.notify();
+                })
+            })
+            .ok();
+        })
+        .detach();
     }
 
     // ── Document API (mirrored by the pane) ───────────────────────────────
@@ -262,8 +331,13 @@ impl SchemaDiffDocument {
         self.groups.clear();
         self.selected.clear();
         self.selected_table_actions.clear();
-        if mode == DiffMode::SnapshotVsLive {
-            self.load_snapshots(cx);
+        match mode {
+            DiffMode::SnapshotVsLive => self.load_snapshots(cx),
+            DiffMode::LiveVsLive => {
+                if self.connection_databases.is_empty() {
+                    self.load_connection_databases(cx);
+                }
+            }
         }
         cx.notify();
     }
@@ -288,19 +362,36 @@ impl SchemaDiffDocument {
         cx.notify();
     }
 
-    fn select_reference_profile(&mut self, other_profile_id: Uuid, cx: &mut Context<Self>) {
+    /// Selects another database on the target's own connection as the reference.
+    fn select_same_connection_database(&mut self, database: String, cx: &mut Context<Self>) {
         self.picker.mode = DiffMode::LiveVsLive;
-        self.reference_profile = Some(other_profile_id);
+        self.reference = Some(ReferenceTarget::SameConnectionDatabase(database));
+        self.reset_after_reference_change();
+        cx.notify();
+    }
+
+    /// Selects a different open relational connection as the reference.
+    fn select_reference_connection(&mut self, other_profile_id: Uuid, cx: &mut Context<Self>) {
+        self.picker.mode = DiffMode::LiveVsLive;
+        self.reference = Some(ReferenceTarget::OtherConnection {
+            profile_id: other_profile_id,
+            database: None,
+        });
+        self.reset_after_reference_change();
+        cx.notify();
+    }
+
+    fn reset_after_reference_change(&mut self) {
         self.compute_state = ComputeState::Idle;
         self.groups.clear();
         self.selected.clear();
         self.selected_table_actions.clear();
-        cx.notify();
     }
 
     // ── Diff computation ──────────────────────────────────────────────────
 
     fn compute_diff(&mut self, cx: &mut Context<Self>) {
+        let reference = self.reference.clone();
         let state = self.app_state.read(cx);
 
         let Some(target) = state.connections().get(&self.profile_id) else {
@@ -320,33 +411,57 @@ impl SchemaDiffDocument {
 
         // Resolve the reference side into a Send-friendly plan.
         let reference_plan = match self.picker.mode {
-            DiffMode::LiveVsLive => {
-                let Some(other_id) = self.reference_profile else {
+            DiffMode::LiveVsLive => match &reference {
+                None => {
                     self.compute_state = ComputeState::Error(
-                        "Pick a second live connection to compare against.".to_string(),
+                        "Pick a reference database or connection to compare against.".to_string(),
                     );
                     cx.notify();
                     return;
-                };
-                let Some(other) = state.connections().get(&other_id) else {
-                    self.compute_state = ComputeState::Error(
-                        "The chosen reference connection is not connected.".to_string(),
-                    );
-                    cx.notify();
-                    return;
-                };
-                let other_db = other.active_database.clone();
-                let other_shallow = other
-                    .schema
-                    .as_ref()
-                    .map(|s| s.tables().to_vec())
-                    .unwrap_or_default();
-                SidePlan::Live {
-                    connection: Arc::clone(&other.connection),
-                    database: other_db,
-                    shallow: other_shallow,
                 }
-            }
+                Some(ReferenceTarget::SameConnectionDatabase(db)) => {
+                    // Same connection, different database: reuse the target
+                    // connection Arc and pull the reference database's cached
+                    // shallow tables. A database whose schema is not loaded yet
+                    // is refused rather than compared as empty, which would
+                    // otherwise read as dropping every table.
+                    match resolve_same_connection_shallow(&target.database_schemas, db) {
+                        Ok(shallow) => SidePlan::Live {
+                            connection: Arc::clone(&target_connection),
+                            database: Some(db.clone()),
+                            shallow,
+                        },
+                        Err(message) => {
+                            self.compute_state = ComputeState::Error(message);
+                            cx.notify();
+                            return;
+                        }
+                    }
+                }
+                Some(ReferenceTarget::OtherConnection {
+                    profile_id,
+                    database,
+                }) => {
+                    let Some(other) = state.connections().get(profile_id) else {
+                        self.compute_state = ComputeState::Error(
+                            "The chosen reference connection is not connected.".to_string(),
+                        );
+                        cx.notify();
+                        return;
+                    };
+                    let other_db = database.clone().or_else(|| other.active_database.clone());
+                    let other_shallow = other
+                        .schema
+                        .as_ref()
+                        .map(|s| s.tables().to_vec())
+                        .unwrap_or_default();
+                    SidePlan::Live {
+                        connection: Arc::clone(&other.connection),
+                        database: other_db,
+                        shallow: other_shallow,
+                    }
+                }
+            },
             DiffMode::SnapshotVsLive => {
                 let Some(snapshot_id) = self.picker.selected_snapshot else {
                     self.compute_state =
@@ -1020,7 +1135,7 @@ fn badge_variant(badge: RiskBadge) -> BadgeVariant {
 impl SchemaDiffDocument {
     fn can_compute(&self) -> bool {
         match self.picker.mode {
-            DiffMode::LiveVsLive => self.reference_profile.is_some(),
+            DiffMode::LiveVsLive => live_reference_ready(&self.reference),
             DiffMode::SnapshotVsLive => self.picker.selected_snapshot.is_some(),
         }
     }
@@ -1160,13 +1275,40 @@ impl SchemaDiffDocument {
             .on_click(cx.listener(move |this, _, _, cx| this.set_mode(mode, cx)))
     }
 
-    fn render_live_reference_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// One selectable reference row (a database or a connection), styled the
+    /// same way regardless of which group it belongs to.
+    fn reference_option_row(
+        &self,
+        id: SharedString,
+        label: String,
+        selected: bool,
+        cx: &mut Context<Self>,
+        on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) -> AnyElement {
         let (primary, muted) = {
             let theme = cx.theme();
             (theme.primary, theme.muted)
         };
+        div()
+            .id(id)
+            .px(Spacing::SM)
+            .py(Spacing::XS)
+            .rounded(Radii::SM)
+            .cursor_pointer()
+            .when(selected, |d| d.bg(primary.opacity(0.15)))
+            .hover(move |h| h.bg(muted))
+            .child(Text::body(label))
+            .on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
+            .into_any_element()
+    }
 
-        let candidates: Vec<(Uuid, String)> = {
+    fn render_live_reference_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let database_candidates = same_connection_reference_databases(
+            &self.connection_databases,
+            self.database.as_deref(),
+        );
+
+        let connection_candidates: Vec<(Uuid, String)> = {
             let state = self.app_state.read(cx);
             state
                 .connections()
@@ -1180,39 +1322,83 @@ impl SchemaDiffDocument {
                 .collect()
         };
 
-        let mut rows: Vec<AnyElement> = Vec::new();
-        for (id, name) in candidates {
-            let selected = self.reference_profile == Some(id);
-            rows.push(
+        if database_candidates.is_empty() && connection_candidates.is_empty() {
+            return div()
+                .child(
+                    Text::caption("Connect a second database or connection to compare against.")
+                        .muted_foreground(),
+                )
+                .into_any_element();
+        }
+
+        let mut sections: Vec<AnyElement> = Vec::new();
+
+        if !database_candidates.is_empty() {
+            let mut rows: Vec<AnyElement> = vec![
+                Text::label_sm("Other databases on this connection")
+                    .muted_foreground()
+                    .into_any_element(),
+            ];
+            for database in database_candidates {
+                let selected = matches!(
+                    &self.reference,
+                    Some(ReferenceTarget::SameConnectionDatabase(chosen)) if chosen == &database
+                );
+                let database_for_click = database.clone();
+                rows.push(self.reference_option_row(
+                    SharedString::from(format!("ref-db-{database}")),
+                    database,
+                    selected,
+                    cx,
+                    move |this, _w, cx| {
+                        this.select_same_connection_database(database_for_click.clone(), cx)
+                    },
+                ));
+            }
+            sections.push(
                 div()
-                    .id(SharedString::from(format!("ref-{id}")))
-                    .px(Spacing::SM)
-                    .py(Spacing::XS)
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .when(selected, |d| d.bg(primary.opacity(0.15)))
-                    .hover(move |h| h.bg(muted))
-                    .child(Text::body(name))
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| this.select_reference_profile(id, cx)),
-                    )
+                    .flex()
+                    .flex_col()
+                    .gap(Spacing::XS)
+                    .children(rows)
                     .into_any_element(),
             );
         }
 
-        if rows.is_empty() {
-            return div()
-                .child(
-                    Text::caption("No other relational connections are open.").muted_foreground(),
-                )
-                .into_any_element();
+        if !connection_candidates.is_empty() {
+            let mut rows: Vec<AnyElement> = vec![
+                Text::label_sm("Other connections")
+                    .muted_foreground()
+                    .into_any_element(),
+            ];
+            for (id, name) in connection_candidates {
+                let selected = matches!(
+                    &self.reference,
+                    Some(ReferenceTarget::OtherConnection { profile_id, .. }) if *profile_id == id
+                );
+                rows.push(self.reference_option_row(
+                    SharedString::from(format!("ref-conn-{id}")),
+                    name,
+                    selected,
+                    cx,
+                    move |this, _w, cx| this.select_reference_connection(id, cx),
+                ));
+            }
+            sections.push(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(Spacing::XS)
+                    .children(rows)
+                    .into_any_element(),
+            );
         }
 
         div()
             .flex()
             .flex_col()
-            .gap(Spacing::XS)
-            .children(rows)
+            .gap(Spacing::SM)
+            .children(sections)
             .into_any_element()
     }
 

@@ -6,9 +6,11 @@
 //! partition that separates changes the driver can apply from the ones it must
 //! surface as unsupported.
 
+use std::collections::HashMap;
+
 use dbflux_core::{
-    CodeGenerator, DdlRejection, ExecutionClassification, RiskedChange, SchemaChange, TableInfo,
-    TableRef, classify_table_added, classify_table_removed,
+    CodeGenerator, DbSchemaInfo, DdlRejection, ExecutionClassification, RiskedChange, SchemaChange,
+    TableInfo, TableRef, classify_table_added, classify_table_removed,
 };
 use uuid::Uuid;
 
@@ -31,6 +33,64 @@ pub struct SourcePicker {
     pub mode: DiffMode,
     /// Snapshot chosen as the reference side in `SnapshotVsLive` mode.
     pub selected_snapshot: Option<Uuid>,
+}
+
+/// The reference side chosen in `LiveVsLive` mode. The reference is what the
+/// live target is compared against and brought in line with. It can be either a
+/// different database on the SAME connection as the target — the common case,
+/// e.g. `atlas_dev` vs `atlas_test` under one server — or a different open
+/// relational connection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReferenceTarget {
+    /// A different database on the same connection as the diff target.
+    SameConnectionDatabase(String),
+    /// A different open relational connection. `database` pins a specific
+    /// database on that connection when set; otherwise its active database is
+    /// used.
+    OtherConnection {
+        profile_id: Uuid,
+        database: Option<String>,
+    },
+}
+
+/// Live-vs-live readiness: a diff can only run once a reference has been chosen.
+pub fn live_reference_ready(reference: &Option<ReferenceTarget>) -> bool {
+    reference.is_some()
+}
+
+/// The other databases on the target's own connection that can serve as a
+/// same-connection reference: every known database name except the target's
+/// own. Pure so the picker's readiness can be unit-tested without GPUI.
+pub fn same_connection_reference_databases(
+    available: &[String],
+    own_database: Option<&str>,
+) -> Vec<String> {
+    available
+        .iter()
+        .filter(|db| Some(db.as_str()) != own_database)
+        .cloned()
+        .collect()
+}
+
+/// Resolves the shallow table list for a same-connection reference database
+/// from the connection's per-database schema cache.
+///
+/// A database whose schema has not been loaded yet is reported as an error
+/// rather than silently treated as empty: an empty reference would make the
+/// diff engine see every table as a drop, producing a bogus destructive plan.
+/// This upholds the "no silently-incomplete metadata" invariant the deep
+/// resolver already enforces for column detail.
+pub fn resolve_same_connection_shallow(
+    database_schemas: &HashMap<String, DbSchemaInfo>,
+    database: &str,
+) -> Result<Vec<TableInfo>, String> {
+    match database_schemas.get(database) {
+        Some(schema) => Ok(schema.tables.clone()),
+        None => Err(format!(
+            "The schema for \"{database}\" is not loaded yet. Expand that database \
+             in the sidebar first, then run Compute Diff again."
+        )),
+    }
 }
 
 /// Three-level risk badge shown per change, derived from the shared governance
@@ -418,6 +478,94 @@ mod tests {
             }
             other => panic!("expected Unsupported, got {other:?}"),
         }
+    }
+
+    // -- Reference target model (same-connection vs other connection) ------
+
+    fn db_schema_with_tables(name: &str, table_names: &[&str]) -> dbflux_core::DbSchemaInfo {
+        dbflux_core::DbSchemaInfo {
+            name: name.to_string(),
+            tables: table_names
+                .iter()
+                .map(|t| TableInfo {
+                    name: t.to_string(),
+                    schema: Some("public".to_string()),
+                    columns: None,
+                    indexes: None,
+                    foreign_keys: None,
+                    constraints: None,
+                    sample_fields: None,
+                    presentation: Default::default(),
+                    child_items: None,
+                })
+                .collect(),
+            views: Vec::new(),
+            custom_types: None,
+        }
+    }
+
+    #[test]
+    fn same_connection_databases_excludes_the_targets_own_database() {
+        let available = vec![
+            "atlas_dev".to_string(),
+            "atlas_test".to_string(),
+            "postgres".to_string(),
+        ];
+
+        let out = same_connection_reference_databases(&available, Some("atlas_dev"));
+
+        assert_eq!(out, vec!["atlas_test".to_string(), "postgres".to_string()]);
+    }
+
+    #[test]
+    fn same_connection_databases_keeps_all_when_target_database_is_unknown() {
+        let available = vec!["atlas_dev".to_string(), "atlas_test".to_string()];
+
+        let out = same_connection_reference_databases(&available, None);
+
+        assert_eq!(out, available);
+    }
+
+    #[test]
+    fn resolve_same_connection_shallow_returns_the_loaded_tables() {
+        let mut schemas = std::collections::HashMap::new();
+        schemas.insert(
+            "atlas_test".to_string(),
+            db_schema_with_tables("atlas_test", &["users", "orders"]),
+        );
+
+        let resolved = resolve_same_connection_shallow(&schemas, "atlas_test")
+            .expect("a loaded database resolves to its cached tables");
+
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved[0].name, "users");
+        assert_eq!(resolved[1].name, "orders");
+    }
+
+    #[test]
+    fn resolve_same_connection_shallow_errors_when_the_database_is_not_loaded() {
+        let schemas: std::collections::HashMap<String, dbflux_core::DbSchemaInfo> =
+            std::collections::HashMap::new();
+
+        let err = resolve_same_connection_shallow(&schemas, "atlas_test")
+            .expect_err("an unloaded reference database must not silently resolve to empty");
+
+        assert!(err.contains("atlas_test"));
+        assert!(err.to_lowercase().contains("sidebar"));
+    }
+
+    #[test]
+    fn live_reference_ready_only_when_a_reference_is_chosen() {
+        assert!(!live_reference_ready(&None));
+        assert!(live_reference_ready(&Some(
+            ReferenceTarget::SameConnectionDatabase("atlas_test".to_string())
+        )));
+        assert!(live_reference_ready(&Some(
+            ReferenceTarget::OtherConnection {
+                profile_id: Uuid::nil(),
+                database: None,
+            }
+        )));
     }
 
     #[test]
