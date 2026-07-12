@@ -939,6 +939,46 @@ mod tests {
     /// is the regression fence for that invariant: it is written against the
     /// current (pre-rename) state and must stay green through file renames.
     #[test]
+    fn test_021_profile_hook_interpreter_upgrades_and_is_idempotent() {
+        let temp_dir = temp_dir("021_profile_hook_interpreter");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("test.db");
+
+        let conn = Connection::open(&db_path).unwrap();
+        let registry = MigrationRegistry::new();
+        registry.run_all(&conn).expect("create pre-021 schema");
+        conn.execute_batch(
+            "ALTER TABLE cfg_connection_profile_hooks DROP COLUMN script_interpreter;
+             DELETE FROM sys_migrations WHERE name = '021_profile_hook_interpreter';",
+        )
+        .expect("restore pre-021 profile hook schema");
+
+        registry
+            .run_all(&conn)
+            .expect("upgrade profile hook schema");
+        assert!(
+            column_names(&conn, "cfg_connection_profile_hooks").contains("script_interpreter"),
+            "migration 021 must add the profile hook interpreter column"
+        );
+
+        registry
+            .run_all(&conn)
+            .expect("rerun profile hook schema upgrade");
+        let applied: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sys_migrations WHERE name = '021_profile_hook_interpreter'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count migration applications");
+        assert_eq!(applied, 1);
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
     fn test_migration_name_order_invariant() {
         let temp_dir = temp_dir("name_order");
         let _ = std::fs::remove_dir_all(&temp_dir);

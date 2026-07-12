@@ -1932,6 +1932,72 @@ mod tests {
     }
 
     #[test]
+    fn global_and_profile_hooks_preserve_empty_and_omitted_values() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let empty_hook = ConnectionHook {
+            enabled: true,
+            kind: HookKind::Command {
+                command: "echo empty".to_string(),
+                args: Vec::new(),
+            },
+            cwd: None,
+            env: Default::default(),
+            inherit_env: true,
+            env_denylist: Vec::new(),
+            timeout_ms: None,
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
+            on_failure: HookFailureMode::Warn,
+        };
+        let defaulted_hook = ConnectionHook {
+            timeout_ms: Some(0),
+            ready_signal: Some(String::new()),
+            ..empty_hook.clone()
+        };
+
+        save_hook_definitions(
+            &runtime,
+            &[
+                HookDefinitionSave {
+                    id: None,
+                    name: "empty-global".to_string(),
+                    hook: empty_hook.clone(),
+                },
+                HookDefinitionSave {
+                    id: None,
+                    name: "defaulted-global".to_string(),
+                    hook: defaulted_hook.clone(),
+                },
+            ],
+            &[],
+        )
+        .expect("save global hooks");
+
+        let mut profile = ConnectionProfile::new("empty-profile", DbConfig::default_postgres());
+        profile.hooks = Some(ConnectionHooks {
+            pre_connect: vec![empty_hook.clone()],
+            post_connect: vec![defaulted_hook.clone()],
+            pre_disconnect: Vec::new(),
+            post_disconnect: Vec::new(),
+        });
+        save_profiles(&runtime, &[profile.clone()]).expect("save profile hooks");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(loaded.hook_definitions["empty-global"].hook, empty_hook);
+        assert_eq!(
+            loaded.hook_definitions["defaulted-global"].hook,
+            defaulted_hook
+        );
+
+        let loaded_profile = loaded
+            .profiles
+            .into_iter()
+            .find(|candidate| candidate.id == profile.id)
+            .expect("load profile");
+        assert_eq!(loaded_profile.hooks, profile.hooks);
+    }
+
+    #[test]
     fn load_config_protects_malformed_canonical_rows_without_mutating_them() {
         let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
         let saved = save_hook_definitions(
@@ -1970,6 +2036,50 @@ mod tests {
                 .kind_json,
             Some("{not valid json".to_string())
         );
+    }
+
+    #[test]
+    fn load_config_recovers_unambiguous_legacy_command_without_diagnostic() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let dto = dbflux_storage::repositories::hook_definitions::HookDefinitionDto {
+            id: "legacy-command".to_string(),
+            name: "legacy".to_string(),
+            execution_mode: "Detached".to_string(),
+            script_ref: Some("echo legacy".to_string()),
+            cwd: None,
+            inherit_env: true,
+            timeout_ms: None,
+            ready_signal: None,
+            on_failure: "Ignore".to_string(),
+            enabled: true,
+            created_at: String::new(),
+            updated_at: String::new(),
+            env_denylist: Vec::new(),
+            kind_json: None,
+        };
+        runtime
+            .hook_definitions()
+            .upsert(&dto)
+            .expect("insert legacy command row");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        let recovered = loaded
+            .hook_definitions
+            .get("legacy")
+            .expect("recover legacy command");
+
+        assert_eq!(recovered.id.as_deref(), Some("legacy-command"));
+        assert_eq!(
+            recovered.hook.kind,
+            HookKind::Command {
+                command: "echo legacy".to_string(),
+                args: Vec::new(),
+            }
+        );
+        assert_eq!(recovered.hook.execution_mode, HookExecutionMode::Detached);
+        assert_eq!(recovered.hook.on_failure, HookFailureMode::Ignore);
+        assert!(loaded.hook_load_diagnostics.is_empty());
+        assert!(loaded.protected_hook_rows.is_empty());
     }
 
     #[test]

@@ -26,6 +26,15 @@ use super::hooks_section::{
 };
 use super::layout;
 
+fn commit_saved_hook_definitions(
+    current: &mut HashMap<String, EditableGlobalHook>,
+    save_result: Result<HashMap<String, EditableGlobalHook>, dbflux_storage::error::StorageError>,
+) -> Result<HashMap<String, EditableGlobalHook>, dbflux_storage::error::StorageError> {
+    let saved = save_result?;
+    *current = saved.clone();
+    Ok(saved)
+}
+
 fn update_hook_definition(
     definitions: &mut HashMap<String, EditableGlobalHook>,
     existing_name: Option<&str>,
@@ -734,10 +743,9 @@ impl HooksSection {
                 hook: definition.hook.clone(),
             })
             .collect::<Vec<_>>();
-        let hooks = match dbflux_app::config_loader::save_hook_definitions(
-            runtime,
-            &desired,
-            &protected_ids,
+        let hooks = match commit_saved_hook_definitions(
+            &mut self.hook_definitions,
+            dbflux_app::config_loader::save_hook_definitions(runtime, &desired, &protected_ids),
         ) {
             Ok(hooks) => hooks,
             Err(e) => {
@@ -750,7 +758,6 @@ impl HooksSection {
             }
         };
 
-        self.hook_definitions = hooks.clone();
         self.app_state.update(cx, move |state, _cx| {
             state.set_hook_definitions(hooks);
         });
@@ -2041,9 +2048,10 @@ fn interpreter_exists(program: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::update_hook_definition;
+    use super::{commit_saved_hook_definitions, update_hook_definition};
     use dbflux_app::config_loader::EditableGlobalHook;
     use dbflux_core::{ConnectionHook, HookExecutionMode, HookFailureMode, HookKind};
+    use dbflux_storage::error::StorageError;
     use std::collections::HashMap;
 
     fn command_hook(command: &str) -> ConnectionHook {
@@ -2062,6 +2070,49 @@ mod tests {
             ready_signal: None,
             on_failure: HookFailureMode::Disconnect,
         }
+    }
+
+    #[test]
+    fn failed_hook_save_keeps_editable_definitions() {
+        let mut current = HashMap::from([(
+            "edited".to_string(),
+            EditableGlobalHook {
+                id: Some("durable-id".to_string()),
+                hook: command_hook("edited-command"),
+            },
+        )]);
+        let before = current.clone();
+
+        let committed = commit_saved_hook_definitions(
+            &mut current,
+            Err(StorageError::Data("injected save failure".to_string())),
+        );
+
+        assert!(committed.is_err());
+        assert_eq!(current, before);
+    }
+
+    #[test]
+    fn successful_hook_save_replaces_editable_definitions() {
+        let mut current = HashMap::from([(
+            "before".to_string(),
+            EditableGlobalHook {
+                id: Some("old-id".to_string()),
+                hook: command_hook("before-command"),
+            },
+        )]);
+        let saved = HashMap::from([(
+            "after".to_string(),
+            EditableGlobalHook {
+                id: Some("new-id".to_string()),
+                hook: command_hook("after-command"),
+            },
+        )]);
+
+        commit_saved_hook_definitions(&mut current, Ok(saved.clone()))
+            .expect("commit successful save");
+
+        assert_eq!(current, saved);
     }
 
     #[test]
