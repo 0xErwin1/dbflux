@@ -722,7 +722,9 @@ impl HooksSection {
     }
 
     fn persist_hooks(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let runtime = self.app_state.read(cx).storage_runtime();
+        let app_state = self.app_state.read(cx);
+        let runtime = app_state.storage_runtime();
+        let protected_ids = app_state.protected_hook_row_ids();
         let desired = self
             .hook_definitions
             .iter()
@@ -732,7 +734,11 @@ impl HooksSection {
                 hook: definition.hook.clone(),
             })
             .collect::<Vec<_>>();
-        let hooks = match dbflux_app::config_loader::save_hook_definitions(runtime, &desired, &[]) {
+        let hooks = match dbflux_app::config_loader::save_hook_definitions(
+            runtime,
+            &desired,
+            &protected_ids,
+        ) {
             Ok(hooks) => hooks,
             Err(e) => {
                 report_error(

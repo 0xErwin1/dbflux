@@ -188,7 +188,13 @@ impl ServicesSection {
     }
 
     pub(super) fn load_services(&mut self, runtime: &StorageRuntime) {
-        let config = dbflux_app::config_loader::load_config(runtime);
+        let config = match dbflux_app::config_loader::load_config(runtime) {
+            Ok(config) => config,
+            Err(error) => {
+                log::warn!("Failed to load RPC services: {error}");
+                return;
+            }
+        };
         self.svc_services = config.services;
     }
 

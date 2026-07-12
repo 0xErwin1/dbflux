@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use dbflux_app::AppState;
+use dbflux_app::{AppState, config_loader::HookLoadDiagnostic};
 use dbflux_core::observability::EventSeverity;
 use dbflux_storage::bootstrap::StorageRuntime;
 use gpui::{Entity, EventEmitter, Global, WindowHandle};
@@ -105,6 +105,8 @@ pub struct AppStateEntity {
     /// call. Ephemeral — resets to 0 on every app start. The audit log is the
     /// durable record; this counter only drives the status-bar badge.
     pub unread_error_count: u32,
+
+    pub hook_load_diagnostics: Vec<HookLoadDiagnostic>,
 }
 
 impl AppStateEntity {
@@ -114,7 +116,7 @@ impl AppStateEntity {
     /// runtime. This path is used in production where the default DB location is
     /// used (`~/.local/share/dbflux/dbflux.db`).
     pub fn new() -> Result<Self, dbflux_storage::error::StorageError> {
-        let inner = AppState::new()?;
+        let mut inner = AppState::new()?;
 
         let saved_charts = SavedChartManager::new(Arc::clone(&inner.saved_charts_repo));
         let dashboards = DashboardManager::new(
@@ -122,6 +124,7 @@ impl AppStateEntity {
             Arc::clone(&inner.dashboard_panels_repo),
         );
         let saved_queries = SavedQueryManager::new(Arc::clone(&inner.saved_query_repo));
+        let hook_load_diagnostics = inner.take_hook_load_diagnostics();
 
         Ok(Self {
             inner,
@@ -132,6 +135,7 @@ impl AppStateEntity {
             pending_edit_reconnect_prompt: None,
             pending_reconnect_request: None,
             unread_error_count: 0,
+            hook_load_diagnostics,
         })
     }
 
@@ -143,7 +147,7 @@ impl AppStateEntity {
     pub fn new_with_storage_runtime(
         storage_runtime: StorageRuntime,
     ) -> Result<Self, dbflux_storage::error::StorageError> {
-        let inner = AppState::new_with_storage_runtime(storage_runtime)?;
+        let mut inner = AppState::new_with_storage_runtime(storage_runtime)?;
 
         let saved_charts = SavedChartManager::new(Arc::clone(&inner.saved_charts_repo));
         let dashboards = DashboardManager::new(
@@ -151,6 +155,7 @@ impl AppStateEntity {
             Arc::clone(&inner.dashboard_panels_repo),
         );
         let saved_queries = SavedQueryManager::new(Arc::clone(&inner.saved_query_repo));
+        let hook_load_diagnostics = inner.take_hook_load_diagnostics();
 
         Ok(Self {
             inner,
@@ -161,6 +166,7 @@ impl AppStateEntity {
             pending_edit_reconnect_prompt: None,
             pending_reconnect_request: None,
             unread_error_count: 0,
+            hook_load_diagnostics,
         })
     }
 

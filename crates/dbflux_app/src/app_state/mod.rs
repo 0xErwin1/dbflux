@@ -57,6 +57,8 @@ pub struct AppState {
     driver_overrides: HashMap<DriverKey, GlobalOverrides>,
     driver_settings: HashMap<DriverKey, FormValues>,
     hook_definitions: HashMap<String, EditableGlobalHook>,
+    hook_load_diagnostics: Vec<crate::config_loader::HookLoadDiagnostic>,
+    protected_hook_rows: Vec<crate::config_loader::ProtectedHookRow>,
     detached_hook_tasks: HashMap<Uuid, HashSet<TaskId>>,
     auth_provider_registry: AuthProviderRegistry,
     history_manager: crate::history_manager_sqlite::HistoryManager,
@@ -1886,6 +1888,21 @@ impl AppState {
         &self.hook_definitions
     }
 
+    pub fn protected_hook_row_ids(&self) -> Vec<String> {
+        self.protected_hook_rows
+            .iter()
+            .map(|row| row.row_id.clone())
+            .collect()
+    }
+
+    pub fn hook_load_diagnostics(&self) -> &[crate::config_loader::HookLoadDiagnostic] {
+        &self.hook_load_diagnostics
+    }
+
+    pub fn take_hook_load_diagnostics(&mut self) -> Vec<crate::config_loader::HookLoadDiagnostic> {
+        std::mem::take(&mut self.hook_load_diagnostics)
+    }
+
     pub fn set_hook_definitions(&mut self, definitions: HashMap<String, EditableGlobalHook>) {
         let hook_count = definitions.len();
         self.hook_definitions = definitions;
@@ -2631,6 +2648,8 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
+            Vec::new(),
+            Vec::new(),
             Vec::new(),
             runtime,
             profiles,

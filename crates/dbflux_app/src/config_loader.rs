@@ -947,12 +947,27 @@ pub fn save_ssh_tunnels(
 // Configuration loading (read path - already migrated)
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookLoadDiagnostic {
+    pub row_id: String,
+    pub row_name: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtectedHookRow {
+    pub row_id: String,
+    pub row_name: Option<String>,
+}
+
 /// Loaded durable configuration from `dbflux.db`.
 pub struct LoadedConfig {
     pub general_settings: GeneralSettings,
     pub driver_overrides: HashMap<DriverKey, GlobalOverrides>,
     pub driver_settings: HashMap<DriverKey, FormValues>,
     pub hook_definitions: HashMap<String, EditableGlobalHook>,
+    pub hook_load_diagnostics: Vec<HookLoadDiagnostic>,
+    pub protected_hook_rows: Vec<ProtectedHookRow>,
     pub services: Vec<ServiceConfig>,
     pub profiles: Vec<ConnectionProfile>,
     pub auth_profiles: Vec<dbflux_core::AuthProfile>,
@@ -965,7 +980,9 @@ pub struct LoadedConfig {
 /// Uses sensible defaults when repositories are empty (fresh install).
 /// This function is the single entry point for loading all covered durable config
 /// domains from SQLite storage.
-pub fn load_config(runtime: &StorageRuntime) -> LoadedConfig {
+pub fn load_config(
+    runtime: &StorageRuntime,
+) -> Result<LoadedConfig, dbflux_storage::error::StorageError> {
     let profiles_repo = runtime.connection_profiles();
     let auth_repo = runtime.auth_profiles();
     let proxy_repo = runtime.proxy_profiles();
@@ -976,24 +993,27 @@ pub fn load_config(runtime: &StorageRuntime) -> LoadedConfig {
         &runtime.driver_overrides(),
         &runtime.driver_setting_values(),
     );
-    let hook_definitions = load_hook_definitions(&hooks_repo);
+    let (hook_definitions, hook_load_diagnostics, protected_hook_rows) =
+        load_hook_definitions(&hooks_repo)?;
     let services = dbflux_storage::load_service_configs(runtime);
     let profiles = load_profiles(&profiles_repo);
     let auth_profiles = load_auth_profiles(&auth_repo);
     let proxy_profiles = load_proxy_profiles(&proxy_repo, &proxy_repo.auth_repo());
     let ssh_tunnels = load_ssh_tunnels(&ssh_repo);
 
-    LoadedConfig {
+    Ok(LoadedConfig {
         general_settings,
         driver_overrides,
         driver_settings,
         hook_definitions,
+        hook_load_diagnostics,
+        protected_hook_rows,
         services,
         profiles,
         auth_profiles,
         proxy_profiles,
         ssh_tunnels,
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1127,58 +1147,104 @@ fn load_driver_maps(
 
 fn load_hook_definitions(
     repo: &dbflux_storage::repositories::hook_definitions::HookDefinitionRepository,
-) -> HashMap<String, EditableGlobalHook> {
+) -> Result<
+    (
+        HashMap<String, EditableGlobalHook>,
+        Vec<HookLoadDiagnostic>,
+        Vec<ProtectedHookRow>,
+    ),
+    dbflux_storage::error::StorageError,
+> {
     let mut map = HashMap::new();
+    let mut diagnostics = Vec::new();
+    let mut protected_rows = Vec::new();
 
-    if let Ok(hooks) = repo.all() {
-        for dto in hooks {
-            let execution_mode = match dto.execution_mode.as_str() {
-                "Detached" => dbflux_core::HookExecutionMode::Detached,
-                _ => dbflux_core::HookExecutionMode::Blocking,
-            };
-
-            let on_failure = match dto.on_failure.as_str() {
-                "Disconnect" => dbflux_core::HookFailureMode::Disconnect,
-                "Ignore" => dbflux_core::HookFailureMode::Ignore,
-                _ => dbflux_core::HookFailureMode::Warn,
-            };
-
-            // Get env vars from child table
-            let env = repo.get_env(&dto.id).unwrap_or_default();
-
-            let kind = dto
-                .kind_json
-                .as_deref()
-                .and_then(|kind_json| serde_json::from_str(kind_json).ok())
-                .unwrap_or_else(|| dbflux_core::HookKind::Command {
-                    command: dto.script_ref.clone().unwrap_or_default(),
-                    args: vec![],
-                });
-
-            let hook = dbflux_core::ConnectionHook {
-                enabled: dto.enabled,
-                kind,
-                cwd: dto.cwd.as_ref().map(std::path::PathBuf::from),
-                env,
-                inherit_env: dto.inherit_env,
-                env_denylist: dto.env_denylist.clone(),
-                timeout_ms: dto.timeout_ms.map(|v| v as u64),
-                execution_mode,
-                ready_signal: dto.ready_signal.clone(),
-                on_failure,
-            };
-
-            map.insert(
-                dto.name,
-                EditableGlobalHook {
-                    id: Some(dto.id),
-                    hook,
+    for dto in repo.all()? {
+        let row_name = Some(dto.name.clone());
+        let kind = match dto.kind_json.as_deref() {
+            Some(kind_json) => match serde_json::from_str(kind_json) {
+                Ok(kind) => kind,
+                Err(error) => {
+                    diagnostics.push(HookLoadDiagnostic {
+                        row_id: dto.id.clone(),
+                        row_name: row_name.clone(),
+                        message: format!("Invalid canonical hook payload: {error}"),
+                    });
+                    protected_rows.push(ProtectedHookRow {
+                        row_id: dto.id,
+                        row_name,
+                    });
+                    continue;
+                }
+            },
+            None => match dto.script_ref.clone() {
+                Some(command) => dbflux_core::HookKind::Command {
+                    command,
+                    args: Vec::new(),
                 },
-            );
-        }
+                None => {
+                    diagnostics.push(HookLoadDiagnostic {
+                        row_id: dto.id.clone(),
+                        row_name: row_name.clone(),
+                        message: "Legacy hook row has no unambiguous payload".to_string(),
+                    });
+                    protected_rows.push(ProtectedHookRow {
+                        row_id: dto.id,
+                        row_name,
+                    });
+                    continue;
+                }
+            },
+        };
+
+        let env = match repo.get_env(&dto.id) {
+            Ok(env) => env,
+            Err(error) => {
+                diagnostics.push(HookLoadDiagnostic {
+                    row_id: dto.id.clone(),
+                    row_name: row_name.clone(),
+                    message: format!("Unable to load hook environment: {error}"),
+                });
+                protected_rows.push(ProtectedHookRow {
+                    row_id: dto.id,
+                    row_name,
+                });
+                continue;
+            }
+        };
+
+        let execution_mode = match dto.execution_mode.as_str() {
+            "Detached" => dbflux_core::HookExecutionMode::Detached,
+            _ => dbflux_core::HookExecutionMode::Blocking,
+        };
+        let on_failure = match dto.on_failure.as_str() {
+            "Disconnect" => dbflux_core::HookFailureMode::Disconnect,
+            "Ignore" => dbflux_core::HookFailureMode::Ignore,
+            _ => dbflux_core::HookFailureMode::Warn,
+        };
+        let hook = dbflux_core::ConnectionHook {
+            enabled: dto.enabled,
+            kind,
+            cwd: dto.cwd.as_ref().map(std::path::PathBuf::from),
+            env,
+            inherit_env: dto.inherit_env,
+            env_denylist: dto.env_denylist.clone(),
+            timeout_ms: dto.timeout_ms.map(|v| v as u64),
+            execution_mode,
+            ready_signal: dto.ready_signal.clone(),
+            on_failure,
+        };
+
+        map.insert(
+            dto.name,
+            EditableGlobalHook {
+                id: Some(dto.id),
+                hook,
+            },
+        );
     }
 
-    map
+    Ok((map, diagnostics, protected_rows))
 }
 
 // ---------------------------------------------------------------------------
@@ -1739,7 +1805,7 @@ mod tests {
         let saved = save_hook_definitions(&runtime, &[existing], &[]).expect("save existing hook");
         let existing_id = saved["existing"].id.clone().expect("generated existing ID");
 
-        let loaded = load_config(&runtime);
+        let loaded = load_config(&runtime).expect("load configuration");
         assert_eq!(
             loaded.hook_definitions["existing"].id.as_deref(),
             Some(existing_id.as_str())
@@ -1758,6 +1824,80 @@ mod tests {
         let saved = save_hook_definitions(&runtime, &[existing, new], &[]).expect("save new hook");
         assert!(saved["new"].id.is_some());
         assert_ne!(saved["new"].id, saved["existing"].id);
+    }
+
+    #[test]
+    fn load_config_protects_malformed_canonical_rows_without_mutating_them() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let saved = save_hook_definitions(
+            &runtime,
+            &[HookDefinitionSave {
+                id: None,
+                name: "broken".to_string(),
+                hook: command_hook("echo broken"),
+            }],
+            &[],
+        )
+        .expect("save hook");
+        let row_id = saved["broken"].id.clone().expect("generated ID");
+
+        let repo = runtime.hook_definitions();
+        let mut dto = repo.get(&row_id).expect("load row").expect("saved row");
+        dto.kind_json = Some("{not valid json".to_string());
+        repo.update(&dto).expect("corrupt canonical payload");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+
+        assert!(!loaded.hook_definitions.contains_key("broken"));
+        assert_eq!(loaded.protected_hook_rows.len(), 1);
+        assert_eq!(loaded.protected_hook_rows[0].row_id, row_id);
+        assert_eq!(
+            loaded.protected_hook_rows[0].row_name.as_deref(),
+            Some("broken")
+        );
+        assert_eq!(loaded.hook_load_diagnostics.len(), 1);
+        assert_eq!(
+            runtime
+                .hook_definitions()
+                .get(&row_id)
+                .expect("load row")
+                .expect("row")
+                .kind_json,
+            Some("{not valid json".to_string())
+        );
+    }
+
+    #[test]
+    fn load_config_protects_ambiguous_legacy_rows_deterministically() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let dto = dbflux_storage::repositories::hook_definitions::HookDefinitionDto {
+            id: "legacy-row".to_string(),
+            name: "legacy".to_string(),
+            execution_mode: "Blocking".to_string(),
+            script_ref: None,
+            cwd: None,
+            inherit_env: true,
+            timeout_ms: None,
+            ready_signal: None,
+            on_failure: "Warn".to_string(),
+            enabled: true,
+            created_at: String::new(),
+            updated_at: String::new(),
+            env_denylist: Vec::new(),
+            kind_json: None,
+        };
+        runtime
+            .hook_definitions()
+            .upsert(&dto)
+            .expect("insert legacy row");
+
+        let first = load_config(&runtime).expect("first load");
+        let second = load_config(&runtime).expect("second load");
+
+        assert!(!first.hook_definitions.contains_key("legacy"));
+        assert_eq!(first.protected_hook_rows, second.protected_hook_rows);
+        assert_eq!(first.hook_load_diagnostics, second.hook_load_diagnostics);
+        assert_eq!(first.protected_hook_rows[0].row_id, "legacy-row");
     }
 
     #[test]
@@ -1865,7 +2005,7 @@ mod tests {
             .upsert(&dto)
             .expect("save general settings dto");
 
-        let loaded = load_config(&runtime);
+        let loaded = load_config(&runtime).expect("load configuration");
 
         assert_eq!(loaded.general_settings.theme, ThemeSetting::Dark);
         assert!(!loaded.general_settings.restore_session_on_startup);
@@ -1926,7 +2066,7 @@ mod tests {
         let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
         super::save_general_settings(&runtime, &settings).expect("save compact style");
 
-        let loaded = load_config(&runtime);
+        let loaded = load_config(&runtime).expect("load configuration");
         assert_eq!(
             loaded.general_settings.style,
             AppStyle::Compact,
@@ -1937,7 +2077,7 @@ mod tests {
         settings.style = AppStyle::Default;
         super::save_general_settings(&runtime, &settings).expect("save default style");
 
-        let loaded = load_config(&runtime);
+        let loaded = load_config(&runtime).expect("load configuration");
         assert_eq!(
             loaded.general_settings.style,
             AppStyle::Default,
@@ -1976,7 +2116,7 @@ mod tests {
             .upsert(&dto)
             .expect("upsert with unknown style");
 
-        let loaded = load_config(&runtime);
+        let loaded = load_config(&runtime).expect("load configuration");
         assert_eq!(
             loaded.general_settings.style,
             AppStyle::Default,
@@ -2022,7 +2162,7 @@ mod tests {
 
         save_profiles(&runtime, &[profile.clone()]).expect("save connection profile");
 
-        let loaded = load_config(&runtime);
+        let loaded = load_config(&runtime).expect("load configuration");
         let reloaded = loaded
             .profiles
             .into_iter()
@@ -2071,7 +2211,7 @@ mod tests {
         )
             .expect("insert legacy service row");
 
-        let loaded = load_config(&runtime);
+        let loaded = load_config(&runtime).expect("load configuration");
 
         assert_eq!(loaded.services.len(), 1);
         assert_eq!(loaded.services[0].socket_id, "legacy-socket");
@@ -2109,7 +2249,7 @@ mod tests {
         assert_eq!(dto.api_major, Some(1));
         assert_eq!(dto.api_minor, Some(0));
 
-        let loaded = load_config(&runtime);
+        let loaded = load_config(&runtime).expect("load configuration");
         assert_eq!(loaded.services.len(), 1);
         assert_eq!(loaded.services[0].kind, RpcServiceKind::AuthProvider);
         assert_eq!(
@@ -2135,7 +2275,7 @@ mod tests {
         )
         .expect("insert unknown-kind service row");
 
-        let loaded = load_config(&runtime);
+        let loaded = load_config(&runtime).expect("load configuration");
 
         assert_eq!(loaded.services.len(), 1);
         assert_eq!(loaded.services[0].kind, RpcServiceKind::Driver);
@@ -2158,7 +2298,7 @@ mod tests {
         )
         .expect("insert driver service row");
 
-        let loaded = load_config(&runtime);
+        let loaded = load_config(&runtime).expect("load configuration");
 
         assert_eq!(loaded.services.len(), 1);
         assert_eq!(
@@ -2181,7 +2321,7 @@ mod tests {
         )
         .expect("insert malformed api contract row");
 
-        let loaded = load_config(&runtime);
+        let loaded = load_config(&runtime).expect("load configuration");
 
         assert_eq!(loaded.services.len(), 1);
         assert_eq!(loaded.services[0].api_contract, None);
