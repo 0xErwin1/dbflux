@@ -8,6 +8,7 @@ pub mod app_state;
 pub mod auth_provider_registry;
 pub mod aws_config_reflect_migration;
 pub mod config_loader;
+pub mod connection_lifecycle;
 pub mod history_manager_sqlite;
 pub mod hook_executor;
 pub mod keymap;
