@@ -1520,6 +1520,7 @@ impl MigrateWizard {
             .when(shows_back, |parent| {
                 parent.child(
                     Button::new("migrate-wizard-back", "Back")
+                        .small()
                         .ghost()
                         .disabled(self.advancing)
                         .on_click(cx.listener(|this, _event, _window, cx| this.go_back(cx))),
@@ -1528,6 +1529,8 @@ impl MigrateWizard {
             .when(shows_continue, |parent| {
                 parent.child(
                     Button::new("migrate-wizard-continue", continue_label)
+                        .small()
+                        .primary()
                         .disabled(!continue_enabled)
                         .on_click(cx.listener(|this, _event, window, cx| this.advance(window, cx))),
                 )
@@ -1544,6 +1547,7 @@ impl MigrateWizard {
                 parent.child(
                     Button::new("migrate-wizard-close", "Close")
                         .small()
+                        .primary()
                         .on_click(cx.listener(|this, _event, _window, cx| this.request_close(cx))),
                 )
             });

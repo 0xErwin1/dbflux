@@ -710,9 +710,15 @@ impl ConfirmRunPhase {
                 )
             })
             .child(
-                Button::new("migrate-confirm-start", "Start Migration")
-                    .disabled(!start_enabled)
-                    .on_click(cx.listener(|this, _event, _window, cx| this.on_start_migration(cx))),
+                div().flex().justify_end().child(
+                    Button::new("migrate-confirm-start", "Start Migration")
+                        .small()
+                        .primary()
+                        .disabled(!start_enabled)
+                        .on_click(
+                            cx.listener(|this, _event, _window, cx| this.on_start_migration(cx)),
+                        ),
+                ),
             )
             .into_any_element()
     }
@@ -775,8 +781,12 @@ impl ConfirmRunPhase {
             )
             .children(rows)
             .child(
-                Button::new("migrate-reorder-accept", "Use this order")
-                    .on_click(cx.listener(|this, _event, _window, cx| this.accept_reorder(cx))),
+                div().flex().justify_end().child(
+                    Button::new("migrate-reorder-accept", "Use this order")
+                        .small()
+                        .primary()
+                        .on_click(cx.listener(|this, _event, _window, cx| this.accept_reorder(cx))),
+                ),
             )
             .into_any_element()
     }
