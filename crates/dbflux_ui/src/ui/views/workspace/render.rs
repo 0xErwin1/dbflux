@@ -796,16 +796,17 @@ impl Render for Workspace {
                 // not a full ROW_COMPACT, so a flat `height * index` over-counts
                 // and pushes the submenu too far down.
                 let submenu_y_offset = if let Some((parent_items, parent_selected)) = parent_entry {
-                    let rows_above = parent_items.iter().take(*parent_selected).fold(
-                        px(0.0),
-                        |acc, item| {
-                            acc + if item.is_separator {
-                                separator_height
-                            } else {
-                                menu_item_height
-                            }
-                        },
-                    );
+                    let rows_above =
+                        parent_items
+                            .iter()
+                            .take(*parent_selected)
+                            .fold(px(0.0), |acc, item| {
+                                acc + if item.is_separator {
+                                    separator_height
+                                } else {
+                                    menu_item_height
+                                }
+                            });
 
                     menu_container_padding + rows_above
                 } else {
