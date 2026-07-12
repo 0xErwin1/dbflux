@@ -4,8 +4,9 @@ use dbflux_core::secrecy::SecretString;
 use dbflux_core::values::ValueRef;
 use dbflux_core::{
     AccessKind, CancelToken, ConnectionMcpGovernance, ConnectionMcpPolicyBinding,
-    ConnectionOverrides, ConnectionProfile, DbConfig, FormFieldKind, SshTunnelConfig,
+    ConnectionOverrides, ConnectionProfile, DbConfig, FormFieldKind, HookPhase, SshTunnelConfig,
 };
+use dbflux_ui_base::hook_phase_runner::{DetachedHookScope, HookPhaseState, run_hook_phase};
 use dbflux_ui_base::toast::{Toast, now_hms};
 use gpui::*;
 use log::info;
@@ -734,82 +735,136 @@ impl ConnectionManagerWindow {
         };
 
         let profile_name = profile.name.clone();
+        let app_state = self.app_state.clone();
+        let hook_context = self.app_state.read(cx).build_hook_context(&profile);
+        let hooks = self.app_state.read(cx).resolve_profile_hooks(&profile);
+        let hook_cancel_token = CancelToken::new();
+        let detached_hook_scope = DetachedHookScope::default();
         let this = cx.entity().clone();
 
-        let task = if profile.uses_pipeline() {
-            let pipeline_input = match self
+        let pipeline_input = if profile.uses_pipeline() {
+            match self
                 .app_state
                 .read(cx)
-                .build_pipeline_input_for_profile(profile, CancelToken::new())
+                .build_pipeline_input_for_profile(profile.clone(), hook_cancel_token.clone())
             {
-                Ok(input) => input,
+                Ok(input) => Some(input),
                 Err(error) => {
                     self.test_status = TestStatus::Failed;
                     self.test_error = Some(error);
                     cx.notify();
                     return;
                 }
-            };
-
-            cx.background_executor().spawn(async move {
-                let (state_tx, _state_rx) = dbflux_core::pipeline_state_channel();
-                let pipeline_output = dbflux_core::run_pipeline(pipeline_input, &state_tx)
-                    .await
-                    .map_err(|error| {
-                        format!("Pipeline stage '{}': {}", error.stage, error.source)
-                    })?;
-
-                let mut profile = pipeline_output.resolved_profile;
-                if pipeline_output.access_handle.is_tunneled() {
-                    profile
-                        .config
-                        .redirect_to_tunnel(pipeline_output.access_handle.local_port());
-                }
-
-                let overrides = ConnectionOverrides::new(pipeline_output.resolved_password);
-                let connection = driver
-                    .connect_with_overrides(&profile, &overrides)
-                    .map_err(|error| error.to_string())?;
-
-                drop(connection);
-
-                Ok::<dbflux_core::TestConnectionResult, String>(
-                    dbflux_core::TestConnectionResult::default(),
-                )
-            })
+            }
         } else {
-            let password = self.form.input_password.read(cx).value().to_string();
-            let password_opt = if password.is_empty() {
-                None
-            } else {
-                Some(SecretString::from(password))
-            };
-
-            let ssh_secret = self.get_ssh_secret(cx).map(SecretString::from);
-
-            cx.background_executor().spawn(async move {
-                let start = std::time::Instant::now();
-                let rich = driver
-                    .test_connection_rich_with_secrets(
-                        &profile,
-                        password_opt.as_ref(),
-                        ssh_secret.as_ref(),
-                    )
-                    .map(|mut result| {
-                        // Fill in RTT from wall time if the driver didn't supply it.
-                        if result.rtt_ms.is_none() {
-                            result.rtt_ms = Some(start.elapsed().as_millis() as u64);
-                        }
-                        result
-                    })
-                    .map_err(|error| error.to_string())?;
-
-                Ok::<dbflux_core::TestConnectionResult, String>(rich)
-            })
+            None
         };
 
+        let password = self.form.input_password.read(cx).value().to_string();
+        let password = (!password.is_empty()).then(|| SecretString::from(password));
+        let ssh_secret = self.get_ssh_secret(cx).map(SecretString::from);
+
         cx.spawn(async move |_this, cx| {
-            let result = task.await;
+            let pre_connect = run_hook_phase(
+                app_state.clone(),
+                profile.id,
+                profile_name.clone(),
+                HookPhase::PreConnect,
+                hooks.pre_connect,
+                hook_context.clone(),
+                Some(hook_cancel_token.clone()),
+                &detached_hook_scope,
+                cx,
+            )
+            .await;
+
+            let pre_connect_error = match pre_connect {
+                HookPhaseState::Continue { .. } => None,
+                HookPhaseState::Aborted { error } => Some(error),
+                HookPhaseState::Cancelled => {
+                    Some("Test connection cancelled by pre-connect hook".to_string())
+                }
+            };
+
+            let pre_connect_succeeded = pre_connect_error.is_none();
+            let result = if let Some(error) = pre_connect_error {
+                Err(error)
+            } else if let Some(pipeline_input) = pipeline_input {
+                let driver = driver.clone();
+                cx.background_executor()
+                    .spawn(async move {
+                        let (state_tx, _state_rx) = dbflux_core::pipeline_state_channel();
+                        let pipeline_output = dbflux_core::run_pipeline(pipeline_input, &state_tx)
+                            .await
+                            .map_err(|error| {
+                                format!("Pipeline stage '{}': {}", error.stage, error.source)
+                            })?;
+
+                        let mut profile = pipeline_output.resolved_profile;
+                        if pipeline_output.access_handle.is_tunneled() {
+                            profile
+                                .config
+                                .redirect_to_tunnel(pipeline_output.access_handle.local_port());
+                        }
+
+                        let overrides = ConnectionOverrides::new(pipeline_output.resolved_password);
+                        let connection = driver
+                            .connect_with_overrides(&profile, &overrides)
+                            .map_err(|error| error.to_string())?;
+                        drop(connection);
+
+                        Ok::<dbflux_core::TestConnectionResult, String>(
+                            dbflux_core::TestConnectionResult::default(),
+                        )
+                    })
+                    .await
+            } else {
+                let driver = driver.clone();
+                let profile = profile.clone();
+                cx.background_executor()
+                    .spawn(async move {
+                        let start = std::time::Instant::now();
+                        driver
+                            .test_connection_rich_with_secrets(
+                                &profile,
+                                password.as_ref(),
+                                ssh_secret.as_ref(),
+                            )
+                            .map(|mut result| {
+                                if result.rtt_ms.is_none() {
+                                    result.rtt_ms = Some(start.elapsed().as_millis() as u64);
+                                }
+                                result
+                            })
+                            .map_err(|error| error.to_string())
+                    })
+                    .await
+            };
+
+            let result = match result {
+                Ok(result) if should_run_post_connect(pre_connect_succeeded, true) => {
+                    match run_hook_phase(
+                        app_state,
+                        profile.id,
+                        profile_name.clone(),
+                        HookPhase::PostConnect,
+                        hooks.post_connect,
+                        hook_context,
+                        Some(hook_cancel_token),
+                        &detached_hook_scope,
+                        cx,
+                    )
+                    .await
+                    {
+                        HookPhaseState::Continue { .. } => Ok(result),
+                        HookPhaseState::Aborted { error } => Err(error),
+                        HookPhaseState::Cancelled => {
+                            Err("Test connection cancelled by post-connect hook".to_string())
+                        }
+                    }
+                }
+                result => result,
+            };
 
             if let Err(error) = cx.update(|cx| {
                 this.update(cx, |this, cx| {
@@ -839,6 +894,38 @@ impl ConnectionManagerWindow {
         })
         .detach();
     }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TestConnectionPhase {
+    PreConnect,
+    Probe,
+    PostConnect,
+    PreDisconnect,
+    PostDisconnect,
+}
+
+fn should_run_post_connect(pre_connect_succeeded: bool, probe_succeeded: bool) -> bool {
+    pre_connect_succeeded && probe_succeeded
+}
+
+#[cfg(test)]
+fn test_connection_phase_sequence(
+    pre_connect_succeeded: bool,
+    probe_succeeded: bool,
+) -> Vec<TestConnectionPhase> {
+    let mut phases = vec![TestConnectionPhase::PreConnect];
+    if !pre_connect_succeeded {
+        return phases;
+    }
+
+    phases.push(TestConnectionPhase::Probe);
+    if should_run_post_connect(pre_connect_succeeded, probe_succeeded) {
+        phases.push(TestConnectionPhase::PostConnect);
+    }
+
+    phases
 }
 
 /// Detect AWS SDK credential-resolution failures and replace them with a
@@ -874,6 +961,34 @@ fn normalize_aws_credentials_error(profile_name: &str, error: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[::core::prelude::v1::test]
+    fn test_connection_runs_post_connect_only_after_a_successful_probe() {
+        assert_eq!(
+            test_connection_phase_sequence(true, true),
+            vec![
+                TestConnectionPhase::PreConnect,
+                TestConnectionPhase::Probe,
+                TestConnectionPhase::PostConnect
+            ],
+        );
+        assert_eq!(
+            test_connection_phase_sequence(false, true),
+            vec![TestConnectionPhase::PreConnect],
+        );
+        assert_eq!(
+            test_connection_phase_sequence(true, false),
+            vec![TestConnectionPhase::PreConnect, TestConnectionPhase::Probe],
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn test_connection_never_includes_disconnect_phases() {
+        let phases = test_connection_phase_sequence(true, true);
+
+        assert!(!phases.contains(&TestConnectionPhase::PreDisconnect));
+        assert!(!phases.contains(&TestConnectionPhase::PostDisconnect));
+    }
 
     #[::core::prelude::v1::test]
     fn normalize_aws_credentials_error_rewrites_no_credentials() {
