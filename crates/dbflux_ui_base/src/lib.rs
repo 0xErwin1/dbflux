@@ -28,7 +28,7 @@ mod style_guardrails;
 pub use app_state_entity::McpRuntimeEventRaised;
 pub use app_state_entity::{
     AppStateChanged, AppStateEntity, AppStateGlobal, AuthProfileCreated, OpenAuditRequested,
-    UserErrorReported,
+    UserErrorReported, drain_hook_load_diagnostics,
 };
 pub use async_ext::AsyncUpdateResultExt;
 pub use dashboard_manager::{

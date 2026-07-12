@@ -15,6 +15,34 @@ use uuid::Uuid;
 use crate::dashboard_manager::DashboardManager;
 use crate::saved_chart_manager::SavedChartManager;
 use crate::saved_query_manager::SavedQueryManager;
+use crate::user_error::{ErrorKind, UserFacingError};
+
+/// Drains startup hook-load diagnostics into safe, actionable user-facing errors.
+///
+/// The durable row remains protected by the configuration loader; this boundary
+/// deliberately omits diagnostic payload text to avoid exposing stored data.
+pub fn drain_hook_load_diagnostics(
+    diagnostics: &mut Vec<HookLoadDiagnostic>,
+) -> Vec<UserFacingError> {
+    std::mem::take(diagnostics)
+        .into_iter()
+        .map(|diagnostic| {
+            let summary = match diagnostic.row_name {
+                Some(row_name) => {
+                    format!(
+                        "Hook definition \"{row_name}\" (ID: {}) needs repair.",
+                        diagnostic.row_id
+                    )
+                }
+                None => format!("Hook definition ID: {} needs repair.", diagnostic.row_id),
+            };
+
+            UserFacingError::new(ErrorKind::Config, summary).with_suggested_action(
+                "The stored row was preserved. Open Settings > Hooks to repair or recreate it.",
+            )
+        })
+        .collect()
+}
 
 // ============================================================================
 // GPUI-coupled event types
@@ -252,3 +280,74 @@ pub struct AppStateGlobal {
 }
 
 impl Global for AppStateGlobal {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn diagnostic(row_id: &str, row_name: Option<&str>, message: &str) -> HookLoadDiagnostic {
+        HookLoadDiagnostic {
+            row_id: row_id.to_string(),
+            row_name: row_name.map(str::to_string),
+            message: message.to_string(),
+        }
+    }
+
+    #[test]
+    fn draining_no_hook_load_diagnostics_emits_no_errors() {
+        let mut diagnostics = Vec::new();
+
+        let errors = drain_hook_load_diagnostics(&mut diagnostics);
+
+        assert!(errors.is_empty());
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn draining_hook_load_diagnostics_reports_repairable_safe_context_once() {
+        let secret_payload = r#"{\"token\":\"do-not-expose\"}"#;
+        let mut diagnostics = vec![diagnostic(
+            "legacy-row-42",
+            Some("Nightly backup"),
+            secret_payload,
+        )];
+
+        let errors = drain_hook_load_diagnostics(&mut diagnostics);
+
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].kind, crate::user_error::ErrorKind::Config);
+        assert_eq!(
+            errors[0].summary,
+            "Hook definition \"Nightly backup\" (ID: legacy-row-42) needs repair."
+        );
+        assert_eq!(
+            errors[0].suggested_action.as_deref(),
+            Some("The stored row was preserved. Open Settings > Hooks to repair or recreate it.")
+        );
+        assert!(!errors[0].summary.contains(secret_payload));
+        assert!(
+            !errors[0]
+                .suggested_action
+                .as_deref()
+                .unwrap_or_default()
+                .contains(secret_payload)
+        );
+        assert!(diagnostics.is_empty());
+
+        assert!(drain_hook_load_diagnostics(&mut diagnostics).is_empty());
+    }
+
+    #[test]
+    fn draining_hook_load_diagnostic_without_name_keeps_row_id_context() {
+        let mut diagnostics = vec![diagnostic("legacy-row-43", None, "invalid payload")];
+
+        let errors = drain_hook_load_diagnostics(&mut diagnostics);
+
+        assert_eq!(errors.len(), 1);
+        assert_eq!(
+            errors[0].summary,
+            "Hook definition ID: legacy-row-43 needs repair."
+        );
+        assert!(diagnostics.is_empty());
+    }
+}
