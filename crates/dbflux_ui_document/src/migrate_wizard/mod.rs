@@ -22,9 +22,10 @@ pub mod tree_model;
 
 use std::sync::Arc;
 
+use dbflux_components::composites::{RailItem, render_wizard_rail};
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::primitives::Text;
 use dbflux_components::tokens::Spacing;
 use dbflux_core::{
     ColumnInfo, Connection, DbError, DriverCapabilities, LogErr, SchemaCacheKey,
@@ -45,7 +46,8 @@ use confirm_run::{ConfirmRunEvent, ConfirmRunInputs, ConfirmRunPhase, decide_ord
 use mapping::{MappingChanged, MappingPhase};
 use options::{OptionsChanged, OptionsPhase};
 use phases::{
-    MappingRowPlan, RailEntry, RunState, WizardPhase, rail_entries, tables_mapping_confirm_warnings,
+    MappingRowPlan, RAIL_PHASES, RailEntry, RunState, WizardPhase, rail_entries,
+    tables_mapping_confirm_warnings,
 };
 use source_target::{SourceTargetChanged, SourceTargetPhase};
 
@@ -120,113 +122,18 @@ fn build_migration_options(
     }
 }
 
-/// Renders the wizard's left phase rail: the five fixed [`WizardPhase`]
-/// entries in order, a checkmark on every completed phase, a highlight on the
-/// current one, and click-to-return back-navigation on completed entries.
-/// `on_select` is invoked with the clicked phase; only completed (already
-/// passed) entries are interactive, so the caller cannot jump ahead. The FK
-/// reorder interrupt is deliberately absent — it is a conditional overlay
-/// inside `Confirm`, never a listed rail phase.
-pub fn render_phase_rail<F>(current: WizardPhase, on_select: F, cx: &App) -> impl IntoElement
-where
-    F: Fn(WizardPhase, &mut Window, &mut App) + Clone + 'static,
-{
-    let theme = cx.theme();
-    let colors = RailColors {
-        current: theme.primary,
-        done: theme.success,
-        muted: theme.muted_foreground,
-        hover_bg: theme.secondary,
-    };
-    let border = theme.border;
-
-    let entries = rail_entries(current)
+/// Maps the wizard's [`RailEntry`]s to the shared rail composite's
+/// domain-free [`RailItem`]s, in the same fixed `RAIL_PHASES` order the
+/// caller uses to translate a clicked index back into a [`WizardPhase`].
+fn to_rail_items(current: WizardPhase) -> Vec<RailItem> {
+    rail_entries(current)
         .into_iter()
-        .map(move |entry| render_rail_entry(entry, colors, on_select.clone()));
-
-    div()
-        .flex()
-        .flex_col()
-        .gap(Spacing::XS)
-        .p(Spacing::MD)
-        .min_w(px(180.0))
-        .border_r_1()
-        .border_color(border)
-        .children(entries)
-}
-
-/// The rail's marker/label colors, resolved once per render from the theme.
-/// `current` and `done` use the theme's bright action/success colors (not the
-/// dark `accent`, which is a low-contrast highlight background on dark themes),
-/// so the current phase reads as the most prominent entry.
-#[derive(Clone, Copy)]
-struct RailColors {
-    current: Hsla,
-    done: Hsla,
-    muted: Hsla,
-    hover_bg: Hsla,
-}
-
-fn render_rail_entry<F>(entry: RailEntry, colors: RailColors, on_select: F) -> impl IntoElement
-where
-    F: Fn(WizardPhase, &mut Window, &mut App) + Clone + 'static,
-{
-    let phase = entry.phase;
-
-    let marker = if entry.completed {
-        Icon::new(AppIcon::CircleCheck)
-            .size(px(14.0))
-            .color(colors.done)
-            .into_any_element()
-    } else {
-        let dot_color = if entry.current {
-            colors.current
-        } else {
-            colors.muted
-        };
-        div()
-            .size(px(8.0)) // guardrail-allow: decorative status-dot diameter, not a spacing token
-            .rounded_full()
-            .bg(dot_color)
-            .into_any_element()
-    };
-
-    // The current entry is the most prominent: bright action color plus a
-    // heavier weight. Every other label stays at full foreground contrast (a
-    // check/dot marker conveys completed vs. pending), so the rail reads
-    // clearly instead of as dim, low-contrast text.
-    let mut label = Text::body(phase.label());
-    if entry.current {
-        label = label
-            .color(colors.current)
-            .font_weight(FontWeight::SEMIBOLD);
-    }
-
-    div()
-        .id(SharedString::from(format!(
-            "migrate-rail-{}",
-            phase.label()
-        )))
-        .flex()
-        .items_center()
-        .gap(Spacing::SM)
-        .px(Spacing::SM)
-        .py(Spacing::XS)
-        .rounded_md()
-        .child(
-            div()
-                .w(px(16.0)) // guardrail-allow: fixed rail marker gutter width for label alignment
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(marker),
-        )
-        .child(label)
-        .when(entry.completed, |el| {
-            el.cursor_pointer()
-                .hover(|style| style.bg(colors.hover_bg))
-                .on_click(move |_event, window, app| on_select(phase, window, app))
+        .map(|entry: RailEntry| RailItem {
+            label: entry.phase.label().into(),
+            completed: entry.completed,
+            current: entry.current,
         })
+        .collect()
 }
 
 /// Outcome of fetching one table's details through the shared
@@ -1433,7 +1340,8 @@ impl Render for MigrateWizard {
 impl MigrateWizard {
     fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
         let rail_entity = cx.entity().downgrade();
-        let on_select = move |phase: WizardPhase, _window: &mut Window, app: &mut App| {
+        let on_select = move |index: usize, _window: &mut Window, app: &mut App| {
+            let phase = RAIL_PHASES[index];
             rail_entity
                 .update(app, |this, cx| this.go_to_phase(phase, cx))
                 .ok();
@@ -1456,7 +1364,11 @@ impl MigrateWizard {
                     .flex_row()
                     .flex_1()
                     .min_h(px(0.0))
-                    .child(render_phase_rail(self.phase, on_select, cx))
+                    .child(render_wizard_rail(
+                        &to_rail_items(self.phase),
+                        Some(on_select),
+                        cx,
+                    ))
                     .child(self.render_phase_area()),
             )
             .child(self.render_footer(cx))

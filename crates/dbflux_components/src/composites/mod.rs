@@ -9,6 +9,7 @@ mod refresh_split_button;
 mod section_header;
 mod split_toolbar_action;
 mod tab_strip;
+mod wizard_rail;
 
 pub(crate) use control_shell::control_shell_with_padding;
 
@@ -37,3 +38,4 @@ pub use section_header::{
 };
 pub use split_toolbar_action::split_toolbar_action;
 pub use tab_strip::tab_strip;
+pub use wizard_rail::{RailItem, render_wizard_rail};
