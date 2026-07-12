@@ -618,8 +618,37 @@ pub async fn run_hook_phase(
     scope: &DetachedHookScope,
     cx: &mut AsyncApp,
 ) -> HookPhaseState {
+    run_hook_phase_with_executor(
+        app_state,
+        profile_id,
+        profile_name,
+        phase,
+        hooks,
+        context,
+        parent_cancel,
+        scope,
+        CompositeExecutor::new(),
+        cx,
+    )
+    .await
+}
+
+async fn run_hook_phase_with_executor<E>(
+    app_state: Entity<AppStateEntity>,
+    profile_id: Uuid,
+    profile_name: String,
+    phase: HookPhase,
+    hooks: Vec<ConnectionHook>,
+    context: HookContext,
+    parent_cancel: Option<CancelToken>,
+    scope: &DetachedHookScope,
+    executor: E,
+    cx: &mut AsyncApp,
+) -> HookPhaseState
+where
+    E: HookExecutor + Clone + 'static,
+{
     let mut policy = HookPhasePolicy::default();
-    let executor = CompositeExecutor::new();
 
     for hook in hooks {
         if !hook.enabled {
@@ -942,9 +971,323 @@ pub async fn run_hook_phase(
 
 #[cfg(test)]
 mod tests {
-    use super::{DetachedCleanupState, DetachedHookScope, HookPhasePolicy, HookPhaseState};
-    use dbflux_core::{HookFailureMode, TaskId};
+    use super::{
+        DetachedCleanupState, DetachedHookScope, HookPhasePolicy, HookPhaseState,
+        run_hook_phase_with_executor,
+    };
+    use crate::AppStateEntity;
+    use dbflux_core::{
+        CancelToken, ConnectionHook, DetachedProcessSender, HookContext, HookExecutionMode,
+        HookExecutor, HookFailureMode, HookKind, HookPhase, HookResult, OutputSender, TaskId,
+        TaskKind, TaskStatus,
+    };
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use gpui::{AppContext, Entity, TestAppContext};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, mpsc};
     use uuid::Uuid;
+
+    #[derive(Clone)]
+    struct RecordingExecutor {
+        invocations: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl RecordingExecutor {
+        fn failing_then_recording(invocations: Arc<Mutex<Vec<String>>>) -> Self {
+            Self { invocations }
+        }
+    }
+
+    impl HookExecutor for RecordingExecutor {
+        fn execute_hook(
+            &self,
+            hook: &ConnectionHook,
+            _context: &HookContext,
+            _cancel_token: &CancelToken,
+            _parent_cancel_token: Option<&CancelToken>,
+            _output: Option<&OutputSender>,
+            _detached: Option<&DetachedProcessSender>,
+        ) -> Result<HookResult, String> {
+            let command = hook.display_command();
+            self.invocations
+                .lock()
+                .expect("test executor poisoned")
+                .push(command.clone());
+
+            if command.starts_with("fail") {
+                Ok(HookResult {
+                    stdout: String::new(),
+                    stderr: "failed".to_string(),
+                    exit_code: Some(1),
+                    timed_out: false,
+                    detached: false,
+                    warnings: Vec::new(),
+                })
+            } else {
+                Ok(HookResult {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: Some(0),
+                    timed_out: false,
+                    detached: false,
+                    warnings: Vec::new(),
+                })
+            }
+        }
+    }
+
+    fn hook(command: &str, on_failure: HookFailureMode) -> ConnectionHook {
+        ConnectionHook {
+            enabled: true,
+            kind: HookKind::Command {
+                command: command.to_string(),
+                args: Vec::new(),
+            },
+            cwd: None,
+            env: HashMap::new(),
+            inherit_env: true,
+            env_denylist: Vec::new(),
+            timeout_ms: None,
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
+            on_failure,
+        }
+    }
+
+    fn hook_context(profile_id: Uuid) -> HookContext {
+        HookContext {
+            profile_id,
+            profile_name: "test profile".to_string(),
+            db_kind: "test".to_string(),
+            host: None,
+            port: None,
+            database: None,
+            phase: Some(HookPhase::PreConnect),
+        }
+    }
+
+    fn test_app_state(cx: &mut TestAppContext) -> Entity<AppStateEntity> {
+        cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("test storage runtime"),
+                )
+                .expect("test app state")
+            })
+        })
+    }
+
+    #[gpui::test]
+    fn run_hook_phase_continues_in_order_after_warn_and_ignore(cx: &mut TestAppContext) {
+        let app_state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        let invocations = Arc::new(Mutex::new(Vec::new()));
+        let executor = RecordingExecutor::failing_then_recording(invocations.clone());
+        let scope = DetachedHookScope::default();
+        let (sender, receiver) = mpsc::channel();
+
+        cx.update(|cx| {
+            cx.spawn(async move |cx| {
+                let state = run_hook_phase_with_executor(
+                    app_state,
+                    profile_id,
+                    "test profile".to_string(),
+                    HookPhase::PreConnect,
+                    vec![
+                        hook("fail-warn", HookFailureMode::Warn),
+                        hook("fail-ignore", HookFailureMode::Ignore),
+                        hook("later-success", HookFailureMode::Disconnect),
+                    ],
+                    hook_context(profile_id),
+                    None,
+                    &scope,
+                    executor,
+                    cx,
+                )
+                .await;
+                sender.send(state).expect("test result receiver");
+            })
+            .detach();
+        });
+
+        cx.run_until_parked();
+
+        assert_eq!(
+            receiver.try_recv().expect("runner must finish"),
+            HookPhaseState::Continue {
+                warnings: vec![
+                    "Pre-connect hook failed (exit code Some(1)): fail-warn (failed)".to_string()
+                ],
+            }
+        );
+        assert_eq!(
+            *invocations.lock().expect("test executor poisoned"),
+            vec!["fail-warn", "fail-ignore", "later-success"],
+        );
+    }
+
+    #[gpui::test]
+    fn run_hook_phase_disconnect_aborts_before_later_hook(cx: &mut TestAppContext) {
+        let app_state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        let invocations = Arc::new(Mutex::new(Vec::new()));
+        let executor = RecordingExecutor::failing_then_recording(invocations.clone());
+        let scope = DetachedHookScope::default();
+        let (sender, receiver) = mpsc::channel();
+
+        cx.update(|cx| {
+            cx.spawn(async move |cx| {
+                let state = run_hook_phase_with_executor(
+                    app_state,
+                    profile_id,
+                    "test profile".to_string(),
+                    HookPhase::PreConnect,
+                    vec![
+                        hook("fail-disconnect", HookFailureMode::Disconnect),
+                        hook("must-not-run", HookFailureMode::Warn),
+                    ],
+                    hook_context(profile_id),
+                    None,
+                    &scope,
+                    executor,
+                    cx,
+                )
+                .await;
+                sender.send(state).expect("test result receiver");
+            })
+            .detach();
+        });
+
+        cx.run_until_parked();
+
+        assert_eq!(
+            receiver.try_recv().expect("runner must finish"),
+            HookPhaseState::Aborted {
+                error: "Pre-connect hook failed (exit code Some(1)): fail-disconnect (failed)"
+                    .to_string(),
+            }
+        );
+        assert_eq!(
+            *invocations.lock().expect("test executor poisoned"),
+            vec!["fail-disconnect"],
+        );
+    }
+
+    #[gpui::test]
+    fn detached_scope_cancel_and_wait_cancels_only_scoped_task_and_waits_for_unregistration(
+        cx: &mut TestAppContext,
+    ) {
+        use std::time::Duration;
+
+        let app_state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        let scope = DetachedHookScope::default();
+        let (scoped_task, scoped_token, unrelated_task, unrelated_token) = cx.update(|cx| {
+            app_state.update(cx, |state, _| {
+                let (scoped_task, scoped_token) = state.start_task_for_profile(
+                    TaskKind::Hook {
+                        phase: HookPhase::PreConnect,
+                    },
+                    "scoped detached hook",
+                    Some(profile_id),
+                );
+                let (unrelated_task, unrelated_token) = state.start_task_for_profile(
+                    TaskKind::Hook {
+                        phase: HookPhase::PreConnect,
+                    },
+                    "unrelated detached hook",
+                    Some(profile_id),
+                );
+                (scoped_task, scoped_token, unrelated_task, unrelated_token)
+            })
+        });
+        scope.register(scoped_task);
+
+        let (unregistered_sender, unregistered_receiver) = mpsc::channel();
+        let task_scope = scope.clone();
+        let task_token = scoped_token.clone();
+
+        cx.update(|cx| {
+            cx.spawn(async move |cx| {
+                while !task_token.is_cancelled() {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(10))
+                        .await;
+                }
+
+                task_scope.unregister(scoped_task);
+                unregistered_sender
+                    .send(())
+                    .expect("test unregistration receiver");
+            })
+            .detach();
+        });
+
+        let (finished_sender, finished_receiver) = mpsc::channel();
+        let cleanup_scope = scope.clone();
+        let cleanup_state = app_state.clone();
+
+        cx.update(|cx| {
+            cx.spawn(async move |cx| {
+                cleanup_scope
+                    .cancel_and_wait(cleanup_state, cx)
+                    .await
+                    .expect("scoped cleanup must complete");
+                finished_sender.send(()).expect("test completion receiver");
+            })
+            .detach();
+        });
+
+        cx.run_until_parked();
+
+        assert!(
+            scoped_token.is_cancelled(),
+            "cancel_and_wait must cancel the scoped task before waiting"
+        );
+        assert!(
+            !unrelated_token.is_cancelled(),
+            "cancel_and_wait must not cancel an unrelated task"
+        );
+        assert!(
+            finished_receiver.try_recv().is_err(),
+            "cleanup must wait until the scoped task unregisters"
+        );
+        cx.executor().advance_clock(Duration::from_millis(10));
+        cx.run_until_parked();
+
+        unregistered_receiver
+            .try_recv()
+            .expect("the cancelled task must unregister itself");
+        assert!(
+            finished_receiver.try_recv().is_err(),
+            "cleanup must remain waiting until its next cancellation poll observes unregistration"
+        );
+
+        cx.executor().advance_clock(Duration::from_millis(50));
+        cx.run_until_parked();
+
+        finished_receiver
+            .try_recv()
+            .expect("cleanup must finish after the scoped task unregisters");
+        let (scoped_status, unrelated_status) = cx
+            .update(|cx| {
+                app_state
+                    .read(cx)
+                    .tasks()
+                    .get(scoped_task)
+                    .map(|task| task.status)
+                    .zip(
+                        app_state
+                            .read(cx)
+                            .tasks()
+                            .get(unrelated_task)
+                            .map(|task| task.status),
+                    )
+            })
+            .expect("both tasks must remain observable");
+        assert_eq!(scoped_status, TaskStatus::Cancelled);
+        assert_eq!(unrelated_status, TaskStatus::Running);
+    }
 
     #[test]
     fn phase_policy_keeps_invoking_after_warn_and_ignore_failures_in_order() {
