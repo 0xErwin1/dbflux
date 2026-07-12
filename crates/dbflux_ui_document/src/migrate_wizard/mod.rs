@@ -368,6 +368,17 @@ async fn fetch_schema_foreign_keys_via_seam(
     Ok(foreign_keys)
 }
 
+/// Whether a successfully fetched target `table_details` proves the target
+/// relation already exists. An existing relation always projects at least one
+/// column, so a `None`/empty column set is treated as "does not exist" — some
+/// drivers (Postgres/MySQL) return `Ok(TableInfo)` with no columns for a
+/// missing relation instead of `DbError::ObjectNotFound`, and that Ok-but-empty
+/// result must classify the row as `Create` (mirror the source columns), never
+/// `Existing`.
+fn target_columns_prove_existing(columns: Option<&[ColumnInfo]>) -> bool {
+    columns.is_some_and(|columns| !columns.is_empty())
+}
+
 /// Builds one [`TableMigrationConfig`] per checked source table by fetching
 /// the source and target table schemas through the shared metadata seam: the
 /// source columns must exist (a failure here is fatal), while a missing target
@@ -402,7 +413,7 @@ async fn build_configs_via_seam(
         };
         let source_columns = to_transfer_columns(source_info.columns.unwrap_or_default());
 
-        let (target_exists, target_columns) = match fetch_table_details_via_seam(
+        let target_fetch = match fetch_table_details_via_seam(
             app_state,
             target_profile_id,
             target_database,
@@ -411,11 +422,21 @@ async fn build_configs_via_seam(
         )
         .await
         {
-            Ok(TableDetailsFetch::Found(info)) => {
+            Ok(fetch) => fetch,
+            Err(e) => return Err(format!("{}: {e}", table_ref.qualified_name())),
+        };
+
+        // An Ok fetch that carries no columns means the target relation does
+        // not exist (Postgres/MySQL report a missing table this way instead of
+        // ObjectNotFound), so it is treated the same as NotFound: the row is a
+        // Create that mirrors the source columns, not an Existing target.
+        let (target_exists, target_columns) = match target_fetch {
+            TableDetailsFetch::Found(info)
+                if target_columns_prove_existing(info.columns.as_deref()) =>
+            {
                 (true, to_transfer_columns(info.columns.unwrap_or_default()))
             }
-            Ok(TableDetailsFetch::NotFound(_)) => (false, Vec::new()),
-            Err(e) => return Err(format!("{}: {e}", table_ref.qualified_name())),
+            _ => (false, Vec::new()),
         };
 
         configs.push(TableMigrationConfig::new(
@@ -475,6 +496,14 @@ pub struct MigrateWizard {
     /// discarded on a real change.
     built_selection: Option<(Vec<TableRef>, Uuid, String)>,
 
+    /// The effective selection captured when the currently in-flight
+    /// `Source & Target` advance was spawned. While an advance is in flight it
+    /// is judged against this snapshot — not [`Self::built_selection`] — so a
+    /// completing background tree fetch that re-emits `SourceTargetChanged`
+    /// without changing the selection (a no-op) does not cancel the advance the
+    /// user already triggered. `None` when no advance is in flight.
+    advance_selection: Option<(Vec<TableRef>, Uuid, String)>,
+
     /// The phase whose child tree/grid currently holds keyboard focus. Drives
     /// the render-time focus routing so the active phase receives arrow-key
     /// focus on entry without a click-in first (keyboard-first identity).
@@ -513,6 +542,7 @@ impl MigrateWizard {
             advancing: false,
             generation: 0,
             built_selection: None,
+            advance_selection: None,
             focused_phase: None,
             resolved_source_database: None,
             target_profile_id: None,
@@ -563,6 +593,7 @@ impl MigrateWizard {
         self.advancing = false;
         self.generation = self.generation.wrapping_add(1);
         self.built_selection = None;
+        self.advance_selection = None;
         self.focused_phase = None;
 
         self.resolved_source_database = None;
@@ -619,7 +650,21 @@ impl MigrateWizard {
         if self.is_running(cx) {
             return;
         }
-        if !self.selection_matches_built(cx) {
+
+        // While a Source & Target advance is in flight, judge the event against
+        // the selection that advance was spawned with — not the built selection
+        // — so a completing background tree fetch that re-emits
+        // `SourceTargetChanged` without changing the selection does not cancel
+        // the advance the user already triggered. A genuine change still
+        // differs and cancels. With no such advance in flight
+        // (`advance_selection` is `None`, including during the later
+        // `Options → Confirm` advance) the built selection is the reference.
+        let reference = if self.advance_selection.is_some() {
+            &self.advance_selection
+        } else {
+            &self.built_selection
+        };
+        if !self.selection_matches(reference, cx) {
             self.invalidate_in_flight_advance();
         }
         cx.notify();
@@ -634,11 +679,16 @@ impl MigrateWizard {
             .is_some_and(|phase| phase.read(cx).run_state() == RunState::Running)
     }
 
-    /// Whether the Source & Target phase's current effective selection equals
-    /// the one the downstream phases were built from.
-    fn selection_matches_built(&self, cx: &App) -> bool {
-        let Some((built_tables, built_profile_id, built_database)) = self.built_selection.as_ref()
-        else {
+    /// Whether the Source & Target phase's current effective selection equals a
+    /// previously captured one (the built selection, or the selection an
+    /// in-flight advance was spawned with). `None` — no captured selection —
+    /// never matches, so the caller treats it as a change.
+    fn selection_matches(
+        &self,
+        captured: &Option<(Vec<TableRef>, Uuid, String)>,
+        cx: &App,
+    ) -> bool {
+        let Some((tables, profile_id, database)) = captured.as_ref() else {
             return false;
         };
         let Some(source_target) = self.source_target.as_ref() else {
@@ -646,9 +696,9 @@ impl MigrateWizard {
         };
 
         let phase = source_target.read(cx);
-        phase.checked_source_tables() == *built_tables
-            && phase.target_profile_id() == Some(*built_profile_id)
-            && phase.target_database().as_deref() == Some(built_database.as_str())
+        phase.checked_source_tables() == *tables
+            && phase.target_profile_id() == Some(*profile_id)
+            && phase.target_database().as_deref() == Some(database.as_str())
     }
 
     /// Orphans any in-flight advance spawn: bumping the generation makes its
@@ -657,6 +707,7 @@ impl MigrateWizard {
     fn invalidate_in_flight_advance(&mut self) {
         self.generation = self.generation.wrapping_add(1);
         self.advancing = false;
+        self.advance_selection = None;
     }
 
     /// Edited mappings only invalidate the confirm/run plan and its FK order;
@@ -873,6 +924,7 @@ impl MigrateWizard {
         }
 
         self.advancing = true;
+        self.advance_selection = self.built_selection.clone();
         self.error = None;
         cx.notify();
 
@@ -906,6 +958,7 @@ impl MigrateWizard {
                 }
 
                 this.advancing = false;
+                this.advance_selection = None;
                 match configs {
                     Ok(configs) => {
                         // A failed listing only affects Create/Existing
@@ -1079,6 +1132,7 @@ impl MigrateWizard {
             let plans: Vec<MappingRowPlan> = configs
                 .iter()
                 .map(|config| MappingRowPlan {
+                    source_schema: config.source_table.schema.as_deref(),
                     source_table: config.source_table.name.as_str(),
                     target_schema: config.target_schema.as_deref(),
                     target_table: config.target_table.as_str(),
@@ -1415,9 +1469,9 @@ impl MigrateWizard {
 mod tests {
     use super::{
         TableMigrationConfig, WizardPhase, build_migration_options, build_migration_table_plans,
-        is_already_cached_sentinel, next_phase,
+        is_already_cached_sentinel, next_phase, target_columns_prove_existing,
     };
-    use dbflux_core::{TableRef, TransferColumn};
+    use dbflux_core::{ColumnInfo, TableRef, TransferColumn};
 
     fn transfer_column(name: &str) -> TransferColumn {
         TransferColumn {
@@ -1426,6 +1480,29 @@ mod tests {
             nullable: true,
             is_primary_key: false,
         }
+    }
+
+    fn column_info(name: &str) -> ColumnInfo {
+        ColumnInfo {
+            name: name.to_string(),
+            type_name: "text".to_string(),
+            nullable: true,
+            is_primary_key: false,
+            default_value: None,
+            enum_values: None,
+        }
+    }
+
+    #[test]
+    fn target_columns_prove_existing_only_for_a_non_empty_column_set() {
+        // A real, existing relation always projects at least one column.
+        let columns = vec![column_info("id")];
+        assert!(target_columns_prove_existing(Some(&columns)));
+
+        // Ok-but-empty columns (Postgres/MySQL "table absent" signal) and a
+        // never-loaded column set both mean the target must be created.
+        assert!(!target_columns_prove_existing(Some(&[])));
+        assert!(!target_columns_prove_existing(None));
     }
 
     #[test]

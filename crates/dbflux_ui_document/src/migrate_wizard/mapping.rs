@@ -223,6 +223,7 @@ impl MappingPhase {
         self.rows
             .iter()
             .map(|row| MappingRowPlan {
+                source_schema: row.config.source_table.schema.as_deref(),
                 source_table: row.config.source_table.name.as_str(),
                 target_schema: row.config.target_schema.as_deref(),
                 target_table: row.config.target_table.as_str(),

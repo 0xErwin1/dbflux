@@ -6,7 +6,7 @@
 //! `topological_order` result) live in `mod.rs`; this module owns only the
 //! state shapes and the guards that do not require live metadata.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use dbflux_core::TableRef;
 
@@ -110,6 +110,7 @@ pub fn can_advance_from_tables_mapping(rows: &[MappingRowReadiness]) -> bool {
 /// [`MappingRowReadiness`] cannot express (they compare rows against each
 /// other and against the shared source container).
 pub struct MappingRowPlan<'a> {
+    pub source_schema: Option<&'a str>,
     pub source_table: &'a str,
     pub target_schema: Option<&'a str>,
     pub target_table: &'a str,
@@ -120,6 +121,35 @@ fn target_label(schema: Option<&str>, table: &str) -> String {
     match schema {
         Some(schema) if !schema.is_empty() => format!("{schema}.{table}"),
         _ => table.to_string(),
+    }
+}
+
+/// Normalizes an optional schema so an empty schema string is treated as
+/// "unqualified" (`None`), matching how [`target_label`] renders it — a bare
+/// `Some("")` must never be a distinct identity from `None`.
+fn normalized_schema(schema: Option<&str>) -> Option<&str> {
+    schema.filter(|s| !s.is_empty())
+}
+
+/// Whether a destructive row's target refers to the same relation as a source
+/// table in the same container. Table names must match; schemas are compared
+/// only when the target schema is known — an unqualified target (`None`) is a
+/// potential collision with any same-named source table, since the server
+/// resolves it against the active schema at run time (the safe direction for a
+/// destructive self-target). A qualified target with a *different* schema (e.g.
+/// `archive.orders` vs source `public.orders`) is therefore not a collision.
+fn is_same_relation(
+    source_schema: Option<&str>,
+    source_table: &str,
+    target_schema: Option<&str>,
+    target_table: &str,
+) -> bool {
+    if source_table != target_table {
+        return false;
+    }
+    match normalized_schema(target_schema) {
+        Some(target_schema) => normalized_schema(source_schema) == Some(target_schema),
+        None => true,
     }
 }
 
@@ -153,17 +183,28 @@ pub fn tables_mapping_blocking_errors(
     }
 
     if same_container {
-        let source_names: HashSet<&str> = rows.iter().map(|row| row.source_table).collect();
-        let mut collided: HashSet<&str> = HashSet::new();
+        let mut collided: HashSet<(Option<&str>, &str)> = HashSet::new();
         for row in rows {
-            if row.destructive
-                && source_names.contains(row.target_table)
-                && collided.insert(row.target_table)
-            {
+            if !row.destructive {
+                continue;
+            }
+
+            let collides = rows.iter().any(|source| {
+                is_same_relation(
+                    source.source_schema,
+                    source.source_table,
+                    row.target_schema,
+                    row.target_table,
+                )
+            });
+            let target_key = (normalized_schema(row.target_schema), row.target_table);
+
+            if collides && collided.insert(target_key) {
                 errors.push(format!(
                     "'{}' uses a destructive mode but its target is source table '{}' in the \
                      same connection — it would be dropped or emptied before it is read.",
-                    row.source_table, row.target_table
+                    row.source_table,
+                    target_label(row.target_schema, row.target_table)
                 ));
             }
         }
@@ -172,33 +213,89 @@ pub fn tables_mapping_blocking_errors(
     errors
 }
 
-/// Non-blocking, cross-row warnings surfaced on the Confirm screen: a
-/// non-destructive row whose target is one of the source tables in the same
-/// container appends rows into a table that is also being read. Destructive
-/// same-container collisions are blocked earlier by
-/// [`tables_mapping_blocking_errors`].
+/// Non-blocking, cross-row warnings surfaced on the Confirm screen:
+/// - **Case-only target collisions**: two rows whose targets differ only in
+///   letter case (e.g. `Users` and `users`). On a case-sensitive database they
+///   are distinct tables (so this is not the blocking exact-duplicate error),
+///   but on a case-insensitive collation they resolve to one table — worth a
+///   warning, not a hard block. Independent of the source/target container.
+/// - **Same-container append**: a non-destructive row whose target is one of the
+///   source tables in the same container appends rows into a table that is also
+///   being read. Destructive same-container collisions are blocked earlier by
+///   [`tables_mapping_blocking_errors`].
 pub fn tables_mapping_confirm_warnings(
     rows: &[MappingRowPlan],
     same_container: bool,
 ) -> Vec<String> {
-    if !same_container {
-        return Vec::new();
+    let mut warnings = case_insensitive_duplicate_target_warnings(rows);
+
+    if same_container {
+        warnings.extend(same_container_append_warnings(rows));
     }
 
-    let source_names: HashSet<&str> = rows.iter().map(|row| row.source_table).collect();
-    let mut warned: HashSet<&str> = HashSet::new();
+    warnings
+}
+
+/// Warns when two target rows share the same identifier under a case-insensitive
+/// comparison but differ in exact spelling. Exact duplicates are the blocking
+/// error in [`tables_mapping_blocking_errors`], so a group that is a single
+/// exact spelling is left alone here.
+fn case_insensitive_duplicate_target_warnings(rows: &[MappingRowPlan]) -> Vec<String> {
+    let mut folded: BTreeMap<(Option<String>, String), BTreeSet<String>> = BTreeMap::new();
+
+    for row in rows {
+        let key = (
+            normalized_schema(row.target_schema).map(str::to_lowercase),
+            row.target_table.to_lowercase(),
+        );
+        folded
+            .entry(key)
+            .or_default()
+            .insert(target_label(row.target_schema, row.target_table));
+    }
+
+    folded
+        .into_values()
+        .filter(|spellings| spellings.len() > 1)
+        .map(|spellings| {
+            let labels: Vec<String> = spellings.into_iter().collect();
+            format!(
+                "Targets {} differ only in letter case; on a case-insensitive database they \
+                 resolve to the same table.",
+                labels.join(", ")
+            )
+        })
+        .collect()
+}
+
+/// The same-container append warnings: a non-destructive row writing into one of
+/// the source tables in the same container.
+fn same_container_append_warnings(rows: &[MappingRowPlan]) -> Vec<String> {
+    let mut warned: HashSet<(Option<&str>, &str)> = HashSet::new();
 
     rows.iter()
         .filter(|row| {
-            !row.destructive
-                && source_names.contains(row.target_table)
-                && warned.insert(row.target_table)
+            if row.destructive {
+                return false;
+            }
+
+            let collides = rows.iter().any(|source| {
+                is_same_relation(
+                    source.source_schema,
+                    source.source_table,
+                    row.target_schema,
+                    row.target_table,
+                )
+            });
+
+            collides && warned.insert((normalized_schema(row.target_schema), row.target_table))
         })
         .map(|row| {
             format!(
                 "'{}' writes into source table '{}' in the same connection; rows are appended to \
                  a table you are also reading.",
-                row.source_table, row.target_table
+                row.source_table,
+                target_label(row.target_schema, row.target_table)
             )
         })
         .collect()
@@ -327,8 +424,25 @@ mod tests {
 
     fn plan<'a>(source: &'a str, target: &'a str, destructive: bool) -> MappingRowPlan<'a> {
         MappingRowPlan {
+            source_schema: None,
             source_table: source,
             target_schema: None,
+            target_table: target,
+            destructive,
+        }
+    }
+
+    fn qualified_plan<'a>(
+        source_schema: Option<&'a str>,
+        source: &'a str,
+        target_schema: Option<&'a str>,
+        target: &'a str,
+        destructive: bool,
+    ) -> MappingRowPlan<'a> {
+        MappingRowPlan {
+            source_schema,
+            source_table: source,
+            target_schema,
             target_table: target,
             destructive,
         }
@@ -363,6 +477,33 @@ mod tests {
     }
 
     #[test]
+    fn tables_mapping_blocking_errors_compares_qualified_identity_for_source_as_target() {
+        // A destructive row targeting `archive.orders` must NOT be blocked by a
+        // source `public.orders` in the same connection — different schemas are
+        // different relations.
+        let different_schema = vec![qualified_plan(
+            Some("public"),
+            "orders",
+            Some("archive"),
+            "orders",
+            true,
+        )];
+        assert!(tables_mapping_blocking_errors(&different_schema, true).is_empty());
+
+        // A genuine same-(schema, table) destructive self-target still blocks.
+        let same_schema = vec![qualified_plan(
+            Some("public"),
+            "orders",
+            Some("public"),
+            "orders",
+            true,
+        )];
+        let errors = tables_mapping_blocking_errors(&same_schema, true);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("orders"));
+    }
+
+    #[test]
     fn tables_mapping_confirm_warnings_flags_non_destructive_same_container_collision() {
         let rows = vec![plan("orders", "orders", false)];
 
@@ -371,6 +512,28 @@ mod tests {
         let warnings = tables_mapping_confirm_warnings(&rows, true);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("orders"));
+    }
+
+    #[test]
+    fn tables_mapping_confirm_warnings_flags_case_only_target_collisions() {
+        // `Users` and `users` are distinct on a case-sensitive database (so no
+        // blocking exact-duplicate error) but collide on a case-insensitive
+        // collation — a non-blocking warning, independent of the container.
+        let rows = vec![plan("a", "Users", false), plan("b", "users", false)];
+
+        assert!(tables_mapping_blocking_errors(&rows, false).is_empty());
+
+        let warnings = tables_mapping_confirm_warnings(&rows, false);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("Users"));
+        assert!(warnings[0].contains("users"));
+    }
+
+    #[test]
+    fn tables_mapping_confirm_warnings_ignores_exact_duplicate_targets() {
+        // Exact duplicates are the blocking error, not a case-only warning.
+        let rows = vec![plan("a", "users", false), plan("b", "users", false)];
+        assert!(tables_mapping_confirm_warnings(&rows, false).is_empty());
     }
 
     #[test]
