@@ -149,6 +149,7 @@ pub struct SchemaDiffDocument {
     pending_apply: bool,
 
     focus_handle: FocusHandle,
+    diff_scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -195,6 +196,7 @@ impl SchemaDiffDocument {
             pending_confirm: None,
             pending_apply: false,
             focus_handle: cx.focus_handle(),
+            diff_scroll: ScrollHandle::new(),
             _subscriptions: vec![confirm_sub],
         }
     }
@@ -1270,14 +1272,12 @@ impl SchemaDiffDocument {
 
         match &self.compute_state {
             ComputeState::Loading => {
-                return div()
-                    .p(Spacing::LG)
+                return diff_message_container()
                     .child(Text::body("Computing diff…").muted_foreground())
                     .into_any_element();
             }
             ComputeState::Idle => {
-                return div()
-                    .p(Spacing::LG)
+                return diff_message_container()
                     .child(
                         Text::body("Pick a source and run Compute Diff to see schema changes.")
                             .muted_foreground(),
@@ -1285,14 +1285,12 @@ impl SchemaDiffDocument {
                     .into_any_element();
             }
             ComputeState::Error(message) => {
-                return div()
-                    .p(Spacing::LG)
+                return diff_message_container()
                     .child(Text::body(message.clone()).danger())
                     .into_any_element();
             }
             ComputeState::Empty => {
-                return div()
-                    .p(Spacing::LG)
+                return diff_message_container()
                     .child(
                         Text::body("No differences found between the two schemas.")
                             .muted_foreground(),
@@ -1308,8 +1306,10 @@ impl SchemaDiffDocument {
         }
 
         div()
+            .id("schema-diff-list-scroll")
             .flex_1()
-            .overflow_hidden()
+            .track_scroll(&self.diff_scroll)
+            .overflow_y_scroll()
             .flex()
             .flex_col()
             .gap(Spacing::SM)
@@ -1506,6 +1506,16 @@ impl SchemaDiffDocument {
                 |this, _w, cx| this.request_apply(cx),
             ))
     }
+}
+
+fn diff_message_container() -> Div {
+    div()
+        .flex_1()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .p(Spacing::LG)
 }
 
 fn render_unsupported_row(unsupported: &UnsupportedChange) -> AnyElement {
