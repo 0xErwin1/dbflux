@@ -20,6 +20,7 @@ mod style_guardrails;
 #[cfg(feature = "mcp")]
 mod governance;
 
+pub mod export_wizard;
 mod handle;
 pub mod history_modal;
 pub mod import_wizard;

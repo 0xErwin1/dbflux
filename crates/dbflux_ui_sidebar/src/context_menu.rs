@@ -251,9 +251,11 @@ impl Sidebar {
                     );
                 }
 
-                // Export (Table -> folder bundle) is gated on the connection's
-                // transfer_family, never on driver id (R7). Views are excluded —
-                // this batch scopes bulk export to writable tables only.
+                // Export (Table -> folder bundle, via the Export wizard) is
+                // gated on the connection's transfer_family, never on driver
+                // id (R7). Views are excluded — this batch scopes bulk export
+                // to writable tables only. Format/folder/segment-size are
+                // chosen in the wizard, not from this menu.
                 if node_kind == SchemaNodeKind::Table && self.table_supports_transfer(item_id, cx) {
                     let count = self.export_table_selection_count(item_id);
                     let label = if count > 1 {
@@ -266,20 +268,7 @@ impl Sidebar {
                         &mut items,
                         [ContextMenuItem::item(
                             label,
-                            ContextMenuAction::Submenu(vec![
-                                ContextMenuItem::item(
-                                    "as CSV",
-                                    ContextMenuAction::ExportTablesAs(
-                                        dbflux_transfer::FileFormat::Csv,
-                                    ),
-                                ),
-                                ContextMenuItem::item(
-                                    "as JSON",
-                                    ContextMenuAction::ExportTablesAs(
-                                        dbflux_transfer::FileFormat::Json,
-                                    ),
-                                ),
-                            ]),
+                            ContextMenuAction::ExportTables,
                         )],
                     );
                 }
@@ -1407,8 +1396,8 @@ impl Sidebar {
                     cx.emit(SidebarEvent::RequestExportConnection { profile_id });
                 }
             }
-            ContextMenuAction::ExportTablesAs(format) => {
-                self.export_selected_tables(&item_id, format, cx);
+            ContextMenuAction::ExportTables => {
+                self.request_export_wizard(&item_id, cx);
             }
             ContextMenuAction::ImportTables => {
                 if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(&item_id) {
