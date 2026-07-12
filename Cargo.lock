@@ -3128,7 +3128,6 @@ dependencies = [
  "dbflux_core",
  "dbflux_ssh",
  "dbflux_storage",
- "dbflux_transfer",
  "dbflux_ui_base",
  "dirs 6.0.0",
  "gpui",
