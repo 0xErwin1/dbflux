@@ -162,6 +162,7 @@ impl MigrationRegistry {
         registry.register(mod_018_app_pending_executions::MigrationImpl);
         registry.register(mod_019_hook_env_denylist::MigrationImpl);
         registry.register(mod_020_hook_kind_json::MigrationImpl);
+        registry.register(mod_021_profile_hook_interpreter::MigrationImpl);
         registry
     }
 
@@ -365,6 +366,7 @@ mod mod_017_qry_saved_queries;
 mod mod_018_app_pending_executions;
 mod mod_019_hook_env_denylist;
 mod mod_020_hook_kind_json;
+mod mod_021_profile_hook_interpreter;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -970,6 +972,7 @@ mod tests {
             "018_app_pending_executions",
             "019_hook_env_denylist",
             "020_hook_kind_json",
+            "021_profile_hook_interpreter",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();

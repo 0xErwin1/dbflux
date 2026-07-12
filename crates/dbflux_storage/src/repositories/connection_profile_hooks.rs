@@ -29,7 +29,7 @@ impl ConnectionProfileHooksRepository {
                 r#"
                 SELECT id, profile_id, phase, order_index, enabled, hook_kind,
                        command, script_language, script_source_type, script_content, script_path,
-                       lua_source_type, lua_content, lua_path,
+                       script_interpreter, lua_source_type, lua_content, lua_path,
                        lua_log, lua_env_read, lua_conn_metadata, lua_process_run,
                        cwd, inherit_env, timeout_ms, execution_mode, ready_signal, on_failure,
                        COALESCE(env_denylist_json, '[]')
@@ -45,7 +45,7 @@ impl ConnectionProfileHooksRepository {
 
         let hooks = stmt
             .query_map([profile_id], |row| {
-                let env_denylist_json: String = row.get(24)?;
+                let env_denylist_json: String = row.get(25)?;
                 let env_denylist: Vec<String> =
                     serde_json::from_str(&env_denylist_json).unwrap_or_default();
 
@@ -61,19 +61,20 @@ impl ConnectionProfileHooksRepository {
                     script_source_type: row.get(8)?,
                     script_content: row.get(9)?,
                     script_path: row.get(10)?,
-                    lua_source_type: row.get(11)?,
-                    lua_content: row.get(12)?,
-                    lua_path: row.get(13)?,
-                    lua_log: row.get::<_, i32>(14)? != 0,
-                    lua_env_read: row.get::<_, i32>(15)? != 0,
-                    lua_conn_metadata: row.get::<_, i32>(16)? != 0,
-                    lua_process_run: row.get::<_, i32>(17)? != 0,
-                    cwd: row.get(18)?,
-                    inherit_env: row.get::<_, i32>(19)? != 0,
-                    timeout_ms: row.get(20)?,
-                    execution_mode: row.get(21)?,
-                    ready_signal: row.get(22)?,
-                    on_failure: row.get(23)?,
+                    script_interpreter: row.get(11)?,
+                    lua_source_type: row.get(12)?,
+                    lua_content: row.get(13)?,
+                    lua_path: row.get(14)?,
+                    lua_log: row.get::<_, i32>(15)? != 0,
+                    lua_env_read: row.get::<_, i32>(16)? != 0,
+                    lua_conn_metadata: row.get::<_, i32>(17)? != 0,
+                    lua_process_run: row.get::<_, i32>(18)? != 0,
+                    cwd: row.get(19)?,
+                    inherit_env: row.get::<_, i32>(20)? != 0,
+                    timeout_ms: row.get(21)?,
+                    execution_mode: row.get(22)?,
+                    ready_signal: row.get(23)?,
+                    on_failure: row.get(24)?,
                     env_denylist,
                 })
             })
@@ -111,13 +112,13 @@ impl ConnectionProfileHooksRepository {
                 INSERT INTO cfg_connection_profile_hooks (
                     id, profile_id, phase, order_index, enabled, hook_kind,
                     command, script_language, script_source_type, script_content, script_path,
-                    lua_source_type, lua_content, lua_path,
+                    script_interpreter, lua_source_type, lua_content, lua_path,
                     lua_log, lua_env_read, lua_conn_metadata, lua_process_run,
                     cwd, inherit_env, timeout_ms, execution_mode, ready_signal, on_failure,
                     env_denylist_json
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-                    ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25
+                    ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26
                 )
                 "#,
                 params![
@@ -132,6 +133,7 @@ impl ConnectionProfileHooksRepository {
                     hook.script_source_type,
                     hook.script_content,
                     hook.script_path,
+                    hook.script_interpreter,
                     hook.lua_source_type,
                     hook.lua_content,
                     hook.lua_path,
@@ -200,6 +202,7 @@ pub struct ConnectionProfileHookDto {
     pub script_source_type: Option<String>,
     pub script_content: Option<String>,
     pub script_path: Option<String>,
+    pub script_interpreter: Option<String>,
     pub lua_source_type: Option<String>,
     pub lua_content: Option<String>,
     pub lua_path: Option<String>,
@@ -236,6 +239,7 @@ impl ConnectionProfileHookDto {
             script_source_type: None,
             script_content: None,
             script_path: None,
+            script_interpreter: None,
             lua_source_type: None,
             lua_content: None,
             lua_path: None,

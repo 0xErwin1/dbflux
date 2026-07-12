@@ -642,6 +642,7 @@ fn connection_hook_to_dto(
         script_source_type: None,
         script_content: None,
         script_path: None,
+        script_interpreter: None,
         lua_source_type: None,
         lua_content: None,
         lua_path: None,
@@ -664,13 +665,16 @@ fn connection_hook_to_dto(
             dto.command = Some(command.clone());
         }
         HookKind::Script {
-            language, source, ..
+            language,
+            source,
+            interpreter,
         } => {
             dto.hook_kind = "script".to_string();
             dto.script_language = Some(match language {
                 ScriptLanguage::Bash => "bash".to_string(),
                 ScriptLanguage::Python => "python".to_string(),
             });
+            dto.script_interpreter = interpreter.clone();
             match source {
                 ScriptSource::Inline { content } => {
                     dto.script_source_type = Some("inline".to_string());
@@ -1333,7 +1337,11 @@ fn load_profile_settings(
 }
 
 /// Loads ConnectionHooks from hook DTOs.
-fn load_connection_hooks_from_dtos(hooks: &[ConnectionProfileHookDto]) -> ConnectionHooks {
+fn load_connection_hooks_from_dtos(
+    hooks: &[ConnectionProfileHookDto],
+    hook_args_repo: &dbflux_storage::repositories::connection_profile_hook_args::ConnectionProfileHookArgsRepository,
+    hook_envs_repo: &dbflux_storage::repositories::connection_profile_hook_envs::ConnectionProfileHookEnvsRepository,
+) -> ConnectionHooks {
     let mut result = ConnectionHooks::default();
 
     for hook_dto in hooks {
@@ -1356,50 +1364,76 @@ fn load_connection_hooks_from_dtos(hooks: &[ConnectionProfileHookDto]) -> Connec
             _ => HookFailureMode::Warn,
         };
 
-        let kind = if hook_dto.command.as_ref().is_some_and(|c| !c.is_empty()) {
-            HookKind::Command {
+        let kind = match hook_dto.hook_kind.as_str() {
+            "command" => HookKind::Command {
                 command: hook_dto.command.clone().unwrap_or_default(),
                 args: vec![],
+            },
+            "script" => {
+                let language = match hook_dto.script_language.as_deref() {
+                    Some("python") => ScriptLanguage::Python,
+                    Some("bash") | Some("sh") => ScriptLanguage::Bash,
+                    _ => continue,
+                };
+                let source = match hook_dto.script_source_type.as_deref() {
+                    Some("file") => match hook_dto.script_path.as_ref() {
+                        Some(path) => ScriptSource::File { path: path.into() },
+                        None => continue,
+                    },
+                    _ => ScriptSource::Inline {
+                        content: hook_dto.script_content.clone().unwrap_or_default(),
+                    },
+                };
+
+                HookKind::Script {
+                    language,
+                    source,
+                    interpreter: hook_dto.script_interpreter.clone(),
+                }
             }
-        } else if hook_dto.script_language.as_deref() == Some("lua") {
-            HookKind::Lua {
-                source: ScriptSource::Inline {
-                    content: hook_dto.lua_content.clone().unwrap_or_default(),
-                },
-                capabilities: dbflux_core::LuaCapabilities {
-                    logging: hook_dto.lua_log,
-                    env_read: hook_dto.lua_env_read,
-                    connection_metadata: hook_dto.lua_conn_metadata,
-                    process_run: hook_dto.lua_process_run,
-                },
+            "lua" => {
+                let source = match hook_dto.lua_source_type.as_deref() {
+                    Some("file") => match hook_dto.lua_path.as_ref() {
+                        Some(path) => ScriptSource::File { path: path.into() },
+                        None => continue,
+                    },
+                    _ => ScriptSource::Inline {
+                        content: hook_dto.lua_content.clone().unwrap_or_default(),
+                    },
+                };
+
+                HookKind::Lua {
+                    source,
+                    capabilities: dbflux_core::LuaCapabilities {
+                        logging: hook_dto.lua_log,
+                        env_read: hook_dto.lua_env_read,
+                        connection_metadata: hook_dto.lua_conn_metadata,
+                        process_run: hook_dto.lua_process_run,
+                    },
+                }
             }
-        } else if hook_dto.script_language.as_deref() == Some("python") {
-            HookKind::Script {
-                language: ScriptLanguage::Python,
-                source: ScriptSource::Inline {
-                    content: hook_dto.script_content.clone().unwrap_or_default(),
-                },
-                interpreter: None,
-            }
-        } else if hook_dto.script_language.as_deref() == Some("bash")
-            || hook_dto.script_language.as_deref() == Some("sh")
-        {
-            HookKind::Script {
-                language: ScriptLanguage::Bash,
-                source: ScriptSource::Inline {
-                    content: hook_dto.script_content.clone().unwrap_or_default(),
-                },
-                interpreter: None,
-            }
-        } else {
-            continue;
+            _ => continue,
+        };
+
+        let kind = match kind {
+            HookKind::Command { command, .. } => HookKind::Command {
+                command,
+                args: hook_args_repo
+                    .get_for_hook(&hook_dto.id)
+                    .map(|args| args.into_iter().map(|arg| arg.value).collect())
+                    .unwrap_or_default(),
+            },
+            other => other,
         };
 
         let hook = ConnectionHook {
             enabled: hook_dto.enabled,
             kind,
             cwd: hook_dto.cwd.as_ref().map(std::path::PathBuf::from),
-            env: Default::default(),
+            env: hook_envs_repo
+                .get_for_hook(&hook_dto.id)
+                .map(|envs| envs.into_iter().map(|env| (env.key, env.value)).collect())
+                .unwrap_or_default(),
             inherit_env: hook_dto.inherit_env,
             env_denylist: hook_dto.env_denylist.clone(),
             timeout_ms: hook_dto.timeout_ms.map(|v| v as u64),
@@ -1555,7 +1589,11 @@ fn load_profiles(
             let hooks = if hooks_dtos.is_empty() {
                 None
             } else {
-                Some(load_connection_hooks_from_dtos(&hooks_dtos))
+                Some(load_connection_hooks_from_dtos(
+                    &hooks_dtos,
+                    &repo.hook_args(),
+                    &repo.hook_envs(),
+                ))
             };
 
             // Load hook bindings from connection_profile_hook_bindings
@@ -1768,8 +1806,9 @@ mod tests {
         theme_setting_from_storage,
     };
     use dbflux_core::{
-        AccessKind, ConnectionHook, ConnectionProfile, DbConfig, DbKind, GeneralSettings,
-        HookExecutionMode, HookFailureMode, HookKind, RpcServiceKind, ServiceConfig, SshAuthMethod,
+        AccessKind, ConnectionHook, ConnectionHooks, ConnectionProfile, DbConfig, DbKind,
+        GeneralSettings, HookExecutionMode, HookFailureMode, HookKind, LuaCapabilities,
+        RpcServiceKind, ScriptLanguage, ScriptSource, ServiceConfig, SshAuthMethod,
         SshTunnelConfig, SshTunnelProfile, ThemeSetting,
     };
     use dbflux_storage::bootstrap::StorageRuntime;
@@ -1824,6 +1863,72 @@ mod tests {
         let saved = save_hook_definitions(&runtime, &[existing, new], &[]).expect("save new hook");
         assert!(saved["new"].id.is_some());
         assert_ne!(saved["new"].id, saved["existing"].id);
+    }
+
+    #[test]
+    fn global_hook_kinds_and_shared_fields_round_trip_losslessly() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let shared = |kind| ConnectionHook {
+            enabled: false,
+            kind,
+            cwd: Some("/tmp/global-hooks".into()),
+            env: [("GLOBAL_ENV".to_string(), "value".to_string())].into(),
+            inherit_env: false,
+            env_denylist: vec!["GLOBAL_SECRET".to_string()],
+            timeout_ms: Some(3_000),
+            execution_mode: HookExecutionMode::Detached,
+            ready_signal: Some("global-ready".to_string()),
+            on_failure: HookFailureMode::Ignore,
+        };
+        let definitions = vec![
+            HookDefinitionSave {
+                id: None,
+                name: "command".to_string(),
+                hook: shared(HookKind::Command {
+                    command: "global-command".to_string(),
+                    args: vec!["--global".to_string()],
+                }),
+            },
+            HookDefinitionSave {
+                id: None,
+                name: "script".to_string(),
+                hook: shared(HookKind::Script {
+                    language: ScriptLanguage::Python,
+                    source: ScriptSource::File {
+                        path: "/tmp/global.py".into(),
+                    },
+                    interpreter: Some("python3.12".to_string()),
+                }),
+            },
+            HookDefinitionSave {
+                id: None,
+                name: "lua".to_string(),
+                hook: shared(HookKind::Lua {
+                    source: ScriptSource::Inline {
+                        content: "print('global lua')".to_string(),
+                    },
+                    capabilities: LuaCapabilities {
+                        logging: false,
+                        env_read: true,
+                        connection_metadata: false,
+                        process_run: true,
+                    },
+                }),
+            },
+        ];
+
+        let saved = save_hook_definitions(&runtime, &definitions, &[])
+            .expect("save global hook definitions");
+        let loaded = load_config(&runtime).expect("load configuration");
+
+        for definition in definitions {
+            let persisted = loaded
+                .hook_definitions
+                .get(&definition.name)
+                .expect("reloaded global hook");
+            assert_eq!(persisted.hook, definition.hook);
+            assert_eq!(persisted.id, saved[&definition.name].id);
+        }
     }
 
     #[test]
@@ -1935,6 +2040,73 @@ mod tests {
                 .iter()
                 .all(|row| row.name != "before")
         );
+    }
+
+    #[test]
+    fn profile_hook_kinds_and_shared_fields_round_trip_losslessly() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let mut profile = ConnectionProfile::new("hooked", DbConfig::default_postgres());
+        let shared = |kind| ConnectionHook {
+            enabled: false,
+            kind,
+            cwd: Some("/tmp/hooks".into()),
+            env: [("HOOK_ENV".to_string(), "value".to_string())].into(),
+            inherit_env: false,
+            env_denylist: vec!["SECRET_TOKEN".to_string()],
+            timeout_ms: Some(2_000),
+            execution_mode: HookExecutionMode::Detached,
+            ready_signal: Some("ready".to_string()),
+            on_failure: HookFailureMode::Ignore,
+        };
+        profile.hooks = Some(ConnectionHooks {
+            pre_connect: vec![shared(HookKind::Command {
+                command: "command".to_string(),
+                args: vec!["--flag".to_string(), "value".to_string()],
+            })],
+            post_connect: vec![shared(HookKind::Script {
+                language: ScriptLanguage::Python,
+                source: ScriptSource::Inline {
+                    content: "print('inline')".to_string(),
+                },
+                interpreter: Some("python3.12".to_string()),
+            })],
+            pre_disconnect: vec![shared(HookKind::Script {
+                language: ScriptLanguage::Bash,
+                source: ScriptSource::File {
+                    path: "/tmp/hook.sh".into(),
+                },
+                interpreter: Some("bash".to_string()),
+            })],
+            post_disconnect: vec![
+                shared(HookKind::Lua {
+                    source: ScriptSource::Inline {
+                        content: "print('lua inline')".to_string(),
+                    },
+                    capabilities: LuaCapabilities {
+                        logging: false,
+                        env_read: true,
+                        connection_metadata: false,
+                        process_run: true,
+                    },
+                }),
+                shared(HookKind::Lua {
+                    source: ScriptSource::File {
+                        path: "/tmp/hook.lua".into(),
+                    },
+                    capabilities: LuaCapabilities::all_enabled(),
+                }),
+            ],
+        });
+
+        save_profiles(&runtime, &[profile.clone()]).expect("save profile hooks");
+        let loaded = load_config(&runtime)
+            .expect("load configuration")
+            .profiles
+            .into_iter()
+            .find(|candidate| candidate.id == profile.id)
+            .expect("reloaded profile");
+
+        assert_eq!(loaded.hooks, profile.hooks);
     }
 
     #[test]
