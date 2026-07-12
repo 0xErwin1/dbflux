@@ -1268,6 +1268,188 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn test_connection_orchestration_runs_direct_and_pipeline_success_through_connect_phases_once()
+    {
+        for probe_name in ["direct-probe", "pipeline-probe"] {
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let cleanup_calls = Arc::new(Mutex::new(0));
+            let hooks = ConnectionHooks {
+                pre_connect: vec![hook("pre-connect")],
+                post_connect: vec![hook("post-connect")],
+                pre_disconnect: vec![hook("must-not-run")],
+                post_disconnect: vec![hook("must-not-run")],
+            };
+
+            let result = block_on(run_test_connection_orchestration(
+                hooks,
+                |phase, hooks, _| {
+                    let calls = calls.clone();
+                    Box::pin(async move {
+                        calls
+                            .lock()
+                            .expect("call log poisoned")
+                            .push((phase, hooks[0].display_command()));
+                        HookPhaseState::Continue {
+                            warnings: Vec::new(),
+                        }
+                    })
+                },
+                |_| {
+                    let calls = calls.clone();
+                    Box::pin(async move {
+                        calls
+                            .lock()
+                            .expect("call log poisoned")
+                            .push((HookPhase::PreConnect, probe_name.to_string()));
+                        Ok(dbflux_core::TestConnectionResult {
+                            engine: Some(probe_name.to_string()),
+                            ..Default::default()
+                        })
+                    })
+                },
+                || {
+                    let cleanup_calls = cleanup_calls.clone();
+                    Box::pin(async move {
+                        *cleanup_calls.lock().expect("cleanup log poisoned") += 1;
+                        Ok(())
+                    })
+                },
+                current_unsaved_hook_context(),
+            ));
+
+            assert_eq!(
+                result
+                    .expect("successful probe publishes one result")
+                    .test_result
+                    .engine
+                    .as_deref(),
+                Some(probe_name),
+            );
+            assert_eq!(
+                *calls.lock().expect("call log poisoned"),
+                vec![
+                    (HookPhase::PreConnect, "pre-connect".to_string()),
+                    (HookPhase::PreConnect, probe_name.to_string()),
+                    (HookPhase::PostConnect, "post-connect".to_string()),
+                ],
+                "Test Connection must not invoke disconnect phases",
+            );
+            assert_eq!(
+                *cleanup_calls.lock().expect("cleanup log poisoned"),
+                1,
+                "each terminal outcome performs one scoped cleanup",
+            );
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn test_connection_orchestration_cleans_up_after_pre_hook_abort_without_probe_or_disconnect() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let cleanup_calls = Arc::new(Mutex::new(0));
+        let hooks = ConnectionHooks {
+            pre_connect: vec![hook("pre-abort")],
+            post_connect: vec![hook("must-not-run")],
+            pre_disconnect: vec![hook("must-not-run")],
+            post_disconnect: vec![hook("must-not-run")],
+        };
+
+        let result = block_on(run_test_connection_orchestration(
+            hooks,
+            |phase, hooks, _| {
+                let calls = calls.clone();
+                Box::pin(async move {
+                    calls
+                        .lock()
+                        .expect("call log poisoned")
+                        .push((phase, hooks[0].display_command()));
+                    HookPhaseState::Aborted {
+                        error: "pre-connect Disconnect policy failed".to_string(),
+                    }
+                })
+            },
+            |_| Box::pin(async { panic!("pre-hook abort must skip probe") }),
+            || {
+                let cleanup_calls = cleanup_calls.clone();
+                Box::pin(async move {
+                    *cleanup_calls.lock().expect("cleanup log poisoned") += 1;
+                    Ok(())
+                })
+            },
+            current_unsaved_hook_context(),
+        ));
+
+        assert!(matches!(result, Err(error) if error == "pre-connect Disconnect policy failed"));
+        assert_eq!(
+            *calls.lock().expect("call log poisoned"),
+            vec![(HookPhase::PreConnect, "pre-abort".to_string())],
+        );
+        assert_eq!(*cleanup_calls.lock().expect("cleanup log poisoned"), 1);
+    }
+
+    #[::core::prelude::v1::test]
+    fn test_connection_orchestration_cleans_up_after_post_hook_disconnect_without_disconnect_phases()
+     {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let cleanup_calls = Arc::new(Mutex::new(0));
+        let hooks = ConnectionHooks {
+            pre_connect: vec![hook("pre-connect")],
+            post_connect: vec![hook("post-disconnect")],
+            pre_disconnect: vec![hook("must-not-run")],
+            post_disconnect: vec![hook("must-not-run")],
+        };
+
+        let result = block_on(run_test_connection_orchestration(
+            hooks,
+            |phase, hooks, _| {
+                let calls = calls.clone();
+                Box::pin(async move {
+                    calls
+                        .lock()
+                        .expect("call log poisoned")
+                        .push((phase, hooks[0].display_command()));
+                    match phase {
+                        HookPhase::PreConnect => HookPhaseState::Continue {
+                            warnings: Vec::new(),
+                        },
+                        HookPhase::PostConnect => HookPhaseState::Aborted {
+                            error: "post-connect Disconnect policy failed".to_string(),
+                        },
+                        HookPhase::PreDisconnect | HookPhase::PostDisconnect => {
+                            panic!("Test Connection must not run disconnect phases")
+                        }
+                    }
+                })
+            },
+            |_| {
+                Box::pin(async {
+                    Ok(dbflux_core::TestConnectionResult {
+                        engine: Some("reachable".to_string()),
+                        ..Default::default()
+                    })
+                })
+            },
+            || {
+                let cleanup_calls = cleanup_calls.clone();
+                Box::pin(async move {
+                    *cleanup_calls.lock().expect("cleanup log poisoned") += 1;
+                    Ok(())
+                })
+            },
+            current_unsaved_hook_context(),
+        ));
+
+        assert!(matches!(result, Err(error) if error == "post-connect Disconnect policy failed"));
+        assert_eq!(
+            *calls.lock().expect("call log poisoned"),
+            vec![
+                (HookPhase::PreConnect, "pre-connect".to_string()),
+                (HookPhase::PostConnect, "post-disconnect".to_string()),
+            ],
+        );
+        assert_eq!(*cleanup_calls.lock().expect("cleanup log poisoned"), 1);
+    }
+
+    #[::core::prelude::v1::test]
     fn test_connection_orchestration_stops_after_failed_pipeline_probe() {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let hooks = ConnectionHooks {
@@ -1383,6 +1565,64 @@ mod tests {
             vec!["Pre-connect hook warning", "Post-connect hook warning"],
         );
         assert_eq!(*cleanup_calls.lock().expect("cleanup log poisoned"), 1);
+    }
+
+    #[::core::prelude::v1::test]
+    fn test_connection_orchestration_returns_post_hook_warn_but_not_ignore_as_warning() {
+        for (post_hook_warnings, expected_warnings) in [
+            (
+                vec!["post-connect Warn policy failed".to_string()],
+                vec!["post-connect Warn policy failed"],
+            ),
+            (Vec::new(), Vec::new()),
+        ] {
+            let phase_calls = Arc::new(Mutex::new(0));
+            let cleanup_calls = Arc::new(Mutex::new(0));
+
+            let result = block_on(run_test_connection_orchestration(
+                ConnectionHooks::default(),
+                |_phase, _hooks, _context| {
+                    let phase_calls = phase_calls.clone();
+                    let post_hook_warnings = post_hook_warnings.clone();
+                    Box::pin(async move {
+                        let mut phase_calls = phase_calls.lock().expect("phase log poisoned");
+                        *phase_calls += 1;
+
+                        if *phase_calls == 1 {
+                            HookPhaseState::Continue {
+                                warnings: Vec::new(),
+                            }
+                        } else {
+                            HookPhaseState::Continue {
+                                warnings: post_hook_warnings,
+                            }
+                        }
+                    })
+                },
+                |_| {
+                    Box::pin(async {
+                        Ok(dbflux_core::TestConnectionResult {
+                            engine: Some("reachable".to_string()),
+                            ..Default::default()
+                        })
+                    })
+                },
+                || {
+                    let cleanup_calls = cleanup_calls.clone();
+                    Box::pin(async move {
+                        *cleanup_calls.lock().expect("cleanup log poisoned") += 1;
+                        Ok(())
+                    })
+                },
+                current_unsaved_hook_context(),
+            ));
+
+            let result = result.expect("Warn and Ignore post hooks preserve successful probe");
+            assert_eq!(result.test_result.engine.as_deref(), Some("reachable"));
+            assert_eq!(result.warnings, expected_warnings);
+            assert_eq!(*phase_calls.lock().expect("phase log poisoned"), 2);
+            assert_eq!(*cleanup_calls.lock().expect("cleanup log poisoned"), 1);
+        }
     }
 
     #[::core::prelude::v1::test]
