@@ -6,9 +6,9 @@ use dbflux_core::observability::{
     EventCategory, EventOutcome, EventRecord, EventSeverity, EventSink,
 };
 use dbflux_core::{
-    AuthProfile, ConnectionHook, ConnectionProfile, DbDriver, DriverKey, FormValues,
-    GeneralSettings, GlobalOverrides, ProfileManager, ProxyProfile, ScriptsDirectory,
-    ServiceConfig, SessionFacade, SshTunnelProfile,
+    AuthProfile, ConnectionProfile, DbDriver, DriverKey, FormValues, GeneralSettings,
+    GlobalOverrides, ProfileManager, ProxyProfile, ScriptsDirectory, ServiceConfig, SessionFacade,
+    SshTunnelProfile,
 };
 
 use dbflux_storage::SavedQueryRepo;
@@ -55,6 +55,7 @@ use dbflux_driver_influxdb::InfluxDriver;
 use dbflux_driver_mssql::MssqlDriver;
 
 use crate::auth_provider_registry::AuthProviderRegistry;
+use crate::config_loader::EditableGlobalHook;
 use crate::rpc_services::external_audit::{ExternalAuditSink, NoOpContextProvider};
 use crate::rpc_services::{
     AuthProviderServiceAdaptation, DriverServiceAdaptation, ExternalDriverDiagnostic,
@@ -77,7 +78,7 @@ pub(super) struct BuiltDrivers {
     pub(super) general_settings: GeneralSettings,
     pub(super) driver_overrides: HashMap<DriverKey, GlobalOverrides>,
     pub(super) driver_settings: HashMap<DriverKey, FormValues>,
-    pub(super) hook_definitions: HashMap<String, ConnectionHook>,
+    pub(super) hook_definitions: HashMap<String, EditableGlobalHook>,
     pub(super) services: Vec<ServiceConfig>,
 }
 
@@ -131,7 +132,7 @@ impl AppState {
         general_settings: GeneralSettings,
         driver_overrides: HashMap<DriverKey, GlobalOverrides>,
         driver_settings: HashMap<DriverKey, FormValues>,
-        hook_definitions: HashMap<String, ConnectionHook>,
+        hook_definitions: HashMap<String, EditableGlobalHook>,
         services: Vec<ServiceConfig>,
         storage_runtime: dbflux_storage::bootstrap::StorageRuntime,
         profiles: Vec<ConnectionProfile>,
@@ -847,7 +848,7 @@ impl AppState {
         GeneralSettings,
         HashMap<DriverKey, GlobalOverrides>,
         HashMap<DriverKey, FormValues>,
-        HashMap<String, ConnectionHook>,
+        HashMap<String, EditableGlobalHook>,
         Vec<ServiceConfig>,
         dbflux_storage::bootstrap::StorageRuntime,
     ) {

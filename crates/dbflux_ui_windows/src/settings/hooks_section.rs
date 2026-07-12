@@ -3,10 +3,11 @@ use super::SettingsSection;
 use super::SettingsSectionId;
 use super::form_section::FormSection;
 use super::section_trait::SectionFocusEvent;
+use dbflux_app::config_loader::EditableGlobalHook;
 use dbflux_app::keymap::Modifiers;
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::controls::{InputEvent, InputState};
-use dbflux_core::{ConnectionHook, HookExecutionMode, ScriptLanguage};
+use dbflux_core::{HookExecutionMode, ScriptLanguage};
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
@@ -69,7 +70,7 @@ pub(super) enum HookFormField {
 
 pub(super) struct HooksSection {
     pub(super) app_state: Entity<AppStateEntity>,
-    pub(super) hook_definitions: HashMap<String, ConnectionHook>,
+    pub(super) hook_definitions: HashMap<String, EditableGlobalHook>,
     pub(super) hook_selected_id: Option<String>,
     pub(super) editing_hook_id: Option<String>,
     pub(super) pending_delete_hook_id: Option<String>,

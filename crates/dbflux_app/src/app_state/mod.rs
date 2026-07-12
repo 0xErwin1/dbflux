@@ -11,9 +11,9 @@ use dbflux_core::observability::{
 };
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    AuthProfile, CancelToken, Connection, ConnectionHook, ConnectionHooks, ConnectionProfile,
-    DbDriver, DbSchemaInfo, DriverKey, EffectiveSettings, FetchCollectionChildrenParams,
-    FormValues, GeneralSettings, GlobalOverrides, HistoryEntry, HookContext, HookPhase, SavedQuery,
+    AuthProfile, CancelToken, Connection, ConnectionHooks, ConnectionProfile, DbDriver,
+    DbSchemaInfo, DriverKey, EffectiveSettings, FetchCollectionChildrenParams, FormValues,
+    GeneralSettings, GlobalOverrides, HistoryEntry, HookContext, HookPhase, SavedQuery,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore,
     SessionFacade, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
@@ -41,6 +41,7 @@ use uuid::Uuid;
 mod bootstrap;
 
 use crate::auth_provider_registry::{AuthProviderRegistry, RegistryAuthProviderWrapper};
+use crate::config_loader::EditableGlobalHook;
 use crate::rpc_services::ExternalDriverDiagnostic;
 
 pub use dbflux_core::{
@@ -55,7 +56,7 @@ pub struct AppState {
     general_settings: GeneralSettings,
     driver_overrides: HashMap<DriverKey, GlobalOverrides>,
     driver_settings: HashMap<DriverKey, FormValues>,
-    hook_definitions: HashMap<String, ConnectionHook>,
+    hook_definitions: HashMap<String, EditableGlobalHook>,
     detached_hook_tasks: HashMap<Uuid, HashSet<TaskId>>,
     auth_provider_registry: AuthProviderRegistry,
     history_manager: crate::history_manager_sqlite::HistoryManager,
@@ -1881,11 +1882,11 @@ impl AppState {
         self.driver_settings.insert(key, values);
     }
 
-    pub fn hook_definitions(&self) -> &HashMap<String, ConnectionHook> {
+    pub fn hook_definitions(&self) -> &HashMap<String, EditableGlobalHook> {
         &self.hook_definitions
     }
 
-    pub fn set_hook_definitions(&mut self, definitions: HashMap<String, ConnectionHook>) {
+    pub fn set_hook_definitions(&mut self, definitions: HashMap<String, EditableGlobalHook>) {
         let hook_count = definitions.len();
         self.hook_definitions = definitions;
 
@@ -2230,7 +2231,12 @@ impl AppState {
     }
 
     pub fn resolve_profile_hooks(&self, profile: &ConnectionProfile) -> ConnectionHooks {
-        ConnectionHooks::resolve_from_bindings(profile, &self.hook_definitions)
+        let hooks: HashMap<_, _> = self
+            .hook_definitions
+            .iter()
+            .map(|(name, definition)| (name.clone(), definition.hook.clone()))
+            .collect();
+        ConnectionHooks::resolve_from_bindings(profile, &hooks)
     }
 
     pub fn profile_uses_connect_pipeline(&self, profile: &ConnectionProfile) -> bool {

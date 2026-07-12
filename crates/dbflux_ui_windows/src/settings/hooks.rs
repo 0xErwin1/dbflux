@@ -1,3 +1,4 @@
+use dbflux_app::config_loader::{EditableGlobalHook, HookDefinitionSave};
 use dbflux_app::keymap::Modifiers;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::controls::{InputEvent, InputState};
@@ -438,7 +439,7 @@ impl HooksSection {
             return self
                 .hook_definitions
                 .get(editing_id)
-                .is_some_and(|saved| saved != &hook);
+                .is_some_and(|saved| saved.hook != hook);
         }
 
         self.form_has_hook_content(cx)
@@ -701,23 +702,34 @@ impl HooksSection {
         Ok(Some((hook_id, hook)))
     }
 
-    fn persist_hooks(&self, _window: &mut Window, cx: &mut Context<Self>) {
+    fn persist_hooks(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> bool {
         let runtime = self.app_state.read(cx).storage_runtime();
-        if let Err(e) =
-            dbflux_app::config_loader::save_hook_definitions(runtime, &self.hook_definitions)
-        {
-            report_error(
-                UserFacingError::new(ErrorKind::Storage, "Failed to save hooks")
-                    .with_cause(e.to_string()),
-                cx,
-            );
-            return;
-        }
+        let desired = self
+            .hook_definitions
+            .iter()
+            .map(|(name, definition)| HookDefinitionSave {
+                id: definition.id.clone(),
+                name: name.clone(),
+                hook: definition.hook.clone(),
+            })
+            .collect::<Vec<_>>();
+        let hooks = match dbflux_app::config_loader::save_hook_definitions(runtime, &desired, &[]) {
+            Ok(hooks) => hooks,
+            Err(e) => {
+                report_error(
+                    UserFacingError::new(ErrorKind::Storage, "Failed to save hooks")
+                        .with_cause(e.to_string()),
+                    cx,
+                );
+                return false;
+            }
+        };
 
-        let hooks = self.hook_definitions.clone();
+        self.hook_definitions = hooks.clone();
         self.app_state.update(cx, move |state, _cx| {
             state.set_hook_definitions(hooks);
         });
+        true
     }
 
     pub(super) fn clear_hook_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -775,7 +787,11 @@ impl HooksSection {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(hook) = self.hook_definitions.get(hook_id).cloned() else {
+        let Some(hook) = self
+            .hook_definitions
+            .get(hook_id)
+            .map(|definition| definition.hook.clone())
+        else {
             return;
         };
 
@@ -940,7 +956,11 @@ impl HooksSection {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(hook) = self.hook_definitions.get(hook_id).cloned() else {
+        let Some(hook) = self
+            .hook_definitions
+            .get(hook_id)
+            .map(|definition| definition.hook.clone())
+        else {
             return;
         };
 
@@ -1134,14 +1154,24 @@ impl HooksSection {
             return;
         }
 
+        let saved_definitions = self.hook_definitions.clone();
         if let Some(previous_id) = self.editing_hook_id.clone()
             && previous_id != hook_id
         {
             self.hook_definitions.remove(&previous_id);
         }
 
-        self.hook_definitions.insert(hook_id.clone(), hook);
-        self.persist_hooks(window, cx);
+        let id = self
+            .editing_hook_id
+            .as_ref()
+            .and_then(|previous_id| self.hook_definitions.get(previous_id))
+            .and_then(|definition| definition.id.clone());
+        self.hook_definitions
+            .insert(hook_id.clone(), EditableGlobalHook { id, hook });
+        if !self.persist_hooks(window, cx) {
+            self.hook_definitions = saved_definitions;
+            return;
+        }
 
         self.load_hook_into_form(&hook_id, window, cx);
         self.hook_focus = HookFocus::Form;
@@ -1158,6 +1188,7 @@ impl HooksSection {
             return;
         };
 
+        let saved_definitions = self.hook_definitions.clone();
         self.hook_definitions.remove(&hook_id);
 
         if self.editing_hook_id.as_deref() == Some(hook_id.as_str()) {
@@ -1169,7 +1200,10 @@ impl HooksSection {
             self.hook_list_idx = None;
         }
 
-        self.persist_hooks(window, cx);
+        if !self.persist_hooks(window, cx) {
+            self.hook_definitions = saved_definitions;
+            return;
+        }
         Toast::success("Hook deleted")
             .meta_right(now_hms())
             .push(cx);

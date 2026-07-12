@@ -23,6 +23,10 @@ use dbflux_storage::repositories::connection_profiles::ConnectionProfileDto;
 use dbflux_storage::repositories::driver_overrides::DriverOverridesDto;
 use dbflux_storage::repositories::driver_setting_values::DriverSettingValueDto;
 use dbflux_storage::repositories::general_settings::GeneralSettingsDto;
+use dbflux_storage::repositories::hook_commands::HookCommandDto;
+use dbflux_storage::repositories::hook_definitions::{
+    HookDefinitionDto, HookDefinitionReplacement,
+};
 
 pub fn save_general_settings(
     runtime: &StorageRuntime,
@@ -154,80 +158,122 @@ pub fn save_driver_settings(
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditableGlobalHook {
+    pub id: Option<String>,
+    pub hook: ConnectionHook,
+}
+
+impl std::ops::Deref for EditableGlobalHook {
+    type Target = ConnectionHook;
+
+    fn deref(&self) -> &Self::Target {
+        &self.hook
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookDefinitionSave {
+    pub id: Option<String>,
+    pub name: String,
+    pub hook: ConnectionHook,
+}
+
 pub fn save_hook_definitions(
     runtime: &StorageRuntime,
-    hooks: &HashMap<String, dbflux_core::ConnectionHook>,
-) -> Result<(), dbflux_storage::error::StorageError> {
-    let repo = runtime.hook_definitions();
+    hooks: &[HookDefinitionSave],
+    protected_ids: &[String],
+) -> Result<HashMap<String, EditableGlobalHook>, dbflux_storage::error::StorageError> {
+    let replacements: Result<Vec<_>, _> = hooks.iter().map(hook_definition_replacement).collect();
+    let saved = runtime
+        .hook_definitions()
+        .replace_all_atomic(&replacements?, &protected_ids.iter().cloned().collect())?;
 
-    // Propagate read errors from the repository.
-    let existing_rows = repo.all()?;
-    let existing_ids: std::collections::HashSet<_> =
-        existing_rows.iter().map(|d| d.id.clone()).collect();
-
-    // Build a name→id map from existing rows for stable IDs.
-    let existing_name_to_id: std::collections::HashMap<_, _> = existing_rows
+    let hooks_by_id: HashMap<_, _> = hooks
         .iter()
-        .map(|d| (d.name.clone(), d.id.clone()))
+        .filter_map(|hook| hook.id.as_ref().map(|id| (id.clone(), hook.hook.clone())))
+        .collect();
+    let hooks_by_name: HashMap<_, _> = hooks
+        .iter()
+        .map(|hook| (hook.name.clone(), hook.hook.clone()))
         .collect();
 
-    // Build the full set of names present in the desired state.
-    let desired_names: std::collections::HashSet<_> = hooks.keys().cloned().collect();
+    Ok(saved
+        .into_iter()
+        .filter_map(|definition| {
+            let hook = hooks_by_id
+                .get(&definition.id)
+                .or_else(|| hooks_by_name.get(&definition.name))?
+                .clone();
+            Some((
+                definition.name,
+                EditableGlobalHook {
+                    id: Some(definition.id),
+                    hook,
+                },
+            ))
+        })
+        .collect())
+}
 
-    // Upsert all hooks that are in the desired state, using the existing ID or generating a new UUID.
-    for (name, hook) in hooks {
-        let id = existing_name_to_id
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        let execution_mode = match hook.execution_mode {
-            dbflux_core::HookExecutionMode::Blocking => "Blocking",
-            dbflux_core::HookExecutionMode::Detached => "Detached",
-        }
-        .to_string();
-        let on_failure = match hook.on_failure {
-            dbflux_core::HookFailureMode::Warn => "Warn",
-            dbflux_core::HookFailureMode::Ignore => "Ignore",
-            dbflux_core::HookFailureMode::Disconnect => "Disconnect",
-        }
-        .to_string();
+fn hook_definition_replacement(
+    hook: &HookDefinitionSave,
+) -> Result<HookDefinitionReplacement, dbflux_storage::error::StorageError> {
+    let execution_mode = match hook.hook.execution_mode {
+        HookExecutionMode::Blocking => "Blocking",
+        HookExecutionMode::Detached => "Detached",
+    };
+    let on_failure = match hook.hook.on_failure {
+        HookFailureMode::Warn => "Warn",
+        HookFailureMode::Ignore => "Ignore",
+        HookFailureMode::Disconnect => "Disconnect",
+    };
+    let definition_id = hook.id.clone().unwrap_or_default();
+    let command = match &hook.hook.kind {
+        HookKind::Command { command, .. } => Some(HookCommandDto {
+            id: uuid::Uuid::new_v4().to_string(),
+            hook_id: definition_id.clone(),
+            command: command.clone(),
+            working_directory: hook
+                .hook
+                .cwd
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string()),
+            timeout_ms: hook.hook.timeout_ms.map(|value| value as i64),
+            ready_signal: hook.hook.ready_signal.clone(),
+        }),
+        HookKind::Script { .. } | HookKind::Lua { .. } => None,
+    };
 
-        let dto = dbflux_storage::repositories::hook_definitions::HookDefinitionDto {
-            id,
-            name: name.clone(),
-            execution_mode,
-            script_ref: hook.ready_signal.clone(),
-            cwd: hook.cwd.as_ref().map(|p| p.to_string_lossy().to_string()),
-            inherit_env: hook.inherit_env,
-            timeout_ms: hook.timeout_ms.map(|v| v as i64),
-            ready_signal: hook.ready_signal.clone(),
-            on_failure,
-            enabled: hook.enabled,
+    Ok(HookDefinitionReplacement {
+        id: hook.id.clone(),
+        definition: HookDefinitionDto {
+            id: definition_id,
+            name: hook.name.clone(),
+            execution_mode: execution_mode.to_string(),
+            script_ref: None,
+            cwd: hook
+                .hook
+                .cwd
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string()),
+            inherit_env: hook.hook.inherit_env,
+            timeout_ms: hook.hook.timeout_ms.map(|value| value as i64),
+            ready_signal: hook.hook.ready_signal.clone(),
+            on_failure: on_failure.to_string(),
+            enabled: hook.hook.enabled,
             created_at: String::new(),
             updated_at: String::new(),
-            kind_json: None,
-            env_denylist: hook.env_denylist.clone(),
-        };
-
-        if existing_ids.contains(&dto.id) {
-            repo.upsert(&dto)?;
-        } else {
-            repo.insert(&dto)?;
-        }
-
-        let hook_env_repo = repo.env_repo();
-        let hook_id_for_child = dto.id.clone();
-        hook_env_repo.insert_many(&hook_id_for_child, &hook.env)?;
-    }
-
-    // Delete hooks that are in DB but not in the desired state.
-    for (name, id) in &existing_name_to_id {
-        if !desired_names.contains(name) {
-            repo.delete(id)?;
-        }
-    }
-
-    Ok(())
+            kind_json: Some(
+                serde_json::to_string(&hook.hook.kind).map_err(|error| {
+                    dbflux_storage::error::StorageError::Data(error.to_string())
+                })?,
+            ),
+            env_denylist: hook.hook.env_denylist.clone(),
+        },
+        command,
+        environment: hook.hook.env.clone(),
+    })
 }
 
 pub fn save_services(
@@ -906,7 +952,7 @@ pub struct LoadedConfig {
     pub general_settings: GeneralSettings,
     pub driver_overrides: HashMap<DriverKey, GlobalOverrides>,
     pub driver_settings: HashMap<DriverKey, FormValues>,
-    pub hook_definitions: HashMap<String, dbflux_core::ConnectionHook>,
+    pub hook_definitions: HashMap<String, EditableGlobalHook>,
     pub services: Vec<ServiceConfig>,
     pub profiles: Vec<ConnectionProfile>,
     pub auth_profiles: Vec<dbflux_core::AuthProfile>,
@@ -1081,7 +1127,7 @@ fn load_driver_maps(
 
 fn load_hook_definitions(
     repo: &dbflux_storage::repositories::hook_definitions::HookDefinitionRepository,
-) -> HashMap<String, dbflux_core::ConnectionHook> {
+) -> HashMap<String, EditableGlobalHook> {
     let mut map = HashMap::new();
 
     if let Ok(hooks) = repo.all() {
@@ -1100,13 +1146,14 @@ fn load_hook_definitions(
             // Get env vars from child table
             let env = repo.get_env(&dto.id).unwrap_or_default();
 
-            // Construct HookKind::Command using script_ref as the command
-            // Note: The new schema doesn't preserve full HookKind (Command/Script/Lua) info
-            // We assume Command for backward compatibility
-            let kind = dbflux_core::HookKind::Command {
-                command: dto.script_ref.clone().unwrap_or_default(),
-                args: vec![],
-            };
+            let kind = dto
+                .kind_json
+                .as_deref()
+                .and_then(|kind_json| serde_json::from_str(kind_json).ok())
+                .unwrap_or_else(|| dbflux_core::HookKind::Command {
+                    command: dto.script_ref.clone().unwrap_or_default(),
+                    args: vec![],
+                });
 
             let hook = dbflux_core::ConnectionHook {
                 enabled: dto.enabled,
@@ -1121,7 +1168,13 @@ fn load_hook_definitions(
                 on_failure,
             };
 
-            map.insert(dto.name, hook);
+            map.insert(
+                dto.name,
+                EditableGlobalHook {
+                    id: Some(dto.id),
+                    hook,
+                },
+            );
         }
     }
 
@@ -1644,16 +1697,105 @@ fn load_ssh_tunnels(
 #[cfg(test)]
 mod tests {
     use super::{
-        default_db_config_for_kind, general_settings_theme_to_storage, load_config, save_profiles,
-        save_services, save_ssh_tunnels, theme_setting_from_storage,
+        HookDefinitionSave, default_db_config_for_kind, general_settings_theme_to_storage,
+        load_config, save_hook_definitions, save_profiles, save_services, save_ssh_tunnels,
+        theme_setting_from_storage,
     };
     use dbflux_core::{
-        AccessKind, ConnectionProfile, DbConfig, DbKind, GeneralSettings, RpcServiceKind,
-        ServiceConfig, SshAuthMethod, SshTunnelConfig, SshTunnelProfile, ThemeSetting,
+        AccessKind, ConnectionHook, ConnectionProfile, DbConfig, DbKind, GeneralSettings,
+        HookExecutionMode, HookFailureMode, HookKind, RpcServiceKind, ServiceConfig, SshAuthMethod,
+        SshTunnelConfig, SshTunnelProfile, ThemeSetting,
     };
     use dbflux_storage::bootstrap::StorageRuntime;
     use dbflux_storage::repositories::general_settings::GeneralSettingsDto;
     use uuid::Uuid;
+
+    fn command_hook(command: &str) -> ConnectionHook {
+        ConnectionHook {
+            enabled: true,
+            kind: HookKind::Command {
+                command: command.to_string(),
+                args: vec!["--quiet".to_string()],
+            },
+            cwd: None,
+            env: [("MODE".to_string(), "test".to_string())].into(),
+            inherit_env: true,
+            env_denylist: vec![],
+            timeout_ms: Some(1_000),
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
+            on_failure: HookFailureMode::Warn,
+        }
+    }
+
+    #[test]
+    fn load_and_save_hook_definitions_preserve_loaded_and_generated_ids() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let existing = HookDefinitionSave {
+            id: None,
+            name: "existing".to_string(),
+            hook: command_hook("echo existing"),
+        };
+        let saved = save_hook_definitions(&runtime, &[existing], &[]).expect("save existing hook");
+        let existing_id = saved["existing"].id.clone().expect("generated existing ID");
+
+        let loaded = load_config(&runtime);
+        assert_eq!(
+            loaded.hook_definitions["existing"].id.as_deref(),
+            Some(existing_id.as_str())
+        );
+
+        let new = HookDefinitionSave {
+            id: None,
+            name: "new".to_string(),
+            hook: command_hook("echo new"),
+        };
+        let existing = HookDefinitionSave {
+            id: Some(existing_id.clone()),
+            name: "existing".to_string(),
+            hook: command_hook("echo existing"),
+        };
+        let saved = save_hook_definitions(&runtime, &[existing, new], &[]).expect("save new hook");
+        assert!(saved["new"].id.is_some());
+        assert_ne!(saved["new"].id, saved["existing"].id);
+    }
+
+    #[test]
+    fn save_hook_definitions_renames_by_id_and_keeps_identity() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let saved = save_hook_definitions(
+            &runtime,
+            &[HookDefinitionSave {
+                id: None,
+                name: "before".to_string(),
+                hook: command_hook("echo before"),
+            }],
+            &[],
+        )
+        .expect("save original hook");
+        let id = saved["before"].id.clone();
+
+        let saved = save_hook_definitions(
+            &runtime,
+            &[HookDefinitionSave {
+                id: id.clone(),
+                name: "after".to_string(),
+                hook: command_hook("echo after"),
+            }],
+            &[],
+        )
+        .expect("rename hook");
+
+        assert_eq!(saved["after"].id, id);
+        assert!(
+            runtime
+                .hook_definitions()
+                .all()
+                .expect("load rows")
+                .iter()
+                .all(|row| row.name != "before")
+        );
+    }
 
     #[test]
     fn default_db_config_for_kind_maps_mariadb_to_mysql_config() {
