@@ -26,6 +26,25 @@ use super::hooks_section::{
 };
 use super::layout;
 
+fn update_hook_definition(
+    definitions: &mut HashMap<String, EditableGlobalHook>,
+    existing_name: Option<&str>,
+    name: String,
+    hook: ConnectionHook,
+) {
+    let id = existing_name
+        .and_then(|previous_name| definitions.get(previous_name))
+        .and_then(|definition| definition.id.clone());
+
+    if let Some(previous_name) = existing_name
+        && previous_name != name
+    {
+        definitions.remove(previous_name);
+    }
+
+    definitions.insert(name, EditableGlobalHook { id, hook });
+}
+
 impl HooksSection {
     fn hook_script_editor_mode(&self, cx: &App) -> &'static str {
         match self.selected_hook_kind(cx) {
@@ -1155,19 +1174,12 @@ impl HooksSection {
         }
 
         let saved_definitions = self.hook_definitions.clone();
-        if let Some(previous_id) = self.editing_hook_id.clone()
-            && previous_id != hook_id
-        {
-            self.hook_definitions.remove(&previous_id);
-        }
-
-        let id = self
-            .editing_hook_id
-            .as_ref()
-            .and_then(|previous_id| self.hook_definitions.get(previous_id))
-            .and_then(|definition| definition.id.clone());
-        self.hook_definitions
-            .insert(hook_id.clone(), EditableGlobalHook { id, hook });
+        update_hook_definition(
+            &mut self.hook_definitions,
+            self.editing_hook_id.as_deref(),
+            hook_id.clone(),
+            hook,
+        );
         if !self.persist_hooks(window, cx) {
             self.hook_definitions = saved_definitions;
             return;
@@ -2019,4 +2031,75 @@ fn interpreter_exists(program: &str) -> bool {
     };
 
     std::env::split_paths(&path_value).any(|dir| dir.join(program).exists())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::update_hook_definition;
+    use dbflux_app::config_loader::EditableGlobalHook;
+    use dbflux_core::{ConnectionHook, HookExecutionMode, HookFailureMode, HookKind};
+    use std::collections::HashMap;
+
+    fn command_hook(command: &str) -> ConnectionHook {
+        ConnectionHook {
+            enabled: true,
+            kind: HookKind::Command {
+                command: command.to_string(),
+                args: Vec::new(),
+            },
+            cwd: None,
+            env: HashMap::new(),
+            inherit_env: true,
+            env_denylist: Vec::new(),
+            timeout_ms: None,
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
+            on_failure: HookFailureMode::Disconnect,
+        }
+    }
+
+    #[test]
+    fn rename_preserves_existing_durable_hook_id() {
+        let mut definitions = HashMap::from([(
+            "before".to_string(),
+            EditableGlobalHook {
+                id: Some("durable-id".to_string()),
+                hook: command_hook("before-command"),
+            },
+        )]);
+
+        update_hook_definition(
+            &mut definitions,
+            Some("before"),
+            "after".to_string(),
+            command_hook("after-command"),
+        );
+
+        assert!(!definitions.contains_key("before"));
+        assert_eq!(
+            definitions
+                .get("after")
+                .and_then(|definition| definition.id.as_deref()),
+            Some("durable-id")
+        );
+    }
+
+    #[test]
+    fn new_hook_remains_without_durable_id() {
+        let mut definitions = HashMap::new();
+
+        update_hook_definition(
+            &mut definitions,
+            None,
+            "new-hook".to_string(),
+            command_hook("new-command"),
+        );
+
+        assert_eq!(
+            definitions
+                .get("new-hook")
+                .and_then(|definition| definition.id.as_deref()),
+            None
+        );
+    }
 }
