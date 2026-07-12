@@ -264,7 +264,9 @@ impl Sidebar {
     ) {
         if let Some(connected) = state.connections_mut().get_mut(&profile_id) {
             connected.database_schemas.remove(database);
-            connected.table_details.retain(|(db, _), _| db != database);
+            connected
+                .table_details
+                .retain(|(db, _, _), _| db != database);
 
             if connected.active_database.as_deref() == Some(database) {
                 connected.active_database = None;

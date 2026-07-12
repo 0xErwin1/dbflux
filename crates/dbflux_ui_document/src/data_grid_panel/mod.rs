@@ -753,12 +753,14 @@ impl DataGridPanel {
                     state.set_table_details(
                         fetch_result.profile_id,
                         fetch_result.database.clone(),
+                        fetch_result.schema.clone(),
                         fetch_result.table.clone(),
                         fetch_result.details,
                     );
                     state.set_dependents(
                         fetch_result.profile_id,
                         fetch_result.database,
+                        fetch_result.schema,
                         fetch_result.table,
                         fetch_result.dependents,
                     );
@@ -861,7 +863,7 @@ impl DataGridPanel {
                             .or_else(|| table.schema.clone())
                             .unwrap_or_else(|| "default".to_string());
                         conn.table_details
-                            .get(&(db, table.name.clone()))
+                            .get(&(db, table.schema.clone(), table.name.clone()))
                             .and_then(|info| info.columns.clone())
                     })
                     .unwrap_or_default()
@@ -2193,7 +2195,11 @@ impl DataGridPanel {
         let database = connected.active_database.as_deref().unwrap_or("default");
 
         // Check table_details cache first (populated when table is expanded)
-        let cache_key = (database.to_string(), table.name.clone());
+        let cache_key = (
+            database.to_string(),
+            table.schema.clone(),
+            table.name.clone(),
+        );
         if let Some(table_info) = connected.table_details.get(&cache_key) {
             let columns = table_info.columns.as_deref().unwrap_or(&[]);
             return columns
@@ -2697,7 +2703,7 @@ impl DataGridPanel {
         let db = db.to_string();
 
         spec.compute_editable_binding(|source| {
-            let cache_key = (db.clone(), source.table.clone());
+            let cache_key = (db.clone(), source.schema.clone(), source.table.clone());
             if let Some(table_info) = connected.table_details.get(&cache_key) {
                 let cols = table_info.columns.as_deref().unwrap_or(&[]);
                 let pk_names: Vec<String> = cols
@@ -3262,6 +3268,7 @@ impl DataGridPanel {
                                     state.set_table_details(
                                         profile_id,
                                         database_for_finish.clone(),
+                                        table_for_finish.schema.clone(),
                                         table_for_finish.name.clone(),
                                         details,
                                     );
@@ -6414,6 +6421,7 @@ mod tests {
                 app.set_table_details(
                     profile_id,
                     "app".to_string(),
+                    Some("public".to_string()),
                     "users".to_string(),
                     TableInfo {
                         name: "users".to_string(),

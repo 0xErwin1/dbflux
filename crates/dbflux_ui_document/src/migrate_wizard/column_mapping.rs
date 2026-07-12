@@ -39,6 +39,7 @@ pub fn default_mapping_mode(target_exists: bool) -> TableMappingMode {
 
 /// One selected table's target location, mapping mode, and adjustable column
 /// bindings (index into `source_columns`, per `target_columns` slot).
+#[derive(Clone)]
 pub struct TableMigrationConfig {
     pub source_table: TableRef,
     pub source_columns: Vec<TransferColumn>,

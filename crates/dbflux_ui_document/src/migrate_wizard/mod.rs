@@ -1,109 +1,567 @@
-//! T27 — Migrate wizard: pick a connected, transfer-compatible target
-//! connection, review/adjust each table's target-table handling and column
-//! mapping (mirroring the Import wizard's T22 review step), resolve FK load
-//! order (R6) — surfacing a manual-reorder step on a cycle instead of
-//! guessing — confirm any destructive plan, then run the migration via
-//! `dbflux_transfer::migration::run_migration`.
+//! Migrate wizard: a five-phase flow (Source & Target → Tables Mapping →
+//! Options → Confirm → Run) rendered inside a large, vertically centered
+//! modal with a left phase rail. Each phase is a self-contained child
+//! entity; this module owns the [`WizardPhase`] state machine that mounts
+//! them, resolves the source/target connections and metadata between phases
+//! (via the shared `prepare_fetch_*` seam), pre-computes the FK load order on
+//! the `Options` → `Confirm` transition, and drives forward/back navigation.
 //!
-//! Reached from the sidebar's multi-select "Migrate…" action (T28), which
+//! Reached from the sidebar's multi-select "Migrate…" action, which
 //! pre-populates `source_profile_id` / `source_database` / `source_tables`.
+//! Engine contracts are preserved verbatim: `TableMigrationConfig::to_overrides()`,
+//! the `open(profile_id, database, tables, …)` signature, and `run_migration`
+//! semantics (the run itself lives in [`confirm_run`]).
 
 mod column_mapping;
+pub mod confirm_run;
+pub mod mapping;
+pub mod options;
+pub mod phases;
+pub mod source_target;
+pub mod tree_model;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use dbflux_components::controls::{
-    Button, Checkbox, Dropdown, DropdownItem, DropdownSelectionChanged,
-};
+use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::Spacing;
 use dbflux_core::{
-    Connection, DriverCapabilities, SchemaForeignKeyInfo, TableRef, TaskId, TaskKind, TaskStatus,
-    TaskTarget, TransferColumn, topological_order,
+    ColumnInfo, Connection, DbError, DriverCapabilities, LogErr, SchemaCacheKey,
+    SchemaForeignKeyInfo, TableInfo, TableRef, TransferColumn, topological_order,
 };
 use dbflux_transfer::TableTransferStatus;
-use dbflux_transfer::migration::{
-    MigratedTable, MigrationOptions, MigrationOutcome, MigrationTablePlan, run_migration,
-};
-use dbflux_ui_base::app_state_entity::{AppStateChanged, AppStateEntity};
+use dbflux_transfer::migration::{MigratedTable, MigrationOptions, MigrationTablePlan};
+use dbflux_ui_base::app_state_entity::AppStateEntity;
 use dbflux_ui_base::modal_frame::ModalFrame;
-use dbflux_ui_base::toast::Toast;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use gpui_component::ActiveTheme;
 use uuid::Uuid;
 
 pub use column_mapping::TableMigrationConfig;
-use column_mapping::mapping_mode_options;
+use confirm_run::{ConfirmRunEvent, ConfirmRunInputs, ConfirmRunPhase, decide_order};
+use mapping::{MappingChanged, MappingPhase};
+use options::{OptionsChanged, OptionsPhase};
+use phases::{
+    MappingRowPlan, RailEntry, RunState, WizardPhase, rail_entries, tables_mapping_confirm_warnings,
+};
+use source_target::{SourceTargetChanged, SourceTargetPhase};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum WizardStep {
-    PickTarget,
-    Configure,
-    ReorderCycle,
-    Confirm,
-    Running,
-    Done,
+/// Whether an `Err(String)` returned by one of the shared
+/// `AppStateEntity::prepare_fetch_*` seams means "the data is already cached"
+/// rather than a real failure — mirrors the sidebar's `spawn_fetch_*`
+/// handling (`crates/dbflux_ui_sidebar/src/table_loading.rs`), where the same
+/// sentinel strings gate whether to report an error or simply proceed with
+/// what is already cached.
+fn is_already_cached_sentinel(error: &str) -> bool {
+    matches!(
+        error,
+        "Table details already cached" | "Schema foreign keys already cached"
+    )
 }
 
-/// One table row's live controls, wrapping the pure [`TableMigrationConfig`]
-/// with the `Dropdown` entities the user adjusts it through — same shape as
-/// the Import wizard's `TableImportRow`.
-struct TableMigrationRow {
-    config: TableMigrationConfig,
-    mapping_mode_dropdown: Entity<Dropdown>,
-    rebind_target_dropdown: Entity<Dropdown>,
-    rebind_source_dropdown: Entity<Dropdown>,
+/// Converts driver-reported column metadata into the transfer engine's
+/// column shape — identical to the wizard's original inline conversion.
+fn to_transfer_columns(columns: Vec<ColumnInfo>) -> Vec<TransferColumn> {
+    columns
+        .into_iter()
+        .map(|c| TransferColumn {
+            name: c.name,
+            type_name: Some(c.type_name),
+            nullable: c.nullable,
+            is_primary_key: c.is_primary_key,
+        })
+        .collect()
 }
 
+/// Assembles the engine's per-table migration plans from the wizard's
+/// adjustable [`TableMigrationConfig`] rows — the same field mapping the
+/// wizard previously built inline in `start_migration`, extracted here so
+/// it is unit-testable without a live wizard entity or GPUI context.
+fn build_migration_table_plans<'a>(
+    configs: impl IntoIterator<Item = &'a TableMigrationConfig>,
+) -> Vec<MigrationTablePlan> {
+    configs
+        .into_iter()
+        .map(|config| MigrationTablePlan {
+            source_table: config.source_table.clone(),
+            source_columns: config.source_columns.clone(),
+            target_schema: config.target_schema.clone(),
+            target_table: config.target_table.clone(),
+            mapping_mode: config.mapping_mode,
+            column_overrides: Some(config.to_overrides()),
+            estimated_total: None,
+        })
+        .collect()
+}
+
+/// Assembles [`MigrationOptions`] from the wizard's resolved run settings.
+/// `target_database` is taken as an explicit parameter (rather than
+/// re-derived from a live connection here) so a future target-container
+/// picker can feed it directly without this function changing shape.
+#[allow(clippy::too_many_arguments)]
+fn build_migration_options(
+    segment_size: u32,
+    source_database: String,
+    target_database: String,
+    destructive_confirmed: bool,
+    disable_referential_integrity: bool,
+    manual_order: Option<Vec<TableRef>>,
+) -> MigrationOptions {
+    MigrationOptions {
+        segment_size,
+        source_database,
+        target_database,
+        destructive_confirmed,
+        disable_referential_integrity,
+        manual_order,
+    }
+}
+
+/// Renders the wizard's left phase rail: the five fixed [`WizardPhase`]
+/// entries in order, a checkmark on every completed phase, a highlight on the
+/// current one, and click-to-return back-navigation on completed entries.
+/// `on_select` is invoked with the clicked phase; only completed (already
+/// passed) entries are interactive, so the caller cannot jump ahead. The FK
+/// reorder interrupt is deliberately absent — it is a conditional overlay
+/// inside `Confirm`, never a listed rail phase.
+pub fn render_phase_rail<F>(current: WizardPhase, on_select: F, cx: &App) -> impl IntoElement
+where
+    F: Fn(WizardPhase, &mut Window, &mut App) + Clone + 'static,
+{
+    let theme = cx.theme();
+    let colors = RailColors {
+        current: theme.primary,
+        done: theme.success,
+        muted: theme.muted_foreground,
+        hover_bg: theme.secondary,
+    };
+    let border = theme.border;
+
+    let entries = rail_entries(current)
+        .into_iter()
+        .map(move |entry| render_rail_entry(entry, colors, on_select.clone()));
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(Spacing::XS)
+        .p(Spacing::MD)
+        .min_w(px(180.0))
+        .border_r_1()
+        .border_color(border)
+        .children(entries)
+}
+
+/// The rail's marker/label colors, resolved once per render from the theme.
+/// `current` and `done` use the theme's bright action/success colors (not the
+/// dark `accent`, which is a low-contrast highlight background on dark themes),
+/// so the current phase reads as the most prominent entry.
+#[derive(Clone, Copy)]
+struct RailColors {
+    current: Hsla,
+    done: Hsla,
+    muted: Hsla,
+    hover_bg: Hsla,
+}
+
+fn render_rail_entry<F>(entry: RailEntry, colors: RailColors, on_select: F) -> impl IntoElement
+where
+    F: Fn(WizardPhase, &mut Window, &mut App) + Clone + 'static,
+{
+    let phase = entry.phase;
+
+    let marker = if entry.completed {
+        Icon::new(AppIcon::CircleCheck)
+            .size(px(14.0))
+            .color(colors.done)
+            .into_any_element()
+    } else {
+        let dot_color = if entry.current {
+            colors.current
+        } else {
+            colors.muted
+        };
+        div()
+            .size(px(8.0)) // guardrail-allow: decorative status-dot diameter, not a spacing token
+            .rounded_full()
+            .bg(dot_color)
+            .into_any_element()
+    };
+
+    // The current entry is the most prominent: bright action color plus a
+    // heavier weight. Every other label stays at full foreground contrast (a
+    // check/dot marker conveys completed vs. pending), so the rail reads
+    // clearly instead of as dim, low-contrast text.
+    let mut label = Text::body(phase.label());
+    if entry.current {
+        label = label
+            .color(colors.current)
+            .font_weight(FontWeight::SEMIBOLD);
+    }
+
+    div()
+        .id(SharedString::from(format!(
+            "migrate-rail-{}",
+            phase.label()
+        )))
+        .flex()
+        .items_center()
+        .gap(Spacing::SM)
+        .px(Spacing::SM)
+        .py(Spacing::XS)
+        .rounded_md()
+        .child(
+            div()
+                .w(px(16.0)) // guardrail-allow: fixed rail marker gutter width for label alignment
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(marker),
+        )
+        .child(label)
+        .when(entry.completed, |el| {
+            el.cursor_pointer()
+                .hover(|style| style.bg(colors.hover_bg))
+                .on_click(move |_event, window, app| on_select(phase, window, app))
+        })
+}
+
+/// Outcome of fetching one table's details through the shared
+/// `prepare_fetch_table_details` seam. `NotFound` maps only a genuine
+/// driver-reported "object does not exist" (`DbError::ObjectNotFound`) — the
+/// expected "target table will be created" signal, see
+/// [`TableMigrationConfig::new`]'s `target_exists` flag. Any other
+/// execute-time failure is returned as a real error so a transient fetch
+/// failure is never silently classified as "will be created".
+enum TableDetailsFetch {
+    Found(TableInfo),
+    NotFound(String),
+}
+
+/// Reads (or fetches, on the background executor) one table's details
+/// through the shared `AppStateEntity::prepare_fetch_table_details` seam,
+/// treating the "already cached" sentinel as success by reading the already
+/// populated `ConnectedProfile` cache instead of re-fetching — mirrors the
+/// sidebar's `spawn_fetch_table_details` (Reuse Audit: replaces the wizard's
+/// former bespoke `Connection::table_details` closure).
+async fn fetch_table_details_via_seam(
+    app_state: &Entity<AppStateEntity>,
+    profile_id: Uuid,
+    database: &str,
+    table_ref: &TableRef,
+    cx: &mut AsyncApp,
+) -> Result<TableDetailsFetch, String> {
+    let prepared = cx
+        .update(|cx| {
+            app_state.read(cx).prepare_fetch_table_details(
+                profile_id,
+                database,
+                table_ref.schema.as_deref(),
+                &table_ref.name,
+            )
+        })
+        .map_err(|e| e.to_string())?;
+
+    let params = match prepared {
+        Ok(params) => params,
+        Err(e) if is_already_cached_sentinel(&e) => {
+            let cached = cx
+                .update(|cx| {
+                    app_state
+                        .read(cx)
+                        .get_table_details(
+                            profile_id,
+                            database,
+                            table_ref.schema.as_deref(),
+                            &table_ref.name,
+                        )
+                        .cloned()
+                })
+                .map_err(|e| e.to_string())?;
+            return Ok(match cached {
+                Some(info) => TableDetailsFetch::Found(info),
+                None => TableDetailsFetch::NotFound(
+                    "Table details reported as cached but the cache was empty".to_string(),
+                ),
+            });
+        }
+        Err(e) => return Err(e),
+    };
+
+    let execute_result = cx
+        .background_executor()
+        .spawn(async move { params.execute() })
+        .await;
+
+    match execute_result {
+        Ok(result) => {
+            let details = result.details.clone();
+            cx.update(|cx| {
+                app_state.update(cx, |state, _| {
+                    state.set_table_details(
+                        result.profile_id,
+                        result.database.clone(),
+                        result.schema.clone(),
+                        result.table.clone(),
+                        result.details,
+                    );
+                    state.set_dependents(
+                        result.profile_id,
+                        result.database,
+                        result.schema,
+                        result.table,
+                        result.dependents,
+                    );
+                });
+            })
+            .map_err(|e| e.to_string())?;
+            Ok(TableDetailsFetch::Found(details))
+        }
+        Err(error @ DbError::ObjectNotFound(_)) => {
+            Ok(TableDetailsFetch::NotFound(error.to_string()))
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// Reads (or fetches, on the background executor) one schema's foreign keys
+/// through the shared `AppStateEntity::prepare_fetch_schema_foreign_keys`
+/// seam, treating the "already cached" sentinel as success by reading the
+/// already populated `ConnectedProfile` cache — mirrors
+/// [`fetch_table_details_via_seam`]. Replaces the wizard's former
+/// synchronous foreground `Connection::schema_foreign_keys` call.
+async fn fetch_schema_foreign_keys_via_seam(
+    app_state: &Entity<AppStateEntity>,
+    profile_id: Uuid,
+    database: &str,
+    schema: Option<&str>,
+    cx: &mut AsyncApp,
+) -> Result<Vec<SchemaForeignKeyInfo>, String> {
+    let prepared = cx
+        .update(|cx| {
+            app_state
+                .read(cx)
+                .prepare_fetch_schema_foreign_keys(profile_id, database, schema)
+        })
+        .map_err(|e| e.to_string())?;
+
+    let params = match prepared {
+        Ok(params) => params,
+        Err(e) if is_already_cached_sentinel(&e) => {
+            let key = SchemaCacheKey::new(database, schema.map(str::to_string));
+            return cx
+                .update(|cx| {
+                    app_state
+                        .read(cx)
+                        .connections()
+                        .get(&profile_id)
+                        .and_then(|connected| connected.schema_foreign_keys.get(&key))
+                        .cloned()
+                        .unwrap_or_default()
+                })
+                .map_err(|e| e.to_string());
+        }
+        Err(e) => return Err(e),
+    };
+
+    let execute_result = cx
+        .background_executor()
+        .spawn(async move { params.execute() })
+        .await?;
+
+    let foreign_keys = execute_result.foreign_keys.clone();
+    cx.update(|cx| {
+        app_state.update(cx, |state, _| {
+            state.set_schema_foreign_keys(
+                execute_result.profile_id,
+                execute_result.database,
+                execute_result.schema,
+                execute_result.foreign_keys,
+            );
+        });
+    })
+    .map_err(|e| e.to_string())?;
+
+    Ok(foreign_keys)
+}
+
+/// Whether a successfully fetched target `table_details` proves the target
+/// relation already exists. An existing relation always projects at least one
+/// column, so a `None`/empty column set is treated as "does not exist" — some
+/// drivers (Postgres/MySQL) return `Ok(TableInfo)` with no columns for a
+/// missing relation instead of `DbError::ObjectNotFound`, and that Ok-but-empty
+/// result must classify the row as `Create` (mirror the source columns), never
+/// `Existing`.
+fn target_columns_prove_existing(columns: Option<&[ColumnInfo]>) -> bool {
+    columns.is_some_and(|columns| !columns.is_empty())
+}
+
+/// Builds one [`TableMigrationConfig`] per checked source table by fetching
+/// the source and target table schemas through the shared metadata seam: the
+/// source columns must exist (a failure here is fatal), while a missing target
+/// table is the expected "will be created" signal rather than an error. The
+/// same field mapping the pre-redesign wizard produced inline, extracted so
+/// the `Source & Target` → `Tables Mapping` transition stays readable.
+async fn build_configs_via_seam(
+    app_state: &Entity<AppStateEntity>,
+    source_profile_id: Uuid,
+    source_database: &str,
+    target_profile_id: Uuid,
+    target_database: &str,
+    tables: &[TableRef],
+    cx: &mut AsyncApp,
+) -> Result<Vec<TableMigrationConfig>, String> {
+    let mut configs = Vec::with_capacity(tables.len());
+
+    for table_ref in tables {
+        let source_info = match fetch_table_details_via_seam(
+            app_state,
+            source_profile_id,
+            source_database,
+            table_ref,
+            cx,
+        )
+        .await
+        {
+            Ok(TableDetailsFetch::Found(info)) => info,
+            Ok(TableDetailsFetch::NotFound(e)) | Err(e) => {
+                return Err(format!("{}: {e}", table_ref.qualified_name()));
+            }
+        };
+        let source_columns = to_transfer_columns(source_info.columns.unwrap_or_default());
+
+        let target_fetch = match fetch_table_details_via_seam(
+            app_state,
+            target_profile_id,
+            target_database,
+            table_ref,
+            cx,
+        )
+        .await
+        {
+            Ok(fetch) => fetch,
+            Err(e) => return Err(format!("{}: {e}", table_ref.qualified_name())),
+        };
+
+        // An Ok fetch that carries no columns means the target relation does
+        // not exist (Postgres/MySQL report a missing table this way instead of
+        // ObjectNotFound), so it is treated the same as NotFound: the row is a
+        // Create that mirrors the source columns, not an Existing target.
+        let (target_exists, target_columns) = match target_fetch {
+            TableDetailsFetch::Found(info)
+                if target_columns_prove_existing(info.columns.as_deref()) =>
+            {
+                (true, to_transfer_columns(info.columns.unwrap_or_default()))
+            }
+            _ => (false, Vec::new()),
+        };
+
+        configs.push(TableMigrationConfig::new(
+            table_ref.clone(),
+            source_columns,
+            target_exists,
+            target_columns,
+        ));
+    }
+
+    Ok(configs)
+}
+
+/// The phase reached by pressing the footer's Continue button from `phase`,
+/// or `None` for phases whose forward action lives elsewhere: `Confirm` starts
+/// the run through the Confirm/Run phase's own "Start Migration" button, and
+/// `Run` has no forward step. Pure so the footer's button visibility and the
+/// dispatch in [`MigrateWizard::advance`] agree by construction.
+fn next_phase(phase: WizardPhase) -> Option<WizardPhase> {
+    match phase {
+        WizardPhase::SourceTarget => Some(WizardPhase::TablesMapping),
+        WizardPhase::TablesMapping => Some(WizardPhase::Options),
+        WizardPhase::Options => Some(WizardPhase::Confirm),
+        WizardPhase::Confirm | WizardPhase::Run => None,
+    }
+}
+
+/// The phase reached by pressing the footer's Back button from `phase`, or
+/// `None` for the first phase and for `Run` (whose back-navigation is frozen —
+/// leaving a live or finished run behind is handled by Cancel/Close, not Back).
+fn prev_phase(phase: WizardPhase) -> Option<WizardPhase> {
+    match phase {
+        WizardPhase::SourceTarget | WizardPhase::Run => None,
+        WizardPhase::TablesMapping => Some(WizardPhase::SourceTarget),
+        WizardPhase::Options => Some(WizardPhase::TablesMapping),
+        WizardPhase::Confirm => Some(WizardPhase::Options),
+    }
+}
+
+/// The migration wizard modal: owns the current [`WizardPhase`] plus the four
+/// child phase entities it mounts as the user advances. Downstream phases are
+/// invalidated (dropped) whenever an upstream phase reports a change, so a
+/// re-advance rebuilds them against fresh inputs; navigating back and forward
+/// without changes reuses the already-built entities.
 pub struct MigrateWizard {
     app_state: Entity<AppStateEntity>,
     focus_handle: FocusHandle,
     visible: bool,
+
     source_profile_id: Option<Uuid>,
     source_database: Option<String>,
     source_tables: Vec<TableRef>,
-    step: WizardStep,
+
+    phase: WizardPhase,
     error: Option<String>,
-    target_dropdown: Entity<Dropdown>,
-    /// Profile ids of connected, transfer-compatible targets, parallel to
-    /// `target_dropdown`'s items — rebuilt once per `open()` call.
-    target_candidates: Vec<Uuid>,
+    advancing: bool,
+
+    /// Monotonic epoch bumped whenever the inputs an in-flight advance was
+    /// spawned against are invalidated (selection/mapping/options edits,
+    /// re-open). Each advance spawn captures the value at spawn time and
+    /// discards its result if the epoch moved — a stale completion must never
+    /// mount a phase built from abandoned inputs or force a phase jump.
+    generation: u64,
+
+    /// The effective Source & Target selection (checked tables + target
+    /// container) the downstream phases were last built from. Used to ignore
+    /// no-op `SourceTargetChanged` events (re-selecting the same target,
+    /// toggling a check off and back on) so mapping/options work is only
+    /// discarded on a real change.
+    built_selection: Option<(Vec<TableRef>, Uuid, String)>,
+
+    /// The effective selection captured when the currently in-flight
+    /// `Source & Target` advance was spawned. While an advance is in flight it
+    /// is judged against this snapshot — not [`Self::built_selection`] — so a
+    /// completing background tree fetch that re-emits `SourceTargetChanged`
+    /// without changing the selection (a no-op) does not cancel the advance the
+    /// user already triggered. `None` when no advance is in flight.
+    advance_selection: Option<(Vec<TableRef>, Uuid, String)>,
+
+    /// The phase whose child tree/grid currently holds keyboard focus. Drives
+    /// the render-time focus routing so the active phase receives arrow-key
+    /// focus on entry without a click-in first (keyboard-first identity).
+    focused_phase: Option<WizardPhase>,
+
+    /// Resolved once the `Source & Target` phase is left, then fed to the
+    /// downstream phases and the run without re-deriving them.
+    resolved_source_database: Option<String>,
     target_profile_id: Option<Uuid>,
-    rows: Vec<TableMigrationRow>,
+    target_database: Option<String>,
     supports_truncate: bool,
     supports_disable_ri: bool,
-    disable_ri: bool,
-    /// The FK-ordered prefix that resolved cleanly (fixed, not reorderable)
-    /// when a cycle was detected among the remaining tables.
-    cyclic_prefix: Vec<TableRef>,
-    /// The unresolved cyclic subset, in the user's current (reorderable)
-    /// order — seeded from `topological_order`'s `cycle`.
-    reorder_list: Vec<TableRef>,
-    /// The final load order once resolved (auto or user-reordered),
-    /// consumed verbatim by `run_migration`.
-    final_order: Option<Vec<TableRef>>,
-    /// Set only by the Confirm step's "Yes, proceed" handler — never derived
-    /// from "is any plan destructive" — so the engine's destructive-confirm
-    /// gate stays a real backstop against a state-machine bypass, not merely
-    /// a restatement of the plan's own classification.
-    confirmed_destructive: bool,
-    loading: bool,
-    running: bool,
-    progress: Arc<Mutex<(u64, Option<u64>)>>,
-    active_task_id: Option<TaskId>,
-    result_summary: Option<String>,
-    result_warnings: Vec<String>,
-    _row_subscriptions: Vec<Subscription>,
-    _target_subscription: Option<Subscription>,
+
+    source_target: Option<Entity<SourceTargetPhase>>,
+    mapping: Option<Entity<MappingPhase>>,
+    options: Option<Entity<OptionsPhase>>,
+    confirm_run: Option<Entity<ConfirmRunPhase>>,
+
+    _source_target_sub: Option<Subscription>,
+    _mapping_sub: Option<Subscription>,
+    _options_sub: Option<Subscription>,
+    _confirm_run_sub: Option<Subscription>,
 }
 
 impl MigrateWizard {
     pub fn new(app_state: Entity<AppStateEntity>, cx: &mut Context<Self>) -> Self {
-        let target_dropdown =
-            cx.new(|_cx| Dropdown::new("migrate-target").placeholder("Target connection"));
-
         Self {
             app_state,
             focus_handle: cx.focus_handle(),
@@ -111,27 +569,26 @@ impl MigrateWizard {
             source_profile_id: None,
             source_database: None,
             source_tables: Vec::new(),
-            step: WizardStep::PickTarget,
+            phase: WizardPhase::SourceTarget,
             error: None,
-            target_dropdown,
-            target_candidates: Vec::new(),
+            advancing: false,
+            generation: 0,
+            built_selection: None,
+            advance_selection: None,
+            focused_phase: None,
+            resolved_source_database: None,
             target_profile_id: None,
-            rows: Vec::new(),
+            target_database: None,
             supports_truncate: false,
             supports_disable_ri: false,
-            disable_ri: false,
-            cyclic_prefix: Vec::new(),
-            reorder_list: Vec::new(),
-            final_order: None,
-            confirmed_destructive: false,
-            loading: false,
-            running: false,
-            progress: Arc::new(Mutex::new((0, None))),
-            active_task_id: None,
-            result_summary: None,
-            result_warnings: Vec::new(),
-            _row_subscriptions: Vec::new(),
-            _target_subscription: None,
+            source_target: None,
+            mapping: None,
+            options: None,
+            confirm_run: None,
+            _source_target_sub: None,
+            _mapping_sub: None,
+            _options_sub: None,
+            _confirm_run_sub: None,
         }
     }
 
@@ -147,25 +604,61 @@ impl MigrateWizard {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A migration already in flight owns the wizard until it terminates.
+        // Re-entering would drop the run's owner (orphaning its task and
+        // progress) and could start a second concurrent migration, so instead
+        // surface the in-progress run and ignore the new request.
+        if self.is_running(cx) {
+            self.visible = true;
+            self.phase = WizardPhase::Run;
+            self.focus_handle.focus(window);
+            cx.notify();
+            return;
+        }
+
         self.visible = true;
         self.source_profile_id = Some(source_profile_id);
-        self.source_database = source_database;
-        self.step = WizardStep::PickTarget;
+        self.source_database = source_database.clone();
+        self.source_tables = source_tables.clone();
+        self.phase = WizardPhase::SourceTarget;
         self.error = None;
-        self.rows.clear();
-        self._row_subscriptions.clear();
-        self.cyclic_prefix.clear();
-        self.reorder_list.clear();
-        self.final_order = None;
-        self.confirmed_destructive = false;
-        self.disable_ri = false;
-        self.loading = false;
-        self.running = false;
-        self.active_task_id = None;
-        self.result_summary = None;
-        self.result_warnings.clear();
+        self.advancing = false;
+        self.generation = self.generation.wrapping_add(1);
+        self.built_selection = None;
+        self.advance_selection = None;
+        self.focused_phase = None;
 
-        self.build_target_candidates(source_tables, cx);
+        self.resolved_source_database = None;
+        self.target_profile_id = None;
+        self.target_database = None;
+        self.supports_truncate = false;
+        self.supports_disable_ri = false;
+
+        self.mapping = None;
+        self.options = None;
+        self.confirm_run = None;
+        self._mapping_sub = None;
+        self._options_sub = None;
+        self._confirm_run_sub = None;
+
+        let app_state = self.app_state.clone();
+        let source_target = cx.new(|cx| {
+            SourceTargetPhase::new(
+                app_state,
+                source_profile_id,
+                source_database,
+                source_tables,
+                cx,
+            )
+        });
+        self._source_target_sub = Some(cx.subscribe(
+            &source_target,
+            |this, _entity, _event: &SourceTargetChanged, cx| {
+                this.on_source_target_changed(cx);
+            },
+        ));
+        self.source_target = Some(source_target);
+
         self.focus_handle.focus(window);
         cx.notify();
     }
@@ -175,49 +668,113 @@ impl MigrateWizard {
         cx.notify();
     }
 
-    fn build_target_candidates(&mut self, source_tables: Vec<TableRef>, cx: &mut Context<Self>) {
-        self.source_tables = source_tables;
-
-        let state = self.app_state.read(cx);
-        let Some(source_profile_id) = self.source_profile_id else {
+    /// A changed source selection or target container invalidates every
+    /// downstream phase — the mapping configs, the options' capability
+    /// gating, and the confirm/run plan all derive from it. Invalidation is
+    /// deferred to the next advance (see [`Self::advance_from_source_target`])
+    /// so a no-op round trip — a check toggled off and back on, the same
+    /// target re-selected — never discards the user's mapping/options work.
+    /// A real deviation still orphans any in-flight advance immediately: its
+    /// result was spawned against inputs that no longer hold.
+    fn on_source_target_changed(&mut self, cx: &mut Context<Self>) {
+        // A live run owns the wizard; a late tree-fetch completion must not
+        // disturb it (and there is nothing downstream to rebuild).
+        if self.is_running(cx) {
             return;
+        }
+
+        // While a Source & Target advance is in flight, judge the event against
+        // the selection that advance was spawned with — not the built selection
+        // — so a completing background tree fetch that re-emits
+        // `SourceTargetChanged` without changing the selection does not cancel
+        // the advance the user already triggered. A genuine change still
+        // differs and cancels. With no such advance in flight
+        // (`advance_selection` is `None`, including during the later
+        // `Options → Confirm` advance) the built selection is the reference.
+        let reference = if self.advance_selection.is_some() {
+            &self.advance_selection
+        } else {
+            &self.built_selection
         };
-        let Some(source_connected) = state.connections().get(&source_profile_id) else {
-            self.error = Some("No active connection for the selected tables".to_string());
+        if !self.selection_matches(reference, cx) {
+            self.invalidate_in_flight_advance();
+        }
+        cx.notify();
+    }
+
+    /// Whether the confirm/run phase currently owns a migration in the
+    /// `Running` state. Drives the guards that keep the run's owner alive and
+    /// the rail frozen on `Run` for the duration of the run.
+    fn is_running(&self, cx: &App) -> bool {
+        self.confirm_run
+            .as_ref()
+            .is_some_and(|phase| phase.read(cx).run_state() == RunState::Running)
+    }
+
+    /// Whether the Source & Target phase's current effective selection equals a
+    /// previously captured one (the built selection, or the selection an
+    /// in-flight advance was spawned with). `None` — no captured selection —
+    /// never matches, so the caller treats it as a change.
+    fn selection_matches(
+        &self,
+        captured: &Option<(Vec<TableRef>, Uuid, String)>,
+        cx: &App,
+    ) -> bool {
+        let Some((tables, profile_id, database)) = captured.as_ref() else {
+            return false;
+        };
+        let Some(source_target) = self.source_target.as_ref() else {
+            return false;
+        };
+
+        let phase = source_target.read(cx);
+        phase.checked_source_tables() == *tables
+            && phase.target_profile_id() == Some(*profile_id)
+            && phase.target_database().as_deref() == Some(database.as_str())
+    }
+
+    /// Orphans any in-flight advance spawn: bumping the generation makes its
+    /// completion discard itself, and the footer stops showing "Loading…" for
+    /// work whose inputs no longer exist.
+    fn invalidate_in_flight_advance(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.advancing = false;
+        self.advance_selection = None;
+    }
+
+    /// Edited mappings only invalidate the confirm/run plan and its FK order;
+    /// the options phase is independent of the per-table mapping.
+    fn on_mapping_changed(&mut self, cx: &mut Context<Self>) {
+        // Never drop the confirm/run phase while it owns a live run — that
+        // would orphan the migration. Edits are impossible during a run anyway
+        // (the rail is frozen on Run), but a late async reseed could still emit.
+        if self.is_running(cx) {
             return;
-        };
-        let source_metadata = source_connected.connection.metadata();
+        }
+        self.invalidate_in_flight_advance();
+        self.confirm_run = None;
+        self._confirm_run_sub = None;
+        cx.notify();
+    }
 
-        let mut candidates: Vec<(Uuid, String)> = state
-            .connections()
-            .iter()
-            .filter(|(_, connected)| {
-                dbflux_core::transfer_compatible(source_metadata, connected.connection.metadata())
-            })
-            .map(|(profile_id, connected)| (*profile_id, connected.profile.name.clone()))
-            .collect();
-        candidates.sort_by(|a, b| a.1.cmp(&b.1));
+    fn on_options_changed(&mut self, cx: &mut Context<Self>) {
+        if self.is_running(cx) {
+            return;
+        }
+        self.invalidate_in_flight_advance();
+        self.confirm_run = None;
+        self._confirm_run_sub = None;
+        cx.notify();
+    }
 
-        self.target_candidates = candidates.iter().map(|(id, _)| *id).collect();
-        let items: Vec<DropdownItem> = candidates
-            .iter()
-            .map(|(_, name)| DropdownItem::new(name.clone()))
-            .collect();
-
-        let target_dropdown = cx.new(|_cx| {
-            Dropdown::new("migrate-target")
-                .items(items)
-                .placeholder("Target connection")
-        });
-        let subscription = cx.subscribe(
-            &target_dropdown,
-            |this, _entity, event: &DropdownSelectionChanged, cx| {
-                this.target_profile_id = this.target_candidates.get(event.index).copied();
+    fn on_confirm_run_event(&mut self, event: &ConfirmRunEvent, cx: &mut Context<Self>) {
+        match event {
+            ConfirmRunEvent::RunStarted => {
+                self.phase = WizardPhase::Run;
                 cx.notify();
-            },
-        );
-        self.target_dropdown = target_dropdown;
-        self._target_subscription = Some(subscription);
+            }
+            ConfirmRunEvent::CloseRequested => self.close(cx),
+        }
     }
 
     /// Resolves the source connection, honoring the specific database the
@@ -232,544 +789,549 @@ impl MigrateWizard {
         })
     }
 
-    /// Resolves a candidate target connection by profile id, using its own
-    /// primary connection — Migration does not offer a separate
-    /// target-database sub-picker in this slice (T27 explicit scope).
-    fn resolve_target_connection(&self, profile_id: Uuid, cx: &App) -> Option<Arc<dyn Connection>> {
-        Some(
-            self.app_state
-                .read(cx)
-                .connections()
-                .get(&profile_id)?
-                .connection
-                .clone(),
-        )
+    /// Resolves the target connection scoped to the chosen target database
+    /// (for `ConnectionPerDatabase` drivers), mirroring
+    /// [`Self::resolve_source_connection`] and the import wizard — the
+    /// profile's primary connection may be bound to a different database, and
+    /// the sink would silently write the migrated rows there.
+    fn resolve_target_connection(
+        &self,
+        profile_id: Uuid,
+        target_database: &str,
+        cx: &App,
+    ) -> Option<Arc<dyn Connection>> {
+        let connected = self.app_state.read(cx).connections().get(&profile_id)?;
+        Some(connected.connection_for_database(target_database))
     }
 
-    fn continue_from_pick_target(&mut self, cx: &mut Context<Self>) {
-        let Some(target_profile_id) = self.target_profile_id else {
-            self.error = Some("Choose a target connection".to_string());
-            cx.notify();
-            return;
-        };
-        let Some(source_connection) = self.resolve_source_connection(cx) else {
-            self.error = Some("No active connection for the source profile".to_string());
-            cx.notify();
-            return;
-        };
-        let Some(target_connection) = self.resolve_target_connection(target_profile_id, cx) else {
-            self.error = Some("No active connection for the target profile".to_string());
-            cx.notify();
-            return;
-        };
-
-        let source_database = self
-            .source_database
-            .clone()
-            .or_else(|| source_connection.active_database())
+    /// A human-readable `profile / database` label for the Confirm summary.
+    fn container_label(&self, profile_id: Uuid, database: &str, cx: &App) -> String {
+        let name = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|connected| connected.profile.name.clone())
             .unwrap_or_default();
-        let target_database = target_connection.active_database().unwrap_or_default();
-        let source_tables = self.source_tables.clone();
-        let supports_truncate = target_connection.supports(DriverCapabilities::TRUNCATE_TABLE);
-        let supports_disable_ri = target_connection.supports(DriverCapabilities::DISABLE_FK_CHECKS);
 
-        self.loading = true;
+        if database.is_empty() {
+            name
+        } else {
+            format!("{name} / {database}")
+        }
+    }
+
+    /// Footer Back button: steps one phase backwards through the linear flow.
+    /// Shares [`Self::go_to_phase`]'s running guard, so it is inert during a
+    /// live run.
+    fn go_back(&mut self, cx: &mut Context<Self>) {
+        if let Some(previous) = prev_phase(self.phase) {
+            self.go_to_phase(previous, cx);
+        }
+    }
+
+    /// Footer Cancel button: signals the confirm/run phase's cancel token so
+    /// the in-flight migration stops at the next chunk boundary.
+    fn cancel_run(&mut self, cx: &mut Context<Self>) {
+        if let Some(phase) = self.confirm_run.clone() {
+            phase.update(cx, |phase, cx| phase.cancel_run(cx));
+        }
+    }
+
+    /// Footer Close button (shown once the run is `Done`): routes through the
+    /// confirm/run phase's existing `CloseRequested` event so the single close
+    /// path in the wizard's subscription stays the only way the modal dismisses.
+    fn request_close(&mut self, cx: &mut Context<Self>) {
+        match self.confirm_run.clone() {
+            Some(phase) => {
+                phase.update(cx, |_phase, cx| cx.emit(ConfirmRunEvent::CloseRequested));
+            }
+            None => self.close(cx),
+        }
+    }
+
+    /// Back-navigation from the rail: only ever returns to an already-passed
+    /// phase, keeping the downstream entities intact so re-advancing is free.
+    fn go_to_phase(&mut self, phase: WizardPhase, cx: &mut Context<Self>) {
+        // The rail is frozen on `Run` while a migration is live: navigating
+        // back would drop the run's owner and orphan the in-flight task.
+        if self.phase == WizardPhase::Run && self.is_running(cx) {
+            return;
+        }
+        if phase < self.phase {
+            self.phase = phase;
+            cx.notify();
+        }
+    }
+
+    /// Whether the footer's Continue button is enabled for the current phase:
+    /// the `Source & Target` and `Tables Mapping` guards compose their child's
+    /// readiness; `Options` always has a usable value.
+    fn continue_enabled(&self, cx: &App) -> bool {
+        match self.phase {
+            WizardPhase::SourceTarget => self
+                .source_target
+                .as_ref()
+                .is_some_and(|phase| phase.read(cx).is_ready(cx)),
+            WizardPhase::TablesMapping => self
+                .mapping
+                .as_ref()
+                .is_some_and(|phase| phase.read(cx).can_advance()),
+            WizardPhase::Options => true,
+            WizardPhase::Confirm | WizardPhase::Run => false,
+        }
+    }
+
+    fn advance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.phase {
+            WizardPhase::SourceTarget => self.advance_from_source_target(window, cx),
+            WizardPhase::TablesMapping => self.advance_from_tables_mapping(window, cx),
+            WizardPhase::Options => self.advance_from_options(cx),
+            WizardPhase::Confirm | WizardPhase::Run => {}
+        }
+    }
+
+    fn report_advance_error(
+        &mut self,
+        kind: ErrorKind,
+        message: impl Into<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let message = message.into();
+        self.advancing = false;
+        self.error = Some(message.clone());
+        report_error(UserFacingError::new(kind, message), cx);
+        cx.notify();
+    }
+
+    /// `Source & Target` → `Tables Mapping`: resolves the chosen connections,
+    /// then (re)builds the mapping grid off-thread from the checked tables'
+    /// schemas and the target container's existing tables.
+    fn advance_from_source_target(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(source_target) = self.source_target.as_ref() else {
+            return;
+        };
+        let source_target = source_target.read(cx);
+        if !source_target.is_ready(cx) {
+            return;
+        }
+
+        let checked = source_target.checked_source_tables();
+        let resolved_source_database = source_target.source_database().to_string();
+        let Some(target_profile_id) = source_target.target_profile_id() else {
+            return;
+        };
+        let Some(target_database) = source_target.target_database() else {
+            return;
+        };
+        let Some(source_profile_id) = self.source_profile_id else {
+            return;
+        };
+
+        let Some(source_connection) = self.resolve_source_connection(cx) else {
+            self.report_advance_error(
+                ErrorKind::Storage,
+                "No active connection for the source profile",
+                cx,
+            );
+            return;
+        };
+        let Some(target_connection) =
+            self.resolve_target_connection(target_profile_id, &target_database, cx)
+        else {
+            self.report_advance_error(
+                ErrorKind::Storage,
+                "No active connection for the target profile",
+                cx,
+            );
+            return;
+        };
+
+        // Bind the plan's source database to exactly the database the phase
+        // resolved the checked tables against, so every checked table lines up
+        // with the single source the engine reads from. Fall back to the
+        // live connection only when the phase could not resolve one.
+        let source_database = if resolved_source_database.is_empty() {
+            source_connection.active_database().unwrap_or_default()
+        } else {
+            resolved_source_database
+        };
+
+        self.resolved_source_database = Some(source_database.clone());
+        self.target_profile_id = Some(target_profile_id);
+        self.target_database = Some(target_database.clone());
+        self.supports_truncate = target_connection.supports(DriverCapabilities::TRUNCATE_TABLE);
+        self.supports_disable_ri =
+            target_connection.supports(DriverCapabilities::DISABLE_FK_CHECKS);
+
+        // Deferred invalidation of downstream phases: only a selection that
+        // actually differs from the one they were built from discards them —
+        // a no-op round trip through the trees keeps the mapping work intact.
+        let new_selection = (checked.clone(), target_profile_id, target_database.clone());
+        if self.built_selection.as_ref() != Some(&new_selection) {
+            self.mapping = None;
+            self._mapping_sub = None;
+            self.options = None;
+            self._options_sub = None;
+            self.confirm_run = None;
+            self._confirm_run_sub = None;
+        }
+        self.built_selection = Some(new_selection);
+
+        if self.mapping.is_some() {
+            self.phase = WizardPhase::TablesMapping;
+            cx.notify();
+            return;
+        }
+
+        self.advancing = true;
+        self.advance_selection = self.built_selection.clone();
         self.error = None;
         cx.notify();
 
-        cx.spawn(async move |this, cx| {
-            let build_result = cx
+        let app_state = self.app_state.clone();
+        let supports_truncate = self.supports_truncate;
+        let list_connection = Arc::clone(&target_connection);
+        let list_database = target_database.clone();
+        let mapping_source_database = source_database.clone();
+        let generation = self.generation;
+
+        cx.spawn_in(window, async move |this, cx| {
+            let configs = build_configs_via_seam(
+                &app_state,
+                source_profile_id,
+                &source_database,
+                target_profile_id,
+                &target_database,
+                &checked,
+                cx,
+            )
+            .await;
+
+            let existing = cx
                 .background_executor()
-                .spawn(async move {
-                    let mut configs = Vec::with_capacity(source_tables.len());
-                    for table_ref in &source_tables {
-                        let source_columns: Vec<TransferColumn> = source_connection
-                            .table_details(
-                                &source_database,
-                                table_ref.schema.as_deref(),
-                                &table_ref.name,
-                            )
-                            .map_err(|e| format!("{}: {e}", table_ref.qualified_name()))?
-                            .columns
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(|c| TransferColumn {
-                                name: c.name,
-                                type_name: Some(c.type_name),
-                                nullable: c.nullable,
-                                is_primary_key: c.is_primary_key,
-                            })
-                            .collect();
-
-                        let target_lookup = target_connection.table_details(
-                            &target_database,
-                            table_ref.schema.as_deref(),
-                            &table_ref.name,
-                        );
-                        let target_exists = target_lookup.is_ok();
-                        let target_columns = target_lookup
-                            .ok()
-                            .and_then(|info| info.columns)
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(|c| TransferColumn {
-                                name: c.name,
-                                type_name: Some(c.type_name),
-                                nullable: c.nullable,
-                                is_primary_key: c.is_primary_key,
-                            })
-                            .collect::<Vec<_>>();
-
-                        configs.push(TableMigrationConfig::new(
-                            table_ref.clone(),
-                            source_columns,
-                            target_exists,
-                            target_columns,
-                        ));
-                    }
-
-                    Ok::<Vec<TableMigrationConfig>, String>(configs)
-                })
+                .spawn(async move { list_connection.schema_for_database(&list_database) })
                 .await;
 
-            this.update(cx, |this, cx| {
-                this.loading = false;
-                match build_result {
+            this.update_in(cx, |this, window, cx| {
+                if this.generation != generation {
+                    return;
+                }
+
+                this.advancing = false;
+                this.advance_selection = None;
+                match configs {
                     Ok(configs) => {
-                        this.supports_truncate = supports_truncate;
-                        this.supports_disable_ri = supports_disable_ri;
-                        this.build_rows(configs, cx);
-                        this.step = WizardStep::Configure;
+                        // A failed listing only affects Create/Existing
+                        // classification while the user types a new name, so
+                        // the empty-list fallback is safe — but the error is
+                        // traced rather than silently dropped.
+                        let existing_target_tables = existing
+                            .map(|info| {
+                                info.tables
+                                    .into_iter()
+                                    .map(|table| table.name)
+                                    .collect::<Vec<_>>()
+                            })
+                            .log_err_with("Could not list existing target tables for mapping")
+                            .unwrap_or_default();
+                        this.mount_mapping(
+                            configs,
+                            existing_target_tables,
+                            supports_truncate,
+                            source_profile_id,
+                            mapping_source_database,
+                            target_profile_id,
+                            target_database,
+                            window,
+                            cx,
+                        );
+                        this.phase = WizardPhase::TablesMapping;
+                        cx.notify();
                     }
                     Err(e) => {
-                        this.error = Some(format!("Could not read table schema: {e}"));
+                        this.report_advance_error(
+                            ErrorKind::Driver,
+                            format!("Could not read table schema: {e}"),
+                            cx,
+                        );
                     }
                 }
-                cx.notify();
             })
             .ok();
         })
         .detach();
     }
 
-    fn build_rows(&mut self, configs: Vec<TableMigrationConfig>, cx: &mut Context<Self>) {
-        self.rows.clear();
-        self._row_subscriptions.clear();
-        let supports_truncate = self.supports_truncate;
-
-        for (table_index, config) in configs.into_iter().enumerate() {
-            let mode_options = mapping_mode_options(supports_truncate);
-            let selected_mode_index = mode_options
-                .iter()
-                .position(|(_, mode)| *mode == config.mapping_mode);
-            let mode_items: Vec<DropdownItem> = mode_options
-                .iter()
-                .map(|(label, _)| DropdownItem::new(*label))
-                .collect();
-
-            let mapping_mode_dropdown = cx.new(|_cx| {
-                Dropdown::new(SharedString::from(format!("migrate-mode-{table_index}")))
-                    .items(mode_items)
-                    .selected_index(selected_mode_index)
-                    .placeholder("Mode")
-            });
-
-            let target_items: Vec<DropdownItem> = config
-                .target_columns
-                .iter()
-                .map(|c| DropdownItem::new(c.name.clone()))
-                .collect();
-            let rebind_target_dropdown = cx.new(|_cx| {
-                Dropdown::new(SharedString::from(format!(
-                    "migrate-target-col-{table_index}"
-                )))
-                .items(target_items)
-                .placeholder("Target column")
-            });
-
-            let mut source_items = vec![DropdownItem::new("(unset)")];
-            source_items.extend(
-                config
-                    .source_columns
-                    .iter()
-                    .map(|c| DropdownItem::new(c.name.clone())),
-            );
-            let rebind_source_dropdown = cx.new(|_cx| {
-                Dropdown::new(SharedString::from(format!(
-                    "migrate-source-col-{table_index}"
-                )))
-                .items(source_items)
-                .placeholder("Source column")
-            });
-
-            let mode_sub = cx.subscribe(
-                &mapping_mode_dropdown,
-                move |this, _entity, event: &DropdownSelectionChanged, cx| {
-                    let mode_options = mapping_mode_options(this.supports_truncate);
-                    if let Some((_, mode)) = mode_options.get(event.index)
-                        && let Some(row) = this.rows.get_mut(table_index)
-                    {
-                        row.config.mapping_mode = *mode;
-                        cx.notify();
-                    }
-                },
-            );
-
-            self.rows.push(TableMigrationRow {
-                config,
-                mapping_mode_dropdown,
-                rebind_target_dropdown,
-                rebind_source_dropdown,
-            });
-            self._row_subscriptions.push(mode_sub);
-        }
+    #[allow(clippy::too_many_arguments)]
+    fn mount_mapping(
+        &mut self,
+        configs: Vec<TableMigrationConfig>,
+        existing_target_tables: Vec<String>,
+        supports_truncate: bool,
+        source_profile_id: Uuid,
+        source_database: String,
+        target_profile_id: Uuid,
+        target_database: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let app_state = self.app_state.clone();
+        let mapping = cx.new(|cx| {
+            MappingPhase::new(
+                app_state,
+                source_profile_id,
+                source_database,
+                target_profile_id,
+                target_database,
+                existing_target_tables,
+                supports_truncate,
+                configs,
+                window,
+                cx,
+            )
+        });
+        self._mapping_sub = Some(
+            cx.subscribe(&mapping, |this, _entity, _event: &MappingChanged, cx| {
+                this.on_mapping_changed(cx)
+            }),
+        );
+        self.mapping = Some(mapping);
     }
 
-    fn apply_rebind(&mut self, table_index: usize, cx: &mut Context<Self>) {
-        let Some(row) = self.rows.get(table_index) else {
+    fn advance_from_tables_mapping(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(mapping) = self.mapping.as_ref() else {
             return;
         };
-
-        let Some(target_index) = row
-            .rebind_target_dropdown
-            .read(cx)
-            .selected_value()
-            .and_then(|value| {
-                row.config
-                    .target_columns
-                    .iter()
-                    .position(|c| c.name.as_str() == value.as_ref())
-            })
-        else {
+        if !mapping.read(cx).can_advance() {
             return;
-        };
-
-        let source_index = row
-            .rebind_source_dropdown
-            .read(cx)
-            .selected_value()
-            .and_then(|value| {
-                row.config
-                    .source_columns
-                    .iter()
-                    .position(|c| c.name.as_str() == value.as_ref())
-            });
-
-        if let Some(row) = self.rows.get_mut(table_index) {
-            row.config.set_binding(target_index, source_index);
         }
+
+        if self.options.is_none() {
+            let supports_disable_ri = self.supports_disable_ri;
+            let options = cx.new(|cx| OptionsPhase::new(supports_disable_ri, window, cx));
+            self._options_sub = Some(
+                cx.subscribe(&options, |this, _entity, _event: &OptionsChanged, cx| {
+                    this.on_options_changed(cx)
+                }),
+            );
+            self.options = Some(options);
+        }
+
+        self.phase = WizardPhase::Options;
+        self.error = None;
         cx.notify();
     }
 
-    /// Resolves the FK load order over the selected tables. On a cycle,
-    /// transitions to `ReorderCycle` instead of proceeding — the caller must
-    /// never guess an order across a cyclic FK graph (R6).
-    fn continue_from_configure(&mut self, cx: &mut Context<Self>) {
-        let Some(source_connection) = self.resolve_source_connection(cx) else {
-            self.error = Some("No active connection for the source profile".to_string());
+    /// `Options` → `Confirm`: fetches the selected tables' foreign keys through
+    /// the shared seam and computes the load order off-thread, surfacing a
+    /// reorder interrupt on a cycle (via [`decide_order`]) before mounting the
+    /// Confirm/Run phase.
+    fn advance_from_options(&mut self, cx: &mut Context<Self>) {
+        if self.confirm_run.is_some() {
+            self.phase = WizardPhase::Confirm;
             cx.notify();
             return;
+        }
+
+        let Some(mapping) = self.mapping.as_ref() else {
+            return;
         };
+        let Some(options) = self.options.as_ref() else {
+            return;
+        };
+        let Some(target_profile_id) = self.target_profile_id else {
+            return;
+        };
+        let Some(target_database) = self.target_database.clone() else {
+            return;
+        };
+        let Some(source_profile_id) = self.source_profile_id else {
+            return;
+        };
+
+        let configs: Vec<TableMigrationConfig> = mapping.read(cx).configs().cloned().collect();
+        let segment_size = options.read(cx).segment_size();
+        let disable_referential_integrity = options.read(cx).disable_referential_integrity();
+
+        let Some(source_connection) = self.resolve_source_connection(cx) else {
+            self.report_advance_error(
+                ErrorKind::Storage,
+                "No active connection for the source profile",
+                cx,
+            );
+            return;
+        };
+        let Some(target_connection) =
+            self.resolve_target_connection(target_profile_id, &target_database, cx)
+        else {
+            self.report_advance_error(
+                ErrorKind::Storage,
+                "No active connection for the target profile",
+                cx,
+            );
+            return;
+        };
+
         let source_database = self
-            .source_database
+            .resolved_source_database
             .clone()
+            .or_else(|| self.source_database.clone())
             .or_else(|| source_connection.active_database())
             .unwrap_or_default();
 
-        let table_refs: Vec<TableRef> = self
-            .rows
-            .iter()
-            .map(|row| row.config.source_table.clone())
-            .collect();
+        let source_container_label = self.container_label(source_profile_id, &source_database, cx);
+        let target_container_label = self.container_label(target_profile_id, &target_database, cx);
 
+        // A non-destructive row whose target is one of the source tables in the
+        // same container appends into a table that is also being read; that is
+        // allowed but worth flagging on the Confirm screen (the destructive
+        // variant is already blocked at the mapping step, LD-14).
+        let same_container =
+            source_profile_id == target_profile_id && source_database == target_database;
+        let pre_run_warnings = {
+            let plans: Vec<MappingRowPlan> = configs
+                .iter()
+                .map(|config| MappingRowPlan {
+                    source_schema: config.source_table.schema.as_deref(),
+                    source_table: config.source_table.name.as_str(),
+                    target_schema: config.target_schema.as_deref(),
+                    target_table: config.target_table.as_str(),
+                    destructive: config.is_destructive(),
+                })
+                .collect();
+            tables_mapping_confirm_warnings(&plans, same_container)
+        };
+
+        let table_refs: Vec<TableRef> = configs.iter().map(|c| c.source_table.clone()).collect();
         let mut schemas: Vec<Option<String>> =
             table_refs.iter().map(|t| t.schema.clone()).collect();
         schemas.sort();
         schemas.dedup();
 
-        let mut fks: Vec<SchemaForeignKeyInfo> = Vec::new();
-        for schema in schemas {
-            match source_connection.schema_foreign_keys(&source_database, schema.as_deref()) {
-                Ok(batch) => fks.extend(batch),
-                Err(e) => {
-                    self.error = Some(format!("Could not read foreign keys: {e}"));
-                    cx.notify();
-                    return;
-                }
-            }
-        }
-
-        match topological_order(&table_refs, &fks) {
-            dbflux_core::OrderResult::Ordered(order) => {
-                self.final_order = Some(order);
-                self.advance_past_ordering(cx);
-            }
-            dbflux_core::OrderResult::Cyclic {
-                ordered_prefix,
-                cycle,
-            } => {
-                self.cyclic_prefix = ordered_prefix;
-                self.reorder_list = cycle;
-                self.step = WizardStep::ReorderCycle;
-                cx.notify();
-            }
-        }
-    }
-
-    fn move_reorder_row(&mut self, index: usize, delta: isize, cx: &mut Context<Self>) {
-        let Some(new_index) = index.checked_add_signed(delta) else {
-            return;
-        };
-        if new_index >= self.reorder_list.len() {
-            return;
-        }
-        self.reorder_list.swap(index, new_index);
+        self.advancing = true;
+        self.error = None;
         cx.notify();
-    }
-
-    fn continue_from_reorder(&mut self, cx: &mut Context<Self>) {
-        let mut order = self.cyclic_prefix.clone();
-        order.extend(self.reorder_list.clone());
-        self.final_order = Some(order);
-        self.advance_past_ordering(cx);
-    }
-
-    fn advance_past_ordering(&mut self, cx: &mut Context<Self>) {
-        let has_destructive = self.rows.iter().any(|row| row.config.is_destructive());
-        self.step = if has_destructive {
-            WizardStep::Confirm
-        } else {
-            self.start_migration(cx);
-            WizardStep::Running
-        };
-        cx.notify();
-    }
-
-    fn confirm_destructive_and_run(&mut self, cx: &mut Context<Self>) {
-        self.confirmed_destructive = true;
-        self.start_migration(cx);
-        self.step = WizardStep::Running;
-        cx.notify();
-    }
-
-    fn start_migration(&mut self, cx: &mut Context<Self>) {
-        let Some(target_profile_id) = self.target_profile_id else {
-            return;
-        };
-        let Some(source_connection) = self.resolve_source_connection(cx) else {
-            report_error(
-                UserFacingError::new(
-                    ErrorKind::Storage,
-                    "No active connection for this migration",
-                ),
-                cx,
-            );
-            return;
-        };
-        let Some(target_connection) = self.resolve_target_connection(target_profile_id, cx) else {
-            report_error(
-                UserFacingError::new(
-                    ErrorKind::Storage,
-                    "No active connection for this migration",
-                ),
-                cx,
-            );
-            return;
-        };
-        let source_database = self
-            .source_database
-            .clone()
-            .or_else(|| source_connection.active_database())
-            .unwrap_or_default();
-        let target_database = target_connection.active_database().unwrap_or_default();
-        let manual_order = self.final_order.clone();
-
-        let plans: Vec<MigrationTablePlan> = self
-            .rows
-            .iter()
-            .map(|row| MigrationTablePlan {
-                source_table: row.config.source_table.clone(),
-                source_columns: row.config.source_columns.clone(),
-                target_schema: row.config.target_schema.clone(),
-                target_table: row.config.target_table.clone(),
-                mapping_mode: row.config.mapping_mode,
-                column_overrides: Some(row.config.to_overrides()),
-                estimated_total: None,
-            })
-            .collect();
-        let destructive_confirmed = self.confirmed_destructive;
-        let disable_referential_integrity = self.disable_ri && self.supports_disable_ri;
-
-        self.running = true;
-        self.result_summary = None;
-        self.result_warnings.clear();
-        *self.progress.lock().unwrap_or_else(|p| p.into_inner()) = (0, None);
-
-        let description = format!("Migrate {} table(s)", plans.len());
-        let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
-            let pair = state.start_task_for_target(
-                TaskKind::Migrate,
-                description,
-                Some(TaskTarget {
-                    profile_id: target_profile_id,
-                    database: Some(target_database.clone()),
-                }),
-            );
-            cx.emit(AppStateChanged);
-            pair
-        });
-        self.active_task_id = Some(task_id);
 
         let app_state = self.app_state.clone();
-        let progress = Arc::clone(&self.progress);
-        let ticker_progress = Arc::clone(&self.progress);
-        let ticker_app_state = app_state.clone();
-
-        cx.spawn(async move |_this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(150))
-                    .await;
-
-                let still_running = cx
-                    .update(|cx| {
-                        ticker_app_state.update(cx, |state, cx| {
-                            let Some(snapshot) = state.tasks().get(task_id) else {
-                                return false;
-                            };
-                            if snapshot.status != TaskStatus::Running {
-                                return false;
-                            }
-
-                            let (rows_done, estimated_total) = *ticker_progress
-                                .lock()
-                                .unwrap_or_else(|poisoned| poisoned.into_inner());
-                            if let Some(total) = estimated_total
-                                && total > 0
-                            {
-                                let fraction = (rows_done as f32 / total as f32).clamp(0.0, 1.0);
-                                state.tasks_mut().update_progress(task_id, fraction);
-                                cx.notify();
-                            }
-
-                            true
-                        })
-                    })
-                    .unwrap_or(false);
-
-                if !still_running {
-                    break;
-                }
-            }
-        })
-        .detach();
+        let generation = self.generation;
 
         cx.spawn(async move |this, cx| {
-            let migration_result = cx
-                .background_executor()
-                .spawn(async move {
-                    let options = MigrationOptions {
-                        segment_size: 500,
-                        source_database,
-                        target_database,
-                        destructive_confirmed,
-                        disable_referential_integrity,
-                        manual_order,
-                    };
+            let mut foreign_keys: Vec<SchemaForeignKeyInfo> = Vec::new();
+            let mut fetch_error: Option<String> = None;
 
-                    run_migration(
-                        &source_connection,
-                        &target_connection,
-                        &plans,
-                        &options,
-                        &cancel_token,
-                        move |_index, rows_done, estimated_total| {
-                            if let Ok(mut guard) = progress.lock() {
-                                *guard = (rows_done, estimated_total);
-                            }
-                        },
-                    )
-                })
-                .await;
-
-            this.update(cx, |this, cx| {
-                this.running = false;
-                this.step = WizardStep::Done;
-
-                match migration_result {
-                    Ok(MigrationOutcome::Completed(outcome)) if outcome.cancelled => {
-                        app_state.update(cx, |state, cx| {
-                            state.tasks_mut().cancel(task_id);
-                            cx.emit(AppStateChanged);
-                        });
-                        this.result_summary = Some("Migration cancelled".to_string());
-                    }
-                    Ok(MigrationOutcome::Completed(outcome)) => {
-                        let failed_table = outcome.tables.iter().find_map(|t| match &t.status {
-                            TableTransferStatus::Failed { error } => {
-                                Some((t.source_table.clone(), error.clone()))
-                            }
-                            _ => None,
-                        });
-
-                        if let Some((table, error)) = &failed_table {
-                            app_state.update(cx, |state, cx| {
-                                state.fail_task(task_id, format!("{table}: {error}"));
-                                cx.emit(AppStateChanged);
-                            });
-                            report_error(
-                                UserFacingError::new(
-                                    ErrorKind::Driver,
-                                    format!("Migration failed on table '{table}': {error}"),
-                                ),
-                                cx,
-                            );
-                        } else {
-                            app_state.update(cx, |state, cx| {
-                                state.complete_task(task_id);
-                                cx.emit(AppStateChanged);
-                            });
-                            Toast::success("Migration completed").push(cx);
-                        }
-
-                        this.result_summary = Some(Self::summarize(&outcome));
-                        this.result_warnings =
-                            Self::itemized_status_lines(&outcome.tables, &outcome.warnings);
-                    }
-                    Ok(MigrationOutcome::CyclicOrderRequired { .. }) => {
-                        // The wizard always resolves ordering (auto or
-                        // manual) before calling `run_migration`, so this
-                        // branch is unreachable in practice; treat it the
-                        // same as any other failure to run rather than
-                        // panicking on an engine invariant.
-                        app_state.update(cx, |state, cx| {
-                            state.fail_task(task_id, "FK order became cyclic mid-run".to_string());
-                            cx.emit(AppStateChanged);
-                        });
-                        this.result_summary =
-                            Some("Migration failed: FK order became cyclic mid-run".to_string());
-                    }
+            for schema in &schemas {
+                match fetch_schema_foreign_keys_via_seam(
+                    &app_state,
+                    source_profile_id,
+                    &source_database,
+                    schema.as_deref(),
+                    cx,
+                )
+                .await
+                {
+                    Ok(batch) => foreign_keys.extend(batch),
                     Err(e) => {
-                        app_state.update(cx, |state, cx| {
-                            state.fail_task(task_id, e.to_string());
-                            cx.emit(AppStateChanged);
-                        });
-                        report_error(
-                            UserFacingError::new(
-                                ErrorKind::Driver,
-                                format!("Migration failed: {e}"),
-                            ),
-                            cx,
-                        );
-                        this.result_summary = Some(format!("Migration failed: {e}"));
+                        fetch_error = Some(e);
+                        break;
                     }
                 }
+            }
 
-                cx.notify();
+            let order_result = match fetch_error {
+                Some(e) => Err(e),
+                None => Ok(cx
+                    .background_executor()
+                    .spawn(async move { topological_order(&table_refs, &foreign_keys) })
+                    .await),
+            };
+
+            this.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+
+                this.advancing = false;
+                match order_result {
+                    Ok(order) => {
+                        let inputs = ConfirmRunInputs {
+                            app_state: this.app_state.clone(),
+                            source_connection,
+                            target_connection,
+                            source_database,
+                            target_database,
+                            target_profile_id,
+                            source_container_label,
+                            target_container_label,
+                            segment_size,
+                            disable_referential_integrity,
+                            order: decide_order(order),
+                            configs,
+                            pre_run_warnings,
+                        };
+                        this.mount_confirm_run(inputs, cx);
+                        this.phase = WizardPhase::Confirm;
+                        cx.notify();
+                    }
+                    Err(e) => {
+                        this.report_advance_error(
+                            ErrorKind::Driver,
+                            format!("Could not read foreign keys: {e}"),
+                            cx,
+                        );
+                    }
+                }
             })
             .ok();
         })
         .detach();
+    }
+
+    /// The focus handle of the child entity backing the current phase, so the
+    /// wizard can route keyboard focus into the active tree/grid on entry.
+    /// `Confirm` and `Run` share the confirm/run child.
+    fn active_phase_focus_handle(&self, cx: &App) -> Option<FocusHandle> {
+        match self.phase {
+            WizardPhase::SourceTarget => self
+                .source_target
+                .as_ref()
+                .map(|entity| entity.read(cx).focus_handle().clone()),
+            WizardPhase::TablesMapping => self
+                .mapping
+                .as_ref()
+                .map(|entity| entity.read(cx).focus_handle().clone()),
+            WizardPhase::Options => self
+                .options
+                .as_ref()
+                .map(|entity| entity.read(cx).focus_handle().clone()),
+            WizardPhase::Confirm | WizardPhase::Run => self
+                .confirm_run
+                .as_ref()
+                .map(|entity| entity.read(cx).focus_handle().clone()),
+        }
+    }
+
+    /// Moves keyboard focus into the active phase's child once per phase
+    /// change, so arrow-key navigation works without clicking into the tree
+    /// first. Focus stays put across re-renders of the same phase, so tabbing
+    /// to the footer button is never stolen back.
+    fn focus_active_phase_on_entry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.focused_phase == Some(self.phase) {
+            return;
+        }
+        if let Some(handle) = self.active_phase_focus_handle(cx) {
+            handle.focus(window);
+            self.focused_phase = Some(self.phase);
+        }
+    }
+
+    fn mount_confirm_run(&mut self, inputs: ConfirmRunInputs, cx: &mut Context<Self>) {
+        let confirm_run = cx.new(|cx| ConfirmRunPhase::new(inputs, cx));
+        self._confirm_run_sub = Some(cx.subscribe(
+            &confirm_run,
+            |this, _entity, event: &ConfirmRunEvent, cx| this.on_confirm_run_event(event, cx),
+        ));
+        self.confirm_run = Some(confirm_run);
     }
 
     fn summarize(outcome: &dbflux_transfer::migration::MigrationRunOutcome) -> String {
@@ -844,256 +1406,318 @@ impl MigrateWizard {
 }
 
 impl Render for MigrateWizard {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.visible {
             return div().into_any_element();
         }
+
+        self.focus_active_phase_on_entry(window, cx);
 
         let close_entity = cx.entity().downgrade();
         let close = move |_window: &mut Window, cx: &mut App| {
             close_entity.update(cx, |this, cx| this.close(cx)).ok();
         };
 
-        let mut frame = ModalFrame::new("migrate-wizard", &self.focus_handle, close)
+        let frame = ModalFrame::new("migrate-wizard", &self.focus_handle, close)
             .title("Migrate Data")
             .icon(AppIcon::ArrowUpDown)
-            .width(px(720.0))
-            .max_height(px(640.0));
+            .width(px(1000.0))
+            .height_fraction(0.8)
+            .center_vertically()
+            .child(self.render_body(cx));
 
-        let body = match self.step {
-            WizardStep::PickTarget => self.render_pick_target(cx),
-            WizardStep::Configure => self.render_configure(cx),
-            WizardStep::ReorderCycle => self.render_reorder_cycle(cx),
-            WizardStep::Confirm => self.render_confirm(cx),
-            WizardStep::Running => self.render_running(),
-            WizardStep::Done => self.render_done(cx),
-        };
-
-        frame = frame.child(body);
         frame.render(cx).into_any_element()
     }
 }
 
 impl MigrateWizard {
-    fn render_pick_target(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
+        let rail_entity = cx.entity().downgrade();
+        let on_select = move |phase: WizardPhase, _window: &mut Window, app: &mut App| {
+            rail_entity
+                .update(app, |this, cx| this.go_to_phase(phase, cx))
+                .ok();
+        };
+
+        // `flex_1` (not `size_full`): the modal container is a fixed-height
+        // flex column whose first child is the header, so the body must grow
+        // into the *remaining* height. `size_full` (100% height) would instead
+        // push the body to the full container height below the header, and the
+        // container's `overflow_hidden` would then clip the footer off-screen.
         div()
             .flex()
             .flex_col()
-            .gap(Spacing::MD)
-            .p(Spacing::MD)
-            .child(Text::body(format!(
-                "Choose a connected, compatible target for {} table(s).",
-                self.source_tables.len()
-            )))
-            .when_some(self.error.clone(), |d, error| d.child(Text::caption(error)))
-            .child(self.target_dropdown.clone())
-            .child(
-                Button::new(
-                    "migrate-wizard-continue-target",
-                    if self.loading {
-                        "Loading..."
-                    } else {
-                        "Continue"
-                    },
-                )
-                .disabled(self.loading)
-                .on_click(cx.listener(|this, _, _, cx| this.continue_from_pick_target(cx))),
-            )
-            .into_any_element()
-    }
-
-    fn render_configure(&self, cx: &mut Context<Self>) -> AnyElement {
-        let rows = self.rows.iter().enumerate().map(|(table_index, row)| {
-            let unmatched = row.config.unmatched_source_names();
-
-            div()
-                .flex()
-                .flex_col()
-                .gap(Spacing::XS)
-                .p(Spacing::SM)
-                .border_1()
-                .child(Text::body(format!(
-                    "{} → {}",
-                    row.config.source_table.qualified_name(),
-                    row.config.target_table
-                )))
-                .child(
-                    div()
-                        .flex()
-                        .gap(Spacing::SM)
-                        .child(row.mapping_mode_dropdown.clone())
-                        .child(row.rebind_target_dropdown.clone())
-                        .child(row.rebind_source_dropdown.clone())
-                        .child(
-                            Button::new(
-                                SharedString::from(format!("migrate-apply-mapping-{table_index}")),
-                                "Apply Mapping",
-                            )
-                            .ghost()
-                            .on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    this.apply_rebind(table_index, cx);
-                                },
-                            )),
-                        ),
-                )
-                .when(!unmatched.is_empty(), |d| {
-                    d.child(Text::caption(format!(
-                        "Unmatched source column(s), will be skipped unless remapped: {}",
-                        unmatched.join(", ")
-                    )))
-                })
-                .into_any_element()
-        });
-
-        div()
-            .flex()
-            .flex_col()
-            .gap(Spacing::MD)
-            .p(Spacing::MD)
-            .children(rows)
-            .when(self.supports_disable_ri, |d| {
-                d.child(
-                    Checkbox::new("migrate-disable-ri")
-                        .checked(self.disable_ri)
-                        .label("Disable referential integrity during migration")
-                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                            this.disable_ri = *checked;
-                            cx.notify();
-                        })),
-                )
-            })
-            .when_some(self.error.clone(), |d, error| d.child(Text::caption(error)))
-            .child(
-                Button::new("migrate-wizard-continue-configure", "Continue")
-                    .on_click(cx.listener(|this, _, _, cx| this.continue_from_configure(cx))),
-            )
-            .into_any_element()
-    }
-
-    fn render_reorder_cycle(&self, cx: &mut Context<Self>) -> AnyElement {
-        let rows = self.reorder_list.iter().enumerate().map(|(index, table)| {
-            div()
-                .flex()
-                .items_center()
-                .gap(Spacing::SM)
-                .p(Spacing::SM)
-                .border_1()
-                .child(Text::body(table.qualified_name()))
-                .child(
-                    Button::new(
-                        SharedString::from(format!("migrate-reorder-up-{index}")),
-                        "Up",
-                    )
-                    .ghost()
-                    .disabled(index == 0)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.move_reorder_row(index, -1, cx);
-                    })),
-                )
-                .child(
-                    Button::new(
-                        SharedString::from(format!("migrate-reorder-down-{index}")),
-                        "Down",
-                    )
-                    .ghost()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.move_reorder_row(index, 1, cx);
-                    })),
-                )
-                .into_any_element()
-        });
-
-        div()
-            .flex()
-            .flex_col()
-            .gap(Spacing::MD)
-            .p(Spacing::MD)
-            .child(Text::body(
-                "These tables have a circular foreign-key relationship and could not be \
-                 ordered automatically. Choose a manual load order:",
-            ))
-            .children(rows)
-            .child(
-                Button::new("migrate-wizard-continue-reorder", "Continue")
-                    .on_click(cx.listener(|this, _, _, cx| this.continue_from_reorder(cx))),
-            )
-            .into_any_element()
-    }
-
-    fn render_confirm(&self, cx: &mut Context<Self>) -> AnyElement {
-        let destructive_tables: Vec<String> = self
-            .rows
-            .iter()
-            .filter(|row| row.config.is_destructive())
-            .map(|row| row.config.target_table.clone())
-            .collect();
-
-        div()
-            .flex()
-            .flex_col()
-            .gap(Spacing::MD)
-            .p(Spacing::MD)
-            .child(Text::body(format!(
-                "This will drop-and-recreate or truncate the following table(s) before loading data: {}",
-                destructive_tables.join(", ")
-            )))
-            .child(Text::caption("This cannot be undone. Confirm to proceed."))
+            .flex_1()
+            .min_h(px(0.0))
+            .w_full()
             .child(
                 div()
                     .flex()
-                    .gap(Spacing::SM)
-                    .child(
-                        Button::new("migrate-wizard-cancel-confirm", "Back")
-                            .ghost()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.step = WizardStep::Configure;
-                                this.confirmed_destructive = false;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("migrate-wizard-confirm-destructive", "Yes, proceed").on_click(
-                            cx.listener(|this, _, _, cx| this.confirm_destructive_and_run(cx)),
-                        ),
-                    ),
+                    .flex_row()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .child(render_phase_rail(self.phase, on_select, cx))
+                    .child(self.render_phase_area()),
             )
+            .child(self.render_footer(cx))
             .into_any_element()
     }
 
-    fn render_running(&self) -> AnyElement {
-        let (rows_done, estimated_total) = *self.progress.lock().unwrap_or_else(|p| p.into_inner());
-        let label = match estimated_total {
-            Some(total) if total > 0 => format!("{rows_done} / {total} rows"),
-            _ => format!("{rows_done} rows"),
+    fn render_phase_area(&self) -> AnyElement {
+        let content = match self.phase {
+            WizardPhase::SourceTarget => self
+                .source_target
+                .as_ref()
+                .map(|entity| entity.clone().into_any_element()),
+            WizardPhase::TablesMapping => self
+                .mapping
+                .as_ref()
+                .map(|entity| entity.clone().into_any_element()),
+            WizardPhase::Options => self
+                .options
+                .as_ref()
+                .map(|entity| entity.clone().into_any_element()),
+            WizardPhase::Confirm | WizardPhase::Run => self
+                .confirm_run
+                .as_ref()
+                .map(|entity| entity.clone().into_any_element()),
         };
 
         div()
+            .flex_1()
+            .min_w(px(0.0))
             .flex()
             .flex_col()
-            .gap(Spacing::MD)
-            .p(Spacing::MD)
-            .child(Text::body("Migrating..."))
-            .child(Text::caption(label))
+            .when_some(content, |parent, element| parent.child(element))
             .into_any_element()
     }
 
-    fn render_done(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_footer(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let border = theme.border;
+
+        let run_state = self
+            .confirm_run
+            .as_ref()
+            .map(|phase| phase.read(cx).run_state());
+        let running = run_state == Some(RunState::Running);
+        let done = run_state == Some(RunState::Done);
+
+        let shows_back = prev_phase(self.phase).is_some() && !running && !done;
+        let shows_continue = next_phase(self.phase).is_some();
+        let continue_enabled = !self.advancing && self.continue_enabled(cx);
+        let continue_label = if self.advancing {
+            "Loading…"
+        } else {
+            "Continue"
+        };
+
+        let actions = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(Spacing::SM)
+            .when(shows_back, |parent| {
+                parent.child(
+                    Button::new("migrate-wizard-back", "Back")
+                        .small()
+                        .ghost()
+                        .disabled(self.advancing)
+                        .on_click(cx.listener(|this, _event, _window, cx| this.go_back(cx))),
+                )
+            })
+            .when(shows_continue, |parent| {
+                parent.child(
+                    Button::new("migrate-wizard-continue", continue_label)
+                        .small()
+                        .primary()
+                        .disabled(!continue_enabled)
+                        .on_click(cx.listener(|this, _event, window, cx| this.advance(window, cx))),
+                )
+            })
+            .when(running, |parent| {
+                parent.child(
+                    Button::new("migrate-wizard-cancel", "Cancel")
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(|this, _event, _window, cx| this.cancel_run(cx))),
+                )
+            })
+            .when(done, |parent| {
+                parent.child(
+                    Button::new("migrate-wizard-close", "Close")
+                        .small()
+                        .primary()
+                        .on_click(cx.listener(|this, _event, _window, cx| this.request_close(cx))),
+                )
+            });
+
         div()
             .flex()
-            .flex_col()
-            .gap(Spacing::MD)
-            .p(Spacing::MD)
-            .when_some(self.result_summary.clone(), |d, summary| {
-                d.child(Text::body(summary))
-            })
-            .when(!self.result_warnings.is_empty(), |d| {
-                d.child(Text::caption(self.result_warnings.join("; ")))
-            })
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .gap(Spacing::SM)
+            .px(Spacing::MD)
+            .py(Spacing::SM)
+            .border_t_1()
+            .border_color(border)
             .child(
-                Button::new("migrate-wizard-close", "Close")
-                    .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .when_some(self.error.clone(), |parent, error| {
+                        parent.child(Text::caption(error).danger())
+                    }),
             )
+            .child(actions)
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        TableMigrationConfig, WizardPhase, build_migration_options, build_migration_table_plans,
+        is_already_cached_sentinel, next_phase, target_columns_prove_existing,
+    };
+    use dbflux_core::{ColumnInfo, TableRef, TransferColumn};
+
+    fn transfer_column(name: &str) -> TransferColumn {
+        TransferColumn {
+            name: name.to_string(),
+            type_name: Some("text".to_string()),
+            nullable: true,
+            is_primary_key: false,
+        }
+    }
+
+    fn column_info(name: &str) -> ColumnInfo {
+        ColumnInfo {
+            name: name.to_string(),
+            type_name: "text".to_string(),
+            nullable: true,
+            is_primary_key: false,
+            default_value: None,
+            enum_values: None,
+        }
+    }
+
+    #[test]
+    fn target_columns_prove_existing_only_for_a_non_empty_column_set() {
+        // A real, existing relation always projects at least one column.
+        let columns = vec![column_info("id")];
+        assert!(target_columns_prove_existing(Some(&columns)));
+
+        // Ok-but-empty columns (Postgres/MySQL "table absent" signal) and a
+        // never-loaded column set both mean the target must be created.
+        assert!(!target_columns_prove_existing(Some(&[])));
+        assert!(!target_columns_prove_existing(None));
+    }
+
+    #[test]
+    fn is_already_cached_sentinel_matches_only_the_known_sentinel_strings() {
+        assert!(is_already_cached_sentinel("Table details already cached"));
+        assert!(is_already_cached_sentinel(
+            "Schema foreign keys already cached"
+        ));
+        assert!(!is_already_cached_sentinel("Profile not connected"));
+        assert!(!is_already_cached_sentinel(""));
+    }
+
+    #[test]
+    fn next_phase_advances_through_the_forward_flow_and_stops_at_confirm() {
+        assert_eq!(
+            next_phase(WizardPhase::SourceTarget),
+            Some(WizardPhase::TablesMapping)
+        );
+        assert_eq!(
+            next_phase(WizardPhase::TablesMapping),
+            Some(WizardPhase::Options)
+        );
+        assert_eq!(next_phase(WizardPhase::Options), Some(WizardPhase::Confirm));
+        assert_eq!(next_phase(WizardPhase::Confirm), None);
+        assert_eq!(next_phase(WizardPhase::Run), None);
+    }
+
+    #[test]
+    fn build_migration_table_plans_maps_every_config_field_and_defaults_estimate_to_none() {
+        let source_columns = vec![transfer_column("id"), transfer_column("legacy_x")];
+        let target_columns = vec![transfer_column("id"), transfer_column("y")];
+        let mut config = TableMigrationConfig::new(
+            TableRef::new("users"),
+            source_columns.clone(),
+            true,
+            target_columns,
+        );
+        config.target_schema = Some("public".to_string());
+        config.set_binding(1, Some(1));
+        let expected_overrides = config.to_overrides();
+
+        let plans = build_migration_table_plans(std::slice::from_ref(&config));
+
+        assert_eq!(plans.len(), 1);
+        let plan = &plans[0];
+        assert_eq!(plan.source_table, config.source_table);
+        assert_eq!(plan.source_columns, source_columns);
+        assert_eq!(plan.target_schema, Some("public".to_string()));
+        assert_eq!(plan.target_table, config.target_table);
+        assert_eq!(plan.mapping_mode, config.mapping_mode);
+        assert_eq!(plan.column_overrides, Some(expected_overrides));
+        assert_eq!(plan.estimated_total, None);
+    }
+
+    #[test]
+    fn build_migration_table_plans_assembles_one_plan_per_config_in_order() {
+        let users = TableMigrationConfig::new(
+            TableRef::new("users"),
+            vec![transfer_column("id")],
+            true,
+            vec![transfer_column("id")],
+        );
+        let orders = TableMigrationConfig::new(
+            TableRef::new("orders"),
+            vec![transfer_column("id")],
+            false,
+            Vec::new(),
+        );
+        let configs = vec![users, orders];
+
+        let plans = build_migration_table_plans(&configs);
+
+        assert_eq!(plans.len(), 2);
+        assert_eq!(plans[0].target_table, "users");
+        assert_eq!(plans[1].target_table, "orders");
+    }
+
+    #[test]
+    fn build_migration_options_maps_every_field_including_target_database() {
+        let options = build_migration_options(
+            500,
+            "source_db".to_string(),
+            "target_db".to_string(),
+            true,
+            false,
+            Some(vec![TableRef::new("a"), TableRef::new("b")]),
+        );
+
+        assert_eq!(options.segment_size, 500);
+        assert_eq!(options.source_database, "source_db");
+        assert_eq!(options.target_database, "target_db");
+        assert!(options.destructive_confirmed);
+        assert!(!options.disable_referential_integrity);
+        assert_eq!(
+            options.manual_order,
+            Some(vec![TableRef::new("a"), TableRef::new("b")])
+        );
+    }
+
+    #[test]
+    fn build_migration_options_with_no_manual_order_leaves_it_none() {
+        let options =
+            build_migration_options(250, "src".to_string(), "dst".to_string(), false, true, None);
+
+        assert_eq!(options.manual_order, None);
+        assert!(options.disable_referential_integrity);
     }
 }

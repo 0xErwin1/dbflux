@@ -58,7 +58,11 @@ impl DataGridPanel {
         let state = self.app_state.read(cx);
         let connected = state.connections().get(&profile_id)?;
         let database = connected.active_database.as_deref().unwrap_or("default");
-        let cache_key = (database.to_string(), table_ref.name.clone());
+        let cache_key = (
+            database.to_string(),
+            table_ref.schema.clone(),
+            table_ref.name.clone(),
+        );
         let table_info = connected.table_details.get(&cache_key)?;
         let columns = table_info.columns.as_deref()?;
 
@@ -84,7 +88,11 @@ impl DataGridPanel {
         let state = self.app_state.read(cx);
         let connected = state.connections().get(&profile_id)?;
         let database = connected.active_database.as_deref().unwrap_or("default");
-        let cache_key = (database.to_string(), table_ref.name.clone());
+        let cache_key = (
+            database.to_string(),
+            table_ref.schema.clone(),
+            table_ref.name.clone(),
+        );
         let table_info = connected.table_details.get(&cache_key)?;
 
         table_info.columns.clone()
@@ -111,7 +119,11 @@ impl DataGridPanel {
         };
 
         let database = connected.active_database.as_deref().unwrap_or("default");
-        let cache_key = (database.to_string(), table_ref.name.clone());
+        let cache_key = (
+            database.to_string(),
+            table_ref.schema.clone(),
+            table_ref.name.clone(),
+        );
         let table_info = match connected.table_details.get(&cache_key) {
             Some(t) => t,
             None => return std::collections::HashSet::new(),
@@ -146,7 +158,11 @@ impl DataGridPanel {
         };
 
         let database = connected.active_database.as_deref().unwrap_or("default");
-        let cache_key = (database.to_string(), table_ref.name.clone());
+        let cache_key = (
+            database.to_string(),
+            table_ref.schema.clone(),
+            table_ref.name.clone(),
+        );
         let table_info = match connected.table_details.get(&cache_key) {
             Some(t) => t,
             None => return vec![None; self.result.columns.len()],

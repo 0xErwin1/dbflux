@@ -150,6 +150,23 @@ impl TreeNav {
         self.rebuild();
     }
 
+    /// Replaces the tree definition (e.g. after a lazy-loaded subtree resolves) while
+    /// preserving the current `expanded` set and restoring the cursor to the row that
+    /// carried it before the rebuild. If that row no longer exists, the cursor is only
+    /// clamped when it now falls out of bounds — it is left untouched otherwise.
+    pub fn set_nodes(&mut self, nodes: Vec<TreeNavNode>) {
+        let cursor_id = self.rows.get(self.cursor).map(|row| row.id.clone());
+
+        self.nodes = nodes;
+        self.rows = flatten_tree(&self.nodes, &self.expanded);
+
+        if let Some(pos) = cursor_id.and_then(|id| self.rows.iter().position(|row| row.id == id)) {
+            self.cursor = pos;
+        } else if self.cursor >= self.rows.len() {
+            self.cursor = self.rows.len().saturating_sub(1);
+        }
+    }
+
     #[allow(dead_code)]
     pub fn expanded(&self) -> &HashSet<SharedString> {
         &self.expanded
@@ -642,5 +659,76 @@ mod tests {
         nav.activate();
 
         assert!(nav.expanded().contains("network"));
+    }
+
+    // ── set_nodes ───────────────────────────────────────────────
+
+    #[test]
+    fn set_nodes_preserves_expanded_across_rebuild() {
+        let mut nav = TreeNav::new(make_test_tree(), all_expanded());
+        assert!(nav.expanded().contains("connection"));
+
+        nav.set_nodes(make_test_tree());
+
+        assert!(nav.expanded().contains("connection"));
+        let ids: Vec<&str> = nav.rows().iter().map(|r| r.id.as_ref()).collect();
+        assert!(ids.contains(&"hooks"));
+    }
+
+    #[test]
+    fn set_nodes_restores_cursor_by_id() {
+        let mut nav = TreeNav::new(make_test_tree(), all_expanded());
+        nav.select_by_id("hooks");
+        assert_eq!(nav.cursor_item().unwrap().id.as_ref(), "hooks");
+
+        // Reordered tree: "about" now comes first, shifting "hooks" to a different index.
+        let reordered = vec![
+            TreeNavNode::leaf("about", "About", Some(AppIcon::Info)),
+            TreeNavNode::leaf("general", "General", Some(AppIcon::Settings)),
+            TreeNavNode::leaf("keybindings", "Keybindings", Some(AppIcon::Keyboard)),
+            TreeNavNode::group(
+                "network",
+                "Network",
+                None,
+                vec![TreeNavNode::leaf(
+                    "ssh-tunnels",
+                    "SSH Tunnels",
+                    Some(AppIcon::FingerprintPattern),
+                )],
+            ),
+            TreeNavNode::group(
+                "connection",
+                "Connection",
+                None,
+                vec![
+                    TreeNavNode::leaf("services", "Services", Some(AppIcon::Plug)),
+                    TreeNavNode::leaf("hooks", "Hooks", Some(AppIcon::SquareTerminal)),
+                    TreeNavNode::leaf("drivers", "Drivers", Some(AppIcon::Database)),
+                ],
+            ),
+        ];
+
+        nav.set_nodes(reordered);
+
+        assert_eq!(nav.cursor_item().unwrap().id.as_ref(), "hooks");
+    }
+
+    #[test]
+    fn set_nodes_clamps_cursor_when_node_gone() {
+        let mut nav = TreeNav::new(make_test_tree(), all_expanded());
+        nav.select_by_id("about");
+        let last_index = nav.rows().len() - 1;
+        assert_eq!(nav.cursor(), last_index);
+
+        // New tree drops "about" and is shorter than the previous cursor index.
+        let shorter = vec![
+            TreeNavNode::leaf("general", "General", Some(AppIcon::Settings)),
+            TreeNavNode::leaf("keybindings", "Keybindings", Some(AppIcon::Keyboard)),
+        ];
+
+        nav.set_nodes(shorter);
+
+        assert_eq!(nav.cursor(), nav.rows().len() - 1);
+        assert!(nav.cursor() < nav.rows().len());
     }
 }

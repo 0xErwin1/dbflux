@@ -4,7 +4,8 @@
 
 - MySQL and MariaDB relational driver implementations in one crate.
 - Supports SQL execution, schema discovery, indexes, foreign keys, check constraints, and unique constraints.
-- Supports authentication, SSL, SSH tunneling, and URI/manual connection modes.
+- Supports authentication, SSH tunneling, and URI/manual connection modes.
+- TLS with the five native SSL modes (`DISABLED`, `PREFERRED`, `REQUIRED`, `VERIFY_CA`, `VERIFY_IDENTITY`): `VERIFY_CA` verifies the server chain while skipping hostname validation and `VERIFY_IDENTITY` verifies both. A custom root CA replaces the system trust store for the verifying modes, and a client certificate + key enables mutual TLS. Uses the `rustls`/`aws-lc-rs` backend.
 - Supports query cancellation through a dedicated cancel path (`KILL QUERY` flow).
 - Includes SQL/code generation for CRUD, indexes, foreign keys, and table DDL operations.
 - Routine discovery: lists stored procedures and user-defined functions from `information_schema.ROUTINES` including parameter types and return type hints (Functions only).

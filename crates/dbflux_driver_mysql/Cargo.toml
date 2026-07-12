@@ -19,7 +19,7 @@ dbflux_core.workspace = true
 dbflux_ssh.workspace = true
 hex.workspace = true
 log.workspace = true
-mysql.workspace = true
+mysql = { workspace = true, features = ["rustls-tls"] }
 serde_json = { workspace = true }
 urlencoding = "2"
 

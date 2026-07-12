@@ -454,42 +454,31 @@ impl CodeDocument {
 
                     DriftOutcome::Refresh(entries) => {
                         // No drift — schedule transparent cache update then execute.
-                        let cache_updates = entries
-                            .into_iter()
-                            .map(|((db, tbl), info)| (db, tbl, info))
-                            .collect();
-
                         doc.pending.drift_query = Some(PendingDriftQuery {
                             query: query_capture,
                             in_new_tab,
                             action: DriftAction::ExecuteNow,
-                            cache_updates,
+                            cache_updates: entries,
                         });
                     }
 
                     DriftOutcome::Drift(detected) => {
-                        // Build cache updates from unchanged tables.
-                        let cache_updates_for_refresh: Vec<(
-                            String,
-                            String,
-                            dbflux_core::TableInfo,
-                        )> = detected
-                            .refreshes
-                            .iter()
-                            .map(|((db, tbl), info)| (db.clone(), tbl.clone(), info.clone()))
-                            .collect();
-
-                        // Also collect per-diff fresh infos so "Refresh & re-run" updates them.
-                        let mut all_updates = cache_updates_for_refresh;
+                        // Build cache updates from unchanged tables, then add
+                        // per-diff fresh infos so "Refresh & re-run" updates them.
+                        let mut all_updates = detected.refreshes.clone();
                         for diff in &detected.diffs {
                             let effective_db = diff
                                 .table
                                 .database
                                 .clone()
                                 .unwrap_or_else(|| "default".to_string());
+                            let schema = diff
+                                .table
+                                .schema
+                                .clone()
+                                .or_else(|| diff.fresh.schema.clone());
                             all_updates.push((
-                                effective_db,
-                                diff.table.table.clone(),
+                                (effective_db, schema, diff.table.table.clone()),
                                 diff.fresh.clone(),
                             ));
                         }
@@ -1807,10 +1796,8 @@ impl CodeDocument {
         if !pending.cache_updates.is_empty() {
             self.app_state.update(cx, |state, _cx| {
                 if let Some(connected) = state.connections_mut().get_mut(&conn_id) {
-                    for (db, table, info) in &pending.cache_updates {
-                        connected
-                            .table_details
-                            .insert((db.clone(), table.clone()), info.clone());
+                    for (key, info) in &pending.cache_updates {
+                        connected.table_details.insert(key.clone(), info.clone());
                     }
                 }
             });
@@ -1870,10 +1857,8 @@ impl CodeDocument {
                 {
                     self.app_state.update(cx, |state, _cx| {
                         if let Some(connected) = state.connections_mut().get_mut(&conn_id) {
-                            for (db, table, info) in &pending.cache_updates {
-                                connected
-                                    .table_details
-                                    .insert((db.clone(), table.clone()), info.clone());
+                            for (key, info) in &pending.cache_updates {
+                                connected.table_details.insert(key.clone(), info.clone());
                             }
                         }
                     });

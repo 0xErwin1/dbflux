@@ -189,11 +189,11 @@ pub use schema::{
     RoutineInfo, RoutineKind, SchemaChange, SchemaDiff, SchemaDriftDetected, SchemaFingerprint,
     SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexBuilder, SchemaIndexInfo,
     SchemaNodeId, SchemaNodeKind, SchemaSnapshot, SchemaSnapshotRecord, SearchIndexInfo,
-    SearchMappingInfo, SearchSchema, SnapshotDepth, TableChange, TableInfo, TimeSeriesFieldInfo,
-    TimeSeriesSchema, VectorCollectionInfo, VectorMetadataField, VectorMetric, VectorSchema,
-    ViewInfo, WideColumnInfo, WideColumnKeyspaceInfo, WideColumnSchema, check_drift_sync,
-    check_schema_drift, classify_table_added, classify_table_removed, diff_schema, diff_table_info,
-    extract_referenced_tables, topological_order,
+    SearchMappingInfo, SearchSchema, SnapshotDepth, TableChange, TableInfo, TableKey,
+    TimeSeriesFieldInfo, TimeSeriesSchema, VectorCollectionInfo, VectorMetadataField, VectorMetric,
+    VectorSchema, ViewInfo, WideColumnInfo, WideColumnKeyspaceInfo, WideColumnSchema,
+    check_drift_sync, check_schema_drift, classify_table_added, classify_table_removed,
+    diff_schema, diff_table_info, extract_referenced_tables, topological_order,
 };
 
 pub use sql::{

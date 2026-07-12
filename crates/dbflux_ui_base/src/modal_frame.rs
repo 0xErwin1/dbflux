@@ -61,6 +61,16 @@ impl ModalFrame {
         self
     }
 
+    pub fn height_fraction(mut self, fraction: f32) -> Self {
+        self.inner = self.inner.height_fraction(fraction);
+        self
+    }
+
+    pub fn center_vertically(mut self) -> Self {
+        self.inner = self.inner.center_vertically();
+        self
+    }
+
     pub fn top_offset(mut self, offset: Pixels) -> Self {
         self.inner = self.inner.top_offset(offset);
         self
