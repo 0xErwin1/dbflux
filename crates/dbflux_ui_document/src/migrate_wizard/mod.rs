@@ -135,10 +135,11 @@ where
     let accent = theme.accent;
     let muted = theme.muted_foreground;
     let border = theme.border;
+    let hover_bg = theme.secondary;
 
     let entries = rail_entries(current)
         .into_iter()
-        .map(move |entry| render_rail_entry(entry, accent, muted, on_select.clone()));
+        .map(move |entry| render_rail_entry(entry, accent, muted, hover_bg, on_select.clone()));
 
     div()
         .flex()
@@ -155,6 +156,7 @@ fn render_rail_entry<F>(
     entry: RailEntry,
     accent: Hsla,
     muted: Hsla,
+    hover_bg: Hsla,
     on_select: F,
 ) -> impl IntoElement
 where
@@ -176,11 +178,12 @@ where
             .into_any_element()
     };
 
+    // Only the current entry is accented; every other label stays at full
+    // foreground contrast (a check/dot marker already conveys completed vs.
+    // pending), so the rail reads clearly instead of as dim, low-contrast text.
     let mut label = Text::body(phase.label());
     if entry.current {
         label = label.color(accent);
-    } else if !entry.completed {
-        label = label.muted_foreground();
     }
 
     div()
@@ -205,6 +208,7 @@ where
         .child(label)
         .when(entry.completed, |el| {
             el.cursor_pointer()
+                .hover(|style| style.bg(hover_bg))
                 .on_click(move |_event, window, app| on_select(phase, window, app))
         })
 }
@@ -461,6 +465,18 @@ fn next_phase(phase: WizardPhase) -> Option<WizardPhase> {
         WizardPhase::TablesMapping => Some(WizardPhase::Options),
         WizardPhase::Options => Some(WizardPhase::Confirm),
         WizardPhase::Confirm | WizardPhase::Run => None,
+    }
+}
+
+/// The phase reached by pressing the footer's Back button from `phase`, or
+/// `None` for the first phase and for `Run` (whose back-navigation is frozen —
+/// leaving a live or finished run behind is handled by Cancel/Close, not Back).
+fn prev_phase(phase: WizardPhase) -> Option<WizardPhase> {
+    match phase {
+        WizardPhase::SourceTarget | WizardPhase::Run => None,
+        WizardPhase::TablesMapping => Some(WizardPhase::SourceTarget),
+        WizardPhase::Options => Some(WizardPhase::TablesMapping),
+        WizardPhase::Confirm => Some(WizardPhase::Options),
     }
 }
 
@@ -786,6 +802,35 @@ impl MigrateWizard {
             name
         } else {
             format!("{name} / {database}")
+        }
+    }
+
+    /// Footer Back button: steps one phase backwards through the linear flow.
+    /// Shares [`Self::go_to_phase`]'s running guard, so it is inert during a
+    /// live run.
+    fn go_back(&mut self, cx: &mut Context<Self>) {
+        if let Some(previous) = prev_phase(self.phase) {
+            self.go_to_phase(previous, cx);
+        }
+    }
+
+    /// Footer Cancel button: signals the confirm/run phase's cancel token so
+    /// the in-flight migration stops at the next chunk boundary.
+    fn cancel_run(&mut self, cx: &mut Context<Self>) {
+        if let Some(phase) = self.confirm_run.clone() {
+            phase.update(cx, |phase, cx| phase.cancel_run(cx));
+        }
+    }
+
+    /// Footer Close button (shown once the run is `Done`): routes through the
+    /// confirm/run phase's existing `CloseRequested` event so the single close
+    /// path in the wizard's subscription stays the only way the modal dismisses.
+    fn request_close(&mut self, cx: &mut Context<Self>) {
+        match self.confirm_run.clone() {
+            Some(phase) => {
+                phase.update(cx, |_phase, cx| cx.emit(ConfirmRunEvent::CloseRequested));
+            }
+            None => self.close(cx),
         }
     }
 
@@ -1428,13 +1473,57 @@ impl MigrateWizard {
         let theme = cx.theme();
         let border = theme.border;
 
+        let run_state = self
+            .confirm_run
+            .as_ref()
+            .map(|phase| phase.read(cx).run_state());
+        let running = run_state == Some(RunState::Running);
+        let done = run_state == Some(RunState::Done);
+
+        let shows_back = prev_phase(self.phase).is_some() && !running && !done;
         let shows_continue = next_phase(self.phase).is_some();
         let continue_enabled = !self.advancing && self.continue_enabled(cx);
-        let label = if self.advancing {
+        let continue_label = if self.advancing {
             "Loading…"
         } else {
             "Continue"
         };
+
+        let actions = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(Spacing::SM)
+            .when(shows_back, |parent| {
+                parent.child(
+                    Button::new("migrate-wizard-back", "Back")
+                        .ghost()
+                        .disabled(self.advancing)
+                        .on_click(cx.listener(|this, _event, _window, cx| this.go_back(cx))),
+                )
+            })
+            .when(shows_continue, |parent| {
+                parent.child(
+                    Button::new("migrate-wizard-continue", continue_label)
+                        .disabled(!continue_enabled)
+                        .on_click(cx.listener(|this, _event, window, cx| this.advance(window, cx))),
+                )
+            })
+            .when(running, |parent| {
+                parent.child(
+                    Button::new("migrate-wizard-cancel", "Cancel")
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(|this, _event, _window, cx| this.cancel_run(cx))),
+                )
+            })
+            .when(done, |parent| {
+                parent.child(
+                    Button::new("migrate-wizard-close", "Close")
+                        .small()
+                        .on_click(cx.listener(|this, _event, _window, cx| this.request_close(cx))),
+                )
+            });
 
         div()
             .flex()
@@ -1454,13 +1543,7 @@ impl MigrateWizard {
                         parent.child(Text::caption(error).danger())
                     }),
             )
-            .when(shows_continue, |parent| {
-                parent.child(
-                    Button::new("migrate-wizard-continue", label)
-                        .disabled(!continue_enabled)
-                        .on_click(cx.listener(|this, _event, window, cx| this.advance(window, cx))),
-                )
-            })
+            .child(actions)
             .into_any_element()
     }
 }

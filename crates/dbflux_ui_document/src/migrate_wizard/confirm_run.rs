@@ -16,9 +16,11 @@
 //! background run always surfaces to the foreground through `report_error`.
 
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use dbflux_components::controls::{Button, Checkbox};
-use dbflux_components::primitives::Text;
+use dbflux_components::icons::AppIcon;
+use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::Spacing;
 use dbflux_core::{
     CancelToken, Connection, OrderResult, TableRef, TaskId, TaskKind, TaskStatus, TaskTarget,
@@ -153,6 +155,18 @@ pub enum ConfirmRunEvent {
     CloseRequested,
 }
 
+/// Live counters for the running migration, shared between the run task's
+/// progress callback and the render thread. `table_index` is the position in
+/// the resolved (post-ordering) load sequence of the table currently being
+/// transferred, so it maps into [`ConfirmRunPhase::final_order`] for a
+/// per-table live status list.
+#[derive(Clone, Copy, Default)]
+struct RunProgress {
+    table_index: usize,
+    rows_done: u64,
+    estimated_total: Option<u64>,
+}
+
 /// Confirm + Run phase entity: renders the plan summary, the optional reorder
 /// interrupt, and the live run (progress + cancel), and owns the migration run
 /// itself. Mounted by the wizard once `Options` is complete.
@@ -180,7 +194,13 @@ pub struct ConfirmRunPhase {
     destructive_ack: bool,
 
     run_state: RunState,
-    progress: Arc<Mutex<(u64, Option<u64>)>>,
+    progress: Arc<Mutex<RunProgress>>,
+    /// Wall-clock start of the live run, for the elapsed-time readout; cleared
+    /// until a run begins.
+    run_started_at: Option<Instant>,
+    /// Frozen total run duration, captured when the run reaches `Done`, so the
+    /// completed screen keeps showing how long the migration took.
+    run_elapsed: Option<Duration>,
     cancel_token: Option<CancelToken>,
     result_summary: Option<String>,
     result_warnings: Vec<String>,
@@ -219,7 +239,9 @@ impl ConfirmRunPhase {
             confirmed_destructive: false,
             destructive_ack: false,
             run_state: RunState::Idle,
-            progress: Arc::new(Mutex::new((0, None))),
+            progress: Arc::new(Mutex::new(RunProgress::default())),
+            run_started_at: None,
+            run_elapsed: None,
             cancel_token: None,
             result_summary: None,
             result_warnings: Vec::new(),
@@ -281,7 +303,9 @@ impl ConfirmRunPhase {
         self.run_state = RunState::Running;
         self.result_summary = None;
         self.result_warnings.clear();
-        *self.progress.lock().unwrap_or_else(|p| p.into_inner()) = (0, None);
+        self.run_started_at = Some(Instant::now());
+        self.run_elapsed = None;
+        *self.progress.lock().unwrap_or_else(|p| p.into_inner()) = RunProgress::default();
 
         let description = format!("Migrate {} table(s)", plans.len());
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
@@ -323,7 +347,7 @@ impl ConfirmRunPhase {
         let ticker_app_state = self.app_state.clone();
         let ticker_progress = Arc::clone(&self.progress);
 
-        cx.spawn(async move |_this, cx| {
+        cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(150))
@@ -339,13 +363,14 @@ impl ConfirmRunPhase {
                                 return false;
                             }
 
-                            let (rows_done, estimated_total) = *ticker_progress
+                            let progress = *ticker_progress
                                 .lock()
                                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-                            if let Some(total) = estimated_total
+                            if let Some(total) = progress.estimated_total
                                 && total > 0
                             {
-                                let fraction = (rows_done as f32 / total as f32).clamp(0.0, 1.0);
+                                let fraction =
+                                    (progress.rows_done as f32 / total as f32).clamp(0.0, 1.0);
                                 state.tasks_mut().update_progress(task_id, fraction);
                                 cx.notify();
                             }
@@ -358,6 +383,12 @@ impl ConfirmRunPhase {
                 if !still_running {
                     break;
                 }
+
+                // Re-render the phase every tick so the elapsed timer, the
+                // progress bar, and the per-table live status advance while the
+                // run is in flight (the app-state notify above only refreshes
+                // the tasks panel, not this modal).
+                this.update(cx, |_this, cx| cx.notify()).ok();
             }
         })
         .detach();
@@ -399,9 +430,13 @@ impl ConfirmRunPhase {
                         &plans,
                         &options,
                         &cancel_token,
-                        move |_index, rows_done, estimated_total| {
+                        move |index, rows_done, estimated_total| {
                             if let Ok(mut guard) = progress.lock() {
-                                *guard = (rows_done, estimated_total);
+                                *guard = RunProgress {
+                                    table_index: index,
+                                    rows_done,
+                                    estimated_total,
+                                };
                             }
                         },
                     )
@@ -450,6 +485,7 @@ impl ConfirmRunPhase {
             // already been finalized above.
             this.update(cx, |this, cx| {
                 this.run_state = RunState::Done;
+                this.run_elapsed = this.run_started_at.map(|started| started.elapsed());
                 this.cancel_token = None;
                 this.result_summary = Some(summary);
                 this.result_warnings = warnings;
@@ -745,35 +781,167 @@ impl ConfirmRunPhase {
             .into_any_element()
     }
 
+    /// The tables in their resolved load order, for the live run status list.
+    /// Falls back to the summary's source names if the order was never
+    /// resolved (which cannot happen once a run has started, but keeps the
+    /// renderer total).
+    fn ordered_table_names(&self) -> Vec<String> {
+        match &self.final_order {
+            Some(order) => order.iter().map(|table| table.qualified_name()).collect(),
+            None => self
+                .summary
+                .rows
+                .iter()
+                .map(|row| row.source.clone())
+                .collect(),
+        }
+    }
+
     fn render_running(&self, cx: &mut Context<Self>) -> AnyElement {
-        let (rows_done, estimated_total) = *self.progress.lock().unwrap_or_else(|p| p.into_inner());
-        let label = match estimated_total {
-            Some(total) if total > 0 => format!("{rows_done} / {total} rows"),
-            _ => format!("{rows_done} rows"),
+        let theme = cx.theme();
+        let color_done = theme.success;
+        let color_current = theme.primary;
+        let color_foreground = theme.foreground;
+        let color_pending = theme.muted_foreground;
+        let color_track = theme.muted;
+        let color_fill = theme.primary;
+
+        let progress = *self.progress.lock().unwrap_or_else(|p| p.into_inner());
+
+        let names = self.ordered_table_names();
+        let total_tables = names.len();
+        let current_index = progress.table_index.min(total_tables.saturating_sub(1));
+
+        let rows_label = match progress.estimated_total {
+            Some(total) if total > 0 => format!("{} / {} rows", progress.rows_done, total),
+            _ => format!("{} rows", progress.rows_done),
         };
+        let determinate = matches!(progress.estimated_total, Some(total) if total > 0);
+        let fraction = match progress.estimated_total {
+            Some(total) if total > 0 => (progress.rows_done as f32 / total as f32).clamp(0.0, 1.0),
+            _ => 0.0,
+        };
+
+        let elapsed = self
+            .run_started_at
+            .map(|started| started.elapsed())
+            .unwrap_or_default();
+
+        let current_table = names.get(current_index).cloned().unwrap_or_default();
+        let position_label = if total_tables > 0 {
+            format!("Table {} of {}", current_index + 1, total_tables)
+        } else {
+            "Preparing".to_string()
+        };
+
+        let steps_rows_label = rows_label.clone();
+        let steps = names.iter().enumerate().map(move |(index, name)| {
+            let (marker, label_color) = if index < current_index {
+                (
+                    Icon::new(AppIcon::CircleCheck)
+                        .size(px(14.0))
+                        .color(color_done)
+                        .into_any_element(),
+                    color_foreground,
+                )
+            } else if index == current_index {
+                (
+                    Icon::new(AppIcon::Loader)
+                        .size(px(14.0))
+                        .color(color_current)
+                        .into_any_element(),
+                    color_foreground,
+                )
+            } else {
+                (
+                    div()
+                        .size(px(8.0)) // guardrail-allow: decorative pending status-dot diameter
+                        .rounded_full()
+                        .bg(color_pending)
+                        .into_any_element(),
+                    color_pending,
+                )
+            };
+
+            div()
+                .flex()
+                .items_center()
+                .gap(Spacing::SM)
+                .py(px(2.0))
+                .child(
+                    div()
+                        .w(px(16.0)) // guardrail-allow: fixed marker gutter for label alignment
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(marker),
+                )
+                .child(Text::body(name.clone()).color(label_color))
+                .when(index == current_index, |el| {
+                    el.child(Text::caption(steps_rows_label.clone()).muted_foreground())
+                })
+                .into_any_element()
+        });
 
         div()
             .flex()
             .flex_col()
             .gap(Spacing::MD)
-            .child(Text::body("Migrating…"))
-            .child(Text::caption(label))
+            .size_full()
             .child(
-                Button::new("migrate-run-cancel", "Cancel")
-                    .ghost()
-                    .on_click(cx.listener(|this, _event, _window, cx| this.cancel_run(cx))),
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(Text::label("Migrating…"))
+                    .child(Text::caption(format_elapsed(elapsed)).muted_foreground()),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(Spacing::SM)
+                    .child(Text::caption(format!("{position_label}: {current_table}")))
+                    .child(Text::caption(rows_label.clone()).muted_foreground()),
+            )
+            .when(determinate, |el| {
+                el.child(
+                    div()
+                        .w_full()
+                        .h(px(6.0)) // guardrail-allow: progress-bar track height
+                        .rounded_full()
+                        .bg(color_track)
+                        .child(
+                            div()
+                                .h_full()
+                                .w(relative(fraction))
+                                .rounded_full()
+                                .bg(color_fill),
+                        ),
+                )
+            })
+            .child(
+                div()
+                    .id("migrate-run-steps")
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .children(steps),
             )
             .into_any_element()
     }
 
-    fn cancel_run(&mut self, cx: &mut Context<Self>) {
+    pub fn cancel_run(&mut self, cx: &mut Context<Self>) {
         if let Some(token) = &self.cancel_token {
             token.cancel();
         }
         cx.notify();
     }
 
-    fn render_done(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_done(&self, _cx: &mut Context<Self>) -> AnyElement {
         div()
             .flex()
             .flex_col()
@@ -781,14 +949,26 @@ impl ConfirmRunPhase {
             .when_some(self.result_summary.clone(), |el, summary| {
                 el.child(Text::body(summary))
             })
+            .when_some(self.run_elapsed, |el, elapsed| {
+                el.child(
+                    Text::caption(format!("Completed in {}", format_elapsed(elapsed)))
+                        .muted_foreground(),
+                )
+            })
             .when(!self.result_warnings.is_empty(), |el| {
                 el.child(Text::caption(self.result_warnings.join("; ")))
             })
-            .child(Button::new("migrate-run-close", "Close").on_click(
-                cx.listener(|_this, _event, _window, cx| cx.emit(ConfirmRunEvent::CloseRequested)),
-            ))
             .into_any_element()
     }
+}
+
+/// Formats an elapsed run duration as `M:SS` for the live timer and the
+/// completed-run readout.
+fn format_elapsed(elapsed: Duration) -> String {
+    let total_seconds = elapsed.as_secs();
+    let minutes = total_seconds / 60;
+    let seconds = total_seconds % 60;
+    format!("{minutes}:{seconds:02}")
 }
 
 #[cfg(test)]
