@@ -403,6 +403,7 @@ async fn drain_task_output(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn start_detached_hook_task(
     app_state: Entity<AppStateEntity>,
     profile_id: Uuid,
@@ -661,6 +662,7 @@ pub async fn run_hook_phase(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_hook_phase_with_executor<E>(
     app_state: Entity<AppStateEntity>,
     profile_id: Uuid,

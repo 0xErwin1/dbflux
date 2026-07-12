@@ -15,8 +15,9 @@ use gpui::*;
 use gpui_component::dialog::Dialog;
 use std::collections::HashMap;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum HookKindSelection {
+    #[default]
     Command,
     Script,
     Lua,
@@ -26,12 +27,6 @@ pub(super) enum HookKindSelection {
 pub(super) struct HookEditorSelectionState {
     pub(super) kind: HookKindSelection,
     pub(super) execution_mode: HookExecutionMode,
-}
-
-impl Default for HookKindSelection {
-    fn default() -> Self {
-        Self::Command
-    }
 }
 
 impl Default for HookEditorSelectionState {

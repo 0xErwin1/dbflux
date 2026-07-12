@@ -1149,16 +1149,15 @@ fn load_driver_maps(
 // Hook Definitions helpers
 // ---------------------------------------------------------------------------
 
+type LoadedHookDefinitions = (
+    HashMap<String, EditableGlobalHook>,
+    Vec<HookLoadDiagnostic>,
+    Vec<ProtectedHookRow>,
+);
+
 fn load_hook_definitions(
     repo: &dbflux_storage::repositories::hook_definitions::HookDefinitionRepository,
-) -> Result<
-    (
-        HashMap<String, EditableGlobalHook>,
-        Vec<HookLoadDiagnostic>,
-        Vec<ProtectedHookRow>,
-    ),
-    dbflux_storage::error::StorageError,
-> {
+) -> Result<LoadedHookDefinitions, dbflux_storage::error::StorageError> {
     let mut map = HashMap::new();
     let mut diagnostics = Vec::new();
     let mut protected_rows = Vec::new();

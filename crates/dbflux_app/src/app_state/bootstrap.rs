@@ -72,6 +72,15 @@ use dbflux_driver_ipc::driver::IpcDriverLaunchConfig;
 
 use super::AppState;
 
+type DefaultDriverBuild = (
+    BuiltDrivers,
+    StorageRuntime,
+    Vec<ConnectionProfile>,
+    Vec<AuthProfile>,
+    Vec<ProxyProfile>,
+    Vec<SshTunnelProfile>,
+);
+
 pub(super) struct BuiltDrivers {
     pub(super) drivers: HashMap<String, Arc<dyn DbDriver>>,
     pub(super) external_driver_diagnostics: HashMap<String, ExternalDriverDiagnostic>,
@@ -794,17 +803,7 @@ impl AppState {
     }
 
     #[allow(clippy::result_large_err)]
-    fn build_default_drivers() -> Result<
-        (
-            BuiltDrivers,
-            dbflux_storage::bootstrap::StorageRuntime,
-            Vec<ConnectionProfile>,
-            Vec<AuthProfile>,
-            Vec<ProxyProfile>,
-            Vec<SshTunnelProfile>,
-        ),
-        dbflux_storage::error::StorageError,
-    > {
+    fn build_default_drivers() -> Result<DefaultDriverBuild, dbflux_storage::error::StorageError> {
         let runtime = dbflux_storage::bootstrap::initialize()
             .expect("failed to initialize internal storage — cannot continue");
 
@@ -813,18 +812,8 @@ impl AppState {
 
     #[allow(clippy::result_large_err)]
     fn build_default_drivers_with_runtime(
-        runtime: dbflux_storage::bootstrap::StorageRuntime,
-    ) -> Result<
-        (
-            BuiltDrivers,
-            dbflux_storage::bootstrap::StorageRuntime,
-            Vec<ConnectionProfile>,
-            Vec<AuthProfile>,
-            Vec<ProxyProfile>,
-            Vec<SshTunnelProfile>,
-        ),
-        dbflux_storage::error::StorageError,
-    > {
+        runtime: StorageRuntime,
+    ) -> Result<DefaultDriverBuild, dbflux_storage::error::StorageError> {
         let drivers = Self::build_builtin_drivers();
         let external_driver_diagnostics = HashMap::new();
 
