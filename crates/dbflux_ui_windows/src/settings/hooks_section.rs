@@ -22,6 +22,45 @@ pub(super) enum HookKindSelection {
     Lua,
 }
 
+fn hook_kind_selection_from_dropdown_index(index: usize) -> Option<HookKindSelection> {
+    match index {
+        0 => Some(HookKindSelection::Command),
+        1 => Some(HookKindSelection::Script),
+        #[cfg(feature = "lua")]
+        2 => Some(HookKindSelection::Lua),
+        _ => None,
+    }
+}
+
+fn hook_execution_mode_from_dropdown_index(index: usize) -> Option<HookExecutionMode> {
+    match index {
+        0 => Some(HookExecutionMode::Blocking),
+        1 => Some(HookExecutionMode::Detached),
+        _ => None,
+    }
+}
+
+fn apply_hook_kind_dropdown_selection(selection: &mut HookKindSelection, index: usize) -> bool {
+    let Some(kind) = hook_kind_selection_from_dropdown_index(index) else {
+        return false;
+    };
+
+    *selection = kind;
+    true
+}
+
+fn apply_hook_execution_mode_dropdown_selection(
+    selection: &mut HookExecutionMode,
+    index: usize,
+) -> bool {
+    let Some(mode) = hook_execution_mode_from_dropdown_index(index) else {
+        return false;
+    };
+
+    *selection = mode;
+    true
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ScriptSourceSelection {
     File,
@@ -229,7 +268,11 @@ impl HooksSection {
         let hook_kind_sub = cx.subscribe_in(
             &hook_kind_dropdown,
             window,
-            |this, _, _: &DropdownSelectionChanged, window, cx| {
+            |this, _, event: &DropdownSelectionChanged, window, cx| {
+                if !apply_hook_kind_dropdown_selection(&mut this.hook_kind_selection, event.index) {
+                    return;
+                }
+
                 this.refresh_hook_script_content_editor(window, cx);
             },
         );
@@ -243,7 +286,14 @@ impl HooksSection {
         let hook_execution_mode_sub = cx.subscribe_in(
             &hook_execution_mode_dropdown,
             window,
-            |_, _, _: &DropdownSelectionChanged, _window, cx| {
+            |this, _, event: &DropdownSelectionChanged, _window, cx| {
+                if !apply_hook_execution_mode_dropdown_selection(
+                    &mut this.hook_execution_mode,
+                    event.index,
+                ) {
+                    return;
+                }
+
                 cx.notify();
             },
         );
@@ -667,6 +717,59 @@ impl SettingsSection for HooksSection {
 impl EventEmitter<SectionFocusEvent> for HooksSection {}
 
 impl EventEmitter<SettingsEvent> for HooksSection {}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(feature = "lua")]
+    use super::hook_kind_selection_from_dropdown_index;
+    use super::{
+        HookKindSelection, apply_hook_execution_mode_dropdown_selection,
+        apply_hook_kind_dropdown_selection,
+    };
+    use dbflux_core::HookExecutionMode;
+
+    #[test]
+    fn dropdown_indices_select_the_same_editable_hook_state_as_keyboard_navigation() {
+        let mut hook_kind = HookKindSelection::Command;
+        let mut execution_mode = HookExecutionMode::Blocking;
+
+        assert!(apply_hook_kind_dropdown_selection(&mut hook_kind, 1));
+        assert!(apply_hook_execution_mode_dropdown_selection(
+            &mut execution_mode,
+            1
+        ));
+
+        assert_eq!(hook_kind, HookKindSelection::Script);
+        assert_eq!(execution_mode, HookExecutionMode::Detached);
+    }
+
+    #[test]
+    fn invalid_dropdown_indices_do_not_change_editable_hook_state() {
+        let mut hook_kind = HookKindSelection::Script;
+        let mut execution_mode = HookExecutionMode::Detached;
+
+        assert!(!apply_hook_kind_dropdown_selection(
+            &mut hook_kind,
+            usize::MAX
+        ));
+        assert!(!apply_hook_execution_mode_dropdown_selection(
+            &mut execution_mode,
+            usize::MAX
+        ));
+
+        assert_eq!(hook_kind, HookKindSelection::Script);
+        assert_eq!(execution_mode, HookExecutionMode::Detached);
+    }
+
+    #[cfg(feature = "lua")]
+    #[test]
+    fn lua_dropdown_index_remains_available_when_lua_is_enabled() {
+        assert_eq!(
+            hook_kind_selection_from_dropdown_index(2),
+            Some(HookKindSelection::Lua)
+        );
+    }
+}
 
 impl Render for HooksSection {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
