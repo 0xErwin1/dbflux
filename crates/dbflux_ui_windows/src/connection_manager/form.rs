@@ -742,6 +742,9 @@ impl ConnectionManagerWindow {
         let hooks = self.app_state.read(cx).resolve_profile_hooks(&profile);
         let hook_cancel_token = CancelToken::new();
         let detached_hook_scope = DetachedHookScope::default();
+        let cleanup_cancel_token = hook_cancel_token.clone();
+        let cleanup_detached_hook_scope = detached_hook_scope.clone();
+        let cleanup_app_state = app_state.clone();
         let this = cx.entity().clone();
 
         let pipeline_input = if profile.uses_pipeline() {
@@ -770,6 +773,7 @@ impl ConnectionManagerWindow {
             let profile_id = profile.id;
             let profile_name_for_hooks = profile_name.clone();
             let phase_cx = cx.clone();
+            let cleanup_cx = cx.clone();
             let background_executor = cx.background_executor().clone();
 
             let result = run_test_connection_orchestration(
@@ -859,6 +863,20 @@ impl ConnectionManagerWindow {
                         }
                     })
                 },
+                move || {
+                    let cleanup_app_state = cleanup_app_state.clone();
+                    let cleanup_detached_hook_scope = cleanup_detached_hook_scope.clone();
+                    let cleanup_cancel_token = cleanup_cancel_token.clone();
+                    let mut cleanup_cx = cleanup_cx.clone();
+
+                    Box::pin(async move {
+                        cleanup_cancel_token.cancel();
+                        cleanup_detached_hook_scope
+                            .cancel_and_wait(cleanup_app_state, &mut cleanup_cx)
+                            .await
+                            .map_err(|_| "failed to release detached test hook tasks".to_string())
+                    })
+                },
                 hook_context,
             )
             .await;
@@ -868,8 +886,13 @@ impl ConnectionManagerWindow {
                     match result {
                         Ok(result) => {
                             info!("Test connection successful for {}", profile_name);
-                            this.test_status = TestStatus::Success;
-                            this.test_error = None;
+                            this.test_status = if result.warnings.is_empty() {
+                                TestStatus::Success
+                            } else {
+                                TestStatus::SuccessWithWarning
+                            };
+                            this.test_error =
+                                (!result.warnings.is_empty()).then(|| result.warnings.join("\n"));
                             this.test_result = Some(result.test_result);
                         }
                         Err(error) => {
@@ -897,11 +920,44 @@ type TestConnectionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 struct TestConnectionOrchestrationResult {
     test_result: dbflux_core::TestConnectionResult,
+    warnings: Vec<String>,
 }
 
-async fn run_test_connection_orchestration<'a, RunPhase, RunProbe>(
+async fn run_test_connection_orchestration<'a, RunPhase, RunProbe, RunCleanup>(
     hooks: dbflux_core::ConnectionHooks,
     mut run_phase: RunPhase,
+    run_probe: RunProbe,
+    run_cleanup: RunCleanup,
+    hook_context: dbflux_core::HookContext,
+) -> Result<TestConnectionOrchestrationResult, String>
+where
+    RunPhase: FnMut(
+        HookPhase,
+        Vec<dbflux_core::ConnectionHook>,
+        dbflux_core::HookContext,
+    ) -> TestConnectionFuture<'a, HookPhaseState>,
+    RunProbe:
+        FnOnce() -> TestConnectionFuture<'a, Result<dbflux_core::TestConnectionResult, String>>,
+    RunCleanup: FnOnce() -> TestConnectionFuture<'a, Result<(), String>>,
+{
+    let outcome = run_test_connection_phases(hooks, &mut run_phase, run_probe, hook_context).await;
+    let cleanup = run_cleanup().await;
+
+    match (outcome, cleanup) {
+        (Ok(result), Ok(())) => Ok(result),
+        (Ok(_), Err(cleanup_error)) => {
+            Err(format!("Test connection cleanup failed: {cleanup_error}"))
+        }
+        (Err(primary_error), Ok(())) => Err(primary_error),
+        (Err(primary_error), Err(cleanup_error)) => Err(format!(
+            "{primary_error} (cleanup warning: {cleanup_error})"
+        )),
+    }
+}
+
+async fn run_test_connection_phases<'a, RunPhase, RunProbe>(
+    hooks: dbflux_core::ConnectionHooks,
+    run_phase: &mut RunPhase,
     run_probe: RunProbe,
     hook_context: dbflux_core::HookContext,
 ) -> Result<TestConnectionOrchestrationResult, String>
@@ -920,21 +976,27 @@ where
         hook_context.clone(),
     )
     .await;
-    match pre_connect {
-        HookPhaseState::Continue { .. } => {}
+    let mut warnings = match pre_connect {
+        HookPhaseState::Continue { warnings } => warnings,
         HookPhaseState::Aborted { error } => return Err(error),
         HookPhaseState::Cancelled => {
             return Err("Test connection cancelled by pre-connect hook".to_string());
         }
-    }
+    };
 
     let result = run_probe().await?;
 
     let post_connect = run_phase(HookPhase::PostConnect, hooks.post_connect, hook_context).await;
     match post_connect {
-        HookPhaseState::Continue { .. } => Ok(TestConnectionOrchestrationResult {
-            test_result: result,
-        }),
+        HookPhaseState::Continue {
+            warnings: post_connect_warnings,
+        } => {
+            warnings.extend(post_connect_warnings);
+            Ok(TestConnectionOrchestrationResult {
+                test_result: result,
+                warnings,
+            })
+        }
         HookPhaseState::Aborted { error } => Err(error),
         HookPhaseState::Cancelled => {
             Err("Test connection cancelled by post-connect hook".to_string())
@@ -1069,6 +1131,7 @@ mod tests {
                     })
                 })
             },
+            || Box::pin(async { Ok(()) }),
             current_unsaved_hook_context(),
         ));
 
@@ -1131,6 +1194,7 @@ mod tests {
                     Err("pipeline probe failed".to_string())
                 })
             },
+            || Box::pin(async { Ok(()) }),
             current_unsaved_hook_context(),
         ));
 
@@ -1141,6 +1205,121 @@ mod tests {
                 (HookPhase::PreConnect, "pipeline-pre".to_string()),
                 (HookPhase::PreConnect, "pipeline-probe".to_string()),
             ],
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn test_connection_orchestration_preserves_probe_failure_when_cleanup_fails() {
+        let cleanup_calls = Arc::new(Mutex::new(0));
+
+        let result = block_on(run_test_connection_orchestration(
+            ConnectionHooks::default(),
+            |_phase, _hooks, _context| {
+                Box::pin(async move {
+                    HookPhaseState::Continue {
+                        warnings: Vec::new(),
+                    }
+                })
+            },
+            || Box::pin(async { Err("driver probe failed".to_string()) }),
+            || {
+                let cleanup_calls = cleanup_calls.clone();
+                Box::pin(async move {
+                    *cleanup_calls.lock().expect("cleanup log poisoned") += 1;
+                    Err("detached hook cleanup failed".to_string())
+                })
+            },
+            current_unsaved_hook_context(),
+        ));
+
+        assert!(
+            matches!(result, Err(error) if error == "driver probe failed (cleanup warning: detached hook cleanup failed)")
+        );
+        assert_eq!(*cleanup_calls.lock().expect("cleanup log poisoned"), 1);
+    }
+
+    #[::core::prelude::v1::test]
+    fn test_connection_orchestration_returns_hook_warnings_after_cleanup() {
+        let cleanup_calls = Arc::new(Mutex::new(0));
+
+        let result = block_on(run_test_connection_orchestration(
+            ConnectionHooks::default(),
+            |phase, _hooks, _context| {
+                Box::pin(async move {
+                    HookPhaseState::Continue {
+                        warnings: vec![format!("{} hook warning", phase.label())],
+                    }
+                })
+            },
+            || {
+                Box::pin(async {
+                    Ok(dbflux_core::TestConnectionResult {
+                        engine: Some("reachable".to_string()),
+                        ..Default::default()
+                    })
+                })
+            },
+            || {
+                let cleanup_calls = cleanup_calls.clone();
+                Box::pin(async move {
+                    *cleanup_calls.lock().expect("cleanup log poisoned") += 1;
+                    Ok(())
+                })
+            },
+            current_unsaved_hook_context(),
+        ));
+
+        let result = result.expect("warnings do not fail the test");
+        assert_eq!(result.test_result.engine.as_deref(), Some("reachable"));
+        assert_eq!(
+            result.warnings,
+            vec!["Pre-connect hook warning", "Post-connect hook warning"],
+        );
+        assert_eq!(*cleanup_calls.lock().expect("cleanup log poisoned"), 1);
+    }
+
+    #[::core::prelude::v1::test]
+    fn test_connection_orchestration_cleans_up_after_cancelled_hook() {
+        let cleanup_calls = Arc::new(Mutex::new(0));
+
+        let result = block_on(run_test_connection_orchestration(
+            ConnectionHooks::default(),
+            |_phase, _hooks, _context| Box::pin(async { HookPhaseState::Cancelled }),
+            || Box::pin(async { panic!("cancelled pre-connect hook must skip probe") }),
+            || {
+                let cleanup_calls = cleanup_calls.clone();
+                Box::pin(async move {
+                    *cleanup_calls.lock().expect("cleanup log poisoned") += 1;
+                    Ok(())
+                })
+            },
+            current_unsaved_hook_context(),
+        ));
+
+        assert!(
+            matches!(result, Err(error) if error == "Test connection cancelled by pre-connect hook")
+        );
+        assert_eq!(*cleanup_calls.lock().expect("cleanup log poisoned"), 1);
+    }
+
+    #[::core::prelude::v1::test]
+    fn test_connection_orchestration_fails_successful_probe_when_cleanup_fails() {
+        let result = block_on(run_test_connection_orchestration(
+            ConnectionHooks::default(),
+            |_phase, _hooks, _context| {
+                Box::pin(async move {
+                    HookPhaseState::Continue {
+                        warnings: Vec::new(),
+                    }
+                })
+            },
+            || Box::pin(async { Ok(dbflux_core::TestConnectionResult::default()) }),
+            || Box::pin(async { Err("access handle did not close".to_string()) }),
+            current_unsaved_hook_context(),
+        ));
+
+        assert!(
+            matches!(result, Err(error) if error == "Test connection cleanup failed: access handle did not close")
         );
     }
 

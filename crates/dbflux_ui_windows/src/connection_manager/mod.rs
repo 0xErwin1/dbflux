@@ -203,6 +203,7 @@ enum TestStatus {
     None,
     Testing,
     Success,
+    SuccessWithWarning,
     Failed,
 }
 

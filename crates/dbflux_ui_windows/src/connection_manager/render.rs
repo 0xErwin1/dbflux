@@ -395,6 +395,21 @@ impl ConnectionManagerWindow {
                                 }
                                 banner
                             }
+                            TestStatus::SuccessWithWarning => {
+                                let mut banner = BannerBlock::new(
+                                    BannerVariant::Warning,
+                                    "Connection successful with warnings",
+                                )
+                                .with_icon(
+                                    AppIconElement::new(AppIcon::Info)
+                                        .size(Heights::ICON_SM)
+                                        .color(banners.warning_fg),
+                                );
+                                if let Some(body) = test_error.or(test_result_body) {
+                                    banner = banner.with_body(body);
+                                }
+                                banner
+                            }
                             TestStatus::Failed => {
                                 let message =
                                     test_error.unwrap_or_else(|| "Connection failed".to_string());

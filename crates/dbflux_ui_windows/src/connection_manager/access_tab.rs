@@ -831,7 +831,7 @@ impl ConnectionManagerWindow {
                 TestStatus::Testing => {
                     Some(Text::muted("Testing SSH connection...").into_any_element())
                 }
-                TestStatus::Success => Some(
+                TestStatus::Success | TestStatus::SuccessWithWarning => Some(
                     StatusIndicator::new(Status::Connected)
                         .label("SSH connection successful")
                         .into_any_element(),
