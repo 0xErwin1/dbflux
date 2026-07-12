@@ -132,14 +132,17 @@ where
     F: Fn(WizardPhase, &mut Window, &mut App) + Clone + 'static,
 {
     let theme = cx.theme();
-    let accent = theme.accent;
-    let muted = theme.muted_foreground;
+    let colors = RailColors {
+        current: theme.primary,
+        done: theme.success,
+        muted: theme.muted_foreground,
+        hover_bg: theme.secondary,
+    };
     let border = theme.border;
-    let hover_bg = theme.secondary;
 
     let entries = rail_entries(current)
         .into_iter()
-        .map(move |entry| render_rail_entry(entry, accent, muted, hover_bg, on_select.clone()));
+        .map(move |entry| render_rail_entry(entry, colors, on_select.clone()));
 
     div()
         .flex()
@@ -152,13 +155,19 @@ where
         .children(entries)
 }
 
-fn render_rail_entry<F>(
-    entry: RailEntry,
-    accent: Hsla,
+/// The rail's marker/label colors, resolved once per render from the theme.
+/// `current` and `done` use the theme's bright action/success colors (not the
+/// dark `accent`, which is a low-contrast highlight background on dark themes),
+/// so the current phase reads as the most prominent entry.
+#[derive(Clone, Copy)]
+struct RailColors {
+    current: Hsla,
+    done: Hsla,
     muted: Hsla,
     hover_bg: Hsla,
-    on_select: F,
-) -> impl IntoElement
+}
+
+fn render_rail_entry<F>(entry: RailEntry, colors: RailColors, on_select: F) -> impl IntoElement
 where
     F: Fn(WizardPhase, &mut Window, &mut App) + Clone + 'static,
 {
@@ -167,10 +176,14 @@ where
     let marker = if entry.completed {
         Icon::new(AppIcon::CircleCheck)
             .size(px(14.0))
-            .color(accent)
+            .color(colors.done)
             .into_any_element()
     } else {
-        let dot_color = if entry.current { accent } else { muted };
+        let dot_color = if entry.current {
+            colors.current
+        } else {
+            colors.muted
+        };
         div()
             .size(px(8.0)) // guardrail-allow: decorative status-dot diameter, not a spacing token
             .rounded_full()
@@ -178,12 +191,15 @@ where
             .into_any_element()
     };
 
-    // Only the current entry is accented; every other label stays at full
-    // foreground contrast (a check/dot marker already conveys completed vs.
-    // pending), so the rail reads clearly instead of as dim, low-contrast text.
+    // The current entry is the most prominent: bright action color plus a
+    // heavier weight. Every other label stays at full foreground contrast (a
+    // check/dot marker conveys completed vs. pending), so the rail reads
+    // clearly instead of as dim, low-contrast text.
     let mut label = Text::body(phase.label());
     if entry.current {
-        label = label.color(accent);
+        label = label
+            .color(colors.current)
+            .font_weight(FontWeight::SEMIBOLD);
     }
 
     div()
@@ -208,7 +224,7 @@ where
         .child(label)
         .when(entry.completed, |el| {
             el.cursor_pointer()
-                .hover(|style| style.bg(hover_bg))
+                .hover(|style| style.bg(colors.hover_bg))
                 .on_click(move |_event, window, app| on_select(phase, window, app))
         })
 }
@@ -1423,10 +1439,17 @@ impl MigrateWizard {
                 .ok();
         };
 
+        // `flex_1` (not `size_full`): the modal container is a fixed-height
+        // flex column whose first child is the header, so the body must grow
+        // into the *remaining* height. `size_full` (100% height) would instead
+        // push the body to the full container height below the header, and the
+        // container's `overflow_hidden` would then clip the footer off-screen.
         div()
             .flex()
             .flex_col()
-            .size_full()
+            .flex_1()
+            .min_h(px(0.0))
+            .w_full()
             .child(
                 div()
                     .flex()
