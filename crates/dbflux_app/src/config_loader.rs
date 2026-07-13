@@ -1795,10 +1795,10 @@ mod tests {
         theme_setting_from_storage,
     };
     use dbflux_core::{
-        AccessKind, ConnectionHook, ConnectionHooks, ConnectionProfile, DbConfig, DbKind,
-        GeneralSettings, HookExecutionMode, HookFailureMode, HookKind, LuaCapabilities,
-        RpcServiceKind, ScriptLanguage, ScriptSource, ServiceConfig, SshAuthMethod,
-        SshTunnelConfig, SshTunnelProfile, ThemeSetting,
+        AccessKind, ConnectionHook, ConnectionHookBindings, ConnectionHooks, ConnectionProfile,
+        DbConfig, DbKind, GeneralSettings, HookExecutionMode, HookFailureMode, HookKind,
+        LuaCapabilities, RpcServiceKind, ScriptLanguage, ScriptSource, ServiceConfig,
+        SshAuthMethod, SshTunnelConfig, SshTunnelProfile, ThemeSetting,
     };
     use dbflux_storage::bootstrap::StorageRuntime;
     use dbflux_storage::repositories::general_settings::GeneralSettingsDto;
@@ -2206,6 +2206,52 @@ mod tests {
             .expect("reloaded profile");
 
         assert_eq!(loaded.hooks, profile.hooks);
+    }
+
+    #[test]
+    fn profile_hook_binding_references_definition_id_and_round_trips() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let saved = save_hook_definitions(
+            &runtime,
+            &[HookDefinitionSave {
+                id: None,
+                name: "seed-db".to_string(),
+                hook: command_hook("echo seed"),
+            }],
+            &[],
+        )
+        .expect("save hook definition");
+        let definition_id = saved["seed-db"]
+            .id
+            .clone()
+            .expect("generated definition id");
+
+        let mut profile = ConnectionProfile::new("bound", DbConfig::default_postgres());
+        profile.hook_bindings = Some(ConnectionHookBindings {
+            pre_connect: vec![definition_id.clone()],
+            post_connect: Vec::new(),
+            pre_disconnect: Vec::new(),
+            post_disconnect: Vec::new(),
+        });
+
+        save_profiles(&runtime, &[profile.clone()]).expect("save profile with hook binding");
+
+        let loaded = load_config(&runtime)
+            .expect("load configuration")
+            .profiles
+            .into_iter()
+            .find(|candidate| candidate.id == profile.id)
+            .expect("reloaded profile");
+
+        let bindings = loaded
+            .hook_bindings
+            .expect("hook bindings must survive reload");
+
+        assert_eq!(bindings.pre_connect, vec![definition_id]);
+        assert!(bindings.post_connect.is_empty());
+        assert!(bindings.pre_disconnect.is_empty());
+        assert!(bindings.post_disconnect.is_empty());
     }
 
     #[test]
