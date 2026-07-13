@@ -23,7 +23,6 @@ use dbflux_storage::repositories::connection_profiles::ConnectionProfileDto;
 use dbflux_storage::repositories::driver_overrides::DriverOverridesDto;
 use dbflux_storage::repositories::driver_setting_values::DriverSettingValueDto;
 use dbflux_storage::repositories::general_settings::GeneralSettingsDto;
-use dbflux_storage::repositories::hook_commands::HookCommandDto;
 use dbflux_storage::repositories::hook_definitions::{
     HookDefinitionDto, HookDefinitionReplacement,
 };
@@ -229,21 +228,6 @@ fn hook_definition_replacement(
         HookFailureMode::Disconnect => "Disconnect",
     };
     let definition_id = hook.id.clone().unwrap_or_default();
-    let command = match &hook.hook.kind {
-        HookKind::Command { command, .. } => Some(HookCommandDto {
-            id: uuid::Uuid::new_v4().to_string(),
-            hook_id: definition_id.clone(),
-            command: command.clone(),
-            working_directory: hook
-                .hook
-                .cwd
-                .as_ref()
-                .map(|path| path.to_string_lossy().to_string()),
-            timeout_ms: hook.hook.timeout_ms.map(|value| value as i64),
-            ready_signal: hook.hook.ready_signal.clone(),
-        }),
-        HookKind::Script { .. } | HookKind::Lua { .. } => None,
-    };
 
     Ok(HookDefinitionReplacement {
         id: hook.id.clone(),
@@ -271,7 +255,11 @@ fn hook_definition_replacement(
             ),
             env_denylist: hook.hook.env_denylist.clone(),
         },
-        command,
+        // The canonical hook kind is persisted in `kind_json`; the legacy
+        // `cfg_hook_commands` child row is never read back, so leaving it
+        // unset lets the atomic replace drop any stale row instead of
+        // mirroring dead data.
+        command: None,
         environment: hook.hook.env.clone(),
     })
 }
@@ -2216,6 +2204,55 @@ mod tests {
             .expect("reloaded profile");
 
         assert_eq!(loaded.hooks, profile.hooks);
+    }
+
+    #[test]
+    fn profile_hook_with_empty_command_round_trips_as_command_not_dropped() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let mut profile = ConnectionProfile::new("empty-command", DbConfig::default_postgres());
+
+        let empty_command_hook = ConnectionHook {
+            enabled: true,
+            kind: HookKind::Command {
+                command: String::new(),
+                args: Vec::new(),
+            },
+            cwd: None,
+            env: std::collections::HashMap::new(),
+            inherit_env: true,
+            env_denylist: Vec::new(),
+            timeout_ms: None,
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
+            on_failure: HookFailureMode::Disconnect,
+        };
+
+        profile.hooks = Some(ConnectionHooks {
+            pre_connect: vec![empty_command_hook.clone()],
+            post_connect: Vec::new(),
+            pre_disconnect: Vec::new(),
+            post_disconnect: Vec::new(),
+        });
+
+        save_profiles(&runtime, &[profile.clone()]).expect("save profile hooks");
+        let loaded = load_config(&runtime)
+            .expect("load configuration")
+            .profiles
+            .into_iter()
+            .find(|candidate| candidate.id == profile.id)
+            .expect("reloaded profile");
+
+        let reloaded_hook = loaded
+            .hooks
+            .as_ref()
+            .and_then(|hooks| hooks.pre_connect.first())
+            .expect("empty-command hook must survive reload");
+
+        assert_eq!(reloaded_hook.kind, empty_command_hook.kind);
+        assert!(matches!(
+            reloaded_hook.kind,
+            HookKind::Command { ref command, .. } if command.is_empty()
+        ));
     }
 
     #[test]
