@@ -55,9 +55,26 @@ pub(crate) fn decode_defensive_fallback(oid: u32, type_name: &str, raw: Option<&
     }
 }
 
+/// Decodes Redshift's `NUMERIC`/`DECIMAL` (OID 1700) wire bytes into a
+/// `Value::Decimal`.
+///
+/// `f64: FromSql` only accepts `FLOAT8`, not `NUMERIC`, so the connection
+/// layer cannot decode this column through a typed `try_get` the way it does
+/// for `float8`. This reuses the same defensive text decode as any other
+/// undecodable type, then relabels a successful decode as `Value::Decimal`
+/// instead of `Value::Text` so downstream numeric handling (e.g. the chart
+/// engine's `s.parse::<f64>()`) treats it as a number rather than an opaque
+/// string.
+pub(crate) fn decode_numeric_fallback(oid: u32, type_name: &str, raw: Option<&[u8]>) -> Value {
+    match decode_defensive_fallback(oid, type_name, raw) {
+        Value::Text(text) => Value::Decimal(text),
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{decode_defensive_fallback, redshift_oid_to_kind};
+    use super::{decode_defensive_fallback, decode_numeric_fallback, redshift_oid_to_kind};
     use dbflux_core::{ColumnKind, Value};
 
     #[test]
@@ -108,5 +125,30 @@ mod tests {
     #[test]
     fn decode_defensive_fallback_returns_null_when_raw_bytes_absent() {
         assert_eq!(decode_defensive_fallback(4000, "super", None), Value::Null);
+    }
+
+    #[test]
+    fn decode_numeric_fallback_decodes_a_real_value_as_decimal_not_null() {
+        assert_eq!(
+            decode_numeric_fallback(1700, "numeric", Some(b"123.45")),
+            Value::Decimal("123.45".to_string())
+        );
+        assert_eq!(
+            decode_numeric_fallback(1700, "numeric", Some(b"-0.001")),
+            Value::Decimal("-0.001".to_string())
+        );
+    }
+
+    #[test]
+    fn decode_numeric_fallback_returns_null_for_a_real_sql_null() {
+        assert_eq!(decode_numeric_fallback(1700, "numeric", None), Value::Null);
+    }
+
+    #[test]
+    fn decode_numeric_fallback_falls_back_to_unsupported_on_undecodable_bytes() {
+        assert_eq!(
+            decode_numeric_fallback(1700, "numeric", Some(&[0xFF, 0xFE])),
+            Value::Unsupported("numeric".to_string())
+        );
     }
 }

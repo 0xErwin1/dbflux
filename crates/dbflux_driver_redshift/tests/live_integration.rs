@@ -316,8 +316,7 @@ fn redshift_live_super_or_varbyte_column_renders_as_text_without_panic() -> Resu
     let result = connection.execute(&QueryRequest::new(&sql))?;
 
     assert_eq!(result.columns.len(), 1);
-    // Closing verification for the WU-1 T14/T15 hypothesis: a real
-    // SUPER/VARBYTE OID must classify as `ColumnKind::Text` here, not
+    // A real SUPER/VARBYTE OID must classify as `ColumnKind::Text` here, not
     // `Unknown` — an `Unknown` result would mean the hardcoded extended-type
     // OID literals in `redshift_oid_to_kind` do not match this cluster.
     assert_eq!(result.columns[0].kind, dbflux_core::ColumnKind::Text);

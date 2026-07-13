@@ -22,7 +22,7 @@ use crate::dialect::REDSHIFT_DIALECT;
 use crate::driver::METADATA;
 use crate::error_formatter::{format_redshift_connection_error, format_redshift_query_error};
 use crate::introspection::{get_current_database, get_databases, get_schemas, get_table_details};
-use crate::types::{decode_defensive_fallback, redshift_oid_to_kind};
+use crate::types::{decode_defensive_fallback, decode_numeric_fallback, redshift_oid_to_kind};
 
 /// Parameters for a direct (host/port) Redshift connection.
 pub(crate) struct RedshiftConnectParams<'a> {
@@ -96,13 +96,157 @@ pub(crate) fn connect_redshift(params: &RedshiftConnectParams) -> Result<Client,
 /// caller could otherwise still route a raw INSERT/UPDATE/DELETE/DDL statement
 /// through `execute()`, so this check runs before any statement reaches the
 /// wire.
+///
+/// `SELECT ... INTO` gets a dedicated check on top of the shared classifier:
+/// `classify_query_for_language` only inspects the leading keyword, so it
+/// treats `SELECT ... INTO newtable FROM t` as an ordinary read. On Redshift
+/// (and PostgreSQL) that form is CTAS — it creates a table — so it must be
+/// rejected here, before any statement reaches the wire, rather than relying
+/// on the shared classifier used by every other SQL driver (some of which
+/// legitimately allow `SELECT ... INTO @var`).
 fn ensure_read_only(sql: &str) -> Result<(), DbError> {
+    if is_select_into(sql) {
+        return Err(DbError::NotSupported(
+            "Amazon Redshift connections are read-only in DBFlux; SELECT ... INTO creates a table and is not supported".to_string(),
+        ));
+    }
+
     match classify_query_for_language(&QueryLanguage::Sql, sql) {
         ExecutionClassification::Read | ExecutionClassification::Metadata => Ok(()),
         _ => Err(DbError::NotSupported(
             "Amazon Redshift connections are read-only in DBFlux; only SELECT/EXPLAIN/SHOW statements are supported".to_string(),
         )),
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SqlScanState {
+    Normal,
+    LineComment,
+    BlockComment,
+    SingleQuote,
+    DoubleQuote,
+}
+
+/// Returns `true` when `sql` is a `SELECT` statement containing a top-level
+/// `INTO` keyword (the `SELECT ... INTO newtable FROM ...` CTAS form).
+///
+/// Comments and quoted string/identifier contents are stripped before
+/// tokenizing, so `INTO` appearing inside a comment, a string literal, or a
+/// quoted identifier is never mistaken for the keyword, and `INTO` is only
+/// matched as a whole word (not a substring of an identifier like
+/// `point_into`).
+fn is_select_into(sql: &str) -> bool {
+    let scanned = strip_comments_and_quoted_content(sql);
+
+    let mut words = scanned
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .filter(|word| !word.is_empty());
+
+    let Some(leading_keyword) = words.next() else {
+        return false;
+    };
+
+    if !leading_keyword.eq_ignore_ascii_case("select") {
+        return false;
+    }
+
+    words.any(|word| word.eq_ignore_ascii_case("into"))
+}
+
+/// Removes comments and the contents of single/double-quoted regions from
+/// `sql`, replacing each with whitespace so word-boundary tokenization
+/// cannot reconstruct a keyword from inside a literal. Doubled quote escapes
+/// (`''`, `""`) are honored so an escaped quote does not end the literal
+/// early.
+///
+/// `index` is always in-bounds: the loop condition below checks it against
+/// `chars.len()` before every indexed read.
+#[allow(clippy::indexing_slicing)]
+fn strip_comments_and_quoted_content(sql: &str) -> String {
+    let chars: Vec<char> = sql.chars().collect();
+    let mut result = String::with_capacity(sql.len());
+    let mut state = SqlScanState::Normal;
+    let mut index = 0;
+
+    while index < chars.len() {
+        let current = chars[index];
+        let next = chars.get(index + 1).copied();
+
+        match state {
+            SqlScanState::Normal => {
+                if current == '-' && next == Some('-') {
+                    state = SqlScanState::LineComment;
+                    index += 2;
+                    continue;
+                }
+
+                if current == '/' && next == Some('*') {
+                    state = SqlScanState::BlockComment;
+                    index += 2;
+                    continue;
+                }
+
+                if current == '\'' {
+                    state = SqlScanState::SingleQuote;
+                    result.push(' ');
+                    index += 1;
+                    continue;
+                }
+
+                if current == '"' {
+                    state = SqlScanState::DoubleQuote;
+                    result.push(' ');
+                    index += 1;
+                    continue;
+                }
+
+                result.push(current);
+                index += 1;
+            }
+
+            SqlScanState::LineComment => {
+                if current == '\n' {
+                    result.push('\n');
+                    state = SqlScanState::Normal;
+                }
+                index += 1;
+            }
+
+            SqlScanState::BlockComment => {
+                if current == '*' && next == Some('/') {
+                    state = SqlScanState::Normal;
+                    index += 2;
+                } else {
+                    index += 1;
+                }
+            }
+
+            SqlScanState::SingleQuote => {
+                if current == '\'' {
+                    if next == Some('\'') {
+                        index += 2;
+                        continue;
+                    }
+                    state = SqlScanState::Normal;
+                }
+                index += 1;
+            }
+
+            SqlScanState::DoubleQuote => {
+                if current == '"' {
+                    if next == Some('"') {
+                        index += 2;
+                        continue;
+                    }
+                    state = SqlScanState::Normal;
+                }
+                index += 1;
+            }
+        }
+    }
+
+    result
 }
 
 pub struct RedshiftConnection {
@@ -398,12 +542,66 @@ impl<'a> FromSql<'a> for RedshiftRawBytes {
     }
 }
 
+/// Decodes column `idx` as `T`, falling back to the defensive text decode
+/// (see [`decode_defensive_fallback`]) when the typed decode itself fails.
+///
+/// A failed `try_get` means the value is present but this Rust type could
+/// not decode it (e.g. a type/format mismatch) — that must not be conflated
+/// with a genuine SQL NULL (`Ok(None)`), which is the only case that yields
+/// `Value::Null`.
+fn decode_typed_or_fallback<T>(
+    row: &postgres::Row,
+    idx: usize,
+    oid: u32,
+    type_name: &str,
+    to_value: impl FnOnce(T) -> Value,
+) -> Value
+where
+    T: for<'a> FromSql<'a>,
+{
+    match row.try_get::<_, Option<T>>(idx) {
+        Ok(Some(value)) => to_value(value),
+        Ok(None) => Value::Null,
+        Err(_) => decode_via_raw_bytes(row, idx, oid, type_name, decode_defensive_fallback),
+    }
+}
+
+/// Captures column `idx`'s raw wire bytes via [`RedshiftRawBytes`] (which
+/// accepts every type) and hands them to `decode` for the final `Value`.
+/// Used both as the fallback path for typed decode failures and directly for
+/// types this driver never attempts to decode through a native Rust type.
+fn decode_via_raw_bytes(
+    row: &postgres::Row,
+    idx: usize,
+    oid: u32,
+    type_name: &str,
+    decode: impl FnOnce(u32, &str, Option<&[u8]>) -> Value,
+) -> Value {
+    match row.try_get::<_, Option<RedshiftRawBytes>>(idx) {
+        Ok(raw) => decode(
+            oid,
+            type_name,
+            raw.as_ref().map(|RedshiftRawBytes(bytes)| bytes.as_slice()),
+        ),
+        Err(error) => {
+            log::info!(
+                "Unsupported Redshift type '{type_name}' (oid {oid}) at column index {idx}: {error}"
+            );
+            Value::Unsupported(type_name.to_string())
+        }
+    }
+}
+
 /// Decodes a single column of a `postgres::Row` into a core `Value`.
 ///
 /// Known scalar types decode through their native Rust representation.
 /// Anything else (enums, domains, Redshift's extended types) falls back to
 /// [`decode_defensive_fallback`], which degrades to `Value::Unsupported`
-/// instead of panicking.
+/// instead of panicking. `NUMERIC`/`DECIMAL` gets its own fallback,
+/// [`decode_numeric_fallback`], because `f64: FromSql` never accepts that
+/// OID: routing it through the same text decode and relabeling the result as
+/// `Value::Decimal` is the only way to represent it, and is required to
+/// avoid silently reporting every decimal value as NULL.
 ///
 /// `idx` is always in-bounds: callers derive it from `0..columns.len()` where
 /// `columns` was itself built from the same row's column list.
@@ -411,102 +609,54 @@ impl<'a> FromSql<'a> for RedshiftRawBytes {
 fn redshift_value_to_value(row: &postgres::Row, idx: usize) -> Value {
     let col_type = row.columns()[idx].type_();
     let type_name = col_type.name();
+    let oid = col_type.oid();
 
     match type_name {
-        "bool" => row
-            .try_get::<_, Option<bool>>(idx)
-            .map(|value| value.map(Value::Bool).unwrap_or(Value::Null))
-            .unwrap_or(Value::Null),
+        "bool" => decode_typed_or_fallback::<bool>(row, idx, oid, type_name, Value::Bool),
 
-        "int2" => row
-            .try_get::<_, Option<i16>>(idx)
-            .map(|value| value.map(|v| Value::Int(v as i64)).unwrap_or(Value::Null))
-            .unwrap_or(Value::Null),
+        "int2" => {
+            decode_typed_or_fallback::<i16>(row, idx, oid, type_name, |v| Value::Int(v as i64))
+        }
 
-        "int4" => row
-            .try_get::<_, Option<i32>>(idx)
-            .map(|value| value.map(|v| Value::Int(v as i64)).unwrap_or(Value::Null))
-            .unwrap_or(Value::Null),
+        "int4" => {
+            decode_typed_or_fallback::<i32>(row, idx, oid, type_name, |v| Value::Int(v as i64))
+        }
 
-        "int8" => row
-            .try_get::<_, Option<i64>>(idx)
-            .map(|value| value.map(Value::Int).unwrap_or(Value::Null))
-            .unwrap_or(Value::Null),
+        "int8" => decode_typed_or_fallback::<i64>(row, idx, oid, type_name, Value::Int),
 
-        "float4" => row
-            .try_get::<_, Option<f32>>(idx)
-            .map(|value| {
-                value
-                    .map(|float| Value::Float(float as f64))
-                    .unwrap_or(Value::Null)
+        "float4" => {
+            decode_typed_or_fallback::<f32>(row, idx, oid, type_name, |v| Value::Float(v as f64))
+        }
+
+        "float8" => decode_typed_or_fallback::<f64>(row, idx, oid, type_name, Value::Float),
+
+        "numeric" => decode_via_raw_bytes(row, idx, oid, type_name, decode_numeric_fallback),
+
+        "text" | "varchar" | "bpchar" | "name" => {
+            decode_typed_or_fallback::<String>(row, idx, oid, type_name, Value::Text)
+        }
+
+        "date" => decode_typed_or_fallback::<NaiveDate>(row, idx, oid, type_name, Value::Date),
+
+        "time" => decode_typed_or_fallback::<NaiveTime>(row, idx, oid, type_name, Value::Time),
+
+        "timestamp" => {
+            decode_typed_or_fallback::<NaiveDateTime>(row, idx, oid, type_name, |timestamp| {
+                Value::DateTime(DateTime::<Utc>::from_naive_utc_and_offset(timestamp, Utc))
             })
-            .unwrap_or(Value::Null),
+        }
 
-        "float8" | "numeric" => row
-            .try_get::<_, Option<f64>>(idx)
-            .map(|value| value.map(Value::Float).unwrap_or(Value::Null))
-            .unwrap_or(Value::Null),
+        "timestamptz" => {
+            decode_typed_or_fallback::<DateTime<Utc>>(row, idx, oid, type_name, Value::DateTime)
+        }
 
-        "text" | "varchar" | "bpchar" | "name" => row
-            .try_get::<_, Option<String>>(idx)
-            .map(|value| value.map(Value::Text).unwrap_or(Value::Null))
-            .unwrap_or(Value::Null),
+        "inet" => decode_typed_or_fallback::<IpAddr>(row, idx, oid, type_name, |ip| {
+            Value::Text(ip.to_string())
+        }),
 
-        "date" => row
-            .try_get::<_, Option<NaiveDate>>(idx)
-            .map(|value| value.map(Value::Date).unwrap_or(Value::Null))
-            .unwrap_or(Value::Null),
+        "bytea" => decode_typed_or_fallback::<Vec<u8>>(row, idx, oid, type_name, Value::Bytes),
 
-        "time" => row
-            .try_get::<_, Option<NaiveTime>>(idx)
-            .map(|value| value.map(Value::Time).unwrap_or(Value::Null))
-            .unwrap_or(Value::Null),
-
-        "timestamp" => row
-            .try_get::<_, Option<NaiveDateTime>>(idx)
-            .map(|value| {
-                value
-                    .map(|timestamp| {
-                        Value::DateTime(DateTime::<Utc>::from_naive_utc_and_offset(timestamp, Utc))
-                    })
-                    .unwrap_or(Value::Null)
-            })
-            .unwrap_or(Value::Null),
-
-        "timestamptz" => row
-            .try_get::<_, Option<DateTime<Utc>>>(idx)
-            .map(|value| value.map(Value::DateTime).unwrap_or(Value::Null))
-            .unwrap_or(Value::Null),
-
-        "inet" => row
-            .try_get::<_, Option<IpAddr>>(idx)
-            .map(|value| {
-                value
-                    .map(|ip| Value::Text(ip.to_string()))
-                    .unwrap_or(Value::Null)
-            })
-            .unwrap_or(Value::Null),
-
-        "bytea" => row
-            .try_get::<_, Option<Vec<u8>>>(idx)
-            .map(|value| value.map(Value::Bytes).unwrap_or(Value::Null))
-            .unwrap_or(Value::Null),
-
-        _ => match row.try_get::<_, Option<RedshiftRawBytes>>(idx) {
-            Ok(raw) => decode_defensive_fallback(
-                col_type.oid(),
-                type_name,
-                raw.as_ref().map(|RedshiftRawBytes(bytes)| bytes.as_slice()),
-            ),
-            Err(error) => {
-                let column_name = row.columns()[idx].name();
-                log::info!(
-                    "Unsupported Redshift type '{type_name}' (kind: {:?}) for column '{column_name}': {error}",
-                    col_type.kind()
-                );
-                Value::Unsupported(type_name.to_string())
-            }
-        },
+        _ => decode_via_raw_bytes(row, idx, oid, type_name, decode_defensive_fallback),
     }
 }
 
@@ -570,5 +720,47 @@ mod tests {
 
         assert!(!message.contains("ExecutionClassification"));
         assert!(message.contains("read-only"));
+    }
+
+    #[test]
+    fn select_into_is_rejected() {
+        let result = ensure_read_only("SELECT a INTO t FROM x");
+        assert!(matches!(result, Err(DbError::NotSupported(_))));
+    }
+
+    #[test]
+    fn select_into_is_rejected_regardless_of_case_and_whitespace() {
+        for sql in [
+            "select a into t from x",
+            "SELECT a\nINTO\tt FROM x",
+            "  SELECT a INTO t FROM x  ",
+        ] {
+            let result = ensure_read_only(sql);
+            assert!(
+                matches!(result, Err(DbError::NotSupported(_))),
+                "expected {sql:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn select_into_as_column_alias_or_literal_is_not_a_false_positive() {
+        for sql in [
+            "SELECT a AS into_col FROM x",
+            "SELECT 'into' FROM x",
+            "SELECT /* into */ 1",
+            "SELECT point_into FROM x",
+        ] {
+            assert!(
+                ensure_read_only(sql).is_ok(),
+                "expected {sql:?} to be allowed"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_select_and_cte_are_still_allowed() {
+        assert!(ensure_read_only("SELECT 1").is_ok());
+        assert!(ensure_read_only("WITH c AS (SELECT 1) SELECT * FROM c").is_ok());
     }
 }

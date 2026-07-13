@@ -4081,8 +4081,6 @@ mod tests {
         );
     }
 
-    // ---- WU-4: build_table_storage_children (generic storage hints) ----
-
     /// Generic rendering must be driven purely by `storage_hints` content: a
     /// populated slice produces one "Storage" folder whose children are one
     /// node per hint, each labeled with the hint's columns and detail.
