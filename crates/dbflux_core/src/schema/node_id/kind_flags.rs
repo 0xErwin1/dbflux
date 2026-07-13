@@ -21,6 +21,7 @@ impl SchemaNodeKind {
                 | Self::IndexesFolder
                 | Self::ForeignKeysFolder
                 | Self::ConstraintsFolder
+                | Self::StorageHintsFolder
                 | Self::SchemaIndexesFolder
                 | Self::SchemaForeignKeysFolder
                 | Self::RoutinesFolder
@@ -61,6 +62,7 @@ impl SchemaNodeKind {
                 | Self::IndexesFolder
                 | Self::ForeignKeysFolder
                 | Self::ConstraintsFolder
+                | Self::StorageHintsFolder
                 | Self::SchemaIndexesFolder
                 | Self::SchemaForeignKeysFolder
                 | Self::RoutinesFolder

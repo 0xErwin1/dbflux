@@ -13,8 +13,8 @@ use super::{
     P_REMOTE_DASHBOARDS_FOLDER, P_ROUTINE, P_ROUTINES_FOLDER, P_ROUTINES_LOADING,
     P_SAVED_CHART_ITEM, P_SAVED_CHARTS_FOLDER, P_SCHEMA, P_SCHEMA_FK, P_SCHEMA_FK_FOLDER,
     P_SCHEMA_FK_LOADING, P_SCHEMA_IDX_FOLDER, P_SCHEMA_IDX_LOADING, P_SCHEMA_INDEX, P_SCRIPT_FILE,
-    P_SCRIPTS_FOLDER, P_TABLE, P_TABLES_FOLDER, P_TYPES_FOLDER, P_TYPES_LOADING, P_VIEW,
-    P_VIEWS_FOLDER,
+    P_SCRIPTS_FOLDER, P_STORAGE_HINT_ITEM, P_STORAGE_HINTS_FOLDER, P_TABLE, P_TABLES_FOLDER,
+    P_TYPES_FOLDER, P_TYPES_LOADING, P_VIEW, P_VIEWS_FOLDER,
 };
 
 impl fmt::Display for SchemaNodeId {
@@ -47,12 +47,14 @@ impl fmt::Display for SchemaNodeId {
             Self::ColumnsFolder { .. }
             | Self::IndexesFolder { .. }
             | Self::ForeignKeysFolder { .. }
-            | Self::ConstraintsFolder { .. } => fmt_table_detail_folders(self, f),
+            | Self::ConstraintsFolder { .. }
+            | Self::StorageHintsFolder { .. } => fmt_table_detail_folders(self, f),
 
             Self::Column { .. }
             | Self::Index { .. }
             | Self::ForeignKey { .. }
             | Self::Constraint { .. }
+            | Self::StorageHintItem { .. }
             | Self::SchemaIndex { .. }
             | Self::SchemaForeignKey { .. } => fmt_detail_variants(self, f),
 
@@ -309,6 +311,17 @@ fn fmt_table_detail_folders(id: &SchemaNodeId, f: &mut fmt::Formatter<'_>) -> fm
                 P_CONSTRAINTS_FOLDER, profile_id, schema, table
             )
         }
+        SchemaNodeId::StorageHintsFolder {
+            profile_id,
+            schema,
+            table,
+        } => {
+            write!(
+                f,
+                "{}|{}|{}|{}",
+                P_STORAGE_HINTS_FOLDER, profile_id, schema, table
+            )
+        }
         _ => unreachable!("fmt_table_detail_folders called with an unexpected variant"),
     }
 }
@@ -342,6 +355,17 @@ fn fmt_detail_variants(id: &SchemaNodeId, f: &mut fmt::Formatter<'_>) -> fmt::Re
             name,
         } => {
             write!(f, "{}|{}|{}|{}", P_CONSTRAINT, profile_id, table, name)
+        }
+        SchemaNodeId::StorageHintItem {
+            profile_id,
+            table,
+            name,
+        } => {
+            write!(
+                f,
+                "{}|{}|{}|{}",
+                P_STORAGE_HINT_ITEM, profile_id, table, name
+            )
         }
         SchemaNodeId::SchemaIndex {
             profile_id,

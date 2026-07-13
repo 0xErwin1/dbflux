@@ -1382,6 +1382,17 @@ impl Sidebar {
             Vec::new()
         };
 
+        let storage_children = if details_loaded {
+            build_table_storage_children(
+                profile_id,
+                schema_name,
+                &table.name,
+                effective_table.storage_hints.as_deref(),
+            )
+        } else {
+            Vec::new()
+        };
+
         // Lookup key must match the cache write path in populate_dependents.
         // The cache key mirrors `table_details`: (database-or-schema, schema, table).
         let dep_key = (
@@ -1406,6 +1417,7 @@ impl Sidebar {
             index_children,
             fk_children,
             constraint_children,
+            storage_children,
             dependents_folder,
         );
 
@@ -2061,6 +2073,63 @@ fn build_table_constraint_children(
         .collect()
 }
 
+/// Build the generic storage-hints folder for a table, driven entirely by
+/// `TableInfo.storage_hints`. Any driver that populates hints (e.g. a
+/// distribution/sort key, or an informational-only constraint) gets this
+/// folder for free; drivers that leave it `None`/empty render nothing here —
+/// never an empty placeholder folder.
+fn build_table_storage_children(
+    profile_id: Uuid,
+    schema_name: &str,
+    table_name: &str,
+    storage_hints: Option<&[dbflux_core::TableStorageHint]>,
+) -> Vec<TreeItem> {
+    let Some(hints) = storage_hints else {
+        return Vec::new();
+    };
+
+    if hints.is_empty() {
+        return Vec::new();
+    }
+
+    let hint_items: Vec<TreeItem> = hints
+        .iter()
+        .map(|hint| {
+            let mut label = hint.label.clone();
+            if !hint.columns.is_empty() {
+                label.push_str(&format!(" ({})", hint.columns.join(", ")));
+            }
+            if let Some(ref detail) = hint.detail {
+                label.push_str(&format!(" — {}", detail));
+            }
+
+            TreeItem::new(
+                SchemaNodeId::StorageHintItem {
+                    profile_id,
+                    table: table_name.to_string(),
+                    name: hint.label.clone(),
+                }
+                .to_string(),
+                label,
+            )
+        })
+        .collect();
+
+    vec![
+        TreeItem::new(
+            SchemaNodeId::StorageHintsFolder {
+                profile_id,
+                schema: schema_name.to_string(),
+                table: table_name.to_string(),
+            }
+            .to_string(),
+            format!("Storage ({})", hint_items.len()),
+        )
+        .expanded(false)
+        .children(hint_items),
+    ]
+}
+
 fn build_table_dependents_folder(
     profile_id: Uuid,
     schema_name: &str,
@@ -2115,7 +2184,8 @@ fn build_table_dependents_folder(
 /// When `details_loaded` is false, emits a single "Loading…" placeholder
 /// instead of four empty section folders. Once details are available the four
 /// folders (Columns, Indexes, Foreign Keys, Constraints) appear with their
-/// real counts; the optional dependents folder is appended last.
+/// real counts, followed by the generic Storage folder (only when the driver
+/// populated `storage_hints`); the optional dependents folder is appended last.
 #[allow(clippy::too_many_arguments)]
 fn build_table_sections(
     profile_id: Uuid,
@@ -2126,6 +2196,7 @@ fn build_table_sections(
     index_children: Vec<TreeItem>,
     fk_children: Vec<TreeItem>,
     constraint_children: Vec<TreeItem>,
+    storage_children: Vec<TreeItem>,
     dependents_folder: Option<TreeItem>,
 ) -> Vec<TreeItem> {
     let mut sections = if details_loaded {
@@ -2184,6 +2255,8 @@ fn build_table_sections(
         let table_loading_id = format!("T|{}|{}|{}_loading", profile_id, schema_name, table_name);
         vec![TreeItem::new(table_loading_id, "Loading…".to_string())]
     };
+
+    sections.extend(storage_children);
 
     if let Some(dep_folder) = dependents_folder {
         sections.push(dep_folder);
@@ -4005,6 +4078,111 @@ mod tests {
                 SchemaNodeId::InstanceOverviewLeaf { profile_id: pid } if *pid == profile_id
             ),
             "leaf must carry InstanceOverviewLeaf node ID: {node_id:?}"
+        );
+    }
+
+    // ---- WU-4: build_table_storage_children (generic storage hints) ----
+
+    /// Generic rendering must be driven purely by `storage_hints` content: a
+    /// populated slice produces one "Storage" folder whose children are one
+    /// node per hint, each labeled with the hint's columns and detail.
+    #[test]
+    fn build_table_storage_children_renders_one_folder_with_one_child_per_hint() {
+        use dbflux_core::{SchemaNodeId, TableStorageHint};
+
+        let profile_id = Uuid::new_v4();
+        let hints = vec![
+            TableStorageHint {
+                label: "Distribution Key".to_string(),
+                columns: vec!["customer_id".to_string()],
+                detail: Some("KEY".to_string()),
+            },
+            TableStorageHint {
+                label: "Sort Key".to_string(),
+                columns: vec!["created_at".to_string()],
+                detail: Some("compound".to_string()),
+            },
+            TableStorageHint {
+                label: "Constraints advisory".to_string(),
+                columns: Vec::new(),
+                detail: Some("PK/FK/UNIQUE are informational, not enforced".to_string()),
+            },
+        ];
+
+        let children =
+            super::build_table_storage_children(profile_id, "public", "orders", Some(&hints));
+
+        assert_eq!(children.len(), 1, "exactly one Storage folder node");
+        let folder = &children[0];
+
+        let folder_id: SchemaNodeId = folder
+            .id
+            .as_ref()
+            .parse()
+            .expect("folder must have a valid SchemaNodeId");
+        assert!(
+            matches!(
+                &folder_id,
+                SchemaNodeId::StorageHintsFolder { profile_id: pid, schema, table }
+                    if *pid == profile_id && schema == "public" && table == "orders"
+            ),
+            "folder must carry StorageHintsFolder node ID: {folder_id:?}"
+        );
+        assert_eq!(folder.label.as_ref(), "Storage (3)");
+
+        assert_eq!(folder.children.len(), 3, "one child per hint");
+
+        let dist_child = folder
+            .children
+            .iter()
+            .find(|c| c.label.as_ref().starts_with("Distribution Key"))
+            .expect("Distribution Key child must exist");
+        assert!(
+            dist_child.label.as_ref().contains("customer_id"),
+            "label must include the hint's columns: {}",
+            dist_child.label
+        );
+        assert!(
+            dist_child.label.as_ref().contains("KEY"),
+            "label must include the hint's detail: {}",
+            dist_child.label
+        );
+
+        let dist_id: SchemaNodeId = dist_child
+            .id
+            .as_ref()
+            .parse()
+            .expect("child must have a valid SchemaNodeId");
+        assert!(
+            matches!(
+                &dist_id,
+                SchemaNodeId::StorageHintItem { profile_id: pid, table, name }
+                    if *pid == profile_id && table == "orders" && name == "Distribution Key"
+            ),
+            "child must carry StorageHintItem node ID: {dist_id:?}"
+        );
+    }
+
+    /// No storage hints (driver did not populate any) must produce no folder
+    /// at all — never an empty placeholder folder. This is the seam that
+    /// keeps the sidebar generic: any driver that leaves `storage_hints` as
+    /// `None` renders nothing extra.
+    #[test]
+    fn build_table_storage_children_is_empty_when_no_hints() {
+        let profile_id = Uuid::new_v4();
+
+        let none_children =
+            super::build_table_storage_children(profile_id, "public", "orders", None);
+        assert!(
+            none_children.is_empty(),
+            "None storage_hints must produce no folder"
+        );
+
+        let empty_children =
+            super::build_table_storage_children(profile_id, "public", "orders", Some(&[]));
+        assert!(
+            empty_children.is_empty(),
+            "empty storage_hints must produce no folder"
         );
     }
 }

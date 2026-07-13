@@ -205,6 +205,15 @@ pub enum SchemaNodeId {
         schema: String,
         table: String,
     },
+    /// Generic folder rendering driver-reported storage hints (e.g. Redshift
+    /// distribution/sort keys, informational-only constraints) via
+    /// `TableInfo.storage_hints`. Absent from the tree entirely when a
+    /// driver populates no hints for a table.
+    StorageHintsFolder {
+        profile_id: Uuid,
+        schema: String,
+        table: String,
+    },
 
     // Detail variants
     Column {
@@ -223,6 +232,14 @@ pub enum SchemaNodeId {
         name: String,
     },
     Constraint {
+        profile_id: Uuid,
+        table: String,
+        name: String,
+    },
+    /// One entry inside a `StorageHintsFolder`. `name` carries the hint's
+    /// `label` (e.g. "Distribution Key"), which is unique per table since a
+    /// driver reports at most one hint per label.
+    StorageHintItem {
         profile_id: Uuid,
         table: String,
         name: String,
@@ -381,10 +398,12 @@ pub enum SchemaNodeKind {
     IndexesFolder,
     ForeignKeysFolder,
     ConstraintsFolder,
+    StorageHintsFolder,
     Column,
     Index,
     ForeignKey,
     Constraint,
+    StorageHintItem,
     SchemaIndex,
     SchemaForeignKey,
     Routine,
@@ -448,10 +467,12 @@ impl SchemaNodeId {
             Self::IndexesFolder { .. } => SchemaNodeKind::IndexesFolder,
             Self::ForeignKeysFolder { .. } => SchemaNodeKind::ForeignKeysFolder,
             Self::ConstraintsFolder { .. } => SchemaNodeKind::ConstraintsFolder,
+            Self::StorageHintsFolder { .. } => SchemaNodeKind::StorageHintsFolder,
             Self::Column { .. } => SchemaNodeKind::Column,
             Self::Index { .. } => SchemaNodeKind::Index,
             Self::ForeignKey { .. } => SchemaNodeKind::ForeignKey,
             Self::Constraint { .. } => SchemaNodeKind::Constraint,
+            Self::StorageHintItem { .. } => SchemaNodeKind::StorageHintItem,
             Self::SchemaIndex { .. } => SchemaNodeKind::SchemaIndex,
             Self::SchemaForeignKey { .. } => SchemaNodeKind::SchemaForeignKey,
             Self::Routine { .. } => SchemaNodeKind::Routine,
@@ -509,10 +530,12 @@ impl SchemaNodeId {
             | Self::IndexesFolder { profile_id, .. }
             | Self::ForeignKeysFolder { profile_id, .. }
             | Self::ConstraintsFolder { profile_id, .. }
+            | Self::StorageHintsFolder { profile_id, .. }
             | Self::Column { profile_id, .. }
             | Self::Index { profile_id, .. }
             | Self::ForeignKey { profile_id, .. }
             | Self::Constraint { profile_id, .. }
+            | Self::StorageHintItem { profile_id, .. }
             | Self::SchemaIndex { profile_id, .. }
             | Self::SchemaForeignKey { profile_id, .. }
             | Self::Routine { profile_id, .. }
@@ -568,10 +591,12 @@ const P_COLUMNS_FOLDER: &str = "CLF";
 const P_INDEXES_FOLDER: &str = "IXF";
 const P_FK_FOLDER: &str = "FKF";
 const P_CONSTRAINTS_FOLDER: &str = "CSF";
+const P_STORAGE_HINTS_FOLDER: &str = "SHF";
 const P_COLUMN: &str = "CL";
 const P_INDEX: &str = "IX";
 const P_FK: &str = "FK";
 const P_CONSTRAINT: &str = "CS";
+const P_STORAGE_HINT_ITEM: &str = "SHI";
 const P_SCHEMA_INDEX: &str = "SX";
 const P_SCHEMA_FK: &str = "SK";
 const P_DB_IDX_FOLDER: &str = "DIF";
@@ -625,7 +650,6 @@ impl std::error::Error for ParseSchemaNodeIdError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::str::FromStr;
 
     fn roundtrip(id: SchemaNodeId) {
         let s = id.to_string();
@@ -762,6 +786,11 @@ mod tests {
             schema: "public".into(),
             table: "users".into(),
         });
+        roundtrip(SchemaNodeId::StorageHintsFolder {
+            profile_id: uuid,
+            schema: "public".into(),
+            table: "users".into(),
+        });
         roundtrip(SchemaNodeId::Column {
             profile_id: uuid,
             table: "users".into(),
@@ -781,6 +810,11 @@ mod tests {
             profile_id: uuid,
             table: "users".into(),
             name: "users_pkey".into(),
+        });
+        roundtrip(SchemaNodeId::StorageHintItem {
+            profile_id: uuid,
+            table: "orders".into(),
+            name: "Distribution Key".into(),
         });
         roundtrip(SchemaNodeId::SchemaIndex {
             profile_id: uuid,
