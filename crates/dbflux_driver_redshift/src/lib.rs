@@ -13,6 +13,7 @@ pub mod connection;
 pub mod dialect;
 pub mod driver;
 pub mod error_formatter;
+pub(crate) mod introspection;
 pub mod types;
 
 pub use dialect::RedshiftDialect;

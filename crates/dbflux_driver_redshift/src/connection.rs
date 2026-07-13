@@ -5,10 +5,11 @@ use std::time::Instant;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dbflux_core::{
-    ColumnMeta, Connection, ConnectionExt, DbError, DbKind, DocumentConnection, DriverMetadata,
-    ExecutionClassification, KeyValueConnection, QueryCancelHandle, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, RelationalConnection, Row, SchemaLoadingStrategy, SchemaSnapshot,
-    SqlDialect, Value, classify_query_for_language,
+    ColumnMeta, Connection, ConnectionExt, DatabaseInfo, DbError, DbKind, DocumentConnection,
+    DriverMetadata, ExecutionClassification, KeyValueConnection, QueryCancelHandle, QueryHandle,
+    QueryLanguage, QueryRequest, QueryResult, RelationalConnection, RelationalSchema, Row,
+    SchemaFeatures, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, TableInfo, Value,
+    classify_query_for_language,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -20,7 +21,8 @@ use uuid::Uuid;
 use crate::dialect::REDSHIFT_DIALECT;
 use crate::driver::METADATA;
 use crate::error_formatter::{format_redshift_connection_error, format_redshift_query_error};
-use crate::types::redshift_oid_to_kind;
+use crate::introspection::{get_current_database, get_databases, get_schemas, get_table_details};
+use crate::types::{decode_defensive_fallback, redshift_oid_to_kind};
 
 /// Parameters for a direct (host/port) Redshift connection.
 pub(crate) struct RedshiftConnectParams<'a> {
@@ -290,13 +292,57 @@ impl Connection for RedshiftConnection {
         })
     }
 
-    /// Schema/table/view/column introspection lands with the metadata
-    /// introspection layer; this crate currently only supports connecting and
-    /// running read-only queries.
     fn schema(&self) -> Result<SchemaSnapshot, DbError> {
-        Err(DbError::NotSupported(
-            "Redshift schema introspection is not yet implemented".to_string(),
-        ))
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {e}").into()))?;
+
+        let databases = get_databases(&mut client)?;
+        let current_database = get_current_database(&mut client)?;
+        let schemas = get_schemas(&mut client)?;
+
+        Ok(SchemaSnapshot::relational(RelationalSchema {
+            databases,
+            current_database,
+            schemas,
+            tables: Vec::new(),
+            views: Vec::new(),
+        }))
+    }
+
+    fn list_databases(&self) -> Result<Vec<DatabaseInfo>, DbError> {
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {e}").into()))?;
+
+        get_databases(&mut client)
+    }
+
+    fn table_details(
+        &self,
+        _database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<TableInfo, DbError> {
+        let schema_name = schema.unwrap_or("public");
+
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {e}").into()))?;
+
+        get_table_details(&mut client, schema_name, table)
+    }
+
+    /// Redshift accepts (but does not enforce) PK/FK/UNIQUE constraints, so
+    /// this driver populates them from the catalog like PostgreSQL — the
+    /// `storage_hints` "Constraints advisory" entry is what tells the UI they
+    /// are informational only. Redshift has no true indexes and no CHECK
+    /// constraints, so those feature flags stay unset.
+    fn schema_features(&self) -> SchemaFeatures {
+        SchemaFeatures::FOREIGN_KEYS | SchemaFeatures::UNIQUE_CONSTRAINTS
     }
 
     fn kind(&self) -> DbKind {
@@ -328,22 +374,23 @@ impl ConnectionExt for RedshiftConnection {
     }
 }
 
-/// Wrapper that decodes any column as raw UTF-8 text.
+/// Wrapper that captures a column's raw wire bytes unconditionally.
 ///
 /// The `postgres` crate's `FromSql<String>` only accepts the handful of OIDs
 /// it recognises as textual, so Redshift's extended types (`SUPER`,
 /// `VARBYTE`, `GEOMETRY`, `GEOGRAPHY`, `HLLSKETCH`) and any other
 /// unrecognised type fail that check silently. This wrapper accepts every
-/// type and reads the wire bytes as UTF-8, giving `redshift_value_to_value` a
-/// defensive fallback instead of a decode panic.
-struct RedshiftText(String);
+/// type and copies the wire bytes verbatim — it never fails — so the actual
+/// decode/fallback decision lives in the pure, unit-tested
+/// [`decode_defensive_fallback`].
+struct RedshiftRawBytes(Vec<u8>);
 
-impl<'a> FromSql<'a> for RedshiftText {
+impl<'a> FromSql<'a> for RedshiftRawBytes {
     fn from_sql(
         _ty: &Type,
         raw: &'a [u8],
     ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
-        Ok(RedshiftText(std::str::from_utf8(raw)?.to_string()))
+        Ok(RedshiftRawBytes(raw.to_vec()))
     }
 
     fn accepts(_ty: &Type) -> bool {
@@ -354,9 +401,9 @@ impl<'a> FromSql<'a> for RedshiftText {
 /// Decodes a single column of a `postgres::Row` into a core `Value`.
 ///
 /// Known scalar types decode through their native Rust representation.
-/// Anything else (enums, domains, Redshift's extended types) falls back to a
-/// raw-text decode via [`RedshiftText`]; a fully undecodable value becomes
-/// `Value::Unsupported` rather than panicking.
+/// Anything else (enums, domains, Redshift's extended types) falls back to
+/// [`decode_defensive_fallback`], which degrades to `Value::Unsupported`
+/// instead of panicking.
 ///
 /// `idx` is always in-bounds: callers derive it from `0..columns.len()` where
 /// `columns` was itself built from the same row's column list.
@@ -445,9 +492,12 @@ fn redshift_value_to_value(row: &postgres::Row, idx: usize) -> Value {
             .map(|value| value.map(Value::Bytes).unwrap_or(Value::Null))
             .unwrap_or(Value::Null),
 
-        _ => match row.try_get::<_, Option<RedshiftText>>(idx) {
-            Ok(Some(RedshiftText(text))) => Value::Text(text),
-            Ok(None) => Value::Null,
+        _ => match row.try_get::<_, Option<RedshiftRawBytes>>(idx) {
+            Ok(raw) => decode_defensive_fallback(
+                col_type.oid(),
+                type_name,
+                raw.as_ref().map(|RedshiftRawBytes(bytes)| bytes.as_slice()),
+            ),
             Err(error) => {
                 let column_name = row.columns()[idx].name();
                 log::info!(

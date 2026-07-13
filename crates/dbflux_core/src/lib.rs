@@ -190,10 +190,11 @@ pub use schema::{
     SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexBuilder, SchemaIndexInfo,
     SchemaNodeId, SchemaNodeKind, SchemaSnapshot, SchemaSnapshotRecord, SearchIndexInfo,
     SearchMappingInfo, SearchSchema, SnapshotDepth, TableChange, TableInfo, TableKey,
-    TimeSeriesFieldInfo, TimeSeriesSchema, VectorCollectionInfo, VectorMetadataField, VectorMetric,
-    VectorSchema, ViewInfo, WideColumnInfo, WideColumnKeyspaceInfo, WideColumnSchema,
-    check_drift_sync, check_schema_drift, classify_table_added, classify_table_removed,
-    diff_schema, diff_table_info, extract_referenced_tables, topological_order,
+    TableStorageHint, TimeSeriesFieldInfo, TimeSeriesSchema, VectorCollectionInfo,
+    VectorMetadataField, VectorMetric, VectorSchema, ViewInfo, WideColumnInfo,
+    WideColumnKeyspaceInfo, WideColumnSchema, check_drift_sync, check_schema_drift,
+    classify_table_added, classify_table_removed, diff_schema, diff_table_info,
+    extract_referenced_tables, topological_order,
 };
 
 pub use sql::{

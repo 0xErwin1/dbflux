@@ -1,4 +1,4 @@
-use dbflux_core::ColumnKind;
+use dbflux_core::{ColumnKind, Value};
 
 /// Amazon Redshift preserves the standard PostgreSQL `pg_type` OID space for
 /// the common scalar types, so timestamp/integer/float/text classification
@@ -29,10 +29,36 @@ pub fn redshift_oid_to_kind(oid: u32) -> ColumnKind {
     }
 }
 
+/// Decodes a column's raw wire bytes when its OID does not match one of the
+/// natively-typed scalars the connection layer decodes directly.
+///
+/// Always attempts a UTF-8 text decode first: this covers Redshift's
+/// extended types (`SUPER`, `VARBYTE`, `GEOMETRY`, `GEOGRAPHY`, `HLLSKETCH`,
+/// all classified `ColumnKind::Text` by [`redshift_oid_to_kind`]) as well as
+/// any OID this driver does not recognize at all (`ColumnKind::Unknown`). A
+/// non-UTF8 payload degrades to `Value::Unsupported` rather than panicking —
+/// there is no `FromSql` path here that can fail unexpectedly.
+pub(crate) fn decode_defensive_fallback(oid: u32, type_name: &str, raw: Option<&[u8]>) -> Value {
+    let Some(bytes) = raw else {
+        return Value::Null;
+    };
+
+    match std::str::from_utf8(bytes) {
+        Ok(text) => Value::Text(text.to_string()),
+        Err(_) => {
+            log::debug!(
+                "Redshift column of type '{type_name}' (oid {oid}, kind {:?}) has a non-UTF8 payload; reporting as unsupported",
+                redshift_oid_to_kind(oid)
+            );
+            Value::Unsupported(type_name.to_string())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::redshift_oid_to_kind;
-    use dbflux_core::ColumnKind;
+    use super::{decode_defensive_fallback, redshift_oid_to_kind};
+    use dbflux_core::{ColumnKind, Value};
 
     #[test]
     fn redshift_oid_to_kind_maps_common_and_extended_types() {
@@ -61,5 +87,26 @@ mod tests {
         for (oid, expected) in cases {
             assert_eq!(redshift_oid_to_kind(oid), expected, "oid {oid} mismatch");
         }
+    }
+
+    #[test]
+    fn decode_defensive_fallback_decodes_valid_utf8_as_text() {
+        assert_eq!(
+            decode_defensive_fallback(4000, "super", Some(b"{\"a\":1}")),
+            Value::Text("{\"a\":1}".to_string())
+        );
+    }
+
+    #[test]
+    fn decode_defensive_fallback_returns_unsupported_on_invalid_utf8() {
+        assert_eq!(
+            decode_defensive_fallback(999_999, "unknown_type", Some(&[0xFF, 0xFE])),
+            Value::Unsupported("unknown_type".to_string())
+        );
+    }
+
+    #[test]
+    fn decode_defensive_fallback_returns_null_when_raw_bytes_absent() {
+        assert_eq!(decode_defensive_fallback(4000, "super", None), Value::Null);
     }
 }
