@@ -762,6 +762,47 @@ impl EventEmitter<SectionFocusEvent> for HooksSection {}
 
 impl EventEmitter<SettingsEvent> for HooksSection {}
 
+impl Render for HooksSection {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let show_hook_delete = self.pending_delete_hook_id.is_some();
+        let hook_delete_name = self.pending_delete_hook_id.clone().unwrap_or_default();
+
+        div()
+            .size_full()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .child(self.render_hooks_section(cx))
+            .when(show_hook_delete, |element| {
+                let entity = cx.entity().clone();
+                let entity_cancel = entity.clone();
+
+                element.child(
+                    Dialog::new(window, cx)
+                        .title("Delete Hook")
+                        .confirm()
+                        .on_ok(move |_, window, cx| {
+                            entity.update(cx, |section, cx| {
+                                section.confirm_delete_hook(window, cx);
+                            });
+                            true
+                        })
+                        .on_cancel(move |_, _, cx| {
+                            entity_cancel.update(cx, |section, cx| {
+                                section.cancel_delete_hook(cx);
+                            });
+                            true
+                        })
+                        .child(div().text_sm().child(format!(
+                            "Are you sure you want to delete hook \"{}\"?",
+                            hook_delete_name
+                        ))),
+                )
+            })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -866,46 +907,5 @@ mod tests {
         assert!(rows.contains(&vec![HookFormField::LuaLogging]));
         assert!(!rows.contains(&vec![HookFormField::ExecutionMode]));
         assert!(!rows.contains(&vec![HookFormField::ReadySignal]));
-    }
-}
-
-impl Render for HooksSection {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let show_hook_delete = self.pending_delete_hook_id.is_some();
-        let hook_delete_name = self.pending_delete_hook_id.clone().unwrap_or_default();
-
-        div()
-            .size_full()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .child(self.render_hooks_section(cx))
-            .when(show_hook_delete, |element| {
-                let entity = cx.entity().clone();
-                let entity_cancel = entity.clone();
-
-                element.child(
-                    Dialog::new(window, cx)
-                        .title("Delete Hook")
-                        .confirm()
-                        .on_ok(move |_, window, cx| {
-                            entity.update(cx, |section, cx| {
-                                section.confirm_delete_hook(window, cx);
-                            });
-                            true
-                        })
-                        .on_cancel(move |_, _, cx| {
-                            entity_cancel.update(cx, |section, cx| {
-                                section.cancel_delete_hook(cx);
-                            });
-                            true
-                        })
-                        .child(div().text_sm().child(format!(
-                            "Are you sure you want to delete hook \"{}\"?",
-                            hook_delete_name
-                        ))),
-                )
-            })
     }
 }
