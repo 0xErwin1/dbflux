@@ -2828,6 +2828,7 @@ dependencies = [
  "dbflux_ssh",
  "dbflux_test_support",
  "hex",
+ "log",
  "native-tls",
  "postgres",
  "postgres-native-tls",

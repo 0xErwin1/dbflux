@@ -9,8 +9,13 @@
     )
 )]
 
+pub mod connection;
+pub mod dialect;
 pub mod driver;
+pub mod error_formatter;
 pub mod types;
 
+pub use dialect::RedshiftDialect;
 pub use driver::{METADATA, REDSHIFT_FORM, RedshiftDriver};
+pub use error_formatter::RedshiftErrorFormatter;
 pub use types::redshift_oid_to_kind;

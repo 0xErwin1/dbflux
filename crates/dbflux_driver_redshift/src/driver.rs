@@ -1,14 +1,23 @@
 use std::collections::HashMap;
-use std::sync::LazyLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
-use dbflux_core::secrecy::SecretString;
+use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     Connection, ConnectionProfile, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
     DeploymentClass, DriverCapabilities, DriverFormDef, DriverKey, DriverMetadata, FormFieldKind,
     FormSection, FormTab, FormValues, Icon, OrderByMode, PaginationStyle, PlaceholderStyle,
-    QueryCapabilities, QueryLanguage, SyntaxInfo, TransferFamily, WhereOperator, field_password,
-    field_required, field_use_uri, ssh_tab, when_checked, when_unchecked, with_default, with_help,
+    QueryCapabilities, QueryLanguage, SshTunnelConfig, SyntaxInfo, TransferFamily, WhereOperator,
+    field_password, field_required, field_use_uri, ssh_tab, when_checked, when_unchecked,
+    with_default, with_help,
 };
+use dbflux_ssh::SshTunnel;
+use native_tls::TlsConnector;
+use postgres::{Client, NoTls};
+use postgres_native_tls::MakeTlsConnector;
+
+use crate::connection::{RedshiftConnectParams, RedshiftConnection, connect_redshift};
+use crate::error_formatter::format_redshift_uri_error;
 
 /// Amazon Redshift driver metadata.
 ///
@@ -330,21 +339,289 @@ impl DbDriver for RedshiftDriver {
         values
     }
 
-    /// Establishing a live connection lands with the connection layer; this
-    /// crate currently only exposes driver metadata and the connection form.
     fn connect_with_secrets(
         &self,
-        _profile: &ConnectionProfile,
-        _password: Option<&SecretString>,
-        _ssh_secret: Option<&SecretString>,
+        profile: &ConnectionProfile,
+        password: Option<&SecretString>,
+        ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError> {
-        Err(DbError::NotSupported(
-            "Redshift connections are not yet supported".to_string(),
-        ))
+        let config = extract_redshift_config(&profile.config)?;
+
+        let password = password.map(|value| value.expose_secret());
+        let ssh_secret = ssh_secret.map(|value| value.expose_secret());
+
+        if config.use_uri {
+            return self.connect_with_uri(config.uri.as_deref().unwrap_or(""), password);
+        }
+
+        if let Some(tunnel_config) = &config.ssh_tunnel {
+            self.connect_via_ssh_tunnel(
+                tunnel_config,
+                ssh_secret,
+                &config.host,
+                config.port,
+                &config.user,
+                &config.database,
+                password,
+                &config.ssl_mode,
+            )
+        } else {
+            self.connect_direct(
+                &config.host,
+                config.port,
+                &config.user,
+                &config.database,
+                password,
+                &config.ssl_mode,
+            )
+        }
     }
 
     fn test_connection(&self, profile: &ConnectionProfile) -> Result<(), DbError> {
-        self.connect_with_secrets(profile, None, None).map(|_| ())
+        let connection = self.connect_with_secrets(profile, None, None)?;
+        connection.ping()
+    }
+}
+
+struct ExtractedRedshiftConfig {
+    use_uri: bool,
+    uri: Option<String>,
+    host: String,
+    port: u16,
+    user: String,
+    database: String,
+    /// Redshift native sslmode id (e.g. `"prefer"`, `"verify-ca"`). Defaults to `"prefer"` when absent.
+    ssl_mode: String,
+    ssh_tunnel: Option<SshTunnelConfig>,
+}
+
+fn extract_redshift_config(config: &DbConfig) -> Result<ExtractedRedshiftConfig, DbError> {
+    match config {
+        DbConfig::Redshift {
+            use_uri,
+            uri,
+            host,
+            port,
+            user,
+            database,
+            ssl_mode,
+            ssh_tunnel,
+            ..
+        } => Ok(ExtractedRedshiftConfig {
+            use_uri: *use_uri,
+            uri: uri.clone(),
+            host: host.clone(),
+            port: *port,
+            user: user.clone(),
+            database: database.clone(),
+            ssl_mode: ssl_mode.clone().unwrap_or_else(|| "prefer".to_string()),
+            ssh_tunnel: ssh_tunnel.clone(),
+        }),
+        _ => Err(DbError::InvalidProfile(
+            "Expected Redshift configuration".to_string(),
+        )),
+    }
+}
+
+/// Rewrites the `redshift://` scheme the connection form advertises into the
+/// `postgresql://` scheme the underlying wire client's URI parser accepts.
+/// URIs already using `postgres://`/`postgresql://` pass through unchanged.
+fn normalize_redshift_uri_scheme(uri: &str) -> String {
+    match uri.strip_prefix("redshift://") {
+        Some(rest) => format!("postgresql://{rest}"),
+        None => uri.to_string(),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RedshiftUriSslMode {
+    Disable,
+    Prefer,
+    Require,
+    Verify,
+}
+
+fn parse_redshift_uri_sslmode(uri: &str) -> RedshiftUriSslMode {
+    let Some(query_start) = uri.find('?') else {
+        return RedshiftUriSslMode::Prefer;
+    };
+
+    let query = &uri[query_start + 1..];
+
+    let sslmode = query
+        .split('&')
+        .find_map(|pair| pair.split_once('=').filter(|(key, _)| *key == "sslmode"))
+        .map(|(_, value)| value.to_ascii_lowercase());
+
+    match sslmode.as_deref() {
+        Some("disable") => RedshiftUriSslMode::Disable,
+        Some("prefer") | Some("allow") => RedshiftUriSslMode::Prefer,
+        Some("require") => RedshiftUriSslMode::Require,
+        Some("verify-ca") | Some("verify-full") => RedshiftUriSslMode::Verify,
+        _ => RedshiftUriSslMode::Prefer,
+    }
+}
+
+/// Injects `password` into a `postgresql://`/`postgres://` URI when the
+/// credentials segment carries an empty password placeholder.
+fn inject_password_into_uri(base_uri: &str, password: Option<&str>) -> String {
+    let password = match password {
+        Some(p) if !p.is_empty() => p,
+        _ => return base_uri.to_string(),
+    };
+
+    if !base_uri.starts_with("postgresql://") && !base_uri.starts_with("postgres://") {
+        return base_uri.to_string();
+    }
+
+    let prefix_end = if base_uri.starts_with("postgresql://") {
+        13
+    } else {
+        11
+    };
+
+    let rest = &base_uri[prefix_end..];
+    let prefix = &base_uri[..prefix_end];
+
+    let Some(at_pos) = rest.find('@') else {
+        return base_uri.to_string();
+    };
+
+    let user_pass = &rest[..at_pos];
+    let after_at = &rest[at_pos..];
+
+    let Some(colon_pos) = user_pass.find(':') else {
+        let encoded_password = urlencoding::encode(password);
+        return format!("{prefix}{user_pass}:{encoded_password}{after_at}");
+    };
+
+    if !user_pass[colon_pos + 1..].is_empty() {
+        return base_uri.to_string();
+    }
+
+    let user = &user_pass[..colon_pos];
+    let encoded_password = urlencoding::encode(password);
+    format!("{prefix}{user}:{encoded_password}{after_at}")
+}
+
+impl RedshiftDriver {
+    fn connect_with_uri(
+        &self,
+        base_uri: &str,
+        password: Option<&str>,
+    ) -> Result<Box<dyn Connection>, DbError> {
+        let normalized = normalize_redshift_uri_scheme(base_uri);
+        let uri = inject_password_into_uri(&normalized, password);
+        let ssl_mode = parse_redshift_uri_sslmode(&uri);
+
+        if ssl_mode == RedshiftUriSslMode::Disable {
+            let client = Client::connect(&uri, NoTls)
+                .map_err(|e| format_redshift_uri_error(&e, base_uri))?;
+            let cancel_token = client.cancel_token();
+
+            return Ok(Box::new(RedshiftConnection {
+                client: Arc::new(Mutex::new(client)),
+                ssh_tunnel: None,
+                cancel_token,
+                active_query: RwLock::new(None),
+                cancelled: Arc::new(AtomicBool::new(false)),
+            }));
+        }
+
+        let accept_invalid_certs = matches!(
+            ssl_mode,
+            RedshiftUriSslMode::Prefer | RedshiftUriSslMode::Require
+        );
+
+        let connector = TlsConnector::builder()
+            .danger_accept_invalid_certs(accept_invalid_certs)
+            .build()
+            .map_err(|e| DbError::ConnectionFailed(format!("TLS setup failed: {e}").into()))?;
+
+        let tls = MakeTlsConnector::new(connector);
+
+        let client = match Client::connect(&uri, tls) {
+            Ok(client) => client,
+            Err(_) if ssl_mode == RedshiftUriSslMode::Prefer => {
+                Client::connect(&uri, NoTls).map_err(|e| format_redshift_uri_error(&e, base_uri))?
+            }
+            Err(e) => return Err(format_redshift_uri_error(&e, base_uri)),
+        };
+
+        let cancel_token = client.cancel_token();
+
+        Ok(Box::new(RedshiftConnection {
+            client: Arc::new(Mutex::new(client)),
+            ssh_tunnel: None,
+            cancel_token,
+            active_query: RwLock::new(None),
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }))
+    }
+
+    fn connect_direct(
+        &self,
+        host: &str,
+        port: u16,
+        user: &str,
+        database: &str,
+        password: Option<&str>,
+        ssl_mode: &str,
+    ) -> Result<Box<dyn Connection>, DbError> {
+        let client = connect_redshift(&RedshiftConnectParams {
+            host,
+            port,
+            user,
+            password: password.unwrap_or(""),
+            database,
+            ssl_mode,
+        })?;
+
+        let cancel_token = client.cancel_token();
+
+        Ok(Box::new(RedshiftConnection {
+            client: Arc::new(Mutex::new(client)),
+            ssh_tunnel: None,
+            cancel_token,
+            active_query: RwLock::new(None),
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn connect_via_ssh_tunnel(
+        &self,
+        tunnel_config: &SshTunnelConfig,
+        ssh_secret: Option<&str>,
+        db_host: &str,
+        db_port: u16,
+        db_user: &str,
+        database: &str,
+        db_password: Option<&str>,
+        ssl_mode: &str,
+    ) -> Result<Box<dyn Connection>, DbError> {
+        let ssh_session = dbflux_ssh::establish_session(tunnel_config, ssh_secret)?;
+        let tunnel = SshTunnel::start(ssh_session, db_host.to_string(), db_port)?;
+        let local_port = tunnel.local_port();
+
+        let client = connect_redshift(&RedshiftConnectParams {
+            host: "127.0.0.1",
+            port: local_port,
+            user: db_user,
+            password: db_password.unwrap_or(""),
+            database,
+            ssl_mode,
+        })?;
+
+        let cancel_token = client.cancel_token();
+
+        Ok(Box::new(RedshiftConnection {
+            client: Arc::new(Mutex::new(client)),
+            ssh_tunnel: Some(tunnel),
+            cancel_token,
+            active_query: RwLock::new(None),
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }))
     }
 }
 
@@ -480,5 +757,86 @@ mod tests {
         let driver = RedshiftDriver::new();
         assert_eq!(driver.driver_key(), "builtin:redshift");
         assert_eq!(driver.kind(), dbflux_core::DbKind::Redshift);
+    }
+
+    mod uri_helpers {
+        use super::super::{
+            RedshiftUriSslMode, inject_password_into_uri, normalize_redshift_uri_scheme,
+            parse_redshift_uri_sslmode,
+        };
+
+        #[test]
+        fn normalize_rewrites_redshift_scheme_to_postgresql() {
+            assert_eq!(
+                normalize_redshift_uri_scheme("redshift://user:pass@cluster.example.com:5439/dev"),
+                "postgresql://user:pass@cluster.example.com:5439/dev"
+            );
+        }
+
+        #[test]
+        fn normalize_leaves_postgresql_scheme_untouched() {
+            let uri = "postgresql://user:pass@cluster.example.com:5439/dev";
+            assert_eq!(normalize_redshift_uri_scheme(uri), uri);
+        }
+
+        #[test]
+        fn parse_sslmode_defaults_to_prefer_when_absent() {
+            assert_eq!(
+                parse_redshift_uri_sslmode("postgresql://cluster.example.com:5439/dev"),
+                RedshiftUriSslMode::Prefer
+            );
+        }
+
+        #[test]
+        fn parse_sslmode_reads_query_parameter() {
+            assert_eq!(
+                parse_redshift_uri_sslmode(
+                    "postgresql://cluster.example.com:5439/dev?sslmode=require"
+                ),
+                RedshiftUriSslMode::Require
+            );
+            assert_eq!(
+                parse_redshift_uri_sslmode(
+                    "postgresql://cluster.example.com:5439/dev?sslmode=disable"
+                ),
+                RedshiftUriSslMode::Disable
+            );
+            assert_eq!(
+                parse_redshift_uri_sslmode(
+                    "postgresql://cluster.example.com:5439/dev?sslmode=verify-full"
+                ),
+                RedshiftUriSslMode::Verify
+            );
+        }
+
+        #[test]
+        fn inject_password_fills_empty_placeholder() {
+            let uri = "postgresql://awsuser:@cluster.example.com:5439/dev";
+            assert_eq!(
+                inject_password_into_uri(uri, Some("secret")),
+                "postgresql://awsuser:secret@cluster.example.com:5439/dev"
+            );
+        }
+
+        #[test]
+        fn inject_password_adds_missing_colon_segment() {
+            let uri = "postgresql://awsuser@cluster.example.com:5439/dev";
+            assert_eq!(
+                inject_password_into_uri(uri, Some("secret")),
+                "postgresql://awsuser:secret@cluster.example.com:5439/dev"
+            );
+        }
+
+        #[test]
+        fn inject_password_leaves_uri_unchanged_when_password_already_present() {
+            let uri = "postgresql://awsuser:already-set@cluster.example.com:5439/dev";
+            assert_eq!(inject_password_into_uri(uri, Some("secret")), uri);
+        }
+
+        #[test]
+        fn inject_password_leaves_uri_unchanged_when_no_password_given() {
+            let uri = "postgresql://awsuser:@cluster.example.com:5439/dev";
+            assert_eq!(inject_password_into_uri(uri, None), uri);
+        }
     }
 }
