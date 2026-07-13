@@ -302,6 +302,9 @@ pub struct Workspace {
     /// Migrate wizard (table -> table, cross-connection), pre-populated from
     /// the sidebar's multi-select Migrate action.
     migrate_wizard: Entity<dbflux_ui_document::migrate_wizard::MigrateWizard>,
+    /// Export wizard (table -> file bundle), pre-populated from the
+    /// sidebar's multi-select Export action.
+    export_wizard: Entity<dbflux_ui_document::export_wizard::ExportWizard>,
 
     tasks_state: PanelState,
     pending_command: Option<&'static str>,
@@ -405,6 +408,9 @@ impl Workspace {
             .new(|cx| dbflux_ui_document::import_wizard::ImportWizard::new(app_state.clone(), cx));
         let migrate_wizard = cx.new(|cx| {
             dbflux_ui_document::migrate_wizard::MigrateWizard::new(app_state.clone(), cx)
+        });
+        let export_wizard = cx.new(|cx| {
+            dbflux_ui_document::export_wizard::ExportWizard::new(app_state.clone(), window, cx)
         });
 
         // Subscribe: ModalDeleteConnection — on Confirmed, execute the pending delete.
@@ -1042,6 +1048,24 @@ impl Workspace {
                         wizard.open(profile_id, database, tables, window, cx);
                     });
                 }
+                SidebarEvent::RequestSchemaDiff {
+                    profile_id,
+                    database,
+                } => {
+                    this.open_schema_diff(*profile_id, database.clone(), window, cx);
+                }
+                SidebarEvent::RequestExportWizard {
+                    profile_id,
+                    database,
+                    tables,
+                } => {
+                    let profile_id = *profile_id;
+                    let database = database.clone();
+                    let tables = tables.clone();
+                    this.export_wizard.update(cx, |wizard, cx| {
+                        wizard.open(profile_id, database, tables, window, cx);
+                    });
+                }
                 SidebarEvent::RequestOpenSettings => {
                     this.open_settings(cx);
                 }
@@ -1313,6 +1337,7 @@ impl Workspace {
             export_modal,
             import_wizard,
             migrate_wizard,
+            export_wizard,
             tasks_state: PanelState::Collapsed,
             pending_command: None,
             pending_sql: None,

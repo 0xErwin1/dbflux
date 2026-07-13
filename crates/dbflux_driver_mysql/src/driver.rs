@@ -7,12 +7,13 @@ use std::time::Instant;
 
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
-    AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo,
-    ColumnInfo, ColumnKind, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
-    ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult,
-    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
-    DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection, DriverCapabilities,
-    DriverFormDef, DriverLimits, DriverMetadata, DropForeignKeyRequest, DropIndexRequest,
+    AddColumnRequest, AddForeignKeyRequest, AlterColumnRequest, CodeGenCapabilities, CodeGenScope,
+    CodeGenerator, CodeGeneratorInfo, ColumnInfo, ColumnKind, ColumnMeta, Connection,
+    ConnectionErrorFormatter, ConnectionExt, ConnectionProfile, ConstraintInfo, ConstraintKind,
+    CreateIndexRequest, CrudResult, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError,
+    DbKind, DbSchemaInfo, DdlCapabilities, DdlRejection, DefaultSpec, DeploymentClass,
+    DescribeRequest, DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits,
+    DriverMetadata, DropColumnRequest, DropForeignKeyRequest, DropIndexRequest,
     ExecutionSourceContext, ExplainRequest, FieldExportTransform, ForeignKeyBuilder,
     ForeignKeyInfo, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon,
     IndexData, IndexInfo, InstanceCatalog, IsolationLevel, KeyValueConnection,
@@ -26,7 +27,7 @@ use dbflux_core::{
     TransferFamily, Value, ViewInfo, WhereOperator, field, field_password, field_required,
     field_use_uri, generate_delete_template, generate_drop_table, generate_insert_template,
     generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
-    sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
+    sanitize_uri, ssh_tab, validate_ddl_fragment, when_checked, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
@@ -470,6 +471,9 @@ impl CodeGenerator for MysqlCodeGenerator {
             | CodeGenCapabilities::CREATE_TABLE
             | CodeGenCapabilities::DROP_TABLE
             | CodeGenCapabilities::ALTER_TABLE
+            | CodeGenCapabilities::ADD_COLUMN
+            | CodeGenCapabilities::DROP_COLUMN
+            | CodeGenCapabilities::ALTER_COLUMN
     }
 
     fn generate_create_index(&self, req: &CreateIndexRequest) -> Option<String> {
@@ -547,6 +551,101 @@ impl CodeGenerator for MysqlCodeGenerator {
             table,
             self.quote(req.constraint_name)
         ))
+    }
+
+    fn generate_add_column(&self, req: &AddColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        validate_ddl_fragment(req.type_name, "column type")?;
+        if let Some(default) = req.default {
+            validate_ddl_fragment(default, "column default")?;
+        }
+
+        let table = self.qualified(req.schema_name, req.table_name);
+        let mut sql = format!(
+            "ALTER TABLE {} ADD COLUMN {} {}",
+            table,
+            self.quote(req.column_name),
+            req.type_name
+        );
+
+        if !req.nullable {
+            sql.push_str(" NOT NULL");
+        }
+        if let Some(default) = req.default {
+            sql.push_str(&format!(" DEFAULT {}", default));
+        }
+        sql.push(';');
+
+        Ok(vec![sql])
+    }
+
+    fn generate_drop_column(&self, req: &DropColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        let table = self.qualified(req.schema_name, req.table_name);
+        Ok(vec![format!(
+            "ALTER TABLE {} DROP COLUMN {};",
+            table,
+            self.quote(req.column_name)
+        )])
+    }
+
+    /// MySQL's `MODIFY COLUMN` redefines the entire column: nullability and
+    /// default are reset to MySQL's own defaults (nullable, no default)
+    /// whenever they aren't explicitly re-specified alongside a type change.
+    /// Callers changing the type must pass the full desired nullable/default
+    /// state to avoid silently losing the current one. When only the
+    /// default changes, the standalone `ALTER COLUMN ... SET/DROP DEFAULT`
+    /// form is used instead, which does not touch type or nullability.
+    fn generate_alter_column(&self, req: &AlterColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        if let Some(new_type) = req.new_type {
+            validate_ddl_fragment(new_type, "column type")?;
+        }
+        if let Some(DefaultSpec::Set(value)) = req.default {
+            validate_ddl_fragment(value, "column default")?;
+        }
+
+        let table = self.qualified(req.schema_name, req.table_name);
+        let column = self.quote(req.column_name);
+
+        if let Some(new_type) = req.new_type {
+            let mut sql = format!(
+                "ALTER TABLE {} MODIFY COLUMN {} {}",
+                table, column, new_type
+            );
+
+            if let Some(nullable) = req.nullable {
+                sql.push_str(if nullable { " NULL" } else { " NOT NULL" });
+            }
+
+            match req.default {
+                Some(DefaultSpec::Set(value)) => sql.push_str(&format!(" DEFAULT {}", value)),
+                Some(DefaultSpec::Drop) | None => {}
+            }
+
+            sql.push(';');
+            return Ok(vec![sql]);
+        }
+
+        if req.nullable.is_some() {
+            return Err(DdlRejection {
+                reason: "MySQL requires the column type to change nullability (MODIFY COLUMN needs the full column definition)".to_string(),
+                followup: None,
+            });
+        }
+
+        match req.default {
+            Some(DefaultSpec::Drop) => Ok(vec![format!(
+                "ALTER TABLE {} ALTER COLUMN {} DROP DEFAULT;",
+                table, column
+            )]),
+            Some(DefaultSpec::Set(value)) => Ok(vec![format!(
+                "ALTER TABLE {} ALTER COLUMN {} SET DEFAULT {};",
+                table, column, value
+            )]),
+            None => Err(DdlRejection {
+                reason: "ALTER COLUMN requires at least one of: type, nullable, default"
+                    .to_string(),
+                followup: None,
+            }),
+        }
     }
 }
 
@@ -3820,11 +3919,13 @@ pub fn fetch_dependents(
 #[cfg(test)]
 mod tests {
     use super::{
-        MysqlDialect, MysqlDriver, inject_password_into_mysql_uri, mysql_routine_type_to_kind,
-        mysql_text_literal, normalize_mysql_tcp_host, plan_mysql_semantic_request,
+        MysqlCodeGenerator, MysqlDialect, MysqlDriver, inject_password_into_mysql_uri,
+        mysql_routine_type_to_kind, mysql_text_literal, normalize_mysql_tcp_host,
+        plan_mysql_semantic_request,
     };
     use dbflux_core::{
-        DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, FormValues, MutationRequest,
+        AddColumnRequest, AlterColumnRequest, CodeGenerator, DatabaseCategory, DbConfig, DbDriver,
+        DbError, DbKind, DdlRejection, DefaultSpec, DropColumnRequest, FormValues, MutationRequest,
         OrderByColumn, QueryLanguage, RoutineKind, RowInsert, SemanticRequest, SqlDialect,
         SqlMutationGenerator, TableBrowseRequest, TableRef, TransferFamily, Value,
     };
@@ -4253,5 +4354,158 @@ mod tests {
     fn mysql_literal_plain_value_stays_readable() {
         let lit = mysql_text_literal("plain value 123");
         assert_eq!(lit, "'plain value 123'");
+    }
+
+    // ===== Column ALTER seam (DBF-24) =====
+
+    #[test]
+    fn mysql_codegen_generates_add_column_with_default() {
+        let generator = MysqlCodeGenerator;
+        let request = AddColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+            type_name: "INT",
+            nullable: false,
+            default: Some("0"),
+        };
+
+        let statements = generator
+            .generate_add_column(&request)
+            .expect("mysql should generate add column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE `users` ADD COLUMN `age` INT NOT NULL DEFAULT 0;"]
+        );
+    }
+
+    #[test]
+    fn mysql_codegen_generates_drop_column() {
+        let generator = MysqlCodeGenerator;
+        let request = DropColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+        };
+
+        let statements = generator
+            .generate_drop_column(&request)
+            .expect("mysql should generate drop column sql");
+
+        assert_eq!(statements, vec!["ALTER TABLE `users` DROP COLUMN `age`;"]);
+    }
+
+    #[test]
+    fn mysql_codegen_alter_column_modifies_type_with_explicit_nullable_and_default() {
+        let generator = MysqlCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+            new_type: Some("BIGINT"),
+            nullable: Some(false),
+            default: Some(DefaultSpec::Set("0")),
+        };
+
+        let statements = generator
+            .generate_alter_column(&request)
+            .expect("mysql should generate alter column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE `users` MODIFY COLUMN `age` BIGINT NOT NULL DEFAULT 0;"]
+        );
+    }
+
+    #[test]
+    fn mysql_codegen_alter_column_modify_omits_nullable_clause_when_unspecified() {
+        let generator = MysqlCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+            new_type: Some("BIGINT"),
+            nullable: None,
+            default: None,
+        };
+
+        let statements = generator
+            .generate_alter_column(&request)
+            .expect("mysql should generate alter column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE `users` MODIFY COLUMN `age` BIGINT;"]
+        );
+    }
+
+    #[test]
+    fn mysql_codegen_alter_column_can_change_default_alone() {
+        let generator = MysqlCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+            new_type: None,
+            nullable: None,
+            default: Some(DefaultSpec::Drop),
+        };
+
+        let statements = generator
+            .generate_alter_column(&request)
+            .expect("mysql should generate alter column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE `users` ALTER COLUMN `age` DROP DEFAULT;"]
+        );
+    }
+
+    #[test]
+    fn mysql_codegen_alter_column_rejects_nullable_change_without_type() {
+        let generator = MysqlCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+            new_type: None,
+            nullable: Some(false),
+            default: None,
+        };
+
+        let result = generator.generate_alter_column(&request);
+
+        assert_eq!(
+            result,
+            Err(DdlRejection {
+                reason: "MySQL requires the column type to change nullability (MODIFY COLUMN needs the full column definition)".to_string(),
+                followup: None,
+            })
+        );
+    }
+
+    #[test]
+    fn mysql_codegen_alter_column_rejects_when_nothing_to_change() {
+        let generator = MysqlCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+            new_type: None,
+            nullable: None,
+            default: None,
+        };
+
+        let result = generator.generate_alter_column(&request);
+
+        assert_eq!(
+            result,
+            Err(DdlRejection {
+                reason: "ALTER COLUMN requires at least one of: type, nullable, default"
+                    .to_string(),
+                followup: None,
+            })
+        );
     }
 }

@@ -23,10 +23,21 @@ pub enum FileFormat {
 }
 
 impl FileFormat {
+    /// All formats the export UI can offer, in display order.
+    pub const ALL: [FileFormat; 2] = [Self::Csv, Self::Json];
+
     pub fn extension(self) -> &'static str {
         match self {
             Self::Csv => "csv",
             Self::Json => "json",
+        }
+    }
+
+    /// Human-readable label for format pickers.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Csv => "CSV",
+            Self::Json => "JSON",
         }
     }
 
@@ -257,6 +268,13 @@ mod tests {
         assert_eq!(FileFormat::from_extension("csv"), Some(FileFormat::Csv));
         assert_eq!(FileFormat::from_extension("json"), Some(FileFormat::Json));
         assert_eq!(FileFormat::from_extension("xml"), None);
+    }
+
+    #[test]
+    fn all_lists_every_format_with_a_label() {
+        assert_eq!(FileFormat::ALL, [FileFormat::Csv, FileFormat::Json]);
+        assert_eq!(FileFormat::Csv.label(), "CSV");
+        assert_eq!(FileFormat::Json.label(), "JSON");
     }
 
     #[test]

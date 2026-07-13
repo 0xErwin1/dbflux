@@ -37,7 +37,7 @@ mod tests {
 
 impl Migration for MigrationImpl {
     fn name(&self) -> &str {
-        "020_hook_kind_json"
+        "022_hook_kind_json"
     }
 
     fn run(&self, tx: &Transaction) -> Result<(), MigrationError> {

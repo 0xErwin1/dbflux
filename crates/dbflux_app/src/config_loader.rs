@@ -87,6 +87,7 @@ pub fn save_general_settings(
             dbflux_core::AppStyle::Default => "default".to_string(),
             dbflux_core::AppStyle::Compact => "compact".to_string(),
         },
+        schema_snapshot_retention: settings.schema_snapshot_retention as i64,
         updated_at: String::new(),
     };
     repo.upsert(&dto)?;
@@ -1050,6 +1051,7 @@ fn load_general_settings(
         dangerous_requires_where: dto.dangerous_requires_where != 0,
         dangerous_requires_preview: dto.dangerous_requires_preview != 0,
         workspace_inspector_width_px: None,
+        schema_snapshot_retention: dto.schema_snapshot_retention as usize,
     }
 }
 
@@ -2314,6 +2316,7 @@ mod tests {
             dangerous_requires_where: 0,
             dangerous_requires_preview: 1,
             style: "default".to_string(),
+            schema_snapshot_retention: 10,
             updated_at: String::new(),
         };
 
@@ -2427,6 +2430,7 @@ mod tests {
             dangerous_requires_where: 1,
             dangerous_requires_preview: 0,
             style: "ultracompact".to_string(), // unknown value
+            schema_snapshot_retention: 10,
             updated_at: String::new(),
         };
         runtime

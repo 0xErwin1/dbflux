@@ -14,6 +14,7 @@ mod column_mapping;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use dbflux_components::composites::{RailItem, render_wizard_rail};
 use dbflux_components::controls::{Button, Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::Text;
@@ -42,6 +43,43 @@ enum WizardStep {
     Confirm,
     Running,
     Done,
+}
+
+/// The rail's four fixed entries, in display order. `Confirm` stays a rail
+/// entry even on a non-destructive plan, where `continue_from_configure`
+/// skips straight from `Configure` to `Running` — it simply never becomes
+/// `current` in that flow and reads as already passed, matching a linear
+/// progress rail rather than a literal per-click history.
+const RAIL_LABELS: [&str; 4] = ["Pick Folder", "Configure", "Confirm", "Run"];
+
+/// `Running` and `Done` collapse onto the same rail index so the terminal
+/// steps of the five-variant `WizardStep` state machine share the rail's
+/// fourth "Run" entry instead of growing a fifth marker.
+fn rail_index(step: WizardStep) -> usize {
+    match step {
+        WizardStep::PickFolder => 0,
+        WizardStep::Configure => 1,
+        WizardStep::Confirm => 2,
+        WizardStep::Running | WizardStep::Done => 3,
+    }
+}
+
+/// Maps the wizard's current [`WizardStep`] to the shared rail composite's
+/// domain-free [`RailItem`]s, marking every entry before the current one as
+/// completed — see [`RAIL_LABELS`] for why `Confirm` may show completed
+/// without the user ever visiting it.
+fn import_rail_items(step: WizardStep) -> Vec<RailItem> {
+    let current_index = rail_index(step);
+
+    RAIL_LABELS
+        .iter()
+        .enumerate()
+        .map(|(index, label)| RailItem {
+            label: SharedString::from(*label),
+            completed: index < current_index,
+            current: index == current_index,
+        })
+        .collect()
 }
 
 /// One table row's live controls, wrapping the pure [`TableImportConfig`]
@@ -652,7 +690,19 @@ impl Render for ImportWizard {
             .width(px(720.0))
             .max_height(px(640.0));
 
-        let body = match self.step {
+        frame = frame.child(self.render_body(cx));
+        frame.render(cx).into_any_element()
+    }
+}
+
+impl ImportWizard {
+    /// Rail + phase-area layout shared with the migrate/export wizard chrome.
+    /// The rail is display-only (`on_select: None`) — see `import_rail_items`
+    /// — so this wrapping is purely presentational and leaves every step's
+    /// own logic and buttons (`render_pick_folder`, `render_configure`, ...)
+    /// unchanged.
+    fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
+        let phase = match self.step {
             WizardStep::PickFolder => self.render_pick_folder(cx),
             WizardStep::Configure => self.render_configure(cx),
             WizardStep::Confirm => self.render_confirm(cx),
@@ -660,8 +710,18 @@ impl Render for ImportWizard {
             WizardStep::Done => self.render_done(cx),
         };
 
-        frame = frame.child(body);
-        frame.render(cx).into_any_element()
+        div()
+            .flex()
+            .flex_row()
+            .flex_1()
+            .min_h(px(0.0))
+            .child(render_wizard_rail(
+                &import_rail_items(self.step),
+                None::<fn(usize, &mut Window, &mut App)>,
+                cx,
+            ))
+            .child(div().flex_1().min_w(px(0.0)).flex().flex_col().child(phase))
+            .into_any_element()
     }
 }
 

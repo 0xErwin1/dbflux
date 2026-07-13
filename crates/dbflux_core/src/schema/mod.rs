@@ -6,18 +6,22 @@ pub mod fingerprint;
 pub mod node_id;
 pub mod query_parser;
 pub mod schema_drift;
+pub mod snapshot_record;
 pub(crate) mod types;
 
 pub use builder::{ForeignKeyBuilder, IndexBuilder, SchemaForeignKeyBuilder, SchemaIndexBuilder};
 pub use dependency_order::{OrderResult, topological_order};
 pub use dependents::{RelationKind, RelationRef};
-pub use drift_check::{DriftOutcome, check_drift_sync, check_schema_drift};
+pub use drift_check::{DriftOutcome, TableKey, check_drift_sync, check_schema_drift};
 pub use fingerprint::SchemaFingerprint;
 pub use node_id::{ParseSchemaNodeIdError, SchemaNodeId, SchemaNodeKind};
 pub use query_parser::{QueryTableRef, extract_referenced_tables};
 pub use schema_drift::{
-    ColumnDiff, ColumnSnapshot, SchemaChange, SchemaDiff, SchemaDriftDetected, diff_table_info,
+    ColumnDiff, ColumnSnapshot, IndexSnapshot, RiskedChange, SchemaChange, SchemaDiff,
+    SchemaDriftDetected, TableChange, classify_table_added, classify_table_removed, diff_schema,
+    diff_table_info,
 };
+pub use snapshot_record::{SchemaSnapshotRecord, SnapshotDepth};
 pub use types::{
     CollectionChildInfo, CollectionChildrenCache, CollectionChildrenPage,
     CollectionChildrenRequest, CollectionIndexInfo, CollectionInfo, CollectionPresentation,

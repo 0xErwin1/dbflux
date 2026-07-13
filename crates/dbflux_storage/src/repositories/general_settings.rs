@@ -37,7 +37,7 @@ impl GeneralSettingsRepository {
                        max_concurrent_background_tasks, auto_refresh_pause_on_error,
                        auto_refresh_only_if_visible, confirm_dangerous_queries,
                        dangerous_requires_where, dangerous_requires_preview,
-                       style, updated_at
+                       style, schema_snapshot_retention, updated_at
                 FROM cfg_general_settings WHERE id = 1
                 "#,
             )
@@ -64,7 +64,8 @@ impl GeneralSettingsRepository {
                 dangerous_requires_where: row.get(13)?,
                 dangerous_requires_preview: row.get(14)?,
                 style: row.get(15)?,
-                updated_at: row.get(16)?,
+                schema_snapshot_retention: row.get(16)?,
+                updated_at: row.get(17)?,
             })
         });
 
@@ -90,8 +91,8 @@ impl GeneralSettingsRepository {
                     max_concurrent_background_tasks, auto_refresh_pause_on_error,
                     auto_refresh_only_if_visible, confirm_dangerous_queries,
                     dangerous_requires_where, dangerous_requires_preview,
-                    style, updated_at
-                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, datetime('now'))
+                    style, schema_snapshot_retention, updated_at
+                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, datetime('now'))
                 ON CONFLICT(id) DO UPDATE SET
                     theme = excluded.theme,
                     restore_session_on_startup = excluded.restore_session_on_startup,
@@ -108,6 +109,7 @@ impl GeneralSettingsRepository {
                     dangerous_requires_where = excluded.dangerous_requires_where,
                     dangerous_requires_preview = excluded.dangerous_requires_preview,
                     style = excluded.style,
+                    schema_snapshot_retention = excluded.schema_snapshot_retention,
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -126,6 +128,7 @@ impl GeneralSettingsRepository {
                     settings.dangerous_requires_where,
                     settings.dangerous_requires_preview,
                     settings.style,
+                    settings.schema_snapshot_retention,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -159,6 +162,9 @@ pub struct GeneralSettingsDto {
     /// Serialized `AppStyle` value: `"default"` or `"compact"`.
     /// Unknown values fall back to `"default"` at the loader layer.
     pub style: String,
+    /// Maximum number of auto-captured schema snapshots retained per
+    /// profile/database before older ones are pruned.
+    pub schema_snapshot_retention: i64,
     pub updated_at: String,
 }
 
@@ -209,6 +215,7 @@ mod tests {
             dangerous_requires_where: 0,
             dangerous_requires_preview: 1,
             style: "compact".to_string(),
+            schema_snapshot_retention: 15,
             updated_at: String::new(),
         };
 
@@ -219,6 +226,7 @@ mod tests {
         assert_eq!(fetched.restore_session_on_startup, 0);
         assert_eq!(fetched.max_history_entries, 500);
         assert_eq!(fetched.style, "compact");
+        assert_eq!(fetched.schema_snapshot_retention, 15);
 
         let _ = std::fs::remove_file(&path);
     }
@@ -252,6 +260,7 @@ mod tests {
                 dangerous_requires_where: 1,
                 dangerous_requires_preview: 0,
                 style: style_str.to_string(),
+                schema_snapshot_retention: 10,
                 updated_at: String::new(),
             };
 
@@ -285,6 +294,10 @@ mod tests {
         assert_eq!(
             fetched.style, "default",
             "style column default should be 'default'"
+        );
+        assert_eq!(
+            fetched.schema_snapshot_retention, 10,
+            "schema_snapshot_retention column default should be 10"
         );
 
         let _ = std::fs::remove_file(&path);

@@ -178,6 +178,58 @@ impl Sidebar {
             })
     }
 
+    /// Whether the connection/database node supports the schema-diff workflow.
+    /// Gated on `DatabaseCategory::Relational` — never a driver id — so any
+    /// current or future relational driver picks it up for free.
+    fn node_supports_schema_diff(&self, item_id: &str, cx: &App) -> bool {
+        let profile_id = match parse_node_id(item_id) {
+            Some(SchemaNodeId::Profile { profile_id }) => profile_id,
+            Some(SchemaNodeId::Database { profile_id, .. }) => profile_id,
+            _ => return false,
+        };
+
+        self.app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .is_some_and(|connected| {
+                connected.connection.metadata().category
+                    == dbflux_core::DatabaseCategory::Relational
+            })
+    }
+
+    /// Emits `SidebarEvent::RequestSchemaDiff` for a connection or database
+    /// node. Non-relational nodes get an explicit "unsupported" toast rather
+    /// than a silent no-op.
+    fn open_schema_diff_from_context(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let (profile_id, database) = match parse_node_id(item_id) {
+            Some(SchemaNodeId::Profile { profile_id }) => {
+                let database = self
+                    .app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .and_then(|connected| connected.active_database.clone());
+                (profile_id, database)
+            }
+            Some(SchemaNodeId::Database { profile_id, name }) => (profile_id, Some(name)),
+            _ => return,
+        };
+
+        if !self.node_supports_schema_diff(item_id, cx) {
+            dbflux_ui_base::toast::Toast::warning(
+                "Schema diff is only available for relational connections.",
+            )
+            .push(cx);
+            return;
+        }
+
+        cx.emit(SidebarEvent::RequestSchemaDiff {
+            profile_id,
+            database,
+        });
+    }
+
     /// Returns "Delete N items" when the right-clicked node is part of a
     /// multi-selection that contains more than one deletable item, otherwise
     /// `None`. Used to relabel the per-node "Delete" entry into a batch action
@@ -251,9 +303,11 @@ impl Sidebar {
                     );
                 }
 
-                // Export (Table -> folder bundle) is gated on the connection's
-                // transfer_family, never on driver id (R7). Views are excluded —
-                // this batch scopes bulk export to writable tables only.
+                // Export (Table -> folder bundle, via the Export wizard) is
+                // gated on the connection's transfer_family, never on driver
+                // id (R7). Views are excluded — this batch scopes bulk export
+                // to writable tables only. Format/folder/segment-size are
+                // chosen in the wizard, not from this menu.
                 if node_kind == SchemaNodeKind::Table && self.table_supports_transfer(item_id, cx) {
                     let count = self.export_table_selection_count(item_id);
                     let label = if count > 1 {
@@ -266,20 +320,7 @@ impl Sidebar {
                         &mut items,
                         [ContextMenuItem::item(
                             label,
-                            ContextMenuAction::Submenu(vec![
-                                ContextMenuItem::item(
-                                    "as CSV",
-                                    ContextMenuAction::ExportTablesAs(
-                                        dbflux_transfer::FileFormat::Csv,
-                                    ),
-                                ),
-                                ContextMenuItem::item(
-                                    "as JSON",
-                                    ContextMenuAction::ExportTablesAs(
-                                        dbflux_transfer::FileFormat::Json,
-                                    ),
-                                ),
-                            ]),
+                            ContextMenuAction::ExportTables,
                         )],
                     );
                 }
@@ -479,6 +520,19 @@ impl Sidebar {
                     );
                 }
 
+                // Compare Schema (relational only) — opens the schema-diff
+                // document with this connection as the live target. Gated on
+                // `DatabaseCategory::Relational`, never a driver id.
+                if is_connected && self.node_supports_schema_diff(item_id, cx) {
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Compare Schema\u{2026}",
+                            ContextMenuAction::CompareSchema,
+                        )],
+                    );
+                }
+
                 // Add "Move to..." submenu with available folders
                 let move_to_items = self.build_move_to_submenu(item_id, cx);
                 if !move_to_items.is_empty() {
@@ -528,6 +582,17 @@ impl Sidebar {
                             ContextMenuAction::RefreshDatabase,
                         )],
                     );
+
+                    // Compare Schema (relational only), scoped to this database.
+                    if self.node_supports_schema_diff(item_id, cx) {
+                        Self::append_menu_section(
+                            &mut items,
+                            [ContextMenuItem::item(
+                                "Compare Schema\u{2026}",
+                                ContextMenuAction::CompareSchema,
+                            )],
+                        );
+                    }
 
                     // "New Query" opens an empty code document with this bucket/database
                     // pre-selected in the source-context dropdown. Available for any
@@ -1108,7 +1173,7 @@ impl Sidebar {
 
         let state = self.app_state.read(cx);
         let conn = state.connections().get(&profile_id)?;
-        let cache_key = (database.clone(), name.clone());
+        let cache_key = (database.clone(), Some(database.clone()), name.clone());
 
         if let Some(details) = conn.table_details.get(&cache_key) {
             return Some(details.clone());
@@ -1407,8 +1472,8 @@ impl Sidebar {
                     cx.emit(SidebarEvent::RequestExportConnection { profile_id });
                 }
             }
-            ContextMenuAction::ExportTablesAs(format) => {
-                self.export_selected_tables(&item_id, format, cx);
+            ContextMenuAction::ExportTables => {
+                self.request_export_wizard(&item_id, cx);
             }
             ContextMenuAction::ImportTables => {
                 if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(&item_id) {
@@ -1608,6 +1673,9 @@ impl Sidebar {
                     };
                     cx.write_to_clipboard(ClipboardItem::new_string(id_str));
                 }
+            }
+            ContextMenuAction::CompareSchema => {
+                self.open_schema_diff_from_context(&item_id, cx);
             }
         }
 

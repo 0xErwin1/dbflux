@@ -430,8 +430,9 @@ struct PendingDriftQuery {
     in_new_tab: bool,
     action: DriftAction,
     /// Cache updates to apply before execution when action is `ExecuteNow` or
-    /// after "Refresh & re-run". Each entry is `(database, table, TableInfo)`.
-    cache_updates: Vec<(String, String, dbflux_core::TableInfo)>,
+    /// after "Refresh & re-run". Each entry is `(TableKey, TableInfo)`, where
+    /// `TableKey` is `(database, schema, table)`.
+    cache_updates: Vec<(dbflux_core::TableKey, dbflux_core::TableInfo)>,
 }
 
 /// Record of a query execution.

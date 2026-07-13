@@ -851,7 +851,7 @@ impl Sidebar {
         self.app_state.update(cx, |state, _cx| {
             if let Some(conn) = state.connections_mut().get_mut(&profile_id) {
                 conn.database_schemas.remove(db_name);
-                conn.table_details.retain(|(db, _), _| db != db_name);
+                conn.table_details.retain(|(db, _, _), _| db != db_name);
                 conn.collection_children.retain(|(db, _), _| db != db_name);
                 conn.schema_types.retain(|key, _| key.database != db_name);
                 conn.schema_indexes.retain(|key, _| key.database != db_name);
@@ -877,9 +877,13 @@ impl Sidebar {
     ) {
         self.app_state.update(cx, |state, _cx| {
             if let Some(conn) = state.connections_mut().get_mut(&profile_id) {
-                let key = (cache_db.to_string(), target.name.clone());
-                conn.table_details.remove(&key);
-                conn.collection_children.remove(&key);
+                // Drop every schema slot for the object name: a drop target
+                // may or may not carry a schema, and stale details under any
+                // schema must not survive the invalidation.
+                conn.table_details
+                    .retain(|(db, _, table), _| db != cache_db || table != &target.name);
+                conn.collection_children
+                    .remove(&(cache_db.to_string(), target.name.clone()));
 
                 if target.kind == SchemaObjectKind::Table {
                     let target_schema = target.schema.as_deref();

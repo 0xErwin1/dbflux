@@ -8,11 +8,12 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dbflux_core::QueryGenerator;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
-    ColumnAssignment, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
-    ConnectionProfile, ConstraintInfo, ConstraintKind, CrudResult, CustomTypeInfo, CustomTypeKind,
-    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
-    DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection, DriverCapabilities,
-    DriverFormDef, DriverLimits, DriverMetadata, ExecutionSourceContext, ExplainRequest,
+    AddColumnRequest, AlterColumnRequest, CodeGenCapabilities, CodeGenerator, ColumnAssignment,
+    ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile,
+    ConstraintInfo, ConstraintKind, CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory,
+    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DdlRejection,
+    DeploymentClass, DescribeRequest, DocumentConnection, DriverCapabilities, DriverFormDef,
+    DriverLimits, DriverMetadata, DropColumnRequest, ExecutionSourceContext, ExplainRequest,
     ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind, FormSection, FormTab, FormValues,
     FormattedError, Icon, IndexData, IndexInfo, InstanceCatalog, IsolationLevel,
     KeyValueConnection, MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle,
@@ -25,7 +26,7 @@ use dbflux_core::{
     Value, ViewInfo, WhereOperator, field, field_password, field_required, field_use_uri,
     generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
     generate_truncate, generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab,
-    when_checked, when_unchecked, with_default,
+    validate_ddl_fragment, when_checked, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 use tiberius::{AuthMethod, Client, Config, EncryptionLevel, SqlBrowser};
@@ -431,6 +432,116 @@ fn value_to_mssql_literal(value: &Value) -> String {
             format!("N'{}'", json.replace('\'', "''"))
         }
         Value::Unsupported(_) => "NULL".to_string(),
+    }
+}
+
+// =============================================================================
+// SQL Server Code Generator
+// =============================================================================
+
+pub struct MssqlCodeGenerator;
+
+static MSSQL_CODE_GENERATOR: MssqlCodeGenerator = MssqlCodeGenerator;
+
+impl MssqlCodeGenerator {
+    fn quote(&self, name: &str) -> String {
+        MSSQL_DIALECT.quote_identifier(name)
+    }
+
+    fn qualified(&self, schema: Option<&str>, name: &str) -> String {
+        MSSQL_DIALECT.qualified_table(schema, name)
+    }
+}
+
+impl CodeGenerator for MssqlCodeGenerator {
+    fn capabilities(&self) -> CodeGenCapabilities {
+        CodeGenCapabilities::ADD_COLUMN
+            | CodeGenCapabilities::DROP_COLUMN
+            | CodeGenCapabilities::ALTER_COLUMN
+    }
+
+    /// T-SQL's `ALTER TABLE ... ADD` grammar has no `COLUMN` keyword (unlike
+    /// `DROP COLUMN` / `ALTER COLUMN`, which both require it).
+    fn generate_add_column(&self, req: &AddColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        validate_ddl_fragment(req.type_name, "column type")?;
+        if let Some(default) = req.default {
+            validate_ddl_fragment(default, "column default")?;
+        }
+
+        let table = self.qualified(req.schema_name, req.table_name);
+        let mut sql = format!(
+            "ALTER TABLE {} ADD {} {}",
+            table,
+            self.quote(req.column_name),
+            req.type_name
+        );
+
+        if !req.nullable {
+            sql.push_str(" NOT NULL");
+        }
+        if let Some(default) = req.default {
+            sql.push_str(&format!(" DEFAULT {}", default));
+        }
+        sql.push(';');
+
+        Ok(vec![sql])
+    }
+
+    fn generate_drop_column(&self, req: &DropColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        let table = self.qualified(req.schema_name, req.table_name);
+        Ok(vec![format!(
+            "ALTER TABLE {} DROP COLUMN {};",
+            table,
+            self.quote(req.column_name)
+        )])
+    }
+
+    /// SQL Server's `ALTER COLUMN` always requires the full data type, and
+    /// omitting `NULL`/`NOT NULL` leaves the server to decide nullability —
+    /// this generator never relies on that ambiguity, so a type change
+    /// without an explicit nullable is rejected rather than guessed.
+    ///
+    /// Column defaults are separate named constraint objects in SQL Server
+    /// (`ALTER TABLE ... ADD CONSTRAINT ... DEFAULT ... FOR col`), so
+    /// changing or dropping one requires the constraint's name, which this
+    /// request does not carry. Default changes are rejected for that reason.
+    fn generate_alter_column(&self, req: &AlterColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        if req.default.is_some() {
+            return Err(DdlRejection {
+                reason: "SQL Server default constraints must be dropped and re-added by name; not derivable from this request".to_string(),
+                followup: None,
+            });
+        }
+
+        if let Some(new_type) = req.new_type {
+            validate_ddl_fragment(new_type, "column type")?;
+        }
+
+        let table = self.qualified(req.schema_name, req.table_name);
+        let column = self.quote(req.column_name);
+
+        match (req.new_type, req.nullable) {
+            (Some(new_type), Some(nullable)) => {
+                let null_clause = if nullable { "NULL" } else { "NOT NULL" };
+                Ok(vec![format!(
+                    "ALTER TABLE {} ALTER COLUMN {} {} {};",
+                    table, column, new_type, null_clause
+                )])
+            }
+            (Some(_), None) => Err(DdlRejection {
+                reason: "SQL Server requires an explicit nullability together with a type change (ALTER COLUMN needs the full column definition)".to_string(),
+                followup: None,
+            }),
+            (None, Some(_)) => Err(DdlRejection {
+                reason: "SQL Server requires the column type to change nullability (ALTER COLUMN needs the full column definition)".to_string(),
+                followup: None,
+            }),
+            (None, None) => Err(DdlRejection {
+                reason: "ALTER COLUMN requires at least one of: type, nullable, default"
+                    .to_string(),
+                followup: None,
+            }),
+        }
     }
 }
 
@@ -2319,6 +2430,10 @@ impl Connection for MssqlConnection {
         &MSSQL_DIALECT
     }
 
+    fn code_generator(&self) -> &dyn CodeGenerator {
+        &MSSQL_CODE_GENERATOR
+    }
+
     fn query_generator(&self) -> Option<&dyn QueryGenerator> {
         static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&MSSQL_DIALECT);
         Some(&GENERATOR)
@@ -3692,6 +3807,7 @@ fn format_mssql_uri_error(e: &tiberius::error::Error, uri: &str) -> DbError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dbflux_core::DefaultSpec;
 
     #[test]
     fn time_type_is_not_classified_as_timestamp() {
@@ -4457,6 +4573,158 @@ mod tests {
             !sql.to_ascii_uppercase().contains(" LIMIT "),
             "sample rows SELECT for MSSQL must not use LIMIT; got: {}",
             sql
+        );
+    }
+
+    // ===== Column ALTER seam (DBF-24) =====
+
+    #[test]
+    fn mssql_codegen_generates_add_column_without_column_keyword() {
+        let generator = MssqlCodeGenerator;
+        let request = AddColumnRequest {
+            table_name: "users",
+            schema_name: Some("dbo"),
+            column_name: "age",
+            type_name: "INT",
+            nullable: false,
+            default: Some("0"),
+        };
+
+        let statements = generator
+            .generate_add_column(&request)
+            .expect("mssql should generate add column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE [dbo].[users] ADD [age] INT NOT NULL DEFAULT 0;"]
+        );
+    }
+
+    #[test]
+    fn mssql_codegen_generates_drop_column_with_column_keyword() {
+        let generator = MssqlCodeGenerator;
+        let request = DropColumnRequest {
+            table_name: "users",
+            schema_name: Some("dbo"),
+            column_name: "age",
+        };
+
+        let statements = generator
+            .generate_drop_column(&request)
+            .expect("mssql should generate drop column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE [dbo].[users] DROP COLUMN [age];"]
+        );
+    }
+
+    #[test]
+    fn mssql_codegen_alter_column_requires_explicit_type_and_nullable_together() {
+        let generator = MssqlCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: Some("dbo"),
+            column_name: "age",
+            new_type: Some("BIGINT"),
+            nullable: Some(true),
+            default: None,
+        };
+
+        let statements = generator
+            .generate_alter_column(&request)
+            .expect("mssql should generate alter column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE [dbo].[users] ALTER COLUMN [age] BIGINT NULL;"]
+        );
+    }
+
+    #[test]
+    fn mssql_codegen_alter_column_rejects_type_change_without_explicit_nullable() {
+        let generator = MssqlCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: Some("dbo"),
+            column_name: "age",
+            new_type: Some("BIGINT"),
+            nullable: None,
+            default: None,
+        };
+
+        let result = generator.generate_alter_column(&request);
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().reason,
+            "SQL Server requires an explicit nullability together with a type change (ALTER COLUMN needs the full column definition)"
+        );
+    }
+
+    #[test]
+    fn mssql_codegen_alter_column_rejects_nullable_change_without_type() {
+        let generator = MssqlCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: Some("dbo"),
+            column_name: "age",
+            new_type: None,
+            nullable: Some(false),
+            default: None,
+        };
+
+        let result = generator.generate_alter_column(&request);
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().reason,
+            "SQL Server requires the column type to change nullability (ALTER COLUMN needs the full column definition)"
+        );
+    }
+
+    #[test]
+    fn mssql_codegen_alter_column_rejects_default_changes() {
+        let generator = MssqlCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: Some("dbo"),
+            column_name: "age",
+            new_type: None,
+            nullable: None,
+            default: Some(DefaultSpec::Set("0")),
+        };
+
+        let result = generator.generate_alter_column(&request);
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().reason,
+            "SQL Server default constraints must be dropped and re-added by name; not derivable from this request"
+        );
+    }
+
+    #[test]
+    fn mssql_codegen_alter_column_rejects_when_nothing_to_change() {
+        let generator = MssqlCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: Some("dbo"),
+            column_name: "age",
+            new_type: None,
+            nullable: None,
+            default: None,
+        };
+
+        let result = generator.generate_alter_column(&request);
+
+        assert_eq!(
+            result,
+            Err(DdlRejection {
+                reason: "ALTER COLUMN requires at least one of: type, nullable, default"
+                    .to_string(),
+                followup: None,
+            })
         );
     }
 }

@@ -346,6 +346,12 @@ pub struct GeneralSettings {
     /// `None` → use `INSPECTOR_DEFAULT_WIDTH`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_inspector_width_px: Option<f32>,
+
+    // -- Schema snapshots --
+    /// Maximum number of auto-captured schema snapshots retained per
+    /// profile/database; older snapshots beyond this bound are pruned.
+    #[serde(default = "default_schema_snapshot_retention")]
+    pub schema_snapshot_retention: usize,
 }
 
 impl Default for GeneralSettings {
@@ -369,6 +375,7 @@ impl Default for GeneralSettings {
             dangerous_requires_where: true,
             dangerous_requires_preview: false,
             workspace_inspector_width_px: None,
+            schema_snapshot_retention: default_schema_snapshot_retention(),
         }
     }
 }
@@ -444,6 +451,10 @@ fn default_refresh_interval_secs() -> u32 {
 
 fn default_max_concurrent_background_tasks() -> usize {
     8
+}
+
+fn default_schema_snapshot_retention() -> usize {
+    10
 }
 
 impl GeneralSettings {

@@ -789,13 +789,13 @@ impl Sidebar {
         database_name: &str,
         target_database: Option<&str>,
         snapshot: &dbflux_core::SchemaSnapshot,
-        table_details: &HashMap<(String, String), TableInfo>,
+        table_details: &HashMap<(String, Option<String>, String), TableInfo>,
         schema_types: &HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
         schema_indexes: &HashMap<SchemaCacheKey, Vec<SchemaIndexInfo>>,
         schema_foreign_keys: &HashMap<SchemaCacheKey, Vec<SchemaForeignKeyInfo>>,
         schema_routines: &HashMap<SchemaCacheKey, Vec<RoutineInfo>>,
         supports_routines: bool,
-        dependents_cache: &HashMap<(String, String), Vec<RelationRef>>,
+        dependents_cache: &HashMap<(String, Option<String>, String), Vec<RelationRef>>,
     ) -> Vec<TreeItem> {
         let mut children = Vec::new();
 
@@ -836,7 +836,7 @@ impl Sidebar {
         profile_id: Uuid,
         database_name: &str,
         db_schema: &dbflux_core::DbSchemaInfo,
-        table_details: &HashMap<(String, String), TableInfo>,
+        table_details: &HashMap<(String, Option<String>, String), TableInfo>,
         collection_children_cache: &HashMap<(String, String), dbflux_core::CollectionChildrenCache>,
         capabilities: DriverCapabilities,
         category: dbflux_core::DatabaseCategory,
@@ -1055,13 +1055,20 @@ impl Sidebar {
         profile_id: Uuid,
         database_name: &str,
         collection: &dbflux_core::TableInfo,
-        table_details: &HashMap<(String, String), TableInfo>,
+        table_details: &HashMap<(String, Option<String>, String), TableInfo>,
         collection_children_cache: &HashMap<(String, String), dbflux_core::CollectionChildrenCache>,
     ) -> TreeItem {
         let coll_name = &collection.name;
-        let cache_key = (database_name.to_string(), coll_name.clone());
-        let effective = table_details.get(&cache_key).unwrap_or(collection);
-        let paged_children = collection_children_cache.get(&cache_key);
+        // Collections carry their database as the schema key component —
+        // mirrors `ItemIdParts::from_node_id` for `SchemaNodeId::Collection`.
+        let details_key = (
+            database_name.to_string(),
+            Some(database_name.to_string()),
+            coll_name.clone(),
+        );
+        let effective = table_details.get(&details_key).unwrap_or(collection);
+        let children_key = (database_name.to_string(), coll_name.clone());
+        let paged_children = collection_children_cache.get(&children_key);
         let child_items = paged_children
             .map(|cache| cache.items.clone())
             .or_else(|| effective.child_items.clone());
@@ -1188,13 +1195,13 @@ impl Sidebar {
         database_name: &str,
         target_database: Option<&str>,
         db_schema: &dbflux_core::DbSchemaInfo,
-        table_details: &HashMap<(String, String), TableInfo>,
+        table_details: &HashMap<(String, Option<String>, String), TableInfo>,
         schema_types: &HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
         schema_indexes: &HashMap<SchemaCacheKey, Vec<SchemaIndexInfo>>,
         schema_foreign_keys: &HashMap<SchemaCacheKey, Vec<SchemaForeignKeyInfo>>,
         schema_routines: &HashMap<SchemaCacheKey, Vec<RoutineInfo>>,
         supports_routines: bool,
-        dependents_cache: &HashMap<(String, String), Vec<RelationRef>>,
+        dependents_cache: &HashMap<(String, Option<String>, String), Vec<RelationRef>>,
     ) -> Vec<TreeItem> {
         let mut content = Vec::new();
         let schema_name = &db_schema.name;
@@ -1324,12 +1331,16 @@ impl Sidebar {
         target_database: Option<&str>,
         schema_name: &str,
         table: &dbflux_core::TableInfo,
-        table_details: &HashMap<(String, String), TableInfo>,
-        dependents_cache: &HashMap<(String, String), Vec<RelationRef>>,
+        table_details: &HashMap<(String, Option<String>, String), TableInfo>,
+        dependents_cache: &HashMap<(String, Option<String>, String), Vec<RelationRef>>,
     ) -> TreeItem {
         // Must match the key used by cache_database().
         let cache_db = target_database.unwrap_or(schema_name);
-        let cache_key = (cache_db.to_string(), table.name.clone());
+        let cache_key = (
+            cache_db.to_string(),
+            Some(schema_name.to_string()),
+            table.name.clone(),
+        );
         let effective_table = table_details.get(&cache_key).unwrap_or(table);
         let details_loaded = effective_table.columns.is_some();
 
@@ -1372,9 +1383,10 @@ impl Sidebar {
         };
 
         // Lookup key must match the cache write path in populate_dependents.
-        // The cache key mirrors `table_details`: (database-or-schema, table).
+        // The cache key mirrors `table_details`: (database-or-schema, schema, table).
         let dep_key = (
             target_database.unwrap_or(schema_name).to_string(),
+            Some(schema_name.to_string()),
             table.name.clone(),
         );
         let deps = dependents_cache
@@ -1793,7 +1805,7 @@ fn build_collections_folder(
     database_name: &str,
     category: dbflux_core::DatabaseCategory,
     db_schema: &dbflux_core::DbSchemaInfo,
-    table_details: &HashMap<(String, String), TableInfo>,
+    table_details: &HashMap<(String, Option<String>, String), TableInfo>,
     collection_children_cache: &HashMap<(String, String), dbflux_core::CollectionChildrenCache>,
 ) -> Option<TreeItem> {
     if db_schema.tables.is_empty() {
@@ -2184,8 +2196,8 @@ fn build_schema_tables_folder(
     schema_name: &str,
     target_database: Option<&str>,
     tables: &[TableInfo],
-    table_details: &HashMap<(String, String), TableInfo>,
-    dependents_cache: &HashMap<(String, String), Vec<RelationRef>>,
+    table_details: &HashMap<(String, Option<String>, String), TableInfo>,
+    dependents_cache: &HashMap<(String, Option<String>, String), Vec<RelationRef>>,
 ) -> Option<TreeItem> {
     if tables.is_empty() {
         return None;

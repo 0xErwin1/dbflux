@@ -66,7 +66,11 @@ impl Sidebar {
         };
 
         let cache_db = parts.cache_database();
-        let cache_key = (cache_db.to_string(), parts.object_name.clone());
+        let cache_key = (
+            cache_db.to_string(),
+            Some(parts.schema_name.clone()),
+            parts.object_name.clone(),
+        );
 
         if let Some(details) = conn.table_details.get(&cache_key)
             && (details.columns.is_some() || details.sample_fields.is_some())
@@ -348,7 +352,7 @@ impl Sidebar {
 
         let task = cx
             .background_executor()
-            .spawn(async move { params.execute() });
+            .spawn(async move { params.execute().map_err(|e| e.to_string()) });
 
         self.spawn_fetch_with_result(
             pending_action,
@@ -361,10 +365,17 @@ impl Sidebar {
                     state.set_table_details(
                         res.profile_id,
                         res.database.clone(),
+                        res.schema.clone(),
                         res.table.clone(),
                         res.details,
                     );
-                    state.set_dependents(res.profile_id, res.database, res.table, res.dependents);
+                    state.set_dependents(
+                        res.profile_id,
+                        res.database,
+                        res.schema,
+                        res.table,
+                        res.dependents,
+                    );
                     cx.emit(AppStateChanged);
                 });
             },

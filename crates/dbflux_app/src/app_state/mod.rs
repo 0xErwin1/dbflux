@@ -19,6 +19,7 @@ use dbflux_core::{
 };
 use dbflux_storage::SavedQueryRepo;
 use dbflux_storage::bootstrap::StorageRuntime;
+use dbflux_storage::repositories::sch_schema_snapshots::SchemaSnapshotRepo;
 use dbflux_storage::repositories::viz_dashboard_panels::DashboardPanelsRepository;
 use dbflux_storage::repositories::viz_dashboards::DashboardsRepository;
 use dbflux_storage::repositories::viz_saved_chart_binding_y::SavedChartBindingYRepository;
@@ -100,6 +101,8 @@ pub struct AppState {
     pub dashboard_panels_repo: Arc<DashboardPanelsRepository>,
     /// Repository for `qry_saved_queries` and its child tables.
     pub saved_query_repo: Arc<SavedQueryRepo>,
+    /// Repository for `sch_schema_snapshots` and its child tables.
+    pub schema_snapshot_repo: Arc<SchemaSnapshotRepo>,
 }
 
 impl AppState {
@@ -218,11 +221,12 @@ impl AppState {
         &self,
         profile_id: Uuid,
         database: &str,
+        schema: Option<&str>,
         table: &str,
     ) -> Option<&dbflux_core::TableInfo> {
         self.facade
             .connections
-            .get_table_details(profile_id, database, table)
+            .get_table_details(profile_id, database, schema, table)
     }
 
     #[allow(dead_code)]
@@ -230,31 +234,39 @@ impl AppState {
         &mut self,
         profile_id: Uuid,
         database: String,
+        schema: Option<String>,
         table: String,
         details: dbflux_core::TableInfo,
     ) {
         self.facade
             .connections
-            .set_table_details(profile_id, database, table, details);
+            .set_table_details(profile_id, database, schema, table, details);
     }
 
     pub fn set_dependents(
         &mut self,
         profile_id: Uuid,
         database: String,
+        schema: Option<String>,
         table: String,
         deps: Vec<dbflux_core::RelationRef>,
     ) {
         self.facade
             .connections
-            .set_dependents(profile_id, database, table, deps);
+            .set_dependents(profile_id, database, schema, table, deps);
     }
 
     #[allow(dead_code)]
-    pub fn needs_table_details(&self, profile_id: Uuid, database: &str, table: &str) -> bool {
+    pub fn needs_table_details(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> bool {
         self.facade
             .connections
-            .needs_table_details(profile_id, database, table)
+            .needs_table_details(profile_id, database, schema, table)
     }
 
     #[allow(dead_code)]

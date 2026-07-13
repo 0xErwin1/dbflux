@@ -7,11 +7,12 @@ use std::time::Instant;
 
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo, ColumnInfo, ColumnKind,
-    ColumnMeta, Connection, ConnectionExt, ConnectionProfile, ConstraintInfo, ConstraintKind,
-    CreateIndexRequest, CrudResult, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
-    DbSchemaInfo, DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection,
-    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, DropIndexRequest,
+    AddColumnRequest, AlterColumnRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator,
+    CodeGeneratorInfo, ColumnInfo, ColumnKind, ColumnMeta, Connection, ConnectionExt,
+    ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult,
+    DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities,
+    DdlRejection, DeploymentClass, DescribeRequest, DocumentConnection, DriverCapabilities,
+    DriverFormDef, DriverLimits, DriverMetadata, DropColumnRequest, DropIndexRequest,
     ExplainRequest, ForeignKeyInfo, FormSection, FormTab, FormValues, FormattedError, Icon,
     IndexData, IndexInfo, IsolationLevel, KeyValueConnection, MutationCapabilities, OrderByColumn,
     PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter,
@@ -22,7 +23,7 @@ use dbflux_core::{
     SqlQueryBuilder, SyntaxInfo, TableInfo, TransactionCapabilities, TransferFamily, Value,
     ViewInfo, WhereOperator, field_file_path, generate_delete_template, generate_drop_table,
     generate_insert_template, generate_select_star, generate_update_template,
-    render_semantic_filter_sql,
+    render_semantic_filter_sql, validate_ddl_fragment,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 
@@ -281,6 +282,14 @@ impl SqliteCodeGenerator {
     }
 }
 
+/// SQLite added `ALTER TABLE ... DROP COLUMN` support in release 3.35.0
+/// (`SQLITE_VERSION_NUMBER` 3035000, 2021-03-12). Extracted as a pure
+/// function so both the runtime check and its tests can exercise the
+/// threshold without depending on the actual bundled library version.
+fn sqlite_drop_column_supported(version_number: i32) -> bool {
+    version_number >= 3_035_000
+}
+
 impl CodeGenerator for SqliteCodeGenerator {
     fn capabilities(&self) -> CodeGenCapabilities {
         CodeGenCapabilities::CRUD
@@ -288,6 +297,8 @@ impl CodeGenerator for SqliteCodeGenerator {
             | CodeGenCapabilities::REINDEX
             | CodeGenCapabilities::CREATE_TABLE
             | CodeGenCapabilities::DROP_TABLE
+            | CodeGenCapabilities::ADD_COLUMN
+            | CodeGenCapabilities::DROP_COLUMN
     }
 
     fn generate_create_index(&self, req: &CreateIndexRequest) -> Option<String> {
@@ -317,6 +328,62 @@ impl CodeGenerator for SqliteCodeGenerator {
     fn generate_reindex(&self, req: &ReindexRequest) -> Option<String> {
         let index = self.qualified(req.schema_name, req.index_name);
         Some(format!("REINDEX {};", index))
+    }
+
+    fn generate_add_column(&self, req: &AddColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        validate_ddl_fragment(req.type_name, "column type")?;
+        if let Some(default) = req.default {
+            validate_ddl_fragment(default, "column default")?;
+        }
+
+        let table = self.qualified(req.schema_name, req.table_name);
+        let mut sql = format!(
+            "ALTER TABLE {} ADD COLUMN {} {}",
+            table,
+            self.quote(req.column_name),
+            req.type_name
+        );
+
+        if !req.nullable {
+            sql.push_str(" NOT NULL");
+        }
+        if let Some(default) = req.default {
+            sql.push_str(&format!(" DEFAULT {}", default));
+        }
+        sql.push(';');
+
+        Ok(vec![sql])
+    }
+
+    fn generate_drop_column(&self, req: &DropColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        if !sqlite_drop_column_supported(rusqlite::version_number()) {
+            return Err(DdlRejection {
+                reason: "SQLite requires a table rebuild".to_string(),
+                followup: Some("DBF-158"),
+            });
+        }
+
+        let table = self.qualified(req.schema_name, req.table_name);
+        Ok(vec![format!(
+            "ALTER TABLE {} DROP COLUMN {};",
+            table,
+            self.quote(req.column_name)
+        )])
+    }
+
+    /// SQLite has no `ALTER COLUMN` statement: changing a column's type,
+    /// nullability, or default always requires the create-copy-drop-rename
+    /// table-rebuild dance, which this seam does not perform. Every request
+    /// is rejected with the DBF-158 follow-up regardless of which fields are
+    /// set.
+    fn generate_alter_column(
+        &self,
+        _req: &AlterColumnRequest,
+    ) -> Result<Vec<String>, DdlRejection> {
+        Err(DdlRejection {
+            reason: "SQLite requires a table rebuild".to_string(),
+            followup: Some("DBF-158"),
+        })
     }
 }
 
@@ -2541,6 +2608,112 @@ mod tests {
         assert!(
             !caps.contains(DriverCapabilities::INSTANCE_INSPECTOR),
             "SQLite must not advertise INSTANCE_INSPECTOR"
+        );
+    }
+
+    // ===== Column ALTER seam (DBF-24) =====
+
+    use super::{SqliteCodeGenerator, sqlite_drop_column_supported};
+    use dbflux_core::{AddColumnRequest, AlterColumnRequest, CodeGenerator, DropColumnRequest};
+
+    #[test]
+    fn sqlite_codegen_generates_add_column_with_default() {
+        let generator = SqliteCodeGenerator;
+        let request = AddColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+            type_name: "INTEGER",
+            nullable: false,
+            default: Some("0"),
+        };
+
+        let statements = generator
+            .generate_add_column(&request)
+            .expect("sqlite should generate add column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE \"users\" ADD COLUMN \"age\" INTEGER NOT NULL DEFAULT 0;"]
+        );
+    }
+
+    #[test]
+    fn sqlite_codegen_generates_add_column_nullable_without_default() {
+        let generator = SqliteCodeGenerator;
+        let request = AddColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "nickname",
+            type_name: "TEXT",
+            nullable: true,
+            default: None,
+        };
+
+        let statements = generator
+            .generate_add_column(&request)
+            .expect("sqlite should generate add column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE \"users\" ADD COLUMN \"nickname\" TEXT;"]
+        );
+    }
+
+    #[test]
+    fn sqlite_drop_column_supported_from_3_35_0_onward() {
+        assert!(sqlite_drop_column_supported(3_035_000));
+        assert!(sqlite_drop_column_supported(3_046_001));
+    }
+
+    #[test]
+    fn sqlite_drop_column_unsupported_before_3_35_0() {
+        assert!(!sqlite_drop_column_supported(3_034_001));
+        assert!(!sqlite_drop_column_supported(3_000_000));
+    }
+
+    #[test]
+    fn sqlite_codegen_generates_drop_column_on_bundled_runtime() {
+        // rusqlite is built with the `bundled` feature, which always ships a
+        // SQLite release far newer than 3.35 (2021-03-12), so this exercises
+        // the real runtime version rather than a synthetic one.
+        let generator = SqliteCodeGenerator;
+        let request = DropColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+        };
+
+        let statements = generator
+            .generate_drop_column(&request)
+            .expect("bundled SQLite should support DROP COLUMN");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE \"users\" DROP COLUMN \"age\";"]
+        );
+    }
+
+    #[test]
+    fn sqlite_codegen_alter_column_always_rejects_with_dbf158_followup() {
+        let generator = SqliteCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+            new_type: Some("TEXT"),
+            nullable: None,
+            default: None,
+        };
+
+        let result = generator.generate_alter_column(&request);
+
+        assert_eq!(
+            result,
+            Err(dbflux_core::DdlRejection {
+                reason: "SQLite requires a table rebuild".to_string(),
+                followup: Some("DBF-158"),
+            })
         );
     }
 }

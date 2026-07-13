@@ -6,7 +6,7 @@ pub struct MigrationImpl;
 
 impl Migration for MigrationImpl {
     fn name(&self) -> &str {
-        "021_profile_hook_interpreter"
+        "023_profile_hook_interpreter"
     }
 
     fn run(&self, tx: &Transaction) -> Result<(), MigrationError> {

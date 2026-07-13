@@ -84,6 +84,7 @@ mod connections;
 mod documents;
 mod metrics;
 mod query;
+mod schema_diff;
 mod scripts;
 mod settings;
 

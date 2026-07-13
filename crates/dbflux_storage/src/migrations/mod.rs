@@ -19,6 +19,7 @@
 //! - `st_*`  — State domain (sessions, query history, UI state)
 //! - `aud_*` — Audit domain (audit events)
 //! - `sys_*` — System domain (migrations, metadata)
+//! - `sch_*` — Schema domain (persisted schema snapshots)
 //!
 //! ## Usage
 //!
@@ -161,8 +162,10 @@ impl MigrationRegistry {
         registry.register(mod_017_qry_saved_queries::MigrationImpl);
         registry.register(mod_018_app_pending_executions::MigrationImpl);
         registry.register(mod_019_hook_env_denylist::MigrationImpl);
-        registry.register(mod_020_hook_kind_json::MigrationImpl);
-        registry.register(mod_021_profile_hook_interpreter::MigrationImpl);
+        registry.register(mod_020_sch_schema_snapshots::MigrationImpl);
+        registry.register(mod_021_general_settings_schema_snapshot_retention::MigrationImpl);
+        registry.register(mod_022_hook_kind_json::MigrationImpl);
+        registry.register(mod_023_profile_hook_interpreter::MigrationImpl);
         registry
     }
 
@@ -365,8 +368,10 @@ mod mod_016_viz_divider_saved_chart_id_constraint;
 mod mod_017_qry_saved_queries;
 mod mod_018_app_pending_executions;
 mod mod_019_hook_env_denylist;
-mod mod_020_hook_kind_json;
-mod mod_021_profile_hook_interpreter;
+mod mod_020_sch_schema_snapshots;
+mod mod_021_general_settings_schema_snapshot_retention;
+mod mod_022_hook_kind_json;
+mod mod_023_profile_hook_interpreter;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -939,27 +944,27 @@ mod tests {
     /// is the regression fence for that invariant: it is written against the
     /// current (pre-rename) state and must stay green through file renames.
     #[test]
-    fn test_021_profile_hook_interpreter_upgrades_and_is_idempotent() {
-        let temp_dir = temp_dir("021_profile_hook_interpreter");
+    fn test_023_profile_hook_interpreter_upgrades_and_is_idempotent() {
+        let temp_dir = temp_dir("023_profile_hook_interpreter");
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::fs::create_dir_all(&temp_dir).unwrap();
         let db_path = temp_dir.join("test.db");
 
         let conn = Connection::open(&db_path).unwrap();
         let registry = MigrationRegistry::new();
-        registry.run_all(&conn).expect("create pre-021 schema");
+        registry.run_all(&conn).expect("create pre-023 schema");
         conn.execute_batch(
             "ALTER TABLE cfg_connection_profile_hooks DROP COLUMN script_interpreter;
-             DELETE FROM sys_migrations WHERE name = '021_profile_hook_interpreter';",
+             DELETE FROM sys_migrations WHERE name = '023_profile_hook_interpreter';",
         )
-        .expect("restore pre-021 profile hook schema");
+        .expect("restore pre-023 profile hook schema");
 
         registry
             .run_all(&conn)
             .expect("upgrade profile hook schema");
         assert!(
             column_names(&conn, "cfg_connection_profile_hooks").contains("script_interpreter"),
-            "migration 021 must add the profile hook interpreter column"
+            "migration 023 must add the profile hook interpreter column"
         );
 
         registry
@@ -967,7 +972,7 @@ mod tests {
             .expect("rerun profile hook schema upgrade");
         let applied: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM sys_migrations WHERE name = '021_profile_hook_interpreter'",
+                "SELECT COUNT(*) FROM sys_migrations WHERE name = '023_profile_hook_interpreter'",
                 [],
                 |row| row.get(0),
             )
@@ -1011,8 +1016,10 @@ mod tests {
             "017_qry_saved_queries",
             "018_app_pending_executions",
             "019_hook_env_denylist",
-            "020_hook_kind_json",
-            "021_profile_hook_interpreter",
+            "020_sch_schema_snapshots",
+            "021_general_settings_schema_snapshot_retention",
+            "022_hook_kind_json",
+            "023_profile_hook_interpreter",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();

@@ -15,11 +15,13 @@ mod data_view;
 pub mod data_view_trait;
 pub mod dedup;
 pub mod query_builder;
+pub mod schema_diff;
 mod style_guardrails;
 
 #[cfg(feature = "mcp")]
 mod governance;
 
+pub mod export_wizard;
 mod handle;
 pub mod history_modal;
 pub mod import_wizard;

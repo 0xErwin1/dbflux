@@ -628,6 +628,9 @@ impl Render for Workspace {
             .when(self.migrate_wizard.read(cx).is_visible(), |root| {
                 root.child(self.migrate_wizard.clone())
             })
+            .when(self.export_wizard.read(cx).is_visible(), |root| {
+                root.child(self.export_wizard.clone())
+            })
             .when(self.modal_create_dashboard.read(cx).is_visible(), |root| {
                 root.child(self.modal_create_dashboard.clone())
             })
@@ -786,12 +789,29 @@ impl Render for Workspace {
                 let menu_width = px(160.0);
                 let menu_gap = Spacing::XS;
                 let menu_item_height = Heights::ROW_COMPACT;
+                let separator_height = px(1.0) + Spacing::XS * 2.0;
                 let menu_container_padding = px(4.0);
 
                 let parent_entry = menu.parent_stack.last();
 
-                let submenu_y_offset = if let Some((_, parent_selected)) = parent_entry {
-                    menu_container_padding + (menu_item_height * (*parent_selected as f32))
+                // Anchor the submenu to its owning row by summing the actual
+                // rendered height of every preceding row. Separators are ~9px,
+                // not a full ROW_COMPACT, so a flat `height * index` over-counts
+                // and pushes the submenu too far down.
+                let submenu_y_offset = if let Some((parent_items, parent_selected)) = parent_entry {
+                    let rows_above =
+                        parent_items
+                            .iter()
+                            .take(*parent_selected)
+                            .fold(px(0.0), |acc, item| {
+                                acc + if item.is_separator {
+                                    separator_height
+                                } else {
+                                    menu_item_height
+                                }
+                            });
+
+                    menu_container_padding + rows_above
                 } else {
                     px(0.0)
                 };

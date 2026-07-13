@@ -1,10 +1,10 @@
 use crate::LogErr;
 use crate::{
     CollectionChildrenCache, CollectionChildrenPage, CollectionChildrenRequest, CollectionRef,
-    Connection, ConnectionHooks, ConnectionProfile, CustomTypeInfo, DbDriver, DbKind, DbSchemaInfo,
-    HookContext, ProxyProfile, RelationRef, RoutineInfo, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaLoadingStrategy, SchemaSnapshot, SecretStore, ShutdownCoordinator, ShutdownPhase,
-    SshTunnelProfile, TableInfo, TaskTarget,
+    Connection, ConnectionHooks, ConnectionProfile, CustomTypeInfo, DbDriver, DbError, DbKind,
+    DbSchemaInfo, HookContext, ProxyProfile, RelationRef, RoutineInfo, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SecretStore, ShutdownCoordinator,
+    ShutdownPhase, SshTunnelProfile, TableInfo, TaskTarget,
 };
 use log::{error, info};
 use secrecy::SecretString;
@@ -26,6 +26,7 @@ pub enum CacheKey {
     },
     TableDetails {
         database: String,
+        schema: Option<String>,
         table: String,
     },
     CollectionChildren {
@@ -57,9 +58,14 @@ impl CacheKey {
         }
     }
 
-    pub fn table_details(database: impl Into<String>, table: impl Into<String>) -> Self {
+    pub fn table_details(
+        database: impl Into<String>,
+        schema: Option<impl Into<String>>,
+        table: impl Into<String>,
+    ) -> Self {
         Self::TableDetails {
             database: database.into(),
+            schema: schema.map(|s| s.into()),
             table: table.into(),
         }
     }
@@ -123,6 +129,7 @@ pub enum OwnedCacheEntry {
     },
     TableDetails {
         database: String,
+        schema: Option<String>,
         table: String,
         details: TableInfo,
     },
@@ -325,14 +332,18 @@ pub struct ConnectedProfile {
     pub mutation_policy: MutationPolicy,
     /// Lazy-loaded schemas per database (MySQL/MariaDB).
     pub database_schemas: HashMap<String, DbSchemaInfo>,
-    pub table_details: HashMap<(String, String), TableInfo>,
+    /// Table details keyed by `(database, schema, table)` — the schema is part
+    /// of the key so same-named tables in different schemas cache independently.
+    pub table_details: HashMap<(String, Option<String>, String), TableInfo>,
     pub collection_children: HashMap<(String, String), CollectionChildrenCache>,
     pub schema_types: HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
     pub schema_indexes: HashMap<SchemaCacheKey, Vec<SchemaIndexInfo>>,
     pub schema_foreign_keys: HashMap<SchemaCacheKey, Vec<SchemaForeignKeyInfo>>,
     pub schema_routines: HashMap<SchemaCacheKey, Vec<RoutineInfo>>,
-    /// Dependent objects (views, FK children, triggers) per table, keyed by `(database, table)`.
-    pub dependents_cache: HashMap<(String, String), Vec<RelationRef>>,
+    /// Dependent objects (views, FK children, triggers) per table, keyed by
+    /// `(database, schema, table)` — the schema is part of the key so
+    /// same-named tables in different schemas keep independent dependents.
+    pub dependents_cache: HashMap<(String, Option<String>, String), Vec<RelationRef>>,
     /// Active database for query context (MySQL/MariaDB USE).
     pub active_database: Option<String>,
     pub redis_key_cache: RedisKeyCache,
@@ -354,9 +365,13 @@ impl ConnectedProfile {
                 .get(database.as_str())
                 .map(CacheEntry::DatabaseSchema),
 
-            CacheKey::TableDetails { database, table } => self
+            CacheKey::TableDetails {
+                database,
+                schema,
+                table,
+            } => self
                 .table_details
-                .get(&(database.clone(), table.clone()))
+                .get(&(database.clone(), schema.clone(), table.clone()))
                 .map(CacheEntry::TableDetails),
 
             CacheKey::CollectionChildren {
@@ -407,10 +422,12 @@ impl ConnectedProfile {
 
             OwnedCacheEntry::TableDetails {
                 database,
+                schema,
                 table,
                 details,
             } => {
-                self.table_details.insert((database, table), details);
+                self.table_details
+                    .insert((database, schema, table), details);
             }
 
             OwnedCacheEntry::CollectionChildren {
@@ -488,26 +505,36 @@ impl ConnectedProfile {
             .unwrap_or_else(|| self.connection.clone())
     }
 
-    /// Return all cached dependents for the given `(database, table)` pair.
+    /// Return all cached dependents for the given `(database, schema, table)`.
     ///
     /// Returns an empty `Vec` when nothing has been populated yet, which is
     /// correct for drivers that have not called `populate_dependents`.
-    pub fn dependents(&self, database: &str, table: &str) -> Vec<RelationRef> {
+    pub fn dependents(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Vec<RelationRef> {
         self.dependents_cache
-            .get(&(database.to_string(), table.to_string()))
+            .get(&(
+                database.to_string(),
+                schema.map(String::from),
+                table.to_string(),
+            ))
             .cloned()
             .unwrap_or_default()
     }
 
-    /// Store the dependent objects for a specific `(database, table)` pair.
+    /// Store the dependent objects for a specific `(database, schema, table)`.
     pub fn populate_dependents(
         &mut self,
         database: impl Into<String>,
+        schema: Option<String>,
         table: impl Into<String>,
         deps: Vec<RelationRef>,
     ) {
         self.dependents_cache
-            .insert((database.into(), table.into()), deps);
+            .insert((database.into(), schema, table.into()), deps);
     }
 
     /// Resolve the effective connection for query execution.
@@ -744,11 +771,15 @@ impl ConnectionManager {
         &self,
         profile_id: Uuid,
         database: &str,
+        schema: Option<&str>,
         table: &str,
     ) -> Option<&TableInfo> {
         self.connections.get(&profile_id).and_then(|c| {
-            c.table_details
-                .get(&(database.to_string(), table.to_string()))
+            c.table_details.get(&(
+                database.to_string(),
+                schema.map(String::from),
+                table.to_string(),
+            ))
         })
     }
 
@@ -756,12 +787,14 @@ impl ConnectionManager {
         &mut self,
         profile_id: Uuid,
         database: String,
+        schema: Option<String>,
         table: String,
         details: TableInfo,
     ) {
         if let Some(connected) = self.connections.get_mut(&profile_id) {
             connected.cache_set(OwnedCacheEntry::TableDetails {
                 database,
+                schema,
                 table,
                 details,
             });
@@ -772,16 +805,23 @@ impl ConnectionManager {
         &mut self,
         profile_id: Uuid,
         database: String,
+        schema: Option<String>,
         table: String,
         deps: Vec<RelationRef>,
     ) {
         if let Some(connected) = self.connections.get_mut(&profile_id) {
-            connected.populate_dependents(database, table, deps);
+            connected.populate_dependents(database, schema, table, deps);
         }
     }
 
-    pub fn needs_table_details(&self, profile_id: Uuid, database: &str, table: &str) -> bool {
-        let key = CacheKey::table_details(database, table);
+    pub fn needs_table_details(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> bool {
+        let key = CacheKey::table_details(database, schema, table);
         self.connections
             .get(&profile_id)
             .is_some_and(|c| !c.cache_contains(&key))
@@ -1347,7 +1387,11 @@ impl ConnectionManager {
             .get(&profile_id)
             .ok_or_else(|| "Profile not connected".to_string())?;
 
-        let cache_key = (database.to_string(), table.to_string());
+        let cache_key = (
+            database.to_string(),
+            schema.map(String::from),
+            table.to_string(),
+        );
         if let Some(details) = connected.table_details.get(&cache_key)
             && (details.columns.is_some() || details.sample_fields.is_some())
         {
@@ -1762,11 +1806,13 @@ pub struct FetchTableDetailsParams {
 
 #[allow(dead_code)]
 impl FetchTableDetailsParams {
-    pub fn execute(self) -> Result<FetchTableDetailsResult, String> {
-        let details = self
-            .connection
-            .table_details(&self.database, self.schema.as_deref(), &self.table)
-            .map_err(|e| e.to_string())?;
+    /// Errors keep the typed [`DbError`] so callers can distinguish a genuine
+    /// "object does not exist" (`DbError::ObjectNotFound`) from a real fetch
+    /// failure instead of collapsing both into a string.
+    pub fn execute(self) -> Result<FetchTableDetailsResult, DbError> {
+        let details =
+            self.connection
+                .table_details(&self.database, self.schema.as_deref(), &self.table)?;
 
         let dependents = self
             .connection
@@ -1776,6 +1822,7 @@ impl FetchTableDetailsParams {
         Ok(FetchTableDetailsResult {
             profile_id: self.profile_id,
             database: self.database,
+            schema: self.schema,
             table: self.table,
             details,
             dependents,
@@ -1787,6 +1834,8 @@ impl FetchTableDetailsParams {
 pub struct FetchTableDetailsResult {
     pub profile_id: Uuid,
     pub database: String,
+    /// The schema the details were fetched for — part of the cache key.
+    pub schema: Option<String>,
     pub table: String,
     pub details: TableInfo,
     /// Dependent objects fetched alongside the table details (views, FK children, triggers).
@@ -2638,6 +2687,105 @@ mod tests {
     }
 
     #[test]
+    fn connection_for_database_prefers_the_per_database_connection_over_the_primary() {
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let primary = make_connection(
+            DbKind::Postgres,
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+        );
+        let reports = make_connection(
+            DbKind::Postgres,
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+        );
+
+        let mut db_connections = HashMap::new();
+        db_connections.insert(
+            "reports".to_string(),
+            DatabaseConnection {
+                connection: reports.clone(),
+                schema: Some(relational_schema_with_current_database("reports")),
+            },
+        );
+
+        let schema = relational_schema_with_current_database("main_db");
+        let connected = connected_profile(profile, primary.clone(), Some(schema), db_connections);
+
+        assert!(Arc::ptr_eq(
+            &connected.connection_for_database("reports"),
+            &reports
+        ));
+        assert!(Arc::ptr_eq(
+            &connected.connection_for_database("main_db"),
+            &primary
+        ));
+    }
+
+    #[test]
+    fn table_details_cache_keeps_same_named_tables_in_different_schemas_distinct() {
+        use crate::ColumnInfo;
+
+        fn table_with_column(schema: &str, column: &str) -> TableInfo {
+            TableInfo {
+                name: "users".to_string(),
+                schema: Some(schema.to_string()),
+                columns: Some(vec![ColumnInfo {
+                    name: column.to_string(),
+                    type_name: "text".to_string(),
+                    nullable: true,
+                    is_primary_key: false,
+                    default_value: None,
+                    enum_values: None,
+                }]),
+                indexes: None,
+                foreign_keys: None,
+                constraints: None,
+                sample_fields: None,
+                presentation: Default::default(),
+                child_items: None,
+            }
+        }
+
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let connection = make_connection(
+            DbKind::Postgres,
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+        );
+        let mut connected = connected_profile(profile, connection, None, HashMap::new());
+
+        connected.cache_set(OwnedCacheEntry::TableDetails {
+            database: "app".to_string(),
+            schema: Some("public".to_string()),
+            table: "users".to_string(),
+            details: table_with_column("public", "email"),
+        });
+        connected.cache_set(OwnedCacheEntry::TableDetails {
+            database: "app".to_string(),
+            schema: Some("audit".to_string()),
+            table: "users".to_string(),
+            details: table_with_column("audit", "changed_at"),
+        });
+
+        let column_for = |schema: &str| -> String {
+            let key = CacheKey::table_details("app", Some(schema), "users");
+            match connected.cache_get(&key) {
+                Some(CacheEntry::TableDetails(info)) => {
+                    info.columns.as_ref().unwrap()[0].name.clone()
+                }
+                _ => panic!("expected cached table details for schema {schema}"),
+            }
+        };
+
+        assert_eq!(column_for("public"), "email");
+        assert_eq!(column_for("audit"), "changed_at");
+
+        let unqualified = CacheKey::table_details("app", None::<String>, "users");
+        assert!(
+            connected.cache_get(&unqualified).is_none(),
+            "schema-less key must not alias a schema-qualified entry"
+        );
+    }
+
+    #[test]
     fn dependents_roundtrip_returns_stored_relations() {
         use crate::{RelationKind, RelationRef};
 
@@ -2659,9 +2807,9 @@ mod tests {
             },
         ];
 
-        connected.populate_dependents("mydb", "users", deps.clone());
+        connected.populate_dependents("mydb", Some("public".to_string()), "users", deps.clone());
 
-        let retrieved = connected.dependents("mydb", "users");
+        let retrieved = connected.dependents("mydb", Some("public"), "users");
         assert_eq!(retrieved, deps);
     }
 
@@ -2678,6 +2826,7 @@ mod tests {
 
         connected.populate_dependents(
             "mydb",
+            Some("public".to_string()),
             "users",
             vec![RelationRef {
                 kind: RelationKind::Trigger,
@@ -2685,11 +2834,54 @@ mod tests {
             }],
         );
 
-        let retrieved = connected.dependents("mydb", "orders");
+        let retrieved = connected.dependents("mydb", Some("public"), "orders");
         assert!(
             retrieved.is_empty(),
             "expected empty for unknown table, got {:?}",
             retrieved
+        );
+    }
+
+    #[test]
+    fn dependents_cache_keeps_same_named_tables_in_different_schemas_distinct() {
+        use crate::{RelationKind, RelationRef};
+
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let connection = make_connection(
+            DbKind::Postgres,
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+        );
+        let mut connected = connected_profile(profile, connection, None, HashMap::new());
+
+        let public_deps = vec![RelationRef {
+            kind: RelationKind::View,
+            qualified_name: "public.audit".to_string(),
+        }];
+        let sales_deps = vec![RelationRef {
+            kind: RelationKind::ForeignKeyChild,
+            qualified_name: "sales.line_items".to_string(),
+        }];
+
+        connected.populate_dependents(
+            "app",
+            Some("public".to_string()),
+            "orders",
+            public_deps.clone(),
+        );
+        connected.populate_dependents(
+            "app",
+            Some("sales".to_string()),
+            "orders",
+            sales_deps.clone(),
+        );
+
+        assert_eq!(
+            connected.dependents("app", Some("public"), "orders"),
+            public_deps
+        );
+        assert_eq!(
+            connected.dependents("app", Some("sales"), "orders"),
+            sales_deps
         );
     }
 
