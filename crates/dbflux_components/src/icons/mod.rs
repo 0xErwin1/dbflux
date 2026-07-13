@@ -275,6 +275,10 @@ impl AppIcon {
             Icon::Mongodb => Self::BrandMongodb,
             Icon::Redis => Self::BrandRedis,
             Icon::Dynamodb => Self::Database,
+            // No redistributable AWS Redshift brand asset is available (Simple Icons
+            // does not ship AWS service icons), so this follows the same fallback
+            // convention as Icon::Dynamodb.
+            Icon::Redshift => Self::Database,
             Icon::Influxdb => Self::BrandInfluxDb,
             Icon::Logs => Self::Logs,
             Icon::Database => Self::Database,

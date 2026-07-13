@@ -2030,6 +2030,7 @@ impl Connection for MongoConnection {
                     sample_fields: None,
                     presentation: dbflux_core::CollectionPresentation::DataGrid,
                     child_items: None,
+                    storage_hints: None,
                 }
             })
             .collect();
@@ -2159,6 +2160,7 @@ impl Connection for MongoConnection {
             sample_fields: Some(sample_fields),
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
+            storage_hints: None,
         })
     }
 

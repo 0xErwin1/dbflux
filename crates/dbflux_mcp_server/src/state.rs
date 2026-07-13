@@ -586,6 +586,7 @@ fn str_to_db_kind(value: &str) -> Option<dbflux_core::DbKind> {
         "CloudWatchLogs" => Some(dbflux_core::DbKind::CloudWatchLogs),
         "InfluxDB" => Some(dbflux_core::DbKind::InfluxDB),
         "SqlServer" => Some(dbflux_core::DbKind::SqlServer),
+        "Redshift" => Some(dbflux_core::DbKind::Redshift),
         _ => None,
     }
 }
@@ -602,6 +603,7 @@ fn default_db_config_for_kind(kind: dbflux_core::DbKind) -> dbflux_core::DbConfi
         dbflux_core::DbKind::CloudWatchLogs => dbflux_core::DbConfig::default_cloudwatch_logs(),
         dbflux_core::DbKind::InfluxDB => dbflux_core::DbConfig::default_influxdb(),
         dbflux_core::DbKind::SqlServer => dbflux_core::DbConfig::default_sqlserver(),
+        dbflux_core::DbKind::Redshift => dbflux_core::DbConfig::default_redshift(),
     }
 }
 

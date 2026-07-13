@@ -655,6 +655,7 @@ impl Connection for CloudWatchConnection {
             sample_fields: None,
             presentation: CollectionPresentation::EventStream,
             child_items: None,
+            storage_hints: None,
         })
     }
 

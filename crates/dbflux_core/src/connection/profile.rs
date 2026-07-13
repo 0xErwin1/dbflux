@@ -23,6 +23,7 @@ pub enum DbKind {
     CloudWatchLogs,
     InfluxDB,
     SqlServer,
+    Redshift,
 }
 
 impl DbKind {
@@ -38,6 +39,7 @@ impl DbKind {
             DbKind::CloudWatchLogs => "CloudWatch Logs",
             DbKind::InfluxDB => "InfluxDB",
             DbKind::SqlServer => "SQL Server",
+            DbKind::Redshift => "Amazon Redshift",
         }
     }
 }
@@ -515,6 +517,36 @@ pub enum DbConfig {
         #[serde(default)]
         ssh_tunnel_profile_id: Option<Uuid>,
     },
+    /// Amazon Redshift, wire-compatible with PostgreSQL.
+    Redshift {
+        #[serde(default)]
+        use_uri: bool,
+        #[serde(default)]
+        uri: Option<String>,
+        host: String,
+        port: u16,
+        user: String,
+        database: String,
+        /// SSL mode using the Postgres native sslmode identifier (e.g. `"prefer"`, `"verify-ca"`).
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_ssl_mode_option"
+        )]
+        ssl_mode: Option<String>,
+        /// Path to the root CA certificate file for `verify-ca` / `verify-full` modes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_root_cert_path: Option<String>,
+        /// Path to the client certificate file for mutual TLS.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_client_cert_path: Option<String>,
+        /// Path to the client private key file for mutual TLS.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_client_key_path: Option<String>,
+        ssh_tunnel: Option<SshTunnelConfig>,
+        #[serde(default)]
+        ssh_tunnel_profile_id: Option<Uuid>,
+    },
     /// Generic config for external RPC drivers.
     External {
         kind: DbKind,
@@ -539,6 +571,7 @@ impl DbConfig {
             DbConfig::CloudWatchLogs { .. } => DbKind::CloudWatchLogs,
             DbConfig::InfluxDB { .. } => DbKind::InfluxDB,
             DbConfig::SqlServer { .. } => DbKind::SqlServer,
+            DbConfig::Redshift { .. } => DbKind::Redshift,
             DbConfig::External { kind, .. } => *kind,
         }
     }
@@ -666,13 +699,31 @@ impl DbConfig {
         }
     }
 
+    pub fn default_redshift() -> Self {
+        DbConfig::Redshift {
+            use_uri: false,
+            uri: None,
+            host: "localhost".to_string(),
+            port: 5439,
+            user: "awsuser".to_string(),
+            database: "dev".to_string(),
+            ssl_mode: Some("prefer".to_string()),
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        }
+    }
+
     pub fn ssh_tunnel(&self) -> Option<&SshTunnelConfig> {
         match self {
             DbConfig::Postgres { ssh_tunnel, .. }
             | DbConfig::MySQL { ssh_tunnel, .. }
             | DbConfig::MongoDB { ssh_tunnel, .. }
             | DbConfig::Redis { ssh_tunnel, .. }
-            | DbConfig::SqlServer { ssh_tunnel, .. } => ssh_tunnel.as_ref(),
+            | DbConfig::SqlServer { ssh_tunnel, .. }
+            | DbConfig::Redshift { ssh_tunnel, .. } => ssh_tunnel.as_ref(),
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
@@ -701,6 +752,10 @@ impl DbConfig {
                 ..
             }
             | DbConfig::SqlServer {
+                ssh_tunnel_profile_id,
+                ..
+            }
+            | DbConfig::Redshift {
                 ssh_tunnel_profile_id,
                 ..
             } => *ssh_tunnel_profile_id,
@@ -739,6 +794,11 @@ impl DbConfig {
                 ssh_tunnel,
                 ssh_tunnel_profile_id,
                 ..
+            }
+            | DbConfig::Redshift {
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+                ..
             } => ssh_tunnel.is_some() || ssh_tunnel_profile_id.is_some(),
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
@@ -755,7 +815,8 @@ impl DbConfig {
             | DbConfig::MySQL { host, port, .. }
             | DbConfig::MongoDB { host, port, .. }
             | DbConfig::Redis { host, port, .. }
-            | DbConfig::SqlServer { host, port, .. } => Some((host, *port)),
+            | DbConfig::SqlServer { host, port, .. }
+            | DbConfig::Redshift { host, port, .. } => Some((host, *port)),
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
@@ -796,6 +857,12 @@ impl DbConfig {
                 port,
                 use_uri,
                 ..
+            }
+            | DbConfig::Redshift {
+                host,
+                port,
+                use_uri,
+                ..
             } => {
                 *host = "127.0.0.1".to_string();
                 *port = tunnel_port;
@@ -819,7 +886,8 @@ impl DbConfig {
             | DbConfig::MySQL { use_uri, uri, .. }
             | DbConfig::MongoDB { use_uri, uri, .. }
             | DbConfig::Redis { use_uri, uri, .. }
-            | DbConfig::SqlServer { use_uri, uri, .. } => (use_uri, uri),
+            | DbConfig::SqlServer { use_uri, uri, .. }
+            | DbConfig::Redshift { use_uri, uri, .. } => (use_uri, uri),
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
@@ -853,6 +921,7 @@ impl DbConfig {
             DbConfig::MongoDB { database, .. } => database.clone(),
             DbConfig::Redis { database, .. } => database.map(|d| d.to_string()),
             DbConfig::SqlServer { database, .. } => database.clone(),
+            DbConfig::Redshift { database, .. } => Some(database.clone()),
             DbConfig::SQLite { .. } => Some("main".to_string()),
             DbConfig::DynamoDB { .. } | DbConfig::CloudWatchLogs { .. } => None,
             DbConfig::InfluxDB { default_bucket, .. } => default_bucket.clone(),
@@ -1005,6 +1074,33 @@ impl DbConfig {
                 ssl_mode,
                 trust_server_certificate,
                 ssl_root_cert_path,
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+            }),
+            DbConfig::Redshift {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                ssl_mode,
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+                ..
+            } => Ok(DbConfig::Redshift {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                database: database.to_string(),
+                ssl_mode,
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
                 ssh_tunnel,
                 ssh_tunnel_profile_id,
             }),
@@ -1305,6 +1401,7 @@ impl ConnectionProfile {
             DbKind::CloudWatchLogs => "cloudwatch",
             DbKind::InfluxDB => "influxdb",
             DbKind::SqlServer => "mssql",
+            DbKind::Redshift => "redshift",
         }
     }
 
@@ -1367,6 +1464,10 @@ impl ConnectionProfile {
                 ..
             }
             | DbConfig::SqlServer {
+                ssh_tunnel_profile_id: Some(id),
+                ..
+            }
+            | DbConfig::Redshift {
                 ssh_tunnel_profile_id: Some(id),
                 ..
             } => AccessKind::Ssh {
@@ -1447,6 +1548,22 @@ mod tests {
 
     fn sqlite_profile() -> ConnectionProfile {
         ConnectionProfile::new("test-sqlite", DbConfig::default_sqlite())
+    }
+
+    #[test]
+    fn default_redshift_uses_port_5439_and_redshift_kind() {
+        let config = DbConfig::default_redshift();
+
+        let DbConfig::Redshift { port, .. } = &config else {
+            panic!("expected DbConfig::Redshift");
+        };
+        assert_eq!(*port, 5439);
+        assert_eq!(config.kind(), DbKind::Redshift);
+        assert_eq!(DbKind::Redshift.display_name(), "Amazon Redshift");
+        assert_eq!(
+            ConnectionProfile::builtin_driver_id_for_kind(DbKind::Redshift),
+            "redshift"
+        );
     }
 
     #[test]

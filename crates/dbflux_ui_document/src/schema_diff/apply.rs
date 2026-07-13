@@ -190,6 +190,7 @@ fn table_info_from_ref(table: &TableRef) -> TableInfo {
         sample_fields: None,
         presentation: Default::default(),
         child_items: None,
+        storage_hints: None,
     }
 }
 
@@ -845,6 +846,7 @@ mod tests {
                 sample_fields: None,
                 presentation: Default::default(),
                 child_items: None,
+                storage_hints: None,
             }
         }
 
@@ -1409,6 +1411,7 @@ mod tests {
             sample_fields: None,
             presentation: Default::default(),
             child_items: None,
+            storage_hints: None,
         };
         let table = TableRef {
             schema: Some("public".to_string()),
@@ -1470,6 +1473,7 @@ mod tests {
             sample_fields: None,
             presentation: Default::default(),
             child_items: None,
+            storage_hints: None,
         };
         let table = TableRef {
             schema: None,

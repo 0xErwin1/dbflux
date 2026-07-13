@@ -111,11 +111,14 @@ impl TransactionVocab {
                 autocommit_lock_timeout_template: Some("SET LOCK_TIMEOUT {ms}"),
                 autocommit_lock_timeout_reset_sql: Some("SET LOCK_TIMEOUT -1"),
             }),
+            // Redshift v1 is read-only: mutations are rejected at the connection seam,
+            // so no transaction vocabulary is needed.
             DbKind::MongoDB
             | DbKind::Redis
             | DbKind::DynamoDB
             | DbKind::CloudWatchLogs
-            | DbKind::InfluxDB => None,
+            | DbKind::InfluxDB
+            | DbKind::Redshift => None,
         }
     }
 

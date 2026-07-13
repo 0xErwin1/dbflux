@@ -611,6 +611,30 @@ pub struct TableInfo {
     /// Driver-provided child sources that should appear under this container.
     #[serde(default)]
     pub child_items: Option<Vec<CollectionChildInfo>>,
+
+    /// Driver-specific storage metadata that has no dedicated core representation
+    /// (e.g. Redshift distribution/sort keys, informational-only constraints).
+    /// `None` = not applicable/not loaded; `Some(vec)` = loaded, possibly empty.
+    #[serde(default)]
+    pub storage_hints: Option<Vec<TableStorageHint>>,
+}
+
+/// A single driver-reported storage characteristic of a table that does not
+/// map to an existing structured field (index, foreign key, constraint).
+///
+/// Used by drivers whose engine-specific storage concepts (distribution keys,
+/// sort keys, advisory/non-enforced constraints) should still surface in the
+/// UI without adding driver-specific branching to `dbflux_ui*` crates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TableStorageHint {
+    /// Human-readable label, e.g. "Distribution Key", "Sort Key".
+    pub label: String,
+
+    /// Column names this hint applies to, if any.
+    pub columns: Vec<String>,
+
+    /// Free-form detail text, e.g. "KEY" or "compound".
+    pub detail: Option<String>,
 }
 
 /// View metadata.
@@ -1104,5 +1128,51 @@ mod tests {
                 kind
             );
         }
+    }
+
+    fn minimal_table_info_json() -> serde_json::Value {
+        serde_json::json!({
+            "name": "orders",
+            "schema": null,
+            "columns": null,
+            "indexes": null,
+            "foreign_keys": null,
+            "constraints": null,
+            "sample_fields": null,
+            "presentation": "DataGrid",
+            "child_items": null,
+        })
+    }
+
+    #[test]
+    fn table_info_storage_hints_defaults_to_none_when_absent() {
+        let json = minimal_table_info_json();
+        let decoded: TableInfo = serde_json::from_value(json).expect("deserialize");
+        assert!(decoded.storage_hints.is_none());
+    }
+
+    #[test]
+    fn table_info_storage_hints_roundtrip_when_populated() {
+        let mut json = minimal_table_info_json();
+        json["storage_hints"] = serde_json::json!([
+            { "label": "Distribution Key", "columns": ["customer_id"], "detail": "KEY" },
+            { "label": "Sort Key", "columns": ["order_date"], "detail": "compound" },
+        ]);
+
+        let decoded: TableInfo = serde_json::from_value(json).expect("deserialize");
+        let hints = decoded
+            .storage_hints
+            .as_ref()
+            .expect("storage_hints populated");
+
+        assert_eq!(hints.len(), 2);
+        assert_eq!(hints[0].label, "Distribution Key");
+        assert_eq!(hints[0].columns, vec!["customer_id".to_string()]);
+        assert_eq!(hints[0].detail.as_deref(), Some("KEY"));
+        assert_eq!(hints[1].label, "Sort Key");
+
+        let json = serde_json::to_string(&decoded).expect("serialize");
+        let redecoded: TableInfo = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(redecoded.storage_hints.expect("hints").len(), 2);
     }
 }

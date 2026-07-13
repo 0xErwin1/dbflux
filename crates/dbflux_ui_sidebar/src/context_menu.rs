@@ -1208,6 +1208,7 @@ impl Sidebar {
                             sample_fields: collection.sample_fields.clone(),
                             presentation: collection.presentation,
                             child_items: collection.child_items.clone(),
+                            storage_hints: None,
                         })
                     })
                 })

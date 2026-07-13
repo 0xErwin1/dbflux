@@ -1896,6 +1896,7 @@ mod tests {
                 sample_fields: None,
                 presentation: Default::default(),
                 child_items: None,
+                storage_hints: None,
             })
         }
     }
@@ -1913,6 +1914,7 @@ mod tests {
             sample_fields: None,
             presentation: Default::default(),
             child_items: None,
+            storage_hints: None,
         }
     }
 

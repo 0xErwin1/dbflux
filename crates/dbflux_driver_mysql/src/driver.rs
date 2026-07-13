@@ -2210,6 +2210,7 @@ impl Connection for MysqlConnection {
             sample_fields: None,
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
+            storage_hints: None,
         })
     }
 
@@ -3362,6 +3363,7 @@ fn fetch_tables_shallow(conn: &mut Conn, database: &str) -> Result<Vec<TableInfo
             sample_fields: None,
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
+            storage_hints: None,
         })
         .collect())
 }

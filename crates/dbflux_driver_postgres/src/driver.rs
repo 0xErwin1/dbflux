@@ -1914,6 +1914,7 @@ impl Connection for PostgresConnection {
             sample_fields: None,
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
+            storage_hints: None,
         })
     }
 
@@ -2670,6 +2671,7 @@ fn get_tables_for_schema(client: &mut Client, schema: &str) -> Result<Vec<TableI
                 sample_fields: None,
                 presentation: dbflux_core::CollectionPresentation::DataGrid,
                 child_items: None,
+                storage_hints: None,
             }
         })
         .collect();

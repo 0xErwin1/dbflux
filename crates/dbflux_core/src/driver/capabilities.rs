@@ -135,6 +135,7 @@ pub enum Icon {
     Mongodb,
     Redis,
     Dynamodb,
+    Redshift,
 
     // Time-series brands
     Influxdb,
@@ -2881,6 +2882,7 @@ mod tests {
         assert!(matches!(Icon::Mongodb, Icon::Mongodb));
         assert!(matches!(Icon::Redis, Icon::Redis));
         assert!(matches!(Icon::Dynamodb, Icon::Dynamodb));
+        assert!(matches!(Icon::Redshift, Icon::Redshift));
         assert!(matches!(Icon::Database, Icon::Database));
     }
 

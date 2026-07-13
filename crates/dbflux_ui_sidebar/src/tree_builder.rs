@@ -1662,6 +1662,7 @@ fn resolve_db_children(
                     sample_fields: collection.sample_fields.clone(),
                     presentation: collection.presentation,
                     child_items: collection.child_items.clone(),
+                    storage_hints: None,
                 })
                 .collect::<Vec<_>>();
 
@@ -2862,6 +2863,7 @@ mod tests {
                 sample_fields: None,
                 presentation: CollectionPresentation::DataGrid,
                 child_items: None,
+                storage_hints: None,
             },
             &Default::default(),
             &Default::default(),
@@ -2901,6 +2903,7 @@ mod tests {
                     last_event_ts_ms: Some(1_776_777_600_000),
                     presentation: CollectionPresentation::EventStream,
                 }]),
+                storage_hints: None,
             },
             &Default::default(),
             &Default::default(),
@@ -2942,6 +2945,7 @@ mod tests {
                 sample_fields: None,
                 presentation: CollectionPresentation::EventStream,
                 child_items: None,
+                storage_hints: None,
             },
             &Default::default(),
             &child_cache,
@@ -3040,6 +3044,7 @@ mod tests {
                     sample_fields: None,
                     presentation: CollectionPresentation::DataGrid,
                     child_items: None,
+                    storage_hints: None,
                 },
                 TableInfo {
                     name: "employees".to_string(),
@@ -3051,6 +3056,7 @@ mod tests {
                     sample_fields: None,
                     presentation: CollectionPresentation::DataGrid,
                     child_items: None,
+                    storage_hints: None,
                 },
                 TableInfo {
                     name: "fallback".to_string(),
@@ -3062,6 +3068,7 @@ mod tests {
                     sample_fields: None,
                     presentation: CollectionPresentation::DataGrid,
                     child_items: None,
+                    storage_hints: None,
                 },
             ],
             views: vec![ViewInfo {

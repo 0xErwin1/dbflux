@@ -283,6 +283,20 @@ impl DbDriver for FakeDriver {
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
             },
+            DbKind::Redshift => DbConfig::Redshift {
+                use_uri: false,
+                uri: None,
+                host: get_string(values, "host", "localhost"),
+                port: get_u16(values, "port", 5439),
+                user: get_string(values, "user", "awsuser"),
+                database: get_string(values, "database", "dev"),
+                ssl_mode: None,
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
+                ssh_tunnel: None,
+                ssh_tunnel_profile_id: None,
+            },
         };
 
         Ok(config)
@@ -402,6 +416,18 @@ impl DbDriver for FakeDriver {
                 values.insert("user".to_string(), user.clone());
                 values.insert("database".to_string(), database.clone().unwrap_or_default());
                 values.insert("instance".to_string(), instance.clone().unwrap_or_default());
+            }
+            DbConfig::Redshift {
+                host,
+                port,
+                user,
+                database,
+                ..
+            } => {
+                values.insert("host".to_string(), host.clone());
+                values.insert("port".to_string(), port.to_string());
+                values.insert("user".to_string(), user.clone());
+                values.insert("database".to_string(), database.clone());
             }
             DbConfig::External { values: vals, .. } => {
                 values.extend(vals.clone());
@@ -543,7 +569,7 @@ impl Connection for FakeConnection {
             DbKind::MySQL | DbKind::MariaDB | DbKind::SqlServer => {
                 SchemaLoadingStrategy::LazyPerDatabase
             }
-            DbKind::Postgres => SchemaLoadingStrategy::ConnectionPerDatabase,
+            DbKind::Postgres | DbKind::Redshift => SchemaLoadingStrategy::ConnectionPerDatabase,
             DbKind::SQLite | DbKind::MongoDB | DbKind::Redis => {
                 SchemaLoadingStrategy::SingleDatabase
             }
@@ -591,6 +617,7 @@ fn active_database_from_profile(profile: &ConnectionProfile) -> Option<String> {
         DbConfig::CloudWatchLogs { .. } => None,
         DbConfig::InfluxDB { default_bucket, .. } => default_bucket.clone(),
         DbConfig::SqlServer { database, .. } => database.clone(),
+        DbConfig::Redshift { database, .. } => Some(database.clone()),
         DbConfig::External { values, .. } => values.get("database").cloned(),
     }
 }
@@ -608,6 +635,9 @@ fn metadata_for_kind(kind: DbKind) -> &'static DriverMetadata {
         DbKind::InfluxDB => &FAKE_INFLUXDB_METADATA,
         // Tests treat SQL Server like a relational driver — reuse postgres metadata.
         DbKind::SqlServer => &FAKE_POSTGRES_METADATA,
+        // The dbflux_driver_redshift crate does not exist yet (WU-1); reuse postgres
+        // metadata as the closest relational fake until the real driver lands.
+        DbKind::Redshift => &FAKE_POSTGRES_METADATA,
     }
 }
 
@@ -622,6 +652,8 @@ fn form_for_kind(kind: DbKind) -> &'static DriverFormDef {
         DbKind::CloudWatchLogs => &CLOUDWATCH_FORM,
         DbKind::InfluxDB => &INFLUXDB_FORM,
         DbKind::SqlServer => &SQLSERVER_FORM,
+        // Same rationale as metadata_for_kind: no dbflux_driver_redshift form yet.
+        DbKind::Redshift => &POSTGRES_FORM,
     }
 }
 
@@ -1230,6 +1262,10 @@ mod tests {
                 SchemaLoadingStrategy::SingleDatabase,
             ),
             (DbKind::SqlServer, SchemaLoadingStrategy::LazyPerDatabase),
+            (
+                DbKind::Redshift,
+                SchemaLoadingStrategy::ConnectionPerDatabase,
+            ),
         ];
 
         for (kind, expected_strategy) in cases {
@@ -1261,6 +1297,7 @@ mod tests {
                 DbKind::CloudWatchLogs => DbConfig::default_cloudwatch_logs(),
                 DbKind::InfluxDB => DbConfig::default_influxdb(),
                 DbKind::SqlServer => DbConfig::default_sqlserver(),
+                DbKind::Redshift => DbConfig::default_redshift(),
             };
 
             let profile = ConnectionProfile::new("fake", config);

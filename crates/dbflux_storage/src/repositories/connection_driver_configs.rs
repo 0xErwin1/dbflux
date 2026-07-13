@@ -304,6 +304,34 @@ impl ConnectionDriverConfigDto {
                     fill_ssh_tunnel_fields(&mut dto, tunnel);
                 }
             }
+            DbConfig::Redshift {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                database,
+                ssl_mode,
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
+                ssh_tunnel,
+                ..
+            } => {
+                dto.use_uri = *use_uri;
+                dto.uri = uri.clone();
+                dto.host = Some(host.clone());
+                dto.port = Some(*port as i32);
+                dto.user = Some(user.clone());
+                dto.database_name = Some(database.clone());
+                dto.ssl_mode = ssl_mode_to_str(ssl_mode);
+                dto.ssl_ca = ssl_root_cert_path.clone();
+                dto.ssl_cert = ssl_client_cert_path.clone();
+                dto.ssl_key = ssl_client_key_path.clone();
+                if let Some(tunnel) = ssh_tunnel {
+                    fill_ssh_tunnel_fields(&mut dto, tunnel);
+                }
+            }
             DbConfig::External { kind, values } => {
                 dto.external_kind = Some(db_kind_to_str(*kind));
                 dto.external_values_json = Some(serde_json::to_string(values).unwrap_or_default());
@@ -488,6 +516,24 @@ impl ConnectionDriverConfigDto {
                     ssh_tunnel_profile_id: None,
                 })
             }
+            DbKind::Redshift => {
+                let ssh_tunnel = build_ssh_tunnel(self);
+
+                Some(DbConfig::Redshift {
+                    use_uri: self.use_uri,
+                    uri: self.uri.clone(),
+                    host: self.host.clone().unwrap_or_default(),
+                    port: self.port.unwrap_or(5439) as u16,
+                    user: self.user.clone().unwrap_or_default(),
+                    database: self.database_name.clone().unwrap_or_default(),
+                    ssl_mode: str_to_ssl_mode_opt(&self.ssl_mode),
+                    ssl_root_cert_path: self.ssl_ca.clone(),
+                    ssl_client_cert_path: self.ssl_cert.clone(),
+                    ssl_client_key_path: self.ssl_key.clone(),
+                    ssh_tunnel,
+                    ssh_tunnel_profile_id: None,
+                })
+            }
         }
     }
 }
@@ -508,6 +554,7 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::CloudWatchLogs => "CloudWatchLogs",
         DbKind::InfluxDB => "InfluxDB",
         DbKind::SqlServer => "SqlServer",
+        DbKind::Redshift => "Redshift",
     }
     .to_string()
 }
@@ -524,6 +571,7 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "CloudWatchLogs" => Some(DbKind::CloudWatchLogs),
         "InfluxDB" => Some(DbKind::InfluxDB),
         "SqlServer" => Some(DbKind::SqlServer),
+        "Redshift" => Some(DbKind::Redshift),
         _ => None,
     }
 }

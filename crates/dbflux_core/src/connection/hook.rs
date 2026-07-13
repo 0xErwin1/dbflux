@@ -521,6 +521,12 @@ fn profile_config_context(config: &DbConfig) -> (Option<String>, Option<u16>, Op
             database,
             ..
         } => (Some(host.clone()), Some(*port), database.clone()),
+        DbConfig::Redshift {
+            host,
+            port,
+            database,
+            ..
+        } => (Some(host.clone()), Some(*port), Some(database.clone())),
         DbConfig::External { values, .. } => {
             let host = values.get("host").cloned();
             let port = values

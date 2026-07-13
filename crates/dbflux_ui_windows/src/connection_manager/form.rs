@@ -373,7 +373,8 @@ impl ConnectionManagerWindow {
                 | DbConfig::MySQL { ssl_mode, .. }
                 | DbConfig::MongoDB { ssl_mode, .. }
                 | DbConfig::Redis { ssl_mode, .. }
-                | DbConfig::SqlServer { ssl_mode, .. } => {
+                | DbConfig::SqlServer { ssl_mode, .. }
+                | DbConfig::Redshift { ssl_mode, .. } => {
                     *ssl_mode = Some(selected);
                 }
                 _ => {}
@@ -418,6 +419,12 @@ impl ConnectionManagerWindow {
                 ssl_client_cert_path,
                 ssl_client_key_path,
                 ..
+            }
+            | DbConfig::Redshift {
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
+                ..
             } => {
                 *ssl_root_cert_path = ssl_root_cert;
                 *ssl_client_cert_path = ssl_client_cert;
@@ -455,6 +462,11 @@ impl ConnectionManagerWindow {
                 ..
             }
             | DbConfig::SqlServer {
+                ssh_tunnel: tunnel,
+                ssh_tunnel_profile_id: profile_id,
+                ..
+            }
+            | DbConfig::Redshift {
                 ssh_tunnel: tunnel,
                 ssh_tunnel_profile_id: profile_id,
                 ..
