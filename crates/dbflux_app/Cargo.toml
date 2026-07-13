@@ -27,6 +27,7 @@ dbflux_driver_dynamodb = { workspace = true, optional = true }
 dbflux_driver_cloudwatch = { workspace = true, optional = true }
 dbflux_driver_influxdb = { workspace = true, optional = true }
 dbflux_driver_mssql = { workspace = true, optional = true }
+dbflux_driver_redshift = { workspace = true, optional = true }
 dbflux_portability.workspace = true
 dbflux_lua = { workspace = true, optional = true }
 dbflux_approval = { workspace = true, optional = true }
@@ -58,6 +59,7 @@ dynamodb = ["dbflux_driver_dynamodb", "dbflux_mcp_server?/dynamodb"]
 cloudwatch = ["dbflux_driver_cloudwatch"]
 influxdb = ["dep:dbflux_driver_influxdb"]
 mssql = ["dep:dbflux_driver_mssql"]
+redshift = ["dbflux_driver_redshift", "dbflux_mcp_server?/redshift"]
 lua = ["dbflux_lua"]
 aws = ["dbflux_aws", "dbflux_ssm", "dbflux_mcp_server?/aws"]
 mcp = ["dbflux_approval", "dbflux_mcp", "dbflux_mcp_server", "dbflux_policy", "dbflux_core/mcp"]

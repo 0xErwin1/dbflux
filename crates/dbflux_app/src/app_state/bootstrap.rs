@@ -55,6 +55,9 @@ use dbflux_driver_influxdb::InfluxDriver;
 #[cfg(feature = "mssql")]
 use dbflux_driver_mssql::MssqlDriver;
 
+#[cfg(feature = "redshift")]
+use dbflux_driver_redshift::RedshiftDriver;
+
 use crate::auth_provider_registry::AuthProviderRegistry;
 use crate::rpc_services::external_audit::{ExternalAuditSink, NoOpContextProvider};
 use crate::rpc_services::{
@@ -1141,6 +1144,11 @@ impl AppState {
         #[cfg(feature = "mssql")]
         {
             drivers.insert("mssql".to_string(), Arc::new(MssqlDriver::new()));
+        }
+
+        #[cfg(feature = "redshift")]
+        {
+            drivers.insert("redshift".to_string(), Arc::new(RedshiftDriver::new()));
         }
 
         drivers

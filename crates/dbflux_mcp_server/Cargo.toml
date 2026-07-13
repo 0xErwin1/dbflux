@@ -19,6 +19,7 @@ mysql = ["dbflux_driver_mysql"]
 mongodb = ["dbflux_driver_mongodb"]
 redis = ["dbflux_driver_redis"]
 dynamodb = ["dbflux_driver_dynamodb"]
+redshift = ["dbflux_driver_redshift"]
 aws = ["dbflux_aws", "dbflux_ssm"]
 
 [dependencies]
@@ -38,6 +39,7 @@ dbflux_driver_mysql = { workspace = true, optional = true }
 dbflux_driver_mongodb = { workspace = true, optional = true }
 dbflux_driver_redis = { workspace = true, optional = true }
 dbflux_driver_dynamodb = { workspace = true, optional = true }
+dbflux_driver_redshift = { workspace = true, optional = true }
 dbflux_aws = { workspace = true, optional = true }
 dbflux_ssm = { workspace = true, optional = true }
 

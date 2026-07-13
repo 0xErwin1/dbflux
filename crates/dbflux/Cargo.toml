@@ -44,7 +44,7 @@ workspace = true
 optional = true
 
 [features]
-default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "cloudwatch", "influxdb", "mssql", "lua", "aws", "mcp"]
+default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "cloudwatch", "influxdb", "mssql", "redshift", "lua", "aws", "mcp"]
 # dbflux_ui is driver-agnostic, so driver features only drive dbflux_app (which
 # registers the drivers and relays to the MCP server). The binary does not need
 # to declare driver/runtime crates as direct optional deps — `dbflux_app/<feat>`
@@ -58,6 +58,7 @@ dynamodb = ["dbflux_app/dynamodb"]
 cloudwatch = ["dbflux_app/cloudwatch"]
 influxdb = ["dbflux_app/influxdb"]
 mssql = ["dbflux_app/mssql"]
+redshift = ["dbflux_app/redshift"]
 lua = ["dbflux_app/lua", "dbflux_ui/lua"]
 aws = ["dbflux_app/aws", "dbflux_ui/aws"]
 mcp = ["dbflux_app/mcp", "dbflux_ui/mcp"]
