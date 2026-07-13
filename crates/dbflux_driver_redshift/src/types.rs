@@ -55,18 +55,126 @@ pub(crate) fn decode_defensive_fallback(oid: u32, type_name: &str, raw: Option<&
     }
 }
 
+/// Decodes the PostgreSQL binary `NUMERIC` wire format into an exact decimal
+/// string, returning `None` on malformed input.
+///
+/// `tokio-postgres`/`postgres` negotiate the BINARY result format for every
+/// column, so a `NUMERIC` column arrives as this binary encoding, never as
+/// ASCII text. The layout is a fixed 8-byte header of four big-endian 16-bit
+/// fields — `ndigits`, `weight`, `sign`, `dscale` — followed by `ndigits`
+/// base-10000 digit groups (each a big-endian `i16` in `0..=9999`). `weight`
+/// is the base-10000 exponent of the first group; `dscale` is the number of
+/// fractional decimal digits to display; `sign` is `0x0000` (positive),
+/// `0x4000` (negative), `0xC000` (NaN), or `0xD000`/`0xF000` (±Infinity).
+///
+/// The value is reconstructed exactly (no float rounding): the integer part is
+/// emitted group by group (the first without leading zeros, the rest
+/// zero-padded to four digits, with implicit trailing zero groups when
+/// `weight` exceeds the last stored group), and the fractional part is emitted
+/// to exactly `dscale` digits, honoring leading fractional zero groups when
+/// `weight` is negative.
+pub(crate) fn decode_pg_numeric_binary(bytes: &[u8]) -> Option<String> {
+    const NUMERIC_POS: u16 = 0x0000;
+    const NUMERIC_NEG: u16 = 0x4000;
+    const NUMERIC_NAN: u16 = 0xC000;
+    const NUMERIC_PINF: u16 = 0xD000;
+    const NUMERIC_NINF: u16 = 0xF000;
+
+    let read_be_u16 = |offset: usize| -> Option<u16> {
+        let pair: [u8; 2] = bytes.get(offset..offset + 2)?.try_into().ok()?;
+        Some(u16::from_be_bytes(pair))
+    };
+
+    let ndigits = read_be_u16(0)? as i16;
+    let weight = read_be_u16(2)? as i16 as i32;
+    let sign = read_be_u16(4)?;
+    let dscale = read_be_u16(6)? as usize;
+
+    match sign {
+        NUMERIC_NAN => return Some("NaN".to_string()),
+        NUMERIC_PINF => return Some("Infinity".to_string()),
+        NUMERIC_NINF => return Some("-Infinity".to_string()),
+        NUMERIC_POS | NUMERIC_NEG => {}
+        _ => return None,
+    }
+
+    let ndigits = usize::try_from(ndigits).ok()?;
+
+    let digits_region = bytes.get(8..8usize.checked_add(ndigits.checked_mul(2)?)?)?;
+
+    let mut groups = Vec::with_capacity(ndigits);
+    for chunk in digits_region.chunks_exact(2) {
+        let pair: [u8; 2] = chunk.try_into().ok()?;
+        let group = i16::from_be_bytes(pair);
+        if !(0..10_000).contains(&group) {
+            return None;
+        }
+        groups.push(group);
+    }
+
+    let group_at = |exponent: i32| -> i16 {
+        usize::try_from(weight - exponent)
+            .ok()
+            .and_then(|index| groups.get(index).copied())
+            .unwrap_or(0)
+    };
+
+    let mut result = String::new();
+    if sign == NUMERIC_NEG {
+        result.push('-');
+    }
+
+    if weight < 0 {
+        result.push('0');
+    } else {
+        for exponent in (0..=weight).rev() {
+            let group = group_at(exponent);
+            if exponent == weight {
+                result.push_str(&group.to_string());
+            } else {
+                result.push_str(&format!("{group:04}"));
+            }
+        }
+    }
+
+    if dscale > 0 {
+        result.push('.');
+
+        let mut fractional = String::new();
+        let mut exponent: i32 = -1;
+        while fractional.len() < dscale {
+            fractional.push_str(&format!("{:04}", group_at(exponent)));
+            exponent -= 1;
+        }
+        fractional.truncate(dscale);
+        result.push_str(&fractional);
+    }
+
+    Some(result)
+}
+
 /// Decodes Redshift's `NUMERIC`/`DECIMAL` (OID 1700) wire bytes into a
 /// `Value::Decimal`.
 ///
 /// `f64: FromSql` only accepts `FLOAT8`, not `NUMERIC`, so the connection
 /// layer cannot decode this column through a typed `try_get` the way it does
-/// for `float8`. This reuses the same defensive text decode as any other
-/// undecodable type, then relabels a successful decode as `Value::Decimal`
-/// instead of `Value::Text` so downstream numeric handling (e.g. the chart
-/// engine's `s.parse::<f64>()`) treats it as a number rather than an opaque
-/// string.
+/// for `float8`. The wire bytes arrive in the binary `NUMERIC` format, so this
+/// decodes them exactly via [`decode_pg_numeric_binary`] and labels the result
+/// `Value::Decimal` so downstream numeric handling (e.g. the chart engine's
+/// `s.parse::<f64>()`) treats it as a number rather than an opaque string. Only
+/// if the binary decode fails (malformed or unexpectedly non-binary payload)
+/// does it fall back to the defensive text decode, still relabeled as
+/// `Value::Decimal`, and finally to `Value::Unsupported` for undecodable bytes.
 pub(crate) fn decode_numeric_fallback(oid: u32, type_name: &str, raw: Option<&[u8]>) -> Value {
-    match decode_defensive_fallback(oid, type_name, raw) {
+    let Some(bytes) = raw else {
+        return Value::Null;
+    };
+
+    if let Some(decimal) = decode_pg_numeric_binary(bytes) {
+        return Value::Decimal(decimal);
+    }
+
+    match decode_defensive_fallback(oid, type_name, Some(bytes)) {
         Value::Text(text) => Value::Decimal(text),
         other => other,
     }
@@ -74,8 +182,32 @@ pub(crate) fn decode_numeric_fallback(oid: u32, type_name: &str, raw: Option<&[u
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_defensive_fallback, decode_numeric_fallback, redshift_oid_to_kind};
+    use super::{
+        decode_defensive_fallback, decode_numeric_fallback, decode_pg_numeric_binary,
+        redshift_oid_to_kind,
+    };
     use dbflux_core::{ColumnKind, Value};
+
+    /// Encodes the PostgreSQL binary `NUMERIC` wire format from its logical
+    /// parts, mirroring what the server sends on the wire so the decode tests
+    /// exercise real payloads rather than ASCII stand-ins.
+    fn encode_pg_numeric(
+        ndigits: i16,
+        weight: i16,
+        sign: u16,
+        dscale: u16,
+        groups: &[i16],
+    ) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(8 + groups.len() * 2);
+        bytes.extend_from_slice(&ndigits.to_be_bytes());
+        bytes.extend_from_slice(&weight.to_be_bytes());
+        bytes.extend_from_slice(&sign.to_be_bytes());
+        bytes.extend_from_slice(&dscale.to_be_bytes());
+        for group in groups {
+            bytes.extend_from_slice(&group.to_be_bytes());
+        }
+        bytes
+    }
 
     #[test]
     fn redshift_oid_to_kind_maps_common_and_extended_types() {
@@ -128,14 +260,77 @@ mod tests {
     }
 
     #[test]
-    fn decode_numeric_fallback_decodes_a_real_value_as_decimal_not_null() {
+    fn decode_pg_numeric_binary_decodes_zero() {
+        // NUMERIC 0 is `ndigits = 0`: its bytes are all `< 0x80`, the exact
+        // payload that a naive `from_utf8` would silently accept as garbage.
+        let bytes = encode_pg_numeric(0, 0, 0x0000, 0, &[]);
+        assert_eq!(decode_pg_numeric_binary(&bytes).as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn decode_pg_numeric_binary_decodes_fraction() {
+        // 123.45 = [123, 4500] base-10000, weight 0, scale 2.
+        let bytes = encode_pg_numeric(2, 0, 0x0000, 2, &[123, 4500]);
+        assert_eq!(decode_pg_numeric_binary(&bytes).as_deref(), Some("123.45"));
+    }
+
+    #[test]
+    fn decode_pg_numeric_binary_decodes_negative_fraction() {
+        let bytes = encode_pg_numeric(2, 0, 0x4000, 2, &[123, 4500]);
+        assert_eq!(decode_pg_numeric_binary(&bytes).as_deref(), Some("-123.45"));
+    }
+
+    #[test]
+    fn decode_pg_numeric_binary_decodes_pure_fraction_with_leading_zero() {
+        // 0.0045 = group 45 at exponent -1, scale 4.
+        let bytes = encode_pg_numeric(1, -1, 0x0000, 4, &[45]);
+        assert_eq!(decode_pg_numeric_binary(&bytes).as_deref(), Some("0.0045"));
+    }
+
+    #[test]
+    fn decode_pg_numeric_binary_decodes_large_multi_group_integer() {
+        // 123456789 = [1, 2345, 6789] base-10000, weight 2, scale 0.
+        let bytes = encode_pg_numeric(3, 2, 0x0000, 0, &[1, 2345, 6789]);
         assert_eq!(
-            decode_numeric_fallback(1700, "numeric", Some(b"123.45")),
+            decode_pg_numeric_binary(&bytes).as_deref(),
+            Some("123456789")
+        );
+    }
+
+    #[test]
+    fn decode_pg_numeric_binary_pads_trailing_integer_groups() {
+        // 20000 = group [2] at weight 1 (implicit trailing zero group).
+        let bytes = encode_pg_numeric(1, 1, 0x0000, 0, &[2]);
+        assert_eq!(decode_pg_numeric_binary(&bytes).as_deref(), Some("20000"));
+    }
+
+    #[test]
+    fn decode_pg_numeric_binary_decodes_nan() {
+        let bytes = encode_pg_numeric(0, 0, 0xC000, 0, &[]);
+        assert_eq!(decode_pg_numeric_binary(&bytes).as_deref(), Some("NaN"));
+    }
+
+    #[test]
+    fn decode_pg_numeric_binary_returns_none_on_malformed_input() {
+        // Header shorter than 8 bytes, and a group count exceeding the payload.
+        assert_eq!(decode_pg_numeric_binary(&[0xFF, 0xFE]), None);
+
+        let truncated = encode_pg_numeric(3, 0, 0x0000, 0, &[1]);
+        assert_eq!(decode_pg_numeric_binary(&truncated), None);
+    }
+
+    #[test]
+    fn decode_numeric_fallback_decodes_binary_wire_value_as_decimal() {
+        let bytes = encode_pg_numeric(2, 0, 0x0000, 2, &[123, 4500]);
+        assert_eq!(
+            decode_numeric_fallback(1700, "numeric", Some(&bytes)),
             Value::Decimal("123.45".to_string())
         );
+
+        let zero = encode_pg_numeric(0, 0, 0x0000, 0, &[]);
         assert_eq!(
-            decode_numeric_fallback(1700, "numeric", Some(b"-0.001")),
-            Value::Decimal("-0.001".to_string())
+            decode_numeric_fallback(1700, "numeric", Some(&zero)),
+            Value::Decimal("0".to_string())
         );
     }
 

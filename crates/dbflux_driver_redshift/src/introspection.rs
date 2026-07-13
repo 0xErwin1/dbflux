@@ -449,12 +449,36 @@ fn get_table_storage_hints(
     ))
 }
 
+/// Reduces a storage-hints fetch to best-effort.
+///
+/// Storage hints (distribution/sort keys, advisory-constraint notes) are a
+/// cosmetic enhancement layered on top of the columns/foreign-keys/constraints
+/// that already succeeded. A failure here — e.g. `SVV_TABLE_INFO`/`PG_TABLE_DEF`
+/// being unreadable for this role — must not discard those core details, so the
+/// error is logged once and downgraded to `None` rather than propagated.
+fn storage_hints_best_effort(
+    result: Result<Vec<TableStorageHint>, DbError>,
+    schema: &str,
+    table: &str,
+) -> Option<Vec<TableStorageHint>> {
+    match result {
+        Ok(hints) => Some(hints),
+        Err(error) => {
+            log::warn!("Redshift storage hints unavailable for {schema}.{table}: {error}");
+            None
+        }
+    }
+}
+
 /// Fetches full table details (columns, foreign keys, unique constraints,
 /// and distribution/sort-key storage hints).
 ///
 /// No `IndexData` is populated: Redshift has no true indexes, and fabricating
 /// one from the (non-enforced) primary key would misrepresent it as a real
 /// index structure.
+///
+/// Storage hints are best-effort: if they fail to load the rest of the details
+/// are still returned (see [`storage_hints_best_effort`]).
 pub(crate) fn get_table_details(
     client: &mut Client,
     schema: &str,
@@ -468,7 +492,11 @@ pub(crate) fn get_table_details(
         || !foreign_keys.is_empty()
         || !constraints.is_empty();
 
-    let storage_hints = get_table_storage_hints(client, schema, table, has_advisory_constraints)?;
+    let storage_hints = storage_hints_best_effort(
+        get_table_storage_hints(client, schema, table, has_advisory_constraints),
+        schema,
+        table,
+    );
 
     Ok(TableInfo {
         name: table.to_string(),
@@ -480,7 +508,7 @@ pub(crate) fn get_table_details(
         sample_fields: None,
         presentation: CollectionPresentation::DataGrid,
         child_items: None,
-        storage_hints: Some(storage_hints),
+        storage_hints,
     })
 }
 
@@ -490,7 +518,9 @@ mod tests {
         CURRENT_DATABASE_QUERY, DATABASES_QUERY, FOREIGN_KEYS_QUERY, PRIMARY_KEY_COLUMNS_QUERY,
         SCHEMAS_QUERY, SortKeyColumn, TABLE_SORT_COLUMNS_QUERY, TABLE_STORAGE_INFO_QUERY,
         TABLES_QUERY, UNIQUE_CONSTRAINTS_QUERY, VIEWS_QUERY, build_storage_hints, parse_diststyle,
+        storage_hints_best_effort,
     };
+    use dbflux_core::{DbError, TableStorageHint};
 
     #[test]
     fn schema_and_table_listing_queries_are_stable() {
@@ -621,5 +651,28 @@ mod tests {
     fn build_storage_hints_returns_empty_when_table_has_no_storage_metadata() {
         let hints = build_storage_hints(None, &[], None, false);
         assert!(hints.is_empty());
+    }
+
+    #[test]
+    fn storage_hints_best_effort_downgrades_error_to_none() {
+        let errored: Result<Vec<TableStorageHint>, DbError> = Err(DbError::QueryFailed(
+            "svv_table_info unreadable".to_string().into(),
+        ));
+
+        assert!(storage_hints_best_effort(errored, "public", "orders").is_none());
+    }
+
+    #[test]
+    fn storage_hints_best_effort_passes_through_ok_hints() {
+        let ok: Result<Vec<TableStorageHint>, DbError> = Ok(vec![TableStorageHint {
+            label: "Sort Key".to_string(),
+            columns: vec!["created_at".to_string()],
+            detail: Some("compound".to_string()),
+        }]);
+
+        let hints = storage_hints_best_effort(ok, "public", "orders").unwrap_or_default();
+
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].label, "Sort Key");
     }
 }

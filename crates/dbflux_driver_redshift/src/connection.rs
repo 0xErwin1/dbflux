@@ -97,6 +97,17 @@ pub(crate) fn connect_redshift(params: &RedshiftConnectParams) -> Result<Client,
 /// through `execute()`, so this check runs before any statement reaches the
 /// wire.
 ///
+/// Multi-statement input is rejected outright: this driver runs a single
+/// read-only statement through `client.prepare()`, so a multi-statement buffer
+/// would otherwise reach the wire as a raw protocol error. The shared
+/// classifier's `SELECT`/`WITH` path already rejects multi-statement input, but
+/// its `EXPLAIN`/`SHOW`/`DESC` path maps straight to `Metadata` with no such
+/// check — so a buffer like `EXPLAIN SELECT 1; DROP TABLE t` would otherwise
+/// slip past. This guard runs first and covers every leading keyword. The
+/// comment/quote-aware tokenizer counts top-level `;`-separated statements so a
+/// `;` inside a string literal, quoted identifier, or comment — and a single
+/// optional trailing `;` — do not trip the check.
+///
 /// `SELECT ... INTO` gets a dedicated check on top of the shared classifier:
 /// `classify_query_for_language` only inspects the leading keyword, so it
 /// treats `SELECT ... INTO newtable FROM t` — and its CTE-prefixed variant
@@ -107,6 +118,12 @@ pub(crate) fn connect_redshift(params: &RedshiftConnectParams) -> Result<Client,
 /// used by every other SQL driver (some of which legitimately allow
 /// `SELECT ... INTO @var`).
 fn ensure_read_only(sql: &str) -> Result<(), DbError> {
+    if has_multiple_statements(sql) {
+        return Err(DbError::NotSupported(
+            "Redshift driver runs a single read-only statement at a time; multiple statements are not supported".to_string(),
+        ));
+    }
+
     if is_select_into(sql) {
         return Err(DbError::NotSupported(
             "Amazon Redshift connections are read-only in DBFlux; SELECT ... INTO creates a table and is not supported".to_string(),
@@ -163,6 +180,23 @@ fn is_select_into(sql: &str) -> bool {
     }
 
     words.any(|word| word.eq_ignore_ascii_case("into"))
+}
+
+/// Returns `true` when `sql` contains more than one non-empty top-level
+/// statement.
+///
+/// Comments and quoted string/identifier contents are stripped first so a `;`
+/// inside a literal (`SELECT ';'`), a quoted identifier, or a comment is not
+/// counted as a statement separator. A single optional trailing `;` leaves one
+/// non-empty segment and is therefore allowed.
+fn has_multiple_statements(sql: &str) -> bool {
+    let scanned = strip_comments_and_quoted_content(sql);
+
+    scanned
+        .split(';')
+        .filter(|segment| !segment.trim().is_empty())
+        .count()
+        > 1
 }
 
 /// Removes comments and the contents of single/double-quoted regions from
@@ -608,11 +642,11 @@ fn decode_via_raw_bytes(
 /// Known scalar types decode through their native Rust representation.
 /// Anything else (enums, domains, Redshift's extended types) falls back to
 /// [`decode_defensive_fallback`], which degrades to `Value::Unsupported`
-/// instead of panicking. `NUMERIC`/`DECIMAL` gets its own fallback,
+/// instead of panicking. `NUMERIC`/`DECIMAL` gets its own decoder,
 /// [`decode_numeric_fallback`], because `f64: FromSql` never accepts that
-/// OID: routing it through the same text decode and relabeling the result as
-/// `Value::Decimal` is the only way to represent it, and is required to
-/// avoid silently reporting every decimal value as NULL.
+/// OID: it decodes the binary `NUMERIC` wire format directly into an exact
+/// `Value::Decimal` string, which is required to avoid silently corrupting or
+/// dropping every decimal value.
 ///
 /// `idx` is always in-bounds: callers derive it from `0..columns.len()` where
 /// `columns` was itself built from the same row's column list.
@@ -787,6 +821,53 @@ mod tests {
             "WITH c AS (SELECT 1) SELECT * FROM c",
             "WITH c AS (SELECT 1) SELECT a AS into_col FROM c",
         ] {
+            assert!(
+                ensure_read_only(sql).is_ok(),
+                "expected {sql:?} to be allowed"
+            );
+        }
+    }
+
+    #[test]
+    fn multiple_statements_are_rejected() {
+        // `EXPLAIN`/`SHOW`-led buffers are the load-bearing cases: the shared
+        // classifier maps their leading keyword straight to `Metadata` without
+        // a multi-statement check, so without this guard the trailing DROP/
+        // DELETE would reach the wire. The `SELECT`-led cases are also rejected
+        // (belt-and-suspenders with the classifier's own check).
+        for sql in [
+            "SELECT 1; DELETE FROM t",
+            "SELECT 1; SELECT 2",
+            "EXPLAIN SELECT 1; DROP TABLE t",
+            "SHOW search_path; DELETE FROM t",
+        ] {
+            let Err(DbError::NotSupported(message)) = ensure_read_only(sql) else {
+                panic!("expected {sql:?} to be rejected as NotSupported");
+            };
+            assert!(
+                message.contains("multiple statements"),
+                "expected {sql:?} to be rejected by the multi-statement guard, got: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn single_statement_with_trailing_semicolon_is_allowed() {
+        for sql in [
+            "SELECT 1;",
+            "SELECT * FROM users ;",
+            "WITH c AS (SELECT 1) SELECT * FROM c;",
+        ] {
+            assert!(
+                ensure_read_only(sql).is_ok(),
+                "expected {sql:?} to be allowed"
+            );
+        }
+    }
+
+    #[test]
+    fn semicolon_inside_string_or_comment_is_not_a_statement_separator() {
+        for sql in ["SELECT ';'", "SELECT 1 -- a; b", "SELECT 1 /* a; b */"] {
             assert!(
                 ensure_read_only(sql).is_ok(),
                 "expected {sql:?} to be allowed"
