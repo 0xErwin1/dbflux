@@ -144,7 +144,7 @@ fn to_rail_items(current: WizardPhase) -> Vec<RailItem> {
 /// execute-time failure is returned as a real error so a transient fetch
 /// failure is never silently classified as "will be created".
 enum TableDetailsFetch {
-    Found(TableInfo),
+    Found(Box<TableInfo>),
     NotFound(String),
 }
 
@@ -189,7 +189,7 @@ async fn fetch_table_details_via_seam(
                 })
                 .map_err(|e| e.to_string())?;
             return Ok(match cached {
-                Some(info) => TableDetailsFetch::Found(info),
+                Some(info) => TableDetailsFetch::Found(Box::new(info)),
                 None => TableDetailsFetch::NotFound(
                     "Table details reported as cached but the cache was empty".to_string(),
                 ),
@@ -225,7 +225,7 @@ async fn fetch_table_details_via_seam(
                 });
             })
             .map_err(|e| e.to_string())?;
-            Ok(TableDetailsFetch::Found(details))
+            Ok(TableDetailsFetch::Found(Box::new(details)))
         }
         Err(error @ DbError::ObjectNotFound(_)) => {
             Ok(TableDetailsFetch::NotFound(error.to_string()))

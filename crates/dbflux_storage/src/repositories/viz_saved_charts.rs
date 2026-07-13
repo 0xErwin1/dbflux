@@ -1360,16 +1360,21 @@ mod tests {
     fn test_list_full_for_dashboard_uses_three_keyed_selects() {
         // Verifies the "3 SELECTs regardless of panel count" contract from design §6.4.
         //
-        // rusqlite's trace hook takes `fn(&str)` (not a closure), so we use a thread-local
-        // counter that the trace function increments. The counter is reset before
-        // list_full_for_dashboard is called and read after it returns.
+        // rusqlite's trace hook takes `fn(TraceEvent<'_>)` (not a closure), so we use a
+        // thread-local counter that the trace function increments. The counter is reset
+        // before list_full_for_dashboard is called and read after it returns.
+        use rusqlite::trace::{TraceEvent, TraceEventCodes};
         use std::cell::Cell;
 
         thread_local! {
             static VIZ_SELECT_COUNT: Cell<usize> = const { Cell::new(0) };
         }
 
-        fn trace_hook(stmt: &str) {
+        fn trace_hook(event: TraceEvent<'_>) {
+            let TraceEvent::Stmt(_, stmt) = event else {
+                return;
+            };
+
             // Count the three chart-assembly SELECTs issued by list_full_for_dashboard:
             //   1. parent rows: SELECT ... FROM viz_saved_charts WHERE id IN (...)
             //   2. series: SELECT ... FROM viz_saved_chart_series WHERE chart_id IN (...)
@@ -1388,7 +1393,7 @@ mod tests {
         }
 
         let path = temp_db("three_selects");
-        let mut conn = open_database(&path).expect("open");
+        let conn = open_database(&path).expect("open");
         MigrationRegistry::new().run_all(&conn).expect("migrate");
 
         let profile_id = Uuid::new_v4();
@@ -1435,7 +1440,7 @@ mod tests {
         }
 
         // Attach trace hook AFTER setup so we only count queries from list_full_for_dashboard.
-        conn.trace(Some(trace_hook as fn(&str)));
+        conn.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, Some(trace_hook));
         VIZ_SELECT_COUNT.with(|c| c.set(0));
 
         let conn = Arc::new(Mutex::new(conn));
