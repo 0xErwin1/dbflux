@@ -1907,6 +1907,28 @@ impl AppState {
             .collect()
     }
 
+    pub fn protected_hook_rows(&self) -> &[crate::config_loader::ProtectedHookRow] {
+        &self.protected_hook_rows
+    }
+
+    /// Deletes a protected (unreadable/legacy) hook definition row by ID.
+    ///
+    /// Protected rows are skipped on load and excluded from the atomic
+    /// hook-save preflight, so they can only be removed through this deliberate
+    /// path. The storage `delete` bypasses the protected preflight guard and
+    /// cascades to child rows; on success the in-memory entry is dropped so the
+    /// row's name becomes reusable without an app restart.
+    pub fn delete_protected_hook_row(
+        &mut self,
+        id: &str,
+    ) -> Result<(), dbflux_storage::error::StorageError> {
+        self.storage_runtime.hook_definitions().delete(id)?;
+
+        self.protected_hook_rows.retain(|row| row.row_id != id);
+
+        Ok(())
+    }
+
     pub fn hook_load_diagnostics(&self) -> &[crate::config_loader::HookLoadDiagnostic] {
         &self.hook_load_diagnostics
     }
@@ -3385,6 +3407,121 @@ mod tests {
         assert!(
             ids.contains("aws-sso-session"),
             "AuthProfileRef with Some(provider_id) must contribute that id to the reference-only set"
+        );
+    }
+
+    fn reused_legacy_hook() -> dbflux_core::ConnectionHook {
+        dbflux_core::ConnectionHook {
+            enabled: true,
+            kind: dbflux_core::HookKind::Command {
+                command: "echo reused".to_string(),
+                args: Vec::new(),
+            },
+            cwd: None,
+            env: HashMap::new(),
+            inherit_env: true,
+            env_denylist: Vec::new(),
+            timeout_ms: None,
+            execution_mode: dbflux_core::HookExecutionMode::Blocking,
+            ready_signal: None,
+            on_failure: dbflux_core::HookFailureMode::Disconnect,
+        }
+    }
+
+    #[test]
+    fn delete_protected_hook_row_removes_row_and_frees_name() {
+        use dbflux_storage::repositories::hook_definitions::HookDefinitionDto;
+
+        let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+            .expect("in-memory storage runtime");
+
+        let mut normal =
+            HookDefinitionDto::new(Uuid::new_v4(), "normal".to_string(), "Command".to_string());
+        normal.kind_json = Some(r#"{"kind":"command","command":"echo hi","args":[]}"#.to_string());
+
+        let legacy = HookDefinitionDto {
+            id: "legacy-broken".to_string(),
+            name: "legacy".to_string(),
+            execution_mode: "Blocking".to_string(),
+            script_ref: None,
+            cwd: None,
+            inherit_env: true,
+            timeout_ms: None,
+            ready_signal: None,
+            on_failure: "Warn".to_string(),
+            enabled: true,
+            created_at: String::new(),
+            updated_at: String::new(),
+            env_denylist: Vec::new(),
+            kind_json: None,
+        };
+
+        runtime
+            .hook_definitions()
+            .upsert(&normal)
+            .expect("seed normal row");
+        runtime
+            .hook_definitions()
+            .upsert(&legacy)
+            .expect("seed legacy row");
+
+        let mut state = AppState::new_with_storage_runtime(runtime).expect("build app state");
+
+        assert!(
+            state
+                .protected_hook_rows()
+                .iter()
+                .any(|row| row.row_id == "legacy-broken"),
+            "legacy row must be surfaced as protected"
+        );
+        assert!(
+            state.hook_definitions().contains_key("normal"),
+            "readable row must load normally"
+        );
+
+        state
+            .delete_protected_hook_row("legacy-broken")
+            .expect("delete protected row");
+
+        assert!(
+            state
+                .storage_runtime()
+                .hook_definitions()
+                .get("legacy-broken")
+                .expect("query row")
+                .is_none(),
+            "protected row must be gone from storage"
+        );
+        assert!(
+            !state
+                .protected_hook_rows()
+                .iter()
+                .any(|row| row.row_id == "legacy-broken"),
+            "protected row must be gone from memory"
+        );
+
+        let normal_definition = state.hook_definitions()["normal"].clone();
+        let saved = crate::config_loader::save_hook_definitions(
+            state.storage_runtime(),
+            &[
+                crate::config_loader::HookDefinitionSave {
+                    id: normal_definition.id.clone(),
+                    name: "normal".to_string(),
+                    hook: normal_definition.hook.clone(),
+                },
+                crate::config_loader::HookDefinitionSave {
+                    id: None,
+                    name: "legacy".to_string(),
+                    hook: reused_legacy_hook(),
+                },
+            ],
+            &state.protected_hook_row_ids(),
+        )
+        .expect("reusing the freed name must succeed");
+
+        assert!(
+            saved.contains_key("legacy"),
+            "the freed name must be reusable for a new hook"
         );
     }
 }

@@ -210,6 +210,7 @@ pub(super) struct HooksSection {
     pub(super) hook_selected_id: Option<String>,
     pub(super) editing_hook_id: Option<String>,
     pub(super) pending_delete_hook_id: Option<String>,
+    pub(super) pending_delete_protected_row_id: Option<String>,
     pub(super) input_hook_id: Entity<InputState>,
     pub(super) hook_kind_dropdown: Entity<Dropdown>,
     pub(super) hook_kind_selection: HookKindSelection,
@@ -420,6 +421,7 @@ impl HooksSection {
             hook_selected_id: None,
             editing_hook_id: None,
             pending_delete_hook_id: None,
+            pending_delete_protected_row_id: None,
             input_hook_id,
             hook_kind_dropdown,
             hook_kind_selection: HookKindSelection::Command,
@@ -766,6 +768,19 @@ impl Render for HooksSection {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let show_hook_delete = self.pending_delete_hook_id.is_some();
         let hook_delete_name = self.pending_delete_hook_id.clone().unwrap_or_default();
+        let show_protected_delete = self.pending_delete_protected_row_id.is_some();
+        let protected_delete_label = self
+            .pending_delete_protected_row_id
+            .as_ref()
+            .and_then(|row_id| {
+                self.app_state
+                    .read(cx)
+                    .protected_hook_rows()
+                    .iter()
+                    .find(|row| &row.row_id == row_id)
+                    .map(|row| row.row_name.clone().unwrap_or_else(|| row.row_id.clone()))
+            })
+            .unwrap_or_default();
 
         div()
             .size_full()
@@ -797,6 +812,33 @@ impl Render for HooksSection {
                         .child(div().text_sm().child(format!(
                             "Are you sure you want to delete hook \"{}\"?",
                             hook_delete_name
+                        ))),
+                )
+            })
+            .when(show_protected_delete, |element| {
+                let entity = cx.entity().clone();
+                let entity_cancel = entity.clone();
+
+                element.child(
+                    Dialog::new(window, cx)
+                        .title("Delete Unreadable Hook Row")
+                        .confirm()
+                        .on_ok(move |_, _, cx| {
+                            entity.update(cx, |section, cx| {
+                                section.confirm_delete_protected_row(cx);
+                            });
+                            true
+                        })
+                        .on_cancel(move |_, _, cx| {
+                            entity_cancel.update(cx, |section, cx| {
+                                section.cancel_delete_protected_row(cx);
+                            });
+                            true
+                        })
+                        .child(div().text_sm().child(format!(
+                            "Permanently delete the unreadable hook row \"{}\"? Its stored data \
+                             cannot be recovered, but its name becomes reusable afterwards.",
+                            protected_delete_label
                         ))),
                 )
             })

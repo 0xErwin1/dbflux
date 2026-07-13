@@ -1257,6 +1257,40 @@ impl HooksSection {
         cx.notify();
     }
 
+    pub(super) fn request_delete_protected_row(&mut self, row_id: String, cx: &mut Context<Self>) {
+        self.pending_delete_protected_row_id = Some(row_id);
+        cx.notify();
+    }
+
+    pub(super) fn confirm_delete_protected_row(&mut self, cx: &mut Context<Self>) {
+        let Some(row_id) = self.pending_delete_protected_row_id.take() else {
+            return;
+        };
+
+        let result = self
+            .app_state
+            .update(cx, |state, _cx| state.delete_protected_hook_row(&row_id));
+
+        if let Err(error) = result {
+            report_error(
+                UserFacingError::new(ErrorKind::Storage, "Failed to delete unreadable hook row")
+                    .with_cause(error.to_string()),
+                cx,
+            );
+            return;
+        }
+
+        Toast::success("Unreadable hook row deleted")
+            .meta_right(now_hms())
+            .push(cx);
+        cx.notify();
+    }
+
+    pub(super) fn cancel_delete_protected_row(&mut self, cx: &mut Context<Self>) {
+        self.pending_delete_protected_row_id = None;
+        cx.notify();
+    }
+
     fn parse_env_denylist(text: &str) -> Vec<String> {
         text.split(',')
             .map(|s| s.trim().to_string())
@@ -1413,8 +1447,93 @@ impl HooksSection {
                                             }),
                                     ),
                             )
-                    })),
+                    }))
+                    .child(self.render_protected_hook_rows(cx)),
             )
+    }
+
+    fn render_protected_hook_rows(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let theme = cx.theme().clone();
+        let protected: Vec<(String, String)> = self
+            .app_state
+            .read(cx)
+            .protected_hook_rows()
+            .iter()
+            .map(|row| {
+                let label = row.row_name.clone().unwrap_or_else(|| row.row_id.clone());
+                (row.row_id.clone(), label)
+            })
+            .collect();
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .when(!protected.is_empty(), |container| {
+                container
+                    .child(div().mt_2().child(
+                        MonoCaption::new("Unreadable hook rows").color(theme.muted_foreground),
+                    ))
+                    .children(protected.into_iter().map(|(row_id, label)| {
+                        let row_id_for_click = row_id.clone();
+
+                        div()
+                            .id(SharedString::from(format!(
+                                "protected-hook-item-{}",
+                                row_id
+                            )))
+                            .px_3()
+                            .py_2()
+                            .rounded(Radii::SM)
+                            .bg(theme.list_even)
+                            .border_1()
+                            .border_color(theme.warning.opacity(0.3))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_start()
+                                    .gap_2()
+                                    .child(
+                                        div().mt(px(2.0)).child(
+                                            Icon::new(AppIcon::TriangleAlert)
+                                                .size(Heights::ICON_SM)
+                                                .warning(),
+                                        ),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_1()
+                                            .child(MonoLabel::new(label))
+                                            .child(
+                                                Body::new("Unreadable — cannot be edited")
+                                                    .color(theme.muted_foreground),
+                                            ),
+                                    )
+                                    .child(
+                                        Button::new(
+                                            SharedString::from(format!(
+                                                "delete-protected-{}",
+                                                row_id
+                                            )),
+                                            "Delete",
+                                        )
+                                        .small()
+                                        .danger()
+                                        .on_click(
+                                            cx.listener(move |this, _, _, cx| {
+                                                this.request_delete_protected_row(
+                                                    row_id_for_click.clone(),
+                                                    cx,
+                                                );
+                                            }),
+                                        ),
+                                    ),
+                            )
+                    }))
+            })
     }
 
     fn render_hook_form(&self, cx: &mut Context<Self>) -> impl IntoElement {
