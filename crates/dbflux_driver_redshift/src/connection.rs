@@ -99,11 +99,13 @@ pub(crate) fn connect_redshift(params: &RedshiftConnectParams) -> Result<Client,
 ///
 /// `SELECT ... INTO` gets a dedicated check on top of the shared classifier:
 /// `classify_query_for_language` only inspects the leading keyword, so it
-/// treats `SELECT ... INTO newtable FROM t` as an ordinary read. On Redshift
-/// (and PostgreSQL) that form is CTAS — it creates a table — so it must be
-/// rejected here, before any statement reaches the wire, rather than relying
-/// on the shared classifier used by every other SQL driver (some of which
-/// legitimately allow `SELECT ... INTO @var`).
+/// treats `SELECT ... INTO newtable FROM t` — and its CTE-prefixed variant
+/// `WITH c AS (...) SELECT ... INTO newtable FROM t`, whose leading keyword
+/// is `WITH` — as an ordinary read. On Redshift (and PostgreSQL) that form is
+/// CTAS — it creates a table — so it must be rejected here, before any
+/// statement reaches the wire, rather than relying on the shared classifier
+/// used by every other SQL driver (some of which legitimately allow
+/// `SELECT ... INTO @var`).
 fn ensure_read_only(sql: &str) -> Result<(), DbError> {
     if is_select_into(sql) {
         return Err(DbError::NotSupported(
@@ -128,8 +130,15 @@ enum SqlScanState {
     DoubleQuote,
 }
 
-/// Returns `true` when `sql` is a `SELECT` statement containing a top-level
-/// `INTO` keyword (the `SELECT ... INTO newtable FROM ...` CTAS form).
+/// Returns `true` when `sql` is a `SELECT` or `WITH`-led statement containing
+/// a top-level `INTO` keyword (the `SELECT ... INTO newtable FROM ...` CTAS
+/// form, including its CTE-prefixed variant `WITH c AS (...) SELECT ... INTO
+/// newtable FROM ...`).
+///
+/// `WITH` is included alongside `SELECT` because a CTE-prefixed CTAS still
+/// has `WITH` as its leading keyword, and `INTO` is not valid syntax inside a
+/// CTE's own parenthesized body — so a top-level `INTO` found anywhere after
+/// a `WITH`-led statement always belongs to the outer `SELECT ... INTO`.
 ///
 /// Comments and quoted string/identifier contents are stripped before
 /// tokenizing, so `INTO` appearing inside a comment, a string literal, or a
@@ -147,7 +156,9 @@ fn is_select_into(sql: &str) -> bool {
         return false;
     };
 
-    if !leading_keyword.eq_ignore_ascii_case("select") {
+    if !leading_keyword.eq_ignore_ascii_case("select")
+        && !leading_keyword.eq_ignore_ascii_case("with")
+    {
         return false;
     }
 
@@ -762,5 +773,24 @@ mod tests {
     fn plain_select_and_cte_are_still_allowed() {
         assert!(ensure_read_only("SELECT 1").is_ok());
         assert!(ensure_read_only("WITH c AS (SELECT 1) SELECT * FROM c").is_ok());
+    }
+
+    #[test]
+    fn cte_prefixed_select_into_is_rejected() {
+        let result = ensure_read_only("WITH c AS (SELECT 1) SELECT a INTO t FROM c");
+        assert!(matches!(result, Err(DbError::NotSupported(_))));
+    }
+
+    #[test]
+    fn cte_without_into_is_allowed() {
+        for sql in [
+            "WITH c AS (SELECT 1) SELECT * FROM c",
+            "WITH c AS (SELECT 1) SELECT a AS into_col FROM c",
+        ] {
+            assert!(
+                ensure_read_only(sql).is_ok(),
+                "expected {sql:?} to be allowed"
+            );
+        }
     }
 }
