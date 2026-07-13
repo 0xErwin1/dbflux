@@ -3137,7 +3137,6 @@ dependencies = [
  "log",
  "rfd",
  "rusqlite",
- "serde_json",
  "uuid",
 ]
 
