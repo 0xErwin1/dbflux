@@ -16,6 +16,7 @@ use dbflux_driver_mssql::SQLSERVER_FORM;
 use dbflux_driver_mysql::MYSQL_FORM;
 use dbflux_driver_postgres::POSTGRES_FORM;
 use dbflux_driver_redis::{REDIS_FORM, RedisLanguageService};
+use dbflux_driver_redshift::{METADATA as REDSHIFT_METADATA, REDSHIFT_FORM};
 use dbflux_driver_sqlite::SQLITE_FORM;
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -635,9 +636,10 @@ fn metadata_for_kind(kind: DbKind) -> &'static DriverMetadata {
         DbKind::InfluxDB => &FAKE_INFLUXDB_METADATA,
         // Tests treat SQL Server like a relational driver — reuse postgres metadata.
         DbKind::SqlServer => &FAKE_POSTGRES_METADATA,
-        // The dbflux_driver_redshift crate does not exist yet (WU-1); reuse postgres
-        // metadata as the closest relational fake until the real driver lands.
-        DbKind::Redshift => &FAKE_POSTGRES_METADATA,
+        // Redshift's read-only capability set differs meaningfully from
+        // postgres (no write/DDL flags), so tests exercise the real driver
+        // metadata instead of a hand-rolled fake.
+        DbKind::Redshift => &REDSHIFT_METADATA,
     }
 }
 
@@ -652,8 +654,7 @@ fn form_for_kind(kind: DbKind) -> &'static DriverFormDef {
         DbKind::CloudWatchLogs => &CLOUDWATCH_FORM,
         DbKind::InfluxDB => &INFLUXDB_FORM,
         DbKind::SqlServer => &SQLSERVER_FORM,
-        // Same rationale as metadata_for_kind: no dbflux_driver_redshift form yet.
-        DbKind::Redshift => &POSTGRES_FORM,
+        DbKind::Redshift => &REDSHIFT_FORM,
     }
 }
 
