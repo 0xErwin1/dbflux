@@ -16,7 +16,7 @@ use dbflux_ssh::SshTunnel;
 use postgres::Config;
 
 use crate::connection::{
-    RedshiftConnectParams, RedshiftConnection, RedshiftSslMode, connect_redshift,
+    RedshiftConnectParams, RedshiftConnection, RedshiftSslMode, RedshiftTlsCerts, connect_redshift,
     connect_with_ssl_mode,
 };
 use crate::error_formatter::format_redshift_uri_error;
@@ -253,6 +253,10 @@ impl DbDriver for RedshiftDriver {
         let use_uri = values.get("use_uri").map(|s| s == "true").unwrap_or(false);
         let uri = values.get("uri").filter(|s| !s.is_empty()).cloned();
 
+        let ssl_root_cert_path = optional_form_value(values, "ssl_root_cert_path");
+        let ssl_client_cert_path = optional_form_value(values, "ssl_client_cert_path");
+        let ssl_client_key_path = optional_form_value(values, "ssl_client_key_path");
+
         if use_uri {
             if uri.is_none() {
                 return Err(DbError::InvalidProfile(
@@ -268,9 +272,9 @@ impl DbDriver for RedshiftDriver {
                 user: String::new(),
                 database: String::new(),
                 ssl_mode: Some("prefer".to_string()),
-                ssl_root_cert_path: None,
-                ssl_client_cert_path: None,
-                ssl_client_key_path: None,
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
             });
@@ -310,9 +314,9 @@ impl DbDriver for RedshiftDriver {
             user,
             database,
             ssl_mode: Some("prefer".to_string()),
-            ssl_root_cert_path: None,
-            ssl_client_cert_path: None,
-            ssl_client_key_path: None,
+            ssl_root_cert_path,
+            ssl_client_cert_path,
+            ssl_client_key_path,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         })
@@ -328,6 +332,9 @@ impl DbDriver for RedshiftDriver {
             port,
             user,
             database,
+            ssl_root_cert_path,
+            ssl_client_cert_path,
+            ssl_client_key_path,
             ..
         } = config
         {
@@ -340,6 +347,16 @@ impl DbDriver for RedshiftDriver {
             values.insert("port".to_string(), port.to_string());
             values.insert("user".to_string(), user.clone());
             values.insert("database".to_string(), database.clone());
+
+            if let Some(path) = ssl_root_cert_path {
+                values.insert("ssl_root_cert_path".to_string(), path.clone());
+            }
+            if let Some(path) = ssl_client_cert_path {
+                values.insert("ssl_client_cert_path".to_string(), path.clone());
+            }
+            if let Some(path) = ssl_client_key_path {
+                values.insert("ssl_client_key_path".to_string(), path.clone());
+            }
         }
 
         values
@@ -357,7 +374,11 @@ impl DbDriver for RedshiftDriver {
         let ssh_secret = ssh_secret.map(|value| value.expose_secret());
 
         if config.use_uri {
-            return self.connect_with_uri(config.uri.as_deref().unwrap_or(""), password);
+            return self.connect_with_uri(
+                config.uri.as_deref().unwrap_or(""),
+                password,
+                &config.tls_certs,
+            );
         }
 
         if let Some(tunnel_config) = &config.ssh_tunnel {
@@ -370,6 +391,7 @@ impl DbDriver for RedshiftDriver {
                 &config.database,
                 password,
                 &config.ssl_mode,
+                &config.tls_certs,
             )
         } else {
             self.connect_direct(
@@ -379,6 +401,7 @@ impl DbDriver for RedshiftDriver {
                 &config.database,
                 password,
                 &config.ssl_mode,
+                &config.tls_certs,
             )
         }
     }
@@ -387,6 +410,16 @@ impl DbDriver for RedshiftDriver {
         let connection = self.connect_with_secrets(profile, None, None)?;
         connection.ping()
     }
+}
+
+/// Returns the trimmed non-empty value for `key`, or `None` when it is absent
+/// or blank. Used so a blank cert-path input never becomes `Some("")`.
+fn optional_form_value(values: &FormValues, key: &str) -> Option<String> {
+    values
+        .get(key)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 struct ExtractedRedshiftConfig {
@@ -398,6 +431,8 @@ struct ExtractedRedshiftConfig {
     database: String,
     /// Redshift native sslmode id (e.g. `"prefer"`, `"verify-ca"`). Defaults to `"prefer"` when absent.
     ssl_mode: String,
+    /// Root CA / client-certificate paths honored when opening a TLS connection.
+    tls_certs: RedshiftTlsCerts,
     ssh_tunnel: Option<SshTunnelConfig>,
 }
 
@@ -411,6 +446,9 @@ fn extract_redshift_config(config: &DbConfig) -> Result<ExtractedRedshiftConfig,
             user,
             database,
             ssl_mode,
+            ssl_root_cert_path,
+            ssl_client_cert_path,
+            ssl_client_key_path,
             ssh_tunnel,
             ..
         } => Ok(ExtractedRedshiftConfig {
@@ -421,6 +459,11 @@ fn extract_redshift_config(config: &DbConfig) -> Result<ExtractedRedshiftConfig,
             user: user.clone(),
             database: database.clone(),
             ssl_mode: ssl_mode.clone().unwrap_or_else(|| "prefer".to_string()),
+            tls_certs: RedshiftTlsCerts {
+                root_cert_path: ssl_root_cert_path.clone(),
+                client_cert_path: ssl_client_cert_path.clone(),
+                client_key_path: ssl_client_key_path.clone(),
+            },
             ssh_tunnel: ssh_tunnel.clone(),
         }),
         _ => Err(DbError::InvalidProfile(
@@ -560,10 +603,11 @@ impl RedshiftDriver {
         &self,
         base_uri: &str,
         password: Option<&str>,
+        tls_certs: &RedshiftTlsCerts,
     ) -> Result<Box<dyn Connection>, DbError> {
         let (config, ssl_mode) = build_uri_config(base_uri, password)?;
 
-        let client = connect_with_ssl_mode(&config, ssl_mode, |e| {
+        let client = connect_with_ssl_mode(&config, ssl_mode, tls_certs, |e| {
             format_redshift_uri_error(e, base_uri)
         })?;
 
@@ -578,6 +622,7 @@ impl RedshiftDriver {
         }))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn connect_direct(
         &self,
         host: &str,
@@ -586,6 +631,7 @@ impl RedshiftDriver {
         database: &str,
         password: Option<&str>,
         ssl_mode: &str,
+        tls_certs: &RedshiftTlsCerts,
     ) -> Result<Box<dyn Connection>, DbError> {
         let client = connect_redshift(&RedshiftConnectParams {
             host,
@@ -594,6 +640,7 @@ impl RedshiftDriver {
             password: password.unwrap_or(""),
             database,
             ssl_mode,
+            tls_certs,
         })?;
 
         let cancel_token = client.cancel_token();
@@ -618,6 +665,7 @@ impl RedshiftDriver {
         database: &str,
         db_password: Option<&str>,
         ssl_mode: &str,
+        tls_certs: &RedshiftTlsCerts,
     ) -> Result<Box<dyn Connection>, DbError> {
         let ssh_session = dbflux_ssh::establish_session(tunnel_config, ssh_secret)?;
         let tunnel = SshTunnel::start(ssh_session, db_host.to_string(), db_port)?;
@@ -630,6 +678,7 @@ impl RedshiftDriver {
             password: db_password.unwrap_or(""),
             database,
             ssl_mode,
+            tls_certs,
         })?;
 
         let cancel_token = client.cancel_token();
@@ -768,6 +817,121 @@ mod tests {
         assert!(
             !format!("{config:?}").contains("password"),
             "DbConfig::Redshift Debug output must never contain a literal password field"
+        );
+    }
+
+    #[test]
+    fn build_config_carries_ssl_cert_paths_from_form_values() {
+        let driver = RedshiftDriver::new();
+        let mut values = FormValues::new();
+        values.insert("host".to_string(), "cluster.example.com".to_string());
+        values.insert("user".to_string(), "awsuser".to_string());
+        values.insert("database".to_string(), "dev".to_string());
+        values.insert(
+            "ssl_root_cert_path".to_string(),
+            "/etc/ssl/redshift-ca.pem".to_string(),
+        );
+        values.insert(
+            "ssl_client_cert_path".to_string(),
+            "/etc/ssl/client.pem".to_string(),
+        );
+        values.insert(
+            "ssl_client_key_path".to_string(),
+            "/etc/ssl/client-key.pem".to_string(),
+        );
+
+        let config = driver
+            .build_config(&values)
+            .expect("build_config should succeed");
+
+        let DbConfig::Redshift {
+            ssl_root_cert_path,
+            ssl_client_cert_path,
+            ssl_client_key_path,
+            ..
+        } = config
+        else {
+            panic!("expected DbConfig::Redshift");
+        };
+
+        assert_eq!(
+            ssl_root_cert_path.as_deref(),
+            Some("/etc/ssl/redshift-ca.pem")
+        );
+        assert_eq!(ssl_client_cert_path.as_deref(), Some("/etc/ssl/client.pem"));
+        assert_eq!(
+            ssl_client_key_path.as_deref(),
+            Some("/etc/ssl/client-key.pem")
+        );
+    }
+
+    #[test]
+    fn blank_ssl_cert_form_values_become_none() {
+        let driver = RedshiftDriver::new();
+        let mut values = FormValues::new();
+        values.insert("host".to_string(), "cluster.example.com".to_string());
+        values.insert("user".to_string(), "awsuser".to_string());
+        values.insert("database".to_string(), "dev".to_string());
+        values.insert("ssl_root_cert_path".to_string(), "   ".to_string());
+        values.insert("ssl_client_cert_path".to_string(), String::new());
+
+        let config = driver
+            .build_config(&values)
+            .expect("build_config should succeed");
+
+        let DbConfig::Redshift {
+            ssl_root_cert_path,
+            ssl_client_cert_path,
+            ssl_client_key_path,
+            ..
+        } = config
+        else {
+            panic!("expected DbConfig::Redshift");
+        };
+
+        assert!(ssl_root_cert_path.is_none());
+        assert!(ssl_client_cert_path.is_none());
+        assert!(ssl_client_key_path.is_none());
+    }
+
+    #[test]
+    fn build_config_and_extract_values_round_trip_ssl_cert_paths() {
+        let driver = RedshiftDriver::new();
+        let mut values = FormValues::new();
+        values.insert("host".to_string(), "cluster.example.com".to_string());
+        values.insert("user".to_string(), "awsuser".to_string());
+        values.insert("database".to_string(), "dev".to_string());
+        values.insert(
+            "ssl_root_cert_path".to_string(),
+            "/certs/ca.pem".to_string(),
+        );
+        values.insert(
+            "ssl_client_cert_path".to_string(),
+            "/certs/client.pem".to_string(),
+        );
+        values.insert(
+            "ssl_client_key_path".to_string(),
+            "/certs/client.key".to_string(),
+        );
+
+        let config = driver
+            .build_config(&values)
+            .expect("build_config should succeed");
+        let round_tripped = driver.extract_values(&config);
+
+        assert_eq!(
+            round_tripped.get("ssl_root_cert_path").map(String::as_str),
+            Some("/certs/ca.pem")
+        );
+        assert_eq!(
+            round_tripped
+                .get("ssl_client_cert_path")
+                .map(String::as_str),
+            Some("/certs/client.pem")
+        );
+        assert_eq!(
+            round_tripped.get("ssl_client_key_path").map(String::as_str),
+            Some("/certs/client.key")
         );
     }
 

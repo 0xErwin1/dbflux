@@ -365,3 +365,63 @@ fn redshift_live_select_into_is_rejected_at_the_wire_not_executed() {
         "SELECT INTO must be rejected at the wire layer, not silently create a table"
     );
 }
+
+/// Documents the TLS root-CA + client-certificate (mutual TLS) path against a
+/// real cluster. No local or Docker-based Redshift emulator exists, so this is
+/// `#[ignore]`d like the other live tests. Run it against a cluster fronted by
+/// a private CA (and, for mTLS, requiring a client certificate) with:
+///
+/// ```text
+/// DBFLUX_TEST_REDSHIFT_HOST=... \
+/// DBFLUX_TEST_REDSHIFT_PASSWORD=... \
+/// DBFLUX_TEST_REDSHIFT_SSL_ROOT_CERT=/path/to/private-ca.pem \
+/// DBFLUX_TEST_REDSHIFT_SSL_CLIENT_CERT=/path/to/client.pem \
+/// DBFLUX_TEST_REDSHIFT_SSL_CLIENT_KEY=/path/to/client-key.pem \
+/// cargo nextest run -p dbflux_driver_redshift --run-ignored all \
+///   redshift_live_verify_full_with_private_ca_and_client_cert
+/// ```
+///
+/// A `verify-full` connection here proves the pinned private CA is honored
+/// (the handshake would otherwise fail against a cert the system trust store
+/// does not chain to) and, when the client cert/key are set, that mutual TLS
+/// is negotiated rather than being inert.
+#[test]
+#[ignore = "requires a real Amazon Redshift cluster fronted by a private CA / client cert; see test docs for env vars"]
+fn redshift_live_verify_full_with_private_ca_and_client_cert() {
+    let env = LiveRedshiftEnv::from_env();
+
+    let ssl_root_cert_path = std::env::var("DBFLUX_TEST_REDSHIFT_SSL_ROOT_CERT").ok();
+    let ssl_client_cert_path = std::env::var("DBFLUX_TEST_REDSHIFT_SSL_CLIENT_CERT").ok();
+    let ssl_client_key_path = std::env::var("DBFLUX_TEST_REDSHIFT_SSL_CLIENT_KEY").ok();
+
+    let profile = ConnectionProfile::new(
+        "live-redshift-mtls",
+        DbConfig::Redshift {
+            use_uri: false,
+            uri: None,
+            host: env.host.clone(),
+            port: env.port,
+            user: env.user.clone(),
+            database: env.database.clone(),
+            ssl_mode: Some("verify-full".to_string()),
+            ssl_root_cert_path,
+            ssl_client_cert_path,
+            ssl_client_key_path,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        },
+    );
+
+    let driver = RedshiftDriver::new();
+    let connection = driver
+        .connect_with_secrets(
+            &profile,
+            Some(&SecretString::from(env.password.clone())),
+            None,
+        )
+        .expect("verify-full connection with the pinned private CA / client cert should succeed");
+
+    connection
+        .ping()
+        .expect("ping over the mutually-authenticated TLS connection should succeed");
+}

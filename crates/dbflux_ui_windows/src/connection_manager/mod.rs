@@ -866,6 +866,12 @@ impl ConnectionManagerWindow {
                     ssl_client_cert_path,
                     ssl_client_key_path,
                     ..
+                }
+                | DbConfig::Redshift {
+                    ssl_root_cert_path,
+                    ssl_client_cert_path,
+                    ssl_client_key_path,
+                    ..
                 } => (
                     ssl_root_cert_path.clone().unwrap_or_default(),
                     ssl_client_cert_path.clone().unwrap_or_default(),
