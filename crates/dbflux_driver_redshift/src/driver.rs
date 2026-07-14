@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
+use std::time::Duration;
 
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
@@ -12,12 +13,17 @@ use dbflux_core::{
     with_default, with_help,
 };
 use dbflux_ssh::SshTunnel;
-use native_tls::TlsConnector;
-use postgres::{Client, NoTls};
-use postgres_native_tls::MakeTlsConnector;
+use postgres::Config;
 
-use crate::connection::{RedshiftConnectParams, RedshiftConnection, connect_redshift};
+use crate::connection::{
+    RedshiftConnectParams, RedshiftConnection, RedshiftSslMode, connect_redshift,
+    connect_with_ssl_mode,
+};
 use crate::error_formatter::format_redshift_uri_error;
+
+/// Default connect timeout applied to a URI connection that does not carry its
+/// own `connect_timeout` query parameter.
+const DEFAULT_URI_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Amazon Redshift driver metadata.
 ///
@@ -433,33 +439,78 @@ fn normalize_redshift_uri_scheme(uri: &str) -> String {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RedshiftUriSslMode {
-    Disable,
-    Prefer,
-    Require,
-    Verify,
-}
-
-fn parse_redshift_uri_sslmode(uri: &str) -> RedshiftUriSslMode {
+/// Resolves the effective [`RedshiftSslMode`] from a URI's `sslmode` query
+/// parameter, defaulting to `prefer` when the parameter is absent.
+fn redshift_uri_sslmode(uri: &str) -> RedshiftSslMode {
     let Some(query_start) = uri.find('?') else {
-        return RedshiftUriSslMode::Prefer;
+        return RedshiftSslMode::Prefer;
     };
 
     let query = &uri[query_start + 1..];
 
-    let sslmode = query
+    query
         .split('&')
         .find_map(|pair| pair.split_once('=').filter(|(key, _)| *key == "sslmode"))
-        .map(|(_, value)| value.to_ascii_lowercase());
+        .map(|(_, value)| RedshiftSslMode::parse(value))
+        .unwrap_or(RedshiftSslMode::Prefer)
+}
 
-    match sslmode.as_deref() {
-        Some("disable") => RedshiftUriSslMode::Disable,
-        Some("prefer") | Some("allow") => RedshiftUriSslMode::Prefer,
-        Some("require") => RedshiftUriSslMode::Require,
-        Some("verify-ca") | Some("verify-full") => RedshiftUriSslMode::Verify,
-        _ => RedshiftUriSslMode::Prefer,
+/// Removes the `sslmode` query parameter from a URI.
+///
+/// The wire client's URI parser only accepts `disable`/`prefer`/`require` and
+/// rejects the libpq `allow`/`verify-ca`/`verify-full` values outright. This
+/// driver resolves the ssl mode itself via [`redshift_uri_sslmode`] and sets it
+/// on the parsed [`Config`], so the raw parameter is stripped before parsing to
+/// keep the URI's ssl mode the single source of truth and to avoid a parse
+/// error on the values libpq accepts but the wire client does not.
+fn strip_sslmode_query_param(uri: &str) -> String {
+    let Some(query_start) = uri.find('?') else {
+        return uri.to_string();
+    };
+
+    let (base, query_with_marker) = uri.split_at(query_start);
+    let query = &query_with_marker[1..];
+
+    let retained: Vec<&str> = query
+        .split('&')
+        .filter(|pair| {
+            let key = pair.split_once('=').map(|(key, _)| key).unwrap_or(pair);
+            !key.eq_ignore_ascii_case("sslmode")
+        })
+        .collect();
+
+    if retained.is_empty() {
+        base.to_string()
+    } else {
+        format!("{base}?{}", retained.join("&"))
     }
+}
+
+/// Builds the `postgres::Config` for a URI connection: resolves the ssl mode,
+/// strips it from the URI so the wire parser accepts every libpq value, applies
+/// the default connect timeout when the URI omits one, and reports the resolved
+/// ssl mode so the connector policy can be applied uniformly.
+fn build_uri_config(
+    base_uri: &str,
+    password: Option<&str>,
+) -> Result<(Config, RedshiftSslMode), DbError> {
+    let normalized = normalize_redshift_uri_scheme(base_uri);
+    let uri = inject_password_into_uri(&normalized, password);
+
+    let ssl_mode = redshift_uri_sslmode(&uri);
+    let stripped = strip_sslmode_query_param(&uri);
+
+    let mut config = stripped
+        .parse::<Config>()
+        .map_err(|e| format_redshift_uri_error(&e, base_uri))?;
+
+    config.ssl_mode(ssl_mode.config_ssl_mode());
+
+    if config.get_connect_timeout().is_none() {
+        config.connect_timeout(DEFAULT_URI_CONNECT_TIMEOUT);
+    }
+
+    Ok((config, ssl_mode))
 }
 
 /// Injects `password` into a `postgresql://`/`postgres://` URI when the
@@ -510,43 +561,11 @@ impl RedshiftDriver {
         base_uri: &str,
         password: Option<&str>,
     ) -> Result<Box<dyn Connection>, DbError> {
-        let normalized = normalize_redshift_uri_scheme(base_uri);
-        let uri = inject_password_into_uri(&normalized, password);
-        let ssl_mode = parse_redshift_uri_sslmode(&uri);
+        let (config, ssl_mode) = build_uri_config(base_uri, password)?;
 
-        if ssl_mode == RedshiftUriSslMode::Disable {
-            let client = Client::connect(&uri, NoTls)
-                .map_err(|e| format_redshift_uri_error(&e, base_uri))?;
-            let cancel_token = client.cancel_token();
-
-            return Ok(Box::new(RedshiftConnection {
-                client: Arc::new(Mutex::new(client)),
-                ssh_tunnel: None,
-                cancel_token,
-                active_query: RwLock::new(None),
-                cancelled: Arc::new(AtomicBool::new(false)),
-            }));
-        }
-
-        let accept_invalid_certs = matches!(
-            ssl_mode,
-            RedshiftUriSslMode::Prefer | RedshiftUriSslMode::Require
-        );
-
-        let connector = TlsConnector::builder()
-            .danger_accept_invalid_certs(accept_invalid_certs)
-            .build()
-            .map_err(|e| DbError::ConnectionFailed(format!("TLS setup failed: {e}").into()))?;
-
-        let tls = MakeTlsConnector::new(connector);
-
-        let client = match Client::connect(&uri, tls) {
-            Ok(client) => client,
-            Err(_) if ssl_mode == RedshiftUriSslMode::Prefer => {
-                Client::connect(&uri, NoTls).map_err(|e| format_redshift_uri_error(&e, base_uri))?
-            }
-            Err(e) => return Err(format_redshift_uri_error(&e, base_uri)),
-        };
+        let client = connect_with_ssl_mode(&config, ssl_mode, |e| {
+            format_redshift_uri_error(e, base_uri)
+        })?;
 
         let cancel_token = client.cancel_token();
 
@@ -761,9 +780,10 @@ mod tests {
 
     mod uri_helpers {
         use super::super::{
-            RedshiftUriSslMode, inject_password_into_uri, normalize_redshift_uri_scheme,
-            parse_redshift_uri_sslmode,
+            RedshiftSslMode, build_uri_config, inject_password_into_uri,
+            normalize_redshift_uri_scheme, redshift_uri_sslmode, strip_sslmode_query_param,
         };
+        use std::time::Duration;
 
         #[test]
         fn normalize_rewrites_redshift_scheme_to_postgresql() {
@@ -782,31 +802,84 @@ mod tests {
         #[test]
         fn parse_sslmode_defaults_to_prefer_when_absent() {
             assert_eq!(
-                parse_redshift_uri_sslmode("postgresql://cluster.example.com:5439/dev"),
-                RedshiftUriSslMode::Prefer
+                redshift_uri_sslmode("postgresql://cluster.example.com:5439/dev"),
+                RedshiftSslMode::Prefer
             );
         }
 
         #[test]
         fn parse_sslmode_reads_query_parameter() {
             assert_eq!(
-                parse_redshift_uri_sslmode(
-                    "postgresql://cluster.example.com:5439/dev?sslmode=require"
-                ),
-                RedshiftUriSslMode::Require
+                redshift_uri_sslmode("postgresql://cluster.example.com:5439/dev?sslmode=require"),
+                RedshiftSslMode::Require
             );
             assert_eq!(
-                parse_redshift_uri_sslmode(
-                    "postgresql://cluster.example.com:5439/dev?sslmode=disable"
-                ),
-                RedshiftUriSslMode::Disable
+                redshift_uri_sslmode("postgresql://cluster.example.com:5439/dev?sslmode=disable"),
+                RedshiftSslMode::Disable
             );
             assert_eq!(
-                parse_redshift_uri_sslmode(
+                redshift_uri_sslmode(
                     "postgresql://cluster.example.com:5439/dev?sslmode=verify-full"
                 ),
-                RedshiftUriSslMode::Verify
+                RedshiftSslMode::Verify
             );
+        }
+
+        #[test]
+        fn strip_sslmode_removes_only_the_sslmode_parameter() {
+            assert_eq!(
+                strip_sslmode_query_param(
+                    "postgresql://cluster.example.com:5439/dev?sslmode=verify-full"
+                ),
+                "postgresql://cluster.example.com:5439/dev"
+            );
+            assert_eq!(
+                strip_sslmode_query_param(
+                    "postgresql://cluster.example.com:5439/dev?sslmode=require&connect_timeout=5"
+                ),
+                "postgresql://cluster.example.com:5439/dev?connect_timeout=5"
+            );
+            assert_eq!(
+                strip_sslmode_query_param(
+                    "postgresql://cluster.example.com:5439/dev?application_name=dbflux"
+                ),
+                "postgresql://cluster.example.com:5439/dev?application_name=dbflux"
+            );
+        }
+
+        #[test]
+        fn build_uri_config_applies_default_connect_timeout_when_absent() {
+            let (config, ssl_mode) =
+                build_uri_config("postgresql://awsuser:pw@cluster.example.com:5439/dev", None)
+                    .expect("URI should parse");
+
+            assert_eq!(config.get_connect_timeout(), Some(&Duration::from_secs(30)));
+            assert_eq!(ssl_mode, RedshiftSslMode::Prefer);
+        }
+
+        #[test]
+        fn build_uri_config_preserves_explicit_connect_timeout() {
+            let (config, _) = build_uri_config(
+                "postgresql://awsuser:pw@cluster.example.com:5439/dev?connect_timeout=7",
+                None,
+            )
+            .expect("URI should parse");
+
+            assert_eq!(config.get_connect_timeout(), Some(&Duration::from_secs(7)));
+        }
+
+        #[test]
+        fn build_uri_config_resolves_libpq_verify_mode_the_wire_parser_rejects() {
+            // `verify-full` is a valid libpq value the wire client's own URI
+            // parser rejects; stripping it keeps the URI parseable while the
+            // resolved ssl mode still mandates certificate validation.
+            let (_, ssl_mode) = build_uri_config(
+                "postgresql://awsuser:pw@cluster.example.com:5439/dev?sslmode=verify-full",
+                None,
+            )
+            .expect("URI should parse after sslmode is stripped");
+
+            assert_eq!(ssl_mode, RedshiftSslMode::Verify);
         }
 
         #[test]

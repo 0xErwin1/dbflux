@@ -1413,11 +1413,13 @@ impl Sidebar {
             schema_name,
             &table.name,
             details_loaded,
-            column_children,
-            index_children,
-            fk_children,
-            constraint_children,
-            storage_children,
+            TableSectionChildren {
+                columns: column_children,
+                indexes: index_children,
+                foreign_keys: fk_children,
+                constraints: constraint_children,
+                storage: storage_children,
+            },
             dependents_folder,
         );
 
@@ -2186,17 +2188,23 @@ fn build_table_dependents_folder(
 /// folders (Columns, Indexes, Foreign Keys, Constraints) appear with their
 /// real counts, followed by the generic Storage folder (only when the driver
 /// populated `storage_hints`); the optional dependents folder is appended last.
-#[allow(clippy::too_many_arguments)]
+/// The per-table section child lists that [`build_table_sections`] assembles
+/// into folder nodes. Grouping the five structurally identical `Vec<TreeItem>`
+/// lists into named fields prevents a silent call-site argument swap.
+struct TableSectionChildren {
+    columns: Vec<TreeItem>,
+    indexes: Vec<TreeItem>,
+    foreign_keys: Vec<TreeItem>,
+    constraints: Vec<TreeItem>,
+    storage: Vec<TreeItem>,
+}
+
 fn build_table_sections(
     profile_id: Uuid,
     schema_name: &str,
     table_name: &str,
     details_loaded: bool,
-    column_children: Vec<TreeItem>,
-    index_children: Vec<TreeItem>,
-    fk_children: Vec<TreeItem>,
-    constraint_children: Vec<TreeItem>,
-    storage_children: Vec<TreeItem>,
+    children: TableSectionChildren,
     dependents_folder: Option<TreeItem>,
 ) -> Vec<TreeItem> {
     let mut sections = if details_loaded {
@@ -2228,35 +2236,35 @@ fn build_table_sections(
         vec![
             TreeItem::new(
                 columns_folder_id,
-                format!("Columns ({})", column_children.len()),
+                format!("Columns ({})", children.columns.len()),
             )
             .expanded(false)
-            .children(column_children),
+            .children(children.columns),
             TreeItem::new(
                 indexes_folder_id,
-                format!("Indexes ({})", index_children.len()),
+                format!("Indexes ({})", children.indexes.len()),
             )
             .expanded(false)
-            .children(index_children),
+            .children(children.indexes),
             TreeItem::new(
                 fks_folder_id,
-                format!("Foreign Keys ({})", fk_children.len()),
+                format!("Foreign Keys ({})", children.foreign_keys.len()),
             )
             .expanded(false)
-            .children(fk_children),
+            .children(children.foreign_keys),
             TreeItem::new(
                 constraints_folder_id,
-                format!("Constraints ({})", constraint_children.len()),
+                format!("Constraints ({})", children.constraints.len()),
             )
             .expanded(false)
-            .children(constraint_children),
+            .children(children.constraints),
         ]
     } else {
         let table_loading_id = format!("T|{}|{}|{}_loading", profile_id, schema_name, table_name);
         vec![TreeItem::new(table_loading_id, "Loading…".to_string())]
     };
 
-    sections.extend(storage_children);
+    sections.extend(children.storage);
 
     if let Some(dep_folder) = dependents_folder {
         sections.push(dep_folder);

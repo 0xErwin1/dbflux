@@ -98,6 +98,17 @@ pub(crate) fn decode_pg_numeric_binary(bytes: &[u8]) -> Option<String> {
         _ => return None,
     }
 
+    // Redshift/PostgreSQL NUMERIC tops out at precision 38, so the base-10000
+    // `weight` (the exponent of the first digit group) never legitimately
+    // exceeds ~10. A far larger `weight` can only come from a malformed or
+    // hostile payload, where the integer reconstruction below would otherwise
+    // allocate a huge zero-filled string (`weight` is a wire-supplied `i16`, so
+    // up to 32767 groups). Reject such input instead.
+    const MAX_NUMERIC_WEIGHT: i32 = 96;
+    if weight > MAX_NUMERIC_WEIGHT {
+        return None;
+    }
+
     let ndigits = usize::try_from(ndigits).ok()?;
 
     let digits_region = bytes.get(8..8usize.checked_add(ndigits.checked_mul(2)?)?)?;
@@ -308,6 +319,29 @@ mod tests {
     fn decode_pg_numeric_binary_decodes_nan() {
         let bytes = encode_pg_numeric(0, 0, 0xC000, 0, &[]);
         assert_eq!(decode_pg_numeric_binary(&bytes).as_deref(), Some("NaN"));
+    }
+
+    #[test]
+    fn decode_pg_numeric_binary_rejects_absurd_weight_without_allocating() {
+        // A hostile payload claims a base-10000 weight far beyond the ~10 a
+        // real precision-38 NUMERIC can reach; the decoder must bail out rather
+        // than build a multi-kilobyte zero-filled integer string.
+        let bytes = encode_pg_numeric(1, 30_000, 0x0000, 0, &[1]);
+        assert_eq!(decode_pg_numeric_binary(&bytes), None);
+
+        // A weight just past the cap is also rejected.
+        let just_over = encode_pg_numeric(1, 97, 0x0000, 0, &[1]);
+        assert_eq!(decode_pg_numeric_binary(&just_over), None);
+    }
+
+    #[test]
+    fn decode_pg_numeric_binary_accepts_weight_at_the_cap() {
+        // A weight exactly at the cap still decodes: group 5 at weight 96 is a
+        // 1-followed-by-many-zeros integer, well-formed and within bounds.
+        let bytes = encode_pg_numeric(1, 96, 0x0000, 0, &[5]);
+        let decoded = decode_pg_numeric_binary(&bytes).expect("weight at cap decodes");
+        assert!(decoded.starts_with('5'));
+        assert_eq!(decoded.len(), 1 + 96 * 4);
     }
 
     #[test]
