@@ -6,6 +6,19 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Amazon Redshift driver (read-only) (DBF-23)** — A first-party Redshift
+  connection for browsing and querying analytical warehouses. Connect over the
+  PostgreSQL wire protocol (host, port `5439`, database, user, password; TLS
+  with optional custom root CA and client-certificate mTLS; optional SSH
+  tunnel), browse schemas, tables, views, and columns, and run read-only
+  `SELECT` queries. Table details surface Redshift-specific distribution and
+  sort keys plus advisory (non-enforced) primary/foreign/unique constraints as
+  storage hints, shown through a generic sidebar seam that any driver can
+  populate. `NUMERIC`/`DECIMAL` values are decoded from the binary wire format.
+  This first release is read-only: `INSERT`/`UPDATE`/`DELETE`, inline editing,
+  and multi-statement input are rejected with a clear error; IAM/SSO auth,
+  `COPY`/`UNLOAD`, and query-plan visualization are not yet supported.
+
 * **Data transfer — Export, Import, and same-engine Migration for SQL databases** —
   A new transfer engine moves SQL data without leaving DBFlux. Multi-select
   tables in the sidebar and **Export** them to a folder (one CSV or JSON file
