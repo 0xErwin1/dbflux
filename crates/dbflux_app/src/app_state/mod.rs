@@ -2282,10 +2282,18 @@ impl AppState {
     }
 
     pub fn resolve_profile_hooks(&self, profile: &ConnectionProfile) -> ConnectionHooks {
+        // Bindings reference definitions by durable id, so the resolution map
+        // must be keyed by id. Definitions without a persisted id cannot be
+        // referenced by a binding and are skipped.
         let hooks: HashMap<_, _> = self
             .hook_definitions
-            .iter()
-            .map(|(name, definition)| (name.clone(), definition.hook.clone()))
+            .values()
+            .filter_map(|definition| {
+                definition
+                    .id
+                    .clone()
+                    .map(|id| (id, definition.hook.clone()))
+            })
             .collect();
         ConnectionHooks::resolve_from_bindings(profile, &hooks)
     }
@@ -3522,6 +3530,53 @@ mod tests {
         assert!(
             saved.contains_key("legacy"),
             "the freed name must be reusable for a new hook"
+        );
+    }
+
+    #[test]
+    fn resolve_profile_hooks_resolves_binding_by_id() {
+        use dbflux_storage::repositories::hook_definitions::HookDefinitionDto;
+
+        let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+            .expect("in-memory storage runtime");
+
+        let hook_uuid = Uuid::new_v4();
+        let hook_id = hook_uuid.to_string();
+
+        let mut definition =
+            HookDefinitionDto::new(hook_uuid, "deploy".to_string(), "Command".to_string());
+        definition.kind_json =
+            Some(r#"{"kind":"command","command":"echo hi","args":[]}"#.to_string());
+
+        runtime
+            .hook_definitions()
+            .upsert(&definition)
+            .expect("seed hook definition");
+
+        let state = AppState::new_with_storage_runtime(runtime).expect("build app state");
+
+        let mut profile = ConnectionProfile::new("bound", DbConfig::default_postgres());
+        profile.hook_bindings = Some(dbflux_core::ConnectionHookBindings {
+            pre_connect: vec![hook_id.clone()],
+            post_connect: Vec::new(),
+            pre_disconnect: Vec::new(),
+            post_disconnect: Vec::new(),
+        });
+
+        let hooks = state.resolve_profile_hooks(&profile);
+        let pre_connect = hooks.phase_hooks(HookPhase::PreConnect);
+
+        assert_eq!(
+            pre_connect.len(),
+            1,
+            "binding id must resolve to its definition"
+        );
+        assert!(
+            matches!(
+                &pre_connect[0].kind,
+                dbflux_core::HookKind::Command { command, .. } if command == "echo hi"
+            ),
+            "resolved hook must carry the seeded command"
         );
     }
 }
