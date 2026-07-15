@@ -294,45 +294,7 @@ impl ConnectionManagerWindow {
             }
         }
 
-        if let Some(bindings) = self.collect_hook_bindings(cx) {
-            let hook_definitions = self.app_state.read(cx).hook_definitions();
-
-            for hook_id in &bindings.pre_connect {
-                if !hook_definitions.contains_key(hook_id) {
-                    self.validation_errors.push(format!(
-                        "Unknown pre-connect hook ID '{}'. Configure it in Settings > Hooks",
-                        hook_id
-                    ));
-                }
-            }
-
-            for hook_id in &bindings.post_connect {
-                if !hook_definitions.contains_key(hook_id) {
-                    self.validation_errors.push(format!(
-                        "Unknown post-connect hook ID '{}'. Configure it in Settings > Hooks",
-                        hook_id
-                    ));
-                }
-            }
-
-            for hook_id in &bindings.pre_disconnect {
-                if !hook_definitions.contains_key(hook_id) {
-                    self.validation_errors.push(format!(
-                        "Unknown pre-disconnect hook ID '{}'. Configure it in Settings > Hooks",
-                        hook_id
-                    ));
-                }
-            }
-
-            for hook_id in &bindings.post_disconnect {
-                if !hook_definitions.contains_key(hook_id) {
-                    self.validation_errors.push(format!(
-                        "Unknown post-disconnect hook ID '{}'. Configure it in Settings > Hooks",
-                        hook_id
-                    ));
-                }
-            }
-        }
+        self.validate_hook_bindings(cx);
 
         self.validation_errors.is_empty()
     }

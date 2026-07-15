@@ -2187,6 +2187,78 @@ impl ConnectionManagerWindow {
         })
     }
 
+    /// Pushes a validation error for every hook token the user selected or
+    /// typed that does not resolve to a known definition. This runs before
+    /// save so the user learns an unknown entry was ignored, while
+    /// `collect_hook_bindings` still drops those tokens to protect the
+    /// `cfg_hook_bindings` foreign key.
+    fn validate_hook_bindings(&mut self, cx: &Context<Self>) {
+        let (name_to_id, known_ids) = self.hook_id_lookup(cx);
+
+        let phases: [(&str, Option<String>, String); 4] = [
+            (
+                "pre-connect",
+                self.settings_tab
+                    .conn_pre_hook_dropdown
+                    .read(cx)
+                    .selected_value()
+                    .map(|value| value.to_string()),
+                self.settings_tab
+                    .conn_pre_hook_extra_input
+                    .read(cx)
+                    .value()
+                    .to_string(),
+            ),
+            (
+                "post-connect",
+                self.settings_tab
+                    .conn_post_hook_dropdown
+                    .read(cx)
+                    .selected_value()
+                    .map(|value| value.to_string()),
+                self.settings_tab
+                    .conn_post_hook_extra_input
+                    .read(cx)
+                    .value()
+                    .to_string(),
+            ),
+            (
+                "pre-disconnect",
+                self.settings_tab
+                    .conn_pre_disconnect_hook_dropdown
+                    .read(cx)
+                    .selected_value()
+                    .map(|value| value.to_string()),
+                self.settings_tab
+                    .conn_pre_disconnect_hook_extra_input
+                    .read(cx)
+                    .value()
+                    .to_string(),
+            ),
+            (
+                "post-disconnect",
+                self.settings_tab
+                    .conn_post_disconnect_hook_dropdown
+                    .read(cx)
+                    .selected_value()
+                    .map(|value| value.to_string()),
+                self.settings_tab
+                    .conn_post_disconnect_hook_extra_input
+                    .read(cx)
+                    .value()
+                    .to_string(),
+            ),
+        ];
+
+        for (label, primary, extra) in phases {
+            for token in Self::unresolved_hook_tokens(primary, &extra, &name_to_id, &known_ids) {
+                self.validation_errors.push(format!(
+                    "Unknown {label} hook '{token}'. Configure it in Settings > Hooks"
+                ));
+            }
+        }
+    }
+
     fn split_primary_and_extra(hooks: &[String]) -> (String, Vec<String>) {
         let Some((first, rest)) = hooks.split_first() else {
             return (String::new(), Vec::new());
@@ -2270,6 +2342,38 @@ impl ConnectionManagerWindow {
             .filter(|value| !value.is_empty())
             .map(ToString::to_string)
             .collect()
+    }
+
+    /// Returns the raw tokens (dropdown selection plus comma-separated extras)
+    /// that resolve to neither a known definition id nor a known definition
+    /// name. `merge_hook_ids` silently drops these to keep the
+    /// `cfg_hook_bindings` foreign key safe, so the form surfaces them here to
+    /// tell the user their entry was ignored instead of failing quietly.
+    fn unresolved_hook_tokens(
+        primary: Option<String>,
+        extra_text: &str,
+        name_to_id: &HashMap<String, String>,
+        known_ids: &HashSet<String>,
+    ) -> Vec<String> {
+        let mut unresolved = Vec::new();
+
+        let tokens = primary
+            .into_iter()
+            .chain(Self::parse_hook_tokens(extra_text));
+
+        for token in tokens {
+            let trimmed = token.trim();
+
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            if Self::resolve_hook_token(trimmed, name_to_id, known_ids).is_none() {
+                unresolved.push(trimmed.to_string());
+            }
+        }
+
+        unresolved
     }
 
     /// Returns the number of driver schema fields (for Settings tab navigation).
@@ -3611,6 +3715,53 @@ mod tests {
         );
 
         assert_eq!(result, vec!["id-main", "id-lint"]);
+    }
+
+    #[test]
+    fn unresolved_hook_tokens_accepts_known_id_and_name() {
+        let name_to_id: HashMap<String, String> = [("lint".to_string(), "id-lint".to_string())]
+            .into_iter()
+            .collect();
+        let known_ids = known_ids_set(["id-main", "id-lint"]);
+
+        let result = ConnectionManagerWindow::unresolved_hook_tokens(
+            Some("id-main".into()),
+            "lint",
+            &name_to_id,
+            &known_ids,
+        );
+
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn unresolved_hook_tokens_reports_unknown_entries() {
+        let name_to_id = HashMap::new();
+        let known_ids = known_ids_set(["id-main"]);
+
+        let result = ConnectionManagerWindow::unresolved_hook_tokens(
+            Some("id-main".into()),
+            "ghost, other",
+            &name_to_id,
+            &known_ids,
+        );
+
+        assert_eq!(result, vec!["ghost", "other"]);
+    }
+
+    #[test]
+    fn unresolved_hook_tokens_ignores_empty_primary() {
+        let name_to_id = HashMap::new();
+        let known_ids = known_ids_set(["id-main"]);
+
+        let result = ConnectionManagerWindow::unresolved_hook_tokens(
+            Some("  ".into()),
+            "id-main",
+            &name_to_id,
+            &known_ids,
+        );
+
+        assert!(result.is_empty());
     }
 
     // --- split_primary_and_extra ---
