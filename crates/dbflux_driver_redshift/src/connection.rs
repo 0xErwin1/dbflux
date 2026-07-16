@@ -296,6 +296,15 @@ pub(crate) fn connect_redshift(params: &RedshiftConnectParams) -> Result<Client,
 /// statement reaches the wire, rather than relying on the shared classifier
 /// used by every other SQL driver (some of which legitimately allow
 /// `SELECT ... INTO @var`).
+///
+/// `EXPLAIN`- and `WITH`-led statements get the same treatment for the same
+/// reason: the shared classifier maps `EXPLAIN` straight to `Metadata` and
+/// `WITH` straight to `Read` from the leading keyword alone, so neither
+/// `EXPLAIN ANALYZE DELETE FROM t` nor the data-modifying CTE
+/// `WITH c AS (DELETE FROM t RETURNING *) SELECT * FROM c` would be caught.
+/// Redshift's own grammar rejects both forms today, but relying on the server
+/// to protect the driver's only safety boundary would silently rot if AWS ever
+/// widened the dialect, so the write keyword is rejected locally instead.
 fn ensure_read_only(sql: &str) -> Result<(), DbError> {
     if has_multiple_statements(sql) {
         return Err(DbError::NotSupported(
@@ -307,6 +316,12 @@ fn ensure_read_only(sql: &str) -> Result<(), DbError> {
         return Err(DbError::NotSupported(
             "Amazon Redshift connections are read-only in DBFlux; SELECT ... INTO creates a table and is not supported".to_string(),
         ));
+    }
+
+    if let Some(keyword) = nested_write_keyword(sql) {
+        return Err(DbError::NotSupported(format!(
+            "Amazon Redshift connections are read-only in DBFlux; {keyword} is not supported"
+        )));
     }
 
     match classify_query_for_language(&QueryLanguage::Sql, sql) {
@@ -359,6 +374,51 @@ fn is_select_into(sql: &str) -> bool {
     }
 
     words.any(|word| word.eq_ignore_ascii_case("into"))
+}
+
+/// Write keywords that must never appear inside an `EXPLAIN`- or `WITH`-led
+/// statement, whose leading keyword alone would otherwise classify the whole
+/// buffer as `Metadata` or `Read`.
+const NESTED_WRITE_KEYWORDS: &[&str] = &[
+    "insert", "update", "delete", "merge", "truncate", "drop", "create", "alter", "grant",
+    "revoke", "copy", "unload", "vacuum",
+];
+
+/// Returns the write keyword found inside an `EXPLAIN`- or `WITH`-led
+/// statement, if any.
+///
+/// Only those two leading keywords are inspected: every other leading keyword
+/// is already classified accurately by `classify_query_for_language`, so
+/// scanning them here would reject reads whose identifiers merely collide with
+/// a keyword.
+///
+/// Comments and quoted content are stripped first and keywords are matched as
+/// whole words, so `EXPLAIN SELECT * FROM delete_log`, `SELECT a AS drop_ts`,
+/// and `EXPLAIN SELECT 'delete'` are all left alone. An identifier that is bare
+/// and *exactly* a write keyword would be a false positive, but Redshift
+/// reserves these words — such an identifier has to be quoted, and quoted
+/// content never reaches the scan.
+fn nested_write_keyword(sql: &str) -> Option<&'static str> {
+    let scanned = strip_comments_and_quoted_content(sql);
+
+    let mut words = scanned
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .filter(|word| !word.is_empty());
+
+    let leading_keyword = words.next()?;
+
+    if !leading_keyword.eq_ignore_ascii_case("explain")
+        && !leading_keyword.eq_ignore_ascii_case("with")
+    {
+        return None;
+    }
+
+    words.find_map(|word| {
+        NESTED_WRITE_KEYWORDS
+            .iter()
+            .find(|keyword| word.eq_ignore_ascii_case(keyword))
+            .copied()
+    })
 }
 
 /// Returns `true` when `sql` contains more than one non-empty top-level
@@ -1235,6 +1295,51 @@ mod tests {
         for sql in [
             "WITH c AS (SELECT 1) SELECT * FROM c",
             "WITH c AS (SELECT 1) SELECT a AS into_col FROM c",
+        ] {
+            assert!(
+                ensure_read_only(sql).is_ok(),
+                "expected {sql:?} to be allowed"
+            );
+        }
+    }
+
+    #[test]
+    fn explain_wrapping_a_write_is_rejected() {
+        for sql in [
+            "EXPLAIN ANALYZE DELETE FROM users",
+            "EXPLAIN ANALYZE INSERT INTO users (name) VALUES ('a')",
+            "EXPLAIN VERBOSE UPDATE users SET name = 'a'",
+            "EXPLAIN DROP TABLE users",
+        ] {
+            assert!(
+                matches!(ensure_read_only(sql), Err(DbError::NotSupported(_))),
+                "expected {sql:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn data_modifying_cte_is_rejected() {
+        for sql in [
+            "WITH c AS (DELETE FROM users RETURNING *) SELECT * FROM c",
+            "WITH c AS (INSERT INTO users (name) VALUES ('a') RETURNING id) SELECT * FROM c",
+            "WITH c AS (UPDATE users SET name = 'a' RETURNING id) SELECT * FROM c",
+        ] {
+            assert!(
+                matches!(ensure_read_only(sql), Err(DbError::NotSupported(_))),
+                "expected {sql:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn reads_colliding_with_write_keywords_are_allowed() {
+        for sql in [
+            "EXPLAIN SELECT * FROM delete_log",
+            "EXPLAIN SELECT a AS drop_ts FROM t",
+            "EXPLAIN SELECT 'delete' FROM t",
+            "WITH c AS (SELECT 1) SELECT * FROM c JOIN update_history u ON u.id = c.id",
+            "WITH c AS (SELECT 1) SELECT * FROM c -- delete this later",
         ] {
             assert!(
                 ensure_read_only(sql).is_ok(),
