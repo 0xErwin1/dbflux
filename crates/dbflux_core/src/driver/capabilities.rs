@@ -1093,6 +1093,23 @@ impl QueryLanguage {
     pub fn statement_count(&self, text: &str) -> usize {
         self.split_statements(text).len()
     }
+
+    /// Byte bounds of the statement containing `offset` in `text`.
+    ///
+    /// Statement boundaries follow the same rules as
+    /// [`QueryLanguage::split_statements`]; for non-SQL editor modes the whole
+    /// buffer is a single statement.
+    pub fn statement_bounds_at(&self, text: &str, offset: usize) -> std::ops::Range<usize> {
+        if self.editor_mode() != "sql" {
+            return 0..text.len();
+        }
+
+        let offset = offset.min(text.len());
+        sql_statement_ranges(text)
+            .into_iter()
+            .find(|range| offset <= range.end)
+            .unwrap_or(0..text.len())
+    }
 }
 
 /// How a driver's query editor should present and behave, independent of the
@@ -1133,45 +1150,50 @@ impl EditorLanguageProfile {
 /// `;`-delimited SQL statement splitter that is aware of strings, identifiers,
 /// comments, and dollar-quoted bodies. See [`QueryLanguage::split_statements`].
 fn split_sql_statements(text: &str) -> Vec<String> {
-    let chars: Vec<char> = text.chars().collect();
+    sql_statement_ranges(text)
+        .into_iter()
+        .filter_map(|range| {
+            let statement = text[range].trim();
+            (!statement.is_empty()).then(|| statement.to_string())
+        })
+        .collect()
+}
+
+/// Byte ranges of the `;`-delimited segments in `text` (separators excluded,
+/// segments untrimmed, empty segments kept). Shared scanner behind
+/// [`split_sql_statements`] and [`QueryLanguage::statement_bounds_at`].
+fn sql_statement_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
     let len = chars.len();
 
-    let mut statements = Vec::new();
-    let mut current = String::new();
+    let mut ranges = Vec::new();
+    let mut segment_start = 0usize;
     let mut index = 0;
 
     while index < len {
-        let ch = chars[index];
+        let (byte, ch) = chars[index];
 
         // Line comment: -- ... up to end of line.
-        if ch == '-' && index + 1 < len && chars[index + 1] == '-' {
-            while index < len && chars[index] != '\n' {
-                current.push(chars[index]);
+        if ch == '-' && index + 1 < len && chars[index + 1].1 == '-' {
+            while index < len && chars[index].1 != '\n' {
                 index += 1;
             }
             continue;
         }
 
         // Block comment: /* ... */ with PostgreSQL-style nesting.
-        if ch == '/' && index + 1 < len && chars[index + 1] == '*' {
-            current.push('/');
-            current.push('*');
+        if ch == '/' && index + 1 < len && chars[index + 1].1 == '*' {
             index += 2;
 
             let mut depth = 1;
             while index < len && depth > 0 {
-                if chars[index] == '/' && index + 1 < len && chars[index + 1] == '*' {
+                if chars[index].1 == '/' && index + 1 < len && chars[index + 1].1 == '*' {
                     depth += 1;
-                    current.push('/');
-                    current.push('*');
                     index += 2;
-                } else if chars[index] == '*' && index + 1 < len && chars[index + 1] == '/' {
+                } else if chars[index].1 == '*' && index + 1 < len && chars[index + 1].1 == '/' {
                     depth -= 1;
-                    current.push('*');
-                    current.push('/');
                     index += 2;
                 } else {
-                    current.push(chars[index]);
                     index += 1;
                 }
             }
@@ -1180,33 +1202,26 @@ fn split_sql_statements(text: &str) -> Vec<String> {
 
         // Single-quoted string literal ('' and backslash escapes).
         if ch == '\'' {
-            current.push(ch);
             index += 1;
 
             while index < len {
-                let inner = chars[index];
+                let inner = chars[index].1;
 
                 if inner == '\\' && index + 1 < len {
-                    current.push(inner);
-                    current.push(chars[index + 1]);
                     index += 2;
                     continue;
                 }
 
                 if inner == '\'' {
-                    if index + 1 < len && chars[index + 1] == '\'' {
-                        current.push('\'');
-                        current.push('\'');
+                    if index + 1 < len && chars[index + 1].1 == '\'' {
                         index += 2;
                         continue;
                     }
 
-                    current.push('\'');
                     index += 1;
                     break;
                 }
 
-                current.push(inner);
                 index += 1;
             }
             continue;
@@ -1215,17 +1230,14 @@ fn split_sql_statements(text: &str) -> Vec<String> {
         // Quoted identifier: "..." (standard SQL) or `...` (MySQL).
         if ch == '"' || ch == '`' {
             let quote = ch;
-            current.push(ch);
             index += 1;
 
             while index < len {
-                let inner = chars[index];
-                current.push(inner);
+                let inner = chars[index].1;
                 index += 1;
 
                 if inner == quote {
-                    if index < len && chars[index] == quote {
-                        current.push(quote);
+                    if index < len && chars[index].1 == quote {
                         index += 1;
                         continue;
                     }
@@ -1239,20 +1251,16 @@ fn split_sql_statements(text: &str) -> Vec<String> {
         if ch == '$'
             && let Some(tag_end) = dollar_tag_end(&chars, index)
         {
-            let tag: String = chars[index..=tag_end].iter().collect();
-            let tag_len = tag.chars().count();
-
-            current.push_str(&tag);
+            let tag_start = index;
+            let tag_len = tag_end + 1 - tag_start;
             index = tag_end + 1;
 
             while index < len {
-                if chars[index] == '$' && matches_tag(&chars, index, &tag) {
-                    current.push_str(&tag);
+                if chars[index].1 == '$' && matches_tag(&chars, index, tag_start, tag_end) {
                     index += tag_len;
                     break;
                 }
 
-                current.push(chars[index]);
                 index += 1;
             }
             continue;
@@ -1260,36 +1268,28 @@ fn split_sql_statements(text: &str) -> Vec<String> {
 
         // Statement terminator.
         if ch == ';' {
-            let trimmed = current.trim();
-            if !trimmed.is_empty() {
-                statements.push(trimmed.to_string());
-            }
-            current.clear();
+            ranges.push(segment_start..byte);
+            segment_start = byte + 1;
             index += 1;
             continue;
         }
 
-        current.push(ch);
         index += 1;
     }
 
-    let trimmed = current.trim();
-    if !trimmed.is_empty() {
-        statements.push(trimmed.to_string());
-    }
-
-    statements
+    ranges.push(segment_start..text.len());
+    ranges
 }
 
 /// If `chars[start]` opens a dollar-quote tag, returns the index of the closing
 /// `$` of that opening tag. The tag identifier must be empty (`$$`) or a valid
 /// identifier (letters, digits, underscore, not starting with a digit), which
 /// also prevents misreading parameter placeholders such as `$1`.
-fn dollar_tag_end(chars: &[char], start: usize) -> Option<usize> {
+fn dollar_tag_end(chars: &[(usize, char)], start: usize) -> Option<usize> {
     let mut index = start + 1;
 
     while index < chars.len() {
-        let ch = chars[index];
+        let ch = chars[index].1;
 
         if ch == '$' {
             return Some(index);
@@ -1307,14 +1307,15 @@ fn dollar_tag_end(chars: &[char], start: usize) -> Option<usize> {
     None
 }
 
-/// Whether `tag` matches the characters starting at `chars[index]`.
-fn matches_tag(chars: &[char], index: usize, tag: &str) -> bool {
-    let tag_chars: Vec<char> = tag.chars().collect();
-    if index + tag_chars.len() > chars.len() {
+/// Whether the opening tag at `chars[tag_start..=tag_end]` repeats starting at
+/// `chars[index]`.
+fn matches_tag(chars: &[(usize, char)], index: usize, tag_start: usize, tag_end: usize) -> bool {
+    let tag_len = tag_end + 1 - tag_start;
+    if index + tag_len > chars.len() {
         return false;
     }
 
-    chars[index..index + tag_chars.len()] == tag_chars[..]
+    (0..tag_len).all(|offset| chars[index + offset].1 == chars[tag_start + offset].1)
 }
 
 // ============================================================================
@@ -2342,6 +2343,43 @@ mod tests {
     fn split_statements_empty_is_zero() {
         assert_eq!(QueryLanguage::Sql.statement_count("   \n  "), 0);
         assert_eq!(QueryLanguage::MongoQuery.statement_count(""), 0);
+    }
+
+    #[test]
+    fn statement_bounds_at_whole_buffer_without_semicolon() {
+        let text = "SELECT inv.total_amount FROM invoices inv";
+        assert_eq!(
+            QueryLanguage::Sql.statement_bounds_at(text, 9),
+            0..text.len()
+        );
+    }
+
+    #[test]
+    fn statement_bounds_at_selects_statement_under_cursor() {
+        let text = "SELECT 1; SELECT inv.issued_at FROM invoices inv; SELECT 3";
+        let range = QueryLanguage::Sql.statement_bounds_at(text, 12);
+        assert_eq!(&text[range], " SELECT inv.issued_at FROM invoices inv");
+
+        let last = QueryLanguage::Sql.statement_bounds_at(text, text.len());
+        assert_eq!(&text[last], " SELECT 3");
+    }
+
+    #[test]
+    fn statement_bounds_at_ignores_semicolons_in_strings_and_comments() {
+        let text = "SELECT ';' AS x, inv.total_amount FROM invoices inv -- trailing; comment";
+        assert_eq!(
+            QueryLanguage::Sql.statement_bounds_at(text, 20),
+            0..text.len()
+        );
+    }
+
+    #[test]
+    fn statement_bounds_at_non_sql_returns_whole_buffer() {
+        let text = "db.users.find(); db.orders.find()";
+        assert_eq!(
+            QueryLanguage::MongoQuery.statement_bounds_at(text, 25),
+            0..text.len()
+        );
     }
 
     #[test]
