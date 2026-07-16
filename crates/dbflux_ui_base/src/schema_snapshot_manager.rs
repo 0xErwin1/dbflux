@@ -163,6 +163,54 @@ impl SchemaSnapshotManager {
             retention,
         )
     }
+
+    /// Table details from the most recent `Deep` snapshot for `(profile_id,
+    /// database)`, restricted to tables that still exist in `live_tables`.
+    ///
+    /// Used to seed the session's `table_details` cache on connect so
+    /// completion and detail views start warm without driver round trips.
+    /// Column-level staleness is acceptable here: the drift check refreshes
+    /// entries at query time.
+    pub fn latest_deep_details(
+        &mut self,
+        profile_id: &str,
+        database: Option<&str>,
+        live_tables: &[TableInfo],
+    ) -> Vec<TableInfo> {
+        let summaries = self.list(profile_id, database);
+        let Some(deep) = summaries
+            .iter()
+            .find(|summary| summary.depth == SnapshotDepth::Deep)
+        else {
+            return Vec::new();
+        };
+
+        let record = match self.get(&deep.id) {
+            Ok(Some(record)) => record,
+            Ok(None) => return Vec::new(),
+            Err(error) => {
+                log::warn!(
+                    "SchemaSnapshotManager: failed to load deep snapshot {}: {error}",
+                    deep.id
+                );
+                return Vec::new();
+            }
+        };
+
+        let live: std::collections::HashSet<(Option<&str>, &str)> = live_tables
+            .iter()
+            .map(|table| (table.schema.as_deref(), table.name.as_str()))
+            .collect();
+
+        record
+            .tables
+            .into_iter()
+            .filter(|table| {
+                (table.columns.is_some() || table.sample_fields.is_some())
+                    && live.contains(&(table.schema.as_deref(), table.name.as_str()))
+            })
+            .collect()
+    }
 }
 
 fn cache_key(profile_id: &str, database: Option<&str>) -> CacheKey {
@@ -227,6 +275,65 @@ mod tests {
             presentation: Default::default(),
             child_items: None,
         }
+    }
+
+    fn shallow_table(name: &str) -> TableInfo {
+        TableInfo {
+            columns: None,
+            ..table(name)
+        }
+    }
+
+    // --- latest_deep_details ---
+
+    #[test]
+    fn latest_deep_details_returns_detailed_tables_still_alive() {
+        let (mut mgr, profile_id) = make_manager();
+
+        // Deep snapshot with columns for two tables, then a newer shallow
+        // one on top (the on-connect auto-capture).
+        mgr.capture(
+            &profile_id,
+            Some("db1"),
+            &[table("users"), table("orders")],
+            SnapshotDepth::Deep,
+            10,
+        )
+        .expect("deep capture");
+        mgr.capture(
+            &profile_id,
+            Some("db1"),
+            &[shallow_table("users")],
+            SnapshotDepth::Shallow,
+            10,
+        )
+        .expect("shallow capture");
+
+        // `orders` no longer exists in the live listing and must be dropped.
+        let details = mgr.latest_deep_details(&profile_id, Some("db1"), &[shallow_table("users")]);
+
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].name, "users");
+        assert!(details[0].columns.is_some());
+    }
+
+    #[test]
+    fn latest_deep_details_empty_without_deep_snapshot() {
+        let (mut mgr, profile_id) = make_manager();
+
+        mgr.capture(
+            &profile_id,
+            Some("db1"),
+            &[shallow_table("users")],
+            SnapshotDepth::Shallow,
+            10,
+        )
+        .expect("shallow capture");
+
+        assert!(
+            mgr.latest_deep_details(&profile_id, Some("db1"), &[shallow_table("users")])
+                .is_empty()
+        );
     }
 
     // --- capture ---

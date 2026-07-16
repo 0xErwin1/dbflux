@@ -697,16 +697,33 @@ impl Sidebar {
             if let Some((capture_repo, capture_retention)) = capture_ctx {
                 let profile_id_string = profile_id.to_string();
 
-                let capture_result = cx
+                let (capture_result, hydration) = cx
                     .background_executor()
                     .spawn(async move {
-                        dbflux_ui_base::SchemaSnapshotManager::new(capture_repo).capture(
+                        let mut manager = dbflux_ui_base::SchemaSnapshotManager::new(capture_repo);
+
+                        let capture_result = manager.capture(
                             &profile_id_string,
                             capture_database.as_deref(),
                             &capture_tables,
                             dbflux_core::SnapshotDepth::Shallow,
                             capture_retention,
-                        )
+                        );
+
+                        // Seed the session cache from the latest persisted deep
+                        // snapshot, so completion and detail views start warm
+                        // without driver round trips. Skipped without a known
+                        // database name, since that is the cache key.
+                        let hydration = capture_database.map(|database| {
+                            let details = manager.latest_deep_details(
+                                &profile_id_string,
+                                Some(&database),
+                                &capture_tables,
+                            );
+                            (database, details)
+                        });
+
+                        (capture_result, hydration)
                     })
                     .await;
 
@@ -718,6 +735,32 @@ impl Sidebar {
                         ),
                         cx,
                     );
+                }
+
+                if let Some((database, details)) = hydration
+                    && !details.is_empty()
+                    && let Err(update_error) = cx.update(|cx| {
+                        app_state.update(cx, |state, _| {
+                            for table in details {
+                                if state.needs_table_details(
+                                    profile_id,
+                                    &database,
+                                    table.schema.as_deref(),
+                                    &table.name,
+                                ) {
+                                    state.set_table_details(
+                                        profile_id,
+                                        database.clone(),
+                                        table.schema.clone(),
+                                        table.name.clone(),
+                                        table,
+                                    );
+                                }
+                            }
+                        });
+                    })
+                {
+                    log::warn!("Failed to hydrate table details from snapshot: {update_error:?}");
                 }
             }
         })
