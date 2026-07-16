@@ -642,7 +642,7 @@ impl DbFluxServer {
     }
 }
 
-#[tool_handler]
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for DbFluxServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(
@@ -801,6 +801,25 @@ mod tests {
             connection_setup_lock: Arc::new(tokio::sync::Mutex::new(())),
             secret_manager: Arc::new(dbflux_core::SecretManager::new(Box::new(NoopSecretStore))),
             mcp_enabled_by_default: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn server_handler_exposes_tools_from_all_sub_routers() {
+        let driver = Arc::new(FakeDriver::new(DbKind::Postgres)) as Arc<dyn DbDriver>;
+        let profile = ConnectionProfile::new("test-pg", DbConfig::default_postgres());
+        let state = test_state_with_driver("postgres", driver, profile);
+
+        let server = DbFluxServer::new(state);
+        let tools = server.tool_router.list_all();
+
+        assert!(!tools.is_empty(), "combined tool router must not be empty");
+        for tool in tools {
+            assert!(
+                ServerHandler::get_tool(&server, &tool.name).is_some(),
+                "tool '{}' must be exposed through the ServerHandler",
+                tool.name
+            );
         }
     }
 
