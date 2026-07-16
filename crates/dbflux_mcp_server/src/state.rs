@@ -852,6 +852,14 @@ fn build_driver_registry() -> HashMap<String, Arc<dyn DbDriver>> {
         );
     }
 
+    #[cfg(feature = "redshift")]
+    {
+        registry.insert(
+            "redshift".to_string(),
+            Arc::new(dbflux_driver_redshift::RedshiftDriver::new()),
+        );
+    }
+
     registry
 }
 
