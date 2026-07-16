@@ -120,6 +120,51 @@ pub(crate) fn retain_database_cache_entries<T>(
     removed.into_iter().collect()
 }
 
+/// Waits for the connection teardown thread so post-disconnect hooks observe
+/// a fully closed connection instead of racing the driver's cancel/close work
+/// (e.g. the kill connection MySQL opens over the tunnel).
+///
+/// The wait is bounded so a wedged teardown cannot stall the disconnect task
+/// forever; hitting the deadline returns a warning for the hook-warning toast.
+/// Cancellation short-circuits the wait and defers to the hook phase runner's
+/// own cancellation handling.
+async fn wait_for_connection_teardown(
+    teardown: std::thread::JoinHandle<()>,
+    cancel_token: &dbflux_core::CancelToken,
+    cx: &gpui::AsyncApp,
+) -> Option<String> {
+    const TEARDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
+    let deadline = std::time::Instant::now() + TEARDOWN_DEADLINE;
+
+    while !teardown.is_finished() {
+        if cancel_token.is_cancelled() {
+            return None;
+        }
+
+        if std::time::Instant::now() >= deadline {
+            log::warn!(
+                "Connection teardown still running after {}s; post-disconnect hooks proceed anyway",
+                TEARDOWN_DEADLINE.as_secs()
+            );
+            return Some(format!(
+                "connection teardown was still running after {}s; post-disconnect hooks may have run while the connection was closing",
+                TEARDOWN_DEADLINE.as_secs()
+            ));
+        }
+
+        cx.background_executor()
+            .timer(std::time::Duration::from_millis(50))
+            .await;
+    }
+
+    if teardown.join().is_err() {
+        log::warn!("Connection teardown thread panicked");
+    }
+
+    None
+}
+
 impl Sidebar {
     pub fn connect_to_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
         self.connect_to_profile_inner(profile_id, None, false, cx);
@@ -859,12 +904,12 @@ impl Sidebar {
                 }
             });
 
-            if let Err(update_error) = cx.update(|cx| {
-                app_state.update(cx, |state, cx| {
-                    state.disconnect(profile_id);
-                    state.cancel_detached_hook_tasks(profile_id);
+            let teardown = match cx.update(|cx| {
+                let teardown = app_state.update(cx, |state, cx| {
+                    let teardown = state.disconnect(profile_id);
                     cx.emit(AppStateChanged);
                     cx.notify();
+                    teardown
                 });
                 // Cancel in-flight metric catalog fetches for this profile so
                 // that stale data from a previous account cannot land in the
@@ -878,9 +923,38 @@ impl Sidebar {
                     sidebar.drop_pending_metric_fetches(profile_id);
                     sidebar.clear_instance_catalog_cache(profile_id);
                 });
+                teardown
+            }) {
+                Ok(teardown) => teardown,
+                Err(update_error) => {
+                    log::warn!(
+                        "Failed to apply disconnect transition to app state: {:?}",
+                        update_error
+                    );
+                    None
+                }
+            };
+
+            // Teardown ordering: disconnect() only spawns the teardown thread
+            // and returns, so both follow-up steps must wait for it. Detached
+            // hook processes may own the tunnel the driver's kill connection
+            // travels through, and post-disconnect hooks must observe a fully
+            // closed connection instead of racing the cancel/close work.
+            if let Some(teardown) = teardown
+                && let Some(warning) =
+                    wait_for_connection_teardown(teardown, &cancel_token, cx).await
+            {
+                hook_warnings.push(warning);
+            }
+
+            if let Err(update_error) = cx.update(|cx| {
+                app_state.update(cx, |state, cx| {
+                    state.cancel_detached_hook_tasks(profile_id);
+                    cx.emit(AppStateChanged);
+                });
             }) {
                 log::warn!(
-                    "Failed to apply disconnect transition to app state: {:?}",
+                    "Failed to cancel detached hook tasks after disconnect: {:?}",
                     update_error
                 );
             }
@@ -1008,7 +1082,9 @@ impl Sidebar {
         self.clear_instance_catalog_cache(profile_id);
         self.app_state.update(cx, |state, cx| {
             state.cancel_detached_hook_tasks(profile_id);
-            state.disconnect(profile_id);
+            // Refresh does not run disconnect hooks, so nothing is ordered
+            // after the teardown; it stays detached.
+            let _teardown = state.disconnect(profile_id);
             log::info!("Refreshing connection for profile {}", profile_id);
             cx.notify();
         });
@@ -1067,5 +1143,111 @@ impl Sidebar {
         }
 
         cx.emit(SidebarEvent::RequestEditConnection { profile_id });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wait_for_connection_teardown;
+    use dbflux_core::CancelToken;
+    use gpui::TestAppContext;
+    use std::sync::mpsc;
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::time::Duration;
+
+    /// Spawns a thread that blocks until the returned gate is released,
+    /// standing in for a driver teardown stuck on cancel/close work.
+    fn gated_teardown_thread() -> (std::thread::JoinHandle<()>, Arc<(Mutex<bool>, Condvar)>) {
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+
+        let thread_gate = gate.clone();
+        let handle = std::thread::spawn(move || {
+            let (lock, condvar) = &*thread_gate;
+
+            let mut released = lock.lock().expect("gate lock");
+            while !*released {
+                released = condvar.wait(released).expect("gate wait");
+            }
+        });
+
+        (handle, gate)
+    }
+
+    fn release_gate(gate: &Arc<(Mutex<bool>, Condvar)>) {
+        let (lock, condvar) = &**gate;
+        *lock.lock().expect("gate lock") = true;
+        condvar.notify_all();
+    }
+
+    #[gpui::test]
+    fn wait_for_connection_teardown_waits_until_thread_completes(cx: &mut TestAppContext) {
+        let (teardown, gate) = gated_teardown_thread();
+        let cancel_token = CancelToken::new();
+
+        let (done_sender, done_receiver) = mpsc::channel();
+        cx.update(|cx| {
+            cx.spawn(async move |cx| {
+                let warning = wait_for_connection_teardown(teardown, &cancel_token, cx).await;
+                done_sender.send(warning).expect("test completion receiver");
+            })
+            .detach();
+        });
+
+        cx.run_until_parked();
+        cx.executor().advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        assert!(
+            done_receiver.try_recv().is_err(),
+            "wait must not complete while the teardown thread is still running"
+        );
+
+        release_gate(&gate);
+
+        // The teardown is a real OS thread while timers use the fake test
+        // clock, so retry a few polls to absorb scheduling latency.
+        let mut warning = None;
+        for _ in 0..100 {
+            cx.executor().advance_clock(Duration::from_millis(50));
+            cx.run_until_parked();
+
+            match done_receiver.try_recv() {
+                Ok(result) => {
+                    warning = Some(result);
+                    break;
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(5)),
+            }
+        }
+
+        assert_eq!(
+            warning,
+            Some(None),
+            "wait must complete without a warning once the teardown thread finishes"
+        );
+    }
+
+    #[gpui::test]
+    fn wait_for_connection_teardown_stops_on_cancellation(cx: &mut TestAppContext) {
+        let (teardown, gate) = gated_teardown_thread();
+        let cancel_token = CancelToken::new();
+        cancel_token.cancel();
+
+        let (done_sender, done_receiver) = mpsc::channel();
+        cx.update(|cx| {
+            cx.spawn(async move |cx| {
+                let warning = wait_for_connection_teardown(teardown, &cancel_token, cx).await;
+                done_sender.send(warning).expect("test completion receiver");
+            })
+            .detach();
+        });
+
+        cx.run_until_parked();
+        assert_eq!(
+            done_receiver.try_recv().ok(),
+            Some(None),
+            "a cancelled disconnect must stop waiting even while teardown is running"
+        );
+
+        release_gate(&gate);
     }
 }

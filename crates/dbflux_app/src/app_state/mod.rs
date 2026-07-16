@@ -165,12 +165,19 @@ impl AppState {
         self.facade.connections.set_active_connection(profile_id);
     }
 
-    pub fn disconnect(&mut self, profile_id: Uuid) {
-        self.facade.connections.disconnect(profile_id);
+    /// Disconnects the profile and returns the teardown thread's handle so
+    /// callers can wait for the connection to be fully closed before running
+    /// ordered follow-up work (post-disconnect hooks). See
+    /// `ConnectionManager::disconnect`.
+    pub fn disconnect(&mut self, profile_id: Uuid) -> Option<std::thread::JoinHandle<()>> {
+        let teardown = self.facade.connections.disconnect(profile_id);
+
         // Evict stale metric catalog data for this connection.
         self.metric_catalog_cache.invalidate(profile_id);
         // Evict the cached remote dashboard listing for this connection.
         self.remote_dashboard_cache.invalidate(profile_id);
+
+        teardown
     }
 
     /// Access the session-scoped metric catalog cache.

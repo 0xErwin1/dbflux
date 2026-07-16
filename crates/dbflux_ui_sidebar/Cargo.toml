@@ -26,6 +26,7 @@ dirs.workspace = true
 [dev-dependencies]
 dbflux_storage.workspace = true
 rusqlite.workspace = true
+gpui = { workspace = true, features = ["test-support"] }
 
 [features]
 default = []

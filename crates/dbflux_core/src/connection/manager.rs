@@ -715,27 +715,38 @@ impl ConnectionManager {
         self.active_connection_id = Some(id);
     }
 
-    pub fn disconnect(&mut self, profile_id: Uuid) {
-        if let Some(connected) = self.connections.remove(&profile_id) {
+    /// Removes the connection and tears it down on a background thread.
+    ///
+    /// Teardown includes cancelling active work (which may open a separate
+    /// kill connection over the same tunnel) and dropping the connection
+    /// handles. Returns the teardown thread's handle so callers that must
+    /// order work after the connection is fully closed — post-disconnect
+    /// hooks in particular — can wait for it. Dropping the handle detaches
+    /// the thread, preserving the old fire-and-forget behavior.
+    pub fn disconnect(&mut self, profile_id: Uuid) -> Option<std::thread::JoinHandle<()>> {
+        let teardown = self.connections.remove(&profile_id).map(|connected| {
             std::thread::spawn(move || {
                 connected.connection.cancel_active().log_err();
                 for db_conn in connected.database_connections.values() {
                     db_conn.connection.cancel_active().log_err();
                 }
                 drop(connected);
-            });
-        }
+            })
+        });
 
         if self.active_connection_id == Some(profile_id) {
             self.active_connection_id = self.connections.keys().next().copied();
         }
+
+        teardown
     }
 
     #[allow(dead_code)]
     pub fn disconnect_all(&mut self) {
         let ids: Vec<Uuid> = self.connections.keys().copied().collect();
         for id in ids {
-            self.disconnect(id);
+            // Bulk teardown stays detached; nothing is ordered after it.
+            let _teardown = self.disconnect(id);
         }
     }
 
@@ -3010,6 +3021,110 @@ mod tests {
         assert!(
             !profile.read_only_flag,
             "read_only_flag must default to false (H-4, DR-12.7)"
+        );
+    }
+
+    /// Connection whose `cancel_active` blocks until the test releases a gate,
+    /// mimicking a driver opening a kill connection over a slow tunnel.
+    struct GatedCancelConnection {
+        inner: TestConnection,
+        gate: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+    }
+
+    impl Connection for GatedCancelConnection {
+        fn metadata(&self) -> &DriverMetadata {
+            self.inner.metadata()
+        }
+
+        fn ping(&self) -> Result<(), DbError> {
+            self.inner.ping()
+        }
+
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn execute(&self, req: &crate::QueryRequest) -> Result<crate::QueryResult, DbError> {
+            self.inner.execute(req)
+        }
+
+        fn cancel(&self, handle: &crate::QueryHandle) -> Result<(), DbError> {
+            self.inner.cancel(handle)
+        }
+
+        fn cancel_active(&self) -> Result<(), DbError> {
+            let (lock, condvar) = &*self.gate;
+
+            let mut released = lock.lock().expect("gate lock");
+            while !*released {
+                released = condvar.wait(released).expect("gate wait");
+            }
+
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            self.inner.schema()
+        }
+
+        fn kind(&self) -> DbKind {
+            self.inner.kind()
+        }
+
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            self.inner.schema_loading_strategy()
+        }
+
+        fn dialect(&self) -> &dyn crate::SqlDialect {
+            self.inner.dialect()
+        }
+    }
+
+    #[test]
+    fn disconnect_teardown_handle_completes_only_after_cancel_finishes() {
+        let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let connection = Arc::new(GatedCancelConnection {
+            inner: TestConnection::new(DbKind::MySQL, SchemaLoadingStrategy::LazyPerDatabase),
+            gate: gate.clone(),
+        });
+
+        let profile = ConnectionProfile::new("gated", DbConfig::default_postgres());
+        let profile_id = profile.id;
+
+        let mut manager = ConnectionManager::new(HashMap::new());
+        manager.add_connection(profile, connection, None, None, false);
+
+        let teardown = manager
+            .disconnect(profile_id)
+            .expect("connected profile must yield a teardown handle");
+
+        assert!(
+            !manager.connections.contains_key(&profile_id),
+            "connection must be removed from the manager immediately"
+        );
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(
+            !teardown.is_finished(),
+            "teardown must not report finished while cancel_active is still running"
+        );
+
+        {
+            let (lock, condvar) = &*gate;
+            *lock.lock().expect("gate lock") = true;
+            condvar.notify_all();
+        }
+
+        teardown.join().expect("teardown thread must finish");
+    }
+
+    #[test]
+    fn disconnect_returns_no_teardown_for_unknown_profile() {
+        let mut manager = ConnectionManager::new(HashMap::new());
+
+        assert!(
+            manager.disconnect(Uuid::new_v4()).is_none(),
+            "unknown profile must not spawn a teardown thread"
         );
     }
 }
