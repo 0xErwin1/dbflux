@@ -51,7 +51,7 @@ pub async fn run_mcp_server(args: McpServerArgs) -> anyhow::Result<()> {
     // to the audit database.  The clone shares the underlying SQLite
     // connection with the service held by McpRuntime.
     if let Some(ref handle) = bridge_handle {
-        let audit_clone = state.runtime.blocking_read().audit_service().clone();
+        let audit_clone = state.runtime.read().await.audit_service().clone();
         if let Err(err) = handle.install_sink(Arc::new(audit_clone)) {
             log::warn!("Failed to install audit bridge sink: {err}");
         }
