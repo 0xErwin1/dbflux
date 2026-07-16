@@ -5,9 +5,11 @@ use crate::TableInfo;
 
 /// A hash over the schema-relevant properties of a table.
 ///
-/// Covers column names, types, nullability, PK flags, and FK target tuples in
-/// declaration order. Column ordering is intentional: reordering columns counts
-/// as a change because it affects positional query results.
+/// Covers column names, types, nullability, PK flags, and FK target tuples.
+/// Column ordering is intentional: reordering columns counts as a change
+/// because it affects positional query results. FK tuples are hashed in
+/// sorted order instead, matching `diff_table_info`: drivers do not guarantee
+/// a stable FK order, so declaration order must not change the fingerprint.
 ///
 /// NOTE: built on `DefaultHasher`, which is NOT stable across Rust versions or
 /// processes. This cache is per-session only. Do NOT persist fingerprints to
@@ -33,13 +35,27 @@ impl SchemaFingerprint {
             }
         }
 
-        // Hash foreign-key tuples in declared order.
+        // Hash foreign-key tuples in sorted order; drivers return FKs in an
+        // unstable order and a mere reordering is not a schema change.
         if let Some(fks) = &info.foreign_keys {
-            for fk in fks {
-                fk.columns.hash(&mut hasher);
-                fk.referenced_schema.hash(&mut hasher);
-                fk.referenced_table.hash(&mut hasher);
-                fk.referenced_columns.hash(&mut hasher);
+            let mut tuples: Vec<_> = fks
+                .iter()
+                .map(|fk| {
+                    (
+                        &fk.columns,
+                        &fk.referenced_schema,
+                        &fk.referenced_table,
+                        &fk.referenced_columns,
+                    )
+                })
+                .collect();
+            tuples.sort();
+
+            for (columns, referenced_schema, referenced_table, referenced_columns) in tuples {
+                columns.hash(&mut hasher);
+                referenced_schema.hash(&mut hasher);
+                referenced_table.hash(&mut hasher);
+                referenced_columns.hash(&mut hasher);
             }
         }
 
@@ -84,15 +100,30 @@ impl SchemaFingerprint {
 
         hasher.update([0xFFu8]);
 
+        // Sorted for the same reason as `from_table_info`: FK declaration
+        // order is driver noise, not a schema change.
         if let Some(fks) = &info.foreign_keys {
-            for fk in fks {
-                hasher.update(fk.columns.join(","));
+            let mut tuples: Vec<_> = fks
+                .iter()
+                .map(|fk| {
+                    (
+                        fk.columns.join(","),
+                        fk.referenced_schema.clone().unwrap_or_default(),
+                        fk.referenced_table.clone(),
+                        fk.referenced_columns.join(","),
+                    )
+                })
+                .collect();
+            tuples.sort();
+
+            for (columns, referenced_schema, referenced_table, referenced_columns) in tuples {
+                hasher.update(columns);
                 hasher.update([0u8]);
-                hasher.update(fk.referenced_schema.as_deref().unwrap_or(""));
+                hasher.update(referenced_schema);
                 hasher.update([0u8]);
-                hasher.update(&fk.referenced_table);
+                hasher.update(referenced_table);
                 hasher.update([0u8]);
-                hasher.update(fk.referenced_columns.join(","));
+                hasher.update(referenced_columns);
                 hasher.update([0u8]);
             }
         }
@@ -204,6 +235,51 @@ mod tests {
         assert_ne!(
             SchemaFingerprint::from_table_info(&original),
             SchemaFingerprint::from_table_info(&table)
+        );
+    }
+
+    fn two_foreign_keys() -> Vec<ForeignKeyInfo> {
+        vec![
+            ForeignKeyInfo {
+                name: "fk_users_org".to_string(),
+                columns: vec!["org_id".to_string()],
+                referenced_table: "organizations".to_string(),
+                referenced_schema: Some("public".to_string()),
+                referenced_columns: vec!["id".to_string()],
+                on_delete: None,
+                on_update: None,
+            },
+            ForeignKeyInfo {
+                name: "fk_users_team".to_string(),
+                columns: vec!["team_id".to_string()],
+                referenced_table: "teams".to_string(),
+                referenced_schema: Some("public".to_string()),
+                referenced_columns: vec!["id".to_string()],
+                on_delete: None,
+                on_update: None,
+            },
+        ]
+    }
+
+    /// Drivers return FKs in an unstable order; a reordering is not a schema
+    /// change and used to surface as a drift modal with an empty diff.
+    #[test]
+    fn fk_reorder_produces_same_fingerprint() {
+        let mut forward = base_table();
+        forward.foreign_keys = Some(two_foreign_keys());
+
+        let mut reversed = base_table();
+        let mut fks = two_foreign_keys();
+        fks.reverse();
+        reversed.foreign_keys = Some(fks);
+
+        assert_eq!(
+            SchemaFingerprint::from_table_info(&forward),
+            SchemaFingerprint::from_table_info(&reversed)
+        );
+        assert_eq!(
+            SchemaFingerprint::stable_hex(&forward),
+            SchemaFingerprint::stable_hex(&reversed)
         );
     }
 

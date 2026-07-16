@@ -32,8 +32,11 @@ pub enum DriftOutcome {
 /// per-table outcome. Called from inside the blocking background task so its
 /// I/O-free path is always unit-testable.
 ///
-/// Returns `None` when the two snapshots are fingerprint-identical (no drift).
-/// Returns `Some(changes)` when they differ.
+/// Returns `None` when the two snapshots are fingerprint-identical (no drift),
+/// or when the fingerprints differ but the diff yields no reportable change
+/// (orderings and other driver noise the diff intentionally ignores). A drift
+/// modal with an empty change list would tell the user nothing actionable.
+/// Returns `Some(changes)` when there is at least one reportable change.
 pub fn check_drift_sync(
     cached: &TableInfo,
     fresh: &TableInfo,
@@ -45,7 +48,12 @@ pub fn check_drift_sync(
         return None;
     }
 
-    Some(diff_table_info(cached, fresh))
+    let changes = diff_table_info(cached, fresh);
+    if changes.is_empty() {
+        return None;
+    }
+
+    Some(changes)
 }
 
 /// Locates the cached entry for a referenced table. An explicit query
@@ -284,6 +292,36 @@ mod tests {
         assert!(
             check_drift_sync(&table, &table).is_none(),
             "identical tables must produce no drift"
+        );
+    }
+
+    /// A fingerprint difference without a reportable diff must not surface a
+    /// drift modal; the modal would render an empty change table. Reordering
+    /// non-PK columns is such a case: the fingerprint is position-sensitive,
+    /// while the diff matches columns by name and reports nothing.
+    #[test]
+    fn outcome_no_drift_when_diff_yields_no_changes() {
+        let cached = make_table(
+            "users",
+            vec![
+                col("id", "integer", false, true),
+                col("email", "text", false, false),
+                col("name", "text", true, false),
+            ],
+        );
+
+        let fresh = make_table(
+            "users",
+            vec![
+                col("id", "integer", false, true),
+                col("name", "text", true, false),
+                col("email", "text", false, false),
+            ],
+        );
+
+        assert!(
+            check_drift_sync(&cached, &fresh).is_none(),
+            "a column reorder has no renderable diff and must not open the modal"
         );
     }
 
