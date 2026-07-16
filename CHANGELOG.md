@@ -6,6 +6,17 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Context-aware SQL autocomplete in the query editor** — Completion in the
+  SQL editor now follows where the cursor sits instead of listing every
+  identifier the connection knows: tables and views after `FROM`/`JOIN`,
+  columns scoped to the tables actually referenced in the statement, relation
+  aliases, CTE names, and `SELECT` output aliases in `GROUP BY` / `ORDER BY` /
+  `HAVING`. It parses with tree-sitter so it holds up on half-typed queries,
+  prefetches column metadata in the background so a table no longer needs a
+  sidebar expand first, and hydrates from the latest deep schema snapshot on
+  connect so it starts warm after a restart. Every relational driver benefits;
+  non-SQL dialects keep their existing keyword completion.
+
 * **Data transfer — Export, Import, and same-engine Migration for SQL databases** —
   A new transfer engine moves SQL data without leaving DBFlux. Multi-select
   tables in the sidebar and **Export** them to a folder (one CSV or JSON file

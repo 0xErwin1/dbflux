@@ -45,6 +45,7 @@ use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
     InsertTextFormat, Position as LspPosition, Range as LspRange, TextEdit,
 };
+use std::cell::Cell;
 use std::cmp::min;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
@@ -251,6 +252,15 @@ pub(super) struct EditorState {
     pub(super) path: Option<PathBuf>,
     pub(super) is_dirty: bool,
     pub(super) suppress_dirty: bool,
+    /// Buffer length at the previous `Change` event, to detect deletions.
+    pub(super) last_change_length: usize,
+    /// Shared with the completion provider, which bumps it on every query.
+    /// A deletion that did NOT bump it was ignored by the menu plumbing
+    /// (cursor deleted back past the menu's trigger start) and would leave a
+    /// stale menu open; the Change handler force-closes it then.
+    pub(super) completion_query_generation: Rc<Cell<u64>>,
+    /// Value of `completion_query_generation` at the previous `Change` event.
+    pub(super) last_completion_generation: u64,
     pub(super) query_language: QueryLanguage,
 }
 
@@ -532,21 +542,22 @@ impl CodeDocument {
                 .placeholder(placeholder)
         });
 
-        let completion_provider: Rc<dyn CompletionProvider> = Rc::new(
-            QueryCompletionProvider::new(query_language.clone(), app_state.clone(), connection_id),
-        );
+        let completion_query_generation = Rc::new(std::cell::Cell::new(0u64));
         let supports_connection_context = editor_profile.supports_connection_context;
-
-        input_state.update(cx, |state, _cx| {
-            state.lsp.completion_provider =
-                supports_connection_context.then_some(completion_provider.clone());
-        });
 
         let input_change_sub = cx.subscribe_in(
             &input_state,
             window,
-            |this, _input, event: &InputEvent, _window, cx| match event {
+            |this, input, event: &InputEvent, _window, cx| match event {
                 InputEvent::Change => {
+                    let current_length = input.read(cx).text().len();
+                    let previous_length =
+                        std::mem::replace(&mut this.editor.last_change_length, current_length);
+
+                    let generation = this.editor.completion_query_generation.get();
+                    let provider_queried = generation != this.editor.last_completion_generation;
+                    this.editor.last_completion_generation = generation;
+
                     if this.editor.suppress_dirty {
                         // Programmatic change (set_content, initial load, or revert):
                         // consume the flag and do nothing else. This prevents an
@@ -561,6 +572,24 @@ impl CodeDocument {
                         this.editor.suppress_dirty = true;
                         this.set_content(&original, _window, cx);
                     } else {
+                        if current_length < previous_length
+                            && !provider_queried
+                            && this.editor.current_editor_mode == "sql"
+                        {
+                            // The menu plumbing ignores deletions once the menu
+                            // lost its trigger anchor, leaving a stale menu (or
+                            // none). No public API for either side: the cursor
+                            // move closes whatever is open, the zero-length edit
+                            // reopens a fresh menu at the new position. The
+                            // no-op edit joins the deletion's undo group, so
+                            // undo is unaffected.
+                            input.update(cx, |state, cx| {
+                                let position = state.cursor_position();
+                                state.set_cursor_position(position, _window, cx);
+                                state.replace_text_in_range(None, "", _window, cx);
+                            });
+                        }
+
                         this.mark_dirty(cx);
                         this.schedule_auto_save(cx);
                         this.schedule_diagnostic_refresh(cx);
@@ -754,6 +783,20 @@ impl CodeDocument {
             exec_ctx.schema = Some("public".to_string());
         }
 
+        let completion_provider: Rc<dyn CompletionProvider> =
+            Rc::new(QueryCompletionProvider::new(
+                query_language.clone(),
+                app_state.clone(),
+                connection_id,
+                exec_ctx.database.clone(),
+                completion_query_generation.clone(),
+            ));
+
+        input_state.update(cx, |state, _cx| {
+            state.lsp.completion_provider =
+                supports_connection_context.then_some(completion_provider.clone());
+        });
+
         let (connection_dropdown, conn_sub) =
             Self::create_connection_dropdown(&app_state, &exec_ctx, window, cx);
         let (database_dropdown, db_sub) =
@@ -843,6 +886,9 @@ impl CodeDocument {
                 path: None,
                 is_dirty: false,
                 suppress_dirty: false,
+                last_change_length: 0,
+                completion_query_generation,
+                last_completion_generation: 0,
                 query_language,
             },
             source: SourceContext {

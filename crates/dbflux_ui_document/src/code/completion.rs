@@ -1,13 +1,42 @@
 use super::*;
 use crate::completion_support::{
     byte_offset_to_lsp_position, completion_replace_range, extract_identifier_prefix,
-    is_identifier_byte, normalize_identifier, push_completion_item, scan_identifier_start,
+    is_identifier_byte, normalize_identifier, push_completion_item, push_completion_item_ranked,
+    scan_identifier_start,
 };
+use dbflux_core::{SqlCompletionContext, SqlContextEngine, SqlCursorAnalysis};
+use std::cell::{Cell, RefCell};
+
+/// Rank groups for context-aware SQL completion (`sort_text` prefix): the
+/// items the context asks for come first, keywords last.
+const RANK_PRIMARY: u8 = 0;
+const RANK_SECONDARY: u8 = 1;
+const RANK_KEYWORD: u8 = 2;
+
+/// `(database, schema, table)` fetch key for a table-details prefetch.
+type PrefetchKey = (String, Option<String>, String);
 
 pub(super) struct QueryCompletionProvider {
     query_language: dbflux_core::QueryLanguage,
     app_state: Entity<AppStateEntity>,
     connection_id: Option<Uuid>,
+    /// The document's selected database (document-local; the document
+    /// reattaches the provider when it changes).
+    database: Option<String>,
+    /// Fetch keys with an in-flight or completed table-details prefetch. A
+    /// key is added once the fetch is actually spawned and removed if the
+    /// fetch fails, so a transient error does not block retry for the session.
+    /// Shared with the spawned task so it can release the key on failure.
+    prefetched_tables: Rc<RefCell<HashSet<PrefetchKey>>>,
+    /// Databases with an in-flight or completed schema-listing prefetch, same
+    /// add-on-spawn / remove-on-failure discipline as `prefetched_tables`.
+    prefetched_databases: Rc<RefCell<HashSet<String>>>,
+    /// `None` when the grammar failed to load; completion then stays on the
+    /// heuristic path.
+    sql_context: Option<SqlContextEngine>,
+    /// Bumped per `completions()` call; the editor's Change handler uses it
+    /// to detect deletions the menu plumbing ignored.
+    completion_query_generation: Rc<Cell<u64>>,
 }
 
 impl QueryCompletionProvider {
@@ -15,11 +44,18 @@ impl QueryCompletionProvider {
         query_language: dbflux_core::QueryLanguage,
         app_state: Entity<AppStateEntity>,
         connection_id: Option<Uuid>,
+        database: Option<String>,
+        completion_query_generation: Rc<Cell<u64>>,
     ) -> Self {
         Self {
             query_language,
             app_state,
             connection_id,
+            database,
+            prefetched_tables: Rc::new(RefCell::new(HashSet::new())),
+            prefetched_databases: Rc::new(RefCell::new(HashSet::new())),
+            sql_context: SqlContextEngine::new(),
+            completion_query_generation,
         }
     }
 
@@ -151,6 +187,20 @@ impl QueryCompletionProvider {
         }
     }
 
+    /// The database completion scopes to: the document's selection, then the
+    /// connection's active database, then the snapshot's current database.
+    fn effective_database(&self, connected: &dbflux_core::ConnectedProfile) -> Option<String> {
+        self.database
+            .clone()
+            .or_else(|| connected.active_database.clone())
+            .or_else(|| {
+                connected
+                    .schema
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.current_database().map(String::from))
+            })
+    }
+
     fn sql_completion_metadata(&self, cx: &App) -> SqlCompletionMetadata {
         let Some(connection_id) = self.connection_id else {
             return SqlCompletionMetadata::default();
@@ -164,10 +214,38 @@ impl QueryCompletionProvider {
         let is_document_category =
             connected.connection.metadata().category == dbflux_core::DatabaseCategory::Document;
 
+        // Scope every source to the selected database; tables cached for
+        // other databases must not leak into this tab's suggestions. Without
+        // a selection, lazy-per-database drivers offer nothing rather than
+        // everything, while snapshot-based drivers keep their single catalog.
+        let effective_database = self.effective_database(connected);
+        let lazy_per_database = connected.connection.schema_loading_strategy()
+            == dbflux_core::SchemaLoadingStrategy::LazyPerDatabase;
+        let database_in_scope = |database: &str| {
+            effective_database
+                .as_deref()
+                .map_or(!lazy_per_database, |selected| selected == database)
+        };
+
+        let snapshot = connected.schema.as_ref().filter(|snapshot| {
+            match (effective_database.as_deref(), snapshot.current_database()) {
+                (Some(selected), Some(current)) => selected == current,
+                _ => true,
+            }
+        });
+
         build_sql_completion_metadata(
-            connected.schema.as_ref(),
-            connected.database_schemas.values(),
-            connected.table_details.values(),
+            snapshot,
+            connected
+                .database_schemas
+                .iter()
+                .filter(|(database, _)| database_in_scope(database))
+                .map(|(_, schema)| schema),
+            connected
+                .table_details
+                .iter()
+                .filter(|((database, _, _), _)| database_in_scope(database))
+                .map(|(_, details)| details),
             is_document_category,
         )
     }
@@ -259,8 +337,305 @@ impl QueryCompletionProvider {
         cx: &App,
     ) -> Vec<CompletionItem> {
         let metadata = self.sql_completion_metadata(cx);
-        sql_completion_items(&metadata, source, cursor)
+        let analysis = self
+            .sql_context
+            .as_ref()
+            .and_then(|engine| engine.analyze(source, cursor));
+
+        sql_completion_items_with_context(&metadata, source, cursor, analysis.as_ref())
     }
+
+    /// Background-fetches column details for tables referenced by the statement
+    /// under the cursor, so `table.` / `alias.` completion has columns without
+    /// requiring the user to expand the table in the sidebar first.
+    ///
+    /// Results land in the connection's shared `table_details` cache via
+    /// `set_table_details`, where the next completion request picks them up.
+    /// Failures are logged only (autocomplete is not a user-facing operation).
+    fn prefetch_sql_table_details(
+        &self,
+        source: &str,
+        cursor: usize,
+        cx: &mut Context<InputState>,
+    ) {
+        let Some(connection_id) = self.connection_id else {
+            return;
+        };
+
+        self.prefetch_database_schema(connection_id, cx);
+
+        let statement_range = dbflux_core::QueryLanguage::Sql.statement_bounds_at(source, cursor);
+        let referenced = dbflux_core::extract_referenced_tables(&source[statement_range]);
+        if referenced.is_empty() {
+            return;
+        }
+
+        let keys = {
+            let state = self.app_state.read(cx);
+            let Some(connected) = state.connections().get(&connection_id) else {
+                return;
+            };
+
+            let effective_database = self.effective_database(connected);
+            let lazy_per_database = connected.connection.schema_loading_strategy()
+                == dbflux_core::SchemaLoadingStrategy::LazyPerDatabase;
+
+            // On lazy-per-database drivers a fabricated fallback name would
+            // reach real queries (`` `default`.`table` ``); single-catalog
+            // drivers ignore the database argument, so a placeholder key is
+            // safe there.
+            let snapshot_database = effective_database
+                .as_deref()
+                .or((!lazy_per_database).then_some("default"));
+
+            let known = known_relational_tables(
+                connected.schema.as_ref(),
+                connected.database_schemas.iter().filter(|(database, _)| {
+                    // Same scope as the metadata builder: without a selection,
+                    // lazy-per-database drivers contribute nothing (otherwise
+                    // we would fetch details the menu then discards).
+                    effective_database
+                        .as_deref()
+                        .map_or(!lazy_per_database, |selected| selected == database.as_str())
+                }),
+                snapshot_database,
+            );
+
+            tables_needing_details(&known, &referenced)
+        };
+
+        for key in keys {
+            if self.prefetched_tables.borrow().contains(&key) {
+                continue;
+            }
+
+            let params = match self.app_state.read(cx).prepare_fetch_table_details(
+                connection_id,
+                &key.0,
+                key.1.as_deref(),
+                &key.2,
+            ) {
+                Ok(params) => params,
+                // Already cached, wrong strategy, or disconnected: nothing to
+                // fetch. The key is not marked, so a later keystroke re-checks.
+                Err(_) => continue,
+            };
+
+            self.prefetched_tables.borrow_mut().insert(key.clone());
+
+            let app_state = self.app_state.clone();
+            let prefetched_tables = self.prefetched_tables.clone();
+            let task = cx
+                .background_executor()
+                .spawn(async move { params.execute() });
+
+            cx.spawn(async move |_this, cx| match task.await {
+                Ok(result) => {
+                    cx.update(|cx| {
+                        app_state.update(cx, |state, _| {
+                            state.set_table_details(
+                                result.profile_id,
+                                result.database.clone(),
+                                result.schema.clone(),
+                                result.table.clone(),
+                                result.details,
+                            );
+                            state.set_dependents(
+                                result.profile_id,
+                                result.database,
+                                result.schema,
+                                result.table,
+                                result.dependents,
+                            );
+                        });
+                    })
+                    .ok();
+                }
+                Err(err) => {
+                    // Release the key so a later keystroke can retry.
+                    prefetched_tables.borrow_mut().remove(&key);
+                    log::warn!(
+                        "autocomplete: failed to prefetch table details for {}.{}: {}",
+                        key.0,
+                        key.2,
+                        err
+                    );
+                }
+            })
+            .detach();
+        }
+    }
+
+    /// Background-fetches the table listing for the editor's selected
+    /// database on lazy-per-database drivers, which is otherwise only
+    /// populated when the user expands the database in the sidebar.
+    fn prefetch_database_schema(&self, connection_id: Uuid, cx: &mut Context<InputState>) {
+        let Some(database) = ({
+            let state = self.app_state.read(cx);
+            state
+                .connections()
+                .get(&connection_id)
+                .and_then(|connected| self.effective_database(connected))
+        }) else {
+            return;
+        };
+
+        if self.prefetched_databases.borrow().contains(&database) {
+            return;
+        }
+
+        let params = match self
+            .app_state
+            .read(cx)
+            .prepare_fetch_database_schema(connection_id, &database)
+        {
+            Ok(params) => params,
+            // Wrong loading strategy, already cached, or disconnected: nothing
+            // to fetch. The key is not marked, so a later keystroke re-checks.
+            Err(_) => return,
+        };
+
+        self.prefetched_databases
+            .borrow_mut()
+            .insert(database.clone());
+
+        let app_state = self.app_state.clone();
+        let prefetched_databases = self.prefetched_databases.clone();
+        let task = cx
+            .background_executor()
+            .spawn(async move { params.execute() });
+
+        cx.spawn(async move |_this, cx| match task.await {
+            Ok(result) => {
+                cx.update(|cx| {
+                    app_state.update(cx, |state, _| {
+                        state.set_database_schema(
+                            result.profile_id,
+                            result.database,
+                            result.schema,
+                        );
+                    });
+                })
+                .ok();
+            }
+            Err(err) => {
+                // Release the key so a later keystroke can retry.
+                prefetched_databases.borrow_mut().remove(&database);
+                log::warn!(
+                    "autocomplete: failed to prefetch schema for database {}: {}",
+                    database,
+                    err
+                );
+            }
+        })
+        .detach();
+    }
+}
+
+/// A table from a connection's cached schema listings, tagged with its
+/// `table_details` cache key.
+struct KnownTableListing {
+    database: String,
+    schema: Option<String>,
+    name: String,
+    has_columns: bool,
+}
+
+/// Flattens a connection's relational schema listings into [`KnownTableListing`]s.
+///
+/// Mirrors the sources of [`build_sql_completion_metadata`]: the connect-time
+/// snapshot (top-level tables plus per-schema tables) and the lazily cached
+/// per-database schemas. Snapshot tables are tagged with `snapshot_database`
+/// as their fetch key; without one they are skipped, since there is no valid
+/// key to fetch them under.
+fn known_relational_tables<'a>(
+    snapshot: Option<&dbflux_core::SchemaSnapshot>,
+    database_schemas: impl Iterator<Item = (&'a String, &'a dbflux_core::DbSchemaInfo)>,
+    snapshot_database: Option<&str>,
+) -> Vec<KnownTableListing> {
+    let mut tables = Vec::new();
+
+    if let Some(database) = snapshot_database
+        && let Some(snapshot) = snapshot
+        && let Some(relational) = snapshot.as_relational()
+    {
+        let per_schema = relational.schemas.iter().flat_map(|schema| &schema.tables);
+        for table in relational.tables.iter().chain(per_schema) {
+            tables.push(KnownTableListing {
+                database: database.to_string(),
+                schema: table.schema.clone(),
+                name: table.name.clone(),
+                has_columns: table.columns.is_some(),
+            });
+        }
+    }
+
+    for (database, schema_info) in database_schemas {
+        for table in &schema_info.tables {
+            tables.push(KnownTableListing {
+                database: database.clone(),
+                schema: table.schema.clone(),
+                name: table.name.clone(),
+                has_columns: table.columns.is_some(),
+            });
+        }
+    }
+
+    tables
+}
+
+/// `(database, schema, table)` fetch keys for the referenced tables that are
+/// known but still lack column details.
+///
+/// A schema-qualified reference must also match the listing's schema or
+/// database (dialects with database-level namespaces parse `db.table` as a
+/// schema qualifier); an unqualified reference matches every same-named
+/// listing (fetching all candidates is bounded by the known-table list and
+/// keeps completion working regardless of search-path semantics).
+fn tables_needing_details(
+    known: &[KnownTableListing],
+    referenced: &[dbflux_core::QueryTableRef],
+) -> Vec<PrefetchKey> {
+    let mut keys = Vec::new();
+
+    for table_ref in referenced {
+        let name = normalize_identifier(&table_ref.table);
+
+        for table in known {
+            if table.has_columns || normalize_identifier(&table.name) != name {
+                continue;
+            }
+
+            if let Some(qualifier) = &table_ref.schema {
+                let qualifier = normalize_identifier(qualifier);
+                let schema_matches = table
+                    .schema
+                    .as_deref()
+                    .is_some_and(|schema| normalize_identifier(schema) == qualifier);
+                let database_matches = normalize_identifier(&table.database) == qualifier;
+
+                if !schema_matches && !database_matches {
+                    continue;
+                }
+            }
+
+            if let Some(database) = &table_ref.database
+                && normalize_identifier(&table.database) != normalize_identifier(database)
+            {
+                continue;
+            }
+
+            keys.push((
+                table.database.clone(),
+                table.schema.clone(),
+                table.name.clone(),
+            ));
+        }
+    }
+
+    keys.sort();
+    keys.dedup();
+    keys
 }
 
 /// Decides whether the editor should route to SQL-style completion.
@@ -346,18 +721,227 @@ fn build_sql_completion_metadata<'a>(
     metadata
 }
 
-fn sql_completion_items(
+/// Push-helper for the SQL item builders: applies the typed-prefix filter and
+/// an optional rank group to whole candidate sets.
+struct SqlItemSink<'a> {
+    items: Vec<CompletionItem>,
+    seen: HashSet<String>,
+    prefix: &'a str,
+    prefix_upper: String,
+    replace_range: lsp_types::Range,
+}
+
+impl SqlItemSink<'_> {
+    fn push_all<'c>(
+        &mut self,
+        candidates: impl IntoIterator<Item = &'c str>,
+        kind: CompletionItemKind,
+        rank: Option<u8>,
+    ) {
+        for candidate in candidates {
+            if !self.prefix_upper.is_empty()
+                && !candidate.to_uppercase().starts_with(&self.prefix_upper)
+            {
+                continue;
+            }
+
+            match rank {
+                Some(rank_group) => push_completion_item_ranked(
+                    &mut self.items,
+                    &mut self.seen,
+                    candidate,
+                    kind,
+                    self.prefix,
+                    self.replace_range,
+                    rank_group,
+                ),
+                None => push_completion_item(
+                    &mut self.items,
+                    &mut self.seen,
+                    candidate,
+                    kind,
+                    self.prefix,
+                    self.replace_range,
+                ),
+            }
+        }
+    }
+
+    fn has_prefix(&self) -> bool {
+        !self.prefix_upper.is_empty()
+    }
+
+    /// Whitespace-triggered menus (empty prefix) only open when the position
+    /// has context-relevant items; a keyword-only popup after every space
+    /// would be noise. Returns true when the sink should stop here.
+    fn stop_before_keywords(&self) -> bool {
+        !self.has_prefix() && self.items.is_empty()
+    }
+
+    /// Items for a table position (after FROM/JOIN/...): CTEs, tables, views,
+    /// then keywords.
+    fn into_table_ref_items(
+        mut self,
+        metadata: &SqlCompletionMetadata,
+        scope: Option<&dbflux_core::StatementScope>,
+    ) -> Vec<CompletionItem> {
+        if let Some(scope) = scope {
+            self.push_all(
+                scope.cte_names.iter().map(String::as_str),
+                CompletionItemKind::STRUCT,
+                Some(RANK_PRIMARY),
+            );
+        }
+
+        self.push_all(
+            metadata.table_names_iter(),
+            CompletionItemKind::STRUCT,
+            Some(RANK_PRIMARY),
+        );
+        self.push_all(
+            metadata.view_names_iter(),
+            CompletionItemKind::STRUCT,
+            Some(RANK_PRIMARY),
+        );
+
+        if self.stop_before_keywords() {
+            return self.items;
+        }
+
+        self.push_all(
+            SQL_KEYWORDS.iter().copied(),
+            CompletionItemKind::KEYWORD,
+            Some(RANK_KEYWORD),
+        );
+        self.items
+    }
+
+    /// Items for a column position: scoped columns (with the referenced-table
+    /// fallback for broken parses), clause-valid SELECT aliases, relation
+    /// aliases, then keywords.
+    fn into_column_ref_items(
+        mut self,
+        metadata: &SqlCompletionMetadata,
+        scope: Option<&dbflux_core::StatementScope>,
+        clause: dbflux_core::SqlClause,
+        source: &str,
+        cursor: usize,
+    ) -> Vec<CompletionItem> {
+        let mut columns = scope.map_or_else(Vec::new, |scope| scoped_columns(metadata, scope));
+
+        // Broken syntax can hide the FROM clause from the parser, leaving the
+        // scope without relations; recover the columns from the referenced
+        // tables so a valid column position still fills.
+        if columns.is_empty() {
+            columns = columns_from_referenced_tables(metadata, source, cursor);
+        }
+
+        // Output aliases (`SELECT c1 * 2 AS a1`) are valid completion targets
+        // where engines resolve them: GROUP BY, ORDER BY, HAVING. Not in WHERE.
+        if matches!(
+            clause,
+            dbflux_core::SqlClause::GroupBy
+                | dbflux_core::SqlClause::OrderBy
+                | dbflux_core::SqlClause::Having
+        ) && let Some(scope) = scope
+        {
+            self.push_all(
+                scope.select_aliases.iter().map(String::as_str),
+                CompletionItemKind::FIELD,
+                Some(RANK_PRIMARY),
+            );
+        }
+
+        if columns.is_empty() {
+            // Scope unresolved (columns not fetched yet, derived tables), so
+            // keep the previous behavior of every known column behind a
+            // non-empty prefix.
+            if self.has_prefix() {
+                self.push_all(
+                    metadata.all_columns_iter(),
+                    CompletionItemKind::FIELD,
+                    Some(RANK_PRIMARY),
+                );
+            }
+        } else {
+            // The context is confident, so scoped columns surface even with an
+            // empty prefix (`WHERE `).
+            self.push_all(columns, CompletionItemKind::FIELD, Some(RANK_PRIMARY));
+        }
+
+        if let Some(scope) = scope {
+            self.push_all(
+                scope
+                    .relations
+                    .iter()
+                    .filter_map(|relation| relation.alias.as_deref()),
+                CompletionItemKind::VARIABLE,
+                Some(RANK_SECONDARY),
+            );
+        }
+
+        if self.stop_before_keywords() {
+            return self.items;
+        }
+
+        self.push_all(
+            SQL_KEYWORDS.iter().copied(),
+            CompletionItemKind::KEYWORD,
+            Some(RANK_KEYWORD),
+        );
+        self.items
+    }
+
+    /// Heuristic fallback when the cursor position could not be classified:
+    /// keywords and (in a table position) tables/views, all prefix-gated so a
+    /// whitespace trigger does not pop a menu.
+    fn into_heuristic_items(
+        mut self,
+        metadata: &SqlCompletionMetadata,
+        before_cursor: &str,
+    ) -> Vec<CompletionItem> {
+        if self.has_prefix() {
+            self.push_all(
+                SQL_KEYWORDS.iter().copied(),
+                CompletionItemKind::KEYWORD,
+                None,
+            );
+        }
+
+        let in_table_context = is_sql_table_context(before_cursor);
+        if in_table_context || self.has_prefix() {
+            self.push_all(
+                metadata.table_names_iter(),
+                CompletionItemKind::STRUCT,
+                None,
+            );
+            self.push_all(metadata.view_names_iter(), CompletionItemKind::STRUCT, None);
+        }
+
+        if !in_table_context && self.has_prefix() {
+            self.push_all(metadata.all_columns_iter(), CompletionItemKind::FIELD, None);
+        }
+
+        self.items
+    }
+}
+
+fn sql_completion_items_with_context(
     metadata: &SqlCompletionMetadata,
     source: &str,
     cursor: usize,
+    analysis: Option<&SqlCursorAnalysis>,
 ) -> Vec<CompletionItem> {
     let (prefix_start, prefix) = extract_identifier_prefix(source, cursor);
-    let prefix_upper = prefix.to_uppercase();
     let before_cursor = &source[..cursor];
-    let replace_range = completion_replace_range(source, prefix_start, cursor);
 
-    let mut seen = HashSet::new();
-    let mut items = Vec::new();
+    let mut sink = SqlItemSink {
+        items: Vec::new(),
+        seen: HashSet::new(),
+        prefix: &prefix,
+        prefix_upper: prefix.to_uppercase(),
+        replace_range: completion_replace_range(source, prefix_start, cursor),
+    };
 
     let has_dot_before_prefix =
         prefix_start > 0 && source.as_bytes().get(prefix_start - 1) == Some(&b'.');
@@ -366,108 +950,24 @@ fn sql_completion_items(
         let qualifier_end = prefix_start - 1;
         let qualifier_start = scan_identifier_start(source, qualifier_end);
         let qualifier = &source[qualifier_start..qualifier_end];
+        let resolved_qualifier = resolve_qualifier(qualifier, analysis, source, cursor);
+        let bare = resolved_qualifier
+            .rsplit_once('.')
+            .map_or(resolved_qualifier.as_str(), |(_, bare)| bare);
 
-        let aliases = extract_sql_aliases(before_cursor);
-        let resolved_qualifier = aliases
-            .get(&normalize_identifier(qualifier))
-            .cloned()
-            .unwrap_or_else(|| normalize_identifier(qualifier));
-
-        for column_name in metadata.columns_for_table(&resolved_qualifier) {
-            if !prefix_upper.is_empty() && !column_name.to_uppercase().starts_with(&prefix_upper) {
-                continue;
-            }
-
-            push_completion_item(
-                &mut items,
-                &mut seen,
-                column_name,
-                CompletionItemKind::FIELD,
-                &prefix,
-                replace_range,
-            );
-        }
-
-        return items;
+        let qualifier_columns = metadata.columns_for_table_or_bare(&resolved_qualifier, bare);
+        sink.push_all(qualifier_columns, CompletionItemKind::FIELD, None);
+        return sink.items;
     }
 
-    for keyword in SQL_KEYWORDS {
-        if !prefix_upper.is_empty() && !keyword.to_uppercase().starts_with(&prefix_upper) {
-            continue;
+    let scope = analysis.map(|analysis| &analysis.scope);
+    match analysis.and_then(|analysis| analysis.context) {
+        Some(SqlCompletionContext::TableRef) => sink.into_table_ref_items(metadata, scope),
+        Some(SqlCompletionContext::ColumnRef { clause }) => {
+            sink.into_column_ref_items(metadata, scope, clause, source, cursor)
         }
-
-        push_completion_item(
-            &mut items,
-            &mut seen,
-            keyword,
-            CompletionItemKind::KEYWORD,
-            &prefix,
-            replace_range,
-        );
+        None => sink.into_heuristic_items(metadata, before_cursor),
     }
-
-    let in_table_context = is_sql_table_context(before_cursor);
-
-    for table_name in metadata.table_names_iter() {
-        if !prefix_upper.is_empty() && !table_name.to_uppercase().starts_with(&prefix_upper) {
-            continue;
-        }
-
-        if !in_table_context && prefix_upper.is_empty() {
-            continue;
-        }
-
-        push_completion_item(
-            &mut items,
-            &mut seen,
-            table_name,
-            CompletionItemKind::STRUCT,
-            &prefix,
-            replace_range,
-        );
-    }
-
-    for view_name in metadata.view_names_iter() {
-        if !prefix_upper.is_empty() && !view_name.to_uppercase().starts_with(&prefix_upper) {
-            continue;
-        }
-
-        if !in_table_context && prefix_upper.is_empty() {
-            continue;
-        }
-
-        push_completion_item(
-            &mut items,
-            &mut seen,
-            view_name,
-            CompletionItemKind::STRUCT,
-            &prefix,
-            replace_range,
-        );
-    }
-
-    if !in_table_context {
-        for column_name in metadata.all_columns_iter() {
-            if !prefix_upper.is_empty() && !column_name.to_uppercase().starts_with(&prefix_upper) {
-                continue;
-            }
-
-            if prefix_upper.is_empty() {
-                continue;
-            }
-
-            push_completion_item(
-                &mut items,
-                &mut seen,
-                column_name,
-                CompletionItemKind::FIELD,
-                &prefix,
-                replace_range,
-            );
-        }
-    }
-
-    items
 }
 
 impl QueryCompletionProvider {
@@ -740,8 +1240,11 @@ impl CompletionProvider for QueryCompletionProvider {
         _window: &mut Window,
         _cx: &mut Context<InputState>,
     ) -> Task<anyhow::Result<CompletionResponse>> {
+        self.completion_query_generation
+            .set(self.completion_query_generation.get() + 1);
+
         let source = text.to_string();
-        let cursor = min(offset, source.len());
+        let cursor = source.floor_char_boundary(offset);
 
         let use_sql = should_use_sql_completion(
             &self.query_language,
@@ -750,6 +1253,7 @@ impl CompletionProvider for QueryCompletionProvider {
         );
 
         let items = if use_sql {
+            self.prefetch_sql_table_details(&source, cursor, _cx);
             self.completion_items_for_sql(&source, cursor, _cx)
         } else {
             match self.query_language {
@@ -795,14 +1299,30 @@ impl CompletionProvider for QueryCompletionProvider {
         &self,
         _offset: usize,
         new_text: &str,
-        _cx: &mut Context<InputState>,
+        cx: &mut Context<InputState>,
     ) -> bool {
+        // Deletions arrive as an empty replacement. Letting them through
+        // makes an open menu re-query at the new cursor position (refresh,
+        // or hide via an empty item list) instead of going stale next to the
+        // removed context.
+        if new_text.is_empty() {
+            return self.is_sql_style_editor(cx);
+        }
+
         if new_text.len() != 1 {
             return false;
         }
 
         let ch = new_text.as_bytes()[0] as char;
-        ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' || ch == '$'
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' || ch == '$' {
+            return true;
+        }
+
+        // On SQL-style editors whitespace also triggers, so the menu opens
+        // right after clause keywords (`FROM `, `WHERE `) without typing a
+        // prefix. The item builders return an empty list for positions with
+        // nothing context-relevant, which keeps the menu closed there.
+        (ch == ' ' || ch == '\n') && self.is_sql_style_editor(cx)
     }
 }
 
@@ -902,6 +1422,17 @@ impl SqlCompletionMetadata {
             .get(table_name)
             .map(|columns| columns.iter().map(|c| c.as_str()).collect())
             .unwrap_or_default()
+    }
+
+    /// Columns for `key`, falling back to the bare table name when the
+    /// qualified key misses. A cached `TableInfo` may carry no schema, so a
+    /// `schema.table` key does not hit; the bare name still does.
+    fn columns_for_table_or_bare(&self, key: &str, bare: &str) -> Vec<&str> {
+        let columns = self.columns_for_table(key);
+        if columns.is_empty() && key != bare {
+            return self.columns_for_table(bare);
+        }
+        columns
     }
 
     fn table_names_iter(&self) -> impl Iterator<Item = &str> {
@@ -1205,8 +1736,96 @@ fn tokenize_sql_identifiers(sql: &str) -> Vec<String> {
     tokens
 }
 
-fn extract_sql_aliases(sql_before_cursor: &str) -> HashMap<String, String> {
-    let tokens = tokenize_sql_identifiers(sql_before_cursor);
+/// Resolves a dot-qualifier (`a.` / `t.` / `s.t.`) to the normalized
+/// `columns_by_table` key.
+///
+/// The tree-sitter scope resolves first. It is subquery-aware, so an inner
+/// alias shadows an outer one. The token-based alias walk stays as fallback
+/// for buffers the grammar mangles (e.g. a SELECT list typed before its FROM
+/// clause exists).
+fn resolve_qualifier(
+    qualifier: &str,
+    analysis: Option<&SqlCursorAnalysis>,
+    source: &str,
+    cursor: usize,
+) -> String {
+    let normalized = normalize_identifier(qualifier);
+
+    if let Some(analysis) = analysis {
+        for relation in &analysis.scope.relations {
+            let alias_matches = relation
+                .alias
+                .as_deref()
+                .is_some_and(|alias| normalize_identifier(alias) == normalized);
+
+            if alias_matches {
+                return relation_metadata_key(relation);
+            }
+        }
+    }
+
+    let statement_range = dbflux_core::QueryLanguage::Sql.statement_bounds_at(source, cursor);
+    let aliases = extract_sql_aliases(&source[statement_range]);
+    aliases.get(&normalized).cloned().unwrap_or(normalized)
+}
+
+/// The columns of every relation in scope, innermost query level first.
+fn scoped_columns<'a>(
+    metadata: &'a SqlCompletionMetadata,
+    scope: &dbflux_core::StatementScope,
+) -> Vec<&'a str> {
+    let mut columns = Vec::new();
+
+    for relation in &scope.relations {
+        columns.extend(metadata.columns_for_table_or_bare(
+            &relation_metadata_key(relation),
+            &normalize_identifier(&relation.table),
+        ));
+    }
+
+    columns
+}
+
+/// The normalized `columns_by_table` key for a scope relation:
+/// schema-qualified when the reference was, bare otherwise (`add_table`
+/// indexes each table under both forms).
+fn relation_metadata_key(relation: &dbflux_core::ScopeRelation) -> String {
+    match &relation.schema {
+        Some(schema) => normalize_identifier(&format!("{}.{}", schema, relation.table)),
+        None => normalize_identifier(&relation.table),
+    }
+}
+
+/// Columns of the tables referenced by the cursor's statement, resolved via
+/// the keyword-based table extractor.
+///
+/// Fallback for when the tree-sitter scope is empty because half-typed syntax
+/// broke the parse (e.g. a trailing comma in a SELECT list swallows the FROM
+/// clause). The extractor is grammar-tolerant and still finds the tables.
+fn columns_from_referenced_tables<'a>(
+    metadata: &'a SqlCompletionMetadata,
+    source: &str,
+    cursor: usize,
+) -> Vec<&'a str> {
+    let statement_range = dbflux_core::QueryLanguage::Sql.statement_bounds_at(source, cursor);
+    let mut columns = Vec::new();
+
+    for table_ref in dbflux_core::extract_referenced_tables(&source[statement_range]) {
+        let key = match &table_ref.schema {
+            Some(schema) => normalize_identifier(&format!("{}.{}", schema, table_ref.table)),
+            None => normalize_identifier(&table_ref.table),
+        };
+
+        columns.extend(
+            metadata.columns_for_table_or_bare(&key, &normalize_identifier(&table_ref.table)),
+        );
+    }
+
+    columns
+}
+
+fn extract_sql_aliases(statement: &str) -> HashMap<String, String> {
+    let tokens = tokenize_sql_identifiers(statement);
     let mut aliases = HashMap::new();
     let keywords = ["FROM", "JOIN", "UPDATE", "INTO"];
 
@@ -1283,14 +1902,25 @@ fn is_sql_table_context(sql_before_cursor: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        CompletionItem, SqlCompletionMetadata, build_sql_completion_metadata,
-        should_use_sql_completion, sql_completion_items,
+        CompletionItem, KnownTableListing, SqlCompletionMetadata, build_sql_completion_metadata,
+        known_relational_tables, should_use_sql_completion, sql_completion_items_with_context,
+        tables_needing_details,
     };
     use crate::completion_support::normalize_identifier;
     use dbflux_core::{
         CollectionInfo, ColumnInfo, DatabaseCategory, DatabaseInfo, DbSchemaInfo, DocumentSchema,
-        FieldInfo, QueryLanguage, SchemaSnapshot, TableInfo,
+        FieldInfo, QueryLanguage, QueryTableRef, RelationalSchema, SchemaSnapshot, TableInfo,
     };
+
+    /// The heuristic-only path (no cursor analysis): the exact pre-context
+    /// behavior every legacy test below asserts.
+    fn sql_completion_items(
+        metadata: &SqlCompletionMetadata,
+        source: &str,
+        cursor: usize,
+    ) -> Vec<CompletionItem> {
+        sql_completion_items_with_context(metadata, source, cursor, None)
+    }
 
     fn column(name: &str, type_name: &str) -> ColumnInfo {
         ColumnInfo {
@@ -1498,6 +2128,398 @@ mod tests {
         let from_source = "SELECT * FROM ";
         let items = sql_completion_items(&metadata, from_source, from_source.len());
         assert!(labels(&items).contains(&"users".to_string()));
+    }
+
+    fn t1_table() -> TableInfo {
+        TableInfo {
+            name: "t1".to_string(),
+            schema: None,
+            columns: Some(vec![
+                column("c1", "text"),
+                column("c2", "timestamp"),
+                column("c3", "numeric"),
+            ]),
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: dbflux_core::CollectionPresentation::default(),
+            child_items: None,
+        }
+    }
+
+    #[test]
+    fn alias_resolves_when_from_clause_is_after_cursor() {
+        let mut metadata = SqlCompletionMetadata::default();
+        metadata.add_table(&t1_table());
+
+        let source = "SELECT a. FROM t1 a";
+        let cursor = "SELECT a.".len();
+        let items = sql_completion_items(&metadata, source, cursor);
+        assert!(
+            labels(&items).contains(&"c2".to_string()),
+            "alias defined after the cursor must resolve"
+        );
+    }
+
+    #[test]
+    fn aliases_do_not_leak_across_statements() {
+        let mut metadata = SqlCompletionMetadata::default();
+        metadata.add_table(&t1_table());
+
+        let source = "SELECT * FROM t1 a;\nSELECT a. FROM t2 b";
+        let cursor = source.rfind("a.").expect("qualifier position") + 2;
+        let items = sql_completion_items(&metadata, source, cursor);
+        assert!(
+            items.is_empty(),
+            "alias from a neighboring statement must not resolve"
+        );
+    }
+
+    #[test]
+    fn alias_resolution_survives_semicolon_inside_string_literal() {
+        let mut metadata = SqlCompletionMetadata::default();
+        metadata.add_table(&t1_table());
+
+        let source = "SELECT a. FROM t1 a WHERE c1 = 'a;b'";
+        let cursor = "SELECT a.".len();
+        let items = sql_completion_items(&metadata, source, cursor);
+        assert!(labels(&items).contains(&"c3".to_string()));
+    }
+
+    fn listing(
+        database: &str,
+        schema: Option<&str>,
+        name: &str,
+        has_columns: bool,
+    ) -> KnownTableListing {
+        KnownTableListing {
+            database: database.to_string(),
+            schema: schema.map(String::from),
+            name: name.to_string(),
+            has_columns,
+        }
+    }
+
+    fn table_ref(schema: Option<&str>, table: &str) -> QueryTableRef {
+        QueryTableRef {
+            database: None,
+            schema: schema.map(String::from),
+            table: table.to_string(),
+        }
+    }
+
+    #[test]
+    fn tables_needing_details_matches_unqualified_and_qualified_refs() {
+        let known = vec![
+            listing("db1", Some("s1"), "t1", false),
+            listing("db1", Some("s2"), "t1", false),
+            listing("db1", Some("s1"), "t2", true),
+        ];
+
+        let keys = tables_needing_details(&known, &[table_ref(None, "t1")]);
+        assert_eq!(
+            keys.len(),
+            2,
+            "unqualified reference matches every schema candidate"
+        );
+
+        let keys = tables_needing_details(&known, &[table_ref(Some("s2"), "t1")]);
+        assert_eq!(
+            keys,
+            vec![("db1".to_string(), Some("s2".to_string()), "t1".to_string())]
+        );
+
+        let keys = tables_needing_details(&known, &[table_ref(None, "t2")]);
+        assert!(
+            keys.is_empty(),
+            "listings that already carry columns are skipped"
+        );
+
+        let keys = tables_needing_details(&known, &[table_ref(None, "nonexistent")]);
+        assert!(keys.is_empty(), "unknown tables are never fetched");
+    }
+
+    #[test]
+    fn tables_needing_details_matches_database_qualifier_refs() {
+        let known = vec![listing("db2", None, "t2", false)];
+
+        // `db.table` parses as a schema qualifier, so it must match the
+        // listing's database key.
+        let keys = tables_needing_details(&known, &[table_ref(Some("db2"), "t2")]);
+        assert_eq!(keys, vec![("db2".to_string(), None, "t2".to_string())]);
+
+        let keys = tables_needing_details(&known, &[table_ref(Some("db3"), "t2")]);
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn known_relational_tables_pulls_snapshot_and_database_schemas() {
+        let snapshot = SchemaSnapshot::relational(RelationalSchema {
+            databases: vec![],
+            current_database: Some("db1".to_string()),
+            schemas: vec![DbSchemaInfo {
+                name: "s1".to_string(),
+                tables: vec![t1_table()],
+                views: vec![],
+                custom_types: None,
+            }],
+            tables: vec![],
+            views: vec![],
+        });
+
+        let t2 = TableInfo {
+            name: "t2".to_string(),
+            schema: None,
+            columns: None,
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: dbflux_core::CollectionPresentation::default(),
+            child_items: None,
+        };
+        let db2 = (
+            "db2".to_string(),
+            DbSchemaInfo {
+                name: "db2".to_string(),
+                tables: vec![t2],
+                views: vec![],
+                custom_types: None,
+            },
+        );
+
+        let known = known_relational_tables(
+            Some(&snapshot),
+            std::iter::once((&db2.0, &db2.1)),
+            Some("db1"),
+        );
+
+        assert_eq!(known.len(), 2);
+        assert_eq!(
+            known[0].database, "db1",
+            "snapshot tables use the caller-provided database"
+        );
+        assert_eq!(known[0].name, "t1");
+        assert!(known[0].has_columns);
+        assert_eq!(known[1].database, "db2", "lazy schemas use their cache key");
+        assert_eq!(known[1].name, "t2");
+        assert!(!known[1].has_columns);
+
+        // Without a snapshot database there is no valid fetch key; snapshot
+        // tables are skipped rather than tagged with a fabricated name.
+        let without_database =
+            known_relational_tables(Some(&snapshot), std::iter::once((&db2.0, &db2.1)), None);
+        assert_eq!(without_database.len(), 1);
+        assert_eq!(without_database[0].name, "t2");
+    }
+
+    fn t2_table() -> TableInfo {
+        TableInfo {
+            name: "t2".to_string(),
+            schema: None,
+            columns: Some(vec![column("c4", "integer"), column("c5", "timestamp")]),
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: dbflux_core::CollectionPresentation::default(),
+            child_items: None,
+        }
+    }
+
+    fn context_metadata() -> SqlCompletionMetadata {
+        let mut metadata = SqlCompletionMetadata::default();
+        metadata.add_table(&t1_table());
+        metadata.add_table(&t2_table());
+        metadata
+    }
+
+    fn analyzed_items(metadata: &SqlCompletionMetadata, source: &str) -> Vec<CompletionItem> {
+        let engine = dbflux_core::SqlContextEngine::new().expect("grammar loads");
+        let analysis = engine.analyze(source, source.len()).expect("analysis");
+        sql_completion_items_with_context(metadata, source, source.len(), Some(&analysis))
+    }
+
+    #[test]
+    fn item_builder_never_panics_on_multi_byte_input() {
+        let metadata = context_metadata();
+        let engine = dbflux_core::SqlContextEngine::new().expect("grammar loads");
+        let fixtures = [
+            "SELECT c1 FROM t1 WHERE c1 = 'héllo wörld' AND ",
+            "SELECT c1 FROM t1 WHERE c1 = '名前' GROUP BY ",
+            "not sql at all 🎉 ;;; ",
+            "",
+        ];
+
+        for source in fixtures {
+            for raw in 0..=source.len() {
+                // completions() floors the offset before calling the builder.
+                let cursor = source.floor_char_boundary(raw);
+                let analysis = engine.analyze(source, cursor);
+                let _items =
+                    sql_completion_items_with_context(&metadata, source, cursor, analysis.as_ref());
+            }
+        }
+    }
+
+    fn sort_text_of<'a>(items: &'a [CompletionItem], label: &str) -> &'a str {
+        items
+            .iter()
+            .find(|item| item.label == label)
+            .and_then(|item| item.sort_text.as_deref())
+            .unwrap_or_else(|| panic!("item {label} missing or unranked"))
+    }
+
+    #[test]
+    fn select_list_fills_columns_when_trailing_comma_breaks_the_parse() {
+        // A trailing comma makes the grammar swallow FROM into the select
+        // list, leaving the tree-sitter scope empty; the column position must
+        // still fill from the referenced table, without a typed prefix.
+        let mut metadata = SqlCompletionMetadata::default();
+        metadata.add_table(&t1_table());
+
+        let source = "SELECT c1, c2, FROM t1";
+        // Cursor right after the trailing comma and one space.
+        let cursor = source.find(", FROM").expect("comma") + 2;
+        let engine = dbflux_core::SqlContextEngine::new().expect("grammar loads");
+        let analysis = engine.analyze(source, cursor).expect("analysis");
+        let items = sql_completion_items_with_context(&metadata, source, cursor, Some(&analysis));
+
+        assert!(labels(&items).contains(&"c1".to_string()));
+        assert!(labels(&items).contains(&"c2".to_string()));
+    }
+
+    #[test]
+    fn context_where_offers_scoped_columns_with_empty_prefix() {
+        let metadata = context_metadata();
+        let source = "SELECT * FROM t1 a WHERE ";
+        let items = analyzed_items(&metadata, source);
+
+        let labels = labels(&items);
+        assert!(
+            labels.contains(&"c2".to_string()),
+            "in-scope column surfaces with an empty prefix"
+        );
+        assert!(
+            !labels.contains(&"c5".to_string()),
+            "columns of tables outside the statement stay hidden"
+        );
+        assert!(
+            sort_text_of(&items, "c2") < sort_text_of(&items, "WHERE"),
+            "scoped columns rank above keywords"
+        );
+        assert!(
+            labels.contains(&"a".to_string()),
+            "relation aliases are offered alongside columns"
+        );
+    }
+
+    #[test]
+    fn context_from_ranks_tables_above_keywords() {
+        let metadata = context_metadata();
+        let items = analyzed_items(&metadata, "SELECT * FROM ");
+
+        assert!(
+            sort_text_of(&items, "t1") < sort_text_of(&items, "SELECT"),
+            "tables rank above keywords in FROM position"
+        );
+    }
+
+    #[test]
+    fn context_from_offers_cte_names() {
+        let metadata = context_metadata();
+        let source = "WITH cte1 AS (SELECT * FROM t1) SELECT * FROM ";
+        let items = analyzed_items(&metadata, source);
+        assert!(labels(&items).contains(&"cte1".to_string()));
+    }
+
+    #[test]
+    fn dot_qualifier_prefers_innermost_scope_alias() {
+        let metadata = context_metadata();
+        let source = "SELECT * FROM t1 a WHERE c1 IN (SELECT a.c5 FROM t2 a WHERE a.";
+        let items = analyzed_items(&metadata, source);
+
+        let labels = labels(&items);
+        assert!(
+            labels.contains(&"c5".to_string()),
+            "inner alias resolves to the subquery relation"
+        );
+        assert!(
+            !labels.contains(&"c2".to_string()),
+            "outer relation must be shadowed by the inner alias"
+        );
+    }
+
+    #[test]
+    fn context_on_offers_columns_of_both_join_sides() {
+        let metadata = context_metadata();
+        let source = "SELECT * FROM t1 a JOIN t2 b ON ";
+        let items = analyzed_items(&metadata, source);
+
+        let labels = labels(&items);
+        assert!(labels.contains(&"c1".to_string()));
+        assert!(labels.contains(&"c4".to_string()));
+    }
+
+    #[test]
+    fn whitespace_after_finished_identifier_stays_silent() {
+        // Space-triggered request in keyword territory: no popup.
+        let metadata = context_metadata();
+        let source = "SELECT * FROM t1 a WHERE a.c1 > 10 AND c2 ";
+        let items = analyzed_items(&metadata, source);
+        assert!(
+            items.is_empty(),
+            "no context-relevant items, menu stays closed"
+        );
+    }
+
+    #[test]
+    fn whitespace_in_column_context_without_metadata_stays_silent() {
+        // `SELECT ` at buffer start: column context, but no scope columns and
+        // no prefix, so a keyword-only popup is suppressed.
+        let metadata = SqlCompletionMetadata::default();
+        let items = analyzed_items(&metadata, "SELECT ");
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn qualified_reference_falls_back_to_bare_metadata_key() {
+        // The cached listings carry no schema, so a database-qualified query
+        // reference must still resolve their columns via the bare name.
+        let metadata = context_metadata();
+        let source = "SELECT * FROM db1.t1 WHERE ";
+        let items = analyzed_items(&metadata, source);
+        assert!(labels(&items).contains(&"c2".to_string()));
+    }
+
+    #[test]
+    fn select_alias_offered_in_group_by_but_not_in_where() {
+        let metadata = context_metadata();
+
+        let group_by = "SELECT c3 * 2 AS a1 FROM t1 GROUP BY ";
+        let items = analyzed_items(&metadata, group_by);
+        assert!(
+            labels(&items).contains(&"a1".to_string()),
+            "output alias is a valid GROUP BY target"
+        );
+
+        let where_clause = "SELECT c3 * 2 AS a1 FROM t1 WHERE ";
+        let items = analyzed_items(&metadata, where_clause);
+        assert!(
+            !labels(&items).contains(&"a1".to_string()),
+            "output aliases are not resolvable in WHERE"
+        );
+    }
+
+    #[test]
+    fn context_falls_back_to_all_columns_when_scope_has_no_metadata() {
+        let metadata = context_metadata();
+        // `tz` is not a known table: scope resolves but yields no columns, so
+        // the pre-context prefix behavior applies.
+        let source = "SELECT * FROM tz WHERE c5";
+        let items = analyzed_items(&metadata, source);
+        assert!(labels(&items).contains(&"c5".to_string()));
     }
 
     #[test]

@@ -138,9 +138,14 @@ impl CodeDocument {
         self.editor.cached_supports_connection_context = editor_profile.supports_connection_context;
         self.editor.cached_comment_prefix = editor_profile.comment_prefix;
 
-        let completion_provider: Rc<dyn CompletionProvider> = Rc::new(
-            QueryCompletionProvider::new(query_language, self.app_state.clone(), connection_id),
-        );
+        let completion_provider: Rc<dyn CompletionProvider> =
+            Rc::new(QueryCompletionProvider::new(
+                query_language,
+                self.app_state.clone(),
+                connection_id,
+                self.source.exec_ctx.database.clone(),
+                self.editor.completion_query_generation.clone(),
+            ));
 
         let editor_mode_changed = editor_mode != self.editor.current_editor_mode;
         self.editor.current_editor_mode = editor_mode.clone();
@@ -764,6 +769,10 @@ impl CodeDocument {
         }
 
         self.refresh_schema_dropdown_with_default(cx);
+
+        // Reattach the completion provider, which captures the selected
+        // database at construction.
+        self.sync_editor_language(cx);
 
         cx.emit(DocumentEvent::MetaChanged);
         cx.notify();
