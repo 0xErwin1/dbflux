@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use dbflux_app::AppState;
+use dbflux_app::{AppState, config_loader::HookLoadDiagnostic};
 use dbflux_core::observability::EventSeverity;
 use dbflux_storage::bootstrap::StorageRuntime;
 use gpui::{Entity, EventEmitter, Global, WindowHandle};
@@ -16,6 +16,34 @@ use crate::dashboard_manager::DashboardManager;
 use crate::saved_chart_manager::SavedChartManager;
 use crate::saved_query_manager::SavedQueryManager;
 use crate::schema_snapshot_manager::SchemaSnapshotManager;
+use crate::user_error::{ErrorKind, UserFacingError};
+
+/// Drains startup hook-load diagnostics into safe, actionable user-facing errors.
+///
+/// The durable row remains protected by the configuration loader; this boundary
+/// deliberately omits diagnostic payload text to avoid exposing stored data.
+pub fn drain_hook_load_diagnostics(
+    diagnostics: &mut Vec<HookLoadDiagnostic>,
+) -> Vec<UserFacingError> {
+    std::mem::take(diagnostics)
+        .into_iter()
+        .map(|diagnostic| {
+            let summary = match diagnostic.row_name {
+                Some(row_name) => {
+                    format!(
+                        "Hook definition \"{row_name}\" (ID: {}) needs repair.",
+                        diagnostic.row_id
+                    )
+                }
+                None => format!("Hook definition ID: {} needs repair.", diagnostic.row_id),
+            };
+
+            UserFacingError::new(ErrorKind::Config, summary).with_suggested_action(
+                "The stored row was preserved. Open Settings > Hooks to repair or recreate it.",
+            )
+        })
+        .collect()
+}
 
 // ============================================================================
 // GPUI-coupled event types
@@ -110,6 +138,8 @@ pub struct AppStateEntity {
     /// call. Ephemeral — resets to 0 on every app start. The audit log is the
     /// durable record; this counter only drives the status-bar badge.
     pub unread_error_count: u32,
+
+    pub hook_load_diagnostics: Vec<HookLoadDiagnostic>,
 }
 
 impl AppStateEntity {
@@ -119,7 +149,7 @@ impl AppStateEntity {
     /// runtime. This path is used in production where the default DB location is
     /// used (`~/.local/share/dbflux/dbflux.db`).
     pub fn new() -> Result<Self, dbflux_storage::error::StorageError> {
-        let inner = AppState::new()?;
+        let mut inner = AppState::new()?;
 
         let saved_charts = SavedChartManager::new(Arc::clone(&inner.saved_charts_repo));
         let dashboards = DashboardManager::new(
@@ -128,6 +158,7 @@ impl AppStateEntity {
         );
         let saved_queries = SavedQueryManager::new(Arc::clone(&inner.saved_query_repo));
         let schema_snapshots = SchemaSnapshotManager::new(Arc::clone(&inner.schema_snapshot_repo));
+        let hook_load_diagnostics = inner.take_hook_load_diagnostics();
 
         Ok(Self {
             inner,
@@ -139,6 +170,7 @@ impl AppStateEntity {
             pending_edit_reconnect_prompt: None,
             pending_reconnect_request: None,
             unread_error_count: 0,
+            hook_load_diagnostics,
         })
     }
 
@@ -150,7 +182,7 @@ impl AppStateEntity {
     pub fn new_with_storage_runtime(
         storage_runtime: StorageRuntime,
     ) -> Result<Self, dbflux_storage::error::StorageError> {
-        let inner = AppState::new_with_storage_runtime(storage_runtime)?;
+        let mut inner = AppState::new_with_storage_runtime(storage_runtime)?;
 
         let saved_charts = SavedChartManager::new(Arc::clone(&inner.saved_charts_repo));
         let dashboards = DashboardManager::new(
@@ -159,6 +191,7 @@ impl AppStateEntity {
         );
         let saved_queries = SavedQueryManager::new(Arc::clone(&inner.saved_query_repo));
         let schema_snapshots = SchemaSnapshotManager::new(Arc::clone(&inner.schema_snapshot_repo));
+        let hook_load_diagnostics = inner.take_hook_load_diagnostics();
 
         Ok(Self {
             inner,
@@ -170,6 +203,7 @@ impl AppStateEntity {
             pending_edit_reconnect_prompt: None,
             pending_reconnect_request: None,
             unread_error_count: 0,
+            hook_load_diagnostics,
         })
     }
 
@@ -255,3 +289,74 @@ pub struct AppStateGlobal {
 }
 
 impl Global for AppStateGlobal {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn diagnostic(row_id: &str, row_name: Option<&str>, message: &str) -> HookLoadDiagnostic {
+        HookLoadDiagnostic {
+            row_id: row_id.to_string(),
+            row_name: row_name.map(str::to_string),
+            message: message.to_string(),
+        }
+    }
+
+    #[test]
+    fn draining_no_hook_load_diagnostics_emits_no_errors() {
+        let mut diagnostics = Vec::new();
+
+        let errors = drain_hook_load_diagnostics(&mut diagnostics);
+
+        assert!(errors.is_empty());
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn draining_hook_load_diagnostics_reports_repairable_safe_context_once() {
+        let secret_payload = r#"{\"token\":\"do-not-expose\"}"#;
+        let mut diagnostics = vec![diagnostic(
+            "legacy-row-42",
+            Some("Nightly backup"),
+            secret_payload,
+        )];
+
+        let errors = drain_hook_load_diagnostics(&mut diagnostics);
+
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].kind, crate::user_error::ErrorKind::Config);
+        assert_eq!(
+            errors[0].summary,
+            "Hook definition \"Nightly backup\" (ID: legacy-row-42) needs repair."
+        );
+        assert_eq!(
+            errors[0].suggested_action.as_deref(),
+            Some("The stored row was preserved. Open Settings > Hooks to repair or recreate it.")
+        );
+        assert!(!errors[0].summary.contains(secret_payload));
+        assert!(
+            !errors[0]
+                .suggested_action
+                .as_deref()
+                .unwrap_or_default()
+                .contains(secret_payload)
+        );
+        assert!(diagnostics.is_empty());
+
+        assert!(drain_hook_load_diagnostics(&mut diagnostics).is_empty());
+    }
+
+    #[test]
+    fn draining_hook_load_diagnostic_without_name_keeps_row_id_context() {
+        let mut diagnostics = vec![diagnostic("legacy-row-43", None, "invalid payload")];
+
+        let errors = drain_hook_load_diagnostics(&mut diagnostics);
+
+        assert_eq!(errors.len(), 1);
+        assert_eq!(
+            errors[0].summary,
+            "Hook definition ID: legacy-row-43 needs repair."
+        );
+        assert!(diagnostics.is_empty());
+    }
+}

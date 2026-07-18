@@ -6,17 +6,17 @@ use gpui_component::ActiveTheme;
 
 impl ConnectionManagerWindow {
     fn selected_hook_ids(&self, cx: &Context<Self>) -> Vec<String> {
+        let (name_to_id, known_ids) = self.hook_id_lookup(cx);
+
         let pre_connect = Self::merge_hook_ids(
             self.settings_tab
                 .conn_pre_hook_dropdown
                 .read(cx)
                 .selected_value()
                 .map(|value| value.to_string()),
-            self.settings_tab
-                .conn_pre_hook_extra_input
-                .read(cx)
-                .value()
-                .to_string(),
+            &self.settings_tab.conn_pre_hook_extra_input.read(cx).value(),
+            &name_to_id,
+            &known_ids,
         );
 
         let post_connect = Self::merge_hook_ids(
@@ -25,11 +25,13 @@ impl ConnectionManagerWindow {
                 .read(cx)
                 .selected_value()
                 .map(|value| value.to_string()),
-            self.settings_tab
+            &self
+                .settings_tab
                 .conn_post_hook_extra_input
                 .read(cx)
-                .value()
-                .to_string(),
+                .value(),
+            &name_to_id,
+            &known_ids,
         );
 
         let pre_disconnect = Self::merge_hook_ids(
@@ -38,11 +40,13 @@ impl ConnectionManagerWindow {
                 .read(cx)
                 .selected_value()
                 .map(|value| value.to_string()),
-            self.settings_tab
+            &self
+                .settings_tab
                 .conn_pre_disconnect_hook_extra_input
                 .read(cx)
-                .value()
-                .to_string(),
+                .value(),
+            &name_to_id,
+            &known_ids,
         );
 
         let post_disconnect = Self::merge_hook_ids(
@@ -51,11 +55,13 @@ impl ConnectionManagerWindow {
                 .read(cx)
                 .selected_value()
                 .map(|value| value.to_string()),
-            self.settings_tab
+            &self
+                .settings_tab
                 .conn_post_disconnect_hook_extra_input
                 .read(cx)
-                .value()
-                .to_string(),
+                .value(),
+            &name_to_id,
+            &known_ids,
         );
 
         let mut selected = Vec::new();
@@ -83,17 +89,18 @@ impl ConnectionManagerWindow {
         let hook_definitions = self.app_state.read(cx).hook_definitions().clone();
 
         selected.into_iter().any(|hook_id| {
-            hook_definitions.get(&hook_id).is_some_and(|hook| {
-                matches!(
-                    &hook.kind,
-                    dbflux_core::HookKind::Lua {
-                        capabilities: dbflux_core::LuaCapabilities {
-                            process_run: true,
+            hook_definitions.values().any(|definition| {
+                definition.id.as_deref() == Some(hook_id.as_str())
+                    && matches!(
+                        &definition.kind,
+                        dbflux_core::HookKind::Lua {
+                            capabilities: dbflux_core::LuaCapabilities {
+                                process_run: true,
+                                ..
+                            },
                             ..
-                        },
-                        ..
-                    }
-                )
+                        }
+                    )
             })
         })
     }

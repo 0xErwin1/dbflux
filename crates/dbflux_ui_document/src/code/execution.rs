@@ -407,16 +407,39 @@ impl CodeDocument {
         let connection = connected.connection.clone();
         let table_details = connected.table_details.clone();
 
-        let database = connected
-            .active_database
+        let database = self
+            .source
+            .exec_ctx
+            .database
             .clone()
+            .or_else(|| connected.active_database.clone())
             .or_else(|| {
                 connected
                     .schema
                     .as_ref()
                     .and_then(|s| s.current_database().map(String::from))
-            })
-            .unwrap_or_else(|| "default".to_string());
+            });
+
+        let database = match database {
+            Some(database) => database,
+            // Without a database there is no valid fetch key. On
+            // lazy-per-database drivers a fabricated name reaches real
+            // queries (`` `default`.`table` ``), so skip the preflight;
+            // single-catalog drivers ignore the database argument.
+            None if connected.connection.schema_loading_strategy()
+                == dbflux_core::SchemaLoadingStrategy::LazyPerDatabase =>
+            {
+                self.pending.drift_query = Some(PendingDriftQuery {
+                    query,
+                    in_new_tab,
+                    action: DriftAction::ExecuteNow,
+                    cache_updates: Vec::new(),
+                });
+                cx.notify();
+                return;
+            }
+            None => "default".to_string(),
+        };
 
         let default_schema = self.source.exec_ctx.schema.clone();
 

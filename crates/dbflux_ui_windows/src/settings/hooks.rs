@@ -1,3 +1,4 @@
+use dbflux_app::config_loader::{EditableGlobalHook, HookDefinitionSave};
 use dbflux_app::keymap::Modifiers;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::controls::{InputEvent, InputState};
@@ -24,6 +25,34 @@ use super::hooks_section::{
     HookFocus, HookFormField, HookKindSelection, HooksSection, ScriptSourceSelection,
 };
 use super::layout;
+
+fn commit_saved_hook_definitions(
+    current: &mut HashMap<String, EditableGlobalHook>,
+    save_result: Result<HashMap<String, EditableGlobalHook>, dbflux_storage::error::StorageError>,
+) -> Result<HashMap<String, EditableGlobalHook>, dbflux_storage::error::StorageError> {
+    let saved = save_result?;
+    *current = saved.clone();
+    Ok(saved)
+}
+
+fn update_hook_definition(
+    definitions: &mut HashMap<String, EditableGlobalHook>,
+    existing_name: Option<&str>,
+    name: String,
+    hook: ConnectionHook,
+) {
+    let id = existing_name
+        .and_then(|previous_name| definitions.get(previous_name))
+        .and_then(|definition| definition.id.clone());
+
+    if let Some(previous_name) = existing_name
+        && previous_name != name
+    {
+        definitions.remove(previous_name);
+    }
+
+    definitions.insert(name, EditableGlobalHook { id, hook });
+}
 
 impl HooksSection {
     fn hook_script_editor_mode(&self, cx: &App) -> &'static str {
@@ -103,7 +132,10 @@ impl HooksSection {
     }
 
     fn set_hook_kind_dropdown(&mut self, kind: HookKindSelection, cx: &mut Context<Self>) {
-        self.hook_kind_selection = kind;
+        let mut selection = self.hook_editor_selection();
+        selection.set_keyboard_kind(kind);
+        self.apply_hook_editor_selection(selection, cx);
+
         let index = match kind {
             HookKindSelection::Command => 0,
             HookKindSelection::Script => 1,
@@ -147,7 +179,10 @@ impl HooksSection {
         mode: HookExecutionMode,
         cx: &mut Context<Self>,
     ) {
-        self.hook_execution_mode = mode;
+        let mut selection = self.hook_editor_selection();
+        selection.set_keyboard_execution_mode(mode);
+        self.apply_hook_editor_selection(selection, cx);
+
         let index = match mode {
             HookExecutionMode::Blocking => 0,
             HookExecutionMode::Detached => 1,
@@ -438,7 +473,7 @@ impl HooksSection {
             return self
                 .hook_definitions
                 .get(editing_id)
-                .is_some_and(|saved| saved != &hook);
+                .is_some_and(|saved| saved.hook != hook);
         }
 
         self.form_has_hook_content(cx)
@@ -585,7 +620,8 @@ impl HooksSection {
             return Err("Hook ID is required".to_string());
         }
 
-        let selected_kind = self.selected_hook_kind(cx);
+        let selected = self.hook_editor_selection().save_selection();
+        let selected_kind = selected.kind;
 
         let timeout_ms = if timeout_text.is_empty() {
             None
@@ -685,11 +721,7 @@ impl HooksSection {
             },
             env_denylist,
             timeout_ms,
-            execution_mode: if selected_kind == HookKindSelection::Lua {
-                HookExecutionMode::Blocking
-            } else {
-                self.selected_hook_execution_mode(cx)
-            },
+            execution_mode: selected.execution_mode,
             ready_signal: if selected_kind == HookKindSelection::Lua || ready_signal.is_empty() {
                 None
             } else {
@@ -701,23 +733,38 @@ impl HooksSection {
         Ok(Some((hook_id, hook)))
     }
 
-    fn persist_hooks(&self, _window: &mut Window, cx: &mut Context<Self>) {
-        let runtime = self.app_state.read(cx).storage_runtime();
-        if let Err(e) =
-            dbflux_app::config_loader::save_hook_definitions(runtime, &self.hook_definitions)
-        {
-            report_error(
-                UserFacingError::new(ErrorKind::Storage, "Failed to save hooks")
-                    .with_cause(e.to_string()),
-                cx,
-            );
-            return;
-        }
+    fn persist_hooks(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let app_state = self.app_state.read(cx);
+        let runtime = app_state.storage_runtime();
+        let protected_ids = app_state.protected_hook_row_ids();
+        let desired = self
+            .hook_definitions
+            .iter()
+            .map(|(name, definition)| HookDefinitionSave {
+                id: definition.id.clone(),
+                name: name.clone(),
+                hook: definition.hook.clone(),
+            })
+            .collect::<Vec<_>>();
+        let hooks = match commit_saved_hook_definitions(
+            &mut self.hook_definitions,
+            dbflux_app::config_loader::save_hook_definitions(runtime, &desired, &protected_ids),
+        ) {
+            Ok(hooks) => hooks,
+            Err(e) => {
+                report_error(
+                    UserFacingError::new(ErrorKind::Storage, "Failed to save hooks")
+                        .with_cause(e.to_string()),
+                    cx,
+                );
+                return false;
+            }
+        };
 
-        let hooks = self.hook_definitions.clone();
         self.app_state.update(cx, move |state, _cx| {
             state.set_hook_definitions(hooks);
         });
+        true
     }
 
     pub(super) fn clear_hook_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -775,7 +822,11 @@ impl HooksSection {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(hook) = self.hook_definitions.get(hook_id).cloned() else {
+        let Some(hook) = self
+            .hook_definitions
+            .get(hook_id)
+            .map(|definition| definition.hook.clone())
+        else {
             return;
         };
 
@@ -785,6 +836,13 @@ impl HooksSection {
         self.hook_list_idx = ids.iter().position(|id| id == hook_id);
         self.hook_enabled = hook.enabled;
         self.hook_inherit_env = hook.inherit_env;
+        self.apply_hook_editor_selection(
+            super::hooks_section::HookEditorSelectionState::from_saved_hook(
+                &hook.kind,
+                hook.execution_mode,
+            ),
+            cx,
+        );
 
         self.input_hook_id.update(cx, |input, cx| {
             input.set_value(hook_id.to_string(), window, cx)
@@ -940,7 +998,11 @@ impl HooksSection {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(hook) = self.hook_definitions.get(hook_id).cloned() else {
+        let Some(hook) = self
+            .hook_definitions
+            .get(hook_id)
+            .map(|definition| definition.hook.clone())
+        else {
             return;
         };
 
@@ -950,6 +1012,13 @@ impl HooksSection {
         self.hook_list_idx = ids.iter().position(|id| id == hook_id);
         self.hook_enabled = hook.enabled;
         self.hook_inherit_env = hook.inherit_env;
+        self.apply_hook_editor_selection(
+            super::hooks_section::HookEditorSelectionState::from_saved_hook(
+                &hook.kind,
+                hook.execution_mode,
+            ),
+            cx,
+        );
 
         self.input_hook_id.update(cx, |input, cx| {
             input.set_value(hook_id.to_string(), window, cx)
@@ -1134,14 +1203,17 @@ impl HooksSection {
             return;
         }
 
-        if let Some(previous_id) = self.editing_hook_id.clone()
-            && previous_id != hook_id
-        {
-            self.hook_definitions.remove(&previous_id);
+        let saved_definitions = self.hook_definitions.clone();
+        update_hook_definition(
+            &mut self.hook_definitions,
+            self.editing_hook_id.as_deref(),
+            hook_id.clone(),
+            hook,
+        );
+        if !self.persist_hooks(window, cx) {
+            self.hook_definitions = saved_definitions;
+            return;
         }
-
-        self.hook_definitions.insert(hook_id.clone(), hook);
-        self.persist_hooks(window, cx);
 
         self.load_hook_into_form(&hook_id, window, cx);
         self.hook_focus = HookFocus::Form;
@@ -1158,6 +1230,7 @@ impl HooksSection {
             return;
         };
 
+        let saved_definitions = self.hook_definitions.clone();
         self.hook_definitions.remove(&hook_id);
 
         if self.editing_hook_id.as_deref() == Some(hook_id.as_str()) {
@@ -1169,7 +1242,10 @@ impl HooksSection {
             self.hook_list_idx = None;
         }
 
-        self.persist_hooks(window, cx);
+        if !self.persist_hooks(window, cx) {
+            self.hook_definitions = saved_definitions;
+            return;
+        }
         Toast::success("Hook deleted")
             .meta_right(now_hms())
             .push(cx);
@@ -1178,6 +1254,40 @@ impl HooksSection {
 
     pub(super) fn cancel_delete_hook(&mut self, cx: &mut Context<Self>) {
         self.pending_delete_hook_id = None;
+        cx.notify();
+    }
+
+    pub(super) fn request_delete_protected_row(&mut self, row_id: String, cx: &mut Context<Self>) {
+        self.pending_delete_protected_row_id = Some(row_id);
+        cx.notify();
+    }
+
+    pub(super) fn confirm_delete_protected_row(&mut self, cx: &mut Context<Self>) {
+        let Some(row_id) = self.pending_delete_protected_row_id.take() else {
+            return;
+        };
+
+        let result = self
+            .app_state
+            .update(cx, |state, _cx| state.delete_protected_hook_row(&row_id));
+
+        if let Err(error) = result {
+            report_error(
+                UserFacingError::new(ErrorKind::Storage, "Failed to delete unreadable hook row")
+                    .with_cause(error.to_string()),
+                cx,
+            );
+            return;
+        }
+
+        Toast::success("Unreadable hook row deleted")
+            .meta_right(now_hms())
+            .push(cx);
+        cx.notify();
+    }
+
+    pub(super) fn cancel_delete_protected_row(&mut self, cx: &mut Context<Self>) {
+        self.pending_delete_protected_row_id = None;
         cx.notify();
     }
 
@@ -1337,8 +1447,93 @@ impl HooksSection {
                                             }),
                                     ),
                             )
-                    })),
+                    }))
+                    .child(self.render_protected_hook_rows(cx)),
             )
+    }
+
+    fn render_protected_hook_rows(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let theme = cx.theme().clone();
+        let protected: Vec<(String, String)> = self
+            .app_state
+            .read(cx)
+            .protected_hook_rows()
+            .iter()
+            .map(|row| {
+                let label = row.row_name.clone().unwrap_or_else(|| row.row_id.clone());
+                (row.row_id.clone(), label)
+            })
+            .collect();
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .when(!protected.is_empty(), |container| {
+                container
+                    .child(div().mt_2().child(
+                        MonoCaption::new("Unreadable hook rows").color(theme.muted_foreground),
+                    ))
+                    .children(protected.into_iter().map(|(row_id, label)| {
+                        let row_id_for_click = row_id.clone();
+
+                        div()
+                            .id(SharedString::from(format!(
+                                "protected-hook-item-{}",
+                                row_id
+                            )))
+                            .px_3()
+                            .py_2()
+                            .rounded(Radii::SM)
+                            .bg(theme.list_even)
+                            .border_1()
+                            .border_color(theme.warning.opacity(0.3))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_start()
+                                    .gap_2()
+                                    .child(
+                                        div().mt(px(2.0)).child(
+                                            Icon::new(AppIcon::TriangleAlert)
+                                                .size(Heights::ICON_SM)
+                                                .warning(),
+                                        ),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_1()
+                                            .child(MonoLabel::new(label))
+                                            .child(
+                                                Body::new("Unreadable — cannot be edited")
+                                                    .color(theme.muted_foreground),
+                                            ),
+                                    )
+                                    .child(
+                                        Button::new(
+                                            SharedString::from(format!(
+                                                "delete-protected-{}",
+                                                row_id
+                                            )),
+                                            "Delete",
+                                        )
+                                        .small()
+                                        .danger()
+                                        .on_click(
+                                            cx.listener(move |this, _, _, cx| {
+                                                this.request_delete_protected_row(
+                                                    row_id_for_click.clone(),
+                                                    cx,
+                                                );
+                                            }),
+                                        ),
+                                    ),
+                            )
+                    }))
+            })
     }
 
     fn render_hook_form(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1985,4 +2180,119 @@ fn interpreter_exists(program: &str) -> bool {
     };
 
     std::env::split_paths(&path_value).any(|dir| dir.join(program).exists())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{commit_saved_hook_definitions, update_hook_definition};
+    use dbflux_app::config_loader::EditableGlobalHook;
+    use dbflux_core::{ConnectionHook, HookExecutionMode, HookFailureMode, HookKind};
+    use dbflux_storage::error::StorageError;
+    use std::collections::HashMap;
+
+    fn command_hook(command: &str) -> ConnectionHook {
+        ConnectionHook {
+            enabled: true,
+            kind: HookKind::Command {
+                command: command.to_string(),
+                args: Vec::new(),
+            },
+            cwd: None,
+            env: HashMap::new(),
+            inherit_env: true,
+            env_denylist: Vec::new(),
+            timeout_ms: None,
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
+            on_failure: HookFailureMode::Disconnect,
+        }
+    }
+
+    #[test]
+    fn failed_hook_save_keeps_editable_definitions() {
+        let mut current = HashMap::from([(
+            "edited".to_string(),
+            EditableGlobalHook {
+                id: Some("durable-id".to_string()),
+                hook: command_hook("edited-command"),
+            },
+        )]);
+        let before = current.clone();
+
+        let committed = commit_saved_hook_definitions(
+            &mut current,
+            Err(StorageError::Data("injected save failure".to_string())),
+        );
+
+        assert!(committed.is_err());
+        assert_eq!(current, before);
+    }
+
+    #[test]
+    fn successful_hook_save_replaces_editable_definitions() {
+        let mut current = HashMap::from([(
+            "before".to_string(),
+            EditableGlobalHook {
+                id: Some("old-id".to_string()),
+                hook: command_hook("before-command"),
+            },
+        )]);
+        let saved = HashMap::from([(
+            "after".to_string(),
+            EditableGlobalHook {
+                id: Some("new-id".to_string()),
+                hook: command_hook("after-command"),
+            },
+        )]);
+
+        commit_saved_hook_definitions(&mut current, Ok(saved.clone()))
+            .expect("commit successful save");
+
+        assert_eq!(current, saved);
+    }
+
+    #[test]
+    fn rename_preserves_existing_durable_hook_id() {
+        let mut definitions = HashMap::from([(
+            "before".to_string(),
+            EditableGlobalHook {
+                id: Some("durable-id".to_string()),
+                hook: command_hook("before-command"),
+            },
+        )]);
+
+        update_hook_definition(
+            &mut definitions,
+            Some("before"),
+            "after".to_string(),
+            command_hook("after-command"),
+        );
+
+        assert!(!definitions.contains_key("before"));
+        assert_eq!(
+            definitions
+                .get("after")
+                .and_then(|definition| definition.id.as_deref()),
+            Some("durable-id")
+        );
+    }
+
+    #[test]
+    fn new_hook_remains_without_durable_id() {
+        let mut definitions = HashMap::new();
+
+        update_hook_definition(
+            &mut definitions,
+            None,
+            "new-hook".to_string(),
+            command_hook("new-command"),
+        );
+
+        assert_eq!(
+            definitions
+                .get("new-hook")
+                .and_then(|definition| definition.id.as_deref()),
+            None
+        );
+    }
 }

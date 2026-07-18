@@ -33,6 +33,40 @@ pub(crate) fn push_completion_item(
     filter_prefix: &str,
     replace_range: LspRange,
 ) {
+    push_completion_item_inner(items, seen, label, kind, filter_prefix, replace_range, None);
+}
+
+/// Like [`push_completion_item`], with an explicit rank group: lower groups
+/// sort first in the completion menu (`sort_text` = `"<group>_<label>"`).
+pub(crate) fn push_completion_item_ranked(
+    items: &mut Vec<CompletionItem>,
+    seen: &mut HashSet<String>,
+    label: &str,
+    kind: CompletionItemKind,
+    filter_prefix: &str,
+    replace_range: LspRange,
+    rank_group: u8,
+) {
+    push_completion_item_inner(
+        items,
+        seen,
+        label,
+        kind,
+        filter_prefix,
+        replace_range,
+        Some(rank_group),
+    );
+}
+
+fn push_completion_item_inner(
+    items: &mut Vec<CompletionItem>,
+    seen: &mut HashSet<String>,
+    label: &str,
+    kind: CompletionItemKind,
+    filter_prefix: &str,
+    replace_range: LspRange,
+    rank_group: Option<u8>,
+) {
     let key = label.to_uppercase();
     if !seen.insert(key) {
         return;
@@ -43,6 +77,7 @@ pub(crate) fn push_completion_item(
         kind: Some(kind),
         insert_text_format: Some(InsertTextFormat::PLAIN_TEXT),
         filter_text: Some(filter_prefix.to_string()),
+        sort_text: rank_group.map(|group| format!("{}_{}", group, label.to_lowercase())),
         text_edit: Some(CompletionTextEdit::Edit(TextEdit {
             range: replace_range,
             new_text: label.to_string(),

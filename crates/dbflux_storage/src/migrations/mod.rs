@@ -164,6 +164,8 @@ impl MigrationRegistry {
         registry.register(mod_019_hook_env_denylist::MigrationImpl);
         registry.register(mod_020_sch_schema_snapshots::MigrationImpl);
         registry.register(mod_021_general_settings_schema_snapshot_retention::MigrationImpl);
+        registry.register(mod_022_hook_kind_json::MigrationImpl);
+        registry.register(mod_023_profile_hook_interpreter::MigrationImpl);
         registry
     }
 
@@ -368,6 +370,8 @@ mod mod_018_app_pending_executions;
 mod mod_019_hook_env_denylist;
 mod mod_020_sch_schema_snapshots;
 mod mod_021_general_settings_schema_snapshot_retention;
+mod mod_022_hook_kind_json;
+mod mod_023_profile_hook_interpreter;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -583,6 +587,12 @@ mod tests {
         assert!(tables.contains("sys_app_meta"), "missing sys_app_meta");
 
         // Migration 010: dangling_origin column on cfg_auth_profiles
+        let hook_columns = column_names(&conn, "cfg_hook_definitions");
+        assert!(
+            hook_columns.contains("kind_json"),
+            "cfg_hook_definitions missing kind_json column"
+        );
+
         let auth_columns = column_names(&conn, "cfg_auth_profiles");
         assert!(
             auth_columns.contains("dangling_origin"),
@@ -934,6 +944,46 @@ mod tests {
     /// is the regression fence for that invariant: it is written against the
     /// current (pre-rename) state and must stay green through file renames.
     #[test]
+    fn test_023_profile_hook_interpreter_upgrades_and_is_idempotent() {
+        let temp_dir = temp_dir("023_profile_hook_interpreter");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("test.db");
+
+        let conn = Connection::open(&db_path).unwrap();
+        let registry = MigrationRegistry::new();
+        registry.run_all(&conn).expect("create pre-023 schema");
+        conn.execute_batch(
+            "ALTER TABLE cfg_connection_profile_hooks DROP COLUMN script_interpreter;
+             DELETE FROM sys_migrations WHERE name = '023_profile_hook_interpreter';",
+        )
+        .expect("restore pre-023 profile hook schema");
+
+        registry
+            .run_all(&conn)
+            .expect("upgrade profile hook schema");
+        assert!(
+            column_names(&conn, "cfg_connection_profile_hooks").contains("script_interpreter"),
+            "migration 023 must add the profile hook interpreter column"
+        );
+
+        registry
+            .run_all(&conn)
+            .expect("rerun profile hook schema upgrade");
+        let applied: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sys_migrations WHERE name = '023_profile_hook_interpreter'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count migration applications");
+        assert_eq!(applied, 1);
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
     fn test_migration_name_order_invariant() {
         let temp_dir = temp_dir("name_order");
         let _ = std::fs::remove_dir_all(&temp_dir);
@@ -968,6 +1018,8 @@ mod tests {
             "019_hook_env_denylist",
             "020_sch_schema_snapshots",
             "021_general_settings_schema_snapshot_retention",
+            "022_hook_kind_json",
+            "023_profile_hook_interpreter",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();

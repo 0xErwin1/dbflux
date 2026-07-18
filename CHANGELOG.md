@@ -18,6 +18,17 @@ All notable changes to DBFlux will be documented in this file.
   This first release is read-only: `INSERT`/`UPDATE`/`DELETE`, inline editing,
   and multi-statement input are rejected with a clear error; IAM/SSO auth,
   `COPY`/`UNLOAD`, and query-plan visualization are not yet supported.
+  
+* **Context-aware SQL autocomplete in the query editor** — Completion in the
+  SQL editor now follows where the cursor sits instead of listing every
+  identifier the connection knows: tables and views after `FROM`/`JOIN`,
+  columns scoped to the tables actually referenced in the statement, relation
+  aliases, CTE names, and `SELECT` output aliases in `GROUP BY` / `ORDER BY` /
+  `HAVING`. It parses with tree-sitter so it holds up on half-typed queries,
+  prefetches column metadata in the background so a table no longer needs a
+  sidebar expand first, and hydrates from the latest deep schema snapshot on
+  connect so it starts warm after a restart. Every relational driver benefits;
+  non-SQL dialects keep their existing keyword completion.
 
 * **Data transfer — Export, Import, and same-engine Migration for SQL databases** —
   A new transfer engine moves SQL data without leaving DBFlux. Multi-select
@@ -55,6 +66,14 @@ All notable changes to DBFlux will be documented in this file.
   encryption is on by default, and the bundle format is unchanged.
 
 ### Fixed
+
+* **Standalone MCP server failed to start and listed no tools** — The
+  governance binding role/policy repositories queried table names that did not
+  match the migrated schema, so `dbflux mcp` aborted with "no such table" for
+  any profile with a governance binding (the same mismatch also broke saving
+  these bindings in the main app). Startup then panicked on a blocking lock
+  read inside the async runtime, and `tools/list` returned an empty catalog
+  because the tool handler served an empty router instead of the combined one.
 
 * **SSH tunnel / proxy list icon vanishing on long hosts** — The globe icon in
   the Settings SSH tunnels and proxies lists could be squeezed to zero width by

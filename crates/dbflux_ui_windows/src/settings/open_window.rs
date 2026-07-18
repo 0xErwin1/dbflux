@@ -56,17 +56,9 @@ pub fn open_or_focus_settings<S>(
     };
     platform::apply_window_options(&mut options, 800.0, 600.0);
 
-    let app_state_for_close = app_state.clone();
     let app_state_for_new = app_state.clone();
 
     let open_result = cx.open_window(options, move |window, cx| {
-        window.on_window_should_close(cx, move |_window, cx| {
-            app_state_for_close.update(cx, |state, _| {
-                state.settings_window = None;
-            });
-            true
-        });
-
         let settings = cx.new(|cx| match section {
             Some(section) => {
                 SettingsCoordinator::new_with_section(app_state_for_new, section, window, cx)

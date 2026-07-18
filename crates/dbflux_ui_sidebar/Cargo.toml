@@ -20,13 +20,13 @@ dbflux_app.workspace = true
 dbflux_ssh.workspace = true
 uuid.workspace = true
 log.workspace = true
-serde_json.workspace = true
 rfd.workspace = true
 dirs.workspace = true
 
 [dev-dependencies]
 dbflux_storage.workspace = true
 rusqlite.workspace = true
+gpui = { workspace = true, features = ["test-support"] }
 
 [features]
 default = []

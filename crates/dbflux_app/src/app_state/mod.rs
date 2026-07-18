@@ -11,9 +11,9 @@ use dbflux_core::observability::{
 };
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    AuthProfile, CancelToken, Connection, ConnectionHook, ConnectionHooks, ConnectionProfile,
-    DbDriver, DbSchemaInfo, DriverKey, EffectiveSettings, FetchCollectionChildrenParams,
-    FormValues, GeneralSettings, GlobalOverrides, HistoryEntry, HookContext, HookPhase, SavedQuery,
+    AuthProfile, CancelToken, Connection, ConnectionHooks, ConnectionProfile, DbDriver,
+    DbSchemaInfo, DriverKey, EffectiveSettings, FetchCollectionChildrenParams, FormValues,
+    GeneralSettings, GlobalOverrides, HistoryEntry, HookContext, HookPhase, SavedQuery,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore,
     SessionFacade, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
@@ -42,6 +42,7 @@ use uuid::Uuid;
 mod bootstrap;
 
 use crate::auth_provider_registry::{AuthProviderRegistry, RegistryAuthProviderWrapper};
+use crate::config_loader::EditableGlobalHook;
 use crate::rpc_services::ExternalDriverDiagnostic;
 
 pub use dbflux_core::{
@@ -56,7 +57,9 @@ pub struct AppState {
     general_settings: GeneralSettings,
     driver_overrides: HashMap<DriverKey, GlobalOverrides>,
     driver_settings: HashMap<DriverKey, FormValues>,
-    hook_definitions: HashMap<String, ConnectionHook>,
+    hook_definitions: HashMap<String, EditableGlobalHook>,
+    hook_load_diagnostics: Vec<crate::config_loader::HookLoadDiagnostic>,
+    protected_hook_rows: Vec<crate::config_loader::ProtectedHookRow>,
     detached_hook_tasks: HashMap<Uuid, HashSet<TaskId>>,
     auth_provider_registry: AuthProviderRegistry,
     history_manager: crate::history_manager_sqlite::HistoryManager,
@@ -162,12 +165,19 @@ impl AppState {
         self.facade.connections.set_active_connection(profile_id);
     }
 
-    pub fn disconnect(&mut self, profile_id: Uuid) {
-        self.facade.connections.disconnect(profile_id);
+    /// Disconnects the profile and returns the teardown thread's handle so
+    /// callers can wait for the connection to be fully closed before running
+    /// ordered follow-up work (post-disconnect hooks). See
+    /// `ConnectionManager::disconnect`.
+    pub fn disconnect(&mut self, profile_id: Uuid) -> Option<std::thread::JoinHandle<()>> {
+        let teardown = self.facade.connections.disconnect(profile_id);
+
         // Evict stale metric catalog data for this connection.
         self.metric_catalog_cache.invalidate(profile_id);
         // Evict the cached remote dashboard listing for this connection.
         self.remote_dashboard_cache.invalidate(profile_id);
+
+        teardown
     }
 
     /// Access the session-scoped metric catalog cache.
@@ -1893,11 +1903,48 @@ impl AppState {
         self.driver_settings.insert(key, values);
     }
 
-    pub fn hook_definitions(&self) -> &HashMap<String, ConnectionHook> {
+    pub fn hook_definitions(&self) -> &HashMap<String, EditableGlobalHook> {
         &self.hook_definitions
     }
 
-    pub fn set_hook_definitions(&mut self, definitions: HashMap<String, ConnectionHook>) {
+    pub fn protected_hook_row_ids(&self) -> Vec<String> {
+        self.protected_hook_rows
+            .iter()
+            .map(|row| row.row_id.clone())
+            .collect()
+    }
+
+    pub fn protected_hook_rows(&self) -> &[crate::config_loader::ProtectedHookRow] {
+        &self.protected_hook_rows
+    }
+
+    /// Deletes a protected (unreadable/legacy) hook definition row by ID.
+    ///
+    /// Protected rows are skipped on load and excluded from the atomic
+    /// hook-save preflight, so they can only be removed through this deliberate
+    /// path. The storage `delete` bypasses the protected preflight guard and
+    /// cascades to child rows; on success the in-memory entry is dropped so the
+    /// row's name becomes reusable without an app restart.
+    pub fn delete_protected_hook_row(
+        &mut self,
+        id: &str,
+    ) -> Result<(), dbflux_storage::error::StorageError> {
+        self.storage_runtime.hook_definitions().delete(id)?;
+
+        self.protected_hook_rows.retain(|row| row.row_id != id);
+
+        Ok(())
+    }
+
+    pub fn hook_load_diagnostics(&self) -> &[crate::config_loader::HookLoadDiagnostic] {
+        &self.hook_load_diagnostics
+    }
+
+    pub fn take_hook_load_diagnostics(&mut self) -> Vec<crate::config_loader::HookLoadDiagnostic> {
+        std::mem::take(&mut self.hook_load_diagnostics)
+    }
+
+    pub fn set_hook_definitions(&mut self, definitions: HashMap<String, EditableGlobalHook>) {
         let hook_count = definitions.len();
         self.hook_definitions = definitions;
 
@@ -2242,7 +2289,20 @@ impl AppState {
     }
 
     pub fn resolve_profile_hooks(&self, profile: &ConnectionProfile) -> ConnectionHooks {
-        ConnectionHooks::resolve_from_bindings(profile, &self.hook_definitions)
+        // Bindings reference definitions by durable id, so the resolution map
+        // must be keyed by id. Definitions without a persisted id cannot be
+        // referenced by a binding and are skipped.
+        let hooks: HashMap<_, _> = self
+            .hook_definitions
+            .values()
+            .filter_map(|definition| {
+                definition
+                    .id
+                    .clone()
+                    .map(|id| (id, definition.hook.clone()))
+            })
+            .collect();
+        ConnectionHooks::resolve_from_bindings(profile, &hooks)
     }
 
     pub fn profile_uses_connect_pipeline(&self, profile: &ConnectionProfile) -> bool {
@@ -2637,6 +2697,8 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
+            Vec::new(),
+            Vec::new(),
             Vec::new(),
             runtime,
             profiles,
@@ -3360,6 +3422,168 @@ mod tests {
         assert!(
             ids.contains("aws-sso-session"),
             "AuthProfileRef with Some(provider_id) must contribute that id to the reference-only set"
+        );
+    }
+
+    fn reused_legacy_hook() -> dbflux_core::ConnectionHook {
+        dbflux_core::ConnectionHook {
+            enabled: true,
+            kind: dbflux_core::HookKind::Command {
+                command: "echo reused".to_string(),
+                args: Vec::new(),
+            },
+            cwd: None,
+            env: HashMap::new(),
+            inherit_env: true,
+            env_denylist: Vec::new(),
+            timeout_ms: None,
+            execution_mode: dbflux_core::HookExecutionMode::Blocking,
+            ready_signal: None,
+            on_failure: dbflux_core::HookFailureMode::Disconnect,
+        }
+    }
+
+    #[test]
+    fn delete_protected_hook_row_removes_row_and_frees_name() {
+        use dbflux_storage::repositories::hook_definitions::HookDefinitionDto;
+
+        let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+            .expect("in-memory storage runtime");
+
+        let mut normal =
+            HookDefinitionDto::new(Uuid::new_v4(), "normal".to_string(), "Command".to_string());
+        normal.kind_json = Some(r#"{"kind":"command","command":"echo hi","args":[]}"#.to_string());
+
+        let legacy = HookDefinitionDto {
+            id: "legacy-broken".to_string(),
+            name: "legacy".to_string(),
+            execution_mode: "Blocking".to_string(),
+            script_ref: None,
+            cwd: None,
+            inherit_env: true,
+            timeout_ms: None,
+            ready_signal: None,
+            on_failure: "Warn".to_string(),
+            enabled: true,
+            created_at: String::new(),
+            updated_at: String::new(),
+            env_denylist: Vec::new(),
+            kind_json: None,
+        };
+
+        runtime
+            .hook_definitions()
+            .upsert(&normal)
+            .expect("seed normal row");
+        runtime
+            .hook_definitions()
+            .upsert(&legacy)
+            .expect("seed legacy row");
+
+        let mut state = AppState::new_with_storage_runtime(runtime).expect("build app state");
+
+        assert!(
+            state
+                .protected_hook_rows()
+                .iter()
+                .any(|row| row.row_id == "legacy-broken"),
+            "legacy row must be surfaced as protected"
+        );
+        assert!(
+            state.hook_definitions().contains_key("normal"),
+            "readable row must load normally"
+        );
+
+        state
+            .delete_protected_hook_row("legacy-broken")
+            .expect("delete protected row");
+
+        assert!(
+            state
+                .storage_runtime()
+                .hook_definitions()
+                .get("legacy-broken")
+                .expect("query row")
+                .is_none(),
+            "protected row must be gone from storage"
+        );
+        assert!(
+            !state
+                .protected_hook_rows()
+                .iter()
+                .any(|row| row.row_id == "legacy-broken"),
+            "protected row must be gone from memory"
+        );
+
+        let normal_definition = state.hook_definitions()["normal"].clone();
+        let saved = crate::config_loader::save_hook_definitions(
+            state.storage_runtime(),
+            &[
+                crate::config_loader::HookDefinitionSave {
+                    id: normal_definition.id.clone(),
+                    name: "normal".to_string(),
+                    hook: normal_definition.hook.clone(),
+                },
+                crate::config_loader::HookDefinitionSave {
+                    id: None,
+                    name: "legacy".to_string(),
+                    hook: reused_legacy_hook(),
+                },
+            ],
+            &state.protected_hook_row_ids(),
+        )
+        .expect("reusing the freed name must succeed");
+
+        assert!(
+            saved.contains_key("legacy"),
+            "the freed name must be reusable for a new hook"
+        );
+    }
+
+    #[test]
+    fn resolve_profile_hooks_resolves_binding_by_id() {
+        use dbflux_storage::repositories::hook_definitions::HookDefinitionDto;
+
+        let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+            .expect("in-memory storage runtime");
+
+        let hook_uuid = Uuid::new_v4();
+        let hook_id = hook_uuid.to_string();
+
+        let mut definition =
+            HookDefinitionDto::new(hook_uuid, "deploy".to_string(), "Command".to_string());
+        definition.kind_json =
+            Some(r#"{"kind":"command","command":"echo hi","args":[]}"#.to_string());
+
+        runtime
+            .hook_definitions()
+            .upsert(&definition)
+            .expect("seed hook definition");
+
+        let state = AppState::new_with_storage_runtime(runtime).expect("build app state");
+
+        let mut profile = ConnectionProfile::new("bound", DbConfig::default_postgres());
+        profile.hook_bindings = Some(dbflux_core::ConnectionHookBindings {
+            pre_connect: vec![hook_id.clone()],
+            post_connect: Vec::new(),
+            pre_disconnect: Vec::new(),
+            post_disconnect: Vec::new(),
+        });
+
+        let hooks = state.resolve_profile_hooks(&profile);
+        let pre_connect = hooks.phase_hooks(HookPhase::PreConnect);
+
+        assert_eq!(
+            pre_connect.len(),
+            1,
+            "binding id must resolve to its definition"
+        );
+        assert!(
+            matches!(
+                &pre_connect[0].kind,
+                dbflux_core::HookKind::Command { command, .. } if command == "echo hi"
+            ),
+            "resolved hook must carry the seeded command"
         );
     }
 }

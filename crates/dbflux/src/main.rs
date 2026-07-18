@@ -33,6 +33,7 @@ use interprocess::local_socket::{
 use log::info;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -54,6 +55,60 @@ const TASK_CANCEL_TIMEOUT: Duration = Duration::from_millis(2000);
 const CONNECTION_CLOSE_TIMEOUT: Duration = Duration::from_millis(3000);
 const TOTAL_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(10000);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Cadence for observing `SHUTDOWN_SIGNAL_RECEIVED`. Deliberately coarser than
+/// `POLL_INTERVAL`: this timer lives for the whole process lifetime, so it is
+/// traded against idle wakeups. The added latency is imperceptible to a user
+/// pressing Ctrl+C.
+#[cfg(unix)]
+const SIGNAL_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Set by `handle_shutdown_signal` when SIGINT or SIGTERM arrives; polled on
+/// the GPUI foreground thread so the same graceful-shutdown path used by
+/// window close also runs for terminal signals.
+#[cfg(unix)]
+static SHUTDOWN_SIGNAL_RECEIVED: AtomicBool = AtomicBool::new(false);
+
+/// Signal handler for SIGINT and SIGTERM.
+///
+/// This runs in an async-signal-unsafe context (arbitrary interrupted code,
+/// possibly mid-allocation or mid-lock), so it must only perform
+/// async-signal-safe operations. Setting an `AtomicBool` is safe; anything
+/// else (logging, allocating, taking locks) is not. The actual shutdown work
+/// happens later, on the GPUI foreground thread, once the flag is observed.
+#[cfg(unix)]
+extern "C" fn handle_shutdown_signal(_signum: std::ffi::c_int) {
+    SHUTDOWN_SIGNAL_RECEIVED.store(true, Ordering::SeqCst);
+}
+
+/// Registers `handle_shutdown_signal` for SIGINT and SIGTERM via `sigaction`.
+///
+/// `SA_RESTART` is required: without it, installing these handlers would make
+/// blocking syscalls elsewhere in the process (IPC accept/read, driver I/O)
+/// fail with `EINTR` on every delivery.
+#[cfg(unix)]
+fn install_shutdown_signal_handlers() {
+    let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+    action.sa_sigaction = handle_shutdown_signal as *const () as usize;
+    action.sa_flags = libc::SA_RESTART;
+    unsafe {
+        libc::sigemptyset(&mut action.sa_mask);
+    }
+
+    for (signum, name) in [(libc::SIGINT, "SIGINT"), (libc::SIGTERM, "SIGTERM")] {
+        let result = unsafe { libc::sigaction(signum, &action, std::ptr::null_mut()) };
+
+        if result != 0 {
+            log::warn!(
+                "Failed to install {name} handler, graceful shutdown on {name} unavailable: {}",
+                io::Error::last_os_error()
+            );
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn install_shutdown_signal_handlers() {}
 
 /// Installs a chained best-effort panic hook that:
 /// 1. Attempts to record the panic via AuditService::record_panic_best_effort
@@ -384,20 +439,7 @@ fn run_gui() {
                         return false;
                     }
 
-                    info!("Starting graceful shutdown...");
-                    let initiated_shutdown =
-                        app_state_for_close.update(cx, |state, _| state.begin_shutdown());
-
-                    if initiated_shutdown {
-                        let audit_service = app_state_for_close.read(cx).audit_service().clone();
-                        emit_system_shutdown(&audit_service);
-
-                        let app_state_shutdown = app_state_for_close.clone();
-                        cx.spawn(async move |cx| {
-                            run_shutdown_sequence(app_state_shutdown, cx).await;
-                        })
-                        .detach();
-                    }
+                    initiate_graceful_shutdown(&app_state_for_close, cx);
 
                     false
                 });
@@ -405,7 +447,53 @@ fn run_gui() {
             .unwrap_or_else(|error| {
                 log::warn!("Failed to install window close handler: {:?}", error);
             });
+
+        install_shutdown_signal_handlers();
+
+        #[cfg(unix)]
+        {
+            let app_state_for_signal = app_state.clone();
+            cx.spawn(async move |cx| {
+                loop {
+                    cx.background_executor().timer(SIGNAL_POLL_INTERVAL).await;
+
+                    if !SHUTDOWN_SIGNAL_RECEIVED.load(Ordering::SeqCst) {
+                        continue;
+                    }
+
+                    info!("Received shutdown signal from terminal");
+
+                    if let Err(error) = cx.update(|cx| {
+                        initiate_graceful_shutdown(&app_state_for_signal, cx);
+                    }) {
+                        log::warn!("Failed to start shutdown from signal: {:?}", error);
+                    }
+
+                    break;
+                }
+            })
+            .detach();
+        }
     });
+}
+
+/// Single entry point for graceful shutdown, reached from both window close
+/// and OS signals (SIGINT/SIGTERM). Marks shutdown as begun, records the
+/// audit event, and spawns the async shutdown sequence.
+fn initiate_graceful_shutdown(app_state: &Entity<AppStateEntity>, cx: &mut App) {
+    info!("Starting graceful shutdown...");
+    let initiated_shutdown = app_state.update(cx, |state, _| state.begin_shutdown());
+
+    if initiated_shutdown {
+        let audit_service = app_state.read(cx).audit_service().clone();
+        emit_system_shutdown(&audit_service);
+
+        let app_state_shutdown = app_state.clone();
+        cx.spawn(async move |cx| {
+            run_shutdown_sequence(app_state_shutdown, cx).await;
+        })
+        .detach();
+    }
 }
 
 async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut AsyncApp) {

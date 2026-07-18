@@ -16,7 +16,9 @@ use dbflux_ui_base::modals::{
     ModalDeleteDashboardConfirm, ModalDeleteSavedChartConfirm, ModalRenameItem, RenameItemOutcome,
     RenameItemRequest, RenameTarget, RequestMetricsForNamespace,
 };
-use dbflux_ui_base::{AppStateGlobal, OpenAuditRequested};
+use dbflux_ui_base::{
+    AppStateGlobal, OpenAuditRequested, drain_hook_load_diagnostics, report_error,
+};
 
 #[cfg(feature = "mcp")]
 use crate::app::McpRuntimeEventRaised;
@@ -353,6 +355,13 @@ impl Workspace {
         cx.set_global(AppStateGlobal {
             entity: app_state.clone(),
         });
+
+        let hook_load_errors = app_state.update(cx, |state, _| {
+            drain_hook_load_diagnostics(&mut state.hook_load_diagnostics)
+        });
+        for error in hook_load_errors {
+            report_error(error, cx);
+        }
 
         let sidebar = cx.new(|cx| Sidebar::new(app_state.clone(), window, cx));
         let sidebar_dock = cx.new(|cx| SidebarDock::new(sidebar.clone(), cx));

@@ -5,6 +5,7 @@ pub(crate) mod language_service;
 pub mod relational_filter;
 pub(crate) mod safety;
 pub(crate) mod semantic;
+pub(crate) mod sql_context;
 pub(crate) mod table_browser;
 pub(crate) mod time_macros;
 pub(crate) mod transfer;
@@ -31,6 +32,10 @@ pub use semantic::{
     AggregateFunction, AggregateRequest, AggregateSpec, PlannedQuery, SemanticFieldRef,
     SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticPlanner, SemanticPredicate,
     SemanticRequest, SemanticRequestKind, parse_semantic_filter_json, render_semantic_filter_sql,
+};
+pub use sql_context::{
+    ScopeRelation, SqlClause, SqlCompletionContext, SqlContextEngine, SqlCursorAnalysis,
+    StatementScope,
 };
 pub use table_browser::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ColumnRef, DescribeRequest,

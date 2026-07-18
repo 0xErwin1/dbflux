@@ -10,6 +10,7 @@ pub mod app_state_entity;
 pub mod async_ext;
 pub mod dashboard_manager;
 pub mod file_dialog;
+pub mod hook_phase_runner;
 pub mod keymap;
 pub mod modal_frame;
 pub mod modals;
@@ -28,7 +29,7 @@ mod style_guardrails;
 pub use app_state_entity::McpRuntimeEventRaised;
 pub use app_state_entity::{
     AppStateChanged, AppStateEntity, AppStateGlobal, AuthProfileCreated, OpenAuditRequested,
-    UserErrorReported,
+    UserErrorReported, drain_hook_load_diagnostics,
 };
 pub use async_ext::AsyncUpdateResultExt;
 pub use dashboard_manager::{

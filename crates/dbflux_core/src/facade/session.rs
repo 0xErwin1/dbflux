@@ -216,7 +216,8 @@ impl SessionFacade {
         }
 
         let removed = self.profiles.remove(idx)?;
-        self.connections.disconnect(removed.id);
+        // Profile removal has no ordered follow-up; teardown stays detached.
+        let _teardown = self.connections.disconnect(removed.id);
         self.secrets.delete_password(&removed);
         self.tree.remove_profile_node(removed.id);
 

@@ -23,6 +23,9 @@ use dbflux_storage::repositories::connection_profiles::ConnectionProfileDto;
 use dbflux_storage::repositories::driver_overrides::DriverOverridesDto;
 use dbflux_storage::repositories::driver_setting_values::DriverSettingValueDto;
 use dbflux_storage::repositories::general_settings::GeneralSettingsDto;
+use dbflux_storage::repositories::hook_definitions::{
+    HookDefinitionDto, HookDefinitionReplacement,
+};
 
 pub fn save_general_settings(
     runtime: &StorageRuntime,
@@ -155,79 +158,111 @@ pub fn save_driver_settings(
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditableGlobalHook {
+    pub id: Option<String>,
+    pub hook: ConnectionHook,
+}
+
+impl std::ops::Deref for EditableGlobalHook {
+    type Target = ConnectionHook;
+
+    fn deref(&self) -> &Self::Target {
+        &self.hook
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookDefinitionSave {
+    pub id: Option<String>,
+    pub name: String,
+    pub hook: ConnectionHook,
+}
+
 pub fn save_hook_definitions(
     runtime: &StorageRuntime,
-    hooks: &HashMap<String, dbflux_core::ConnectionHook>,
-) -> Result<(), dbflux_storage::error::StorageError> {
-    let repo = runtime.hook_definitions();
+    hooks: &[HookDefinitionSave],
+    protected_ids: &[String],
+) -> Result<HashMap<String, EditableGlobalHook>, dbflux_storage::error::StorageError> {
+    let replacements: Result<Vec<_>, _> = hooks.iter().map(hook_definition_replacement).collect();
+    let saved = runtime
+        .hook_definitions()
+        .replace_all_atomic(&replacements?, &protected_ids.iter().cloned().collect())?;
 
-    // Propagate read errors from the repository.
-    let existing_rows = repo.all()?;
-    let existing_ids: std::collections::HashSet<_> =
-        existing_rows.iter().map(|d| d.id.clone()).collect();
-
-    // Build a name→id map from existing rows for stable IDs.
-    let existing_name_to_id: std::collections::HashMap<_, _> = existing_rows
+    let hooks_by_id: HashMap<_, _> = hooks
         .iter()
-        .map(|d| (d.name.clone(), d.id.clone()))
+        .filter_map(|hook| hook.id.as_ref().map(|id| (id.clone(), hook.hook.clone())))
+        .collect();
+    let hooks_by_name: HashMap<_, _> = hooks
+        .iter()
+        .map(|hook| (hook.name.clone(), hook.hook.clone()))
         .collect();
 
-    // Build the full set of names present in the desired state.
-    let desired_names: std::collections::HashSet<_> = hooks.keys().cloned().collect();
+    Ok(saved
+        .into_iter()
+        .filter_map(|definition| {
+            let hook = hooks_by_id
+                .get(&definition.id)
+                .or_else(|| hooks_by_name.get(&definition.name))?
+                .clone();
+            Some((
+                definition.name,
+                EditableGlobalHook {
+                    id: Some(definition.id),
+                    hook,
+                },
+            ))
+        })
+        .collect())
+}
 
-    // Upsert all hooks that are in the desired state, using the existing ID or generating a new UUID.
-    for (name, hook) in hooks {
-        let id = existing_name_to_id
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        let execution_mode = match hook.execution_mode {
-            dbflux_core::HookExecutionMode::Blocking => "Blocking",
-            dbflux_core::HookExecutionMode::Detached => "Detached",
-        }
-        .to_string();
-        let on_failure = match hook.on_failure {
-            dbflux_core::HookFailureMode::Warn => "Warn",
-            dbflux_core::HookFailureMode::Ignore => "Ignore",
-            dbflux_core::HookFailureMode::Disconnect => "Disconnect",
-        }
-        .to_string();
+fn hook_definition_replacement(
+    hook: &HookDefinitionSave,
+) -> Result<HookDefinitionReplacement, dbflux_storage::error::StorageError> {
+    let execution_mode = match hook.hook.execution_mode {
+        HookExecutionMode::Blocking => "Blocking",
+        HookExecutionMode::Detached => "Detached",
+    };
+    let on_failure = match hook.hook.on_failure {
+        HookFailureMode::Warn => "Warn",
+        HookFailureMode::Ignore => "Ignore",
+        HookFailureMode::Disconnect => "Disconnect",
+    };
+    let definition_id = hook.id.clone().unwrap_or_default();
 
-        let dto = dbflux_storage::repositories::hook_definitions::HookDefinitionDto {
-            id,
-            name: name.clone(),
-            execution_mode,
-            script_ref: hook.ready_signal.clone(),
-            cwd: hook.cwd.as_ref().map(|p| p.to_string_lossy().to_string()),
-            inherit_env: hook.inherit_env,
-            timeout_ms: hook.timeout_ms.map(|v| v as i64),
-            ready_signal: hook.ready_signal.clone(),
-            on_failure,
-            enabled: hook.enabled,
+    Ok(HookDefinitionReplacement {
+        id: hook.id.clone(),
+        definition: HookDefinitionDto {
+            id: definition_id,
+            name: hook.name.clone(),
+            execution_mode: execution_mode.to_string(),
+            script_ref: None,
+            cwd: hook
+                .hook
+                .cwd
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string()),
+            inherit_env: hook.hook.inherit_env,
+            timeout_ms: hook.hook.timeout_ms.map(|value| value as i64),
+            ready_signal: hook.hook.ready_signal.clone(),
+            on_failure: on_failure.to_string(),
+            enabled: hook.hook.enabled,
             created_at: String::new(),
             updated_at: String::new(),
-            env_denylist: hook.env_denylist.clone(),
-        };
-
-        if existing_ids.contains(&dto.id) {
-            repo.upsert(&dto)?;
-        } else {
-            repo.insert(&dto)?;
-        }
-
-        let hook_env_repo = repo.env_repo();
-        let hook_id_for_child = dto.id.clone();
-        hook_env_repo.insert_many(&hook_id_for_child, &hook.env)?;
-    }
-
-    // Delete hooks that are in DB but not in the desired state.
-    for (name, id) in &existing_name_to_id {
-        if !desired_names.contains(name) {
-            repo.delete(id)?;
-        }
-    }
-
-    Ok(())
+            kind_json: Some(
+                serde_json::to_string(&hook.hook.kind).map_err(|error| {
+                    dbflux_storage::error::StorageError::Data(error.to_string())
+                })?,
+            ),
+            env_denylist: hook.hook.env_denylist.clone(),
+        },
+        // The canonical hook kind is persisted in `kind_json`; the legacy
+        // `cfg_hook_commands` child row is never read back, so leaving it
+        // unset lets the atomic replace drop any stale row instead of
+        // mirroring dead data.
+        command: None,
+        environment: hook.hook.env.clone(),
+    })
 }
 
 pub fn save_services(
@@ -599,6 +634,7 @@ fn connection_hook_to_dto(
         script_source_type: None,
         script_content: None,
         script_path: None,
+        script_interpreter: None,
         lua_source_type: None,
         lua_content: None,
         lua_path: None,
@@ -621,13 +657,16 @@ fn connection_hook_to_dto(
             dto.command = Some(command.clone());
         }
         HookKind::Script {
-            language, source, ..
+            language,
+            source,
+            interpreter,
         } => {
             dto.hook_kind = "script".to_string();
             dto.script_language = Some(match language {
                 ScriptLanguage::Bash => "bash".to_string(),
                 ScriptLanguage::Python => "python".to_string(),
             });
+            dto.script_interpreter = interpreter.clone();
             match source {
                 ScriptSource::Inline { content } => {
                     dto.script_source_type = Some("inline".to_string());
@@ -904,12 +943,27 @@ pub fn save_ssh_tunnels(
 // Configuration loading (read path - already migrated)
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookLoadDiagnostic {
+    pub row_id: String,
+    pub row_name: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtectedHookRow {
+    pub row_id: String,
+    pub row_name: Option<String>,
+}
+
 /// Loaded durable configuration from `dbflux.db`.
 pub struct LoadedConfig {
     pub general_settings: GeneralSettings,
     pub driver_overrides: HashMap<DriverKey, GlobalOverrides>,
     pub driver_settings: HashMap<DriverKey, FormValues>,
-    pub hook_definitions: HashMap<String, dbflux_core::ConnectionHook>,
+    pub hook_definitions: HashMap<String, EditableGlobalHook>,
+    pub hook_load_diagnostics: Vec<HookLoadDiagnostic>,
+    pub protected_hook_rows: Vec<ProtectedHookRow>,
     pub services: Vec<ServiceConfig>,
     pub profiles: Vec<ConnectionProfile>,
     pub auth_profiles: Vec<dbflux_core::AuthProfile>,
@@ -922,7 +976,9 @@ pub struct LoadedConfig {
 /// Uses sensible defaults when repositories are empty (fresh install).
 /// This function is the single entry point for loading all covered durable config
 /// domains from SQLite storage.
-pub fn load_config(runtime: &StorageRuntime) -> LoadedConfig {
+pub fn load_config(
+    runtime: &StorageRuntime,
+) -> Result<LoadedConfig, dbflux_storage::error::StorageError> {
     let profiles_repo = runtime.connection_profiles();
     let auth_repo = runtime.auth_profiles();
     let proxy_repo = runtime.proxy_profiles();
@@ -933,24 +989,27 @@ pub fn load_config(runtime: &StorageRuntime) -> LoadedConfig {
         &runtime.driver_overrides(),
         &runtime.driver_setting_values(),
     );
-    let hook_definitions = load_hook_definitions(&hooks_repo);
+    let (hook_definitions, hook_load_diagnostics, protected_hook_rows) =
+        load_hook_definitions(&hooks_repo)?;
     let services = dbflux_storage::load_service_configs(runtime);
     let profiles = load_profiles(&profiles_repo);
     let auth_profiles = load_auth_profiles(&auth_repo);
     let proxy_profiles = load_proxy_profiles(&proxy_repo, &proxy_repo.auth_repo());
     let ssh_tunnels = load_ssh_tunnels(&ssh_repo);
 
-    LoadedConfig {
+    Ok(LoadedConfig {
         general_settings,
         driver_overrides,
         driver_settings,
         hook_definitions,
+        hook_load_diagnostics,
+        protected_hook_rows,
         services,
         profiles,
         auth_profiles,
         proxy_profiles,
         ssh_tunnels,
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1083,53 +1142,105 @@ fn load_driver_maps(
 // Hook Definitions helpers
 // ---------------------------------------------------------------------------
 
+type LoadedHookDefinitions = (
+    HashMap<String, EditableGlobalHook>,
+    Vec<HookLoadDiagnostic>,
+    Vec<ProtectedHookRow>,
+);
+
 fn load_hook_definitions(
     repo: &dbflux_storage::repositories::hook_definitions::HookDefinitionRepository,
-) -> HashMap<String, dbflux_core::ConnectionHook> {
+) -> Result<LoadedHookDefinitions, dbflux_storage::error::StorageError> {
     let mut map = HashMap::new();
+    let mut diagnostics = Vec::new();
+    let mut protected_rows = Vec::new();
 
-    if let Ok(hooks) = repo.all() {
-        for dto in hooks {
-            let execution_mode = match dto.execution_mode.as_str() {
-                "Detached" => dbflux_core::HookExecutionMode::Detached,
-                _ => dbflux_core::HookExecutionMode::Blocking,
-            };
+    for dto in repo.all()? {
+        let row_name = Some(dto.name.clone());
+        let kind = match dto.kind_json.as_deref() {
+            Some(kind_json) => match serde_json::from_str(kind_json) {
+                Ok(kind) => kind,
+                Err(error) => {
+                    diagnostics.push(HookLoadDiagnostic {
+                        row_id: dto.id.clone(),
+                        row_name: row_name.clone(),
+                        message: format!("Invalid canonical hook payload: {error}"),
+                    });
+                    protected_rows.push(ProtectedHookRow {
+                        row_id: dto.id,
+                        row_name,
+                    });
+                    continue;
+                }
+            },
+            None => match dto.script_ref.clone() {
+                Some(command) => dbflux_core::HookKind::Command {
+                    command,
+                    args: Vec::new(),
+                },
+                None => {
+                    diagnostics.push(HookLoadDiagnostic {
+                        row_id: dto.id.clone(),
+                        row_name: row_name.clone(),
+                        message: "Legacy hook row has no unambiguous payload".to_string(),
+                    });
+                    protected_rows.push(ProtectedHookRow {
+                        row_id: dto.id,
+                        row_name,
+                    });
+                    continue;
+                }
+            },
+        };
 
-            let on_failure = match dto.on_failure.as_str() {
-                "Disconnect" => dbflux_core::HookFailureMode::Disconnect,
-                "Ignore" => dbflux_core::HookFailureMode::Ignore,
-                _ => dbflux_core::HookFailureMode::Warn,
-            };
+        let env = match repo.get_env(&dto.id) {
+            Ok(env) => env,
+            Err(error) => {
+                diagnostics.push(HookLoadDiagnostic {
+                    row_id: dto.id.clone(),
+                    row_name: row_name.clone(),
+                    message: format!("Unable to load hook environment: {error}"),
+                });
+                protected_rows.push(ProtectedHookRow {
+                    row_id: dto.id,
+                    row_name,
+                });
+                continue;
+            }
+        };
 
-            // Get env vars from child table
-            let env = repo.get_env(&dto.id).unwrap_or_default();
+        let execution_mode = match dto.execution_mode.as_str() {
+            "Detached" => dbflux_core::HookExecutionMode::Detached,
+            _ => dbflux_core::HookExecutionMode::Blocking,
+        };
+        let on_failure = match dto.on_failure.as_str() {
+            "Disconnect" => dbflux_core::HookFailureMode::Disconnect,
+            "Ignore" => dbflux_core::HookFailureMode::Ignore,
+            _ => dbflux_core::HookFailureMode::Warn,
+        };
+        let hook = dbflux_core::ConnectionHook {
+            enabled: dto.enabled,
+            kind,
+            cwd: dto.cwd.as_ref().map(std::path::PathBuf::from),
+            env,
+            inherit_env: dto.inherit_env,
+            env_denylist: dto.env_denylist.clone(),
+            timeout_ms: dto.timeout_ms.map(|v| v as u64),
+            execution_mode,
+            ready_signal: dto.ready_signal.clone(),
+            on_failure,
+        };
 
-            // Construct HookKind::Command using script_ref as the command
-            // Note: The new schema doesn't preserve full HookKind (Command/Script/Lua) info
-            // We assume Command for backward compatibility
-            let kind = dbflux_core::HookKind::Command {
-                command: dto.script_ref.clone().unwrap_or_default(),
-                args: vec![],
-            };
-
-            let hook = dbflux_core::ConnectionHook {
-                enabled: dto.enabled,
-                kind,
-                cwd: dto.cwd.as_ref().map(std::path::PathBuf::from),
-                env,
-                inherit_env: dto.inherit_env,
-                env_denylist: dto.env_denylist.clone(),
-                timeout_ms: dto.timeout_ms.map(|v| v as u64),
-                execution_mode,
-                ready_signal: dto.ready_signal.clone(),
-                on_failure,
-            };
-
-            map.insert(dto.name, hook);
-        }
+        map.insert(
+            dto.name,
+            EditableGlobalHook {
+                id: Some(dto.id),
+                hook,
+            },
+        );
     }
 
-    map
+    Ok((map, diagnostics, protected_rows))
 }
 
 // ---------------------------------------------------------------------------
@@ -1218,7 +1329,11 @@ fn load_profile_settings(
 }
 
 /// Loads ConnectionHooks from hook DTOs.
-fn load_connection_hooks_from_dtos(hooks: &[ConnectionProfileHookDto]) -> ConnectionHooks {
+fn load_connection_hooks_from_dtos(
+    hooks: &[ConnectionProfileHookDto],
+    hook_args_repo: &dbflux_storage::repositories::connection_profile_hook_args::ConnectionProfileHookArgsRepository,
+    hook_envs_repo: &dbflux_storage::repositories::connection_profile_hook_envs::ConnectionProfileHookEnvsRepository,
+) -> ConnectionHooks {
     let mut result = ConnectionHooks::default();
 
     for hook_dto in hooks {
@@ -1241,50 +1356,76 @@ fn load_connection_hooks_from_dtos(hooks: &[ConnectionProfileHookDto]) -> Connec
             _ => HookFailureMode::Warn,
         };
 
-        let kind = if hook_dto.command.as_ref().is_some_and(|c| !c.is_empty()) {
-            HookKind::Command {
+        let kind = match hook_dto.hook_kind.as_str() {
+            "command" => HookKind::Command {
                 command: hook_dto.command.clone().unwrap_or_default(),
                 args: vec![],
+            },
+            "script" => {
+                let language = match hook_dto.script_language.as_deref() {
+                    Some("python") => ScriptLanguage::Python,
+                    Some("bash") | Some("sh") => ScriptLanguage::Bash,
+                    _ => continue,
+                };
+                let source = match hook_dto.script_source_type.as_deref() {
+                    Some("file") => match hook_dto.script_path.as_ref() {
+                        Some(path) => ScriptSource::File { path: path.into() },
+                        None => continue,
+                    },
+                    _ => ScriptSource::Inline {
+                        content: hook_dto.script_content.clone().unwrap_or_default(),
+                    },
+                };
+
+                HookKind::Script {
+                    language,
+                    source,
+                    interpreter: hook_dto.script_interpreter.clone(),
+                }
             }
-        } else if hook_dto.script_language.as_deref() == Some("lua") {
-            HookKind::Lua {
-                source: ScriptSource::Inline {
-                    content: hook_dto.lua_content.clone().unwrap_or_default(),
-                },
-                capabilities: dbflux_core::LuaCapabilities {
-                    logging: hook_dto.lua_log,
-                    env_read: hook_dto.lua_env_read,
-                    connection_metadata: hook_dto.lua_conn_metadata,
-                    process_run: hook_dto.lua_process_run,
-                },
+            "lua" => {
+                let source = match hook_dto.lua_source_type.as_deref() {
+                    Some("file") => match hook_dto.lua_path.as_ref() {
+                        Some(path) => ScriptSource::File { path: path.into() },
+                        None => continue,
+                    },
+                    _ => ScriptSource::Inline {
+                        content: hook_dto.lua_content.clone().unwrap_or_default(),
+                    },
+                };
+
+                HookKind::Lua {
+                    source,
+                    capabilities: dbflux_core::LuaCapabilities {
+                        logging: hook_dto.lua_log,
+                        env_read: hook_dto.lua_env_read,
+                        connection_metadata: hook_dto.lua_conn_metadata,
+                        process_run: hook_dto.lua_process_run,
+                    },
+                }
             }
-        } else if hook_dto.script_language.as_deref() == Some("python") {
-            HookKind::Script {
-                language: ScriptLanguage::Python,
-                source: ScriptSource::Inline {
-                    content: hook_dto.script_content.clone().unwrap_or_default(),
-                },
-                interpreter: None,
-            }
-        } else if hook_dto.script_language.as_deref() == Some("bash")
-            || hook_dto.script_language.as_deref() == Some("sh")
-        {
-            HookKind::Script {
-                language: ScriptLanguage::Bash,
-                source: ScriptSource::Inline {
-                    content: hook_dto.script_content.clone().unwrap_or_default(),
-                },
-                interpreter: None,
-            }
-        } else {
-            continue;
+            _ => continue,
+        };
+
+        let kind = match kind {
+            HookKind::Command { command, .. } => HookKind::Command {
+                command,
+                args: hook_args_repo
+                    .get_for_hook(&hook_dto.id)
+                    .map(|args| args.into_iter().map(|arg| arg.value).collect())
+                    .unwrap_or_default(),
+            },
+            other => other,
         };
 
         let hook = ConnectionHook {
             enabled: hook_dto.enabled,
             kind,
             cwd: hook_dto.cwd.as_ref().map(std::path::PathBuf::from),
-            env: Default::default(),
+            env: hook_envs_repo
+                .get_for_hook(&hook_dto.id)
+                .map(|envs| envs.into_iter().map(|env| (env.key, env.value)).collect())
+                .unwrap_or_default(),
             inherit_env: hook_dto.inherit_env,
             env_denylist: hook_dto.env_denylist.clone(),
             timeout_ms: hook_dto.timeout_ms.map(|v| v as u64),
@@ -1440,7 +1581,11 @@ fn load_profiles(
             let hooks = if hooks_dtos.is_empty() {
                 None
             } else {
-                Some(load_connection_hooks_from_dtos(&hooks_dtos))
+                Some(load_connection_hooks_from_dtos(
+                    &hooks_dtos,
+                    &repo.hook_args(),
+                    &repo.hook_envs(),
+                ))
             };
 
             // Load hook bindings from connection_profile_hook_bindings
@@ -1648,16 +1793,518 @@ fn load_ssh_tunnels(
 #[cfg(test)]
 mod tests {
     use super::{
-        default_db_config_for_kind, general_settings_theme_to_storage, load_config, save_profiles,
-        save_services, save_ssh_tunnels, theme_setting_from_storage,
+        HookDefinitionSave, default_db_config_for_kind, general_settings_theme_to_storage,
+        load_config, save_hook_definitions, save_profiles, save_services, save_ssh_tunnels,
+        theme_setting_from_storage,
     };
     use dbflux_core::{
-        AccessKind, ConnectionProfile, DbConfig, DbKind, GeneralSettings, RpcServiceKind,
-        ServiceConfig, SshAuthMethod, SshTunnelConfig, SshTunnelProfile, ThemeSetting,
+        AccessKind, ConnectionHook, ConnectionHookBindings, ConnectionHooks, ConnectionProfile,
+        DbConfig, DbKind, GeneralSettings, HookExecutionMode, HookFailureMode, HookKind,
+        LuaCapabilities, RpcServiceKind, ScriptLanguage, ScriptSource, ServiceConfig,
+        SshAuthMethod, SshTunnelConfig, SshTunnelProfile, ThemeSetting,
     };
     use dbflux_storage::bootstrap::StorageRuntime;
     use dbflux_storage::repositories::general_settings::GeneralSettingsDto;
     use uuid::Uuid;
+
+    fn command_hook(command: &str) -> ConnectionHook {
+        ConnectionHook {
+            enabled: true,
+            kind: HookKind::Command {
+                command: command.to_string(),
+                args: vec!["--quiet".to_string()],
+            },
+            cwd: None,
+            env: [("MODE".to_string(), "test".to_string())].into(),
+            inherit_env: true,
+            env_denylist: vec![],
+            timeout_ms: Some(1_000),
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
+            on_failure: HookFailureMode::Warn,
+        }
+    }
+
+    #[test]
+    fn load_and_save_hook_definitions_preserve_loaded_and_generated_ids() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let existing = HookDefinitionSave {
+            id: None,
+            name: "existing".to_string(),
+            hook: command_hook("echo existing"),
+        };
+        let saved = save_hook_definitions(&runtime, &[existing], &[]).expect("save existing hook");
+        let existing_id = saved["existing"].id.clone().expect("generated existing ID");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(
+            loaded.hook_definitions["existing"].id.as_deref(),
+            Some(existing_id.as_str())
+        );
+
+        let new = HookDefinitionSave {
+            id: None,
+            name: "new".to_string(),
+            hook: command_hook("echo new"),
+        };
+        let existing = HookDefinitionSave {
+            id: Some(existing_id.clone()),
+            name: "existing".to_string(),
+            hook: command_hook("echo existing"),
+        };
+        let saved = save_hook_definitions(&runtime, &[existing, new], &[]).expect("save new hook");
+        assert!(saved["new"].id.is_some());
+        assert_ne!(saved["new"].id, saved["existing"].id);
+    }
+
+    #[test]
+    fn global_hook_kinds_and_shared_fields_round_trip_losslessly() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let shared = |kind| ConnectionHook {
+            enabled: false,
+            kind,
+            cwd: Some("/tmp/global-hooks".into()),
+            env: [("GLOBAL_ENV".to_string(), "value".to_string())].into(),
+            inherit_env: false,
+            env_denylist: vec!["GLOBAL_SECRET".to_string()],
+            timeout_ms: Some(3_000),
+            execution_mode: HookExecutionMode::Detached,
+            ready_signal: Some("global-ready".to_string()),
+            on_failure: HookFailureMode::Ignore,
+        };
+        let definitions = vec![
+            HookDefinitionSave {
+                id: None,
+                name: "command".to_string(),
+                hook: shared(HookKind::Command {
+                    command: "global-command".to_string(),
+                    args: vec!["--global".to_string()],
+                }),
+            },
+            HookDefinitionSave {
+                id: None,
+                name: "script".to_string(),
+                hook: shared(HookKind::Script {
+                    language: ScriptLanguage::Python,
+                    source: ScriptSource::File {
+                        path: "/tmp/global.py".into(),
+                    },
+                    interpreter: Some("python3.12".to_string()),
+                }),
+            },
+            HookDefinitionSave {
+                id: None,
+                name: "lua".to_string(),
+                hook: shared(HookKind::Lua {
+                    source: ScriptSource::Inline {
+                        content: "print('global lua')".to_string(),
+                    },
+                    capabilities: LuaCapabilities {
+                        logging: false,
+                        env_read: true,
+                        connection_metadata: false,
+                        process_run: true,
+                    },
+                }),
+            },
+        ];
+
+        let saved = save_hook_definitions(&runtime, &definitions, &[])
+            .expect("save global hook definitions");
+        let loaded = load_config(&runtime).expect("load configuration");
+
+        for definition in definitions {
+            let persisted = loaded
+                .hook_definitions
+                .get(&definition.name)
+                .expect("reloaded global hook");
+            assert_eq!(persisted.hook, definition.hook);
+            assert_eq!(persisted.id, saved[&definition.name].id);
+        }
+    }
+
+    #[test]
+    fn global_and_profile_hooks_preserve_empty_and_omitted_values() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let empty_hook = ConnectionHook {
+            enabled: true,
+            kind: HookKind::Command {
+                command: "echo empty".to_string(),
+                args: Vec::new(),
+            },
+            cwd: None,
+            env: Default::default(),
+            inherit_env: true,
+            env_denylist: Vec::new(),
+            timeout_ms: None,
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
+            on_failure: HookFailureMode::Warn,
+        };
+        let defaulted_hook = ConnectionHook {
+            timeout_ms: Some(0),
+            ready_signal: Some(String::new()),
+            ..empty_hook.clone()
+        };
+
+        save_hook_definitions(
+            &runtime,
+            &[
+                HookDefinitionSave {
+                    id: None,
+                    name: "empty-global".to_string(),
+                    hook: empty_hook.clone(),
+                },
+                HookDefinitionSave {
+                    id: None,
+                    name: "defaulted-global".to_string(),
+                    hook: defaulted_hook.clone(),
+                },
+            ],
+            &[],
+        )
+        .expect("save global hooks");
+
+        let mut profile = ConnectionProfile::new("empty-profile", DbConfig::default_postgres());
+        profile.hooks = Some(ConnectionHooks {
+            pre_connect: vec![empty_hook.clone()],
+            post_connect: vec![defaulted_hook.clone()],
+            pre_disconnect: Vec::new(),
+            post_disconnect: Vec::new(),
+        });
+        save_profiles(&runtime, &[profile.clone()]).expect("save profile hooks");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(loaded.hook_definitions["empty-global"].hook, empty_hook);
+        assert_eq!(
+            loaded.hook_definitions["defaulted-global"].hook,
+            defaulted_hook
+        );
+
+        let loaded_profile = loaded
+            .profiles
+            .into_iter()
+            .find(|candidate| candidate.id == profile.id)
+            .expect("load profile");
+        assert_eq!(loaded_profile.hooks, profile.hooks);
+    }
+
+    #[test]
+    fn load_config_protects_malformed_canonical_rows_without_mutating_them() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let saved = save_hook_definitions(
+            &runtime,
+            &[HookDefinitionSave {
+                id: None,
+                name: "broken".to_string(),
+                hook: command_hook("echo broken"),
+            }],
+            &[],
+        )
+        .expect("save hook");
+        let row_id = saved["broken"].id.clone().expect("generated ID");
+
+        let repo = runtime.hook_definitions();
+        let mut dto = repo.get(&row_id).expect("load row").expect("saved row");
+        dto.kind_json = Some("{not valid json".to_string());
+        repo.update(&dto).expect("corrupt canonical payload");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+
+        assert!(!loaded.hook_definitions.contains_key("broken"));
+        assert_eq!(loaded.protected_hook_rows.len(), 1);
+        assert_eq!(loaded.protected_hook_rows[0].row_id, row_id);
+        assert_eq!(
+            loaded.protected_hook_rows[0].row_name.as_deref(),
+            Some("broken")
+        );
+        assert_eq!(loaded.hook_load_diagnostics.len(), 1);
+        assert_eq!(
+            runtime
+                .hook_definitions()
+                .get(&row_id)
+                .expect("load row")
+                .expect("row")
+                .kind_json,
+            Some("{not valid json".to_string())
+        );
+    }
+
+    #[test]
+    fn load_config_recovers_unambiguous_legacy_command_without_diagnostic() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let dto = dbflux_storage::repositories::hook_definitions::HookDefinitionDto {
+            id: "legacy-command".to_string(),
+            name: "legacy".to_string(),
+            execution_mode: "Detached".to_string(),
+            script_ref: Some("echo legacy".to_string()),
+            cwd: None,
+            inherit_env: true,
+            timeout_ms: None,
+            ready_signal: None,
+            on_failure: "Ignore".to_string(),
+            enabled: true,
+            created_at: String::new(),
+            updated_at: String::new(),
+            env_denylist: Vec::new(),
+            kind_json: None,
+        };
+        runtime
+            .hook_definitions()
+            .upsert(&dto)
+            .expect("insert legacy command row");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        let recovered = loaded
+            .hook_definitions
+            .get("legacy")
+            .expect("recover legacy command");
+
+        assert_eq!(recovered.id.as_deref(), Some("legacy-command"));
+        assert_eq!(
+            recovered.hook.kind,
+            HookKind::Command {
+                command: "echo legacy".to_string(),
+                args: Vec::new(),
+            }
+        );
+        assert_eq!(recovered.hook.execution_mode, HookExecutionMode::Detached);
+        assert_eq!(recovered.hook.on_failure, HookFailureMode::Ignore);
+        assert!(loaded.hook_load_diagnostics.is_empty());
+        assert!(loaded.protected_hook_rows.is_empty());
+    }
+
+    #[test]
+    fn load_config_protects_ambiguous_legacy_rows_deterministically() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let dto = dbflux_storage::repositories::hook_definitions::HookDefinitionDto {
+            id: "legacy-row".to_string(),
+            name: "legacy".to_string(),
+            execution_mode: "Blocking".to_string(),
+            script_ref: None,
+            cwd: None,
+            inherit_env: true,
+            timeout_ms: None,
+            ready_signal: None,
+            on_failure: "Warn".to_string(),
+            enabled: true,
+            created_at: String::new(),
+            updated_at: String::new(),
+            env_denylist: Vec::new(),
+            kind_json: None,
+        };
+        runtime
+            .hook_definitions()
+            .upsert(&dto)
+            .expect("insert legacy row");
+
+        let first = load_config(&runtime).expect("first load");
+        let second = load_config(&runtime).expect("second load");
+
+        assert!(!first.hook_definitions.contains_key("legacy"));
+        assert_eq!(first.protected_hook_rows, second.protected_hook_rows);
+        assert_eq!(first.hook_load_diagnostics, second.hook_load_diagnostics);
+        assert_eq!(first.protected_hook_rows[0].row_id, "legacy-row");
+    }
+
+    #[test]
+    fn save_hook_definitions_renames_by_id_and_keeps_identity() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let saved = save_hook_definitions(
+            &runtime,
+            &[HookDefinitionSave {
+                id: None,
+                name: "before".to_string(),
+                hook: command_hook("echo before"),
+            }],
+            &[],
+        )
+        .expect("save original hook");
+        let id = saved["before"].id.clone();
+
+        let saved = save_hook_definitions(
+            &runtime,
+            &[HookDefinitionSave {
+                id: id.clone(),
+                name: "after".to_string(),
+                hook: command_hook("echo after"),
+            }],
+            &[],
+        )
+        .expect("rename hook");
+
+        assert_eq!(saved["after"].id, id);
+        assert!(
+            runtime
+                .hook_definitions()
+                .all()
+                .expect("load rows")
+                .iter()
+                .all(|row| row.name != "before")
+        );
+    }
+
+    #[test]
+    fn profile_hook_kinds_and_shared_fields_round_trip_losslessly() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let mut profile = ConnectionProfile::new("hooked", DbConfig::default_postgres());
+        let shared = |kind| ConnectionHook {
+            enabled: false,
+            kind,
+            cwd: Some("/tmp/hooks".into()),
+            env: [("HOOK_ENV".to_string(), "value".to_string())].into(),
+            inherit_env: false,
+            env_denylist: vec!["SECRET_TOKEN".to_string()],
+            timeout_ms: Some(2_000),
+            execution_mode: HookExecutionMode::Detached,
+            ready_signal: Some("ready".to_string()),
+            on_failure: HookFailureMode::Ignore,
+        };
+        profile.hooks = Some(ConnectionHooks {
+            pre_connect: vec![shared(HookKind::Command {
+                command: "command".to_string(),
+                args: vec!["--flag".to_string(), "value".to_string()],
+            })],
+            post_connect: vec![shared(HookKind::Script {
+                language: ScriptLanguage::Python,
+                source: ScriptSource::Inline {
+                    content: "print('inline')".to_string(),
+                },
+                interpreter: Some("python3.12".to_string()),
+            })],
+            pre_disconnect: vec![shared(HookKind::Script {
+                language: ScriptLanguage::Bash,
+                source: ScriptSource::File {
+                    path: "/tmp/hook.sh".into(),
+                },
+                interpreter: Some("bash".to_string()),
+            })],
+            post_disconnect: vec![
+                shared(HookKind::Lua {
+                    source: ScriptSource::Inline {
+                        content: "print('lua inline')".to_string(),
+                    },
+                    capabilities: LuaCapabilities {
+                        logging: false,
+                        env_read: true,
+                        connection_metadata: false,
+                        process_run: true,
+                    },
+                }),
+                shared(HookKind::Lua {
+                    source: ScriptSource::File {
+                        path: "/tmp/hook.lua".into(),
+                    },
+                    capabilities: LuaCapabilities::all_enabled(),
+                }),
+            ],
+        });
+
+        save_profiles(&runtime, &[profile.clone()]).expect("save profile hooks");
+        let loaded = load_config(&runtime)
+            .expect("load configuration")
+            .profiles
+            .into_iter()
+            .find(|candidate| candidate.id == profile.id)
+            .expect("reloaded profile");
+
+        assert_eq!(loaded.hooks, profile.hooks);
+    }
+
+    #[test]
+    fn profile_hook_binding_references_definition_id_and_round_trips() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let saved = save_hook_definitions(
+            &runtime,
+            &[HookDefinitionSave {
+                id: None,
+                name: "seed-db".to_string(),
+                hook: command_hook("echo seed"),
+            }],
+            &[],
+        )
+        .expect("save hook definition");
+        let definition_id = saved["seed-db"]
+            .id
+            .clone()
+            .expect("generated definition id");
+
+        let mut profile = ConnectionProfile::new("bound", DbConfig::default_postgres());
+        profile.hook_bindings = Some(ConnectionHookBindings {
+            pre_connect: vec![definition_id.clone()],
+            post_connect: Vec::new(),
+            pre_disconnect: Vec::new(),
+            post_disconnect: Vec::new(),
+        });
+
+        save_profiles(&runtime, &[profile.clone()]).expect("save profile with hook binding");
+
+        let loaded = load_config(&runtime)
+            .expect("load configuration")
+            .profiles
+            .into_iter()
+            .find(|candidate| candidate.id == profile.id)
+            .expect("reloaded profile");
+
+        let bindings = loaded
+            .hook_bindings
+            .expect("hook bindings must survive reload");
+
+        assert_eq!(bindings.pre_connect, vec![definition_id]);
+        assert!(bindings.post_connect.is_empty());
+        assert!(bindings.pre_disconnect.is_empty());
+        assert!(bindings.post_disconnect.is_empty());
+    }
+
+    #[test]
+    fn profile_hook_with_empty_command_round_trips_as_command_not_dropped() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let mut profile = ConnectionProfile::new("empty-command", DbConfig::default_postgres());
+
+        let empty_command_hook = ConnectionHook {
+            enabled: true,
+            kind: HookKind::Command {
+                command: String::new(),
+                args: Vec::new(),
+            },
+            cwd: None,
+            env: std::collections::HashMap::new(),
+            inherit_env: true,
+            env_denylist: Vec::new(),
+            timeout_ms: None,
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
+            on_failure: HookFailureMode::Disconnect,
+        };
+
+        profile.hooks = Some(ConnectionHooks {
+            pre_connect: vec![empty_command_hook.clone()],
+            post_connect: Vec::new(),
+            pre_disconnect: Vec::new(),
+            post_disconnect: Vec::new(),
+        });
+
+        save_profiles(&runtime, &[profile.clone()]).expect("save profile hooks");
+        let loaded = load_config(&runtime)
+            .expect("load configuration")
+            .profiles
+            .into_iter()
+            .find(|candidate| candidate.id == profile.id)
+            .expect("reloaded profile");
+
+        let reloaded_hook = loaded
+            .hooks
+            .as_ref()
+            .and_then(|hooks| hooks.pre_connect.first())
+            .expect("empty-command hook must survive reload");
+
+        assert_eq!(reloaded_hook.kind, empty_command_hook.kind);
+        assert!(matches!(
+            reloaded_hook.kind,
+            HookKind::Command { ref command, .. } if command.is_empty()
+        ));
+    }
 
     #[test]
     fn default_db_config_for_kind_maps_mariadb_to_mysql_config() {
@@ -1728,7 +2375,7 @@ mod tests {
             .upsert(&dto)
             .expect("save general settings dto");
 
-        let loaded = load_config(&runtime);
+        let loaded = load_config(&runtime).expect("load configuration");
 
         assert_eq!(loaded.general_settings.theme, ThemeSetting::Dark);
         assert!(!loaded.general_settings.restore_session_on_startup);
@@ -1789,7 +2436,7 @@ mod tests {
         let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
         super::save_general_settings(&runtime, &settings).expect("save compact style");
 
-        let loaded = load_config(&runtime);
+        let loaded = load_config(&runtime).expect("load configuration");
         assert_eq!(
             loaded.general_settings.style,
             AppStyle::Compact,
@@ -1800,7 +2447,7 @@ mod tests {
         settings.style = AppStyle::Default;
         super::save_general_settings(&runtime, &settings).expect("save default style");
 
-        let loaded = load_config(&runtime);
+        let loaded = load_config(&runtime).expect("load configuration");
         assert_eq!(
             loaded.general_settings.style,
             AppStyle::Default,
@@ -1840,7 +2487,7 @@ mod tests {
             .upsert(&dto)
             .expect("upsert with unknown style");
 
-        let loaded = load_config(&runtime);
+        let loaded = load_config(&runtime).expect("load configuration");
         assert_eq!(
             loaded.general_settings.style,
             AppStyle::Default,
@@ -1886,7 +2533,7 @@ mod tests {
 
         save_profiles(&runtime, &[profile.clone()]).expect("save connection profile");
 
-        let loaded = load_config(&runtime);
+        let loaded = load_config(&runtime).expect("load configuration");
         let reloaded = loaded
             .profiles
             .into_iter()
@@ -1935,7 +2582,7 @@ mod tests {
         )
             .expect("insert legacy service row");
 
-        let loaded = load_config(&runtime);
+        let loaded = load_config(&runtime).expect("load configuration");
 
         assert_eq!(loaded.services.len(), 1);
         assert_eq!(loaded.services[0].socket_id, "legacy-socket");
@@ -1973,7 +2620,7 @@ mod tests {
         assert_eq!(dto.api_major, Some(1));
         assert_eq!(dto.api_minor, Some(0));
 
-        let loaded = load_config(&runtime);
+        let loaded = load_config(&runtime).expect("load configuration");
         assert_eq!(loaded.services.len(), 1);
         assert_eq!(loaded.services[0].kind, RpcServiceKind::AuthProvider);
         assert_eq!(
@@ -1999,7 +2646,7 @@ mod tests {
         )
         .expect("insert unknown-kind service row");
 
-        let loaded = load_config(&runtime);
+        let loaded = load_config(&runtime).expect("load configuration");
 
         assert_eq!(loaded.services.len(), 1);
         assert_eq!(loaded.services[0].kind, RpcServiceKind::Driver);
@@ -2022,7 +2669,7 @@ mod tests {
         )
         .expect("insert driver service row");
 
-        let loaded = load_config(&runtime);
+        let loaded = load_config(&runtime).expect("load configuration");
 
         assert_eq!(loaded.services.len(), 1);
         assert_eq!(
@@ -2045,7 +2692,7 @@ mod tests {
         )
         .expect("insert malformed api contract row");
 
-        let loaded = load_config(&runtime);
+        let loaded = load_config(&runtime).expect("load configuration");
 
         assert_eq!(loaded.services.len(), 1);
         assert_eq!(loaded.services[0].api_contract, None);

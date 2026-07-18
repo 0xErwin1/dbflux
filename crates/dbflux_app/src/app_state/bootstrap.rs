@@ -6,9 +6,9 @@ use dbflux_core::observability::{
     EventCategory, EventOutcome, EventRecord, EventSeverity, EventSink,
 };
 use dbflux_core::{
-    AuthProfile, ConnectionHook, ConnectionProfile, DbDriver, DriverKey, FormValues,
-    GeneralSettings, GlobalOverrides, ProfileManager, ProxyProfile, ScriptsDirectory,
-    ServiceConfig, SessionFacade, SshTunnelProfile,
+    AuthProfile, ConnectionProfile, DbDriver, DriverKey, FormValues, GeneralSettings,
+    GlobalOverrides, ProfileManager, ProxyProfile, ScriptsDirectory, ServiceConfig, SessionFacade,
+    SshTunnelProfile,
 };
 
 use dbflux_storage::SavedQueryRepo;
@@ -59,6 +59,7 @@ use dbflux_driver_mssql::MssqlDriver;
 use dbflux_driver_redshift::RedshiftDriver;
 
 use crate::auth_provider_registry::AuthProviderRegistry;
+use crate::config_loader::{EditableGlobalHook, HookLoadDiagnostic, ProtectedHookRow};
 use crate::rpc_services::external_audit::{ExternalAuditSink, NoOpContextProvider};
 use crate::rpc_services::{
     AuthProviderServiceAdaptation, DriverServiceAdaptation, ExternalDriverDiagnostic,
@@ -75,20 +76,31 @@ use dbflux_driver_ipc::driver::IpcDriverLaunchConfig;
 
 use super::AppState;
 
+type DefaultDriverBuild = (
+    BuiltDrivers,
+    StorageRuntime,
+    Vec<ConnectionProfile>,
+    Vec<AuthProfile>,
+    Vec<ProxyProfile>,
+    Vec<SshTunnelProfile>,
+);
+
 pub(super) struct BuiltDrivers {
     pub(super) drivers: HashMap<String, Arc<dyn DbDriver>>,
     pub(super) external_driver_diagnostics: HashMap<String, ExternalDriverDiagnostic>,
     pub(super) general_settings: GeneralSettings,
     pub(super) driver_overrides: HashMap<DriverKey, GlobalOverrides>,
     pub(super) driver_settings: HashMap<DriverKey, FormValues>,
-    pub(super) hook_definitions: HashMap<String, ConnectionHook>,
+    pub(super) hook_definitions: HashMap<String, EditableGlobalHook>,
+    pub(super) hook_load_diagnostics: Vec<HookLoadDiagnostic>,
+    pub(super) protected_hook_rows: Vec<ProtectedHookRow>,
     pub(super) services: Vec<ServiceConfig>,
 }
 
 impl AppState {
     pub fn new() -> Result<Self, dbflux_storage::error::StorageError> {
         let (built, storage_runtime, profiles, auth_profiles, proxies, ssh_tunnels) =
-            Self::build_default_drivers();
+            Self::build_default_drivers()?;
 
         Self::new_with_drivers_and_settings(
             built.drivers,
@@ -97,6 +109,8 @@ impl AppState {
             built.driver_overrides,
             built.driver_settings,
             built.hook_definitions,
+            built.hook_load_diagnostics,
+            built.protected_hook_rows,
             built.services,
             storage_runtime,
             profiles,
@@ -110,7 +124,7 @@ impl AppState {
         storage_runtime: StorageRuntime,
     ) -> Result<Self, dbflux_storage::error::StorageError> {
         let (built, storage_runtime, profiles, auth_profiles, proxies, ssh_tunnels) =
-            Self::build_default_drivers_with_runtime(storage_runtime);
+            Self::build_default_drivers_with_runtime(storage_runtime)?;
 
         Self::new_with_drivers_and_settings(
             built.drivers,
@@ -119,6 +133,8 @@ impl AppState {
             built.driver_overrides,
             built.driver_settings,
             built.hook_definitions,
+            built.hook_load_diagnostics,
+            built.protected_hook_rows,
             built.services,
             storage_runtime,
             profiles,
@@ -135,7 +151,9 @@ impl AppState {
         general_settings: GeneralSettings,
         driver_overrides: HashMap<DriverKey, GlobalOverrides>,
         driver_settings: HashMap<DriverKey, FormValues>,
-        hook_definitions: HashMap<String, ConnectionHook>,
+        hook_definitions: HashMap<String, EditableGlobalHook>,
+        hook_load_diagnostics: Vec<HookLoadDiagnostic>,
+        protected_hook_rows: Vec<ProtectedHookRow>,
         services: Vec<ServiceConfig>,
         storage_runtime: dbflux_storage::bootstrap::StorageRuntime,
         profiles: Vec<ConnectionProfile>,
@@ -194,6 +212,8 @@ impl AppState {
             driver_overrides,
             driver_settings,
             hook_definitions,
+            hook_load_diagnostics,
+            protected_hook_rows,
             detached_hook_tasks: HashMap::new(),
             auth_provider_registry,
             history_manager,
@@ -792,14 +812,7 @@ impl AppState {
     }
 
     #[allow(clippy::result_large_err)]
-    fn build_default_drivers() -> (
-        BuiltDrivers,
-        dbflux_storage::bootstrap::StorageRuntime,
-        Vec<ConnectionProfile>,
-        Vec<AuthProfile>,
-        Vec<ProxyProfile>,
-        Vec<SshTunnelProfile>,
-    ) {
+    fn build_default_drivers() -> Result<DefaultDriverBuild, dbflux_storage::error::StorageError> {
         let runtime = dbflux_storage::bootstrap::initialize()
             .expect("failed to initialize internal storage — cannot continue");
 
@@ -808,68 +821,44 @@ impl AppState {
 
     #[allow(clippy::result_large_err)]
     fn build_default_drivers_with_runtime(
-        runtime: dbflux_storage::bootstrap::StorageRuntime,
-    ) -> (
-        BuiltDrivers,
-        dbflux_storage::bootstrap::StorageRuntime,
-        Vec<ConnectionProfile>,
-        Vec<AuthProfile>,
-        Vec<ProxyProfile>,
-        Vec<SshTunnelProfile>,
-    ) {
+        runtime: StorageRuntime,
+    ) -> Result<DefaultDriverBuild, dbflux_storage::error::StorageError> {
         let drivers = Self::build_builtin_drivers();
         let external_driver_diagnostics = HashMap::new();
 
-        let (
-            general_settings,
-            driver_overrides,
-            driver_settings,
-            hook_definitions,
-            services,
-            runtime,
-        ) = Self::load_app_config_from_runtime(runtime);
+        let (loaded, runtime) = Self::load_app_config_from_runtime(runtime)?;
 
-        let loaded = crate::config_loader::load_config(&runtime);
-
-        (
+        Ok((
             BuiltDrivers {
                 drivers,
                 external_driver_diagnostics,
-                general_settings,
-                driver_overrides,
-                driver_settings,
-                hook_definitions,
-                services,
+                general_settings: loaded.general_settings,
+                driver_overrides: loaded.driver_overrides,
+                driver_settings: loaded.driver_settings,
+                hook_definitions: loaded.hook_definitions,
+                hook_load_diagnostics: loaded.hook_load_diagnostics,
+                protected_hook_rows: loaded.protected_hook_rows,
+                services: loaded.services,
             },
             runtime,
             loaded.profiles,
             loaded.auth_profiles,
             loaded.proxy_profiles,
             loaded.ssh_tunnels,
-        )
+        ))
     }
 
-    #[allow(clippy::type_complexity)]
     fn load_app_config_from_runtime(
         runtime: dbflux_storage::bootstrap::StorageRuntime,
-    ) -> (
-        GeneralSettings,
-        HashMap<DriverKey, GlobalOverrides>,
-        HashMap<DriverKey, FormValues>,
-        HashMap<String, ConnectionHook>,
-        Vec<ServiceConfig>,
-        dbflux_storage::bootstrap::StorageRuntime,
-    ) {
-        let loaded = crate::config_loader::load_config(&runtime);
-
+    ) -> Result<
         (
-            loaded.general_settings,
-            loaded.driver_overrides,
-            loaded.driver_settings,
-            loaded.hook_definitions,
-            loaded.services,
-            runtime,
-        )
+            crate::config_loader::LoadedConfig,
+            dbflux_storage::bootstrap::StorageRuntime,
+        ),
+        dbflux_storage::error::StorageError,
+    > {
+        let loaded = crate::config_loader::load_config(&runtime)?;
+        Ok((loaded, runtime))
     }
 
     fn launch_rpc_services(

@@ -203,6 +203,7 @@ enum TestStatus {
     None,
     Testing,
     Success,
+    SuccessWithWarning,
     Failed,
 }
 
@@ -1854,29 +1855,49 @@ impl ConnectionManagerWindow {
 
         let hook_definitions = self.app_state.read(cx).hook_definitions().clone();
 
-        let mut hook_ids: Vec<String> = hook_definitions.keys().cloned().collect();
-        hook_ids.sort();
-        hook_items.extend(hook_ids.iter().map(|hook_id| {
-            let label = hook_definitions
-                .get(hook_id)
-                .map(|hook| format!("{} - {}", hook_id, hook.summary()))
-                .unwrap_or_else(|| hook_id.clone());
+        let mut hook_names: Vec<String> = hook_definitions.keys().cloned().collect();
+        hook_names.sort();
+        hook_items.extend(hook_names.iter().filter_map(|hook_name| {
+            let definition = hook_definitions.get(hook_name)?;
+            let definition_id = definition.id.clone()?;
 
-            dbflux_components::controls::DropdownItem::with_value(label, hook_id)
+            let label = format!("{} - {}", hook_name, definition.summary());
+
+            Some(dbflux_components::controls::DropdownItem::with_value(
+                label,
+                definition_id,
+            ))
         }));
 
-        let (pre_selected, pre_extra) = hook_bindings
+        let id_to_name: HashMap<String, String> = hook_definitions
+            .iter()
+            .filter_map(|(name, definition)| definition.id.clone().map(|id| (id, name.clone())))
+            .collect();
+
+        let display_extra = |ids: &[String]| -> String {
+            ids.iter()
+                .map(|id| id_to_name.get(id).cloned().unwrap_or_else(|| id.clone()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+
+        let (pre_selected, pre_extra_ids) = hook_bindings
             .map(|bindings| Self::split_primary_and_extra(&bindings.pre_connect))
             .unwrap_or_default();
-        let (post_selected, post_extra) = hook_bindings
+        let (post_selected, post_extra_ids) = hook_bindings
             .map(|bindings| Self::split_primary_and_extra(&bindings.post_connect))
             .unwrap_or_default();
-        let (pre_disconnect_selected, pre_disconnect_extra) = hook_bindings
+        let (pre_disconnect_selected, pre_disconnect_extra_ids) = hook_bindings
             .map(|bindings| Self::split_primary_and_extra(&bindings.pre_disconnect))
             .unwrap_or_default();
-        let (post_disconnect_selected, post_disconnect_extra) = hook_bindings
+        let (post_disconnect_selected, post_disconnect_extra_ids) = hook_bindings
             .map(|bindings| Self::split_primary_and_extra(&bindings.post_disconnect))
             .unwrap_or_default();
+
+        let pre_extra = display_extra(&pre_extra_ids);
+        let post_extra = display_extra(&post_extra_ids);
+        let pre_disconnect_extra = display_extra(&pre_disconnect_extra_ids);
+        let post_disconnect_extra = display_extra(&post_disconnect_extra_ids);
 
         let selection_index = |selected: &str| {
             hook_items
@@ -2098,17 +2119,17 @@ impl ConnectionManagerWindow {
     }
 
     fn collect_hook_bindings(&self, cx: &Context<Self>) -> Option<ConnectionHookBindings> {
+        let (name_to_id, known_ids) = self.hook_id_lookup(cx);
+
         let pre_connect = Self::merge_hook_ids(
             self.settings_tab
                 .conn_pre_hook_dropdown
                 .read(cx)
                 .selected_value()
                 .map(|value| value.to_string()),
-            self.settings_tab
-                .conn_pre_hook_extra_input
-                .read(cx)
-                .value()
-                .to_string(),
+            &self.settings_tab.conn_pre_hook_extra_input.read(cx).value(),
+            &name_to_id,
+            &known_ids,
         );
 
         let post_connect = Self::merge_hook_ids(
@@ -2117,11 +2138,13 @@ impl ConnectionManagerWindow {
                 .read(cx)
                 .selected_value()
                 .map(|value| value.to_string()),
-            self.settings_tab
+            &self
+                .settings_tab
                 .conn_post_hook_extra_input
                 .read(cx)
-                .value()
-                .to_string(),
+                .value(),
+            &name_to_id,
+            &known_ids,
         );
 
         let pre_disconnect = Self::merge_hook_ids(
@@ -2130,11 +2153,13 @@ impl ConnectionManagerWindow {
                 .read(cx)
                 .selected_value()
                 .map(|value| value.to_string()),
-            self.settings_tab
+            &self
+                .settings_tab
                 .conn_pre_disconnect_hook_extra_input
                 .read(cx)
-                .value()
-                .to_string(),
+                .value(),
+            &name_to_id,
+            &known_ids,
         );
 
         let post_disconnect = Self::merge_hook_ids(
@@ -2143,11 +2168,13 @@ impl ConnectionManagerWindow {
                 .read(cx)
                 .selected_value()
                 .map(|value| value.to_string()),
-            self.settings_tab
+            &self
+                .settings_tab
                 .conn_post_disconnect_hook_extra_input
                 .read(cx)
-                .value()
-                .to_string(),
+                .value(),
+            &name_to_id,
+            &known_ids,
         );
 
         if pre_connect.is_empty()
@@ -2166,23 +2193,124 @@ impl ConnectionManagerWindow {
         })
     }
 
-    fn split_primary_and_extra(hooks: &[String]) -> (String, String) {
-        let Some((first, rest)) = hooks.split_first() else {
-            return (String::new(), String::new());
-        };
+    /// Pushes a validation error for every hook token the user selected or
+    /// typed that does not resolve to a known definition. This runs before
+    /// save so the user learns an unknown entry was ignored, while
+    /// `collect_hook_bindings` still drops those tokens to protect the
+    /// `cfg_hook_bindings` foreign key.
+    fn validate_hook_bindings(&mut self, cx: &Context<Self>) {
+        let (name_to_id, known_ids) = self.hook_id_lookup(cx);
 
-        (first.clone(), rest.join(", "))
+        let phases: [(&str, Option<String>, String); 4] = [
+            (
+                "pre-connect",
+                self.settings_tab
+                    .conn_pre_hook_dropdown
+                    .read(cx)
+                    .selected_value()
+                    .map(|value| value.to_string()),
+                self.settings_tab
+                    .conn_pre_hook_extra_input
+                    .read(cx)
+                    .value()
+                    .to_string(),
+            ),
+            (
+                "post-connect",
+                self.settings_tab
+                    .conn_post_hook_dropdown
+                    .read(cx)
+                    .selected_value()
+                    .map(|value| value.to_string()),
+                self.settings_tab
+                    .conn_post_hook_extra_input
+                    .read(cx)
+                    .value()
+                    .to_string(),
+            ),
+            (
+                "pre-disconnect",
+                self.settings_tab
+                    .conn_pre_disconnect_hook_dropdown
+                    .read(cx)
+                    .selected_value()
+                    .map(|value| value.to_string()),
+                self.settings_tab
+                    .conn_pre_disconnect_hook_extra_input
+                    .read(cx)
+                    .value()
+                    .to_string(),
+            ),
+            (
+                "post-disconnect",
+                self.settings_tab
+                    .conn_post_disconnect_hook_dropdown
+                    .read(cx)
+                    .selected_value()
+                    .map(|value| value.to_string()),
+                self.settings_tab
+                    .conn_post_disconnect_hook_extra_input
+                    .read(cx)
+                    .value()
+                    .to_string(),
+            ),
+        ];
+
+        for (label, primary, extra) in phases {
+            for token in Self::unresolved_hook_tokens(primary, &extra, &name_to_id, &known_ids) {
+                self.validation_errors.push(format!(
+                    "Unknown {label} hook '{token}'. Configure it in Settings > Hooks"
+                ));
+            }
+        }
     }
 
-    fn merge_hook_ids(primary: Option<String>, extra_text: String) -> Vec<String> {
-        let mut ordered = Vec::new();
+    fn split_primary_and_extra(hooks: &[String]) -> (String, Vec<String>) {
+        let Some((first, rest)) = hooks.split_first() else {
+            return (String::new(), Vec::new());
+        };
 
-        if let Some(primary) = primary.filter(|value| !value.trim().is_empty()) {
-            ordered.push(primary);
+        (first.clone(), rest.to_vec())
+    }
+
+    /// Builds the name→id and known-id lookups used to resolve hook bindings
+    /// to durable definition ids. `hook_definitions` is keyed by name, while
+    /// each `EditableGlobalHook` carries the persisted definition id.
+    fn hook_id_lookup(&self, cx: &Context<Self>) -> (HashMap<String, String>, HashSet<String>) {
+        let app_state = self.app_state.read(cx);
+        let hook_definitions = app_state.hook_definitions();
+
+        let mut name_to_id = HashMap::new();
+        let mut known_ids = HashSet::new();
+
+        for (name, definition) in hook_definitions.iter() {
+            if let Some(id) = &definition.id {
+                name_to_id.insert(name.clone(), id.clone());
+                known_ids.insert(id.clone());
+            }
         }
 
-        for id in Self::parse_hook_ids(&extra_text) {
-            if !ordered.iter().any(|existing| existing == &id) {
+        (name_to_id, known_ids)
+    }
+
+    fn merge_hook_ids(
+        primary: Option<String>,
+        extra_text: &str,
+        name_to_id: &HashMap<String, String>,
+        known_ids: &HashSet<String>,
+    ) -> Vec<String> {
+        let mut ordered = Vec::new();
+
+        if let Some(id) =
+            primary.and_then(|value| Self::resolve_hook_token(&value, name_to_id, known_ids))
+        {
+            ordered.push(id);
+        }
+
+        for token in Self::parse_hook_tokens(extra_text) {
+            if let Some(id) = Self::resolve_hook_token(&token, name_to_id, known_ids)
+                && !ordered.iter().any(|existing| existing == &id)
+            {
                 ordered.push(id);
             }
         }
@@ -2190,12 +2318,68 @@ impl ConnectionManagerWindow {
         ordered
     }
 
-    fn parse_hook_ids(text: &str) -> Vec<String> {
+    /// Resolves a user-entered hook token to a durable definition id.
+    ///
+    /// A token already matching a known definition id is accepted as-is; a
+    /// token matching a definition name is mapped to that definition's id.
+    /// Tokens matching neither are dropped so an unknown value can never reach
+    /// the `cfg_hook_bindings` foreign key.
+    fn resolve_hook_token(
+        token: &str,
+        name_to_id: &HashMap<String, String>,
+        known_ids: &HashSet<String>,
+    ) -> Option<String> {
+        let trimmed = token.trim();
+
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        if known_ids.contains(trimmed) {
+            return Some(trimmed.to_string());
+        }
+
+        name_to_id.get(trimmed).cloned()
+    }
+
+    fn parse_hook_tokens(text: &str) -> Vec<String> {
         text.split(',')
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToString::to_string)
             .collect()
+    }
+
+    /// Returns the raw tokens (dropdown selection plus comma-separated extras)
+    /// that resolve to neither a known definition id nor a known definition
+    /// name. `merge_hook_ids` silently drops these to keep the
+    /// `cfg_hook_bindings` foreign key safe, so the form surfaces them here to
+    /// tell the user their entry was ignored instead of failing quietly.
+    fn unresolved_hook_tokens(
+        primary: Option<String>,
+        extra_text: &str,
+        name_to_id: &HashMap<String, String>,
+        known_ids: &HashSet<String>,
+    ) -> Vec<String> {
+        let mut unresolved = Vec::new();
+
+        let tokens = primary
+            .into_iter()
+            .chain(Self::parse_hook_tokens(extra_text));
+
+        for token in tokens {
+            let trimmed = token.trim();
+
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            if Self::resolve_hook_token(trimmed, name_to_id, known_ids).is_none() {
+                unresolved.push(trimmed.to_string());
+            }
+        }
+
+        unresolved
     }
 
     /// Returns the number of driver schema fields (for Settings tab navigation).
@@ -3433,58 +3617,157 @@ mod tests {
     use super::auth_profile_needs_login;
     use super::auth_profile_ref_field_id_from_form;
     use dbflux_core::AuthSessionState;
+    use std::collections::{HashMap, HashSet};
 
-    // --- parse_hook_ids ---
+    // --- parse_hook_tokens ---
 
     #[test]
-    fn parse_hook_ids_comma_separated() {
-        let ids = ConnectionManagerWindow::parse_hook_ids("pre-check, lint, deploy");
-        assert_eq!(ids, vec!["pre-check", "lint", "deploy"]);
+    fn parse_hook_tokens_comma_separated() {
+        let tokens = ConnectionManagerWindow::parse_hook_tokens("pre-check, lint, deploy");
+        assert_eq!(tokens, vec!["pre-check", "lint", "deploy"]);
     }
 
     #[test]
-    fn parse_hook_ids_trims_whitespace() {
-        let ids = ConnectionManagerWindow::parse_hook_ids("  a ,  b  , c ");
-        assert_eq!(ids, vec!["a", "b", "c"]);
+    fn parse_hook_tokens_trims_whitespace() {
+        let tokens = ConnectionManagerWindow::parse_hook_tokens("  a ,  b  , c ");
+        assert_eq!(tokens, vec!["a", "b", "c"]);
     }
 
     #[test]
-    fn parse_hook_ids_skips_empty() {
-        let ids = ConnectionManagerWindow::parse_hook_ids(",, a ,, b ,,");
-        assert_eq!(ids, vec!["a", "b"]);
+    fn parse_hook_tokens_skips_empty() {
+        let tokens = ConnectionManagerWindow::parse_hook_tokens(",, a ,, b ,,");
+        assert_eq!(tokens, vec!["a", "b"]);
     }
 
     #[test]
-    fn parse_hook_ids_empty_string() {
-        let ids = ConnectionManagerWindow::parse_hook_ids("");
-        assert!(ids.is_empty());
+    fn parse_hook_tokens_empty_string() {
+        let tokens = ConnectionManagerWindow::parse_hook_tokens("");
+        assert!(tokens.is_empty());
     }
 
     // --- merge_hook_ids ---
 
+    fn known_ids_set<const N: usize>(ids: [&str; N]) -> HashSet<String> {
+        ids.iter().map(ToString::to_string).collect()
+    }
+
     #[test]
     fn merge_hook_ids_primary_plus_extras() {
-        let result =
-            ConnectionManagerWindow::merge_hook_ids(Some("main".into()), "extra1, extra2".into());
+        let name_to_id = HashMap::new();
+        let known_ids = known_ids_set(["main", "extra1", "extra2"]);
+
+        let result = ConnectionManagerWindow::merge_hook_ids(
+            Some("main".into()),
+            "extra1, extra2",
+            &name_to_id,
+            &known_ids,
+        );
+
         assert_eq!(result, vec!["main", "extra1", "extra2"]);
     }
 
     #[test]
     fn merge_hook_ids_deduplicates() {
-        let result = ConnectionManagerWindow::merge_hook_ids(Some("a".into()), "b, a, c".into());
+        let name_to_id = HashMap::new();
+        let known_ids = known_ids_set(["a", "b", "c"]);
+
+        let result = ConnectionManagerWindow::merge_hook_ids(
+            Some("a".into()),
+            "b, a, c",
+            &name_to_id,
+            &known_ids,
+        );
+
         assert_eq!(result, vec!["a", "b", "c"]);
     }
 
     #[test]
     fn merge_hook_ids_no_primary() {
-        let result = ConnectionManagerWindow::merge_hook_ids(None, "x, y".into());
+        let name_to_id = HashMap::new();
+        let known_ids = known_ids_set(["x", "y"]);
+
+        let result = ConnectionManagerWindow::merge_hook_ids(None, "x, y", &name_to_id, &known_ids);
+
         assert_eq!(result, vec!["x", "y"]);
     }
 
     #[test]
     fn merge_hook_ids_empty_primary_is_skipped() {
-        let result = ConnectionManagerWindow::merge_hook_ids(Some("  ".into()), "a".into());
+        let name_to_id = HashMap::new();
+        let known_ids = known_ids_set(["a"]);
+
+        let result = ConnectionManagerWindow::merge_hook_ids(
+            Some("  ".into()),
+            "a",
+            &name_to_id,
+            &known_ids,
+        );
+
         assert_eq!(result, vec!["a"]);
+    }
+
+    #[test]
+    fn merge_hook_ids_resolves_names_and_drops_unknown_tokens() {
+        let name_to_id: HashMap<String, String> = [("lint".to_string(), "id-lint".to_string())]
+            .into_iter()
+            .collect();
+        let known_ids = known_ids_set(["id-main", "id-lint"]);
+
+        let result = ConnectionManagerWindow::merge_hook_ids(
+            Some("id-main".into()),
+            "lint, ghost",
+            &name_to_id,
+            &known_ids,
+        );
+
+        assert_eq!(result, vec!["id-main", "id-lint"]);
+    }
+
+    #[test]
+    fn unresolved_hook_tokens_accepts_known_id_and_name() {
+        let name_to_id: HashMap<String, String> = [("lint".to_string(), "id-lint".to_string())]
+            .into_iter()
+            .collect();
+        let known_ids = known_ids_set(["id-main", "id-lint"]);
+
+        let result = ConnectionManagerWindow::unresolved_hook_tokens(
+            Some("id-main".into()),
+            "lint",
+            &name_to_id,
+            &known_ids,
+        );
+
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn unresolved_hook_tokens_reports_unknown_entries() {
+        let name_to_id = HashMap::new();
+        let known_ids = known_ids_set(["id-main"]);
+
+        let result = ConnectionManagerWindow::unresolved_hook_tokens(
+            Some("id-main".into()),
+            "ghost, other",
+            &name_to_id,
+            &known_ids,
+        );
+
+        assert_eq!(result, vec!["ghost", "other"]);
+    }
+
+    #[test]
+    fn unresolved_hook_tokens_ignores_empty_primary() {
+        let name_to_id = HashMap::new();
+        let known_ids = known_ids_set(["id-main"]);
+
+        let result = ConnectionManagerWindow::unresolved_hook_tokens(
+            Some("  ".into()),
+            "id-main",
+            &name_to_id,
+            &known_ids,
+        );
+
+        assert!(result.is_empty());
     }
 
     // --- split_primary_and_extra ---
@@ -3494,7 +3777,7 @@ mod tests {
         let hooks = vec!["first".into(), "second".into(), "third".into()];
         let (primary, extra) = ConnectionManagerWindow::split_primary_and_extra(&hooks);
         assert_eq!(primary, "first");
-        assert_eq!(extra, "second, third");
+        assert_eq!(extra, vec!["second", "third"]);
     }
 
     #[test]
@@ -3502,7 +3785,7 @@ mod tests {
         let hooks = vec!["only".into()];
         let (primary, extra) = ConnectionManagerWindow::split_primary_and_extra(&hooks);
         assert_eq!(primary, "only");
-        assert_eq!(extra, "");
+        assert!(extra.is_empty());
     }
 
     #[test]
@@ -3510,7 +3793,7 @@ mod tests {
         let hooks: Vec<String> = vec![];
         let (primary, extra) = ConnectionManagerWindow::split_primary_and_extra(&hooks);
         assert_eq!(primary, "");
-        assert_eq!(extra, "");
+        assert!(extra.is_empty());
     }
 
     #[test]
