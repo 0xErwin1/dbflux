@@ -904,7 +904,9 @@ impl DataGridPanel {
             &filter_input,
             window,
             |this, input, event: &InputEvent, window, cx| match event {
-                InputEvent::PressEnter { secondary: false, .. } => {
+                InputEvent::PressEnter {
+                    secondary: false, ..
+                } => {
                     this.refresh(window, cx);
                     this.focus_table(window, cx);
                 }
@@ -930,7 +932,9 @@ impl DataGridPanel {
             &limit_input,
             window,
             |this, _, event: &InputEvent, window, cx| match event {
-                InputEvent::PressEnter { secondary: false, .. } => {
+                InputEvent::PressEnter {
+                    secondary: false, ..
+                } => {
                     this.refresh(window, cx);
                     this.focus_table(window, cx);
                 }
@@ -1670,7 +1674,7 @@ impl DataGridPanel {
             loop {
                 cx.background_executor().timer(duration).await;
 
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     let Some(entity) = this.upgrade() else {
                         return;
                     };

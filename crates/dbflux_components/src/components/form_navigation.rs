@@ -125,7 +125,9 @@ pub fn subscribe_form_input<T: FormNavigation>(
         input,
         window,
         |this: &mut T, _, event: &InputEvent, window, cx| match event {
-            InputEvent::PressEnter { secondary: false, .. } => {
+            InputEvent::PressEnter {
+                secondary: false, ..
+            } => {
                 this.exit_edit_mode(window, cx);
                 this.focus_down(cx);
                 cx.notify();

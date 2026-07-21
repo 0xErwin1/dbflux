@@ -1,6 +1,5 @@
 use super::*;
 use dbflux_core::{DbSchemaInfo, SchemaDropTarget, SchemaObjectKind};
-use dbflux_ui_base::AsyncUpdateResultExt;
 
 impl Sidebar {
     fn remove_database_from_snapshot(snapshot: &mut SchemaSnapshot, database: &str) {

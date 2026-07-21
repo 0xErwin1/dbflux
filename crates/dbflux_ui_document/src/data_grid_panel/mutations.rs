@@ -280,14 +280,13 @@ impl DataGridPanel {
         let profile_id = *profile_id;
 
         cx.spawn(async move |_this, cx| {
-            let conn = cx
-                .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .connections()
-                        .get(&profile_id)
-                        .map(|c| c.connection.clone())
-                });
+            let conn = cx.update(|cx| {
+                app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .map(|c| c.connection.clone())
+            });
 
             let Some(conn) = conn else {
                 log::error!("[SAVE] No connection for profile {}", profile_id);
@@ -512,18 +511,17 @@ impl DataGridPanel {
         let entity = cx.entity().clone();
 
         cx.spawn(async move |_this, cx| {
-            let conn = cx
-                .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .connections()
-                        .get(&profile_id)
-                        .and_then(|connected| {
-                            connected
-                                .resolve_connection_for_execution(database.as_deref())
-                                .ok()
-                        })
-                });
+            let conn = cx.update(|cx| {
+                app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .and_then(|connected| {
+                        connected
+                            .resolve_connection_for_execution(database.as_deref())
+                            .ok()
+                    })
+            });
 
             let Some(conn) = conn else {
                 log::error!("[SAVE] No connection for profile {}", profile_id);
@@ -645,14 +643,13 @@ impl DataGridPanel {
         let entity = cx.entity().clone();
 
         cx.spawn(async move |_this, cx| {
-            let conn = cx
-                .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .connections()
-                        .get(&profile_id)
-                        .map(|c| c.connection.clone())
-                });
+            let conn = cx.update(|cx| {
+                app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .map(|c| c.connection.clone())
+            });
 
             let Some(conn) = conn else {
                 log::error!("[SAVE] No connection for profile {}", profile_id);
@@ -810,14 +807,13 @@ impl DataGridPanel {
         let table_state_clone = table_state.clone();
 
         cx.spawn(async move |_this, cx| {
-            let conn = cx
-                .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .connections()
-                        .get(&profile_id)
-                        .map(|c| c.connection.clone())
-                });
+            let conn = cx.update(|cx| {
+                app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .map(|c| c.connection.clone())
+            });
 
             let Some(conn) = conn else {
                 log::error!("[INSERT] No connection for profile {}", profile_id);
@@ -942,18 +938,17 @@ impl DataGridPanel {
         let table_state_clone = table_state.clone();
 
         cx.spawn(async move |_this, cx| {
-            let conn = cx
-                .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .connections()
-                        .get(&profile_id)
-                        .and_then(|connected| {
-                            connected
-                                .resolve_connection_for_execution(database.as_deref())
-                                .ok()
-                        })
-                });
+            let conn = cx.update(|cx| {
+                app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .and_then(|connected| {
+                        connected
+                            .resolve_connection_for_execution(database.as_deref())
+                            .ok()
+                    })
+            });
 
             let Some(conn) = conn else {
                 log::error!("[INSERT] No connection for profile {}", profile_id);
@@ -1152,14 +1147,13 @@ impl DataGridPanel {
         let table_state_clone = table_state.clone();
 
         cx.spawn(async move |_this, cx| {
-            let conn = cx
-                .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .connections()
-                        .get(&profile_id)
-                        .map(|c| c.connection.clone())
-                });
+            let conn = cx.update(|cx| {
+                app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .map(|c| c.connection.clone())
+            });
 
             let Some(conn) = conn else {
                 log::error!("[DELETE] No connection for profile {}", profile_id);
@@ -1279,18 +1273,17 @@ impl DataGridPanel {
         let table_state_clone = table_state.clone();
 
         cx.spawn(async move |_this, cx| {
-            let conn = cx
-                .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .connections()
-                        .get(&profile_id)
-                        .and_then(|connected| {
-                            connected
-                                .resolve_connection_for_execution(database.as_deref())
-                                .ok()
-                        })
-                });
+            let conn = cx.update(|cx| {
+                app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .and_then(|connected| {
+                        connected
+                            .resolve_connection_for_execution(database.as_deref())
+                            .ok()
+                    })
+            });
 
             let Some(conn) = conn else {
                 log::error!("[DELETE] No connection for profile {}", profile_id);
@@ -1525,18 +1518,17 @@ impl DataGridPanel {
         let schema_name = table_ref.schema.clone();
 
         cx.spawn(async move |_this, cx| {
-            let conn = cx
-                .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .connections()
-                        .get(&profile_id)
-                        .and_then(|connected| {
-                            connected
-                                .resolve_connection_for_execution(database.as_deref())
-                                .ok()
-                        })
-                });
+            let conn = cx.update(|cx| {
+                app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .and_then(|connected| {
+                        connected
+                            .resolve_connection_for_execution(database.as_deref())
+                            .ok()
+                    })
+            });
 
             let Some(conn) = conn else {
                 log::error!("[BULK DELETE] No connection for profile {}", profile_id);
@@ -1705,14 +1697,13 @@ impl DataGridPanel {
         let collection_db = collection.database.clone();
 
         cx.spawn(async move |_this, cx| {
-            let conn = cx
-                .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .connections()
-                        .get(&profile_id)
-                        .map(|c| c.connection.clone())
-                });
+            let conn = cx.update(|cx| {
+                app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .map(|c| c.connection.clone())
+            });
 
             let Some(conn) = conn else {
                 log::error!("[BULK DELETE] No connection for profile {}", profile_id);

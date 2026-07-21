@@ -1213,32 +1213,31 @@ impl DashboardDocument {
             loop {
                 cx.background_executor().timer(duration).await;
 
-                let still_alive = cx
-                    .update(|cx| {
-                        let Some(entity) = this.upgrade() else {
-                            return false;
-                        };
-                        entity.update(cx, |doc, cx| {
-                            if doc.refresh_interval().is_none() {
-                                return;
-                            }
-                            // Skip the tick when the underlying connection is gone.
-                            // Re-executing would just produce "Connection not found"
-                            // toasts; the loop resumes on its own once the user
-                            // reconnects.
-                            if let Some(profile_id) = doc.profile_id
-                                && !doc
-                                    .app_state
-                                    .read(cx)
-                                    .connections()
-                                    .contains_key(&profile_id)
-                            {
-                                return;
-                            }
-                            doc.refresh_all_loaded_panels(cx);
-                        });
-                        true
+                let still_alive = cx.update(|cx| {
+                    let Some(entity) = this.upgrade() else {
+                        return false;
+                    };
+                    entity.update(cx, |doc, cx| {
+                        if doc.refresh_interval().is_none() {
+                            return;
+                        }
+                        // Skip the tick when the underlying connection is gone.
+                        // Re-executing would just produce "Connection not found"
+                        // toasts; the loop resumes on its own once the user
+                        // reconnects.
+                        if let Some(profile_id) = doc.profile_id
+                            && !doc
+                                .app_state
+                                .read(cx)
+                                .connections()
+                                .contains_key(&profile_id)
+                        {
+                            return;
+                        }
+                        doc.refresh_all_loaded_panels(cx);
                     });
+                    true
+                });
 
                 if !still_alive {
                     break;
@@ -1335,7 +1334,10 @@ impl DashboardDocument {
             window,
             move |this, entity, event: &dbflux_components::controls::InputEvent, _window, cx| {
                 match event {
-                    dbflux_components::controls::InputEvent::PressEnter { secondary: false, .. } => {
+                    dbflux_components::controls::InputEvent::PressEnter {
+                        secondary: false,
+                        ..
+                    } => {
                         let value = entity.read(cx).value().to_string();
                         if let Some(idx) = this.editing_title_panel_index.take() {
                             this.update_panel_title(idx, value, cx);
@@ -1406,7 +1408,9 @@ impl DashboardDocument {
             window,
             |this, entity, event: &dbflux_components::controls::InputEvent, _window, cx| match event
             {
-                dbflux_components::controls::InputEvent::PressEnter { secondary: false, .. } => {
+                dbflux_components::controls::InputEvent::PressEnter {
+                    secondary: false, ..
+                } => {
                     let value = entity.read(cx).value().to_string();
                     this.commit_dashboard_name_edit(value, cx);
                 }

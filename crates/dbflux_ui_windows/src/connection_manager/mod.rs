@@ -583,7 +583,9 @@ impl ConnectionManagerWindow {
                 input,
                 window,
                 |this, _, event: &InputEvent, window, cx| match event {
-                    InputEvent::PressEnter { secondary: false, .. } => {
+                    InputEvent::PressEnter {
+                        secondary: false, ..
+                    } => {
                         this.exit_edit_mode(window, cx);
                         this.focus_down(cx);
                     }
@@ -599,7 +601,9 @@ impl ConnectionManagerWindow {
             &input_password,
             window,
             |this, _, event: &InputEvent, window, cx| match event {
-                InputEvent::PressEnter { secondary: false, .. } => {
+                InputEvent::PressEnter {
+                    secondary: false, ..
+                } => {
                     this.exit_edit_mode(window, cx);
                     this.focus_down(cx);
                 }
@@ -1134,7 +1138,9 @@ impl ConnectionManagerWindow {
                 &input,
                 window,
                 move |this, _, event: &InputEvent, window, cx| match event {
-                    InputEvent::PressEnter { secondary: false, .. } => {
+                    InputEvent::PressEnter {
+                        secondary: false, ..
+                    } => {
                         this.exit_edit_mode(window, cx);
                         this.focus_down(cx);
                     }
@@ -3309,8 +3315,7 @@ impl ConnectionManagerWindow {
         cx.spawn(async move |_this, cx| {
             let path = task.await;
 
-            if let Some(path) = path
-            {
+            if let Some(path) = path {
                 cx.update(|cx| {
                     this.update(cx, |this, cx| {
                         this.pending.ssh_key_path = Some(path.to_string_lossy().to_string());
@@ -3360,8 +3365,7 @@ impl ConnectionManagerWindow {
         cx.spawn(async move |_this, cx| {
             let path = task.await;
 
-            if let Some(path) = path
-            {
+            if let Some(path) = path {
                 cx.update(|cx| {
                     this.update(cx, |this, cx| {
                         let path_str = path.to_string_lossy().to_string();
@@ -3431,8 +3435,7 @@ impl ConnectionManagerWindow {
         cx.spawn(async move |_this, cx| {
             let path = task.await;
 
-            if let Some(path) = path
-            {
+            if let Some(path) = path {
                 cx.update(|cx| {
                     this.update(cx, |this, cx| {
                         this.pending.file_path = Some(path.to_string_lossy().to_string());

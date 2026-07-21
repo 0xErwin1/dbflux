@@ -895,9 +895,9 @@ mod tests {
 
         let node_names: HashSet<_> = sub.nodes().map(|(_, n)| n.id.name.clone()).collect();
 
-        assert!(node_names.contains(&"a".to_owned()));
-        assert!(node_names.contains(&"b".to_owned()));
-        assert!(!node_names.contains(&"c".to_owned()));
+        assert!(node_names.contains("a"));
+        assert!(node_names.contains("b"));
+        assert!(!node_names.contains("c"));
         assert_eq!(sub.edge_count(), 1); // B → A
     }
 
@@ -939,9 +939,9 @@ mod tests {
 
         let node_names: HashSet<_> = sub.nodes().map(|(_, n)| n.id.name.clone()).collect();
 
-        assert!(node_names.contains(&"a".to_owned()));
-        assert!(node_names.contains(&"b".to_owned()));
-        assert!(node_names.contains(&"c".to_owned()));
+        assert!(node_names.contains("a"));
+        assert!(node_names.contains("b"));
+        assert!(node_names.contains("c"));
         assert_eq!(sub.edge_count(), 2); // A→B, A→C
     }
 
@@ -1018,9 +1018,9 @@ mod tests {
 
         let node_names: HashSet<_> = sub.nodes().map(|(_, n)| n.id.name.clone()).collect();
 
-        assert!(node_names.contains(&"a".to_owned()));
-        assert!(node_names.contains(&"b".to_owned()));
-        assert!(node_names.contains(&"c".to_owned()));
+        assert!(node_names.contains("a"));
+        assert!(node_names.contains("b"));
+        assert!(node_names.contains("c"));
         assert_eq!(sub.edge_count(), 2); // B→A, C→A
     }
 }

@@ -812,7 +812,7 @@ impl AuthProfilesSection {
         cx.spawn(async move |_this, cx| {
             let result = fetch_task.await;
 
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     match result {
                         Ok(response) => {
@@ -1742,7 +1742,7 @@ impl AuthProfilesSection {
             loop {
                 match url_rx.try_recv() {
                     Ok(Some(url)) => {
-                        let _ = cx.update(|cx| {
+                        cx.update(|cx| {
                             this_for_url.update(cx, |this, cx| {
                                 this.active_login_url = Some(url.clone());
                                 this.pending_sso_url =

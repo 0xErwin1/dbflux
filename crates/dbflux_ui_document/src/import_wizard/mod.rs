@@ -480,30 +480,29 @@ impl ImportWizard {
                     .timer(std::time::Duration::from_millis(150))
                     .await;
 
-                let still_running = cx
-                    .update(|cx| {
-                        ticker_app_state.update(cx, |state, cx| {
-                            let Some(snapshot) = state.tasks().get(task_id) else {
-                                return false;
-                            };
-                            if snapshot.status != TaskStatus::Running {
-                                return false;
-                            }
+                let still_running = cx.update(|cx| {
+                    ticker_app_state.update(cx, |state, cx| {
+                        let Some(snapshot) = state.tasks().get(task_id) else {
+                            return false;
+                        };
+                        if snapshot.status != TaskStatus::Running {
+                            return false;
+                        }
 
-                            let (rows_done, estimated_total) = *ticker_progress
-                                .lock()
-                                .unwrap_or_else(|poisoned| poisoned.into_inner());
-                            if let Some(total) = estimated_total
-                                && total > 0
-                            {
-                                let fraction = (rows_done as f32 / total as f32).clamp(0.0, 1.0);
-                                state.tasks_mut().update_progress(task_id, fraction);
-                                cx.notify();
-                            }
+                        let (rows_done, estimated_total) = *ticker_progress
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        if let Some(total) = estimated_total
+                            && total > 0
+                        {
+                            let fraction = (rows_done as f32 / total as f32).clamp(0.0, 1.0);
+                            state.tasks_mut().update_progress(task_id, fraction);
+                            cx.notify();
+                        }
 
-                            true
-                        })
-                    });
+                        true
+                    })
+                });
 
                 if !still_running {
                     break;

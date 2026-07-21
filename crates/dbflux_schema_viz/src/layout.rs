@@ -1021,7 +1021,7 @@ mod tests {
         );
 
         // Grid x positions must be multiples of CELL_WIDTH.
-        for (_, node_layout) in &layout.nodes {
+        for node_layout in layout.nodes.values() {
             let col = (node_layout.x / CELL_WIDTH).round();
             let expected_x = col * CELL_WIDTH;
             assert!(

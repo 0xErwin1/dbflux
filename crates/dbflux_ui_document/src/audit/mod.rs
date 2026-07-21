@@ -316,7 +316,9 @@ impl AuditDocument {
 
         let search_sub = cx.subscribe(&search_input, |this, _, event: &InputEvent, cx| {
             match event {
-                InputEvent::PressEnter { secondary: false, .. } => {
+                InputEvent::PressEnter {
+                    secondary: false, ..
+                } => {
                     this.handle_search_submit(cx);
                 }
                 // When the input loses focus (e.g. user presses Escape inside the input),

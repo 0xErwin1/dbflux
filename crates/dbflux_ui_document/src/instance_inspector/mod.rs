@@ -307,7 +307,7 @@ impl InspectorPanel {
             loop {
                 cx.background_executor().timer(duration).await;
 
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     let Some(entity) = this.upgrade() else {
                         return;
                     };
@@ -430,7 +430,7 @@ impl InspectorPanel {
                 let uf = kill_error_to_user_facing(&action_id, &action_label, &metric_id, e);
                 report_error_async(uf, cx);
             } else {
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     if let Some(entity) = this.upgrade() {
                         entity.update(cx, |panel, cx| panel.request_reexec(cx));
                     }

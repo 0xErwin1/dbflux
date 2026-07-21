@@ -208,8 +208,7 @@ impl Sidebar {
                 }
             }
 
-            if current_stage.is_some()
-            {
+            if current_stage.is_some() {
                 cx.update(|cx| {
                     app_state_for_stage_tasks.update(cx, |state, cx| {
                         if let Some((_, stage_task_id)) = current_stage.take() {
@@ -338,7 +337,7 @@ impl Sidebar {
                     // Emit pipeline connection failure audit event.
                     let pipeline_fail_now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
                     let pipeline_fail_driver_id = driver.display_name().to_string();
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         let audit_service = app_state.read(cx).audit_service().clone();
                         let mut event = dbflux_core::observability::EventRecord::new(
                             pipeline_fail_now_ms,
@@ -443,7 +442,7 @@ impl Sidebar {
                     // Emit driver connect failure audit event.
                     let driver_fail_now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
                     let driver_fail_driver_id = driver_name_for_audit.clone();
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         let audit_service = app_state.read(cx).audit_service().clone();
                         let mut event = dbflux_core::observability::EventRecord::new(
                             driver_fail_now_ms,
@@ -574,7 +573,7 @@ impl Sidebar {
 
             // Emit pipeline connection success audit event.
             let connect_success_now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let audit_service = app_state.read(cx).audit_service().clone();
                 let mut event = dbflux_core::observability::EventRecord::new(
                     connect_success_now_ms,

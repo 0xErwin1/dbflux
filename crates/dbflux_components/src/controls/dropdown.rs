@@ -7,7 +7,7 @@ use crate::tokens::{ChromeEdgeRole, Heights, Radii, Spacing};
 use crate::typography::AppFonts;
 use gpui::prelude::*;
 use gpui::{
-    ClickEvent, Context, Anchor, ElementId, EventEmitter, Hsla, InteractiveElement, IntoElement,
+    Anchor, ClickEvent, Context, ElementId, EventEmitter, Hsla, InteractiveElement, IntoElement,
     MouseButton, ParentElement, Pixels, Render, ScrollHandle, ScrollWheelEvent, SharedString,
     StatefulInteractiveElement, Styled, Window, anchored, deferred, div, point, px,
 };

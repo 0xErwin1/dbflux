@@ -301,8 +301,7 @@ impl ImportConnectionsPanel {
             });
 
             cx.spawn(async move |_this, cx| {
-                if let Some(path) = task.await
-                {
+                if let Some(path) = task.await {
                     cx.update(|cx| {
                         this.update(cx, |this, cx| {
                             this.pending_file_path = Some(path.to_string_lossy().to_string());

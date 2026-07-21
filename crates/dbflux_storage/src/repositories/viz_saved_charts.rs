@@ -1435,6 +1435,9 @@ mod tests {
         }
 
         // Attach trace hook AFTER setup so we only count queries from list_full_for_dashboard.
+        // `trace` is deprecated in favor of `trace_v2`, whose `TraceEvent` callback exposes
+        // different statement text; this test asserts on the legacy raw-SQL form it counts.
+        #[allow(deprecated)]
         conn.trace(Some(trace_hook as fn(&str)));
         VIZ_SELECT_COUNT.with(|c| c.set(0));
 

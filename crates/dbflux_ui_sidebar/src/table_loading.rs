@@ -1,6 +1,5 @@
 use super::*;
 use dbflux_core::TaskKind;
-use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 
 const COLLECTION_CHILDREN_PAGE_SIZE: u32 = 50;

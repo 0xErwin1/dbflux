@@ -200,14 +200,12 @@ impl Sidebar {
                     .timer(std::time::Duration::from_millis(100))
                     .await;
 
-                let cleared = cx
-                    .update(|cx| {
-                        let still_connected =
-                            app_state.read(cx).connections().contains_key(&profile_id);
-                        let still_pending =
-                            app_state.read(cx).is_operation_pending(profile_id, None);
-                        !still_connected && !still_pending
-                    });
+                let cleared = cx.update(|cx| {
+                    let still_connected =
+                        app_state.read(cx).connections().contains_key(&profile_id);
+                    let still_pending = app_state.read(cx).is_operation_pending(profile_id, None);
+                    !still_connected && !still_pending
+                });
 
                 if cleared {
                     break;
@@ -828,7 +826,7 @@ impl Sidebar {
             // Emit disconnect audit event before actual disconnect.
             let disconnect_driver_id = profile.driver_id.clone();
             let disconnect_now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let audit_service = app_state.read(cx).audit_service().clone();
                 let mut event = dbflux_core::observability::EventRecord::new(
                     disconnect_now_ms,

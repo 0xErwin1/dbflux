@@ -625,7 +625,6 @@ impl std::error::Error for ParseSchemaNodeIdError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::str::FromStr;
 
     fn roundtrip(id: SchemaNodeId) {
         let s = id.to_string();
