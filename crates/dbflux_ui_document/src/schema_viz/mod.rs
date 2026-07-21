@@ -27,6 +27,7 @@ use crate::handle::DocumentEvent;
 use crate::types::{DocumentId, DocumentState};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::icons::AppIcon;
+use dbflux_components::primitives::LoadingBlock;
 use dbflux_components::tokens::{FontSizes, Spacing};
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::toast::{PendingToast, flush_pending_toast};
@@ -1316,21 +1317,10 @@ impl SchemaVizDocument {
             .items_center()
             .justify_center()
             .bg(theme.background)
-            .flex_col()
-            .gap(Spacing::MD)
-            .child(
-                div()
-                    .size(px(32.0))
-                    .border_2()
-                    .border_color(theme.primary)
-                    .rounded_full(),
-            )
-            .child(
-                div()
-                    .text_size(FontSizes::SM)
-                    .text_color(theme.muted_foreground)
-                    .child("Loading schema..."),
-            )
+            .child(LoadingBlock::loading(
+                Some(SharedString::from("Loading schema…")),
+                0,
+            ))
     }
 
     fn render_error(&self, msg: &str) -> Div {
