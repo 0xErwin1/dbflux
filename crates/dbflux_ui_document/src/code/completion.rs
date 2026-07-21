@@ -2147,6 +2147,7 @@ mod tests {
             sample_fields: None,
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
+            storage_hints: None,
         }
     }
 
@@ -2280,6 +2281,7 @@ mod tests {
             sample_fields: None,
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
+            storage_hints: None,
         };
         let db2 = (
             "db2".to_string(),
@@ -2327,6 +2329,7 @@ mod tests {
             sample_fields: None,
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
+            storage_hints: None,
         }
     }
 
