@@ -22,15 +22,6 @@ dbflux_core.workspace = true
 dbflux_storage.workspace = true
 dbflux_app.workspace = true
 dbflux_ipc.workspace = true
-dbflux_driver_ipc.workspace = true
-dbflux_mcp = { workspace = true, optional = true }
-dbflux_mcp_server = { workspace = true, optional = true }
-dbflux_policy = { workspace = true, optional = true }
-dbflux_approval = { workspace = true, optional = true }
-dbflux_audit.workspace = true
-dbflux_schema_viz.workspace = true
-petgraph.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
 dbflux_ssh.workspace = true
 uuid.workspace = true
 chrono.workspace = true

@@ -25,9 +25,6 @@ dbflux_audit.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
 log.workspace = true
 interprocess.workspace = true
-open = "5"
-indexmap.workspace = true
-dbml-rs = "1.0.1"
 # rustls 0.23 refuses to auto-select a crypto provider when more than one
 # backend is linked. This workspace links several (the AWS SDK pulls `ring`,
 # reqwest and the TLS drivers pull `aws-lc-rs`), so the binary installs a

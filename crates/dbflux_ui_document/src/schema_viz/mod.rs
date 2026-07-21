@@ -1658,10 +1658,10 @@ impl SchemaVizDocument {
         let in_submenu = !menu.parent_stack.is_empty();
 
         // Layout constants (must match the sidebar pattern)
-        let menu_container_padding = px(4.0);
+        let menu_container_padding = Spacing::XS;
         let menu_item_height = px(28.0);
         let menu_width = px(160.0);
-        let menu_gap = px(4.0);
+        let menu_gap = Spacing::XS;
 
         let submenu_y_offset = if let Some((_, parent_selected)) = menu.parent_stack.last() {
             menu_container_padding + (menu_item_height * (*parent_selected as f32))
@@ -1850,7 +1850,7 @@ impl SchemaVizDocument {
                     .text_color(muted_foreground)
                     .child(counter_label),
             )
-            .child(div().w(px(1.0)).h(px(16.0)).bg(border.opacity(0.5)))
+            .child(div().w(px(1.0)).h(Spacing::LG).bg(border.opacity(0.5)))
             .child(
                 Checkbox::new("schema-viz-show-types")
                     .checked(show_types_val)
@@ -1877,7 +1877,7 @@ impl SchemaVizDocument {
             .items_center()
             .w_full()
             .px(Spacing::MD)
-            .py(px(6.0))
+            .py(Spacing::XXS)
             .bg(tab_bar)
             .border_b_1()
             .border_color(border)
@@ -1888,18 +1888,18 @@ impl SchemaVizDocument {
                     .items_center()
                     .gap(Spacing::SM)
                     .child(
-                        div().flex().items_center().gap(px(4.0)).child(
+                        div().flex().items_center().gap(Spacing::XS).child(
                             div()
                                 .text_size(FontSizes::SM)
                                 .text_color(muted_foreground)
                                 .child(format!("{:.0}%", zoom * 100.0)),
                         ),
                     )
-                    .child(div().w(px(1.0)).h(px(16.0)).bg(border.opacity(0.5)))
+                    .child(div().w(px(1.0)).h(Spacing::LG).bg(border.opacity(0.5)))
                     .child(
                         div()
                             .cursor_pointer()
-                            .px(px(8.0))
+                            .px(Spacing::SM)
                             .py(px(2.0))
                             .rounded_sm()
                             .when(self.zoom < 4.0, |d| {
@@ -1916,7 +1916,7 @@ impl SchemaVizDocument {
                     .child(
                         div()
                             .cursor_pointer()
-                            .px(px(8.0))
+                            .px(Spacing::SM)
                             .py(px(2.0))
                             .rounded_sm()
                             .when(self.zoom > 0.25, |d| {
@@ -1933,7 +1933,7 @@ impl SchemaVizDocument {
                     .child(
                         div()
                             .cursor_pointer()
-                            .px(px(8.0))
+                            .px(Spacing::SM)
                             .py(px(2.0))
                             .rounded_sm()
                             .on_mouse_down(
@@ -1946,7 +1946,7 @@ impl SchemaVizDocument {
                             )
                             .child("Reset"),
                     )
-                    .child(div().w(px(1.0)).h(px(16.0)).bg(border.opacity(0.5)))
+                    .child(div().w(px(1.0)).h(Spacing::LG).bg(border.opacity(0.5)))
                     // Layout dropdown
                     .child(
                         div()
@@ -1956,7 +1956,7 @@ impl SchemaVizDocument {
                                     .flex()
                                     .items_center()
                                     .gap_1()
-                                    .px(px(8.0))
+                                    .px(Spacing::SM)
                                     .py(px(2.0))
                                     .rounded_sm()
                                     .cursor_pointer()
@@ -1988,7 +1988,7 @@ impl SchemaVizDocument {
                                 d.child(self.render_layout_menu(&theme, cx))
                             }),
                     )
-                    .child(div().w(px(1.0)).h(px(16.0)).bg(border.opacity(0.5)))
+                    .child(div().w(px(1.0)).h(Spacing::LG).bg(border.opacity(0.5)))
                     // Export dropdown
                     .child(
                         div()
@@ -1998,7 +1998,7 @@ impl SchemaVizDocument {
                                     .flex()
                                     .items_center()
                                     .gap_1()
-                                    .px(px(8.0))
+                                    .px(Spacing::SM)
                                     .py(px(2.0))
                                     .rounded_sm()
                                     .cursor_pointer()
@@ -2409,7 +2409,7 @@ impl SchemaVizDocument {
         let cap_warning = self.table_cap_warning.then(|| {
             div()
                 .px(Spacing::MD)
-                .py(px(4.0))
+                .py(Spacing::XS)
                 .bg(theme.primary.opacity(0.08))
                 .border_b_1()
                 .border_color(theme.border)
@@ -2599,7 +2599,7 @@ impl SchemaVizDocument {
                     .justify_end()
                     .flex_shrink_0()
                     .w(px(64.0))
-                    .gap(px(4.0))
+                    .gap(Spacing::XS)
                     .when(col.is_pk, |d| {
                         d.child(self.render_column_badge("PK", true, pk_color))
                     })
@@ -2614,7 +2614,7 @@ impl SchemaVizDocument {
                     .flex()
                     .items_center()
                     .h(px(NODE_ROW_PX))
-                    .gap(px(8.0))
+                    .gap(Spacing::SM)
                     .overflow_hidden()
                     .text_size(FontSizes::XS)
                     .text_color(theme.foreground)
@@ -2654,7 +2654,7 @@ impl SchemaVizDocument {
                         .flex()
                         .items_center()
                         .h(px(NODE_INDEX_ROW_PX))
-                        .gap(px(4.0))
+                        .gap(Spacing::XS)
                         .overflow_hidden()
                         .text_size(FontSizes::XS)
                         .text_color(muted_fg)
@@ -2931,7 +2931,8 @@ impl SchemaVizDocument {
 
                     let mut builder = PathBuilder::stroke(px(1.5));
                     if e.dashed {
-                        builder = builder.dash_array(&[px(6.0), px(4.0)]);
+                        // FK edge dash on/off lengths are diagram stroke geometry, not UI spacing.
+                        builder = builder.dash_array(&[px(6.0), px(4.0)]); // guardrail-allow: diagram stroke geometry
                     }
                     builder.move_to(from);
                     builder.cubic_bezier_to(to, ctrl1, ctrl2);

@@ -156,7 +156,7 @@ fn render_column_row(
         .items_center()
         .gap(Spacing::XS)
         .px(Spacing::SM)
-        .py(px(4.0))
+        .py(Spacing::XS)
         .border_b_1()
         .border_color(theme.border.opacity(0.5))
         .child(
@@ -193,7 +193,7 @@ fn render_index_row(idx: &IndexSummary, theme: &gpui_component::theme::Theme) ->
         .items_center()
         .gap(Spacing::XS)
         .px(Spacing::SM)
-        .py(px(4.0))
+        .py(Spacing::XS)
         .border_b_1()
         .border_color(theme.border.opacity(0.5))
         .child(
@@ -228,7 +228,7 @@ fn render_outgoing_fk(fk: &OutgoingFk, theme: &gpui_component::theme::Theme) -> 
         .flex_col()
         .gap(px(2.0))
         .px(Spacing::SM)
-        .py(px(6.0))
+        .py(Spacing::XXS)
         .border_b_1()
         .border_color(theme.border.opacity(0.5))
         .child(

@@ -288,7 +288,9 @@ impl ChartDocument {
                         }
                     }
                     Some(ChartDetection::NoTimeColumn) => "No time column detected in result.",
-                    Some(ChartDetection::NoNumericSeries) => "No numeric series detected in result.",
+                    Some(ChartDetection::NoNumericSeries) => {
+                        "No numeric series detected in result."
+                    }
                     Some(ChartDetection::Ok { .. }) => "Chart build failed.",
                 }
             };
