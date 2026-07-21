@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -1850,10 +1850,15 @@ impl Connection for MssqlConnection {
             total_start.elapsed().as_secs_f64() * 1000.0
         );
 
+        let schemas = match &current_database {
+            Some(db) => self.fetch_db_schemas(db).unwrap_or_default(),
+            None => Vec::new(),
+        };
+
         Ok(SchemaSnapshot::relational(RelationalSchema {
             databases,
             current_database,
-            schemas: Vec::new(),
+            schemas,
             tables: Vec::new(),
             views: Vec::new(),
         }))
@@ -3084,6 +3089,102 @@ impl MssqlConnection {
         }
 
         Ok(builder.build_sorted())
+    }
+
+    fn fetch_db_schemas(&self, database: &str) -> Result<Vec<DbSchemaInfo>, DbError> {
+        let escaped_db = database.replace(']', "]]");
+        let qualified = format!("[{}]", escaped_db);
+
+        let tables_sql = format!(
+            "SELECT s.name AS schema_name, t.name AS table_name \
+             FROM {qualified}.sys.tables t \
+             JOIN {qualified}.sys.schemas s ON s.schema_id = t.schema_id \
+             WHERE t.is_ms_shipped = 0 \
+             ORDER BY s.name, t.name",
+            qualified = qualified
+        );
+
+        let table_rows = self.execute_simple(&tables_sql)?;
+        let mut schema_tables: BTreeMap<String, Vec<TableInfo>> = BTreeMap::new();
+
+        for row in table_rows.rows {
+            let mut iter = row.into_iter();
+            let schema_name = match iter.next() {
+                Some(Value::Text(s)) => s,
+                _ => continue,
+            };
+            let table_name = match iter.next() {
+                Some(Value::Text(s)) => s,
+                _ => continue,
+            };
+
+            schema_tables
+                .entry(schema_name.clone())
+                .or_default()
+                .push(TableInfo {
+                    name: table_name,
+                    schema: Some(schema_name),
+                    columns: None,
+                    indexes: None,
+                    foreign_keys: None,
+                    constraints: None,
+                    sample_fields: None,
+                    presentation: dbflux_core::CollectionPresentation::DataGrid,
+                    child_items: None,
+                });
+        }
+
+        let views_sql = format!(
+            "SELECT s.name AS schema_name, v.name AS view_name \
+             FROM {qualified}.sys.views v \
+             JOIN {qualified}.sys.schemas s ON s.schema_id = v.schema_id \
+             WHERE v.is_ms_shipped = 0 \
+             ORDER BY s.name, v.name",
+            qualified = qualified
+        );
+
+        let view_rows = self.execute_simple(&views_sql)?;
+        let mut schema_views: BTreeMap<String, Vec<ViewInfo>> = BTreeMap::new();
+
+        for row in view_rows.rows {
+            let mut iter = row.into_iter();
+            let schema_name = match iter.next() {
+                Some(Value::Text(s)) => s,
+                _ => continue,
+            };
+            let view_name = match iter.next() {
+                Some(Value::Text(s)) => s,
+                _ => continue,
+            };
+
+            schema_views
+                .entry(schema_name.clone())
+                .or_default()
+                .push(ViewInfo {
+                    name: view_name,
+                    schema: Some(schema_name),
+                });
+        }
+
+        let mut all_schema_names: BTreeSet<String> = BTreeSet::new();
+        all_schema_names.extend(schema_tables.keys().cloned());
+        all_schema_names.extend(schema_views.keys().cloned());
+
+        let schemas: Vec<DbSchemaInfo> = all_schema_names
+            .into_iter()
+            .map(|name| {
+                let tables = schema_tables.remove(&name).unwrap_or_default();
+                let views = schema_views.remove(&name).unwrap_or_default();
+                DbSchemaInfo {
+                    name,
+                    tables,
+                    views,
+                    custom_types: None,
+                }
+            })
+            .collect();
+
+        Ok(schemas)
     }
 }
 
