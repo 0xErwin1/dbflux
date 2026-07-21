@@ -1,6 +1,5 @@
 use super::*;
 use dbflux_core::{DbSchemaInfo, SchemaDropTarget, SchemaObjectKind};
-use dbflux_ui_base::AsyncUpdateResultExt;
 
 impl Sidebar {
     fn remove_database_from_snapshot(snapshot: &mut SchemaSnapshot, database: &str) {
@@ -481,8 +480,7 @@ impl Sidebar {
                     }
                     sidebar.rebuild_tree_with_overrides(cx);
                 });
-            })
-            .log_if_dropped();
+            });
         });
 
         self.pending_metric_namespace_fetches
@@ -579,8 +577,7 @@ impl Sidebar {
                     }
                     sidebar.rebuild_tree_with_overrides(cx);
                 });
-            })
-            .log_if_dropped();
+            });
         });
 
         self.pending_metric_fetches.insert(fetch_key, task);
@@ -652,8 +649,7 @@ impl Sidebar {
                     }
                     sidebar.rebuild_tree_with_overrides(cx);
                 });
-            })
-            .log_if_dropped();
+            });
         });
 
         self.pending_remote_dashboard_fetches
@@ -730,8 +726,7 @@ impl Sidebar {
                     }
                     sidebar.rebuild_tree_with_overrides(cx);
                 });
-            })
-            .log_if_dropped();
+            });
         });
 
         self.pending_instance_catalog_fetches

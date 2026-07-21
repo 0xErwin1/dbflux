@@ -104,7 +104,7 @@ impl SqlPreviewModal {
         self.generation_type = generation_type;
         self.visible = true;
         self.regenerate_sql(window, cx);
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -134,7 +134,7 @@ impl SqlPreviewModal {
             state
         });
 
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 

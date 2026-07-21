@@ -718,7 +718,7 @@ impl ConnectionManagerWindow {
                                 } else {
                                     this.form.checkbox_states.insert(field_id.clone(), *checked);
                                 }
-                                window.focus(&this.focus_handle);
+                                window.focus(&this.focus_handle, cx);
                                 cx.notify();
                             })),
                     );
@@ -753,7 +753,7 @@ impl ConnectionManagerWindow {
                                         } else {
                                             SshAuthSelection::Password
                                         };
-                                        window.focus(&this.focus_handle);
+                                        window.focus(&this.focus_handle, cx);
                                         cx.notify();
                                     }),
                                 )
@@ -1234,7 +1234,7 @@ impl Render for ConnectionManagerWindow {
                         return;
                     }
                     if this.edit_state == EditState::Navigating {
-                        window.focus(&this.focus_handle);
+                        window.focus(&this.focus_handle, cx);
                         cx.notify();
                     }
                 }),

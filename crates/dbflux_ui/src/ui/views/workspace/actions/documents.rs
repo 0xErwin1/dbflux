@@ -403,4 +403,114 @@ impl Workspace {
             });
         }
     }
+
+    /// Opens a schema visualization document for a table.
+    pub(in crate::ui::views::workspace) fn open_schema_viz_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        database: Option<String>,
+        schema: Option<String>,
+        table: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::document::{DocumentKey, SchemaVizDocument, SchemaVizMode};
+
+        // Deduplication: one focused diagram per (profile_id, database, schema, table).
+        let existing_id = self.tab_manager.read(cx).find_by_key(
+            &DocumentKey::SchemaViz {
+                profile_id,
+                database: database.clone(),
+                schema: schema.clone(),
+                table: Some(table.clone()),
+            },
+            cx,
+        );
+
+        if let Some(existing_id) = existing_id {
+            self.tab_manager.update(cx, |mgr, cx| {
+                mgr.activate(existing_id, cx);
+            });
+            return;
+        }
+
+        let mode = SchemaVizMode::Focused {
+            table: table.clone(),
+            schema: schema.clone(),
+        };
+
+        let doc = cx.new(|cx| {
+            SchemaVizDocument::new(
+                profile_id,
+                database.clone(),
+                mode,
+                self.app_state.clone(),
+                window,
+                cx,
+            )
+        });
+
+        let pane = SchemaVizDocument::into_pane(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+
+        log::info!(
+            "Opened schema viz document: {} (profile={}, db={:?}, schema={:?})",
+            table,
+            profile_id,
+            database.as_deref(),
+            schema.as_deref()
+        );
+    }
+
+    /// Opens a global schema visualization document for a database.
+    pub(in crate::ui::views::workspace) fn open_global_schema_viz_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        database: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::document::{DocumentKey, SchemaVizDocument, SchemaVizMode};
+
+        // Deduplication: one Global diagram per (profile_id, database).
+        let existing_id = self.tab_manager.read(cx).find_by_key(
+            &DocumentKey::SchemaViz {
+                profile_id,
+                database: Some(database.clone()),
+                schema: None,
+                table: None,
+            },
+            cx,
+        );
+
+        if let Some(existing_id) = existing_id {
+            self.tab_manager
+                .update(cx, |mgr, cx| mgr.activate(existing_id, cx));
+            return;
+        }
+
+        let doc = cx.new(|cx| {
+            SchemaVizDocument::new(
+                profile_id,
+                Some(database.clone()),
+                SchemaVizMode::Global,
+                self.app_state.clone(),
+                window,
+                cx,
+            )
+        });
+
+        let pane = SchemaVizDocument::into_pane(doc, cx);
+        self.tab_manager
+            .update(cx, |mgr, cx| mgr.open(Tab::Pane(Box::new(pane)), cx));
+
+        log::info!(
+            "Opened global schema viz for profile={} db={}",
+            profile_id,
+            database
+        );
+    }
 }

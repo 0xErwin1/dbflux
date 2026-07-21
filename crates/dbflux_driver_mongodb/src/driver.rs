@@ -1961,7 +1961,7 @@ impl Connection for MongoConnection {
 
     fn schema(&self) -> Result<SchemaSnapshot, DbError> {
         let databases = self.list_databases()?;
-        log::info!("[SCHEMA] Found {} databases", databases.len());
+        log::debug!("[SCHEMA] Found {} databases", databases.len());
 
         Ok(SchemaSnapshot::document(DocumentSchema {
             databases,
@@ -1995,7 +1995,7 @@ impl Connection for MongoConnection {
     }
 
     fn schema_for_database(&self, database: &str) -> Result<DbSchemaInfo, DbError> {
-        log::info!("[SCHEMA] Fetching schema for database: {}", database);
+        log::debug!("[SCHEMA] Fetching schema for database: {}", database);
 
         let client = self
             .client

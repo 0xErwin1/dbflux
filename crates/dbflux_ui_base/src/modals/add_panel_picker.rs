@@ -272,7 +272,7 @@ impl ModalAddPanelPicker {
         }
         self._subscriptions = subs;
 
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         let _ = has_metric_catalog;
         cx.notify();
     }

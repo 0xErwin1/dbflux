@@ -202,6 +202,19 @@ pub(crate) fn embedded_bytes(icon: AppIcon) -> &'static [u8] {
         }
         AppIcon::Sigma => include_bytes!("../../../../../resources/icons/ui/sigma.svg"),
         AppIcon::Database => include_bytes!("../../../../../resources/icons/ui/database.svg"),
+        AppIcon::DatabaseZap => {
+            include_bytes!("../../../../../resources/icons/ui/database-zap.svg")
+        }
+        AppIcon::ZoomIn => include_bytes!("../../../../../resources/icons/ui/zoom-in.svg"),
+        AppIcon::ZoomOut => include_bytes!("../../../../../resources/icons/ui/zoom-out.svg"),
+        AppIcon::Minus => include_bytes!("../../../../../resources/icons/ui/minus.svg"),
+        AppIcon::Grid3x3 => include_bytes!("../../../../../resources/icons/ui/grid-3x3.svg"),
+        AppIcon::Snowflake => include_bytes!("../../../../../resources/icons/ui/snowflake.svg"),
+        AppIcon::Scale => include_bytes!("../../../../../resources/icons/ui/scale.svg"),
+        AppIcon::ArrowLeftRight => {
+            include_bytes!("../../../../../resources/icons/ui/arrow-left-right.svg")
+        }
+        AppIcon::Clipboard => include_bytes!("../../../../../resources/icons/ui/clipboard.svg"),
         AppIcon::Logs => include_bytes!("../../../../../resources/icons/ui/logs.svg"),
         AppIcon::ChartSpline => {
             include_bytes!("../../../../../resources/icons/ui/chart-spline.svg")

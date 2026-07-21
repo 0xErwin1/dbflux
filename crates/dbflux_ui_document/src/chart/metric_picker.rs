@@ -384,8 +384,7 @@ impl MetricPickerState {
                             picker.dimensions_task = None;
                             cx.notify();
                         });
-                    })
-                    .ok();
+                    });
                 })
             }
         };

@@ -316,7 +316,9 @@ impl AuditDocument {
 
         let search_sub = cx.subscribe(&search_input, |this, _, event: &InputEvent, cx| {
             match event {
-                InputEvent::PressEnter { secondary: false } => {
+                InputEvent::PressEnter {
+                    secondary: false, ..
+                } => {
                     this.handle_search_submit(cx);
                 }
                 // When the input loses focus (e.g. user presses Escape inside the input),
@@ -797,7 +799,7 @@ impl AuditDocument {
             loop {
                 cx.background_executor().timer(duration).await;
 
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     let Some(entity) = this.upgrade() else {
                         return;
                     };
@@ -1473,8 +1475,8 @@ impl AuditDocument {
 
     // ── Focus ─────────────────────────────────────────────────────────────
 
-    pub fn focus(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
-        self.focus_handle.focus(window);
+    pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_handle.focus(window, cx);
     }
 
     pub fn filter_by_correlation(&mut self, correlation_id: String, cx: &mut Context<Self>) {

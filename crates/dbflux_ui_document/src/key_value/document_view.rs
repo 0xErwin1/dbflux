@@ -193,8 +193,7 @@ impl super::KeyValueDocument {
                         cx.notify();
                     }
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }

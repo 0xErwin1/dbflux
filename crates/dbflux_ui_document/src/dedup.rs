@@ -88,6 +88,16 @@ pub enum DocumentKey {
         profile_id: Uuid,
         database: Option<String>,
     },
+
+    /// A schema-visualization diagram document opened from a table or database
+    /// sidebar node. Deduplicated by `(profile_id, database, schema, table)` so
+    /// that opening the same focused diagram again focuses the existing tab.
+    SchemaViz {
+        profile_id: Uuid,
+        database: Option<String>,
+        schema: Option<String>,
+        table: Option<String>,
+    },
 }
 
 #[cfg(test)]

@@ -1,6 +1,5 @@
 use super::*;
 use dbflux_core::TaskKind;
-use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 
 const COLLECTION_CHILDREN_PAGE_SIZE: u32 = 50;
@@ -302,8 +301,7 @@ impl Sidebar {
                 }
 
                 on_finalize(&app_state, cx);
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
 

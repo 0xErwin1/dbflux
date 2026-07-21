@@ -127,7 +127,7 @@ impl Sidebar {
                 None => return,
             };
 
-            if let Err(error) = cx.update(|cx| {
+            cx.update(|cx| {
                 let path = app_state.update(cx, |state, _cx| {
                     let dir = state.scripts_directory_mut()?;
                     let imported = dir.import(&source, parent.as_deref()).ok()?;
@@ -141,12 +141,7 @@ impl Sidebar {
                         cx.emit(SidebarEvent::OpenScript { path });
                     });
                 }
-            }) {
-                log::warn!(
-                    "Failed to apply imported script state to sidebar: {:?}",
-                    error
-                );
-            }
+            });
         })
         .detach();
     }

@@ -22,8 +22,8 @@ use crate::chart::ChartRailTab;
 use crate::chart::metric_picker_render::MetricPickerView;
 use crate::chart::toolbar::{ChartToolbarContext, ChartToolbarHandlers, render_chart_toolbar};
 use dbflux_components::chart::{
-    ChartDetection, ChartView, axis_bar_element, format_span, format_x_value, format_y_value,
-    legend_element,
+    ChartDetection, ChartView, MetricSource, axis_bar_element, format_span, format_x_value,
+    format_y_value, legend_element,
 };
 use dbflux_components::common::time_range::state::TimeRange;
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
@@ -267,21 +267,32 @@ impl ChartDocument {
             // For self-executing sources (MetricSource) the copy is tailored to
             // metric charts; for query/empty sources the generic copy is shown.
             let is_metric = self.data_source.is_self_executing();
-            let msg = match &chart_detection {
-                Some(ChartDetection::EmptyResult) | None => {
-                    if is_metric {
-                        if self.exec_state == ExecState::Running {
-                            "Loading metric data…"
+            let metric_unconfigured = self
+                .data_source
+                .as_any()
+                .and_then(|any| any.downcast_ref::<MetricSource>())
+                .is_some_and(|source| source.series.is_empty());
+            let msg = if metric_unconfigured {
+                "This chart has no metric series configured. Edit it to add one."
+            } else {
+                match &chart_detection {
+                    Some(ChartDetection::EmptyResult) | None => {
+                        if is_metric {
+                            if self.exec_state == ExecState::Running {
+                                "Loading metric data…"
+                            } else {
+                                "No data points for the selected window."
+                            }
                         } else {
-                            "No data points for the selected window."
+                            "Run the query to populate the chart."
                         }
-                    } else {
-                        "Run the query to populate the chart."
                     }
+                    Some(ChartDetection::NoTimeColumn) => "No time column detected in result.",
+                    Some(ChartDetection::NoNumericSeries) => {
+                        "No numeric series detected in result."
+                    }
+                    Some(ChartDetection::Ok { .. }) => "Chart build failed.",
                 }
-                Some(ChartDetection::NoTimeColumn) => "No time column detected in result.",
-                Some(ChartDetection::NoNumericSeries) => "No numeric series detected in result.",
-                Some(ChartDetection::Ok { .. }) => "Chart build failed.",
             };
             div()
                 .size_full()
@@ -563,7 +574,13 @@ impl ChartDocument {
                         .border_color(theme.border)
                         .bg(theme.popover)
                         .occlude()
-                        .child(div().flex_grow().min_h_0().overflow_hidden().child(element))
+                        .child(
+                            div()
+                                .flex_grow(1.0)
+                                .min_h_0()
+                                .overflow_hidden()
+                                .child(element),
+                        )
                         .into_any_element()
                 })
             } else {
@@ -914,7 +931,7 @@ impl ChartDocument {
             .bg(theme.popover)
             .occlude()
             .child(header)
-            .child(div().flex_grow().min_h_0().overflow_hidden().child(body))
+            .child(div().flex_grow(1.0).min_h_0().overflow_hidden().child(body))
             .into_any_element()
     }
 }

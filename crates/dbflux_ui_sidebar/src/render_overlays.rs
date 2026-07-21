@@ -327,7 +327,7 @@ impl Sidebar {
             filter_focused: false,
         });
 
-        focus_handle.focus(window);
+        focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -411,7 +411,7 @@ impl Sidebar {
 
     pub fn picker_focus_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(picker) = self.child_picker.as_ref() {
-            picker.focus_handle.focus(window);
+            picker.focus_handle.focus(window, cx);
             cx.notify();
         }
     }

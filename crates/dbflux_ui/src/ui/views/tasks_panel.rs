@@ -55,28 +55,25 @@ impl TasksPanel {
 
             tick_count = tick_count.wrapping_add(1);
 
-            let should_notify = cx
-                .update(|cx| {
-                    this.upgrade()
-                        .map(|entity| {
-                            entity
-                                .read(cx)
-                                .app_state
-                                .read(cx)
-                                .tasks()
-                                .has_running_tasks()
-                        })
-                        .unwrap_or(false)
-                })
-                .unwrap_or(false);
+            let should_notify = cx.update(|cx| {
+                this.upgrade()
+                    .map(|entity| {
+                        entity
+                            .read(cx)
+                            .app_state
+                            .read(cx)
+                            .tasks()
+                            .has_running_tasks()
+                    })
+                    .unwrap_or(false)
+            });
 
             if should_notify {
                 cx.update(|cx| {
                     if let Some(entity) = this.upgrade() {
                         entity.update(cx, |_, cx| cx.notify());
                     }
-                })
-                .ok();
+                });
             }
 
             if tick_count.is_multiple_of(300) {
@@ -88,8 +85,7 @@ impl TasksPanel {
                             });
                         });
                     }
-                })
-                .ok();
+                });
             }
         }
     }

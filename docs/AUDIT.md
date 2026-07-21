@@ -223,11 +223,19 @@ Action strings are defined in `dbflux_core/src/observability/actions.rs`. Use co
 | `HOOK_EXECUTE_FAILED` | `hook_execute_failed` | Hook |
 | `SCRIPT_EXECUTE` | `script_execute` | Script |
 | `SCRIPT_EXECUTE_FAILED` | `script_execute_failed` | Script |
+| `MCP_TOOL_CALL` | `mcp_tool_call` | Mcp |
+| `MCP_TOOL_DENIED` | `mcp_tool_denied` | Mcp |
 | `MCP_AUTHORIZE` | `mcp_authorize` | Mcp |
 | `MCP_APPROVE_EXECUTION` | `mcp_approve_execution` | Mcp |
 | `MCP_REJECT_EXECUTION` | `mcp_reject_execution` | Mcp |
 | `MCP_TOOL_EXECUTE` | `mcp_tool_execute` | Mcp |
 | `MCP_TOOL_EXECUTE_FAILED` | `mcp_tool_execute_failed` | Mcp |
+| `SCHEMA_VIZ_OPEN` | `schema_viz_open` | Config |
+| `SCHEMA_VIZ_CANCEL` | `schema_viz_cancel` | Config |
+| `SCHEMA_VIZ_ERROR` | `schema_viz_error` | Config |
+| `SCHEMA_VIZ_LAYOUT_CHANGE` | `schema_viz_layout_change` | Config |
+| `SCHEMA_VIZ_EXPORT_DBML` | `schema_viz_export_dbml` | Config |
+| `SCHEMA_VIZ_EXPORT_SQL` | `schema_viz_export_sql` | Config |
 | `SYSTEM_PANIC` | `system_panic` | System |
 
 ### Required Fields Checklist

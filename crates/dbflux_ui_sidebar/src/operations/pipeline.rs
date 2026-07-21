@@ -142,7 +142,8 @@ impl Sidebar {
                     && current_stage
                         .as_ref()
                         .is_none_or(|(active, _)| active != &description)
-                    && let Err(error) = cx.update(|cx| {
+                {
+                    cx.update(|cx| {
                         let stage_state = state.clone();
 
                         app_state_for_stage_tasks.update(cx, |app_state, cx| {
@@ -164,10 +165,7 @@ impl Sidebar {
 
                             cx.emit(AppStateChanged);
                         });
-                    })
-                {
-                    log::warn!("Failed to update pipeline stage subtask: {:?}", error);
-                    break;
+                    });
                 }
 
                 if matches!(
@@ -178,7 +176,7 @@ impl Sidebar {
                 ) {
                     let terminal_state = state.clone();
 
-                    if let Err(error) = cx.update(|cx| {
+                    cx.update(|cx| {
                         app_state_for_stage_tasks.update(cx, |app_state, cx| {
                             if let Some((_, stage_task_id)) = current_stage.take() {
                                 match &terminal_state {
@@ -204,25 +202,21 @@ impl Sidebar {
 
                             cx.emit(AppStateChanged);
                         });
-                    }) {
-                        log::warn!("Failed to finalize pipeline stage subtask: {:?}", error);
-                    }
+                    });
 
                     break;
                 }
             }
 
-            if current_stage.is_some()
-                && let Err(error) = cx.update(|cx| {
+            if current_stage.is_some() {
+                cx.update(|cx| {
                     app_state_for_stage_tasks.update(cx, |state, cx| {
                         if let Some((_, stage_task_id)) = current_stage.take() {
                             state.complete_task(stage_task_id);
                             cx.emit(AppStateChanged);
                         }
                     });
-                })
-            {
-                log::warn!("Failed to cleanup pipeline stage subtask: {:?}", error);
+                });
             }
         })
         .detach();
@@ -259,7 +253,7 @@ impl Sidebar {
                         error: error.clone(),
                     });
 
-                    if let Err(update_error) = cx.update(|cx| {
+                    cx.update(|cx| {
                         app_state.update(cx, |state, cx| {
                             state.cancel_detached_hook_tasks(profile_id);
                             state.fail_task(task_id, error.clone());
@@ -274,18 +268,13 @@ impl Sidebar {
                             });
                             sidebar.refresh_tree(cx);
                         });
-                    }) {
-                        log::warn!(
-                            "Failed to apply pipeline pre-connect hook abort state: {:?}",
-                            update_error
-                        );
-                    }
+                    });
                     return;
                 }
                 HookPhaseState::Cancelled => {
                     let _ = state_tx.send(dbflux_core::PipelineState::Cancelled);
 
-                    if let Err(update_error) = cx.update(|cx| {
+                    cx.update(|cx| {
                         app_state.update(cx, |state, cx| {
                             state.cancel_detached_hook_tasks(profile_id);
                             cx.emit(dbflux_ui_base::AppStateChanged);
@@ -317,12 +306,7 @@ impl Sidebar {
                             });
                             sidebar.refresh_tree(cx);
                         });
-                    }) {
-                        log::warn!(
-                            "Failed to apply pipeline pre-connect hook cancellation state: {:?}",
-                            update_error
-                        );
-                    }
+                    });
                     return;
                 }
             }
@@ -353,7 +337,7 @@ impl Sidebar {
                     // Emit pipeline connection failure audit event.
                     let pipeline_fail_now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
                     let pipeline_fail_driver_id = driver.display_name().to_string();
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         let audit_service = app_state.read(cx).audit_service().clone();
                         let mut event = dbflux_core::observability::EventRecord::new(
                             pipeline_fail_now_ms,
@@ -377,7 +361,7 @@ impl Sidebar {
                         }
                     });
 
-                    if let Err(update_error) = cx.update(|cx| {
+                    cx.update(|cx| {
                         app_state.update(cx, |state, cx| {
                             state.cancel_detached_hook_tasks(profile_id);
                             state.fail_task(task_id, error_msg.clone());
@@ -392,9 +376,7 @@ impl Sidebar {
                             });
                             sidebar.refresh_tree(cx);
                         });
-                    }) {
-                        log::warn!("Failed to apply pipeline failure state: {:?}", update_error);
-                    }
+                    });
                     return;
                 }
             };
@@ -460,7 +442,7 @@ impl Sidebar {
                     // Emit driver connect failure audit event.
                     let driver_fail_now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
                     let driver_fail_driver_id = driver_name_for_audit.clone();
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         let audit_service = app_state.read(cx).audit_service().clone();
                         let mut event = dbflux_core::observability::EventRecord::new(
                             driver_fail_now_ms,
@@ -484,7 +466,7 @@ impl Sidebar {
                         }
                     });
 
-                    if let Err(update_error) = cx.update(|cx| {
+                    cx.update(|cx| {
                         app_state.update(cx, |state, cx| {
                             state.cancel_detached_hook_tasks(profile_id);
                             state.fail_task(task_id, error.clone());
@@ -499,12 +481,7 @@ impl Sidebar {
                             });
                             sidebar.refresh_tree(cx);
                         });
-                    }) {
-                        log::warn!(
-                            "Failed to apply pipeline driver connect failure: {:?}",
-                            update_error
-                        );
-                    }
+                    });
                     return;
                 }
             };
@@ -531,7 +508,7 @@ impl Sidebar {
                         error: error.clone(),
                     });
 
-                    if let Err(update_error) = cx.update(|cx| {
+                    cx.update(|cx| {
                         app_state.update(cx, |state, cx| {
                             state.cancel_detached_hook_tasks(profile_id);
                             state.fail_task(task_id, error.clone());
@@ -546,18 +523,13 @@ impl Sidebar {
                             });
                             sidebar.refresh_tree(cx);
                         });
-                    }) {
-                        log::warn!(
-                            "Failed to apply pipeline post-connect hook abort state: {:?}",
-                            update_error
-                        );
-                    }
+                    });
                     return;
                 }
                 HookPhaseState::Cancelled => {
                     let _ = state_tx.send(dbflux_core::PipelineState::Cancelled);
 
-                    if let Err(update_error) = cx.update(|cx| {
+                    cx.update(|cx| {
                         app_state.update(cx, |state, cx| {
                             state.cancel_detached_hook_tasks(profile_id);
                             cx.emit(dbflux_ui_base::AppStateChanged);
@@ -589,12 +561,7 @@ impl Sidebar {
                             });
                             sidebar.refresh_tree(cx);
                         });
-                    }) {
-                        log::warn!(
-                            "Failed to apply pipeline post-connect hook cancellation state: {:?}",
-                            update_error
-                        );
-                    }
+                    });
                     return;
                 }
             }
@@ -606,7 +573,7 @@ impl Sidebar {
 
             // Emit pipeline connection success audit event.
             let connect_success_now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let audit_service = app_state.read(cx).audit_service().clone();
                 let mut event = dbflux_core::observability::EventRecord::new(
                     connect_success_now_ms,
@@ -638,19 +605,18 @@ impl Sidebar {
                 .and_then(|s| s.current_database().map(str::to_string));
 
             let capture_ctx = if capture_category == dbflux_core::DatabaseCategory::Relational {
-                cx.update(|cx| {
+                Some(cx.update(|cx| {
                     let state = app_state.read(cx);
                     (
                         Arc::clone(&state.schema_snapshot_repo),
                         state.general_settings().schema_snapshot_retention,
                     )
-                })
-                .ok()
+                }))
             } else {
                 None
             };
 
-            if let Err(update_error) = cx.update(|cx| {
+            cx.update(|cx| {
                 for warning in &hook_warnings {
                     log::warn!("{}", warning);
                 }
@@ -687,12 +653,7 @@ impl Sidebar {
                     });
                     sidebar.refresh_tree(cx);
                 });
-            }) {
-                log::warn!(
-                    "Failed to apply pipeline connection result: {:?}",
-                    update_error
-                );
-            }
+            });
 
             if let Some((capture_repo, capture_retention)) = capture_ctx {
                 let profile_id_string = profile_id.to_string();
@@ -739,7 +700,8 @@ impl Sidebar {
 
                 if let Some((database, details)) = hydration
                     && !details.is_empty()
-                    && let Err(update_error) = cx.update(|cx| {
+                {
+                    cx.update(|cx| {
                         app_state.update(cx, |state, _| {
                             for table in details {
                                 if state.needs_table_details(
@@ -758,9 +720,7 @@ impl Sidebar {
                                 }
                             }
                         });
-                    })
-                {
-                    log::warn!("Failed to hydrate table details from snapshot: {update_error:?}");
+                    });
                 }
             }
         })

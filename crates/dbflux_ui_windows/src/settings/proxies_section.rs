@@ -17,7 +17,7 @@ use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::checkbox::Checkbox;
-use gpui_component::dialog::Dialog;
+use gpui_component::dialog::AlertDialog;
 use gpui_component::{ActiveTheme, Icon, Sizable};
 use uuid::Uuid;
 
@@ -1049,7 +1049,7 @@ impl Render for ProxiesSection {
                 };
 
                 element.child(
-                    Dialog::new(window, cx)
+                    AlertDialog::new(cx)
                         .title("Delete Proxy")
                         .confirm()
                         .on_ok(move |_, _, cx| {
@@ -1072,7 +1072,7 @@ impl Render for ProxiesSection {
                 let entity_cancel = entity.clone();
 
                 element.child(
-                    Dialog::new(window, cx)
+                    AlertDialog::new(cx)
                         .title("Discard Proxy Changes")
                         .confirm()
                         .on_ok(move |_, window, cx| {

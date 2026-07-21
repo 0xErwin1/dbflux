@@ -165,7 +165,7 @@ impl AuditDocument {
         });
         // Keep focus on the document's own handle so on_key_down continues
         // to receive events while the context menu is open.
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -194,14 +194,14 @@ impl AuditDocument {
             selected_index: 0,
             position: local_position,
         });
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
     pub(super) fn close_context_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.context_menu.is_some() {
             self.context_menu = None;
-            self.focus_handle.focus(window);
+            self.focus_handle.focus(window, cx);
             cx.notify();
         }
     }
@@ -354,11 +354,11 @@ impl AuditDocument {
         if self.toolbar_index(ToolbarSlot::Refresh) == Some(focused_index) {
             self.refresh(cx);
             self.filter_bar.deactivate();
-            self.focus_handle.focus(window);
+            self.focus_handle.focus(window, cx);
         } else if self.toolbar_index(ToolbarSlot::Clear) == Some(focused_index) {
             self.clear_filters(window, cx);
             self.filter_bar.deactivate();
-            self.focus_handle.focus(window);
+            self.focus_handle.focus(window, cx);
         } else if self.toolbar_index(ToolbarSlot::CustomApply) == Some(focused_index) {
             if self.can_apply_custom_time_range(cx) {
                 self.apply_custom_time_range(cx);
@@ -436,7 +436,7 @@ impl AuditDocument {
                 // here to exit editing mode. Everything else goes to the input.
                 if cmd == Command::Cancel {
                     self.filter_bar.exit_editing();
-                    self.focus_handle.focus(window);
+                    self.focus_handle.focus(window, cx);
                     cx.notify();
                     return true;
                 }
@@ -466,7 +466,7 @@ impl AuditDocument {
                 }
                 Command::Cancel | Command::FocusUp => {
                     self.filter_bar.deactivate();
-                    self.focus_handle.focus(window);
+                    self.focus_handle.focus(window, cx);
                     cx.notify();
                     true
                 }

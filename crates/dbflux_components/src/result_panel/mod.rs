@@ -273,8 +273,8 @@ impl ResultPanel {
     }
 
     /// Focus this panel's own focus root (used by `track_focus` in render).
-    pub fn focus(&self, window: &mut Window) {
-        self.focus_handle.focus(window);
+    pub fn focus(&self, window: &mut Window, cx: &mut App) {
+        self.focus_handle.focus(window, cx);
     }
 
     // ── Test helpers ──────────────────────────────────────────────────────────

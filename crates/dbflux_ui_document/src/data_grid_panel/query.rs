@@ -237,7 +237,7 @@ impl DataGridPanel {
         cx.spawn(async move |_this, cx| {
             let result = task.await;
 
-            if let Err(error) = cx.update(|cx| {
+            cx.update(|cx| {
                 if cancel_token.is_cancelled() {
                     log::info!("Query was cancelled, discarding result");
                     if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
@@ -281,12 +281,7 @@ impl DataGridPanel {
                         });
                     }
                 }
-            }) {
-                log::warn!(
-                    "Failed to apply table query result to UI state: {:?}",
-                    error
-                );
-            }
+            });
         })
         .detach();
 
@@ -374,7 +369,7 @@ impl DataGridPanel {
         cx.spawn(async move |_this, cx| {
             let result = task.await;
 
-            if let Err(error) = cx.update(|cx| {
+            cx.update(|cx| {
                 if cancel_token.is_cancelled() {
                     log::info!("Visual query was cancelled, discarding result");
                     if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
@@ -431,12 +426,7 @@ impl DataGridPanel {
                         });
                     }
                 }
-            }) {
-                log::warn!(
-                    "Failed to apply visual query result to UI state: {:?}",
-                    error
-                );
-            }
+            });
         })
         .detach();
     }
@@ -551,7 +541,7 @@ impl DataGridPanel {
         cx.spawn(async move |_this, cx| {
             let result = task.await;
 
-            if let Err(error) = cx.update(|cx| {
+            cx.update(|cx| {
                 if cancel_token.is_cancelled() {
                     log::info!("Query was cancelled, discarding result");
                     if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
@@ -594,12 +584,7 @@ impl DataGridPanel {
                         });
                     }
                 }
-            }) {
-                log::warn!(
-                    "Failed to apply collection query result to UI state: {:?}",
-                    error
-                );
-            }
+            });
         })
         .detach();
 
@@ -721,7 +706,7 @@ impl DataGridPanel {
         cx.spawn(async move |_this, cx| {
             let result = task.await;
 
-            if let Err(error) = cx.update(|cx| {
+            cx.update(|cx| {
                 if let Ok(total) = result {
                     entity.update(cx, |panel, cx| {
                         panel.pending.total_count = Some(PendingTotalCount {
@@ -731,12 +716,7 @@ impl DataGridPanel {
                         cx.notify();
                     });
                 }
-            }) {
-                log::warn!(
-                    "Failed to apply table count result to UI state: {:?}",
-                    error
-                );
-            }
+            });
         })
         .detach();
     }
@@ -800,7 +780,7 @@ impl DataGridPanel {
         cx.spawn(async move |_this, cx| {
             let result = task.await;
 
-            if let Err(error) = cx.update(|cx| {
+            cx.update(|cx| {
                 if let Ok(total) = result {
                     entity.update(cx, |panel, cx| {
                         panel.pending.total_count = Some(PendingTotalCount {
@@ -810,12 +790,7 @@ impl DataGridPanel {
                         cx.notify();
                     });
                 }
-            }) {
-                log::warn!(
-                    "Failed to apply collection count result to UI state: {:?}",
-                    error
-                );
-            }
+            });
         })
         .detach();
     }
@@ -1031,7 +1006,7 @@ impl DataGridPanel {
         cx.spawn(async move |_this, cx| {
             let result = task.await;
 
-            if let Err(e) = cx.update(|cx| {
+            cx.update(|cx| {
                 if let Ok(query_result) = result
                     && let Some(row) = query_result.rows.first()
                     && let Some(first_value) = row.first()
@@ -1053,9 +1028,7 @@ impl DataGridPanel {
                         });
                     }
                 }
-            }) {
-                log::warn!("Failed to apply grouped count result: {:?}", e);
-            }
+            });
         })
         .detach();
     }
@@ -1104,7 +1077,7 @@ impl DataGridPanel {
         cx.spawn(async move |_this, cx| {
             let result = task.await;
 
-            if let Err(e) = cx.update(|cx| {
+            cx.update(|cx| {
                 if let Ok(query_result) = result
                     && let Some(row) = query_result.rows.first()
                     && let Some(dbflux_core::Value::Int(count)) = row.first()
@@ -1117,9 +1090,7 @@ impl DataGridPanel {
                         cx.notify();
                     });
                 }
-            }) {
-                log::warn!("Failed to apply relational count result: {:?}", e);
-            }
+            });
         })
         .detach();
     }

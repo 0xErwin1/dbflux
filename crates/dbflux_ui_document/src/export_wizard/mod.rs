@@ -177,7 +177,7 @@ impl ExportWizard {
         if self.is_running() {
             self.visible = true;
             self.phase = ExportPhase::Run;
-            self.focus_handle.focus(window);
+            self.focus_handle.focus(window, cx);
             cx.notify();
             return;
         }
@@ -209,7 +209,7 @@ impl ExportWizard {
         self.result_summary = None;
         self.result_warnings.clear();
 
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 

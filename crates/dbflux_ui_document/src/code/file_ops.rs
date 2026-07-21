@@ -51,8 +51,7 @@ impl CodeDocument {
                         entity.update(cx, |doc, cx| {
                             doc.mark_clean(cx);
                         });
-                    })
-                    .ok();
+                    });
                 }
                 Err(e) => {
                     report_error_async(
@@ -159,8 +158,7 @@ impl CodeDocument {
                             .meta_right(dbflux_ui_base::toast::now_hms())
                             .push(cx);
                         }
-                    })
-                    .ok();
+                    });
                 }
                 Err(e) => {
                     report_error_async(
@@ -231,8 +229,7 @@ impl CodeDocument {
                         entity.update(cx, |doc, cx| {
                             doc.show_saved_label(cx);
                         });
-                    })
-                    .ok();
+                    });
                 }
                 Err(e) => {
                     report_error_async(
@@ -264,8 +261,7 @@ impl CodeDocument {
                         cx.notify();
                     });
                 }
-            })
-            .ok();
+            });
         }));
     }
 

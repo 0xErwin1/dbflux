@@ -18,7 +18,7 @@ dirs = { workspace = true }
 log = "0.4"
 chrono = { workspace = true }
 bitflags = "2.10.0"
-tree-sitter = "0.25"
+tree-sitter = "0.26"
 tree-sitter-sequel = "0.3"
 urlencoding = "2"
 tempfile = "3"

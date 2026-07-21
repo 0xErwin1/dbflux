@@ -95,6 +95,19 @@ pub enum AppIcon {
 
     // Database generic
     Database,
+    DatabaseZap,
+
+    // Zoom / View
+    ZoomIn,
+    ZoomOut,
+    Minus,
+    Grid3x3,
+    Snowflake,
+    Scale,
+    ArrowLeftRight,
+
+    // Clipboard
+    Clipboard,
 
     // Generic non-database data sources
     Logs,
@@ -199,6 +212,15 @@ impl AppIcon {
             Self::Parentheses => "icons/ui/parentheses.svg",
             Self::Sigma => "icons/ui/sigma.svg",
             Self::Database => "icons/ui/database.svg",
+            Self::DatabaseZap => "icons/ui/database-zap.svg",
+            Self::ZoomIn => "icons/ui/zoom-in.svg",
+            Self::ZoomOut => "icons/ui/zoom-out.svg",
+            Self::Minus => "icons/ui/minus.svg",
+            Self::Grid3x3 => "icons/ui/grid-3x3.svg",
+            Self::Snowflake => "icons/ui/snowflake.svg",
+            Self::Scale => "icons/ui/scale.svg",
+            Self::ArrowLeftRight => "icons/ui/arrow-left-right.svg",
+            Self::Clipboard => "icons/ui/clipboard.svg",
             Self::Logs => "icons/ui/logs.svg",
             Self::ChartSpline => "icons/ui/chart-spline.svg",
             Self::ChartArea => "icons/ui/chart-area.svg",

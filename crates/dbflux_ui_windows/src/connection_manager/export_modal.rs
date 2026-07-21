@@ -17,10 +17,7 @@ use dbflux_components::typography::AppFonts;
 use dbflux_core::access::AccessKind;
 use dbflux_core::secrecy::SecretString;
 use dbflux_portability::{AuthExportMode, AwsRef, EncryptionChoice, ExportOptions, IncludeExclude};
-use dbflux_ui_base::{
-    AppStateEntity,
-    user_error::{ErrorKind, UserFacingError, report_error_async},
-};
+use dbflux_ui_base::AppStateEntity;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -329,7 +326,7 @@ impl ExportBundleModal {
             .update(cx, |state, cx| state.set_value(default_path, window, cx));
 
         self.visible = true;
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.notify();
     }
 
@@ -548,15 +545,13 @@ impl ExportBundleModal {
             });
 
             cx.spawn(async move |_this, cx| {
-                if let Some(path) = task.await
-                    && let Err(error) = cx.update(|cx| {
+                if let Some(path) = task.await {
+                    cx.update(|cx| {
                         this.update(cx, |this, cx| {
                             this.pending_output_path = Some(path.to_string_lossy().to_string());
                             cx.notify();
                         });
-                    })
-                {
-                    log::warn!("Failed to apply export path to modal state: {:?}", error);
+                    });
                 }
             })
             .detach();
@@ -640,7 +635,7 @@ impl ExportBundleModal {
         self.pending_result = None;
         cx.notify();
 
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
 
         cx.spawn(async move |_this, cx| {
             // Run the export and write the file entirely on the background
@@ -675,7 +670,7 @@ impl ExportBundleModal {
                 })
                 .await;
 
-            if let Err(update_err) = cx.update(|cx| {
+            cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     this.is_exporting = false;
                     match &outcome {
@@ -698,16 +693,7 @@ impl ExportBundleModal {
                         }
                     }
                 });
-            }) {
-                log::warn!(
-                    "Failed to update export modal after export: {:?}",
-                    update_err
-                );
-
-                if let ExportResult::Failed(msg) = outcome {
-                    report_error_async(UserFacingError::new(ErrorKind::Storage, msg), cx);
-                }
-            }
+            });
         })
         .detach();
     }

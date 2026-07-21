@@ -340,141 +340,144 @@ fn run_gui() {
 
     info!("IPC socket bound successfully");
 
-    Application::new().with_assets(Assets).run(|cx: &mut App| {
-        dbflux_ui::theme::init(cx);
-        dbflux_ui::ui::components::data_table::init(cx);
-        dbflux_ui::ui::components::document_tree::init(cx);
+    gpui_platform::application()
+        .with_assets(Assets)
+        .run(|cx: &mut App| {
+            dbflux_ui::theme::init(cx);
+            dbflux_ui::ui::components::data_table::init(cx);
+            dbflux_ui::ui::components::document_tree::init(cx);
 
-        let app_state_inner = match AppStateEntity::new() {
-            Ok(state) => state,
-            Err(e) => {
-                eprintln!(
-                    "DBFlux: failed to initialize storage — cannot open database: {e}\n\
+            let app_state_inner = match AppStateEntity::new() {
+                Ok(state) => state,
+                Err(e) => {
+                    eprintln!(
+                        "DBFlux: failed to initialize storage — cannot open database: {e}\n\
                      Check that ~/.local/share/dbflux is accessible and not corrupted."
-                );
-                cx.quit();
-                return;
-            }
-        };
-        let app_state = cx.new(|_cx| app_state_inner);
-
-        // Wire the bridge into the audit service before cloning it out.
-        // `attach_tracing_bridge` must be called on the owned `AppState`
-        // because `AuditService.bridge_min_level` is not shared across clones.
-        let persisted_min_level = app_state.read(cx).log_capture_min_level_setting();
-        if let Some(handle) = BRIDGE_HANDLE.lock().unwrap().as_ref() {
-            app_state.update(cx, |state, _| {
-                state.attach_tracing_bridge(handle.min_level.clone(), handle.drop_counter.clone());
-            });
-
-            let seeded_level =
-                dbflux_core::observability::EventSeverity::from_str_repr(&persisted_min_level)
-                    .unwrap_or(dbflux_core::observability::EventSeverity::Info);
-            handle.set_min_level(seeded_level);
-
-            let audit_service_arc = Arc::new(app_state.read(cx).audit_service().clone());
-            if let Err(err) = handle.install_sink(audit_service_arc) {
-                log::warn!("Failed to install audit bridge sink: {err}");
-            }
-        }
-
-        let audit_service = app_state.read(cx).audit_service().clone();
-        *AUDIT_SERVICE_FOR_PANIC.lock().unwrap() = Some(audit_service.clone());
-
-        emit_system_startup(&audit_service);
-
-        let general_settings = app_state.read(cx).general_settings().clone();
-        let theme_setting = general_settings.theme;
-        let style_setting = general_settings.style;
-
-        // Set up the density global and apply the persisted theme+style so
-        // radius tokens are correct from the very first frame.
-        dbflux_ui::theme::init_with_settings(theme_setting, style_setting, cx);
-
-        let channel = dbflux_core::ReleaseChannel::current();
-        let mut main_window_options = WindowOptions {
-            app_id: Some(channel.app_id().into()),
-            titlebar: Some(TitlebarOptions {
-                title: Some(channel.display_name().into()),
-                ..Default::default()
-            }),
-            // Request client-side decorations on Linux to enable native Wayland support.
-            // On other platforms this returns Server explicitly.
-            window_decorations: platform::main_window_decoration_request(),
-            ..Default::default()
-        };
-        platform::apply_window_options(&mut main_window_options, 800.0, 600.0);
-
-        let window_handle = cx
-            .open_window(main_window_options, |window, cx| {
-                cx.bind_keys(command_palette_keybindings());
-                cx.bind_keys(input_context_keybindings());
-                cx.bind_keys(workspace_keybindings());
-
-                let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
-
-                IpcServer::start_with_listener(
-                    listener,
-                    workspace.clone(),
-                    window.window_handle(),
-                    auth_token,
-                    cx,
-                );
-                info!("IPC server started");
-
-                cx.new(|cx| Root::new(workspace, window, cx))
-            })
-            .expect("Failed to open main window");
-
-        let app_state_for_close = app_state.clone();
-        window_handle
-            .update(cx, |_root, window, cx| {
-                window.on_window_should_close(cx, move |_window, cx| {
-                    let already_shutting_down = app_state_for_close.read(cx).is_shutting_down();
-                    if already_shutting_down {
-                        let phase = app_state_for_close.read(cx).shutdown_phase();
-                        if matches!(phase, ShutdownPhase::Complete | ShutdownPhase::Failed) {
-                            return true;
-                        }
-                        return false;
-                    }
-
-                    initiate_graceful_shutdown(&app_state_for_close, cx);
-
-                    false
-                });
-            })
-            .unwrap_or_else(|error| {
-                log::warn!("Failed to install window close handler: {:?}", error);
-            });
-
-        install_shutdown_signal_handlers();
-
-        #[cfg(unix)]
-        {
-            let app_state_for_signal = app_state.clone();
-            cx.spawn(async move |cx| {
-                loop {
-                    cx.background_executor().timer(SIGNAL_POLL_INTERVAL).await;
-
-                    if !SHUTDOWN_SIGNAL_RECEIVED.load(Ordering::SeqCst) {
-                        continue;
-                    }
-
-                    info!("Received shutdown signal from terminal");
-
-                    if let Err(error) = cx.update(|cx| {
-                        initiate_graceful_shutdown(&app_state_for_signal, cx);
-                    }) {
-                        log::warn!("Failed to start shutdown from signal: {:?}", error);
-                    }
-
-                    break;
+                    );
+                    cx.quit();
+                    return;
                 }
-            })
-            .detach();
-        }
-    });
+            };
+            let app_state = cx.new(|_cx| app_state_inner);
+
+            // Wire the bridge into the audit service before cloning it out.
+            // `attach_tracing_bridge` must be called on the owned `AppState`
+            // because `AuditService.bridge_min_level` is not shared across clones.
+            let persisted_min_level = app_state.read(cx).log_capture_min_level_setting();
+            if let Some(handle) = BRIDGE_HANDLE.lock().unwrap().as_ref() {
+                app_state.update(cx, |state, _| {
+                    state.attach_tracing_bridge(
+                        handle.min_level.clone(),
+                        handle.drop_counter.clone(),
+                    );
+                });
+
+                let seeded_level =
+                    dbflux_core::observability::EventSeverity::from_str_repr(&persisted_min_level)
+                        .unwrap_or(dbflux_core::observability::EventSeverity::Info);
+                handle.set_min_level(seeded_level);
+
+                let audit_service_arc = Arc::new(app_state.read(cx).audit_service().clone());
+                if let Err(err) = handle.install_sink(audit_service_arc) {
+                    log::warn!("Failed to install audit bridge sink: {err}");
+                }
+            }
+
+            let audit_service = app_state.read(cx).audit_service().clone();
+            *AUDIT_SERVICE_FOR_PANIC.lock().unwrap() = Some(audit_service.clone());
+
+            emit_system_startup(&audit_service);
+
+            let general_settings = app_state.read(cx).general_settings().clone();
+            let theme_setting = general_settings.theme;
+            let style_setting = general_settings.style;
+
+            // Set up the density global and apply the persisted theme+style so
+            // radius tokens are correct from the very first frame.
+            dbflux_ui::theme::init_with_settings(theme_setting, style_setting, cx);
+
+            let channel = dbflux_core::ReleaseChannel::current();
+            let mut main_window_options = WindowOptions {
+                app_id: Some(channel.app_id().into()),
+                titlebar: Some(TitlebarOptions {
+                    title: Some(channel.display_name().into()),
+                    ..Default::default()
+                }),
+                // Request client-side decorations on Linux to enable native Wayland support.
+                // On other platforms this returns Server explicitly.
+                window_decorations: platform::main_window_decoration_request(),
+                ..Default::default()
+            };
+            platform::apply_window_options(&mut main_window_options, 800.0, 600.0);
+
+            let window_handle = cx
+                .open_window(main_window_options, |window, cx| {
+                    cx.bind_keys(command_palette_keybindings());
+                    cx.bind_keys(input_context_keybindings());
+                    cx.bind_keys(workspace_keybindings());
+
+                    let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
+
+                    IpcServer::start_with_listener(
+                        listener,
+                        workspace.clone(),
+                        window.window_handle(),
+                        auth_token,
+                        cx,
+                    );
+                    info!("IPC server started");
+
+                    cx.new(|cx| Root::new(workspace, window, cx))
+                })
+                .expect("Failed to open main window");
+
+            let app_state_for_close = app_state.clone();
+            window_handle
+                .update(cx, |_root, window, cx| {
+                    window.on_window_should_close(cx, move |_window, cx| {
+                        let already_shutting_down = app_state_for_close.read(cx).is_shutting_down();
+                        if already_shutting_down {
+                            let phase = app_state_for_close.read(cx).shutdown_phase();
+                            if matches!(phase, ShutdownPhase::Complete | ShutdownPhase::Failed) {
+                                return true;
+                            }
+                            return false;
+                        }
+
+                        initiate_graceful_shutdown(&app_state_for_close, cx);
+
+                        false
+                    });
+                })
+                .unwrap_or_else(|error| {
+                    log::warn!("Failed to install window close handler: {:?}", error);
+                });
+
+            install_shutdown_signal_handlers();
+
+            #[cfg(unix)]
+            {
+                let app_state_for_signal = app_state.clone();
+                cx.spawn(async move |cx| {
+                    loop {
+                        cx.background_executor().timer(SIGNAL_POLL_INTERVAL).await;
+
+                        if !SHUTDOWN_SIGNAL_RECEIVED.load(Ordering::SeqCst) {
+                            continue;
+                        }
+
+                        info!("Received shutdown signal from terminal");
+
+                        cx.update(|cx| {
+                            initiate_graceful_shutdown(&app_state_for_signal, cx);
+                        });
+
+                        break;
+                    }
+                })
+                .detach();
+            }
+        });
 }
 
 /// Single entry point for graceful shutdown, reached from both window close
@@ -500,15 +503,11 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
     let start = Instant::now();
 
     info!("Shutdown phase: Cancelling tasks...");
-    let task_cancel_result = cx.update(|cx| {
+    cx.update(|cx| {
         app_state.update(cx, |state, _| {
             state.cancel_all_tasks();
         });
     });
-
-    if task_cancel_result.is_err() {
-        log::error!("Failed to cancel tasks during shutdown");
-    }
 
     let task_deadline = Instant::now() + TASK_CANCEL_TIMEOUT;
     loop {
@@ -525,13 +524,11 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
                     auth_stopped
                 );
             }
-            let _ = cx.update(|cx| cx.quit());
+            cx.update(|cx| cx.quit());
             return;
         }
 
-        let still_running = cx
-            .update(|cx| app_state.read(cx).has_running_tasks())
-            .unwrap_or(false);
+        let still_running = cx.update(|cx| app_state.read(cx).has_running_tasks());
 
         if !still_running {
             info!("All tasks finished");
@@ -547,15 +544,11 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
     }
 
     info!("Shutdown phase: Closing connections...");
-    let close_result = cx.update(|cx| {
+    cx.update(|cx| {
         app_state.update(cx, |state, _| {
             state.close_all_connections();
         });
     });
-
-    if close_result.is_err() {
-        log::error!("Failed to close connections during shutdown");
-    }
 
     let conn_deadline = Instant::now() + CONNECTION_CLOSE_TIMEOUT;
     loop {
@@ -572,13 +565,11 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
                     auth_stopped
                 );
             }
-            let _ = cx.update(|cx| cx.quit());
+            cx.update(|cx| cx.quit());
             return;
         }
 
-        let has_connections = cx
-            .update(|cx| app_state.read(cx).has_connections())
-            .unwrap_or(false);
+        let has_connections = cx.update(|cx| app_state.read(cx).has_connections());
 
         if !has_connections {
             info!("All connections closed");
@@ -594,7 +585,7 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
     }
 
     info!("Shutdown phase: Flushing logs...");
-    let _ = cx.update(|cx| {
+    cx.update(|cx| {
         app_state.update(cx, |state, _| {
             state.shutdown().advance_phase(
                 ShutdownPhase::ClosingConnections,
@@ -625,7 +616,7 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
         .await;
 
     info!("Shutdown complete in {:?}", start.elapsed());
-    let _ = cx.update(|cx| {
+    cx.update(|cx| {
         app_state.update(cx, |state, _| {
             state.complete_shutdown();
         });
@@ -644,7 +635,7 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
         );
     }
 
-    let _ = cx.update(|cx| {
+    cx.update(|cx| {
         cx.quit();
     });
 }

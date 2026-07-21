@@ -94,7 +94,10 @@ pub fn completion_input_keys_wrapper(state: &Entity<InputState>) -> Div {
             move |_: &InputIndentInline, window: &mut Window, cx: &mut App| {
                 let handled = state_tab.update(cx, |s, cx| {
                     s.handle_action_for_context_menu(
-                        Box::new(InputEnter { secondary: false }),
+                        Box::new(InputEnter {
+                            secondary: false,
+                            shift: false,
+                        }),
                         window,
                         cx,
                     )

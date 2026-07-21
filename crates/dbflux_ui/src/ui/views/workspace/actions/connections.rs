@@ -174,7 +174,7 @@ impl Workspace {
         cx.spawn(async move |_this, cx| {
             let result = task.await;
 
-            if let Err(error) = cx.update(|cx| match result {
+            cx.update(|cx| match result {
                 Ok(schema) => {
                     app_state.update(cx, |state, cx| {
                         if let Some(connected) = state.connections_mut().get_mut(&profile_id) {
@@ -192,12 +192,7 @@ impl Workspace {
                         cx,
                     );
                 }
-            }) {
-                log::warn!(
-                    "Failed to apply refreshed schema to workspace state: {:?}",
-                    error
-                );
-            }
+            });
         })
         .detach();
 

@@ -22,8 +22,7 @@ impl CodeDocument {
 
                     this.run_diagnostics(cx);
                 });
-            })
-            .ok();
+            });
         }));
     }
 

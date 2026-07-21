@@ -857,7 +857,7 @@ impl ConnectionManagerWindow {
         match command {
             Command::Cancel => {
                 self.view = View::DriverSelect;
-                window.focus(&self.focus_handle);
+                window.focus(&self.focus_handle, cx);
                 cx.notify();
                 true
             }
@@ -885,7 +885,7 @@ impl ConnectionManagerWindow {
                 true
             }
             Command::Cancel if self.form.driver_filter_focused => {
-                window.focus(&self.focus_handle);
+                window.focus(&self.focus_handle, cx);
                 true
             }
             _ if count == 0 => {
@@ -1395,7 +1395,7 @@ impl ConnectionManagerWindow {
 
     pub(super) fn exit_edit_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.edit_state = EditState::Navigating;
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.notify();
     }
 

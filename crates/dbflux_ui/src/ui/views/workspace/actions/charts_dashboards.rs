@@ -1454,7 +1454,7 @@ impl Workspace {
                     })
                     .await;
 
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(namespaces) => {
                         app_state.update(cx, |state, _| state.complete_task(task_id));
                         modal.update(cx, |m, cx| m.set_metric_namespaces(namespaces, cx));
@@ -1526,7 +1526,7 @@ impl Workspace {
                 })
                 .await;
 
-            let _ = cx.update(|cx| match result {
+            cx.update(|cx| match result {
                 Ok(metrics) => {
                     app_state.update(cx, |state, _| state.complete_task(task_id));
                     modal.update(cx, |m, cx| {

@@ -271,7 +271,7 @@ fn apply_ayu_dark(style: AppStyle, cx: &mut App) {
     theme.table_row_border = hsla(0.0, 0.0, 0.0, 0.0);
 
     // List
-    theme.list = background;
+    theme.colors.list = background;
     theme.list_head = panel;
     theme.list_even = rgb_to_hsla_alpha(0xB3B1AD, 0.02);
     theme.list_hover = rgb_to_hsla_alpha(0xB3B1AD, 0.05);
@@ -334,8 +334,8 @@ fn apply_ayu_dark(style: AppStyle, cx: &mut App) {
     theme.chart_5 = rgb_to_hsla(0xD2A6FF);
 
     // Candlestick
-    theme.bullish = success;
-    theme.bearish = error;
+    theme.chart_bullish = success;
+    theme.chart_bearish = error;
 
     // Base colors
     theme.red = error;
@@ -451,7 +451,7 @@ fn apply_ayu_mirage(style: AppStyle, cx: &mut App) {
     theme.table_active_border = rgb_to_hsla_alpha(0x73D0FF, 0.4);
     theme.table_row_border = hsla(0.0, 0.0, 0.0, 0.0);
 
-    theme.list = background;
+    theme.colors.list = background;
     theme.list_head = panel;
     theme.list_even = rgb_to_hsla_alpha(0xCBCCC6, 0.02);
     theme.list_hover = rgb_to_hsla_alpha(0xCBCCC6, 0.05);
@@ -496,8 +496,8 @@ fn apply_ayu_mirage(style: AppStyle, cx: &mut App) {
     theme.chart_4 = error;
     theme.chart_5 = rgb_to_hsla(0xD4BFFF);
 
-    theme.bullish = success;
-    theme.bearish = error;
+    theme.chart_bullish = success;
+    theme.chart_bearish = error;
 
     theme.red = error;
     theme.red_light = rgb_to_hsla(0xF7B3AA);
@@ -614,7 +614,7 @@ fn apply_ayu_light(style: AppStyle, cx: &mut App) {
     // No row dividers — alternating tint (table_even) provides visual separation
     theme.table_row_border = hsla(0.0, 0.0, 0.0, 0.0);
 
-    theme.list = background;
+    theme.colors.list = background;
     theme.list_head = panel;
     theme.list_even = rgb_to_hsla_alpha(0x5C6166, 0.03);
     theme.list_hover = rgb_to_hsla_alpha(0x5C6166, 0.06);
@@ -662,8 +662,8 @@ fn apply_ayu_light(style: AppStyle, cx: &mut App) {
     theme.chart_4 = rgb_to_hsla(0xE65050);
     theme.chart_5 = rgb_to_hsla(0xA37ACC);
 
-    theme.bullish = success;
-    theme.bearish = error;
+    theme.chart_bullish = success;
+    theme.chart_bearish = error;
 
     theme.red = error;
     theme.red_light = rgb_to_hsla(0xF09090);

@@ -87,7 +87,7 @@ impl ModalImportDashboard {
             state.set_value(DEFAULT_IMPORT_NAME, window, cx);
         });
 
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 

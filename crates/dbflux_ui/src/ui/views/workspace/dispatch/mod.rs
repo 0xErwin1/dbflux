@@ -161,7 +161,7 @@ impl Workspace {
         }
 
         // Always focus workspace to blur any input and enable keyboard navigation
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         true
     }
 }

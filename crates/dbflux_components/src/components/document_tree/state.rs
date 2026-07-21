@@ -710,8 +710,8 @@ impl DocumentTreeState {
 
     // === Actions ===
 
-    pub fn focus(&self, window: &mut gpui::Window) {
-        self.focus_handle.focus(window);
+    pub fn focus(&self, window: &mut gpui::Window, cx: &mut gpui::App) {
+        self.focus_handle.focus(window, cx);
     }
 
     pub fn start_edit_at_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
