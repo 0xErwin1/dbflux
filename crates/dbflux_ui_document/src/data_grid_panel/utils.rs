@@ -1,0 +1,188 @@
+use super::DataGridPanel;
+use dbflux_core::{QueryResult, Value};
+use gpui::Context;
+
+/// Returns `(column_index, column_name)` for every column marked as a primary key.
+/// Used by mutations and context-menu handlers to build document filters generically.
+pub(super) fn extract_pk_columns(result: &QueryResult) -> Vec<(usize, String)> {
+    result
+        .columns
+        .iter()
+        .enumerate()
+        .filter(|(_, col)| col.is_primary_key)
+        .map(|(idx, col)| (idx, col.name.clone()))
+        .collect()
+}
+
+pub(super) fn value_to_json(value: &Value) -> serde_json::Value {
+    match value {
+        Value::Null => serde_json::Value::Null,
+        Value::Bool(b) => serde_json::Value::Bool(*b),
+        Value::Int(i) => serde_json::json!(*i),
+        Value::Float(f) => serde_json::json!(*f),
+        Value::Text(s) => serde_json::Value::String(s.clone()),
+        Value::Bytes(b) => {
+            let hex: String = b.iter().map(|byte| format!("{:02x}", byte)).collect();
+            serde_json::json!({"$binary": {"hex": hex}})
+        }
+        Value::Json(j) => serde_json::from_str(j).unwrap_or(serde_json::Value::String(j.clone())),
+        Value::Decimal(d) => serde_json::Value::String(d.clone()),
+        Value::DateTime(dt) => serde_json::json!({"$date": dt.to_rfc3339()}),
+        Value::Date(d) => serde_json::Value::String(d.to_string()),
+        Value::Time(t) => serde_json::Value::String(t.to_string()),
+        Value::Array(arr) => serde_json::Value::Array(arr.iter().map(value_to_json).collect()),
+        Value::Document(doc) => {
+            let map: serde_json::Map<String, serde_json::Value> = doc
+                .iter()
+                .map(|(k, v)| (k.clone(), value_to_json(v)))
+                .collect();
+            serde_json::Value::Object(map)
+        }
+        Value::ObjectId(oid) => serde_json::json!({"$oid": oid}),
+        Value::Unsupported(type_name) => serde_json::json!({"$unsupported": type_name}),
+    }
+}
+
+impl DataGridPanel {
+    pub(super) fn get_column_default(&self, col: usize, cx: &Context<Self>) -> Option<String> {
+        let (profile_id, table_ref) = match &self.source {
+            super::DataSource::Table {
+                profile_id, table, ..
+            } => (*profile_id, table),
+            super::DataSource::Collection { .. } => return None,
+            super::DataSource::QueryResult { .. } => return None,
+        };
+
+        let col_name = self.result.columns.get(col)?.name.clone();
+
+        let state = self.app_state.read(cx);
+        let connected = state.connections().get(&profile_id)?;
+        let database = connected.active_database.as_deref().unwrap_or("default");
+        let cache_key = (
+            database.to_string(),
+            table_ref.schema.clone(),
+            table_ref.name.clone(),
+        );
+        let table_info = connected.table_details.get(&cache_key)?;
+        let columns = table_info.columns.as_deref()?;
+
+        columns
+            .iter()
+            .find(|c| c.name == col_name)
+            .and_then(|c| c.default_value.clone())
+    }
+
+    /// Returns the cached `ColumnInfo` list for the current table, if available.
+    pub(super) fn get_column_details(
+        &self,
+        cx: &Context<Self>,
+    ) -> Option<Vec<dbflux_core::ColumnInfo>> {
+        let (profile_id, table_ref) = match &self.source {
+            super::DataSource::Table {
+                profile_id, table, ..
+            } => (*profile_id, table),
+            super::DataSource::Collection { .. } => return None,
+            super::DataSource::QueryResult { .. } => return None,
+        };
+
+        let state = self.app_state.read(cx);
+        let connected = state.connections().get(&profile_id)?;
+        let database = connected.active_database.as_deref().unwrap_or("default");
+        let cache_key = (
+            database.to_string(),
+            table_ref.schema.clone(),
+            table_ref.name.clone(),
+        );
+        let table_info = connected.table_details.get(&cache_key)?;
+
+        table_info.columns.clone()
+    }
+
+    /// Returns the set of local column names that are FK source columns for the
+    /// current table, using the cached `TableInfo.foreign_keys`.
+    pub(super) fn get_fk_column_names(
+        &self,
+        cx: &Context<Self>,
+    ) -> std::collections::HashSet<String> {
+        let (profile_id, table_ref) = match &self.source {
+            super::DataSource::Table {
+                profile_id, table, ..
+            } => (*profile_id, table),
+            super::DataSource::Collection { .. } => return std::collections::HashSet::new(),
+            super::DataSource::QueryResult { .. } => return std::collections::HashSet::new(),
+        };
+
+        let state = self.app_state.read(cx);
+        let connected = match state.connections().get(&profile_id) {
+            Some(c) => c,
+            None => return std::collections::HashSet::new(),
+        };
+
+        let database = connected.active_database.as_deref().unwrap_or("default");
+        let cache_key = (
+            database.to_string(),
+            table_ref.schema.clone(),
+            table_ref.name.clone(),
+        );
+        let table_info = match connected.table_details.get(&cache_key) {
+            Some(t) => t,
+            None => return std::collections::HashSet::new(),
+        };
+
+        table_info
+            .foreign_keys
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .flat_map(|fk| fk.columns.iter().cloned())
+            .collect()
+    }
+
+    pub(super) fn get_all_column_defaults(&self, cx: &Context<Self>) -> Vec<Option<String>> {
+        let (profile_id, table_ref) = match &self.source {
+            super::DataSource::Table {
+                profile_id, table, ..
+            } => (*profile_id, table),
+            super::DataSource::Collection { .. } => {
+                return vec![None; self.result.columns.len()];
+            }
+            super::DataSource::QueryResult { .. } => {
+                return vec![None; self.result.columns.len()];
+            }
+        };
+
+        let state = self.app_state.read(cx);
+        let connected = match state.connections().get(&profile_id) {
+            Some(c) => c,
+            None => return vec![None; self.result.columns.len()],
+        };
+
+        let database = connected.active_database.as_deref().unwrap_or("default");
+        let cache_key = (
+            database.to_string(),
+            table_ref.schema.clone(),
+            table_ref.name.clone(),
+        );
+        let table_info = match connected.table_details.get(&cache_key) {
+            Some(t) => t,
+            None => return vec![None; self.result.columns.len()],
+        };
+
+        let columns = match table_info.columns.as_deref() {
+            Some(c) => c,
+            None => return vec![None; self.result.columns.len()],
+        };
+
+        // Map result columns to their defaults
+        self.result
+            .columns
+            .iter()
+            .map(|col| {
+                columns
+                    .iter()
+                    .find(|c| c.name == col.name)
+                    .and_then(|c| c.default_value.clone())
+            })
+            .collect()
+    }
+}

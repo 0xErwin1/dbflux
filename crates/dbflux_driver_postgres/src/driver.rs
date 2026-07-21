@@ -8,25 +8,29 @@ use std::time::Instant;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
-    AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator,
-    CodeGeneratorInfo, ColumnInfo, ColumnKind, ColumnMeta, Connection, ConnectionErrorFormatter,
-    ConnectionExt, ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest,
-    CreateTypeRequest, CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo,
-    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DeploymentClass,
+    AddColumnRequest, AddEnumValueRequest, AddForeignKeyRequest, AlterColumnRequest,
+    CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo, ColumnInfo, ColumnKind,
+    ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile,
+    ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest, CrudResult,
+    CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError,
+    DbKind, DbSchemaInfo, DdlCapabilities, DdlRejection, DefaultSpec, DeploymentClass,
     DescribeRequest, DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits,
-    DriverMetadata, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation,
-    ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData,
-    IndexInfo, IsolationLevel, KeyValueConnection, MutationCapabilities, OrderByColumn,
-    POSTGRES_FORM, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
-    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    ReindexRequest, RelationalConnection, RelationalSchema, RoutineInfo, RoutineKind, Row,
-    RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind,
-    SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder,
-    SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities, TypeDefinition, Value,
-    ViewInfo, WhereOperator, generate_create_table, generate_delete_template, generate_drop_table,
+    DriverMetadata, DropColumnRequest, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest,
+    ErrorLocation, ExecutionSourceContext, ExplainRequest, FieldExportTransform, ForeignKeyBuilder,
+    ForeignKeyInfo, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon,
+    IndexData, IndexInfo, InstanceCatalog, IsolationLevel, KeyValueConnection,
+    MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
+    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, ReindexRequest, RelationalConnection, RelationalSchema, RoutineInfo,
+    RoutineKind, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
+    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
+    SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities,
+    TransferFamily, TypeDefinition, Value, ViewInfo, WhereOperator, field_password, field_required,
+    field_use_uri, generate_create_table, generate_delete_template, generate_drop_table,
     generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
-    render_semantic_filter_sql, sanitize_uri,
+    render_semantic_filter_sql, sanitize_uri, ssh_tab, validate_ddl_fragment, when_checked,
+    when_unchecked, with_default, with_help,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -42,6 +46,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     display_name: "PostgreSQL".into(),
     description: "Advanced open-source relational database".into(),
     category: DatabaseCategory::Relational,
+    transfer_family: TransferFamily::Sql,
     deployment_class: Some(DeploymentClass::SelfHosted),
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
@@ -57,7 +62,13 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::RETURNING.bits()
             | DriverCapabilities::TRANSACTIONAL_DDL.bits()
             | DriverCapabilities::ROUTINES.bits()
-            | DriverCapabilities::MULTI_STATEMENT.bits(),
+            | DriverCapabilities::MULTI_STATEMENT.bits()
+            | DriverCapabilities::INSTANCE_METRICS.bits()
+            | DriverCapabilities::INSTANCE_INSPECTOR.bits()
+            | DriverCapabilities::CHART_AUTHORING.bits()
+            | DriverCapabilities::BULK_INSERT.bits()
+            | DriverCapabilities::TRUNCATE_TABLE.bits()
+            | DriverCapabilities::DISABLE_FK_CHECKS.bits(),
     ),
     default_port: Some(5432),
     uri_scheme: "postgresql".into(),
@@ -95,6 +106,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             WhereOperator::Not,
         ],
         supports_order_by: true,
+        order_by_mode: dbflux_core::OrderByMode::AnyColumns,
         supports_group_by: true,
         supports_having: true,
         supports_distinct: true,
@@ -166,6 +178,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         max_identifier_length: 63,
         max_columns: 250,
         max_indexes_per_table: 32,
+        max_bulk_insert_rows: 0,
     }),
     ssl_modes: Some(&[
         dbflux_core::SslModeOption {
@@ -198,6 +211,9 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         client_cert: true,
     }),
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
+    editor_profile: None,
 });
 
 /// PostgreSQL SQL dialect implementation.
@@ -326,6 +342,9 @@ impl PostgresCodeGenerator {
 impl CodeGenerator for PostgresCodeGenerator {
     fn capabilities(&self) -> CodeGenCapabilities {
         CodeGenCapabilities::POSTGRES_FULL
+            | CodeGenCapabilities::ADD_COLUMN
+            | CodeGenCapabilities::DROP_COLUMN
+            | CodeGenCapabilities::ALTER_COLUMN
     }
 
     fn generate_create_index(&self, req: &CreateIndexRequest) -> Option<String> {
@@ -466,9 +485,170 @@ impl CodeGenerator for PostgresCodeGenerator {
             type_name, req.new_value
         ))
     }
+
+    fn generate_add_column(&self, req: &AddColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        validate_ddl_fragment(req.type_name, "column type")?;
+        if let Some(default) = req.default {
+            validate_ddl_fragment(default, "column default")?;
+        }
+
+        let table = self.qualified(req.schema_name, req.table_name);
+        let mut sql = format!(
+            "ALTER TABLE {} ADD COLUMN {} {}",
+            table,
+            self.quote(req.column_name),
+            req.type_name
+        );
+
+        if !req.nullable {
+            sql.push_str(" NOT NULL");
+        }
+        if let Some(default) = req.default {
+            sql.push_str(&format!(" DEFAULT {}", default));
+        }
+        sql.push(';');
+
+        Ok(vec![sql])
+    }
+
+    fn generate_drop_column(&self, req: &DropColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        let table = self.qualified(req.schema_name, req.table_name);
+        Ok(vec![format!(
+            "ALTER TABLE {} DROP COLUMN {};",
+            table,
+            self.quote(req.column_name)
+        )])
+    }
+
+    fn generate_alter_column(&self, req: &AlterColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        if let Some(new_type) = req.new_type {
+            validate_ddl_fragment(new_type, "column type")?;
+        }
+        if let Some(DefaultSpec::Set(value)) = req.default {
+            validate_ddl_fragment(value, "column default")?;
+        }
+
+        let table = self.qualified(req.schema_name, req.table_name);
+        let column = self.quote(req.column_name);
+        let mut statements = Vec::new();
+
+        if let Some(new_type) = req.new_type {
+            statements.push(format!(
+                "ALTER TABLE {} ALTER COLUMN {} TYPE {};",
+                table, column, new_type
+            ));
+        }
+
+        if let Some(nullable) = req.nullable {
+            let clause = if nullable {
+                "DROP NOT NULL"
+            } else {
+                "SET NOT NULL"
+            };
+            statements.push(format!(
+                "ALTER TABLE {} ALTER COLUMN {} {};",
+                table, column, clause
+            ));
+        }
+
+        match req.default {
+            Some(DefaultSpec::Drop) => {
+                statements.push(format!(
+                    "ALTER TABLE {} ALTER COLUMN {} DROP DEFAULT;",
+                    table, column
+                ));
+            }
+            Some(DefaultSpec::Set(value)) => {
+                statements.push(format!(
+                    "ALTER TABLE {} ALTER COLUMN {} SET DEFAULT {};",
+                    table, column, value
+                ));
+            }
+            None => {}
+        }
+
+        if statements.is_empty() {
+            return Err(DdlRejection {
+                reason: "ALTER COLUMN requires at least one of: type, nullable, default"
+                    .to_string(),
+                followup: None,
+            });
+        }
+
+        Ok(statements)
+    }
 }
 
 // =============================================================================
+
+pub static POSTGRES_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![
+        FormTab {
+            id: "main".into(),
+            label: "Main".into(),
+            sections: vec![
+                FormSection {
+                    title: "Server".into(),
+                    fields: vec![
+                        field_use_uri(),
+                        when_checked(
+                            field_required(
+                                "uri",
+                                "Connection URI",
+                                FormFieldKind::Text,
+                                "postgresql://user:pass@localhost:5432/db",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("host", "Host", FormFieldKind::Text, "localhost"),
+                                "localhost",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("port", "Port", FormFieldKind::Number, "5432"),
+                                "5432",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required(
+                                    "database",
+                                    "Database",
+                                    FormFieldKind::Text,
+                                    "postgres",
+                                ),
+                                "postgres",
+                            ),
+                            "use_uri",
+                        ),
+                    ],
+                },
+                FormSection {
+                    title: "Authentication".into(),
+                    fields: vec![
+                        when_unchecked(
+                            with_default(
+                                field_required("user", "User", FormFieldKind::Text, "postgres"),
+                                "postgres",
+                            ),
+                            "use_uri",
+                        ),
+                        with_help(
+                            field_password(),
+                            "via Auth Profile · resolved at runtime, never persisted on disk",
+                        ),
+                    ],
+                },
+            ],
+        },
+        ssh_tab(),
+    ],
+});
 
 pub struct PostgresDriver;
 
@@ -542,6 +722,24 @@ impl DbDriver for PostgresDriver {
 
     fn form_definition(&self) -> &DriverFormDef {
         &POSTGRES_FORM
+    }
+
+    fn export_field_transform(&self, field_id: &str, values: &FormValues) -> FieldExportTransform {
+        if field_id != "uri" {
+            return FieldExportTransform::None;
+        }
+
+        let use_uri = values.get("use_uri").map(|s| s == "true").unwrap_or(false);
+        if !use_uri {
+            return FieldExportTransform::None;
+        }
+
+        let uri = match values.get("uri") {
+            Some(u) if !u.is_empty() => u.as_str(),
+            _ => return FieldExportTransform::None,
+        };
+
+        split_postgres_uri_secret(uri)
     }
 
     fn build_config(&self, values: &FormValues) -> Result<DbConfig, DbError> {
@@ -910,7 +1108,7 @@ impl PostgresDriver {
             log::info!("[CONNECT] PostgreSQL connection established via URI");
 
             return Ok(Box::new(PostgresConnection {
-                client: Mutex::new(client),
+                client: Arc::new(Mutex::new(client)),
                 ssh_tunnel: None,
                 cancel_token,
                 active_query: RwLock::new(None),
@@ -939,7 +1137,7 @@ impl PostgresDriver {
         log::info!("[CONNECT] PostgreSQL connection established via URI");
 
         Ok(Box::new(PostgresConnection {
-            client: Mutex::new(client),
+            client: Arc::new(Mutex::new(client)),
             ssh_tunnel: None,
             cancel_token,
             active_query: RwLock::new(None),
@@ -977,7 +1175,7 @@ impl PostgresDriver {
         log::info!("Successfully connected to {}:{}", host, port);
 
         Ok(Box::new(PostgresConnection {
-            client: Mutex::new(client),
+            client: Arc::new(Mutex::new(client)),
             ssh_tunnel: None,
             cancel_token,
             active_query: RwLock::new(None),
@@ -1055,7 +1253,7 @@ impl PostgresDriver {
         );
 
         Ok(Box::new(PostgresConnection {
-            client: Mutex::new(client),
+            client: Arc::new(Mutex::new(client)),
             ssh_tunnel: Some(tunnel),
             cancel_token,
             active_query: RwLock::new(None),
@@ -1094,7 +1292,7 @@ fn parse_pg_uri_sslmode(uri: &str) -> PgUriSslMode {
 }
 
 pub struct PostgresConnection {
-    client: Mutex<Client>,
+    client: Arc<Mutex<Client>>,
     #[allow(dead_code)]
     ssh_tunnel: Option<SshTunnel>,
     cancel_token: PgCancelToken,
@@ -1364,8 +1562,63 @@ impl Connection for PostgresConnection {
         Ok(())
     }
 
+    fn set_referential_integrity(&self, enabled: bool) -> Result<(), DbError> {
+        let role = if enabled { "origin" } else { "replica" };
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
+        client
+            .simple_query(&format!("SET session_replication_role = '{role}'"))
+            .map_err(|e| format_pg_query_error(&e))?;
+        Ok(())
+    }
+
+    fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
+        let pg_signal_backend = self
+            .client
+            .lock()
+            .ok()
+            .map(|mut c| {
+                crate::instance_catalog::PgInstanceCatalog::probe_pg_signal_backend(&mut c)
+            })
+            .unwrap_or(false);
+
+        Some(Box::new(
+            crate::instance_catalog::PgInstanceCatalog::new_probed(
+                Arc::clone(&self.client),
+                pg_signal_backend,
+            ),
+        ))
+    }
+
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
         self.cancelled.store(false, Ordering::SeqCst);
+
+        if let Some(source) = req
+            .execution_context
+            .as_ref()
+            .and_then(|ctx| ctx.source.as_ref())
+        {
+            match source {
+                ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
+                    let mut client = self.client.lock().map_err(|_| {
+                        DbError::QueryFailed("postgres client mutex poisoned".to_string().into())
+                    })?;
+                    return crate::instance_catalog::dispatch_metric_series(&mut client, metric_id);
+                }
+                ExecutionSourceContext::InstanceInspectorQuery { metric_id } => {
+                    let mut client = self.client.lock().map_err(|_| {
+                        DbError::QueryFailed("postgres client mutex poisoned".to_string().into())
+                    })?;
+                    return crate::instance_catalog::dispatch_inspector_snapshot(
+                        &mut client,
+                        metric_id,
+                    );
+                }
+                _ => {}
+            }
+        }
 
         let start = Instant::now();
         let query_id = Uuid::new_v4();
@@ -3682,6 +3935,59 @@ fn format_pg_uri_error(e: &postgres::Error, uri: &str) -> DbError {
     formatted.into_connection_error()
 }
 
+/// Extract the password from a postgres/postgresql URI into a `SplitSecret` transform.
+///
+/// When the URI carries embedded credentials (`scheme://user:pass@host/db`), this
+/// returns the URI with an empty password placeholder as the skeleton and the
+/// extracted (URL-decoded) password as the secret.
+///
+/// Returns `None` (i.e. `FieldExportTransform::None`) when:
+/// - the URI has no `@` (no credentials), or
+/// - the user portion has no colon-separated password.
+fn split_postgres_uri_secret(uri: &str) -> FieldExportTransform {
+    let prefix_end = if uri.starts_with("postgresql://") {
+        13
+    } else if uri.starts_with("postgres://") {
+        11
+    } else {
+        return FieldExportTransform::None;
+    };
+
+    let prefix = &uri[..prefix_end];
+    let rest = &uri[prefix_end..];
+
+    let at_pos = match rest.find('@') {
+        Some(p) => p,
+        None => return FieldExportTransform::None,
+    };
+
+    let user_pass = &rest[..at_pos];
+    let after_at = &rest[at_pos..];
+
+    let colon_pos = match user_pass.find(':') {
+        Some(p) => p,
+        None => return FieldExportTransform::None,
+    };
+
+    let user = &user_pass[..colon_pos];
+    let encoded_pass = &user_pass[colon_pos + 1..];
+
+    if encoded_pass.is_empty() {
+        return FieldExportTransform::None;
+    }
+
+    let password = urlencoding::decode(encoded_pass)
+        .unwrap_or_else(|_| encoded_pass.into())
+        .into_owned();
+
+    let skeleton = format!("{}{}:{}", prefix, user, after_at);
+
+    FieldExportTransform::SplitSecret {
+        skeleton,
+        secret: dbflux_core::secrecy::SecretString::from(password),
+    }
+}
+
 fn inject_password_into_pg_uri(base_uri: &str, password: Option<&str>) -> String {
     let password = match password {
         Some(p) if !p.is_empty() => p,
@@ -4157,15 +4463,16 @@ fn get_schema_routines(
 #[cfg(test)]
 mod tests {
     use super::{
-        PgUriSslMode, PostgresCodeGenerator, PostgresDialect, PostgresDriver,
+        POSTGRES_DIALECT, PgUriSslMode, PostgresCodeGenerator, PostgresDialect, PostgresDriver,
         inject_password_into_pg_uri, parse_pg_uri_sslmode, plan_postgres_semantic_request,
         prokind_to_routine_kind,
     };
     use dbflux_core::{
-        CodeGenerator, CreateTypeRequest, DatabaseCategory, DbConfig, DbDriver, DbError,
-        FormValues, MutationRequest, QueryLanguage, RowInsert, SemanticRequest, SqlDialect,
-        TableBrowseRequest, TableRef, TypeAttributeDefinition, TypeDefinition, Value,
-        WhereOperator,
+        AddColumnRequest, AlterColumnRequest, CodeGenerator, ColumnAssignment, CreateTableSpec,
+        CreateTypeRequest, DatabaseCategory, DbConfig, DbDriver, DbError, DdlRejection,
+        DefaultSpec, DropColumnRequest, FormValues, MutationRequest, QueryLanguage, RowInsert,
+        SemanticRequest, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, TableBrowseRequest,
+        TableRef, TransferFamily, TypeAttributeDefinition, TypeDefinition, Value, WhereOperator,
     };
 
     #[test]
@@ -4320,6 +4627,7 @@ mod tests {
         let metadata = driver.metadata();
 
         assert_eq!(metadata.category, DatabaseCategory::Relational);
+        assert_eq!(metadata.transfer_family, TransferFamily::Sql);
         assert_eq!(metadata.query_language, QueryLanguage::Sql);
         assert_eq!(metadata.default_port, Some(5432));
         assert_eq!(metadata.uri_scheme, "postgresql");
@@ -4491,6 +4799,187 @@ mod tests {
         assert!(generator.generate_create_type(&request).is_none());
     }
 
+    // ===== Column ALTER seam (DBF-24) =====
+
+    #[test]
+    fn postgres_codegen_generates_add_column_with_default() {
+        let generator = PostgresCodeGenerator;
+        let request = AddColumnRequest {
+            table_name: "users",
+            schema_name: Some("public"),
+            column_name: "age",
+            type_name: "INTEGER",
+            nullable: false,
+            default: Some("0"),
+        };
+
+        let statements = generator
+            .generate_add_column(&request)
+            .expect("postgres should generate add column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE \"public\".\"users\" ADD COLUMN \"age\" INTEGER NOT NULL DEFAULT 0;"]
+        );
+    }
+
+    #[test]
+    fn postgres_codegen_rejects_injected_default_and_type() {
+        let generator = PostgresCodeGenerator;
+
+        let injected_default = AddColumnRequest {
+            table_name: "users",
+            schema_name: Some("public"),
+            column_name: "age",
+            type_name: "INTEGER",
+            nullable: true,
+            default: Some("0; DROP TABLE users; --"),
+        };
+        assert!(
+            generator.generate_add_column(&injected_default).is_err(),
+            "a default carrying a stacked statement must be rejected, not emitted"
+        );
+
+        let injected_type = AlterColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+            new_type: Some("TEXT; DROP TABLE users; --"),
+            nullable: None,
+            default: None,
+        };
+        assert!(
+            generator.generate_alter_column(&injected_type).is_err(),
+            "a type carrying a stacked statement must be rejected, not emitted"
+        );
+
+        let legit = AddColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "name",
+            type_name: "VARCHAR(255)",
+            nullable: false,
+            default: Some("now()"),
+        };
+        assert!(
+            generator.generate_add_column(&legit).is_ok(),
+            "legitimate VARCHAR(255)/now() must still pass"
+        );
+    }
+
+    #[test]
+    fn postgres_codegen_generates_add_column_nullable_without_default() {
+        let generator = PostgresCodeGenerator;
+        let request = AddColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "nickname",
+            type_name: "TEXT",
+            nullable: true,
+            default: None,
+        };
+
+        let statements = generator
+            .generate_add_column(&request)
+            .expect("postgres should generate add column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE \"users\" ADD COLUMN \"nickname\" TEXT;"]
+        );
+    }
+
+    #[test]
+    fn postgres_codegen_generates_drop_column() {
+        let generator = PostgresCodeGenerator;
+        let request = DropColumnRequest {
+            table_name: "users",
+            schema_name: Some("public"),
+            column_name: "age",
+        };
+
+        let statements = generator
+            .generate_drop_column(&request)
+            .expect("postgres should generate drop column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE \"public\".\"users\" DROP COLUMN \"age\";"]
+        );
+    }
+
+    #[test]
+    fn postgres_codegen_alter_column_emits_independent_type_nullable_default_clauses() {
+        let generator = PostgresCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: Some("public"),
+            column_name: "age",
+            new_type: Some("BIGINT"),
+            nullable: Some(true),
+            default: Some(DefaultSpec::Set("0")),
+        };
+
+        let statements = generator
+            .generate_alter_column(&request)
+            .expect("postgres should generate alter column sql");
+
+        assert_eq!(
+            statements,
+            vec![
+                "ALTER TABLE \"public\".\"users\" ALTER COLUMN \"age\" TYPE BIGINT;",
+                "ALTER TABLE \"public\".\"users\" ALTER COLUMN \"age\" DROP NOT NULL;",
+                "ALTER TABLE \"public\".\"users\" ALTER COLUMN \"age\" SET DEFAULT 0;",
+            ]
+        );
+    }
+
+    #[test]
+    fn postgres_codegen_alter_column_can_drop_default_alone() {
+        let generator = PostgresCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+            new_type: None,
+            nullable: None,
+            default: Some(DefaultSpec::Drop),
+        };
+
+        let statements = generator
+            .generate_alter_column(&request)
+            .expect("postgres should generate alter column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE \"users\" ALTER COLUMN \"age\" DROP DEFAULT;"]
+        );
+    }
+
+    #[test]
+    fn postgres_codegen_alter_column_rejects_when_nothing_to_change() {
+        let generator = PostgresCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+            new_type: None,
+            nullable: None,
+            default: None,
+        };
+
+        let result = generator.generate_alter_column(&request);
+
+        assert_eq!(
+            result,
+            Err(DdlRejection {
+                reason: "ALTER COLUMN requires at least one of: type, nullable, default"
+                    .to_string(),
+                followup: None,
+            })
+        );
+    }
+
     // ===== Array literal emission (#76) =====
 
     use super::{format_pg_array_literal, pg_array_element_type, value_to_pg_literal_typed};
@@ -4629,5 +5118,252 @@ mod tests {
         //   cargo nextest run -p dbflux_driver_postgres --run-ignored
         // Skipped in normal CI.
         let _ = "placeholder for live integration test";
+    }
+
+    #[test]
+    fn postgres_metadata_advertises_chart_authoring() {
+        use super::METADATA;
+        use dbflux_core::DriverCapabilities;
+
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::CHART_AUTHORING),
+            "CHART_AUTHORING must be set: drivers advertising INSTANCE_METRICS also need \
+             CHART_AUTHORING so the sidebar surfaces Dashboards / Saved Charts folders"
+        );
+    }
+
+    #[test]
+    fn postgres_metadata_advertises_instance_metrics() {
+        use super::METADATA;
+        use dbflux_core::DriverCapabilities;
+
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::INSTANCE_METRICS),
+            "INSTANCE_METRICS must remain set on PostgreSQL driver"
+        );
+    }
+
+    #[test]
+    fn postgres_metadata_advertises_bulk_transfer_capabilities() {
+        use super::METADATA;
+        use dbflux_core::DriverCapabilities;
+
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::BULK_INSERT)
+        );
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::TRUNCATE_TABLE)
+        );
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::DISABLE_FK_CHECKS)
+        );
+    }
+
+    #[test]
+    fn postgres_generate_bulk_insert_emits_multi_row_values() {
+        use dbflux_core::QueryGenerator;
+
+        let generator = SqlMutationGenerator::new(&POSTGRES_DIALECT);
+        let columns = vec!["name".to_string(), "age".to_string()];
+        let owned_rows: Vec<Vec<dbflux_core::Value>> = vec![
+            vec![
+                dbflux_core::Value::Text("Alice".to_string()),
+                dbflux_core::Value::Int(25),
+            ],
+            vec![
+                dbflux_core::Value::Text("Bob".to_string()),
+                dbflux_core::Value::Int(30),
+            ],
+        ];
+        let rows: Vec<&[dbflux_core::Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
+
+        let generated = generator
+            .generate_bulk_insert(None, "users", &columns, &[], &rows)
+            .unwrap()
+            .expect("postgres generator must support native bulk insert");
+
+        assert_eq!(
+            generated.text,
+            "INSERT INTO \"users\" (\"name\", \"age\") VALUES ('Alice', 25), ('Bob', 30)"
+        );
+    }
+
+    /// JD-C2 regression (bulk route): a `text[]` column's `Value::Array` must
+    /// emit `ARRAY[...]::text[]` when the generator is given the column's
+    /// type, not the untyped `'...'::jsonb` fallback.
+    #[test]
+    fn postgres_generate_bulk_insert_emits_array_literal_when_column_type_is_known() {
+        use dbflux_core::QueryGenerator;
+
+        let generator = SqlMutationGenerator::new(&POSTGRES_DIALECT);
+        let columns = vec!["tags".to_string()];
+        let column_types = vec![Some("text[]".to_string())];
+        let owned_rows: Vec<Vec<Value>> = vec![vec![Value::Array(vec![
+            Value::Text("a".to_string()),
+            Value::Text("b".to_string()),
+        ])]];
+        let rows: Vec<&[Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
+
+        let generated = generator
+            .generate_bulk_insert(None, "t", &columns, &column_types, &rows)
+            .unwrap()
+            .expect("postgres generator must support native bulk insert");
+
+        assert_eq!(
+            generated.text,
+            "INSERT INTO \"t\" (\"tags\") VALUES (ARRAY['a', 'b']::text[])"
+        );
+        assert!(
+            !generated.text.contains("::jsonb"),
+            "a typed array column must never fall back to a jsonb cast: {}",
+            generated.text
+        );
+    }
+
+    /// JD-C2 regression (per-row route): the same `text[]` column must emit
+    /// `ARRAY[...]::text[]` through `RowInsert::with_typed_assignments` +
+    /// `build_insert` — the path `TableSink`'s per-row fallback now uses
+    /// instead of the untyped `RowInsert::new`.
+    #[test]
+    fn postgres_build_insert_emits_array_literal_for_typed_assignment() {
+        let insert = RowInsert::with_typed_assignments(
+            "t".to_string(),
+            None,
+            vec![ColumnAssignment {
+                name: "tags".to_string(),
+                value: Value::Array(vec![
+                    Value::Text("a".to_string()),
+                    Value::Text("b".to_string()),
+                ]),
+                type_name: Some("text[]".to_string()),
+            }],
+        );
+
+        let builder = SqlQueryBuilder::new(&POSTGRES_DIALECT);
+        let sql = builder.build_insert(&insert, false).unwrap();
+
+        assert_eq!(
+            sql,
+            "INSERT INTO \"t\" (\"tags\") VALUES (ARRAY['a', 'b']::text[])"
+        );
+        assert!(!sql.contains("::jsonb"));
+    }
+
+    #[test]
+    fn postgres_generate_create_table_preserves_types_and_pk() {
+        use dbflux_core::QueryGenerator;
+
+        let generator = SqlMutationGenerator::new(&POSTGRES_DIALECT);
+        let spec = CreateTableSpec {
+            schema: Some("public".to_string()),
+            table: "users".to_string(),
+            columns: vec![
+                dbflux_core::TransferColumn {
+                    name: "id".to_string(),
+                    type_name: Some("integer".to_string()),
+                    nullable: false,
+                    is_primary_key: true,
+                },
+                dbflux_core::TransferColumn {
+                    name: "name".to_string(),
+                    type_name: Some("text".to_string()),
+                    nullable: true,
+                    is_primary_key: false,
+                },
+            ],
+            if_not_exists: false,
+        };
+
+        let generated = generator
+            .generate_create_table(&spec)
+            .unwrap()
+            .expect("postgres generator must support native CREATE TABLE");
+
+        assert_eq!(
+            generated.text,
+            "CREATE TABLE \"public\".\"users\" (\n    \"id\" integer NOT NULL,\n    \"name\" text,\n    PRIMARY KEY (\"id\")\n);"
+        );
+    }
+
+    // --- Phase 2.4: URI transform splits password (R-SEC-1 / C1 / ADR-1) ---
+
+    #[test]
+    fn uri_transform_splits_password() {
+        use dbflux_core::secrecy::ExposeSecret;
+        use dbflux_core::{FieldExportTransform, FormValues};
+
+        let driver = PostgresDriver::new();
+        let mut values = FormValues::new();
+        values.insert("use_uri".to_string(), "true".to_string());
+        values.insert(
+            "uri".to_string(),
+            "postgres://alice:s3cr3t@db.example/app".to_string(),
+        );
+
+        let transform = driver.export_field_transform("uri", &values);
+
+        let FieldExportTransform::SplitSecret { skeleton, secret } = transform else {
+            panic!("expected SplitSecret but got None");
+        };
+
+        assert!(
+            !skeleton.contains("s3cr3t"),
+            "skeleton must not contain the password: {skeleton}"
+        );
+        assert!(
+            skeleton.contains("alice"),
+            "skeleton must contain the username: {skeleton}"
+        );
+        assert_eq!(
+            secret.expose_secret(),
+            "s3cr3t",
+            "secret must be the extracted password"
+        );
+    }
+
+    #[test]
+    fn uri_transform_no_credentials_returns_none() {
+        use dbflux_core::{FieldExportTransform, FormValues};
+
+        let driver = PostgresDriver::new();
+        let mut values = FormValues::new();
+        values.insert("use_uri".to_string(), "true".to_string());
+        values.insert("uri".to_string(), "postgres://db.example/app".to_string());
+
+        assert!(
+            matches!(
+                driver.export_field_transform("uri", &values),
+                FieldExportTransform::None
+            ),
+            "URI without credentials must return None"
+        );
+    }
+
+    #[test]
+    fn uri_transform_non_uri_mode_returns_none() {
+        use dbflux_core::{FieldExportTransform, FormValues};
+
+        let driver = PostgresDriver::new();
+        let mut values = FormValues::new();
+        values.insert("use_uri".to_string(), "false".to_string());
+        values.insert("host".to_string(), "localhost".to_string());
+
+        assert!(
+            matches!(
+                driver.export_field_transform("uri", &values),
+                FieldExportTransform::None
+            ),
+            "non-URI mode must return None"
+        );
     }
 }

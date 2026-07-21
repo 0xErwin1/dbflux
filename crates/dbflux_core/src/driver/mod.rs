@@ -3,13 +3,13 @@ pub(crate) mod form;
 
 pub use capabilities::{
     DatabaseCategory, DdlCapabilities, DeploymentClass, DriverCapabilities, DriverLimits,
-    DriverMetadata, DriverMetadataBuilder, ExecutionClassification, Icon, IsolationLevel,
-    MutationCapabilities, OperationClassifier, PaginationStyle, QueryCapabilities, QueryLanguage,
-    SslCertFields, SslModeOption, SyntaxInfo, TransactionCapabilities, WhereOperator,
+    DriverMetadata, DriverMetadataBuilder, EditorLanguageProfile, ExecutionClassification, Icon,
+    IsolationLevel, MutationCapabilities, OperationClassifier, OrderByMode, PaginationStyle,
+    QueryCapabilities, QueryLanguage, SslCertFields, SslModeOption, SyntaxInfo,
+    TransactionCapabilities, TransferFamily, WhereOperator, transfer_compatible,
 };
 pub use form::{
-    CLOUDWATCH_FORM, DYNAMODB_FORM, DriverFormDef, FormFieldDef, FormFieldKind, FormSection,
-    FormTab, FormValues, INFLUXDB_FORM, MONGODB_FORM, MYSQL_FORM, POSTGRES_FORM, REDIS_FORM,
-    RefreshTrigger, SQLITE_FORM, SQLSERVER_FORM, SelectOption, field_file_path, field_password,
-    field_use_uri, ssh_tab,
+    DriverFormDef, ExportFieldHint, FieldExportTransform, FormFieldDef, FormFieldKind, FormSection,
+    FormTab, FormValues, RefreshTrigger, SelectOption, field, field_file_path, field_password,
+    field_required, field_use_uri, ssh_tab, when_checked, when_unchecked, with_default, with_help,
 };

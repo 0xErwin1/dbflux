@@ -10,9 +10,27 @@ use crate::tokens::{ChromeEdgeRole, Heights, Spacing};
 
 type CloseHandler = Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum ModalHeight {
     Fixed(Pixels),
     Max(Pixels),
+    Fraction(f32),
+}
+
+/// Whether the modal overlay anchors its container near the top (the default for
+/// every existing modal) or centers it vertically (opt-in via `center_vertically()`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OverlayVerticalPlacement {
+    TopAnchored,
+    Centered,
+}
+
+fn overlay_vertical_placement(center_vertically: bool) -> OverlayVerticalPlacement {
+    if center_vertically {
+        OverlayVerticalPlacement::Centered
+    } else {
+        OverlayVerticalPlacement::TopAnchored
+    }
 }
 
 enum ModalFrameCloseAffordance {
@@ -28,6 +46,7 @@ pub struct ModalFrame {
     width: Pixels,
     height: ModalHeight,
     top_offset: Pixels,
+    center_vertically: bool,
     on_close: CloseHandler,
     header_leading: Option<gpui::AnyElement>,
     header_extra: Option<gpui::AnyElement>,
@@ -50,6 +69,7 @@ impl ModalFrame {
             width: px(900.0),
             height: ModalHeight::Fixed(px(600.0)),
             top_offset: px(80.0),
+            center_vertically: false,
             on_close: Arc::new(on_close),
             header_leading: None,
             header_extra: None,
@@ -86,6 +106,20 @@ impl ModalFrame {
 
     pub fn top_offset(mut self, offset: Pixels) -> Self {
         self.top_offset = offset;
+        self
+    }
+
+    /// Opt-in: vertically centers the overlay instead of anchoring it near the top.
+    /// Every other modal keeps the default top-anchored behavior unless it calls this.
+    pub fn center_vertically(mut self) -> Self {
+        self.center_vertically = true;
+        self
+    }
+
+    /// Opt-in: sizes the container as a fraction of the viewport height (e.g. `0.8` = 80%).
+    /// Every other modal keeps its default fixed/max height unless it calls this.
+    pub fn height_fraction(mut self, fraction: f32) -> Self {
+        self.height = ModalHeight::Fraction(fraction);
         self
     }
 
@@ -137,6 +171,7 @@ impl ModalFrame {
         match self.height {
             ModalHeight::Fixed(height) => container = container.h(height),
             ModalHeight::Max(height) => container = container.max_h(height),
+            ModalHeight::Fraction(fraction) => container = container.h(gpui::relative(fraction)),
         };
 
         let mut header_left = div().flex().items_center().gap(Spacing::SM);
@@ -196,9 +231,14 @@ impl ModalFrame {
             .inset_0()
             .bg(crate::primitives::overlay_bg(theme))
             .flex()
-            .justify_center()
-            .items_start()
-            .pt(self.top_offset)
+            .justify_center();
+
+        overlay = match overlay_vertical_placement(self.center_vertically) {
+            OverlayVerticalPlacement::Centered => overlay.items_center(),
+            OverlayVerticalPlacement::TopAnchored => overlay.items_start().pt(self.top_offset),
+        };
+
+        let mut overlay = overlay
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                 (close_for_overlay)(window, cx);
             })
@@ -330,10 +370,14 @@ pub fn modal_frame_with_header_extra(
 
 #[cfg(test)]
 mod tests {
-    use super::{ModalFrameVariant, inspect_modal_frame};
+    use super::{
+        ModalFrame, ModalFrameVariant, ModalHeight, OverlayVerticalPlacement, inspect_modal_frame,
+        overlay_vertical_placement,
+    };
     use crate::primitives::{SurfaceRole, TextVariant};
     use crate::tokens::ChromeEdgeRole;
     use crate::tokens::Spacing;
+    use gpui::{TestAppContext, px};
 
     #[test]
     fn modal_frame_keeps_scrim_container_and_title_contracts_centralized() {
@@ -359,5 +403,46 @@ mod tests {
 
         let with_extra = inspect_modal_frame(ModalFrameVariant::Dialog, true);
         assert!(with_extra.has_header_extra);
+    }
+
+    // ── overlay_vertical_placement (pure) ──────────────────────
+
+    #[test]
+    fn overlay_vertical_placement_defaults_to_top_anchored() {
+        assert_eq!(
+            overlay_vertical_placement(false),
+            OverlayVerticalPlacement::TopAnchored
+        );
+    }
+
+    #[test]
+    fn overlay_vertical_placement_centers_when_opted_in() {
+        assert_eq!(
+            overlay_vertical_placement(true),
+            OverlayVerticalPlacement::Centered
+        );
+    }
+
+    // ── ModalFrame builder state (regression guard for R6) ─────
+
+    #[gpui::test]
+    fn default_modal_frame_stays_top_anchored_with_fixed_height(cx: &mut TestAppContext) {
+        let focus_handle = cx.update(|cx| cx.focus_handle());
+        let frame = ModalFrame::new("regression-modal", &focus_handle, |_, _| {});
+
+        assert!(!frame.center_vertically);
+        assert_eq!(frame.top_offset, px(80.0));
+        assert_eq!(frame.height, ModalHeight::Fixed(px(600.0)));
+    }
+
+    #[gpui::test]
+    fn center_vertically_and_height_fraction_opt_into_centered_layout(cx: &mut TestAppContext) {
+        let focus_handle = cx.update(|cx| cx.focus_handle());
+        let frame = ModalFrame::new("wizard-modal", &focus_handle, |_, _| {})
+            .center_vertically()
+            .height_fraction(0.8);
+
+        assert!(frame.center_vertically);
+        assert_eq!(frame.height, ModalHeight::Fraction(0.8));
     }
 }

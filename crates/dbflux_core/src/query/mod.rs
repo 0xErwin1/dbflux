@@ -1,20 +1,31 @@
+pub(crate) mod column_kind;
 pub(crate) mod generator;
+pub(crate) mod keyset;
 pub(crate) mod language_service;
+pub mod relational_filter;
 pub(crate) mod safety;
 pub(crate) mod semantic;
+pub(crate) mod sql_context;
 pub(crate) mod table_browser;
+pub(crate) mod time_macros;
+pub(crate) mod transfer;
+pub(crate) mod tx_vocab;
 pub(crate) mod types;
+pub(crate) mod visual_query;
 
+pub use column_kind::{infer_column_kind, project_aggregate_kinds};
 pub use generator::{
-    CollectionTemplateRequest, GeneratedQuery, MutationCategory, MutationTemplateOperation,
-    MutationTemplateRequest, QueryGenerator, ReadTemplateOperation, ReadTemplateRequest,
-    SqlMutationGenerator,
+    CollectionTemplateRequest, CreateTableSpec, GeneratedMutation, GeneratedQuery, GeneratorError,
+    MutationCategory, MutationTemplateOperation, MutationTemplateRequest, QueryGenError,
+    QueryGenerator, ReadTemplateOperation, ReadTemplateRequest, SelectQuery, SqlMutationGenerator,
+    inline_params, render_filter_node_sql,
 };
+pub use keyset::lower_keyset_predicate;
 pub use language_service::{
-    DangerousQueryKind, Diagnostic, DiagnosticSeverity, EditorDiagnostic, LanguageService,
-    SqlLanguageService, TSqlLanguageService, TextPosition, TextPositionRange, TextRange,
-    ValidationResult, classify_query_for_language, detect_dangerous_mongo, detect_dangerous_query,
-    detect_dangerous_redis, detect_dangerous_sql, strip_leading_comments,
+    ClassifiedMutation, DangerousQueryKind, Diagnostic, DiagnosticSeverity, EditorDiagnostic,
+    LanguageService, SqlLanguageService, TextPosition, TextPositionRange, TextRange,
+    ValidationResult, classify_query_for_language, classify_query_for_language_with_service,
+    classify_visual_mutation, detect_dangerous_query, detect_dangerous_sql, strip_leading_comments,
 };
 pub use safety::{classify_query_for_governance, classify_sql_execution, is_safe_read_query};
 pub use semantic::{
@@ -22,12 +33,27 @@ pub use semantic::{
     SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticPlanner, SemanticPredicate,
     SemanticRequest, SemanticRequestKind, parse_semantic_filter_json, render_semantic_filter_sql,
 };
+pub use sql_context::{
+    ScopeRelation, SqlClause, SqlCompletionContext, SqlContextEngine, SqlCursorAnalysis,
+    StatementScope,
+};
 pub use table_browser::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ColumnRef, DescribeRequest,
     ExplainRequest, OrderByColumn, Pagination, SortDirection, TableBrowseRequest,
     TableCountRequest, TableRef,
 };
+pub use time_macros::{contains_time_macros, substitute_time_macros};
+pub use transfer::TransferColumn;
+pub use tx_vocab::TransactionVocab;
 pub use types::{
     ColumnKind, ColumnMeta, QueryHandle, QueryRequest, QueryResult, QueryResultShape,
     ResolvedWindow, Row,
+};
+pub use visual_query::AggregateSpec as VisualAggregateSpec;
+pub use visual_query::SortDirection as VisualSortDirection;
+pub use visual_query::{
+    AggFn, AliasOrigin, Assignment, AssignmentValue, BoolOp, ColumnOrigin, Comparator, CountSpec,
+    EditableBinding, FilterNode, GroupByEntry, JoinFilterNode, JoinKind, JoinOn, JoinPredicate,
+    JoinStep, LiteralValue, MutationKind, Predicate, PredicateValue, ProjectedColumn, Projection,
+    ScalarLiteral, SortEntry, SourceTable, SpecError, VisualMutationSpec, VisualQuerySpec,
 };

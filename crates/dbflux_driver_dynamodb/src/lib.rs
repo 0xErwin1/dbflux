@@ -13,4 +13,4 @@ pub mod driver;
 pub mod query_generator;
 pub mod query_parser;
 
-pub use driver::{DYNAMODB_METADATA, DynamoDriver};
+pub use driver::{DYNAMODB_FORM, DYNAMODB_METADATA, DynamoDriver};

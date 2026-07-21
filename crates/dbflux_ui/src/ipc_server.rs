@@ -24,6 +24,7 @@ impl IpcServer {
     pub fn start_with_listener(
         listener: IpcListener,
         workspace: Entity<Workspace>,
+        window: AnyWindowHandle,
         auth_token: String,
         cx: &mut App,
     ) {
@@ -34,7 +35,7 @@ impl IpcServer {
         });
 
         cx.spawn(async move |cx| {
-            process_commands(cmd_rx, workspace, cx.clone()).await;
+            process_commands(cmd_rx, workspace, window, cx.clone()).await;
         })
         .detach();
     }
@@ -126,20 +127,25 @@ fn handle_connection(
 async fn process_commands(
     cmd_rx: Receiver<IpcCommand>,
     workspace: Entity<Workspace>,
+    window: AnyWindowHandle,
     cx: AsyncApp,
 ) {
     loop {
         match cmd_rx.try_recv() {
             Ok(cmd) => {
-                cx.update(|cx| {
-                    workspace.update(cx, |ws, cx| match cmd {
-                        IpcCommand::OpenScript { path } => {
+                cx.update(|cx| match cmd {
+                    IpcCommand::OpenScript { path } => {
+                        workspace.update(cx, |ws, cx| {
                             ws.open_script_from_path(path, cx);
+                        });
+                    }
+                    IpcCommand::Focus => {
+                        if let Err(e) = window.update(cx, |_root, window, _cx| {
+                            window.activate_window();
+                        }) {
+                            log::warn!("Failed to focus main window via IPC: {:?}", e);
                         }
-                        IpcCommand::Focus => {
-                            // TODO: implement window focus
-                        }
-                    });
+                    }
                 });
             }
             Err(mpsc::TryRecvError::Empty) => {

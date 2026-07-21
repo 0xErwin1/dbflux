@@ -3,6 +3,10 @@ members = [
     "crates/dbflux",
     "crates/dbflux_app",
     "crates/dbflux_ui",
+    "crates/dbflux_ui_base",
+    "crates/dbflux_ui_document",
+    "crates/dbflux_ui_windows",
+    "crates/dbflux_ui_sidebar",
     "crates/dbflux_components",
     "crates/dbflux_core",
     "crates/dbflux_lua",
@@ -21,6 +25,7 @@ members = [
     "crates/dbflux_proxy",
     "crates/dbflux_tunnel_core",
     "crates/dbflux_export",
+    "crates/dbflux_transfer",
     "crates/dbflux_driver_host",
     "crates/dbflux_aws",
     "crates/dbflux_ssm",
@@ -32,13 +37,15 @@ members = [
     "crates/dbflux_storage",
     "crates/dbflux_schema_viz",
     "crates/dbflux_driver_influxdb",
+    "crates/dbflux_portability",
 ]
 default-members = ["crates/dbflux"]
 resolver = "2"
 
 [workspace.package]
 edition = "2024"
-version = "0.6.0-dev.6"
+rust-version = "1.85"
+version = "0.7.0-dev.0"
 authors = ["Ignacio Perez <ignacio@feuer.me>"]
 description = "A fast, keyboard-first database client"
 repository = "https://github.com/0xErwin1/dbflux"
@@ -73,30 +80,47 @@ dbflux_audit = { path = "crates/dbflux_audit" }
 dbflux_storage = { path = "crates/dbflux_storage" }
 dbflux_schema_viz = { path = "crates/dbflux_schema_viz" }
 dbflux_driver_influxdb = { path = "crates/dbflux_driver_influxdb" }
+dbflux_portability = { path = "crates/dbflux_portability" }
 dbflux_app = { path = "crates/dbflux_app" }
 dbflux_components = { path = "crates/dbflux_components" }
+dbflux_ui_base = { path = "crates/dbflux_ui_base" }
+dbflux_ui_document = { path = "crates/dbflux_ui_document" }
+dbflux_ui_windows = { path = "crates/dbflux_ui_windows" }
+dbflux_ui_sidebar = { path = "crates/dbflux_ui_sidebar" }
 dbflux_ui = { path = "crates/dbflux_ui" }
-mysql = "25"
+dbflux_transfer = { path = "crates/dbflux_transfer" }
+mysql = "28"
 
 petgraph = "0.7"
 
 gpui = "0.2.2"
-gpui_platform = { git = "https://github.com/0xErwin1/zed", branch = "feature/53306-07-text-raster-subpixel-regressions", features = ["wayland", "x11"] }
-gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "2d2524d89efc47270e9a0ee18f10fa72cd573eff", features = ["tree-sitter-languages"] }
+gpui_platform = { git = "https://github.com/0xErwin1/zed", branch = "feature/53306-gpui-transforms", features = ["wayland", "x11"] }
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "4f99bb8764650eaf6af79163a9dc727675b231ac", features = ["tree-sitter-languages"] }
 core-text = ">=21.0.0, <21.1.0"
 smallvec = "1.13.2"
 rfd = "0.17"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-uuid = { version = "1", features = ["v4", "v5", "serde"] }
+async-trait = "0.1"
+anyhow = "1"
+postcard = { version = "1", features = ["use-std"] }
+lsp-types = "0.97"
+toml = "1"
+uuid = { version = "1", features = ["v4", "v5", "v7", "serde"] }
 thiserror = "2"
-dirs = "5"
-rusqlite = { version = "0.32", features = ["bundled"] }
+secrecy = "0.10"
+age = { version = "0.11", features = ["armor"] }
+dirs = "6"
+rusqlite = { version = "0.40", features = ["bundled"] }
 tokio-postgres = "0.7"
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 log = "0.4"
 env_logger = "0.11"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-log = "0.2"
+tracing-appender = "0.2"
 fuzzy-matcher = "0.3"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "gzip", "json"] }
@@ -105,9 +129,9 @@ chrono = { version = "0.4", features = ["serde"] }
 urlencoding = "2"
 base64 = "0.22"
 hex = "0.4"
-sha2 = "0.10"
+sha2 = "0.11"
 interprocess = "2.4"
-mlua = "0.10"
+mlua = "0.11"
 indexmap = "2"
 
 [workspace.lints.rust]
@@ -126,13 +150,13 @@ unimplemented = "warn"
 indexing_slicing = "warn"
 
 [patch.crates-io]
-gpui = { git = "https://github.com/0xErwin1/zed", branch = "feature/53306-07-text-raster-subpixel-regressions" }
+gpui = { git = "https://github.com/0xErwin1/zed", branch = "feature/53306-gpui-transforms", version = "=0.2.2" }
 
 [patch."https://github.com/zed-industries/zed"]
-gpui = { git = "https://github.com/0xErwin1/zed", branch = "feature/53306-07-text-raster-subpixel-regressions" }
-gpui_platform = { git = "https://github.com/0xErwin1/zed", branch = "feature/53306-07-text-raster-subpixel-regressions" }
-gpui_web = { git = "https://github.com/0xErwin1/zed", branch = "feature/53306-07-text-raster-subpixel-regressions" }
-gpui_macros = { git = "https://github.com/0xErwin1/zed", branch = "feature/53306-07-text-raster-subpixel-regressions" }
+gpui = { git = "https://github.com/0xErwin1/zed", branch = "feature/53306-gpui-transforms", version = "=0.2.2" }
+gpui_platform = { git = "https://github.com/0xErwin1/zed", branch = "feature/53306-gpui-transforms" }
+gpui_web = { git = "https://github.com/0xErwin1/zed", branch = "feature/53306-gpui-transforms" }
+gpui_macros = { git = "https://github.com/0xErwin1/zed", branch = "feature/53306-gpui-transforms" }
 
 # Development build profile tuned for memory and link speed.
 # Full debug info (debug = 2) is the main driver of peak RAM and disk usage
@@ -145,3 +169,12 @@ debug = "line-tables-only"
 # large reduction in target/ size and link-time memory.
 [profile.dev.package."*"]
 debug = false
+
+# Release build profile tuned for binary size and runtime speed.
+# `panic` is intentionally left at the default `unwind`: switching to `abort` is a
+# separate decision that loses `catch_unwind` and may break GPUI internals that
+# rely on unwinding, so it is not changed here.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

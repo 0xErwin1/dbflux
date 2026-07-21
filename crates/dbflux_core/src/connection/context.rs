@@ -11,6 +11,59 @@ pub enum ExecutionSourceContext {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         query_mode: Option<String>,
     },
+    /// A CloudWatch GetMetricData request. Carries one or more metric series
+    /// batched into a single API call plus the shared time bounds. `start_ms`
+    /// and `end_ms` are epoch milliseconds.
+    ///
+    /// The driver returns one timestamp column plus one numeric column per
+    /// series in the same order as `series`. Series labels default to
+    /// `metric_name` when `label` is `None`.
+    MetricQuery {
+        /// Non-empty list of metric series to fetch in a single GetMetricData.
+        series: Vec<MetricQuerySeries>,
+        /// Query window start, epoch milliseconds (UTC).
+        start_ms: i64,
+        /// Query window end, epoch milliseconds (UTC).
+        end_ms: i64,
+    },
+
+    /// A per-driver instance metric series, fetched as time-bounded data points.
+    ///
+    /// Dispatches to `InstanceCatalog::fetch_metric_series`. Returns a
+    /// `QueryResult` with one `Timestamp` column + one or more `Float` columns.
+    InstanceMetricQuery {
+        metric_id: String,
+        /// Query window start, epoch milliseconds (UTC).
+        start_ms: i64,
+        /// Query window end, epoch milliseconds (UTC).
+        end_ms: i64,
+    },
+
+    /// A per-driver instance inspector snapshot, always reflecting the current moment.
+    ///
+    /// Dispatches to `InstanceCatalog::fetch_inspector_snapshot`. Carries no
+    /// time-window fields — inspectors always return a live snapshot.
+    InstanceInspectorQuery { metric_id: String },
+}
+
+/// A single series inside a multi-series CloudWatch GetMetricData request.
+///
+/// Lives in `dbflux_core` so the execution-context boundary stays the only
+/// driver/UI seam; `dbflux_components::saved_chart::MetricSeries` is the
+/// persistence/runtime twin and converts into this type at plan-build time.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MetricQuerySeries {
+    pub namespace: String,
+    pub metric_name: String,
+    /// Ordered (name, value) dimension pairs. May be empty for scalar metrics.
+    pub dimensions: Vec<(String, String)>,
+    /// Aggregation period in seconds. Must be > 0; validated by the driver.
+    pub period_s: u32,
+    /// AWS statistic name (e.g. "Average", "Sum", "p99"). Free-form string.
+    pub statistic: String,
+    /// Optional display label; falls back to `metric_name` in the result columns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 /// Per-document execution context (connection, database, schema).
@@ -83,11 +136,22 @@ impl ExecutionContext {
         ctx
     }
 
-    /// Serialize the context as comment lines to prepend to a file.
+    /// Serialize the context as comment lines to prepend to a file, deriving the
+    /// line-comment prefix from `language`.
     ///
     /// Only set fields are emitted. Returns an empty string when nothing is set.
     pub fn to_comment_header(&self, language: QueryLanguage) -> String {
-        let prefix = language.comment_prefix();
+        self.to_comment_header_with_prefix(language.comment_prefix())
+    }
+
+    /// Serialize the context as comment lines to prepend to a file, using an
+    /// explicit line-comment prefix.
+    ///
+    /// Callers that resolve presentation through a driver's editor profile
+    /// (rather than the raw `QueryLanguage`) pass the profile's prefix here so a
+    /// driver with a bespoke surface (e.g. DynamoDB's PartiQL using `--`) gets the
+    /// correct annotation prefix. Only set fields are emitted.
+    pub fn to_comment_header_with_prefix(&self, prefix: &str) -> String {
         let mut lines = Vec::new();
 
         if let Some(id) = &self.connection_id {
@@ -236,6 +300,69 @@ db.orders.find({})
         };
 
         assert!(!ctx.is_empty());
+    }
+
+    #[test]
+    fn instance_metric_query_variant_fields() {
+        let ctx = ExecutionSourceContext::InstanceMetricQuery {
+            metric_id: "pg.tx_commit_rate".to_string(),
+            start_ms: 1_000_000,
+            end_ms: 2_000_000,
+        };
+
+        match &ctx {
+            ExecutionSourceContext::InstanceMetricQuery {
+                metric_id,
+                start_ms,
+                end_ms,
+            } => {
+                assert_eq!(metric_id, "pg.tx_commit_rate");
+                assert_eq!(*start_ms, 1_000_000);
+                assert_eq!(*end_ms, 2_000_000);
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn instance_inspector_query_carries_no_time_window() {
+        let ctx = ExecutionSourceContext::InstanceInspectorQuery {
+            metric_id: "pg.activity".to_string(),
+        };
+
+        match &ctx {
+            ExecutionSourceContext::InstanceInspectorQuery { metric_id } => {
+                assert_eq!(metric_id, "pg.activity");
+                // Compile-time guarantee: no start_ms/end_ms fields on this variant.
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn instance_metric_query_serde_roundtrip() {
+        let original = ExecutionSourceContext::InstanceMetricQuery {
+            metric_id: "pg.cache_hit_ratio".to_string(),
+            start_ms: 1_710_000_000_000,
+            end_ms: 1_710_000_300_000,
+        };
+
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: ExecutionSourceContext = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored, original);
+    }
+
+    #[test]
+    fn instance_inspector_query_serde_roundtrip() {
+        let original = ExecutionSourceContext::InstanceInspectorQuery {
+            metric_id: "pg.activity".to_string(),
+        };
+
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: ExecutionSourceContext = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored, original);
     }
 
     #[test]

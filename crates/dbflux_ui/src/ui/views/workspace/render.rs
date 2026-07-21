@@ -1,11 +1,12 @@
 use super::*;
 use crate::keymap::ContextId;
-use crate::platform;
-use crate::ui::components::modal_frame::ModalFrame;
-use crate::ui::tokens::FontSizes;
 use dbflux_components::composites::{PanelHeaderVariant, panel_header_collapsible_variant};
-use dbflux_components::primitives::{Chord, Icon, Text, overlay_bg};
+use dbflux_components::controls::Button;
+use dbflux_components::modals::shell::{ModalShell, ModalVariant};
+use dbflux_components::primitives::{Chord, Icon, Text};
 use dbflux_components::typography::Body;
+use dbflux_ui_base::modal_frame::ModalFrame;
+use dbflux_ui_base::platform;
 use gpui_component::IconName;
 
 impl Workspace {
@@ -618,6 +619,37 @@ impl Render for Workspace {
             .when(self.modal_tunnel_auth.read(cx).is_visible(), |root| {
                 root.child(self.modal_tunnel_auth.clone())
             })
+            .when(self.modal_import_dashboard.read(cx).is_visible(), |root| {
+                root.child(self.modal_import_dashboard.clone())
+            })
+            .when(self.import_wizard.read(cx).is_visible(), |root| {
+                root.child(self.import_wizard.clone())
+            })
+            .when(self.migrate_wizard.read(cx).is_visible(), |root| {
+                root.child(self.migrate_wizard.clone())
+            })
+            .when(self.export_wizard.read(cx).is_visible(), |root| {
+                root.child(self.export_wizard.clone())
+            })
+            .when(self.modal_create_dashboard.read(cx).is_visible(), |root| {
+                root.child(self.modal_create_dashboard.clone())
+            })
+            .when(self.modal_rename_item.read(cx).is_visible(), |root| {
+                root.child(self.modal_rename_item.clone())
+            })
+            .when(self.modal_delete_dashboard.read(cx).is_visible(), |root| {
+                root.child(self.modal_delete_dashboard.clone())
+            })
+            .when(
+                self.modal_delete_saved_chart.read(cx).is_visible(),
+                |root| root.child(self.modal_delete_saved_chart.clone()),
+            )
+            .when(self.modal_add_panel.read(cx).is_visible(), |root| {
+                root.child(self.modal_add_panel.clone())
+            })
+            .when(self.export_modal.read(cx).is_visible(), |root| {
+                root.child(self.export_modal.clone())
+            })
             .child(
                 div()
                     .absolute()
@@ -748,7 +780,7 @@ impl Render for Workspace {
             // Context menu rendered at workspace level for proper positioning
             .when_some(sidebar_context_menu, |this, menu| {
                 use crate::ui::components::context_menu as ctx;
-                use crate::ui::views::sidebar::ContextMenuItem;
+                use dbflux_ui_sidebar::ContextMenuItem;
 
                 let sidebar_entity = self.sidebar.clone();
 
@@ -757,12 +789,29 @@ impl Render for Workspace {
                 let menu_width = px(160.0);
                 let menu_gap = Spacing::XS;
                 let menu_item_height = Heights::ROW_COMPACT;
+                let separator_height = px(1.0) + Spacing::XS * 2.0;
                 let menu_container_padding = px(4.0);
 
                 let parent_entry = menu.parent_stack.last();
 
-                let submenu_y_offset = if let Some((_, parent_selected)) = parent_entry {
-                    menu_container_padding + (menu_item_height * (*parent_selected as f32))
+                // Anchor the submenu to its owning row by summing the actual
+                // rendered height of every preceding row. Separators are ~9px,
+                // not a full ROW_COMPACT, so a flat `height * index` over-counts
+                // and pushes the submenu too far down.
+                let submenu_y_offset = if let Some((parent_items, parent_selected)) = parent_entry {
+                    let rows_above =
+                        parent_items
+                            .iter()
+                            .take(*parent_selected)
+                            .fold(px(0.0), |acc, item| {
+                                acc + if item.is_separator {
+                                    separator_height
+                                } else {
+                                    menu_item_height
+                                }
+                            });
+
+                    menu_container_padding + rows_above
                 } else {
                     px(0.0)
                 };
@@ -782,24 +831,30 @@ impl Render for Workspace {
                         let sidebar_click = sidebar_entity.clone();
                         let sidebar_hover = sidebar_entity.clone();
 
-                        d.child(div().absolute().top(menu_y).left(menu_x).child(
-                            ctx::render_menu_container(
-                                "parent-menu",
-                                &shared_items,
-                                Some(*parent_selected),
-                                move |idx, cx| {
-                                    sidebar_click.update(cx, |s, cx| {
-                                        s.context_menu_parent_execute_at(idx, cx);
-                                    });
-                                },
-                                move |idx, cx| {
-                                    sidebar_hover.update(cx, |s, cx| {
-                                        s.context_menu_parent_hover_at(idx, cx);
-                                    });
-                                },
-                                cx,
-                            ),
-                        ))
+                        d.child(
+                            deferred(
+                                anchored()
+                                    .position(point(menu_x, menu_y))
+                                    .snap_to_window()
+                                    .child(ctx::render_menu_container(
+                                        "parent-menu",
+                                        &shared_items,
+                                        Some(*parent_selected),
+                                        move |idx, cx| {
+                                            sidebar_click.update(cx, |s, cx| {
+                                                s.context_menu_parent_execute_at(idx, cx);
+                                            });
+                                        },
+                                        move |idx, cx| {
+                                            sidebar_hover.update(cx, |s, cx| {
+                                                s.context_menu_parent_hover_at(idx, cx);
+                                            });
+                                        },
+                                        cx,
+                                    )),
+                            )
+                            .with_priority(1),
+                        )
                     })
                     // Current menu (submenu to the right of parent, or main menu at click position)
                     .child({
@@ -807,30 +862,35 @@ impl Render for Workspace {
                         let sidebar_click = sidebar_entity.clone();
                         let sidebar_hover = sidebar_entity.clone();
 
-                        div()
-                            .absolute()
-                            .top(menu_y + submenu_y_offset)
-                            .left(if in_submenu {
-                                menu_x + menu_width + menu_gap
-                            } else {
-                                menu_x
-                            })
-                            .child(ctx::render_menu_container(
-                                "context-menu",
-                                &shared_items,
-                                Some(menu.selected_index),
-                                move |idx, cx| {
-                                    sidebar_click.update(cx, |s, cx| {
-                                        s.context_menu_execute_at(idx, cx);
-                                    });
-                                },
-                                move |idx, cx| {
-                                    sidebar_hover.update(cx, |s, cx| {
-                                        s.context_menu_hover_at(idx, cx);
-                                    });
-                                },
-                                cx,
-                            ))
+                        let menu_left = if in_submenu {
+                            menu_x + menu_width + menu_gap
+                        } else {
+                            menu_x
+                        };
+                        let menu_top = menu_y + submenu_y_offset;
+
+                        deferred(
+                            anchored()
+                                .position(point(menu_left, menu_top))
+                                .snap_to_window()
+                                .child(ctx::render_menu_container(
+                                    "context-menu",
+                                    &shared_items,
+                                    Some(menu.selected_index),
+                                    move |idx, cx| {
+                                        sidebar_click.update(cx, |s, cx| {
+                                            s.context_menu_execute_at(idx, cx);
+                                        });
+                                    },
+                                    move |idx, cx| {
+                                        sidebar_hover.update(cx, |s, cx| {
+                                            s.context_menu_hover_at(idx, cx);
+                                        });
+                                    },
+                                    cx,
+                                )),
+                        )
+                        .with_priority(1)
                     })
             })
             // Tab context menu rendered at workspace level for proper positioning
@@ -877,9 +937,20 @@ impl Render for Workspace {
             .when_some(
                 self.sidebar.read(cx).delete_modal_state(),
                 |el, modal_state| {
-                    let theme = cx.theme();
+                    // Capture sidebar clones for each callback before building the footer.
                     let sidebar_confirm = self.sidebar.clone();
                     let sidebar_cancel = self.sidebar.clone();
+                    let sidebar_close = self.sidebar.clone();
+
+                    let title = if modal_state.multi_count.is_some() {
+                        "Delete"
+                    } else if modal_state.is_ddl {
+                        "Drop"
+                    } else if modal_state.is_folder {
+                        "Delete folder"
+                    } else {
+                        "Delete connection"
+                    };
 
                     let message = if let Some(count) = modal_state.multi_count {
                         format!("Delete {count} selected items?")
@@ -893,118 +964,44 @@ impl Render for Workspace {
                     };
 
                     let confirm_label = if modal_state.is_ddl { "Drop" } else { "Delete" };
-                    let btn_hover = theme.muted;
+                    let variant = if modal_state.is_ddl {
+                        ModalVariant::Danger
+                    } else {
+                        ModalVariant::Default
+                    };
+
+                    let body = Text::body(message).into_any_element();
+
+                    let footer = div()
+                        .flex()
+                        .gap(Spacing::SM)
+                        .child(
+                            Button::new("delete-cancel", "Cancel").on_click(move |_, _, cx| {
+                                sidebar_cancel.update(cx, |this, cx| {
+                                    this.cancel_modal_delete(cx);
+                                });
+                            }),
+                        )
+                        .child(
+                            Button::new("delete-confirm", confirm_label)
+                                .when(modal_state.is_ddl, |b| b.danger())
+                                .on_click(move |_, _, cx| {
+                                    sidebar_confirm.update(cx, |this, cx| {
+                                        this.confirm_modal_delete(cx);
+                                    });
+                                }),
+                        )
+                        .into_any_element();
 
                     el.child(
-                        div()
-                            .id("delete-modal-overlay")
-                            .absolute()
-                            .inset_0()
-                            .bg(overlay_bg(theme))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                cx.stop_propagation();
-                            })
-                            .child(
-                                div()
-                                    .bg(theme.sidebar)
-                                    .border_1()
-                                    .border_color(if modal_state.is_ddl {
-                                        theme.danger
-                                    } else {
-                                        theme.border
-                                    })
-                                    .rounded(Radii::MD)
-                                    .p(Spacing::MD)
-                                    .min_w(px(250.0))
-                                    .flex()
-                                    .flex_col()
-                                    .gap(Spacing::MD)
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .child(
-                                                svg()
-                                                    .path(if modal_state.is_ddl {
-                                                        AppIcon::Delete.path()
-                                                    } else {
-                                                        AppIcon::TriangleAlert.path()
-                                                    })
-                                                    .size_5()
-                                                    .text_color(if modal_state.is_ddl {
-                                                        theme.danger
-                                                    } else {
-                                                        theme.warning
-                                                    }),
-                                            )
-                                            .child(Text::body(message)),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .justify_end()
-                                            .gap(Spacing::SM)
-                                            .child(
-                                                div()
-                                                    .id("delete-cancel")
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_1()
-                                                    .px(Spacing::SM)
-                                                    .py(Spacing::XS)
-                                                    .rounded(Radii::SM)
-                                                    .cursor_pointer()
-                                                    .text_size(FontSizes::SM)
-                                                    .bg(theme.secondary)
-                                                    .hover(move |d| d.bg(btn_hover))
-                                                    .on_click(move |_, _, cx| {
-                                                        sidebar_cancel.update(cx, |this, cx| {
-                                                            this.cancel_modal_delete(cx);
-                                                        });
-                                                    })
-                                                    .child(
-                                                        Icon::new(AppIcon::X)
-                                                            .size(px(16.0))
-                                                            .muted(),
-                                                    )
-                                                    .child(
-                                                        Text::caption("Cancel").muted_foreground(),
-                                                    ),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id("delete-confirm")
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_1()
-                                                    .px(Spacing::SM)
-                                                    .py(Spacing::XS)
-                                                    .rounded(Radii::SM)
-                                                    .cursor_pointer()
-                                                    .text_size(FontSizes::SM)
-                                                    .bg(theme.danger)
-                                                    .hover(|d| d.opacity(0.9))
-                                                    .on_click(move |_, _, cx| {
-                                                        sidebar_confirm.update(cx, |this, cx| {
-                                                            this.confirm_modal_delete(cx);
-                                                        });
-                                                    })
-                                                    .child(
-                                                        Icon::new(AppIcon::Delete)
-                                                            .size(px(16.0))
-                                                            .color(theme.background),
-                                                    )
-                                                    .child(
-                                                        Text::caption(confirm_label)
-                                                            .color(theme.background),
-                                                    ),
-                                            ),
-                                    ),
-                            ),
+                        ModalShell::new(title, body, footer)
+                            .width(px(360.0))
+                            .variant(variant)
+                            .on_close(move |_, cx| {
+                                sidebar_close.update(cx, |this, cx| {
+                                    this.cancel_modal_delete(cx);
+                                });
+                            }),
                     )
                 },
             )

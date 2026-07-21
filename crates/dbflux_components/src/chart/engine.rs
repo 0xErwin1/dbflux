@@ -10,16 +10,18 @@ use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Bounds, Context, Hsla, PathBuilder, Pixels, Render, SharedString, TextRun, Window,
-    canvas, div, fill, font, point,
+    AnyElement, App, Bounds, Context, Hsla, PathBuilder, Pixels, Render, ShapedLine, SharedString,
+    TextRun, Window, canvas, div, fill, font, point,
 };
+use gpui_component::ActiveTheme;
 
-use crate::chart::axis::{TickLabel, ticks_numeric, ticks_time};
+use crate::chart::axis::{TickLabel, ticks_log, ticks_numeric, ticks_time};
 use crate::chart::decimate::{lttb, lttb_with_indices};
-use crate::chart::spec::{AxisKind, ChartSpec};
+use crate::chart::spec::{AxisKind, ChartSpec, YScale};
 use crate::chart::stats::{
     SeriesStats, compute_series_stats, hit_test_focused_series, interpolate_y_at_x,
 };
+use crate::semantic::ChartColors;
 use crate::tokens::FontSizes;
 use dbflux_core::{ColumnKind, QueryResult, Value};
 
@@ -44,65 +46,24 @@ pub enum ChartBuildError {
 }
 
 // ---------------------------------------------------------------------------
-// Palette
+// Palette helpers
 // ---------------------------------------------------------------------------
 
-/// Design-aligned palette: exact Ayu Dark chart tokens from `tokens.css`.
+/// Map a color slot index to the active theme's chart palette.
 ///
-/// HSL values computed from the hex palette:
-///   #59C2FF → h=0.578, s=1.0,  l=0.673   (chart-1 cyan)
-///   #AAD94C → h=0.228, s=0.673, l=0.572  (chart-2 lime)
-///   #FFB454 → h=0.097, s=1.0,  l=0.666   (chart-3 amber / primary)
-///   #F07178 → h=0.985, s=0.819, l=0.694  (chart-4 rose)
-///   #D2A6FF → h=0.758, s=1.0,  l=0.826   (chart-5 lavender)
-pub const CHART_PALETTE: &[Hsla] = &[
-    Hsla {
-        h: 0.578,
-        s: 1.0,
-        l: 0.673,
-        a: 1.0,
-    }, // #59C2FF chart-1 cyan
-    Hsla {
-        h: 0.228,
-        s: 0.673,
-        l: 0.572,
-        a: 1.0,
-    }, // #AAD94C chart-2 lime
-    Hsla {
-        h: 0.097,
-        s: 1.0,
-        l: 0.666,
-        a: 1.0,
-    }, // #FFB454 chart-3 amber
-    Hsla {
-        h: 0.985,
-        s: 0.819,
-        l: 0.694,
-        a: 1.0,
-    }, // #F07178 chart-4 rose
-    Hsla {
-        h: 0.758,
-        s: 1.0,
-        l: 0.826,
-        a: 1.0,
-    }, // #D2A6FF chart-5 lavender
-];
-
-/// Accent cyan — #95E6CB (min/max/avg stat values in the Stats dock).
-pub const CHART_ACCENT_CYAN: Hsla = Hsla {
-    h: 0.444,
-    s: 0.618,
-    l: 0.741,
-    a: 1.0,
-};
-
-/// Accent primary — #FFB454 (p99 stat value, matches theme primary).
-pub const CHART_ACCENT_PRIMARY: Hsla = Hsla {
-    h: 0.097,
-    s: 1.0,
-    l: 0.666,
-    a: 1.0,
-};
+/// `slot % 5` selects one of `theme.chart_1..chart_5`. Out-of-bounds slots
+/// (unreachable in practice) fall back to a neutral mid-grey so paint does not
+/// crash even if the series list is somehow malformed.
+#[inline]
+fn theme_chart_color(theme: &gpui_component::theme::Theme, slot: u8) -> Hsla {
+    match slot % 5 {
+        0 => theme.chart_1,
+        1 => theme.chart_2,
+        2 => theme.chart_3,
+        3 => theme.chart_4,
+        _ => theme.chart_5,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // RenderModel
@@ -111,19 +72,36 @@ pub const CHART_ACCENT_PRIMARY: Hsla = Hsla {
 /// Pre-computed, immutable chart data stored after `build`. Render only reads this.
 pub(crate) struct RenderModel {
     /// Decimated (x, y) pairs per series — in data space (f64, f64).
-    pub decimated: Vec<Vec<(f64, f64)>>,
-    /// Resolved palette colour per series.
-    pub palette_colors: Vec<Hsla>,
+    ///
+    /// Wrapped in `Rc` so the render path can hand the data to multiple paint
+    /// closures (canvas paint + canvas prepaint) per frame with O(1) clones
+    /// instead of cloning a `Vec<Vec<(f64, f64)>>` for every panel on every
+    /// dashboard repaint.
+    pub decimated: Rc<Vec<Vec<(f64, f64)>>>,
+    /// Raw color-slot indices per series (theme-resolved at render time).
+    pub palette_slots: Vec<u8>,
     /// X-axis tick labels rendered below the plot area.
+    // Used in tests and retained for future rendering flexibility; the paint
+    // closure regenerates ticks dynamically at render time via `x_ticks_dynamic`.
+    #[allow(dead_code)]
     pub x_ticks: Vec<TickLabel>,
-    /// Y-axis tick labels rendered to the left of the plot area.
+    /// Y-axis tick labels (build-time, target=5). Superseded by the dynamic
+    /// render-time path (`y_ticks_dynamic` in the paint closure); retained for
+    /// API stability and future flexibility.
+    #[allow(dead_code)]
     pub y_ticks: Vec<TickLabel>,
     /// Data-space X bounds.
     pub x_min: f64,
     pub x_max: f64,
-    /// Data-space Y bounds.
+    /// Data-space Y bounds (always original scale).
     pub y_min: f64,
     pub y_max: f64,
+    /// Whether Y is rendered in log1p scale.
+    pub y_is_log: bool,
+    /// Y bounds in log1p space when `y_is_log` is true; equal to
+    /// `(y_min, y_max)` in linear mode.
+    pub y_log_min: f64,
+    pub y_log_max: f64,
     /// Per-series descriptive stats over post-decimation Y values.
     /// Indexed parallel to `decimated`; `None` for empty series.
     pub series_stats: Vec<Option<SeriesStats>>,
@@ -202,25 +180,33 @@ impl ChartView {
 
         let x_is_time = spec.x_axis.kind == AxisKind::Time;
 
+        // Per-row extraction: a row is retained whenever at least ONE series
+        // produced a finite value at that X. Missing per-series values become
+        // `NaN` so downstream filters (`is_finite`) automatically skip them on
+        // each series's render pass — that lets a sparse or fully-empty series
+        // (e.g. a CloudWatch metric that returned no datapoints in the
+        // selected window) coexist with populated siblings instead of forcing
+        // the whole chart to fail with `NoUsableData`.
         for row in &result.rows {
             let x_val = extract_f64(&row[x_col], x_is_time);
             let Some(x) = x_val else { continue };
 
-            let mut all_valid = true;
             let mut y_vals: Vec<f64> = Vec::with_capacity(spec.series.len());
+            let mut any_valid = false;
 
             for s in &spec.series {
                 let col_kind = result.columns[s.column_index].kind;
                 let y_val = extract_f64(&row[s.column_index], col_kind == ColumnKind::Timestamp);
-                if let Some(y) = y_val {
-                    y_vals.push(y);
-                } else {
-                    all_valid = false;
-                    break;
+                match y_val {
+                    Some(y) => {
+                        y_vals.push(y);
+                        any_valid = true;
+                    }
+                    None => y_vals.push(f64::NAN),
                 }
             }
 
-            if all_valid {
+            if any_valid {
                 raw_x.push(x);
                 for (i, y) in y_vals.into_iter().enumerate() {
                     raw_series[i].push(y);
@@ -343,6 +329,21 @@ impl ChartView {
             .flat_map(|s| s.iter().map(|(_, y)| *y))
             .fold(f64::NEG_INFINITY, f64::max);
 
+        // --- Y scale mode ---
+
+        let y_is_log = spec.y_scale == YScale::Log;
+
+        // In log1p mode: bounds and ticks live in log1p space so the canvas
+        // projection is a simple linear map of those transformed values.
+        // In linear mode: y_log_* mirrors y_min/y_max unchanged.
+        let (y_log_min, y_log_max) = if y_is_log {
+            let lmin = (y_min.max(0.0) + 1.0).ln();
+            let lmax = (y_max.max(0.0) + 1.0).ln();
+            (lmin, lmax)
+        } else {
+            (y_min, y_max)
+        };
+
         // --- Axis ticks ---
 
         let x_ticks = if x_is_time {
@@ -351,18 +352,15 @@ impl ChartView {
             ticks_numeric(x_min, x_max, 6)
         };
 
-        let y_ticks = ticks_numeric(y_min, y_max, 5);
+        let y_ticks = if y_is_log {
+            ticks_log(y_min, y_max, 5)
+        } else {
+            ticks_numeric(y_min, y_max, 5)
+        };
 
-        // --- Palette colours ---
+        // --- Palette slots (theme-resolved at render time) ---
 
-        let palette_colors: Vec<Hsla> = spec
-            .series
-            .iter()
-            .map(|s| {
-                let idx = s.color_slot as usize % CHART_PALETTE.len();
-                CHART_PALETTE[idx]
-            })
-            .collect();
+        let palette_slots: Vec<u8> = spec.series.iter().map(|s| s.color_slot).collect();
 
         // Compute per-series stats over the post-decimation points.
         let series_stats: Vec<Option<SeriesStats>> = decimated
@@ -371,14 +369,17 @@ impl ChartView {
             .collect();
 
         let render_model = RenderModel {
-            decimated,
-            palette_colors,
+            decimated: Rc::new(decimated),
+            palette_slots,
             x_ticks,
             y_ticks,
             x_min,
             x_max,
             y_min,
             y_max,
+            y_is_log,
+            y_log_min,
+            y_log_max,
             series_stats,
             source_indices,
         };
@@ -392,6 +393,21 @@ impl ChartView {
             plot_bounds: Rc::new(RefCell::new(None)),
             hidden: HashSet::new(),
         })
+    }
+
+    /// Switch the chart kind in place. Cheap — the `RenderModel` is kind-agnostic
+    /// (decimated points, ticks, and bounds are identical for Line and Bar), so
+    /// only `render` needs to re-run.
+    pub fn set_kind(&mut self, kind: crate::chart::spec::ChartKind, cx: &mut Context<Self>) {
+        if self.spec.kind != kind {
+            self.spec.kind = kind;
+            cx.notify();
+        }
+    }
+
+    /// The current chart kind.
+    pub fn kind(&self) -> crate::chart::spec::ChartKind {
+        self.spec.kind
     }
 
     /// Update legend visibility. Cheap — does not rebuild the render model.
@@ -427,18 +443,29 @@ impl ChartView {
         (self.render_model.x_min, self.render_model.x_max)
     }
 
+    /// Data-space Y bounds `(y_min, y_max)` for the current render model.
+    ///
+    /// These are always original-scale values regardless of the active `YScale`
+    /// mode. The projection-space bounds are stored separately as `y_log_min`
+    /// / `y_log_max` and are not exposed publicly.
+    pub fn data_y_bounds(&self) -> (f64, f64) {
+        (self.render_model.y_min, self.render_model.y_max)
+    }
+
     /// Whether the X axis is a time axis.
     pub fn x_is_time(&self) -> bool {
         self.spec.x_axis.kind == AxisKind::Time
     }
 
-    /// Resolved palette colour for the series at `idx`. Returns a neutral grey
-    /// when `idx` is out of range.
-    pub fn series_color(&self, idx: usize) -> Hsla {
+    /// Resolved palette colour for the series at `idx`, derived from the active theme.
+    ///
+    /// Returns a neutral grey when `idx` is out of range.
+    pub fn series_color(&self, idx: usize, cx: &App) -> Hsla {
+        let theme = cx.theme();
         self.render_model
-            .palette_colors
+            .palette_slots
             .get(idx)
-            .copied()
+            .map(|&slot| theme_chart_color(theme, slot))
             .unwrap_or(Hsla {
                 h: 0.0,
                 s: 0.0,
@@ -462,9 +489,17 @@ impl ChartView {
         &self.spec.series
     }
 
-    /// Resolved palette colours, indexed parallel to `spec_series()`.
-    pub fn palette_colors(&self) -> &[Hsla] {
-        &self.render_model.palette_colors
+    /// Resolved palette colours for all series, derived from the active theme at call time.
+    ///
+    /// Returns an owned `Vec<Hsla>` since the colours are no longer stored — they are
+    /// derived on demand from `cx.theme()` so they reflect the currently active theme.
+    pub fn resolved_palette(&self, cx: &App) -> Vec<Hsla> {
+        let theme = cx.theme();
+        self.render_model
+            .palette_slots
+            .iter()
+            .map(|&slot| theme_chart_color(theme, slot))
+            .collect()
     }
 
     /// Source row indices, per series, for each decimated point.
@@ -548,6 +583,43 @@ impl ChartView {
         cx.notify();
     }
 
+    /// The padded Y ceiling used when rendering a `StackedBar` chart.
+    ///
+    /// `RenderModel.y_max` stores per-series maxima, which underestimate the top
+    /// of a stack. This recomputes the true ceiling by summing the visible
+    /// series at each shared point index and adding the same 8% headroom render
+    /// uses, so the render path and the hover hit-test agree on the Y scale. It
+    /// is recomputed from the current hidden set, so toggling series off keeps
+    /// the scale correct.
+    fn stacked_y_max(&self) -> f64 {
+        let model = &self.render_model;
+        let y_min = model.y_min;
+
+        let visible: Vec<usize> = (0..model.decimated.len())
+            .filter(|i| !self.hidden.contains(i))
+            .collect();
+
+        let max_points = model.decimated.iter().map(|s| s.len()).max().unwrap_or(0);
+
+        let stacked_max = (0..max_points)
+            .map(|pt_idx| {
+                visible
+                    .iter()
+                    .filter_map(|&s| model.decimated[s].get(pt_idx).map(|(_, y)| *y))
+                    .filter(|y| y.is_finite())
+                    .sum::<f64>()
+            })
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        let stacked_max = if stacked_max.is_finite() {
+            stacked_max
+        } else {
+            model.y_max
+        };
+
+        stacked_max + (stacked_max - y_min).abs() * 0.08
+    }
+
     /// Re-evaluate which series the cursor hovers over and update
     /// `focused_series_idx` with a 2 px dead-band to dampen jitter.
     ///
@@ -579,13 +651,264 @@ impl ChartView {
 
         let x_min = self.render_model.x_min;
         let x_range = (self.render_model.x_max - x_min).max(1.0);
+        let y_log_min = self.render_model.y_log_min;
+        let y_log_range = (self.render_model.y_log_max - y_log_min).max(1.0);
+        let y_is_log = self.render_model.y_is_log;
         let y_min = self.render_model.y_min;
         let y_range = (self.render_model.y_max - y_min).max(1.0);
 
         let cursor_data_x = x_min + (rel_x as f64 / plot_w as f64) * x_range;
 
-        let data_to_screen_y =
-            |dy: f64| -> f32 { plot_y0 + plot_h - ((dy - y_min) / y_range * plot_h as f64) as f32 };
+        // Bar charts focus by column: the series whose bar sits horizontally
+        // under the cursor wins across the bar's full height — not only near its
+        // top where the data point lives (which is how the line hit-test below
+        // works). This mirrors the geometry in `paint_bars`, including the bar
+        // x-inset, so the hit area matches the painted bars exactly.
+        if matches!(self.spec.kind, crate::chart::spec::ChartKind::Bar) {
+            let visible: Vec<usize> = (0..self.render_model.decimated.len())
+                .filter(|i| !self.hidden.contains(i))
+                .collect();
+            if visible.is_empty() {
+                return;
+            }
+
+            let num_visible = visible.len();
+            let max_points = self
+                .render_model
+                .decimated
+                .iter()
+                .map(|s| s.len())
+                .max()
+                .unwrap_or(1)
+                .max(1);
+
+            let x_pad = plot_w * (0.5 / max_points as f32);
+            let usable_w = (plot_w - 2.0 * x_pad).max(1.0);
+            let slot_w = plot_w / max_points as f32;
+            let group_w = slot_w * 0.8;
+            let bar_w = (group_w / num_visible as f32).max(1.0);
+
+            let data_to_screen_x = |dx: f64| -> f32 {
+                plot_x0 + x_pad + ((dx - x_min) / x_range * usable_w as f64) as f32
+            };
+
+            let cursor_sx = f32::from(hover_x);
+
+            for (group_pos, &s_idx) in visible.iter().enumerate() {
+                let offset = group_pos as f32 * bar_w - group_w / 2.0;
+                for &(x, _) in &self.render_model.decimated[s_idx] {
+                    let bar_left = data_to_screen_x(x) + offset;
+                    let bar_right = bar_left + bar_w * 0.92;
+                    if cursor_sx >= bar_left && cursor_sx <= bar_right {
+                        self.focused_series_idx = s_idx;
+                        return;
+                    }
+                }
+            }
+
+            // Cursor fell in a gap between bars: keep the current focus.
+            return;
+        }
+
+        // StackedBar: full-width single bars per x slot. Find the x column
+        // under the cursor, then pick the series whose stacked segment the
+        // cursor's Y falls inside for the most precise focus.
+        if matches!(self.spec.kind, crate::chart::spec::ChartKind::StackedBar) {
+            let visible: Vec<usize> = (0..self.render_model.decimated.len())
+                .filter(|i| !self.hidden.contains(i))
+                .collect();
+            if visible.is_empty() {
+                return;
+            }
+
+            let max_points = self
+                .render_model
+                .decimated
+                .iter()
+                .map(|s| s.len())
+                .max()
+                .unwrap_or(1)
+                .max(1);
+
+            let x_pad = plot_w * (0.5 / max_points as f32);
+            let usable_w = (plot_w - 2.0 * x_pad).max(1.0);
+            let slot_w = plot_w / max_points as f32;
+            let bar_w = (slot_w * 0.8).max(1.0);
+
+            let data_to_screen_x = |dx: f64| -> f32 {
+                plot_x0 + x_pad + ((dx - x_min) / x_range * usable_w as f64) as f32
+            };
+
+            let cursor_sx = f32::from(hover_x);
+            let cursor_sy = f32::from(hover_y);
+
+            // Use the same stacked Y ceiling render uses, not the per-series
+            // RenderModel.y_max, so segment boundaries line up with the bars.
+            let stacked_y_max = self.stacked_y_max();
+            let y_range_local = (stacked_y_max - y_min).max(1.0);
+            let data_to_screen_y = |dy: f64| -> f32 {
+                plot_y0 + plot_h - ((dy - y_min) / y_range_local * plot_h as f64) as f32
+            };
+
+            // Use the first visible series as x-position anchor.
+            let anchor = visible[0];
+            for pt_idx in 0..self.render_model.decimated[anchor].len() {
+                let (x, _) = self.render_model.decimated[anchor][pt_idx];
+                let bar_center = data_to_screen_x(x);
+                if cursor_sx < bar_center - bar_w / 2.0 || cursor_sx > bar_center + bar_w / 2.0 {
+                    continue;
+                }
+
+                // Cursor is inside this bar column. Find which series segment
+                // the cursor's Y lands in by checking stacked segment boundaries.
+                let baseline = if y_min <= 0.0 && stacked_y_max >= 0.0 {
+                    0.0_f64
+                } else {
+                    y_min
+                };
+                let mut cumulative = baseline;
+
+                for &s_idx in &visible {
+                    let Some(&(_, y)) = self.render_model.decimated[s_idx].get(pt_idx) else {
+                        break;
+                    };
+                    let seg_bottom_sy = data_to_screen_y(cumulative);
+                    cumulative += y;
+                    let seg_top_sy = data_to_screen_y(cumulative);
+
+                    let (top, bot) = if seg_top_sy <= seg_bottom_sy {
+                        (seg_top_sy, seg_bottom_sy)
+                    } else {
+                        (seg_bottom_sy, seg_top_sy)
+                    };
+
+                    if cursor_sy >= top && cursor_sy <= bot {
+                        self.focused_series_idx = s_idx;
+                        return;
+                    }
+                }
+
+                // Cursor in the column but outside all segments: focus topmost.
+                if let Some(&s_idx) = visible.last() {
+                    self.focused_series_idx = s_idx;
+                }
+                return;
+            }
+
+            return;
+        }
+
+        // Pie: focus by angle from the pie centre.
+        if matches!(self.spec.kind, crate::chart::spec::ChartKind::Pie) {
+            let pie_cx = plot_x0 + plot_w / 2.0;
+            let pie_cy = plot_y0 + plot_h / 2.0;
+            let base_radius = (plot_w.min(plot_h) * 0.4).max(1.0);
+
+            let cursor_sx = f32::from(hover_x);
+            let cursor_sy = f32::from(hover_y);
+
+            let dx = (cursor_sx - pie_cx) as f64;
+            let dy = (cursor_sy - pie_cy) as f64;
+            let dist = (dx * dx + dy * dy).sqrt() as f32;
+
+            // Only respond when cursor is inside the pie disc.
+            if dist > base_radius * 1.1 {
+                return;
+            }
+
+            let cursor_angle = (dy).atan2(dx); // atan2(y, x) in [-π, π]
+
+            // Normalise to [0, 2π) from –π/2 start (same as paint_pie).
+            let start_offset = -std::f64::consts::FRAC_PI_2;
+            let normalise = |angle: f64| -> f64 {
+                let a = angle - start_offset;
+                a.rem_euclid(2.0 * std::f64::consts::PI)
+            };
+            let cursor_norm = normalise(cursor_angle);
+
+            let visible: Vec<usize> = (0..self.render_model.decimated.len())
+                .filter(|i| !self.hidden.contains(i))
+                .collect();
+
+            let totals: Vec<(usize, f64)> = visible
+                .iter()
+                .filter_map(|&s_idx| {
+                    let total: f64 = self.render_model.decimated[s_idx]
+                        .iter()
+                        .map(|(_, y)| *y)
+                        .filter(|y| y.is_finite())
+                        .sum();
+                    if total > 0.0 {
+                        Some((s_idx, total))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let grand_total: f64 = totals.iter().map(|(_, t)| t).sum();
+            if grand_total <= 0.0 {
+                return;
+            }
+
+            let mut accumulated = 0.0_f64;
+            for &(s_idx, total) in &totals {
+                let sweep = (total / grand_total) * 2.0 * std::f64::consts::PI;
+                let end_norm = accumulated + sweep;
+                if cursor_norm >= accumulated && cursor_norm < end_norm {
+                    self.focused_series_idx = s_idx;
+                    return;
+                }
+                accumulated = end_norm;
+            }
+
+            return;
+        }
+
+        // Scatter charts focus by the nearest discrete point (2D distance),
+        // since there is no connecting line to project onto. Focus only switches
+        // when a point is within a small pixel tolerance of the cursor.
+        if matches!(self.spec.kind, crate::chart::spec::ChartKind::Scatter) {
+            let data_to_screen_x =
+                |dx: f64| -> f32 { plot_x0 + ((dx - x_min) / x_range * plot_w as f64) as f32 };
+            let data_to_screen_y = |dy: f64| -> f32 {
+                plot_y0 + plot_h - ((dy - y_min) / y_range * plot_h as f64) as f32
+            };
+
+            let cursor_sx = f32::from(hover_x);
+            let cursor_sy = f32::from(hover_y);
+
+            const FOCUS_TOLERANCE_PX: f32 = 18.0;
+            let mut best: Option<(usize, f32)> = None;
+
+            for (s_idx, pts) in self.render_model.decimated.iter().enumerate() {
+                if self.hidden.contains(&s_idx) {
+                    continue;
+                }
+                for &(x, y) in pts {
+                    let dx = data_to_screen_x(x) - cursor_sx;
+                    let dy = data_to_screen_y(y) - cursor_sy;
+                    let dist_sq = dx * dx + dy * dy;
+                    if best.is_none_or(|(_, b)| dist_sq < b) {
+                        best = Some((s_idx, dist_sq));
+                    }
+                }
+            }
+
+            if let Some((idx, dist_sq)) = best
+                && dist_sq <= FOCUS_TOLERANCE_PX * FOCUS_TOLERANCE_PX
+            {
+                self.focused_series_idx = idx;
+            }
+
+            return;
+        }
+
+        // Line case: use the shared projection helper so the hover hit-test and
+        // the render canvas always apply the same Y transform.
+        let data_to_screen_y = |dy: f64| -> f32 {
+            project_y_to_screen(dy, plot_y0, plot_h, y_log_min, y_log_range, y_is_log)
+        };
 
         let cursor_screen_y = f32::from(hover_y);
 
@@ -629,6 +952,84 @@ impl ChartView {
 }
 
 // ---------------------------------------------------------------------------
+// Y projection helper
+// ---------------------------------------------------------------------------
+
+/// Project a data-space Y value to a screen-space Y coordinate (pixels).
+///
+/// This is the single authoritative projection used by both the render canvas
+/// (for series polylines / hover dots) and the hover hit-test path.
+/// Keeping both in sync here ensures they always agree.
+///
+/// Parameters:
+/// - `dy` — data-space Y value in the **original** scale (not log-transformed).
+/// - `plot_y0` — screen Y of the plot area top edge.
+/// - `plot_h` — screen height of the plot area in pixels.
+/// - `y_proj_min` — lower bound in projection space (`y_log_min` or `y_min`).
+/// - `y_proj_range` — span in projection space; must be > 0.
+/// - `y_is_log` — when `true`, applies `ln(dy + 1)` before the linear map.
+///
+/// Y is inverted: the top of the plot area corresponds to the maximum value.
+/// Non-finite intermediate values are clamped to plot boundaries rather than
+/// propagating NaN into the path builder.
+#[inline]
+fn project_y_to_screen(
+    dy: f64,
+    plot_y0: f32,
+    plot_h: f32,
+    y_proj_min: f64,
+    y_proj_range: f64,
+    y_is_log: bool,
+) -> f32 {
+    let projected = if y_is_log {
+        // Apply log1p; clamp to avoid ln(0) or ln(negative).
+        let safe = dy.max(-1.0 + 1e-9);
+        (safe + 1.0).ln()
+    } else {
+        dy
+    };
+
+    // Guard against non-finite values (e.g. NaN from degenerate data).
+    if !projected.is_finite() {
+        return plot_y0 + plot_h;
+    }
+
+    let ratio = if y_proj_range > 0.0 {
+        ((projected - y_proj_min) / y_proj_range).clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+
+    plot_y0 + plot_h - (ratio * plot_h as f64) as f32
+}
+
+/// Map a value that is already in **projection space** to a screen Y coordinate.
+///
+/// Used to place Y-axis tick gridlines and labels.  In log mode `ticks_log`
+/// stores `tick.value` in log1p space; in linear mode tick values are already
+/// original-scale.  Both cases are in projection space, so no further transform
+/// is needed — only the linear `[proj_min, proj_max] → [plot_y0+plot_h, plot_y0]`
+/// mapping is applied.
+#[inline]
+fn project_y_proj_space_to_screen(
+    proj_value: f64,
+    plot_y0: f32,
+    plot_h: f32,
+    y_proj_min: f64,
+    y_proj_range: f64,
+) -> f32 {
+    if !proj_value.is_finite() {
+        return plot_y0 + plot_h;
+    }
+    let ratio = if y_proj_range > 0.0 {
+        ((proj_value - y_proj_min) / y_proj_range).clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+    plot_y0 + plot_h - (ratio * plot_h as f64) as f32
+}
+
+// ---------------------------------------------------------------------------
 // Render
 // ---------------------------------------------------------------------------
 
@@ -638,37 +1039,43 @@ const MARGIN_RIGHT: f32 = 16.0;
 const MARGIN_TOP: f32 = 8.0;
 const MARGIN_BOTTOM: f32 = 32.0;
 
+/// Compute effective horizontal padding from the rendered widths of X-axis tick labels.
+///
+/// Each returned pad is `max(base_margin, max_label_width / 2.0)`, so the widest
+/// label's center can align exactly on the plot edge without its half-width
+/// overhanging the canvas boundary. REQ-001..REQ-004 from the spec:
+///
+/// - Empty `label_widths` returns `(margin_left, margin_right)` unchanged.
+/// - Padding never shrinks below the base margin (floor preserved).
+/// - Both left and right expand symmetrically based on the single widest label.
+fn effective_x_label_padding(
+    label_widths: &[f32],
+    margin_left: f32,
+    margin_right: f32,
+) -> (f32, f32) {
+    let max_width = label_widths.iter().copied().fold(0.0_f32, f32::max);
+    let half = max_width / 2.0;
+    (margin_left.max(half), margin_right.max(half))
+}
+
 impl Render for ChartView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    #[allow(refining_impl_trait_reachable)]
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         use crate::chart::spec::ChartKind;
 
-        // Non-Line chart kinds render a placeholder frame. The full Bar and
-        // Scatter implementations ship in the next change once the seams are
-        // in place. This branch must never panic.
-        let is_placeholder = match self.spec.kind {
-            ChartKind::Line => false,
-            ChartKind::Bar | ChartKind::Scatter => true,
-        };
+        let kind = self.spec.kind;
 
-        if is_placeholder {
-            let label = match self.spec.kind {
-                ChartKind::Bar => "Bar chart coming soon",
-                ChartKind::Scatter => "Scatter chart coming soon",
-                ChartKind::Line => unreachable!(),
-            };
-            return div()
-                .flex()
-                .flex_col()
-                .size_full()
-                .items_center()
-                .justify_center()
-                .border_1()
-                .border_color(gpui::hsla(0.0, 0.0, 0.5, 0.4))
-                .rounded(gpui::px(4.0))
-                .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
-                .text_size(FontSizes::SM)
-                .child(label);
+        // Number charts have no axes/gridlines/series geometry — short-circuit
+        // and render each visible series' latest value as a large stat tile.
+        // Re-using the full chart frame for a single-value display would force
+        // every match arm to handle a degenerate ChartKind that doesn't share
+        // its plot/hit-test contract.
+        if matches!(kind, ChartKind::Number) {
+            return render_number_chart(self, cx).into_any_element();
         }
+
+        // Line, Bar, and Scatter all share the same plot frame (axes, gridlines,
+        // ticks) and differ only in how each series is painted further below.
 
         let model = &self.render_model;
         let spec = &self.spec;
@@ -677,35 +1084,53 @@ impl Render for ChartView {
 
         let x_min = model.x_min;
         let x_max = model.x_max;
+        let x_range = (x_max - x_min).max(1.0);
         let y_min = model.y_min;
         let y_max = model.y_max;
-        let x_range = (x_max - x_min).max(1.0);
         let y_range = (y_max - y_min).max(1.0);
+        let y_log_min = model.y_log_min;
+        let y_log_max = model.y_log_max;
+        let y_log_range = (y_log_max - y_log_min).max(1.0);
+        let y_is_log = model.y_is_log;
 
-        let palette = model.palette_colors.clone();
+        let bar_layout = bar_layout_params(
+            kind,
+            y_max,
+            y_range,
+            if matches!(kind, crate::chart::spec::ChartKind::StackedBar) {
+                Some(self.stacked_y_max())
+            } else {
+                None
+            },
+            &model.decimated,
+        );
+        let y_max = bar_layout.y_max_adjusted;
+        let bar_x_inset_fraction = bar_layout.bar_x_inset_fraction;
+
+        let theme = cx.theme();
+        let palette: Vec<Hsla> = model
+            .palette_slots
+            .iter()
+            .map(|&slot| theme_chart_color(theme, slot))
+            .collect();
         let decimated = model.decimated.clone();
         let x_is_time = spec.x_axis.kind == AxisKind::Time;
 
-        // Tick label strings for in-canvas painting (Y data order; painting handles positioning).
-        let y_tick_labels: Vec<(f64, SharedString)> = model
-            .y_ticks
-            .iter()
-            .map(|t| (t.value, SharedString::from(t.label.clone())))
-            .collect();
-
-        let _x_tick_labels: Vec<(f64, SharedString)> = model
-            .x_ticks
-            .iter()
-            .map(|t| (t.value, SharedString::from(t.label.clone())))
-            .collect();
+        // Y ticks are generated dynamically inside the paint closure based on
+        // the available plot_h. The closure captures the adjusted y bounds
+        // (y_min / y_max already reflect the StackedBar ceiling or bar headroom)
+        // and y_is_log so it can pick the right tick generator.
 
         // Clone for canvas closure.
         let decimated_canvas = decimated.clone();
         let palette_canvas = palette.clone();
-        let y_ticks_canvas = model.y_ticks.clone();
         let hover_x_canvas = hover_x;
-        let y_tick_labels_canvas = y_tick_labels.clone();
         let hidden_canvas = self.hidden.clone();
+        let kind_canvas = kind;
+        let bar_x_inset_canvas = bar_x_inset_fraction;
+        let y_min_canvas = y_min;
+        let y_max_canvas = y_max;
+        let y_is_log_canvas = y_is_log;
 
         // Shared plot-area bounds: written by the canvas prepaint closure,
         // read here to compute the readout and inside the on_mouse_move
@@ -737,6 +1162,9 @@ impl Render for ChartView {
         // The `spec.legend_visible` field is preserved for future use / API compat.
         let legend: Option<AnyElement> = None;
 
+        // Resolve per-theme chrome colors for the readout overlay.
+        let readout_colors = ChartColors::for_current(cx);
+
         let plot_bounds_for_hover = plot_bounds_rc.clone();
 
         div()
@@ -746,7 +1174,7 @@ impl Render for ChartView {
             .overflow_hidden()
             .child(
                 div()
-                    .flex_grow()
+                    .flex_grow(1.0)
                     .relative()
                     .overflow_hidden()
                     .on_mouse_move(cx.listener(
@@ -774,6 +1202,12 @@ impl Render for ChartView {
                             move |bounds, _window, _cx| {
                                 // Store the full canvas bounds; plot bounds are derived
                                 // inside the paint closure using the same margin constants.
+                                //
+                                // v1 limitation: plot_bounds uses the base MARGIN_LEFT /
+                                // MARGIN_RIGHT constants. When effective X-label padding is
+                                // larger, hover detection in the outer gutter maps to
+                                // off-data coordinates — no incorrect data is shown.
+                                // Tracked for follow-up: align plot_bounds with effective padding.
                                 *plot_bounds_for_canvas.borrow_mut() = Some(gpui::Bounds {
                                     origin: point(
                                         bounds.origin.x + gpui::px(MARGIN_LEFT),
@@ -793,323 +1227,1307 @@ impl Render for ChartView {
                                 let ox = f32::from(b.origin.x);
                                 let oy = f32::from(b.origin.y);
 
-                                // Plot area occupies the right portion of the canvas;
-                                // the left MARGIN_LEFT is reserved for Y-axis tick labels.
-                                let plot_x0 = ox + MARGIN_LEFT;
-                                let plot_y0 = oy + MARGIN_TOP;
-                                let plot_w = (w - MARGIN_LEFT - MARGIN_RIGHT).max(1.0);
-                                let plot_h = (h - MARGIN_TOP - MARGIN_BOTTOM).max(1.0);
+                                let theme = cx.theme();
+                                let tick_color = theme.muted_foreground;
+                                let tick_font = font("Zed Mono");
+                                let tick_size = gpui::px(10.0);
+                                let line_height = gpui::px(12.0);
+                                let gridline_color = theme.border;
 
-                                let data_to_screen_x = |dx: f64| -> f32 {
-                                    plot_x0 + ((dx - x_min) / x_range * plot_w as f64) as f32
-                                };
-                                let data_to_screen_y = |dy: f64| -> f32 {
-                                    // Y is inverted: top = y_max, bottom = y_min.
-                                    plot_y0 + plot_h
-                                        - ((dy - y_min) / y_range * plot_h as f64) as f32
-                                };
-
-                                // Dynamic X tick density: roughly one tick per 120px,
-                                // clamped to a sane range so very narrow or very wide
-                                // charts stay legible.
+                                let plot_w_provisional = (w - MARGIN_LEFT - MARGIN_RIGHT).max(1.0);
                                 let x_tick_target =
-                                    ((plot_w / 120.0).round() as usize).clamp(4, 16);
+                                    ((plot_w_provisional / 120.0).round() as usize).clamp(3, 16);
                                 let x_ticks_dynamic = if x_is_time {
                                     ticks_time(x_min, x_max, x_tick_target)
                                 } else {
                                     ticks_numeric(x_min, x_max, x_tick_target)
                                 };
 
-                                // --- Horizontal gridlines at each Y tick ---
-                                for tick in &y_ticks_canvas {
-                                    let sy = data_to_screen_y(tick.value);
-                                    window.paint_quad(fill(
-                                        gpui::Bounds {
-                                            origin: point(gpui::px(plot_x0), gpui::px(sy - 0.5)),
-                                            size: gpui::Size {
-                                                width: gpui::px(plot_w),
-                                                height: gpui::px(1.0),
-                                            },
-                                        },
-                                        gpui::hsla(0.0, 0.0, 0.5, 0.18),
-                                    ));
-                                }
+                                let (shaped_x_labels, left_pad, right_pad) = shape_x_ticks(
+                                    kind_canvas,
+                                    &x_ticks_dynamic,
+                                    window,
+                                    tick_font.clone(),
+                                    tick_size,
+                                    tick_color,
+                                );
 
-                                // --- Vertical gridlines at each X tick ---
-                                for tick in &x_ticks_dynamic {
-                                    let sx = data_to_screen_x(tick.value);
-                                    window.paint_quad(fill(
-                                        gpui::Bounds {
-                                            origin: point(gpui::px(sx - 0.5), gpui::px(plot_y0)),
-                                            size: gpui::Size {
-                                                width: gpui::px(1.0),
-                                                height: gpui::px(plot_h),
-                                            },
-                                        },
-                                        gpui::hsla(0.0, 0.0, 0.5, 0.18),
-                                    ));
-                                }
+                                let plot_x0 = ox + left_pad;
+                                let plot_y0 = oy + MARGIN_TOP;
+                                let plot_w = (w - left_pad - right_pad).max(1.0);
+                                let plot_h = (h - MARGIN_TOP - MARGIN_BOTTOM).max(1.0);
 
-                                // --- Series polylines (two-pass) ---
-                                //
-                                // Pass 1: all non-focused series at 2.0 px so they
-                                // render below the focused line.
-                                // Pass 2: focused series at 2.8 px, composited on top.
-                                let paint_series =
-                                    |pts: &[(f64, f64)],
-                                     color: Hsla,
-                                     stroke_w: f32,
-                                     window: &mut Window| {
-                                        if pts.is_empty() {
-                                            return;
-                                        }
-                                        if pts.len() == 1 {
-                                            // Single-point fallback: paint a square whose
-                                            // side scales with stroke width.
-                                            let half = stroke_w * 1.5;
-                                            let sx = data_to_screen_x(pts[0].0);
-                                            let sy = data_to_screen_y(pts[0].1);
-                                            window.paint_quad(fill(
-                                                gpui::Bounds {
-                                                    origin: point(
-                                                        gpui::px(sx - half),
-                                                        gpui::px(sy - half),
-                                                    ),
-                                                    size: gpui::Size {
-                                                        width: gpui::px(half * 2.0),
-                                                        height: gpui::px(half * 2.0),
-                                                    },
-                                                },
-                                                color,
-                                            ));
-                                        } else {
-                                            let mut builder =
-                                                PathBuilder::stroke(gpui::px(stroke_w));
-                                            let (x0, y0) = pts[0];
-                                            builder.move_to(point(
-                                                gpui::px(data_to_screen_x(x0)),
-                                                gpui::px(data_to_screen_y(y0)),
-                                            ));
-                                            for &(x, y) in pts.iter().skip(1) {
-                                                builder.line_to(point(
-                                                    gpui::px(data_to_screen_x(x)),
-                                                    gpui::px(data_to_screen_y(y)),
-                                                ));
-                                            }
-                                            if let Ok(path) = builder.build() {
-                                                window.paint_path(path, color);
-                                            }
-                                        }
-                                    };
+                                let y_tick_target = ((plot_h / 60.0).round() as usize).clamp(3, 12);
+                                let y_ticks_dynamic = if y_is_log_canvas {
+                                    ticks_log(y_min_canvas, y_max_canvas, y_tick_target)
+                                } else {
+                                    ticks_numeric(y_min_canvas, y_max_canvas, y_tick_target)
+                                };
+                                let y_tick_labels_dynamic: Vec<(f64, SharedString)> =
+                                    y_ticks_dynamic
+                                        .iter()
+                                        .map(|t| (t.value, SharedString::from(t.label.clone())))
+                                        .collect();
 
-                                // Pass 1 — non-focused, non-hidden series at 1.4 px.
-                                for (s_idx, pts) in decimated_canvas.iter().enumerate() {
-                                    if s_idx == focused_idx || hidden_canvas.contains(&s_idx) {
-                                        continue;
-                                    }
-                                    let color = palette_canvas
-                                        .get(s_idx)
-                                        .copied()
-                                        .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
-                                    paint_series(pts, color, 1.4, window);
-                                }
+                                let x_pad = plot_w * bar_x_inset_canvas;
+                                let usable_w = (plot_w - 2.0 * x_pad).max(1.0);
+                                let data_to_screen_x = |dx: f64| -> f32 {
+                                    plot_x0
+                                        + x_pad
+                                        + ((dx - x_min) / x_range * usable_w as f64) as f32
+                                };
+                                let data_to_screen_y = |dy: f64| -> f32 {
+                                    project_y_to_screen(
+                                        dy,
+                                        plot_y0,
+                                        plot_h,
+                                        y_log_min,
+                                        y_log_range,
+                                        y_is_log,
+                                    )
+                                };
 
-                                // Pass 2 — focused series at 2.2 px (composited on top).
-                                // Skip if the focused series is hidden.
-                                if !hidden_canvas.contains(&focused_idx)
-                                    && let Some(pts) = decimated_canvas.get(focused_idx)
-                                {
-                                    let color = palette_canvas
-                                        .get(focused_idx)
-                                        .copied()
-                                        .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
-                                    paint_series(pts, color, 2.2, window);
-                                }
+                                paint_gridlines(
+                                    window,
+                                    kind_canvas,
+                                    &x_ticks_dynamic,
+                                    &y_ticks_dynamic,
+                                    plot_x0,
+                                    plot_y0,
+                                    plot_w,
+                                    plot_h,
+                                    y_log_min,
+                                    y_log_range,
+                                    gridline_color,
+                                    data_to_screen_x,
+                                );
 
-                                // --- Crosshair (dashed, amber #FFB454 at 0.7 opacity) ---
-                                if let Some(hx) = hover_x_canvas {
-                                    let sx = f32::from(hx);
-                                    if sx >= plot_x0 && sx <= plot_x0 + plot_w {
-                                        paint_dashed_vline(
-                                            window,
-                                            sx,
-                                            plot_y0,
-                                            plot_y0 + plot_h,
-                                            gpui::hsla(0.097, 1.0, 0.666, 0.7),
-                                            2.0,
-                                            3.0,
-                                        );
+                                paint_chart_series(
+                                    window,
+                                    kind_canvas,
+                                    &decimated_canvas,
+                                    &palette_canvas,
+                                    &hidden_canvas,
+                                    focused_idx,
+                                    plot_x0,
+                                    plot_y0,
+                                    plot_w,
+                                    plot_h,
+                                    y_min_canvas,
+                                    y_max_canvas,
+                                    data_to_screen_x,
+                                    data_to_screen_y,
+                                );
 
-                                        // --- Hover dots per series ---
-                                        // Two-pass: fill background first, then stroke series color.
-                                        let cursor_data_x = x_min
-                                            + ((sx - plot_x0) as f64 / plot_w as f64) * x_range;
+                                paint_hover_overlay(
+                                    window,
+                                    cx,
+                                    kind_canvas,
+                                    hover_x_canvas,
+                                    &decimated_canvas,
+                                    &palette_canvas,
+                                    &hidden_canvas,
+                                    plot_x0,
+                                    plot_y0,
+                                    plot_w,
+                                    plot_h,
+                                    x_min,
+                                    x_range,
+                                    data_to_screen_y,
+                                );
 
-                                        for (s_idx, pts) in decimated_canvas.iter().enumerate() {
-                                            if hidden_canvas.contains(&s_idx) {
-                                                continue;
-                                            }
+                                paint_y_tick_labels(
+                                    window,
+                                    cx,
+                                    kind_canvas,
+                                    &y_tick_labels_dynamic,
+                                    ox,
+                                    plot_y0,
+                                    plot_h,
+                                    left_pad,
+                                    y_log_min,
+                                    y_log_range,
+                                    tick_font,
+                                    tick_size,
+                                    line_height,
+                                    tick_color,
+                                );
 
-                                            let Some(y_data) =
-                                                crate::chart::stats::interpolate_y_at_x(
-                                                    pts,
-                                                    cursor_data_x,
-                                                )
-                                            else {
-                                                continue;
-                                            };
-
-                                            let dot_sx = sx;
-                                            let dot_sy = data_to_screen_y(y_data);
-                                            let series_color = palette_canvas
-                                                .get(s_idx)
-                                                .copied()
-                                                .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
-
-                                            // Filled background disk + stroked series-color ring.
-                                            // Built from two SVG-style arcs (top + bottom semicircle)
-                                            // because GPUI's PathBuilder has no first-class circle.
-                                            let r = 3.5_f32;
-                                            let radii = point(gpui::px(r), gpui::px(r));
-                                            let right =
-                                                point(gpui::px(dot_sx + r), gpui::px(dot_sy));
-                                            let left =
-                                                point(gpui::px(dot_sx - r), gpui::px(dot_sy));
-
-                                            let mut fill_builder = PathBuilder::fill();
-                                            fill_builder.move_to(right);
-                                            fill_builder.arc_to(
-                                                radii,
-                                                gpui::px(0.0),
-                                                false,
-                                                true,
-                                                left,
-                                            );
-                                            fill_builder.arc_to(
-                                                radii,
-                                                gpui::px(0.0),
-                                                false,
-                                                true,
-                                                right,
-                                            );
-                                            fill_builder.close();
-                                            if let Ok(path) = fill_builder.build() {
-                                                window.paint_path(
-                                                    path,
-                                                    gpui::hsla(0.56, 0.17, 0.07, 1.0),
-                                                );
-                                            }
-
-                                            let mut stroke_builder =
-                                                PathBuilder::stroke(gpui::px(1.5));
-                                            stroke_builder.move_to(right);
-                                            stroke_builder.arc_to(
-                                                radii,
-                                                gpui::px(0.0),
-                                                false,
-                                                true,
-                                                left,
-                                            );
-                                            stroke_builder.arc_to(
-                                                radii,
-                                                gpui::px(0.0),
-                                                false,
-                                                true,
-                                                right,
-                                            );
-                                            stroke_builder.close();
-                                            if let Ok(path) = stroke_builder.build() {
-                                                window.paint_path(path, series_color);
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // --- In-canvas Y-axis tick labels ---
-                                // Right-aligned in the MARGIN_LEFT column.
-                                let tick_color = gpui::hsla(0.0, 0.0, 0.55, 1.0);
-                                let tick_font = font("Zed Mono");
-                                let tick_size = gpui::px(10.0);
-                                let line_height = gpui::px(12.0);
-
-                                for (value, label) in &y_tick_labels_canvas {
-                                    let sy = data_to_screen_y(*value);
-                                    let run = TextRun {
-                                        len: label.len(),
-                                        font: tick_font.clone(),
-                                        color: tick_color,
-                                        background_color: None,
-                                        underline: None,
-                                        strikethrough: None,
-                                    };
-                                    let shaped = window.text_system().shape_line(
-                                        label.clone(),
-                                        tick_size,
-                                        &[run],
-                                        None,
-                                    );
-                                    let label_w = f32::from(shaped.width);
-                                    // Right-align within MARGIN_LEFT minus 4px padding.
-                                    let label_x = ox + (MARGIN_LEFT - 4.0) - label_w;
-                                    let label_y = sy - f32::from(line_height) / 2.0;
-                                    let _ = shaped.paint(
-                                        point(gpui::px(label_x), gpui::px(label_y)),
-                                        line_height,
-                                        gpui::TextAlign::Left,
-                                        None,
-                                        window,
-                                        cx,
-                                    );
-                                }
-
-                                // --- In-canvas X-axis tick labels ---
-                                // Centered below each tick, in the MARGIN_BOTTOM band.
-                                let x_baseline_y = plot_y0 + plot_h + 10.0;
-
-                                for tick in &x_ticks_dynamic {
-                                    let value = tick.value;
-                                    let label = SharedString::from(tick.label.clone());
-                                    let sx = data_to_screen_x(value);
-                                    let run = TextRun {
-                                        len: label.len(),
-                                        font: tick_font.clone(),
-                                        color: tick_color,
-                                        background_color: None,
-                                        underline: None,
-                                        strikethrough: None,
-                                    };
-                                    let shaped = window.text_system().shape_line(
-                                        label.clone(),
-                                        tick_size,
-                                        &[run],
-                                        None,
-                                    );
-                                    let label_w = f32::from(shaped.width);
-                                    let label_x = sx - label_w / 2.0;
-                                    let _ = shaped.paint(
-                                        point(gpui::px(label_x), gpui::px(x_baseline_y)),
-                                        line_height,
-                                        gpui::TextAlign::Left,
-                                        None,
-                                        window,
-                                        cx,
-                                    );
-                                }
+                                paint_x_tick_labels(
+                                    window,
+                                    cx,
+                                    &shaped_x_labels,
+                                    plot_y0 + plot_h + 10.0,
+                                    line_height,
+                                    data_to_screen_x,
+                                );
                             },
                         )
                         .absolute()
                         .size_full()
                     })
-                    .when_some(readout, |container, r| container.child(readout_overlay(r))),
+                    .when_some(readout, |container, r| {
+                        container.child(readout_overlay(r, readout_colors))
+                    }),
             )
             // Legend row (below canvas)
             .when_some(legend, |d, leg| d.child(leg))
+            .into_any_element()
     }
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Pre-computed bar/stacked-bar layout values derived from the data bounds.
+///
+/// Computed once in `render` and captured by the canvas paint closure.
+/// `stacked_y_max` is passed as `Some(...)` only when the chart kind is
+/// `StackedBar`; all other kinds pass `None` to skip the computation.
+struct BarLayoutParams {
+    /// Adjusted Y ceiling: bar headroom (y_max + 8 %) or the stacked-bar max.
+    y_max_adjusted: f64,
+    /// Fractional horizontal inset per edge so the first/last bar sits inside the
+    /// plot area. Zero for non-bar chart kinds.
+    bar_x_inset_fraction: f32,
+}
+
+/// Compute bar/stacked-bar layout parameters from data-space bounds.
+///
+/// Returns [`BarLayoutParams`] with an adjusted Y ceiling and a horizontal
+/// inset fraction. For non-bar kinds (`Line`, `Scatter`, `Area`, `Pie`,
+/// `Number`) the identity applies: `y_max_adjusted == y_max`,
+/// `bar_x_inset_fraction == 0.0`.
+///
+/// `stacked_y_max` must be `Some(...)` only when `kind` is `StackedBar`; pass
+/// `None` for all other kinds so the computation is skipped at the call site.
+fn bar_layout_params(
+    kind: crate::chart::spec::ChartKind,
+    y_max: f64,
+    y_range: f64,
+    stacked_y_max: Option<f64>,
+    decimated: &[Vec<(f64, f64)>],
+) -> BarLayoutParams {
+    use crate::chart::spec::ChartKind;
+
+    let needs_bar_layout = matches!(kind, ChartKind::Bar | ChartKind::StackedBar);
+
+    let y_max_adjusted = if let Some(smax) = stacked_y_max {
+        smax
+    } else if needs_bar_layout {
+        y_max + y_range * 0.08
+    } else {
+        y_max
+    };
+
+    let bar_x_inset_fraction: f32 = if needs_bar_layout {
+        let max_points = decimated.iter().map(|s| s.len()).max().unwrap_or(1).max(1);
+        0.5 / max_points as f32
+    } else {
+        0.0
+    };
+
+    BarLayoutParams {
+        y_max_adjusted,
+        bar_x_inset_fraction,
+    }
+}
+
+/// Pre-shape X-tick labels, measure their widths, and derive effective
+/// horizontal plot padding.
+///
+/// Returns `(shaped_labels, left_pad, right_pad)` where `shaped_labels` is a
+/// parallel vec of `(data_value, ShapedLine)` ready for the paint pass.
+/// `left_pad` and `right_pad` are the effective horizontal margins; they equal
+/// the base `MARGIN_LEFT` / `MARGIN_RIGHT` constants when no label exceeds the
+/// floor.
+///
+/// Requires a GPUI paint context (`&mut Window`) for text shaping. Cannot be
+/// unit-tested outside a GPUI test harness. For `ChartKind::Pie` the function
+/// skips shaping entirely and returns the base margins with an empty label vec.
+fn shape_x_ticks(
+    kind: crate::chart::spec::ChartKind,
+    ticks: &[crate::chart::axis::TickLabel],
+    window: &mut Window,
+    tick_font: gpui::Font,
+    tick_size: Pixels,
+    tick_color: Hsla,
+) -> (Vec<(f64, ShapedLine)>, f32, f32) {
+    use crate::chart::spec::ChartKind;
+
+    if matches!(kind, ChartKind::Pie) {
+        return (vec![], MARGIN_LEFT, MARGIN_RIGHT);
+    }
+
+    let mut shaped: Vec<(f64, ShapedLine)> = Vec::with_capacity(ticks.len());
+    let mut widths: Vec<f32> = Vec::with_capacity(ticks.len());
+
+    for tick in ticks {
+        let label = SharedString::from(tick.label.clone());
+        let run = TextRun {
+            len: label.len(),
+            font: tick_font.clone(),
+            color: tick_color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let shaped_line = window
+            .text_system()
+            .shape_line(label, tick_size, &[run], None);
+        widths.push(f32::from(shaped_line.width));
+        shaped.push((tick.value, shaped_line));
+    }
+
+    let (lp, rp) = effective_x_label_padding(&widths, MARGIN_LEFT, MARGIN_RIGHT);
+    (shaped, lp, rp)
+}
+
+/// Paint horizontal gridlines at each Y tick and vertical gridlines at each
+/// X tick.
+///
+/// Skips all gridlines for `ChartKind::Pie` which has no axes. Y-tick values
+/// are in projection space (log1p or linear); `project_y_proj_space_to_screen`
+/// maps them to screen coordinates. Vertical gridlines use `data_to_screen_x`
+/// for X positioning.
+///
+/// Requires a GPUI paint context (`&mut Window`). Cannot be unit-tested outside
+/// a GPUI test harness.
+#[allow(clippy::too_many_arguments)]
+fn paint_gridlines(
+    window: &mut Window,
+    kind: crate::chart::spec::ChartKind,
+    x_ticks: &[crate::chart::axis::TickLabel],
+    y_ticks: &[crate::chart::axis::TickLabel],
+    plot_x0: f32,
+    plot_y0: f32,
+    plot_w: f32,
+    plot_h: f32,
+    y_log_min: f64,
+    y_log_range: f64,
+    gridline_color: Hsla,
+    data_to_screen_x: impl Fn(f64) -> f32,
+) {
+    use crate::chart::spec::ChartKind;
+
+    for tick in y_ticks.iter().filter(|_| !matches!(kind, ChartKind::Pie)) {
+        let sy =
+            project_y_proj_space_to_screen(tick.value, plot_y0, plot_h, y_log_min, y_log_range);
+        window.paint_quad(fill(
+            gpui::Bounds {
+                origin: point(gpui::px(plot_x0), gpui::px(sy - 0.5)),
+                size: gpui::Size {
+                    width: gpui::px(plot_w),
+                    height: gpui::px(1.0),
+                },
+            },
+            gridline_color,
+        ));
+    }
+
+    for tick in x_ticks.iter().filter(|_| !matches!(kind, ChartKind::Pie)) {
+        let sx = data_to_screen_x(tick.value);
+        window.paint_quad(fill(
+            gpui::Bounds {
+                origin: point(gpui::px(sx - 0.5), gpui::px(plot_y0)),
+                size: gpui::Size {
+                    width: gpui::px(1.0),
+                    height: gpui::px(plot_h),
+                },
+            },
+            gridline_color,
+        ));
+    }
+}
+
+/// Paint all `ChartKind::Line` series using a two-pass approach.
+///
+/// Pass 1 renders every non-focused, non-hidden series at 1.4 px stroke width.
+/// Pass 2 renders the focused series at 2.2 px on top. A single-point series
+/// is rendered as a small square instead of a zero-length stroke. Uses the
+/// `paint_series` local closure for polyline/dot geometry.
+///
+/// Requires a GPUI paint context (`&mut Window`). Cannot be unit-tested outside
+/// a GPUI test harness.
+fn paint_line_series(
+    window: &mut Window,
+    decimated: &[Vec<(f64, f64)>],
+    palette: &[Hsla],
+    hidden: &HashSet<usize>,
+    focused_idx: usize,
+    data_to_screen_x: impl Fn(f64) -> f32,
+    data_to_screen_y: impl Fn(f64) -> f32,
+) {
+    let paint_series = |pts: &[(f64, f64)], color: Hsla, stroke_w: f32, window: &mut Window| {
+        if pts.is_empty() {
+            return;
+        }
+        if pts.len() == 1 {
+            let half = stroke_w * 1.5;
+            let sx = data_to_screen_x(pts[0].0);
+            let sy = data_to_screen_y(pts[0].1);
+            window.paint_quad(fill(
+                gpui::Bounds {
+                    origin: point(gpui::px(sx - half), gpui::px(sy - half)),
+                    size: gpui::Size {
+                        width: gpui::px(half * 2.0),
+                        height: gpui::px(half * 2.0),
+                    },
+                },
+                color,
+            ));
+        } else {
+            let mut builder = PathBuilder::stroke(gpui::px(stroke_w));
+            let (x0, y0) = pts[0];
+            builder.move_to(point(
+                gpui::px(data_to_screen_x(x0)),
+                gpui::px(data_to_screen_y(y0)),
+            ));
+            for &(x, y) in pts.iter().skip(1) {
+                builder.line_to(point(
+                    gpui::px(data_to_screen_x(x)),
+                    gpui::px(data_to_screen_y(y)),
+                ));
+            }
+            if let Ok(path) = builder.build() {
+                window.paint_path(path, color);
+            }
+        }
+    };
+
+    for (s_idx, pts) in decimated.iter().enumerate() {
+        if s_idx == focused_idx || hidden.contains(&s_idx) {
+            continue;
+        }
+        let color = palette
+            .get(s_idx)
+            .copied()
+            .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
+        paint_series(pts, color, 1.4, window);
+    }
+
+    if !hidden.contains(&focused_idx)
+        && let Some(pts) = decimated.get(focused_idx)
+    {
+        let color = palette
+            .get(focused_idx)
+            .copied()
+            .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
+        paint_series(pts, color, 2.2, window);
+    }
+}
+
+/// Dispatch series painting for all non-Number chart kinds.
+///
+/// Handles `Line`, `Bar`, `Scatter`, `Area`, `StackedBar`, and `Pie` by
+/// delegating to the appropriate `paint_*` helper. The `ChartKind::Line` arm
+/// retains an internal named local closure (`paint_series`) for polyline and
+/// single-point geometry.
+///
+/// Requires a GPUI paint context (`&mut Window`). Cannot be unit-tested outside
+/// a GPUI test harness.
+#[allow(clippy::too_many_arguments)]
+fn paint_chart_series(
+    window: &mut Window,
+    kind: crate::chart::spec::ChartKind,
+    decimated: &[Vec<(f64, f64)>],
+    palette: &[Hsla],
+    hidden: &HashSet<usize>,
+    focused_idx: usize,
+    plot_x0: f32,
+    plot_y0: f32,
+    plot_w: f32,
+    plot_h: f32,
+    y_min: f64,
+    y_max: f64,
+    data_to_screen_x: impl Fn(f64) -> f32,
+    data_to_screen_y: impl Fn(f64) -> f32,
+) {
+    use crate::chart::spec::ChartKind;
+
+    match kind {
+        ChartKind::Line => {
+            paint_line_series(
+                window,
+                decimated,
+                palette,
+                hidden,
+                focused_idx,
+                data_to_screen_x,
+                data_to_screen_y,
+            );
+        }
+        ChartKind::Bar => {
+            paint_bars(
+                window,
+                decimated,
+                palette,
+                hidden,
+                focused_idx,
+                plot_w,
+                y_min,
+                y_max,
+                &data_to_screen_x,
+                &data_to_screen_y,
+            );
+        }
+        ChartKind::Scatter => {
+            paint_scatter(
+                window,
+                decimated,
+                palette,
+                hidden,
+                focused_idx,
+                &data_to_screen_x,
+                &data_to_screen_y,
+            );
+        }
+        ChartKind::Area => {
+            paint_area(
+                window,
+                decimated,
+                palette,
+                hidden,
+                focused_idx,
+                y_min,
+                y_max,
+                &data_to_screen_x,
+                &data_to_screen_y,
+            );
+        }
+        ChartKind::StackedBar => {
+            paint_stacked_bars(
+                window,
+                decimated,
+                palette,
+                hidden,
+                focused_idx,
+                plot_w,
+                y_min,
+                y_max,
+                &data_to_screen_x,
+                &data_to_screen_y,
+            );
+        }
+        ChartKind::Pie => {
+            paint_pie(
+                window,
+                decimated,
+                palette,
+                hidden,
+                focused_idx,
+                plot_x0,
+                plot_y0,
+                plot_w,
+                plot_h,
+            );
+        }
+        ChartKind::Number => {}
+    }
+}
+
+/// Paint the vertical crosshair and per-series hover dots at the cursor position.
+///
+/// Skips everything for `ChartKind::Pie`. Bar and StackedBar show the crosshair
+/// line only; Line and Area additionally show filled-background dots with a
+/// series-colored stroke ring at the interpolated Y value for each visible
+/// series.
+///
+/// `cx` must be `&App` (read-only) for theme color lookups. Requires a GPUI
+/// paint context (`&mut Window`). Cannot be unit-tested outside a GPUI test
+/// harness.
+#[allow(clippy::too_many_arguments)]
+fn paint_hover_overlay(
+    window: &mut Window,
+    cx: &App,
+    kind: crate::chart::spec::ChartKind,
+    hover_x_screen: Option<Pixels>,
+    decimated: &[Vec<(f64, f64)>],
+    palette: &[Hsla],
+    hidden: &HashSet<usize>,
+    plot_x0: f32,
+    plot_y0: f32,
+    plot_w: f32,
+    plot_h: f32,
+    x_min: f64,
+    x_range: f64,
+    data_to_screen_y: impl Fn(f64) -> f32,
+) {
+    use crate::chart::spec::ChartKind;
+
+    let Some(hx) = hover_x_screen.filter(|_| !matches!(kind, ChartKind::Pie)) else {
+        return;
+    };
+
+    let sx = f32::from(hx);
+    if sx < plot_x0 || sx > plot_x0 + plot_w {
+        return;
+    }
+
+    let theme = cx.theme();
+    let crosshair_color = Hsla {
+        a: 0.7,
+        ..theme.primary
+    };
+    paint_dashed_vline(
+        window,
+        sx,
+        plot_y0,
+        plot_y0 + plot_h,
+        crosshair_color,
+        2.0,
+        3.0,
+    );
+
+    let cursor_data_x = x_min + ((sx - plot_x0) as f64 / plot_w as f64) * x_range;
+
+    for (s_idx, pts) in decimated.iter().enumerate() {
+        if !matches!(kind, ChartKind::Line | ChartKind::Area) {
+            break;
+        }
+        if hidden.contains(&s_idx) {
+            continue;
+        }
+
+        let Some(y_data) = crate::chart::stats::interpolate_y_at_x(pts, cursor_data_x) else {
+            continue;
+        };
+
+        let dot_sx = sx;
+        let dot_sy = data_to_screen_y(y_data);
+        let series_color = palette
+            .get(s_idx)
+            .copied()
+            .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
+
+        let r = 3.5_f32;
+        let radii = point(gpui::px(r), gpui::px(r));
+        let right = point(gpui::px(dot_sx + r), gpui::px(dot_sy));
+        let left = point(gpui::px(dot_sx - r), gpui::px(dot_sy));
+
+        let mut fill_builder = PathBuilder::fill();
+        fill_builder.move_to(right);
+        fill_builder.arc_to(radii, gpui::px(0.0), false, true, left);
+        fill_builder.arc_to(radii, gpui::px(0.0), false, true, right);
+        fill_builder.close();
+        if let Ok(path) = fill_builder.build() {
+            window.paint_path(path, theme.background);
+        }
+
+        let mut stroke_builder = PathBuilder::stroke(gpui::px(1.5));
+        stroke_builder.move_to(right);
+        stroke_builder.arc_to(radii, gpui::px(0.0), false, true, left);
+        stroke_builder.arc_to(radii, gpui::px(0.0), false, true, right);
+        stroke_builder.close();
+        if let Ok(path) = stroke_builder.build() {
+            window.paint_path(path, series_color);
+        }
+    }
+}
+
+/// Paint Y-axis tick labels right-aligned against the effective left margin.
+///
+/// Label values are in projection space (log1p or linear); `project_y_proj_space_to_screen`
+/// maps them to screen Y. Skips all labels for `ChartKind::Pie`. Requires a GPUI
+/// paint context; `ShapedLine::paint` takes `&mut App`.
+#[allow(clippy::too_many_arguments)]
+fn paint_y_tick_labels(
+    window: &mut Window,
+    cx: &mut App,
+    kind: crate::chart::spec::ChartKind,
+    y_tick_labels: &[(f64, SharedString)],
+    ox: f32,
+    plot_y0: f32,
+    plot_h: f32,
+    left_pad: f32,
+    y_log_min: f64,
+    y_log_range: f64,
+    tick_font: gpui::Font,
+    tick_size: Pixels,
+    line_height: Pixels,
+    tick_color: Hsla,
+) {
+    use crate::chart::spec::ChartKind;
+
+    for (value, label) in y_tick_labels
+        .iter()
+        .filter(|_| !matches!(kind, ChartKind::Pie))
+    {
+        let sy = project_y_proj_space_to_screen(*value, plot_y0, plot_h, y_log_min, y_log_range);
+        let run = TextRun {
+            len: label.len(),
+            font: tick_font.clone(),
+            color: tick_color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let shaped = window
+            .text_system()
+            .shape_line(label.clone(), tick_size, &[run], None);
+        let label_w = f32::from(shaped.width);
+        let label_x = ox + (left_pad - 4.0) - label_w;
+        let label_y = sy - f32::from(line_height) / 2.0;
+        let _ = shaped.paint(
+            point(gpui::px(label_x), gpui::px(label_y)),
+            line_height,
+            gpui::TextAlign::Left,
+            None,
+            window,
+            cx,
+        );
+    }
+}
+
+/// Paint X-axis tick labels centered below each tick mark.
+///
+/// Uses pre-shaped `ShapedLine` values from `shape_x_ticks` — no second
+/// `shape_line` call is needed. Requires a GPUI paint context;
+/// `ShapedLine::paint` takes `&mut App`.
+fn paint_x_tick_labels(
+    window: &mut Window,
+    cx: &mut App,
+    shaped_x_labels: &[(f64, ShapedLine)],
+    x_baseline_y: f32,
+    line_height: Pixels,
+    data_to_screen_x: impl Fn(f64) -> f32,
+) {
+    for (value, shaped) in shaped_x_labels {
+        let sx = data_to_screen_x(*value);
+        let label_w = f32::from(shaped.width);
+        let label_x = sx - label_w / 2.0;
+        let _ = shaped.paint(
+            point(gpui::px(label_x), gpui::px(x_baseline_y)),
+            line_height,
+            gpui::TextAlign::Left,
+            None,
+            window,
+            cx,
+        );
+    }
+}
+
+/// Render a `ChartKind::Number` view: a single-stat / multi-stat tile grid
+/// where each visible series shows its label and the most recent finite Y
+/// value as large text. No axes, no gridlines, no decimation.
+fn render_number_chart(view: &ChartView, cx: &mut Context<ChartView>) -> impl IntoElement {
+    let chart_colors = ChartColors::for_current(cx);
+
+    let palette: Vec<Hsla> = {
+        let theme = cx.theme();
+        view.render_model
+            .palette_slots
+            .iter()
+            .map(|&slot| theme_chart_color(theme, slot))
+            .collect()
+    };
+
+    let mut tiles: Vec<AnyElement> = Vec::with_capacity(view.spec.series.len());
+
+    for (series_idx, series_spec) in view.spec.series.iter().enumerate() {
+        if view.hidden.contains(&series_idx) {
+            continue;
+        }
+
+        let latest_value = view.render_model.decimated.get(series_idx).and_then(|pts| {
+            pts.iter()
+                .rev()
+                .find(|(_, y)| y.is_finite())
+                .map(|(_, y)| *y)
+        });
+
+        let value_text = match latest_value {
+            Some(v) => format_number_value(v),
+            None => "—".to_string(),
+        };
+
+        let accent = palette
+            .get(series_idx)
+            .copied()
+            .unwrap_or(chart_colors.value_fg);
+
+        tiles.push(
+            div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap_1()
+                .flex_1()
+                .p_3()
+                .child(
+                    div()
+                        .text_size(gpui::px(14.0))
+                        .text_color(chart_colors.label_fg)
+                        .child(SharedString::from(series_spec.label.clone())),
+                )
+                .child(
+                    div()
+                        .text_size(gpui::px(40.0))
+                        .text_color(accent)
+                        .child(SharedString::from(value_text)),
+                )
+                .into_any_element(),
+        );
+    }
+
+    if tiles.is_empty() {
+        return div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_color(chart_colors.label_fg)
+            .child("No data");
+    }
+
+    div()
+        .size_full()
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .justify_around()
+        .children(tiles)
+}
+
+/// Format a floating-point value for the Number chart: use up to 4 significant
+/// digits, fall back to scientific notation when the magnitude makes a fixed
+/// representation unreadable.
+fn format_number_value(v: f64) -> String {
+    if v == 0.0 {
+        return "0".to_string();
+    }
+    let abs = v.abs();
+    if !(1e-3..1e9).contains(&abs) {
+        return format!("{:.3e}", v);
+    }
+    if abs >= 100.0 {
+        format!("{:.0}", v)
+    } else if abs >= 10.0 {
+        format!("{:.1}", v)
+    } else if abs >= 1.0 {
+        format!("{:.2}", v)
+    } else {
+        format!("{:.3}", v)
+    }
+}
+
+/// Paint grouped vertical bars for every visible series.
+///
+/// Each X position owns a slot whose width derives from the densest series so
+/// bars stay inside their column even when series have differing point counts.
+/// Within a slot, visible series are laid out side by side (grouped, never
+/// overlapping). Bars are anchored at the zero baseline when zero lies inside
+/// the value range, otherwise at the data minimum so a positive-only series
+/// still grows from the axis floor.
+///
+/// Non-focused series are dimmed when more than one series is visible, mirroring
+/// the emphasis the Line arm gives the focused polyline.
+#[allow(clippy::too_many_arguments)]
+fn paint_bars<FX, FY>(
+    window: &mut Window,
+    decimated: &[Vec<(f64, f64)>],
+    palette: &[Hsla],
+    hidden: &HashSet<usize>,
+    focused_idx: usize,
+    plot_w: f32,
+    y_min: f64,
+    y_max: f64,
+    data_to_screen_x: &FX,
+    data_to_screen_y: &FY,
+) where
+    FX: Fn(f64) -> f32,
+    FY: Fn(f64) -> f32,
+{
+    let baseline = if y_min <= 0.0 && y_max >= 0.0 {
+        0.0
+    } else {
+        y_min
+    };
+    let baseline_sy = data_to_screen_y(baseline);
+
+    let visible: Vec<usize> = (0..decimated.len())
+        .filter(|i| !hidden.contains(i))
+        .collect();
+    let num_visible = visible.len().max(1);
+
+    let max_points = decimated.iter().map(|s| s.len()).max().unwrap_or(1).max(1);
+
+    let slot_w = plot_w / max_points as f32;
+    let group_w = slot_w * 0.8;
+    let bar_w = (group_w / num_visible as f32).max(1.0);
+
+    let fallback = gpui::hsla(0.6, 0.6, 0.5, 1.0);
+
+    for (group_pos, &s_idx) in visible.iter().enumerate() {
+        let base_color = palette.get(s_idx).copied().unwrap_or(fallback);
+        let color = if num_visible > 1 && s_idx != focused_idx {
+            gpui::hsla(base_color.h, base_color.s, base_color.l, 0.55)
+        } else {
+            base_color
+        };
+
+        let offset = group_pos as f32 * bar_w - group_w / 2.0;
+
+        for &(x, y) in &decimated[s_idx] {
+            let bar_left = data_to_screen_x(x) + offset;
+            let value_sy = data_to_screen_y(y);
+
+            let (rect_top, rect_height) = if value_sy <= baseline_sy {
+                (value_sy, baseline_sy - value_sy)
+            } else {
+                (baseline_sy, value_sy - baseline_sy)
+            };
+
+            window.paint_quad(fill(
+                gpui::Bounds {
+                    origin: point(gpui::px(bar_left), gpui::px(rect_top)),
+                    size: gpui::Size {
+                        width: gpui::px(bar_w * 0.92),
+                        height: gpui::px(rect_height.max(1.0)),
+                    },
+                },
+                color,
+            ));
+        }
+    }
+}
+
+/// Paint stacked vertical bars for every visible series.
+///
+/// Unlike `paint_bars` (which groups series side-by-side), stacked bars pile
+/// series on top of each other at each X position. The visual footprint per
+/// X slot is a single full-width bar column, with each series' segment sitting
+/// on the cumulative total of the series below it.
+///
+/// The Y axis **must** have already been rescaled to the maximum stack sum
+/// before calling this function — `render()` does this for `ChartKind::StackedBar`.
+///
+/// Series with mismatched lengths are handled safely: iteration stops at the
+/// shortest series at each point index.
+#[allow(clippy::too_many_arguments)]
+fn paint_stacked_bars<FX, FY>(
+    window: &mut Window,
+    decimated: &[Vec<(f64, f64)>],
+    palette: &[Hsla],
+    hidden: &HashSet<usize>,
+    focused_idx: usize,
+    plot_w: f32,
+    y_min: f64,
+    y_max: f64,
+    data_to_screen_x: &FX,
+    data_to_screen_y: &FY,
+) where
+    FX: Fn(f64) -> f32,
+    FY: Fn(f64) -> f32,
+{
+    let baseline = if y_min <= 0.0 && y_max >= 0.0 {
+        0.0
+    } else {
+        y_min
+    };
+
+    let visible: Vec<usize> = (0..decimated.len())
+        .filter(|i| !hidden.contains(i))
+        .collect();
+    let num_visible = visible.len();
+    if num_visible == 0 {
+        return;
+    }
+
+    // Bar width: one slot per X position (single full-width column per x,
+    // since the series stack rather than sit side-by-side).
+    let max_points = decimated.iter().map(|s| s.len()).max().unwrap_or(1).max(1);
+
+    let slot_w = plot_w / max_points as f32;
+    let bar_w = (slot_w * 0.8).max(1.0);
+
+    let fallback = gpui::hsla(0.6, 0.6, 0.5, 1.0);
+
+    // Iterate over x positions using the first visible series as the anchor.
+    // For each x position, collect the y values from all visible series in order.
+    let anchor_series = visible[0];
+    let n_points = decimated[anchor_series].len();
+
+    for pt_idx in 0..n_points {
+        let (x, _) = decimated[anchor_series][pt_idx];
+        let bar_center_sx = data_to_screen_x(x);
+        let bar_left = bar_center_sx - bar_w / 2.0;
+
+        // Accumulate from the baseline upward, one segment per visible series.
+        let mut cumulative = baseline;
+
+        for &s_idx in &visible {
+            let Some(&(_, y)) = decimated[s_idx].get(pt_idx) else {
+                // This series has fewer points — skip remaining series for this slot.
+                break;
+            };
+
+            let seg_bottom_sy = data_to_screen_y(cumulative);
+            let seg_top_sy = data_to_screen_y(cumulative + y);
+            cumulative += y;
+
+            let (rect_top, rect_h) = if seg_top_sy <= seg_bottom_sy {
+                (seg_top_sy, seg_bottom_sy - seg_top_sy)
+            } else {
+                (seg_bottom_sy, seg_top_sy - seg_bottom_sy)
+            };
+
+            let base_color = palette.get(s_idx).copied().unwrap_or(fallback);
+            let color = if num_visible > 1 && s_idx != focused_idx {
+                gpui::hsla(base_color.h, base_color.s, base_color.l, 0.55)
+            } else {
+                base_color
+            };
+
+            window.paint_quad(fill(
+                gpui::Bounds {
+                    origin: point(gpui::px(bar_left), gpui::px(rect_top)),
+                    size: gpui::Size {
+                        width: gpui::px(bar_w),
+                        height: gpui::px(rect_h.max(1.0)),
+                    },
+                },
+                color,
+            ));
+        }
+    }
+}
+
+/// Paint a pie chart: one wedge per visible series, sized proportional to the
+/// sum of that series' Y values.
+///
+/// Wedges are drawn by subdividing each arc into small line segments (~2°
+/// steps) to avoid pitfalls with GPUI's arc_to large-arc handling. The focused
+/// series is drawn at full opacity and slightly larger radius; non-focused
+/// slices are slightly dimmed.
+///
+/// When all visible series totals are ≤ 0, nothing is painted.
+#[allow(clippy::too_many_arguments)]
+fn paint_pie(
+    window: &mut Window,
+    decimated: &[Vec<(f64, f64)>],
+    palette: &[Hsla],
+    hidden: &HashSet<usize>,
+    focused_idx: usize,
+    plot_x0: f32,
+    plot_y0: f32,
+    plot_w: f32,
+    plot_h: f32,
+) {
+    let visible: Vec<usize> = (0..decimated.len())
+        .filter(|i| !hidden.contains(i))
+        .collect();
+
+    // Sum each visible series; skip series with non-positive totals.
+    let totals: Vec<(usize, f64)> = visible
+        .iter()
+        .filter_map(|&s_idx| {
+            let total: f64 = decimated[s_idx]
+                .iter()
+                .map(|(_, y)| *y)
+                .filter(|y| y.is_finite())
+                .sum();
+            if total > 0.0 {
+                Some((s_idx, total))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if totals.is_empty() {
+        return;
+    }
+
+    let grand_total: f64 = totals.iter().map(|(_, t)| t).sum();
+    if grand_total <= 0.0 {
+        return;
+    }
+
+    let cx = plot_x0 + plot_w / 2.0;
+    let cy = plot_y0 + plot_h / 2.0;
+    let base_radius = (plot_w.min(plot_h) * 0.4).max(1.0);
+
+    // Each slice spans [start_angle, end_angle] in radians (0 = right, CCW).
+    let fallback = gpui::hsla(0.6, 0.6, 0.5, 1.0);
+    let mut start_angle: f64 = -std::f64::consts::FRAC_PI_2; // Start from the top.
+
+    for &(s_idx, total) in &totals {
+        let fraction = total / grand_total;
+        let sweep = fraction * 2.0 * std::f64::consts::PI;
+        let end_angle = start_angle + sweep;
+
+        let is_focused = s_idx == focused_idx;
+        let radius = if is_focused {
+            base_radius * 1.04
+        } else {
+            base_radius
+        };
+        let base_color = palette.get(s_idx).copied().unwrap_or(fallback);
+        let alpha = if is_focused { 1.0_f32 } else { 0.75_f32 };
+        let color = gpui::hsla(base_color.h, base_color.s, base_color.l, alpha);
+
+        // Subdivide the arc into 2-degree segments to avoid large-arc pitfalls.
+        const STEP: f64 = 2.0 * std::f64::consts::PI / 180.0; // 2 degrees
+
+        let mut builder = PathBuilder::fill();
+
+        // Start from the centre and trace the wedge outline.
+        builder.move_to(point(gpui::px(cx), gpui::px(cy)));
+
+        let mut angle = start_angle;
+        let first_x = cx + (radius as f64 * angle.cos()) as f32;
+        let first_y = cy + (radius as f64 * angle.sin()) as f32;
+        builder.line_to(point(gpui::px(first_x), gpui::px(first_y)));
+
+        // Trace the arc rim by small straight segments.
+        while angle < end_angle - STEP * 0.5 {
+            angle = (angle + STEP).min(end_angle);
+            let rim_x = cx + (radius as f64 * angle.cos()) as f32;
+            let rim_y = cy + (radius as f64 * angle.sin()) as f32;
+            builder.line_to(point(gpui::px(rim_x), gpui::px(rim_y)));
+        }
+
+        // Ensure the final point lands exactly on end_angle.
+        let last_x = cx + (radius as f64 * end_angle.cos()) as f32;
+        let last_y = cy + (radius as f64 * end_angle.sin()) as f32;
+        builder.line_to(point(gpui::px(last_x), gpui::px(last_y)));
+
+        builder.close();
+
+        if let Ok(path) = builder.build() {
+            window.paint_path(path, color);
+        }
+
+        start_angle = end_angle;
+    }
+}
+
+/// Paint a filled disk at `(cx, cy)` with radius `r`.
+///
+/// GPUI's `PathBuilder` has no first-class circle, so the disk is built from two
+/// half-arcs (top and bottom semicircles).
+fn paint_filled_circle(window: &mut Window, cx: f32, cy: f32, r: f32, color: Hsla) {
+    let radii = point(gpui::px(r), gpui::px(r));
+    let right = point(gpui::px(cx + r), gpui::px(cy));
+    let left = point(gpui::px(cx - r), gpui::px(cy));
+
+    let mut builder = PathBuilder::fill();
+    builder.move_to(right);
+    builder.arc_to(radii, gpui::px(0.0), false, true, left);
+    builder.arc_to(radii, gpui::px(0.0), false, true, right);
+    builder.close();
+
+    if let Ok(path) = builder.build() {
+        window.paint_path(path, color);
+    }
+}
+
+/// Paint every visible series as a cloud of discrete points (no connecting
+/// line). The focused series is drawn at full opacity with a slightly larger
+/// radius; non-focused series are dimmed and smaller, mirroring the emphasis
+/// the Line and Bar arms give the focused series.
+fn paint_scatter<FX, FY>(
+    window: &mut Window,
+    decimated: &[Vec<(f64, f64)>],
+    palette: &[Hsla],
+    hidden: &HashSet<usize>,
+    focused_idx: usize,
+    data_to_screen_x: &FX,
+    data_to_screen_y: &FY,
+) where
+    FX: Fn(f64) -> f32,
+    FY: Fn(f64) -> f32,
+{
+    let fallback = gpui::hsla(0.6, 0.6, 0.5, 1.0);
+
+    let visible: Vec<usize> = (0..decimated.len())
+        .filter(|i| !hidden.contains(i))
+        .collect();
+    let num_visible = visible.len();
+
+    for &s_idx in &visible {
+        let base_color = palette.get(s_idx).copied().unwrap_or(fallback);
+        let (color, radius) = if num_visible > 1 && s_idx != focused_idx {
+            (
+                gpui::hsla(base_color.h, base_color.s, base_color.l, 0.45),
+                2.5_f32,
+            )
+        } else {
+            (base_color, 3.5_f32)
+        };
+
+        for &(x, y) in &decimated[s_idx] {
+            let sx = data_to_screen_x(x);
+            let sy = data_to_screen_y(y);
+            paint_filled_circle(window, sx, sy, radius, color);
+        }
+    }
+}
+
+/// Paint every visible series as a filled area chart.
+///
+/// Each series is drawn in two passes to achieve the stacked visual effect of
+/// fill behind a stroke line:
+///
+/// 1. **Fill pass**: a closed path from the first-point baseline, through all
+///    data points, back down to the last-point baseline, filled with the series
+///    colour at low alpha. Non-focused series use a lower alpha (~0.12) so they
+///    recede behind the focused series (~0.22).
+/// 2. **Stroke pass**: the data-point polyline only (no baseline edges), at
+///    1.6 px for non-focused and 2.2 px for the focused series.
+///
+/// The baseline follows the same rule as `paint_bars`: `y = 0.0` when zero
+/// falls inside `[y_min, y_max]`, otherwise `y = y_min`.
+///
+/// Single-point series are handled gracefully — the fill degenerates to a
+/// vertical line segment and the stroke paints a square marker, matching the
+/// Line arm's single-point fallback.
+#[allow(clippy::too_many_arguments)]
+fn paint_area<FX, FY>(
+    window: &mut Window,
+    decimated: &[Vec<(f64, f64)>],
+    palette: &[Hsla],
+    hidden: &HashSet<usize>,
+    focused_idx: usize,
+    y_min: f64,
+    y_max: f64,
+    data_to_screen_x: &FX,
+    data_to_screen_y: &FY,
+) where
+    FX: Fn(f64) -> f32,
+    FY: Fn(f64) -> f32,
+{
+    let baseline = if y_min <= 0.0 && y_max >= 0.0 {
+        0.0
+    } else {
+        y_min
+    };
+    let baseline_sy = data_to_screen_y(baseline);
+
+    let fallback = gpui::hsla(0.6, 0.6, 0.5, 1.0);
+
+    let visible: Vec<usize> = (0..decimated.len())
+        .filter(|i| !hidden.contains(i))
+        .collect();
+    let num_visible = visible.len();
+
+    // Two passes: non-focused first so the focused series composites on top.
+    for pass in 0..2usize {
+        for &s_idx in &visible {
+            let is_focused = s_idx == focused_idx;
+            if pass == 0 && is_focused {
+                continue;
+            }
+            if pass == 1 && !is_focused {
+                continue;
+            }
+
+            let pts = &decimated[s_idx];
+            if pts.is_empty() {
+                continue;
+            }
+
+            let base_color = palette.get(s_idx).copied().unwrap_or(fallback);
+
+            // --- Fill pass ---
+            let fill_alpha = if num_visible > 1 && !is_focused {
+                0.12
+            } else {
+                0.22
+            };
+            let fill_color = gpui::hsla(base_color.h, base_color.s, base_color.l, fill_alpha);
+
+            if pts.len() == 1 {
+                // Single-point: fill a thin vertical rect from the data point to the baseline.
+                let sx = data_to_screen_x(pts[0].0);
+                let sy = data_to_screen_y(pts[0].1);
+                let (rect_top, rect_h) = if sy <= baseline_sy {
+                    (sy, baseline_sy - sy)
+                } else {
+                    (baseline_sy, sy - baseline_sy)
+                };
+                window.paint_quad(fill(
+                    gpui::Bounds {
+                        origin: point(gpui::px(sx - 1.0), gpui::px(rect_top)),
+                        size: gpui::Size {
+                            width: gpui::px(2.0),
+                            height: gpui::px(rect_h.max(1.0)),
+                        },
+                    },
+                    fill_color,
+                ));
+            } else {
+                // Build a closed filled path: baseline→first, data points, last→baseline.
+                let (x0, _) = pts[0];
+                let (xn, _) = pts[pts.len() - 1];
+
+                let mut builder = PathBuilder::fill();
+                builder.move_to(point(gpui::px(data_to_screen_x(x0)), gpui::px(baseline_sy)));
+                for &(x, y) in pts {
+                    builder.line_to(point(
+                        gpui::px(data_to_screen_x(x)),
+                        gpui::px(data_to_screen_y(y)),
+                    ));
+                }
+                builder.line_to(point(gpui::px(data_to_screen_x(xn)), gpui::px(baseline_sy)));
+                builder.close();
+                if let Ok(path) = builder.build() {
+                    window.paint_path(path, fill_color);
+                }
+            }
+
+            // --- Stroke pass (data-line only, no baseline edges) ---
+            let stroke_w = if num_visible > 1 && !is_focused {
+                1.6_f32
+            } else {
+                2.2_f32
+            };
+            let stroke_alpha = if num_visible > 1 && !is_focused {
+                0.6_f32
+            } else {
+                1.0_f32
+            };
+            let stroke_color = gpui::hsla(base_color.h, base_color.s, base_color.l, stroke_alpha);
+
+            if pts.len() == 1 {
+                // Single-point fallback: a square marker, same as the Line arm.
+                let half = stroke_w * 1.5;
+                let sx = data_to_screen_x(pts[0].0);
+                let sy = data_to_screen_y(pts[0].1);
+                window.paint_quad(fill(
+                    gpui::Bounds {
+                        origin: point(gpui::px(sx - half), gpui::px(sy - half)),
+                        size: gpui::Size {
+                            width: gpui::px(half * 2.0),
+                            height: gpui::px(half * 2.0),
+                        },
+                    },
+                    stroke_color,
+                ));
+            } else {
+                let mut builder = PathBuilder::stroke(gpui::px(stroke_w));
+                let (x0, y0) = pts[0];
+                builder.move_to(point(
+                    gpui::px(data_to_screen_x(x0)),
+                    gpui::px(data_to_screen_y(y0)),
+                ));
+                for &(x, y) in pts.iter().skip(1) {
+                    builder.line_to(point(
+                        gpui::px(data_to_screen_x(x)),
+                        gpui::px(data_to_screen_y(y)),
+                    ));
+                }
+                if let Ok(path) = builder.build() {
+                    window.paint_path(path, stroke_color);
+                }
+            }
+        }
+    }
+}
 
 /// Paint a vertical dashed line using short filled quads.
 ///
@@ -1168,6 +2586,19 @@ fn extract_f64(value: &Value, is_time: bool) -> Option<f64> {
                 None
             }
         }
+        // Temporal values are only meaningful as epoch-ms on a time axis; gated
+        // on is_time (like the Text arm). Defensive: the Y pickers never offer
+        // Timestamp columns, so this only drops a non-Timestamp column that
+        // happens to carry a datetime value, instead of blowing the value-axis
+        // scale up to ~1e12.
+        Value::DateTime(dt) if is_time => Some(dt.timestamp_millis() as f64),
+        // Date maps to midnight UTC for a consistent, unambiguous epoch-ms value.
+        Value::Date(d) if is_time => d
+            .and_hms_opt(0, 0, 0)
+            .map(|ndt| ndt.and_utc().timestamp_millis() as f64),
+        // Time is a wall-clock time-of-day with no date component; there is no
+        // meaningful epoch origin to assign, so it cannot be placed on a time axis.
+        Value::Time(_) => None,
         Value::Null => None,
         _ => None,
     }
@@ -1348,19 +2779,57 @@ pub fn format_x_value(x: f64, is_time: bool) -> String {
     }
 }
 
+/// Format a Y readout value for tooltips and hover overlays.
+///
+/// Magnitudes `>= 1e3` collapse to SI suffixes (`K`, `M`, `G`, `T`, `P`) so
+/// the readout matches the axis-tick formatter and dashboards like CloudWatch
+/// (`2.5G`, not `2.500e9`). Very small non-zero magnitudes (`< 1e-3`) keep
+/// scientific notation — SI sub-unit suffixes would clash with axis glyphs.
 pub fn format_y_value(y: f64) -> String {
-    if y.abs() >= 1000.0 || (y != 0.0 && y.abs() < 0.001) {
-        format!("{:.3e}", y)
-    } else {
-        format!("{:.3}", y)
+    if y == 0.0 {
+        return "0.000".to_string();
     }
+    let abs = y.abs();
+
+    if abs < 1e-3 {
+        return format!("{:.3e}", y);
+    }
+
+    if abs >= 1e3 {
+        const SUFFIXES: &[(f64, &str)] =
+            &[(1e15, "P"), (1e12, "T"), (1e9, "G"), (1e6, "M"), (1e3, "K")];
+
+        for &(threshold, suffix) in SUFFIXES {
+            if abs >= threshold {
+                let scaled = y / threshold;
+                let abs_scaled = scaled.abs();
+                let formatted = if abs_scaled >= 100.0 {
+                    format!("{:.0}", scaled)
+                } else if abs_scaled >= 10.0 {
+                    format!("{:.1}", scaled)
+                } else {
+                    format!("{:.2}", scaled)
+                };
+                let trimmed = formatted
+                    .trim_end_matches('0')
+                    .trim_end_matches('.')
+                    .to_string();
+                return format!("{trimmed}{suffix}");
+            }
+        }
+    }
+
+    format!("{:.3}", y)
 }
 
 /// Build the absolute-positioned overlay div that shows the multi-series readout.
 ///
 /// Layout: top 18px fixed; left clamped so the panel stays inside the plot area.
 /// Min-width 200px; one header row (time + optional offset) then one row per series.
-fn readout_overlay(r: HoverReadout) -> impl IntoElement {
+///
+/// `colors` is derived from `ChartColors::for_current(cx)` at the render call site
+/// so the overlay matches the active theme.
+fn readout_overlay(r: HoverReadout, colors: ChartColors) -> impl IntoElement {
     const PANEL_MIN_WIDTH: f32 = 200.0;
     const PANEL_GAP: f32 = 12.0;
 
@@ -1386,9 +2855,9 @@ fn readout_overlay(r: HoverReadout) -> impl IntoElement {
         .gap(gpui::px(2.0))
         .px(gpui::px(10.0))
         .py(gpui::px(8.0))
-        .bg(gpui::hsla(0.0, 0.0, 0.09, 1.0))
+        .bg(colors.panel_bg)
         .border_1()
-        .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.18))
+        .border_color(colors.panel_border)
         .rounded(gpui::px(6.0))
         .text_size(FontSizes::XS)
         .overflow_hidden()
@@ -1397,18 +2866,14 @@ fn readout_overlay(r: HoverReadout) -> impl IntoElement {
             div()
                 .flex()
                 .items_center()
-                .text_color(gpui::hsla(0.0, 0.0, 0.85, 1.0))
+                .text_color(colors.value_fg)
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(r.header_time)
                 .when_some(r.header_offset, |d, offset| {
-                    d.child(
-                        div()
-                            .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
-                            .child(offset),
-                    )
+                    d.child(div().text_color(colors.label_fg).child(offset))
                 }),
         )
-        // One row per series; focused row gets semibold + slightly brighter bg.
+        // One row per series; focused row gets semibold.
         .children(r.series.into_iter().enumerate().map(move |(idx, entry)| {
             let is_focused = idx == focused_idx;
             div()
@@ -1423,15 +2888,11 @@ fn readout_overlay(r: HoverReadout) -> impl IntoElement {
                 .child(
                     div()
                         .flex_1()
-                        .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
+                        .text_color(colors.label_fg)
                         .child(entry.label),
                 )
                 // Value (foreground)
-                .child(
-                    div()
-                        .text_color(gpui::hsla(0.0, 0.0, 0.95, 1.0))
-                        .child(entry.y_label),
-                )
+                .child(div().text_color(colors.value_fg).child(entry.y_label))
         }))
 }
 
@@ -1513,9 +2974,50 @@ mod tests {
     }
 
     #[test]
-    fn format_y_value_uses_scientific_for_large_magnitudes() {
-        assert!(format_y_value(1234.0).contains('e'));
+    fn extract_f64_datetime_yields_epoch_ms() {
+        use dbflux_core::chrono::{DateTime, TimeZone, Utc};
+        // 2024-01-01T00:00:00Z, hardcoded ms to pin the unit (catches a
+        // secs/micros regression that a self-derived expected would mask).
+        let dt: DateTime<Utc> = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        assert_eq!(
+            extract_f64(&Value::DateTime(dt), true),
+            Some(1_704_067_200_000.0)
+        );
+        // Gated on is_time: on a value axis a datetime is dropped, not plotted.
+        assert_eq!(extract_f64(&Value::DateTime(dt), false), None);
+    }
+
+    #[test]
+    fn extract_f64_date_yields_midnight_utc_epoch_ms() {
+        use dbflux_core::chrono::NaiveDate;
+        let date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        assert_eq!(
+            extract_f64(&Value::Date(date), true),
+            Some(1_704_067_200_000.0)
+        );
+        assert_eq!(extract_f64(&Value::Date(date), false), None);
+    }
+
+    #[test]
+    fn extract_f64_time_returns_none() {
+        use dbflux_core::chrono::NaiveTime;
+        let t = NaiveTime::from_hms_opt(10, 30, 0).unwrap();
+        assert_eq!(extract_f64(&Value::Time(t), true), None);
+        assert_eq!(extract_f64(&Value::Time(t), false), None);
+    }
+
+    #[test]
+    fn format_y_value_uses_si_suffix_for_large_magnitudes() {
+        // SI suffixes for values >= 1e3
+        assert_eq!(format_y_value(1234.0), "1.23K");
+        assert_eq!(format_y_value(2_500_000_000.0), "2.5G");
+        assert_eq!(format_y_value(98_790_000_000.0), "98.8G");
+        assert_eq!(format_y_value(4.936e10), "49.4G");
+
+        // Scientific notation kept only for very small magnitudes.
         assert!(format_y_value(0.0001).contains('e'));
+
+        // Pass-through formatting for the readable range.
         assert_eq!(format_y_value(0.0), "0.000");
         assert_eq!(format_y_value(1.5), "1.500");
     }
@@ -1559,6 +3061,7 @@ mod tests {
                 aggregation: AggKind::None,
             },
             track_source_indices: false,
+            y_scale: crate::chart::spec::YScale::Linear,
         }
     }
 
@@ -1654,7 +3157,7 @@ mod tests {
     }
 
     #[test]
-    fn build_assigns_palette_colors() {
+    fn build_assigns_palette_slots() {
         let rows = vec![vec![Value::Int(0), Value::Float(1.0), Value::Float(2.0)]];
         let result = QueryResult::table(
             vec![
@@ -1668,7 +3171,7 @@ mod tests {
         );
         let spec = simple_spec(0, &[1, 2]);
         let view = ChartView::build(&result, spec).expect("build should succeed");
-        assert_eq!(view.render_model.palette_colors.len(), 2);
+        assert_eq!(view.render_model.palette_slots.len(), 2);
     }
 
     #[test]
@@ -1708,8 +3211,8 @@ mod tests {
 
     /// `ChartView::build` with `ChartKind::Bar` must not panic.
     ///
-    /// The Bar paint arm renders a placeholder; it must never call `panic!()` or
-    /// `todo!()`. This test drives the implementation of the placeholder branch.
+    /// Bar shares the kind-agnostic `RenderModel` with Line, so `build` succeeds
+    /// identically; the Bar-specific geometry is produced later in `render`.
     #[test]
     fn build_with_bar_kind_does_not_panic() {
         let rows = vec![
@@ -1752,6 +3255,29 @@ mod tests {
         spec.kind = crate::chart::spec::ChartKind::Scatter;
 
         let _ = ChartView::build(&result, spec).expect("build with Scatter kind must not fail");
+    }
+
+    /// `ChartView::build` defaults the kind from the spec, and `kind()` reflects it.
+    #[test]
+    fn build_preserves_bar_kind_in_spec() {
+        let rows = vec![
+            vec![Value::Int(0), Value::Float(1.0)],
+            vec![Value::Int(1000), Value::Float(2.0)],
+        ];
+        let result = QueryResult::table(
+            vec![
+                make_col("t", ColumnKind::Timestamp),
+                make_col("v", ColumnKind::Float),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        );
+        let mut spec = simple_spec(0, &[1]);
+        spec.kind = crate::chart::spec::ChartKind::Bar;
+
+        let view = ChartView::build(&result, spec).expect("build should succeed");
+        assert_eq!(view.kind(), crate::chart::spec::ChartKind::Bar);
     }
 
     // T-CE-G04: source_indices tracking tests
@@ -1906,8 +3432,8 @@ mod tests {
             "y_ticks must be non-empty"
         );
 
-        // Palette colours resolved for both series.
-        assert_eq!(view.render_model.palette_colors.len(), 2);
+        // Palette slot indices stored for both series (theme-resolved at render time).
+        assert_eq!(view.render_model.palette_slots.len(), 2);
 
         // Series stats over post-decimation (= all) points.
         let s0 = view.render_model.series_stats[0].expect("series 0 stats present");
@@ -1920,5 +3446,326 @@ mod tests {
         assert_eq!(s1.min, 10.0);
         assert_eq!(s1.max, 30.0);
         assert_eq!(s1.last, 30.0);
+
+        // Linear mode: y_is_log must be false; y_log_* mirrors y bounds.
+        assert!(!view.render_model.y_is_log);
+        assert_eq!(view.render_model.y_log_min, view.render_model.y_min);
+        assert_eq!(view.render_model.y_log_max, view.render_model.y_max);
+    }
+
+    // ---------------------------------------------------------------------------
+    // T-PROJ-01..04: project_y_to_screen / regression for Y projection
+    // ---------------------------------------------------------------------------
+
+    /// T-PROJ-01: linear projection maps min → bottom, max → top.
+    #[test]
+    fn project_y_linear_maps_min_to_bottom_and_max_to_top() {
+        let plot_y0 = 10.0_f32;
+        let plot_h = 200.0_f32;
+        let y_min = 0.0_f64;
+        let y_max = 100.0_f64;
+        let y_range = y_max - y_min;
+
+        let bottom = project_y_to_screen(y_min, plot_y0, plot_h, y_min, y_range, false);
+        let top = project_y_to_screen(y_max, plot_y0, plot_h, y_min, y_range, false);
+
+        assert!(
+            (bottom - (plot_y0 + plot_h)).abs() < 0.01,
+            "min should map to bottom, got {bottom}"
+        );
+        assert!(
+            (top - plot_y0).abs() < 0.01,
+            "max should map to top, got {top}"
+        );
+    }
+
+    /// T-PROJ-02: linear mode is byte-identical before and after this change.
+    #[test]
+    fn project_y_linear_midpoint_is_correct() {
+        let plot_y0 = 0.0_f32;
+        let plot_h = 100.0_f32;
+        let y_min = 0.0_f64;
+        let y_range = 100.0_f64;
+
+        let mid = project_y_to_screen(50.0, plot_y0, plot_h, y_min, y_range, false);
+        assert!(
+            (mid - 50.0).abs() < 0.01,
+            "midpoint should map to screen center (50px), got {mid}"
+        );
+    }
+
+    /// T-PROJ-03: log1p mode — known value maps to expected screen coordinate.
+    #[test]
+    fn project_y_log_known_value() {
+        // Setup: y range 0..99, log1p bounds ln(1)=0 to ln(100)≈4.605.
+        let y_min = 0.0_f64;
+        let y_max = 99.0_f64;
+        let log_min = (y_min + 1.0).ln(); // = 0.0
+        let log_max = (y_max + 1.0).ln(); // ≈ 4.605
+        let log_range = log_max - log_min;
+
+        let plot_y0 = 0.0_f32;
+        let plot_h = 100.0_f32;
+
+        // y = 0 → log1p(0) = 0 → bottom of chart.
+        let sy0 = project_y_to_screen(0.0, plot_y0, plot_h, log_min, log_range, true);
+        assert!(
+            (sy0 - (plot_y0 + plot_h)).abs() < 0.1,
+            "y=0 should map to bottom in log mode, got {sy0}"
+        );
+
+        // y = 99 → log1p(99) = log_max → top of chart.
+        let sy_max = project_y_to_screen(99.0, plot_y0, plot_h, log_min, log_range, true);
+        assert!(
+            (sy_max - plot_y0).abs() < 0.1,
+            "y=99 should map to top in log mode, got {sy_max}"
+        );
+    }
+
+    /// T-PROJ-04: log mode with y=0 produces finite result (no -Inf from ln(0)).
+    #[test]
+    fn project_y_log_zero_is_finite() {
+        let result = project_y_to_screen(0.0, 0.0, 100.0, 0.0, 5.0, true);
+        assert!(
+            result.is_finite(),
+            "log mode with y=0 must produce finite screen coord"
+        );
+    }
+
+    /// T-PROJ-05: ChartView::build with y_scale=Log sets y_is_log and log bounds.
+    #[test]
+    fn build_with_log_scale_sets_y_is_log() {
+        let rows = vec![
+            vec![Value::Int(0), Value::Float(0.0)],
+            vec![Value::Int(1000), Value::Float(99.0)],
+        ];
+        let result = QueryResult::table(
+            vec![
+                make_col("t", ColumnKind::Timestamp),
+                make_col("v", ColumnKind::Float),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        );
+        let mut spec = simple_spec(0, &[1]);
+        spec.y_scale = crate::chart::spec::YScale::Log;
+
+        let view = ChartView::build(&result, spec).expect("build should succeed");
+
+        assert!(view.render_model.y_is_log, "y_is_log must be true");
+        // Log bounds: ln(0+1)=0 to ln(99+1)≈4.605.
+        assert!(
+            view.render_model.y_log_min.abs() < 1e-9,
+            "y_log_min should be ~0"
+        );
+        assert!(
+            (view.render_model.y_log_max - 100f64.ln()).abs() < 1e-6,
+            "y_log_max should be ~ln(100)"
+        );
+        // Linear y bounds are still original-scale.
+        assert_eq!(view.render_model.y_min, 0.0);
+        assert_eq!(view.render_model.y_max, 99.0);
+    }
+
+    /// `ChartView::build` with `ChartKind::Area` must not panic.
+    ///
+    /// Area shares the same kind-agnostic `RenderModel` as Line; the Area-specific
+    /// geometry (filled paths + stroke) is produced later in `render`.
+    #[test]
+    fn build_with_area_kind_does_not_panic() {
+        let rows = vec![
+            vec![Value::Int(0), Value::Float(1.0)],
+            vec![Value::Int(1000), Value::Float(2.0)],
+        ];
+        let result = QueryResult::table(
+            vec![
+                make_col("t", ColumnKind::Timestamp),
+                make_col("v", ColumnKind::Float),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        );
+        let mut spec = simple_spec(0, &[1]);
+        spec.kind = crate::chart::spec::ChartKind::Area;
+
+        let view = ChartView::build(&result, spec).expect("build with Area kind must not fail");
+        assert_eq!(view.kind(), crate::chart::spec::ChartKind::Area);
+    }
+
+    /// `ChartView::build` with `ChartKind::StackedBar` must not panic.
+    ///
+    /// StackedBar shares the same kind-agnostic `RenderModel` as Bar; the
+    /// stacked-y-range override and stacking geometry are applied in `render`.
+    #[test]
+    fn build_with_stacked_bar_kind_does_not_panic() {
+        let rows = vec![
+            vec![Value::Int(0), Value::Float(1.0), Value::Float(2.0)],
+            vec![Value::Int(1000), Value::Float(3.0), Value::Float(4.0)],
+        ];
+        let result = QueryResult::table(
+            vec![
+                make_col("t", ColumnKind::Timestamp),
+                make_col("a", ColumnKind::Float),
+                make_col("b", ColumnKind::Float),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        );
+        let mut spec = simple_spec(0, &[1, 2]);
+        spec.kind = crate::chart::spec::ChartKind::StackedBar;
+
+        let view =
+            ChartView::build(&result, spec).expect("build with StackedBar kind must not fail");
+        assert_eq!(view.kind(), crate::chart::spec::ChartKind::StackedBar);
+    }
+
+    /// `ChartView::build` with `ChartKind::Pie` must not panic.
+    ///
+    /// Pie shares the same kind-agnostic `RenderModel`; the wedge geometry
+    /// and axis suppression are applied in `render`.
+    #[test]
+    fn build_with_pie_kind_does_not_panic() {
+        let rows = vec![
+            vec![Value::Int(0), Value::Float(10.0), Value::Float(20.0)],
+            vec![Value::Int(1000), Value::Float(15.0), Value::Float(25.0)],
+        ];
+        let result = QueryResult::table(
+            vec![
+                make_col("t", ColumnKind::Timestamp),
+                make_col("a", ColumnKind::Float),
+                make_col("b", ColumnKind::Float),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        );
+        let mut spec = simple_spec(0, &[1, 2]);
+        spec.kind = crate::chart::spec::ChartKind::Pie;
+
+        let view = ChartView::build(&result, spec).expect("build with Pie kind must not fail");
+        assert_eq!(view.kind(), crate::chart::spec::ChartKind::Pie);
+    }
+
+    // ---------------------------------------------------------------------------
+    // T-PAD: effective_x_label_padding — unit tests (TDD cycle 1 RED → 2 GREEN)
+    // ---------------------------------------------------------------------------
+
+    mod padding_tests {
+        use super::*;
+
+        /// Empty label_widths: both pads equal their floor constants. Covers REQ-003, REQ-004.
+        #[test]
+        fn padding_empty_input() {
+            let (left, right) = effective_x_label_padding(&[], MARGIN_LEFT, MARGIN_RIGHT);
+            assert_eq!(left, MARGIN_LEFT);
+            assert_eq!(right, MARGIN_RIGHT);
+        }
+
+        /// Narrow label (half-width < both margins): floors apply. Covers REQ-003 floor.
+        #[test]
+        fn padding_narrow_labels() {
+            let (left, right) = effective_x_label_padding(&[20.0], MARGIN_LEFT, MARGIN_RIGHT);
+            assert_eq!(left, MARGIN_LEFT);
+            assert_eq!(right, MARGIN_RIGHT);
+        }
+
+        /// Wide label that inflates right but not left (80/2=40 > MARGIN_RIGHT=16, < MARGIN_LEFT=50).
+        /// Covers REQ-001.
+        #[test]
+        fn padding_wide_right() {
+            let (left, right) = effective_x_label_padding(&[80.0], MARGIN_LEFT, MARGIN_RIGHT);
+            assert_eq!(left, MARGIN_LEFT);
+            assert_eq!(right, 40.0);
+        }
+
+        /// Very wide label (120/2=60) inflates both pads. Covers REQ-002.
+        #[test]
+        fn padding_wide_triggers_left() {
+            let (left, right) = effective_x_label_padding(&[120.0], MARGIN_LEFT, MARGIN_RIGHT);
+            assert_eq!(left, 60.0);
+            assert_eq!(right, 60.0);
+        }
+
+        /// Mixed widths: max is 80, so right inflates to 40; left stays at floor. Asymmetric case.
+        #[test]
+        fn padding_asymmetric_mix() {
+            let (left, right) = effective_x_label_padding(&[20.0, 80.0], MARGIN_LEFT, MARGIN_RIGHT);
+            assert_eq!(left, MARGIN_LEFT);
+            assert_eq!(right, 40.0);
+        }
+
+        /// Label width exactly 2 * MARGIN_RIGHT (= 32.0): half = 16.0 == MARGIN_RIGHT, no expansion.
+        /// Covers the boundary edge / floor equality.
+        #[test]
+        fn padding_exactly_at_floor() {
+            let width = MARGIN_RIGHT * 2.0;
+            let (left, right) = effective_x_label_padding(&[width], MARGIN_LEFT, MARGIN_RIGHT);
+            assert_eq!(left, MARGIN_LEFT);
+            assert_eq!(right, MARGIN_RIGHT);
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // T-2: bar_layout_params — unit tests
+    // ---------------------------------------------------------------------------
+
+    mod bar_layout_params_tests {
+        use super::*;
+        use crate::chart::spec::ChartKind;
+
+        /// `ChartKind::Bar` adds 8 % headroom to `y_max` and sets a non-zero inset fraction.
+        #[test]
+        fn bar_layout_params_bar_adds_headroom() {
+            let decimated = vec![vec![(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)]];
+            let p = bar_layout_params(ChartKind::Bar, 10.0, 10.0, None, &decimated);
+            assert!(
+                (p.y_max_adjusted - (10.0 + 10.0 * 0.08)).abs() < 1e-10,
+                "Bar y_max_adjusted must be y_max + y_range * 0.08"
+            );
+            assert!(
+                p.bar_x_inset_fraction > 0.0,
+                "Bar bar_x_inset_fraction must be > 0"
+            );
+        }
+
+        /// `ChartKind::StackedBar` uses the pre-computed `stacked_y_max` as the adjusted ceiling.
+        #[test]
+        fn bar_layout_params_stacked_uses_stacked_y_max() {
+            let decimated = vec![vec![(0.0, 1.0)], vec![(0.0, 2.0)]];
+            let stacked_max = 50.0;
+            let p = bar_layout_params(
+                ChartKind::StackedBar,
+                10.0,
+                10.0,
+                Some(stacked_max),
+                &decimated,
+            );
+            assert_eq!(
+                p.y_max_adjusted, stacked_max,
+                "StackedBar y_max_adjusted must equal stacked_y_max"
+            );
+            assert!(
+                p.bar_x_inset_fraction > 0.0,
+                "StackedBar bar_x_inset_fraction must be > 0"
+            );
+        }
+
+        /// `ChartKind::Line` is an identity pass: `y_max_adjusted == y_max`, inset fraction is 0.
+        #[test]
+        fn bar_layout_params_line_is_identity() {
+            let decimated = vec![vec![(0.0, 1.0), (1.0, 2.0)]];
+            let p = bar_layout_params(ChartKind::Line, 10.0, 10.0, None, &decimated);
+            assert_eq!(
+                p.y_max_adjusted, 10.0,
+                "Line y_max_adjusted must equal y_max unchanged"
+            );
+            assert_eq!(
+                p.bar_x_inset_fraction, 0.0,
+                "Line bar_x_inset_fraction must be 0.0"
+            );
+        }
     }
 }

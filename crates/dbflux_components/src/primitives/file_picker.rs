@@ -133,7 +133,7 @@ impl RenderOnce for FilePicker {
                     .hover(|d| d.bg(theme.list_hover))
                     .child(
                         Icon::new(self.clear_icon.clone())
-                            .size(px(12.0))
+                            .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                             .color(theme.muted_foreground),
                     )
                     .when_some(clear_handler, |d, handler| {

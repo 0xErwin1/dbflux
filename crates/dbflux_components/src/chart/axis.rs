@@ -78,21 +78,49 @@ fn nice_step(raw: f64) -> f64 {
 
 /// Format a numeric value with up to 4 significant figures.
 ///
-/// Uses scientific notation for very large (`>= 1e6`) or very small
-/// (`< 1e-3` and non-zero) magnitudes.
+/// Uses SI suffixes (`K`, `M`, `G`, `T`, `P`) for magnitudes `>= 1e3` so axis
+/// labels read `2.5G` instead of `2.500e9` — matches the conventions of
+/// observability dashboards (CloudWatch, Grafana). Very small non-zero
+/// magnitudes (`< 1e-3`) keep scientific notation since SI sub-unit suffixes
+/// (`m`, `µ`, `n`) collide with axis-label glyphs.
 fn format_numeric(v: f64) -> String {
     if v == 0.0 {
         return "0".to_string();
     }
     let abs = v.abs();
-    if abs >= 1e6 || (abs <= 1e-3 && abs > 0.0) {
-        format!("{:.3e}", v)
-    } else {
-        // Up to 4 significant figures, then strip trailing zeros.
-        let s = format!("{:.4}", v);
-        let s = s.trim_end_matches('0').trim_end_matches('.');
-        s.to_string()
+
+    if abs <= 1e-3 {
+        return format!("{:.3e}", v);
     }
+
+    if abs >= 1e3 {
+        const SUFFIXES: &[(f64, &str)] =
+            &[(1e15, "P"), (1e12, "T"), (1e9, "G"), (1e6, "M"), (1e3, "K")];
+
+        for &(threshold, suffix) in SUFFIXES {
+            if abs >= threshold {
+                let scaled = v / threshold;
+                let abs_scaled = scaled.abs();
+                let formatted = if abs_scaled >= 100.0 {
+                    format!("{:.0}", scaled)
+                } else if abs_scaled >= 10.0 {
+                    format!("{:.1}", scaled)
+                } else {
+                    format!("{:.2}", scaled)
+                };
+                let trimmed = formatted
+                    .trim_end_matches('0')
+                    .trim_end_matches('.')
+                    .to_string();
+                return format!("{trimmed}{suffix}");
+            }
+        }
+    }
+
+    // Up to 4 significant figures, then strip trailing zeros.
+    let s = format!("{:.4}", v);
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    s.to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -100,6 +128,9 @@ fn format_numeric(v: f64) -> String {
 // ---------------------------------------------------------------------------
 
 /// Step values for the time tick ladder (milliseconds).
+///
+/// Must remain strictly ascending. Each entry is a "nice" human-readable
+/// duration that `ticks_time` may select as a step boundary.
 const NICE_TIME_STEPS_MS: &[f64] = &[
     1_000.0,             // 1s
     5_000.0,             // 5s
@@ -108,8 +139,13 @@ const NICE_TIME_STEPS_MS: &[f64] = &[
     5.0 * 60_000.0,      // 5m
     15.0 * 60_000.0,     // 15m
     3_600_000.0,         // 1h
+    2.0 * 3_600_000.0,   // 2h
+    3.0 * 3_600_000.0,   // 3h
     6.0 * 3_600_000.0,   // 6h
+    12.0 * 3_600_000.0,  // 12h
     86_400_000.0,        // 1d
+    2.0 * 86_400_000.0,  // 2d
+    3.0 * 86_400_000.0,  // 3d
     7.0 * 86_400_000.0,  // 1w
     30.0 * 86_400_000.0, // ~1mo
 ];
@@ -180,6 +216,111 @@ fn format_time_ms(ms: f64, step_ms: f64) -> String {
 
 // Need chrono re-export for the timestamp_opt call
 use dbflux_core::chrono;
+
+// ---------------------------------------------------------------------------
+// Log1p ticks (Y axis in Log scale mode)
+// ---------------------------------------------------------------------------
+
+/// Generate readable Y-axis ticks for a log1p-scaled axis.
+///
+/// Input `min` and `max` are original data-space values (counts, etc.).
+/// Tick *positions* are expressed in log1p space (`ln(y + 1)`) so the caller
+/// can map them directly to screen coordinates using the same log1p bounds.
+/// Tick *labels* show the rounded original-scale values so users read natural
+/// numbers.
+///
+/// The tick strategy places a tick at each "decade" boundary in log1p space
+/// (`e^k - 1` for integer `k`) that falls within `[min, max]`, padded with a
+/// few intermediate values when the range spans less than two decades.
+///
+/// Returns at least one tick even for a degenerate range (`min >= max`).
+/// Never produces non-finite tick positions.
+pub fn ticks_log(min: f64, max: f64, target_count: usize) -> Vec<TickLabel> {
+    let target_count = target_count.max(1);
+
+    // Clamp to non-negative — log1p is only defined for y >= -1; counts are >= 0.
+    let min = min.max(0.0);
+    let max = max.max(min);
+
+    if min >= max {
+        let original = (min.exp() - 1.0).round().max(0.0);
+        return vec![TickLabel {
+            value: min,
+            label: format_log_label(original),
+        }];
+    }
+
+    // Work in log1p space: transform bounds.
+    let log_min = (min + 1.0).ln();
+    let log_max = (max + 1.0).ln();
+
+    // Candidate original-scale counts at decade boundaries: 0, 1, 9, 99, 999 …
+    // (values where e^k - 1 is an integer for k = 0, 1, 2, …).
+    // We also interpolate linearly in log1p space when the range is narrow.
+    let mut positions: Vec<f64> = Vec::new();
+
+    // Decade boundaries whose log1p value falls inside [log_min, log_max].
+    let k_start = log_min.floor() as i64;
+    let k_end = log_max.ceil() as i64;
+
+    for k in k_start..=k_end {
+        // log1p position for decade k: k is already in log-space.
+        let lv = k as f64;
+        if lv >= log_min - 1e-9 && lv <= log_max + 1e-9 {
+            positions.push(lv.clamp(log_min, log_max));
+        }
+    }
+
+    // If fewer than target_count candidates, add linearly-spaced positions in
+    // log1p space to reach a denser grid.
+    if positions.len() < target_count {
+        let step = (log_max - log_min) / target_count as f64;
+        let mut t = log_min;
+        while t <= log_max + step * 1e-9 {
+            let candidate = t.clamp(log_min, log_max);
+            // Only add if not already close to an existing position.
+            let already_close = positions
+                .iter()
+                .any(|&p| (p - candidate).abs() < step * 0.4);
+            if !already_close {
+                positions.push(candidate);
+            }
+            t += step;
+        }
+        positions.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    }
+
+    // Deduplicate very close positions (can happen at exact decade boundaries).
+    positions.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+
+    // Build TickLabel: position is in log1p space; label is the original-scale
+    // integer count (inverse: original = e^lv - 1, rounded to nearest integer).
+    positions
+        .into_iter()
+        .filter_map(|lv| {
+            if !lv.is_finite() {
+                return None;
+            }
+            let original = (lv.exp() - 1.0).round().max(0.0);
+            Some(TickLabel {
+                value: lv,
+                label: format_log_label(original),
+            })
+        })
+        .collect()
+}
+
+/// Format a count label for the log1p axis.
+///
+/// Uses integer formatting for whole numbers and up to 2 decimal places for
+/// sub-unit values that can arise after inverse transform.
+fn format_log_label(original: f64) -> String {
+    if original == original.floor() && original.abs() < 1e12 {
+        format!("{}", original as i64)
+    } else {
+        format!("{:.2}", original)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Categorical ticks (Bar / Scatter X axis — seam for next change)
@@ -301,6 +442,82 @@ mod tests {
         assert!(ticks.is_empty());
     }
 
+    // ---------------------------------------------------------------------------
+    // ticks_log tests (TDD RED → GREEN for log1p Y-axis)
+    // ---------------------------------------------------------------------------
+
+    /// T-LOG-01: decade-ish ticks — positions are in log1p space.
+    #[test]
+    fn ticks_log_positions_are_in_log1p_space() {
+        // Range 0..=99: log1p(0+1)=0, log1p(99+1)≈ln(100)≈4.6.
+        let ticks = ticks_log(0.0, 99.0, 5);
+        assert!(!ticks.is_empty(), "should produce ticks");
+
+        // Every tick position must equal ln(original + 1) within tolerance.
+        for t in &ticks {
+            assert!(
+                t.value.is_finite(),
+                "tick position must be finite, got {}",
+                t.value
+            );
+            // Position is in log1p space; it must be in [ln(1), ln(100)].
+            assert!(
+                t.value >= -1e-9,
+                "position must be >= 0 (log1p of 0+1=0), got {}",
+                t.value
+            );
+            assert!(
+                t.value <= (100f64).ln() + 1e-9,
+                "position must be <= ln(100), got {}",
+                t.value
+            );
+        }
+    }
+
+    /// T-LOG-02: labels show original-scale integer counts.
+    #[test]
+    fn ticks_log_labels_are_original_scale_integers() {
+        let ticks = ticks_log(0.0, 9999.0, 6);
+        assert!(!ticks.is_empty());
+
+        // Reconstruct original from position and compare to label.
+        for t in &ticks {
+            let reconstructed = (t.value.exp() - 1.0).round().max(0.0);
+            // Label must be the integer representation of the reconstructed value.
+            let expected_label = format!("{}", reconstructed as i64);
+            assert_eq!(
+                t.label, expected_label,
+                "label '{}' should be original-scale integer '{}' (pos={})",
+                t.label, expected_label, t.value
+            );
+        }
+    }
+
+    /// T-LOG-03: min == 0 is handled correctly (no NaN or -Inf).
+    #[test]
+    fn ticks_log_handles_min_zero() {
+        let ticks = ticks_log(0.0, 100.0, 5);
+        assert!(!ticks.is_empty());
+        for t in &ticks {
+            assert!(t.value.is_finite(), "position must be finite");
+        }
+        // First tick should represent count 0.
+        let first = &ticks[0];
+        assert_eq!(first.label, "0", "first tick should be label '0'");
+    }
+
+    /// T-LOG-04: degenerate range (min >= max) returns a single tick.
+    #[test]
+    fn ticks_log_degenerate_range_returns_single_tick() {
+        let ticks = ticks_log(5.0, 5.0, 5);
+        assert_eq!(
+            ticks.len(),
+            1,
+            "degenerate range must produce exactly 1 tick"
+        );
+        assert!(ticks[0].value.is_finite());
+    }
+
     #[test]
     fn ticks_time_labels_format_per_step_magnitude() {
         // 1-hour span → steps should be at minute or second resolution.
@@ -313,5 +530,39 @@ mod tests {
                 t.label
             );
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Tick density tests (issue #132)
+    // ---------------------------------------------------------------------------
+
+    /// A 3-week span with target 12 must produce at least 7 ticks.
+    ///
+    /// Before the ladder expansion the largest step ≤ raw_step was 1 week,
+    /// yielding only 3 ticks. Adding 2d and 3d entries ensures a step ≤ 3d is
+    /// chosen, producing ≥ 7 ticks across 21 days.
+    #[test]
+    fn ticks_time_3week_target12_yields_at_least_7() {
+        let span_ms = 21.0 * 86_400_000.0; // 21 days
+        let ticks = ticks_time(0.0, span_ms, 12);
+        assert!(
+            ticks.len() >= 7,
+            "expected >= 7 ticks for 3-week span target 12, got {}",
+            ticks.len()
+        );
+    }
+
+    /// `ticks_numeric` with target 13 over [0, 25] must produce at least 6 ticks.
+    ///
+    /// This acts as a non-regression anchor: the nice-step algorithm already
+    /// satisfies this for numeric axes, confirming the Y dynamic path will too.
+    #[test]
+    fn ticks_numeric_target13_range_0_25_yields_at_least_6() {
+        let ticks = ticks_numeric(0.0, 25.0, 13);
+        assert!(
+            ticks.len() >= 6,
+            "expected >= 6 ticks for [0, 25] target 13, got {}",
+            ticks.len()
+        );
     }
 }

@@ -4,9 +4,9 @@ use dbflux_components::composites::{
 };
 use dbflux_components::controls::{Input, InputState};
 use dbflux_components::primitives::focus_frame;
+use dbflux_ui::theme;
 use dbflux_ui::ui::components::context_menu::{MenuItem, render_menu_container};
 use dbflux_ui::ui::icons::AppIcon;
-use dbflux_ui::ui::theme;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, AppContext, Context, Entity, Modifiers, Render, TestAppContext, Window, div, px,

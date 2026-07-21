@@ -8,6 +8,7 @@ use crate::artifacts::ArtifactStore;
 use crate::error::StorageError;
 use crate::migrations::MigrationRegistry;
 use crate::paths;
+use crate::repositories::app_meta::AppMetaRepository;
 use crate::repositories::audit::AuditRepository;
 use crate::repositories::audit_settings::AuditSettingsRepository;
 use crate::repositories::auth_profiles::AuthProfileRepository;
@@ -27,6 +28,9 @@ use crate::repositories::state::{
     saved_queries::SavedQueriesRepository, sessions::SessionRepository,
     ui_state::UiStateRepository,
 };
+use crate::repositories::viz_dashboard_panels::DashboardPanelsRepository;
+use crate::repositories::viz_dashboards::DashboardsRepository;
+use crate::repositories::viz_saved_charts::SavedChartsRepository;
 use crate::sqlite;
 
 /// An owned database connection wrapped in Arc for shared access.
@@ -56,8 +60,19 @@ impl StorageRuntime {
     pub fn for_path(dbflux_db_path: PathBuf) -> Result<Self, StorageError> {
         // Open and validate dbflux.db - apply migrations if needed
         let dbflux_conn = crate::sqlite::open_database(&dbflux_db_path)?;
+
+        // Run migrations with foreign-key enforcement disabled so table-rebuild
+        // migrations (drop + recreate to change constraints) do not cascade-delete
+        // child rows when the parent table is dropped. Enforcement is restored for
+        // normal runtime use immediately afterwards.
+        crate::sqlite::set_foreign_keys(&dbflux_conn, false)?;
         let registry = MigrationRegistry::new();
         registry.run_all(&dbflux_conn)?;
+        crate::sqlite::set_foreign_keys(&dbflux_conn, true)?;
+
+        // Sidecars created lazily on the first migration write; secure them now.
+        paths::secure_db_sidecars(&dbflux_db_path)?;
+
         info!("Unified database ready at {}", dbflux_db_path.display());
 
         // Initialize the artifact store using the parent directory of dbflux.db as data root.
@@ -95,8 +110,8 @@ impl StorageRuntime {
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
         );
 
         let temp_dir = std::env::temp_dir().join(&temp_label);
@@ -136,6 +151,11 @@ impl StorageRuntime {
     // All repositories now use the single unified database connection.
     // Config-domain and state-domain tables coexist in the same database
     // with domain-prefixed names (cfg_*, st_*).
+
+    /// Creates an app metadata repository for one-time migration flags.
+    pub fn app_meta(&self) -> AppMetaRepository {
+        AppMetaRepository::new(self.dbflux_db())
+    }
 
     /// Creates a connection profile repository.
     pub fn connection_profiles(&self) -> ConnectionProfileRepository {
@@ -220,11 +240,13 @@ impl StorageRuntime {
     }
 
     /// Creates an audit repository.
-    pub fn audit(&self) -> AuditRepository {
+    ///
+    /// Returns `Err` if a new database connection cannot be opened. This can
+    /// happen when the database path is inaccessible (e.g. removed after startup).
+    pub fn audit(&self) -> Result<AuditRepository, StorageError> {
         use std::sync::Mutex;
-        // Wrap the connection in a Mutex for thread-safe access
-        let conn = self.open_dbflux_db().expect("should open dbflux db");
-        AuditRepository::new(Arc::new(Mutex::new(conn)))
+        let conn = self.open_dbflux_db()?;
+        Ok(AuditRepository::new(Arc::new(Mutex::new(conn))))
     }
 
     /// Creates an audit settings repository.
@@ -233,11 +255,65 @@ impl StorageRuntime {
     }
 
     /// Creates a saved filters repository.
-    pub fn saved_filters(&self) -> SavedFiltersRepository {
+    ///
+    /// Returns `Err` if a new database connection cannot be opened.
+    pub fn saved_filters(&self) -> Result<SavedFiltersRepository, StorageError> {
         use std::sync::Mutex;
-        // Wrap the connection in a Mutex for thread-safe access
-        let conn = self.open_dbflux_db().expect("should open dbflux db");
-        SavedFiltersRepository::new(Arc::new(Mutex::new(conn)))
+        let conn = self.open_dbflux_db()?;
+        Ok(SavedFiltersRepository::new(Arc::new(Mutex::new(conn))))
+    }
+
+    /// Creates a shared `Arc<Mutex<Connection>>` for the viz repositories.
+    ///
+    /// All five viz repos that share this connection will serialize access
+    /// via the same mutex. Callers should create this once and clone the `Arc`
+    /// for each repository that needs it.
+    ///
+    /// Returns `Err` if a new database connection cannot be opened.
+    pub fn viz_connection(
+        &self,
+    ) -> Result<Arc<std::sync::Mutex<rusqlite::Connection>>, StorageError> {
+        let conn = self.open_dbflux_db()?;
+        Ok(Arc::new(std::sync::Mutex::new(conn)))
+    }
+
+    /// Creates a `SavedChartsRepository` backed by the unified database.
+    ///
+    /// Returns `Err` if a new database connection cannot be opened.
+    pub fn saved_charts(&self) -> Result<SavedChartsRepository, StorageError> {
+        Ok(SavedChartsRepository::new(self.viz_connection()?))
+    }
+
+    /// Creates a `DashboardsRepository` backed by the unified database.
+    ///
+    /// Returns `Err` if a new database connection cannot be opened.
+    pub fn dashboards_repo(&self) -> Result<DashboardsRepository, StorageError> {
+        Ok(DashboardsRepository::new(self.viz_connection()?))
+    }
+
+    /// Creates a `DashboardPanelsRepository` backed by the unified database.
+    ///
+    /// Returns `Err` if a new database connection cannot be opened.
+    pub fn dashboard_panels_repo(&self) -> Result<DashboardPanelsRepository, StorageError> {
+        Ok(DashboardPanelsRepository::new(self.viz_connection()?))
+    }
+
+    /// Creates a `SqlitePendingExecutionStore` backed by the unified database.
+    ///
+    /// Returns `Err` if a new database connection cannot be opened. Callers
+    /// should propagate the error rather than unwrapping, since a failure here
+    /// means the approvals subsystem is unavailable at startup.
+    pub fn pending_executions(
+        &self,
+    ) -> Result<crate::pending_executions::SqlitePendingExecutionStore, StorageError> {
+        let conn = self.open_dbflux_db()?;
+        let conn = Arc::new(std::sync::Mutex::new(conn));
+        crate::pending_executions::SqlitePendingExecutionStore::new(conn).map_err(|e| {
+            StorageError::Migration {
+                kind: "pending_executions".to_string(),
+                details: e.to_string(),
+            }
+        })
     }
 
     /// Returns the artifact store for scratch/shadow path management.
@@ -287,8 +363,8 @@ mod tests {
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
         ));
         let _ = std::fs::remove_dir_all(&dir);
         dir

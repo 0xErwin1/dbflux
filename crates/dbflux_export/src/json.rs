@@ -46,7 +46,7 @@ fn rows_to_json_array(columns: &[ColumnMeta], rows: &[Row]) -> serde_json::Value
     )
 }
 
-fn row_to_json_object(columns: &[ColumnMeta], row: &Row) -> serde_json::Value {
+pub(crate) fn row_to_json_object(columns: &[ColumnMeta], row: &[Value]) -> serde_json::Value {
     let mut map = serde_json::Map::new();
 
     for (col, value) in columns.iter().zip(row.iter()) {

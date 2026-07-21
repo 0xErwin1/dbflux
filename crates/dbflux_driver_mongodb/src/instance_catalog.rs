@@ -1,0 +1,916 @@
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use async_trait::async_trait;
+use bson::{Bson, Document};
+use dbflux_core::{
+    ColumnKind, ColumnMeta, DbError, DefaultDashboardPanel, DefaultInstanceDashboard,
+    DriverCapabilities, InstanceCatalog, InstanceInspectorDef, InstanceMetricDef,
+    InstanceMetricUnit, QueryResult, QueryResultShape, Row, Value,
+};
+use mongodb::sync::Client;
+
+/// Dotted BSON path within the `serverStatus` document mapped to a chartable metric.
+///
+/// Each entry: `(dotted_path, metric_id, display_name, group, unit)`.
+pub const SERVER_STATUS_PATHS: &[(&str, &str, &str, &str, InstanceMetricUnit)] = &[
+    (
+        "opcounters.query",
+        "mongo.opcounters.query",
+        "Queries / sec",
+        "Throughput",
+        InstanceMetricUnit::PerSecond,
+    ),
+    (
+        "opcounters.insert",
+        "mongo.opcounters.insert",
+        "Inserts / sec",
+        "Throughput",
+        InstanceMetricUnit::PerSecond,
+    ),
+    (
+        "opcounters.update",
+        "mongo.opcounters.update",
+        "Updates / sec",
+        "Throughput",
+        InstanceMetricUnit::PerSecond,
+    ),
+    (
+        "opcounters.delete",
+        "mongo.opcounters.delete",
+        "Deletes / sec",
+        "Throughput",
+        InstanceMetricUnit::PerSecond,
+    ),
+    (
+        "connections.current",
+        "mongo.connections.current",
+        "Current connections",
+        "Connections",
+        InstanceMetricUnit::Count,
+    ),
+    (
+        "connections.available",
+        "mongo.connections.available",
+        "Available connections",
+        "Connections",
+        InstanceMetricUnit::Count,
+    ),
+    (
+        "mem.resident",
+        "mongo.mem.resident",
+        "Resident memory (MB)",
+        "Memory",
+        InstanceMetricUnit::Bytes,
+    ),
+    (
+        "globalLock.currentQueue.total",
+        "mongo.global_lock.queue",
+        "Global lock queue",
+        "Locks",
+        InstanceMetricUnit::Count,
+    ),
+    (
+        "wiredTiger.cache.bytes currently in the cache",
+        "mongo.wt.cache_bytes",
+        "WiredTiger cache bytes",
+        "Cache",
+        InstanceMetricUnit::Bytes,
+    ),
+    (
+        "wiredTiger.cache.unmodified pages evicted",
+        "mongo.wt.pages_evicted",
+        "WiredTiger pages evicted",
+        "Cache",
+        InstanceMetricUnit::Count,
+    ),
+];
+
+pub struct MongoInstanceCatalog {
+    client: Arc<Mutex<Client>>,
+    cluster_monitor: bool,
+    inprog: bool,
+    killop: bool,
+}
+
+impl MongoInstanceCatalog {
+    pub fn new(client: Arc<Mutex<Client>>) -> Self {
+        Self {
+            client,
+            cluster_monitor: false,
+            inprog: false,
+            killop: false,
+        }
+    }
+
+    /// Constructs a catalog with pre-probed privilege flags.
+    pub fn new_probed(
+        client: Arc<Mutex<Client>>,
+        cluster_monitor: bool,
+        inprog: bool,
+        killop: bool,
+    ) -> Self {
+        Self {
+            client,
+            cluster_monitor,
+            inprog,
+            killop,
+        }
+    }
+
+    pub fn static_metrics() -> Vec<InstanceMetricDef> {
+        SERVER_STATUS_PATHS
+            .iter()
+            .map(|(_, id, display_name, group, unit)| InstanceMetricDef {
+                id: id.to_string(),
+                display_name: display_name.to_string(),
+                group: group.to_string(),
+                unit: *unit,
+                description: None,
+                default_refresh_secs: 15,
+            })
+            .collect()
+    }
+
+    pub fn static_inspectors() -> Vec<InstanceInspectorDef> {
+        vec![InstanceInspectorDef {
+            id: "mongo.current_op".to_string(),
+            display_name: "Current operations".to_string(),
+            description: Some(
+                "Active and pending operations from $currentOp aggregation.".to_string(),
+            ),
+            default_refresh_secs: 10,
+        }]
+    }
+
+    /// Static list of row-level actions for the given inspector metric.
+    pub fn static_row_actions(metric_id: &str) -> Vec<dbflux_core::InspectorRowAction> {
+        match metric_id {
+            "mongo.current_op" => vec![dbflux_core::InspectorRowAction {
+                id: "kill".to_string(),
+                label: "Kill operation".to_string(),
+                description: Some(
+                    "Calls db.killOp(opid) to terminate the selected operation.".to_string(),
+                ),
+                is_destructive: true,
+            }],
+            _ => Vec::new(),
+        }
+    }
+
+    /// Curated "Instance Overview" dashboard layout for MongoDB.
+    ///
+    /// Row 0: queries/sec (cols 0-5) | current connections (cols 6-11)
+    /// Row 1: memory resident (cols 0-5) | global lock queue (cols 6-11)
+    /// Row 2: current operations inspector (full width)
+    pub fn static_default_dashboard() -> Option<DefaultInstanceDashboard> {
+        Some(DefaultInstanceDashboard {
+            title: "MongoDB Instance Overview".to_string(),
+            description: Some(
+                "Curated MongoDB serverStatus metrics and current-operations inspector."
+                    .to_string(),
+            ),
+            panels: vec![
+                DefaultDashboardPanel {
+                    metric_id: "mongo.opcounters.query".to_string(),
+                    is_inspector: false,
+                    grid_column: 0,
+                    grid_row: 0,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "mongo.connections.current".to_string(),
+                    is_inspector: false,
+                    grid_column: 6,
+                    grid_row: 0,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "mongo.mem.resident".to_string(),
+                    is_inspector: false,
+                    grid_column: 0,
+                    grid_row: 3,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "mongo.global_lock.queue".to_string(),
+                    is_inspector: false,
+                    grid_column: 6,
+                    grid_row: 3,
+                    grid_width: 6,
+                    grid_height: 3,
+                },
+                DefaultDashboardPanel {
+                    metric_id: "mongo.current_op".to_string(),
+                    is_inspector: true,
+                    grid_column: 0,
+                    grid_row: 6,
+                    grid_width: 12,
+                    grid_height: 4,
+                },
+            ],
+        })
+    }
+
+    /// Returns metrics filtered by the cluster_monitor privilege probe.
+    ///
+    /// All serverStatus metrics require the `clusterMonitor` role or equivalent.
+    pub fn metrics_with_probes(cluster_monitor: bool) -> Vec<InstanceMetricDef> {
+        if cluster_monitor {
+            Self::static_metrics()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Returns inspectors filtered by the inprog privilege probe.
+    pub fn inspectors_with_probes(inprog: bool) -> Vec<InstanceInspectorDef> {
+        if inprog {
+            Self::static_inspectors()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Returns row actions for the given inspector, gated by the killop probe.
+    pub fn row_actions_with_probes(
+        metric_id: &str,
+        killop: bool,
+    ) -> Vec<dbflux_core::InspectorRowAction> {
+        if metric_id == "mongo.current_op" && killop {
+            Self::static_row_actions(metric_id)
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Returns `true` if the current user has privileges to call `serverStatus`.
+    ///
+    /// Inspects the `connectionStatus` privilege list for `serverStatus`-granting
+    /// actions or the `clusterMonitor` role. Falls back to false on any error.
+    pub(crate) fn probe_cluster_monitor(client: &Client) -> bool {
+        let db = get_admin_db(client);
+        let doc = match db
+            .run_command(bson::doc! { "connectionStatus": 1, "showPrivileges": true })
+            .run()
+        {
+            Ok(d) => d,
+            Err(_) => return false,
+        };
+
+        has_privilege_or_role(&doc, &["serverStatus"], &["clusterMonitor", "root"])
+    }
+
+    /// Returns `true` if the current user has `inprog` action privilege.
+    pub(crate) fn probe_inprog(client: &Client) -> bool {
+        let db = get_admin_db(client);
+        let doc = match db
+            .run_command(bson::doc! { "connectionStatus": 1, "showPrivileges": true })
+            .run()
+        {
+            Ok(d) => d,
+            Err(_) => return false,
+        };
+
+        has_privilege_or_role(&doc, &["inprog"], &["clusterMonitor", "root"])
+    }
+
+    /// Returns `true` if the current user has `killop` action privilege.
+    pub(crate) fn probe_killop(client: &Client) -> bool {
+        let db = get_admin_db(client);
+        let doc = match db
+            .run_command(bson::doc! { "connectionStatus": 1, "showPrivileges": true })
+            .run()
+        {
+            Ok(d) => d,
+            Err(_) => return false,
+        };
+
+        has_privilege_or_role(&doc, &["killop"], &["clusterManager", "root"])
+    }
+
+    /// Extracts a numeric value from a BSON document at a dotted path.
+    ///
+    /// Traverses nested documents using `.`-separated path segments.
+    /// Returns `None` if any segment is missing or the leaf is not numeric.
+    pub fn extract_path(doc: &Document, path: &str) -> Option<f64> {
+        let (key, rest) = match path.split_once('.') {
+            Some((k, r)) => (k, Some(r)),
+            None => (path, None),
+        };
+
+        let value = doc.get(key)?;
+
+        match rest {
+            None => bson_to_f64(value),
+            Some(remainder) => match value {
+                Bson::Document(nested) => Self::extract_path(nested, remainder),
+                _ => None,
+            },
+        }
+    }
+}
+
+fn bson_to_f64(bson: &Bson) -> Option<f64> {
+    match bson {
+        Bson::Double(v) => Some(*v),
+        Bson::Int32(v) => Some(*v as f64),
+        Bson::Int64(v) => Some(*v as f64),
+        _ => None,
+    }
+}
+
+/// Checks a `connectionStatus` response document for the given privilege actions
+/// or role names.
+///
+/// Returns `true` when either:
+/// - `authInfo.authenticatedUserPrivileges` contains an entry with one of the
+///   given `actions`, OR
+/// - `authInfo.authenticatedUserRoles` contains one of the given `roles`.
+fn bson_action_matches(entry: &Bson, actions: &[&str]) -> bool {
+    let priv_doc = match entry.as_document() {
+        Some(d) => d,
+        None => return false,
+    };
+    let priv_actions = match priv_doc.get("actions") {
+        Some(Bson::Array(a)) => a,
+        _ => return false,
+    };
+    priv_actions
+        .iter()
+        .any(|a| a.as_str().is_some_and(|s| actions.contains(&s)))
+}
+
+/// Checks a `connectionStatus` response document for the given privilege actions
+/// or role names.
+///
+/// Returns `true` when either:
+/// - `authInfo.authenticatedUserPrivileges` contains an entry with one of the
+///   given `actions`, OR
+/// - `authInfo.authenticatedUserRoles` contains one of the given `roles`.
+fn has_privilege_or_role(doc: &Document, actions: &[&str], roles: &[&str]) -> bool {
+    let auth_info = match doc.get("authInfo").and_then(|v| v.as_document()) {
+        Some(d) => d,
+        None => return false,
+    };
+
+    let has_matching_action = matches!(
+        auth_info.get("authenticatedUserPrivileges"),
+        Some(Bson::Array(privs)) if privs.iter().any(|e| bson_action_matches(e, actions))
+    );
+    if has_matching_action {
+        return true;
+    }
+
+    if let Some(Bson::Array(user_roles)) = auth_info.get("authenticatedUserRoles") {
+        for role_entry in user_roles {
+            let role_name = role_entry
+                .as_document()
+                .and_then(|d| d.get("role"))
+                .and_then(|v| v.as_str());
+            if role_name.is_some_and(|r| roles.contains(&r)) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn now_epoch_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn timestamp_col(name: &str) -> ColumnMeta {
+    ColumnMeta {
+        name: name.to_string(),
+        kind: ColumnKind::Timestamp,
+        type_name: "int64".to_string(),
+        nullable: false,
+        is_primary_key: false,
+    }
+}
+
+fn float_col(name: &str) -> ColumnMeta {
+    ColumnMeta {
+        name: name.to_string(),
+        kind: ColumnKind::Float,
+        type_name: "double".to_string(),
+        nullable: false,
+        is_primary_key: false,
+    }
+}
+
+fn mongo_error(e: mongodb::error::Error) -> DbError {
+    DbError::QueryFailed(e.to_string().into())
+}
+
+fn get_admin_db(client: &Client) -> mongodb::sync::Database {
+    client.database("admin")
+}
+
+fn run_server_status(client: &Client) -> Result<Document, DbError> {
+    get_admin_db(client)
+        .run_command(bson::doc! { "serverStatus": 1 })
+        .run()
+        .map_err(mongo_error)
+}
+
+#[async_trait]
+impl InstanceCatalog for MongoInstanceCatalog {
+    async fn list_metrics(&self) -> Result<Vec<InstanceMetricDef>, DbError> {
+        Ok(Self::metrics_with_probes(self.cluster_monitor))
+    }
+
+    async fn list_inspectors(&self) -> Result<Vec<InstanceInspectorDef>, DbError> {
+        Ok(Self::inspectors_with_probes(self.inprog))
+    }
+
+    fn default_dashboard(&self) -> Option<DefaultInstanceDashboard> {
+        Self::static_default_dashboard()
+    }
+
+    async fn fetch_metric_series(
+        &self,
+        metric_id: &str,
+        _start_ms: i64,
+        _end_ms: i64,
+    ) -> Result<QueryResult, DbError> {
+        let client = self
+            .client
+            .lock()
+            .map_err(|_| DbError::QueryFailed("mongo client mutex poisoned".to_string().into()))?;
+
+        dispatch_metric_series(&client, metric_id)
+    }
+
+    async fn fetch_inspector_snapshot(&self, metric_id: &str) -> Result<QueryResult, DbError> {
+        let client = self
+            .client
+            .lock()
+            .map_err(|_| DbError::QueryFailed("mongo client mutex poisoned".to_string().into()))?;
+
+        dispatch_inspector_snapshot(&client, metric_id)
+    }
+
+    fn row_actions(&self, metric_id: &str) -> Vec<dbflux_core::InspectorRowAction> {
+        Self::row_actions_with_probes(metric_id, self.killop)
+    }
+
+    async fn execute_row_action(
+        &self,
+        metric_id: &str,
+        action_id: &str,
+        row_values: &[dbflux_core::Value],
+    ) -> Result<(), DbError> {
+        if metric_id == "mongo.current_op" && action_id == "kill" {
+            // `opid` column is always Text (see `fetch_current_op`). Attempt
+            // numeric parse first; if that fails treat the value as an opaque
+            // string (Atlas/sharded clusters use ObjectId or shard-prefixed IDs).
+            let opid_bson: Bson = match row_values.first() {
+                Some(dbflux_core::Value::Int(n)) => Bson::Int64(*n),
+                Some(dbflux_core::Value::Float(f)) => Bson::Int64(*f as i64),
+                Some(dbflux_core::Value::Text(s)) => {
+                    let trimmed = s.trim();
+                    if let Ok(n) = trimmed.parse::<i64>() {
+                        Bson::Int64(n)
+                    } else {
+                        Bson::String(trimmed.to_string())
+                    }
+                }
+                _ => {
+                    return Err(DbError::QueryFailed(
+                        "mongo.current_op kill: could not read opid from row"
+                            .to_string()
+                            .into(),
+                    ));
+                }
+            };
+
+            let client = self.client.lock().map_err(|_| {
+                DbError::QueryFailed("mongo client mutex poisoned".to_string().into())
+            })?;
+
+            let db = get_admin_db(&client);
+            db.run_command(bson::doc! { "killOp": 1, "op": opid_bson })
+                .run()
+                .map_err(mongo_error)?;
+
+            return Ok(());
+        }
+
+        Err(DbError::NotSupported(format!(
+            "row action '{action_id}' not supported for inspector '{metric_id}'"
+        )))
+    }
+}
+
+pub(crate) fn dispatch_metric_series(
+    client: &Client,
+    metric_id: &str,
+) -> Result<QueryResult, DbError> {
+    let entry = SERVER_STATUS_PATHS
+        .iter()
+        .find(|(_, id, _, _, _)| *id == metric_id);
+
+    match entry {
+        Some((path, metric_id_str, display_name, _, _)) => {
+            let status = run_server_status(client)?;
+            let value = MongoInstanceCatalog::extract_path(&status, path).ok_or_else(|| {
+                DbError::QueryFailed(
+                    format!(
+                        "serverStatus path '{}' not found — metric '{}' is not available \
+                         on this MongoDB version or deployment (Atlas, in-memory engine, \
+                         or older server may omit this field)",
+                        path, metric_id_str
+                    )
+                    .into(),
+                )
+            })?;
+
+            let columns = vec![timestamp_col("timestamp_ms"), float_col(display_name)];
+
+            let row: Row = vec![Value::Int(now_epoch_ms()), Value::Float(value)];
+
+            Ok(QueryResult {
+                shape: QueryResultShape::Table,
+                columns,
+                rows: vec![row],
+                affected_rows: None,
+                execution_time: Duration::ZERO,
+                text_body: None,
+                raw_bytes: None,
+                next_page_token: None,
+                resolved_window: None,
+                metadata_extra: None,
+                additional_results: Vec::new(),
+            })
+        }
+        None => Err(DbError::NotSupported(format!(
+            "unknown instance metric: {metric_id}"
+        ))),
+    }
+}
+
+pub(crate) fn dispatch_inspector_snapshot(
+    client: &Client,
+    metric_id: &str,
+) -> Result<QueryResult, DbError> {
+    match metric_id {
+        "mongo.current_op" => fetch_current_op(client),
+        other => Err(DbError::NotSupported(format!("unknown inspector: {other}"))),
+    }
+}
+
+fn fetch_current_op(client: &Client) -> Result<QueryResult, DbError> {
+    let db = get_admin_db(client);
+
+    let pipeline = vec![
+        bson::doc! { "$currentOp": { "allUsers": true, "idleConnections": false } },
+        bson::doc! {
+            "$project": {
+                "opid": 1,
+                "type": 1,
+                "ns": 1,
+                "op": 1,
+                "secs_running": 1,
+                "desc": 1,
+                "client": 1,
+            }
+        },
+        bson::doc! { "$limit": 100 },
+    ];
+
+    let cursor = db.aggregate(pipeline).run().map_err(mongo_error)?;
+
+    let columns = vec![
+        ColumnMeta {
+            name: "opid".to_string(),
+            kind: ColumnKind::Text,
+            type_name: "string".to_string(),
+            nullable: true,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "type".to_string(),
+            kind: ColumnKind::Text,
+            type_name: "string".to_string(),
+            nullable: true,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "ns".to_string(),
+            kind: ColumnKind::Text,
+            type_name: "string".to_string(),
+            nullable: true,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "op".to_string(),
+            kind: ColumnKind::Text,
+            type_name: "string".to_string(),
+            nullable: true,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "secs_running".to_string(),
+            kind: ColumnKind::Float,
+            type_name: "double".to_string(),
+            nullable: true,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "desc".to_string(),
+            kind: ColumnKind::Text,
+            type_name: "string".to_string(),
+            nullable: true,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "client".to_string(),
+            kind: ColumnKind::Text,
+            type_name: "string".to_string(),
+            nullable: true,
+            is_primary_key: false,
+        },
+    ];
+
+    let mut rows: Vec<Row> = Vec::new();
+
+    for doc_result in cursor {
+        let doc = doc_result.map_err(mongo_error)?;
+
+        let row: Row = vec![
+            doc.get("opid")
+                .and_then(|v| match v {
+                    Bson::Int64(n) => Some(Value::Text(n.to_string())),
+                    Bson::Int32(n) => Some(Value::Text(n.to_string())),
+                    Bson::String(s) => Some(Value::Text(s.clone())),
+                    Bson::ObjectId(oid) => Some(Value::Text(oid.to_hex())),
+                    _ => None,
+                })
+                .unwrap_or(Value::Null),
+            doc.get("type")
+                .and_then(|v| v.as_str().map(|s| Value::Text(s.to_string())))
+                .unwrap_or(Value::Null),
+            doc.get("ns")
+                .and_then(|v| v.as_str().map(|s| Value::Text(s.to_string())))
+                .unwrap_or(Value::Null),
+            doc.get("op")
+                .and_then(|v| v.as_str().map(|s| Value::Text(s.to_string())))
+                .unwrap_or(Value::Null),
+            doc.get("secs_running")
+                .and_then(bson_to_f64)
+                .map(Value::Float)
+                .unwrap_or(Value::Null),
+            doc.get("desc")
+                .and_then(|v| v.as_str().map(|s| Value::Text(s.to_string())))
+                .unwrap_or(Value::Null),
+            doc.get("client")
+                .and_then(|v| v.as_str().map(|s| Value::Text(s.to_string())))
+                .unwrap_or(Value::Null),
+        ];
+
+        rows.push(row);
+    }
+
+    Ok(QueryResult {
+        shape: QueryResultShape::Table,
+        columns,
+        rows,
+        affected_rows: None,
+        execution_time: Duration::ZERO,
+        text_body: None,
+        raw_bytes: None,
+        next_page_token: None,
+        resolved_window: None,
+        metadata_extra: None,
+        additional_results: Vec::new(),
+    })
+}
+
+/// Returns `true` if MongoDB METADATA advertises both instance-metrics bits.
+pub fn mongo_advertises_instance_capabilities() -> bool {
+    let caps = crate::MONGODB_METADATA.capabilities;
+    caps.contains(DriverCapabilities::INSTANCE_METRICS)
+        && caps.contains(DriverCapabilities::INSTANCE_INSPECTOR)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_status_paths_list_is_non_empty() {
+        assert!(
+            !SERVER_STATUS_PATHS.is_empty(),
+            "SERVER_STATUS_PATHS must have at least one entry"
+        );
+    }
+
+    #[test]
+    fn static_metrics_ids_are_lowercase_dot_separated() {
+        let metrics = MongoInstanceCatalog::static_metrics();
+        for m in &metrics {
+            let valid = !m.id.is_empty()
+                && m.id
+                    .chars()
+                    .next()
+                    .map(|c| c.is_ascii_lowercase())
+                    .unwrap_or(false)
+                && m.id
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_');
+            assert!(valid, "metric id {:?} must match [a-z][a-z0-9_.]*", m.id);
+        }
+    }
+
+    #[test]
+    fn bson_path_extraction_from_fixture_produces_float_value() {
+        let mut inner = Document::new();
+        inner.insert("query", Bson::Int64(42));
+        inner.insert("insert", Bson::Int64(7));
+
+        let mut status = Document::new();
+        status.insert("opcounters", Bson::Document(inner));
+        status.insert(
+            "mem",
+            Bson::Document({
+                let mut d = Document::new();
+                d.insert("resident", Bson::Int32(256));
+                d
+            }),
+        );
+
+        assert_eq!(
+            MongoInstanceCatalog::extract_path(&status, "opcounters.query"),
+            Some(42.0)
+        );
+        assert_eq!(
+            MongoInstanceCatalog::extract_path(&status, "opcounters.insert"),
+            Some(7.0)
+        );
+        assert_eq!(
+            MongoInstanceCatalog::extract_path(&status, "mem.resident"),
+            Some(256.0)
+        );
+        assert_eq!(
+            MongoInstanceCatalog::extract_path(&status, "opcounters.missing"),
+            None
+        );
+        assert_eq!(
+            MongoInstanceCatalog::extract_path(&status, "nonexistent.path"),
+            None
+        );
+    }
+
+    #[test]
+    fn static_metric_default_refresh_secs_at_or_above_floor() {
+        let metrics = MongoInstanceCatalog::static_metrics();
+        for m in &metrics {
+            assert!(m.default_refresh_secs >= 10);
+        }
+    }
+
+    #[test]
+    fn static_inspectors_list_is_non_empty() {
+        let inspectors = MongoInstanceCatalog::static_inspectors();
+        assert!(!inspectors.is_empty());
+    }
+
+    #[test]
+    fn mongo_advertises_both_instance_capability_bits() {
+        assert!(
+            mongo_advertises_instance_capabilities(),
+            "MongoDB METADATA must include INSTANCE_METRICS and INSTANCE_INSPECTOR bits"
+        );
+    }
+
+    /// BF10: when cluster_monitor probe returns false, serverStatus-based
+    /// metrics must be absent from list_metrics.
+    #[test]
+    fn metrics_without_cluster_monitor_are_empty() {
+        let metrics = MongoInstanceCatalog::metrics_with_probes(false);
+        assert!(
+            metrics.is_empty(),
+            "all serverStatus metrics must be hidden when cluster_monitor probe fails"
+        );
+    }
+
+    /// BF10: when cluster_monitor probe returns true, metrics are returned.
+    #[test]
+    fn metrics_with_cluster_monitor_are_non_empty() {
+        let metrics = MongoInstanceCatalog::metrics_with_probes(true);
+        assert!(
+            !metrics.is_empty(),
+            "serverStatus metrics must be present when cluster_monitor probe succeeds"
+        );
+    }
+
+    /// BF10: when inprog probe returns false, current_op inspector is absent.
+    #[test]
+    fn inspectors_without_inprog_exclude_current_op() {
+        let inspectors = MongoInstanceCatalog::inspectors_with_probes(false);
+        assert!(
+            inspectors.is_empty(),
+            "mongo.current_op must be absent when inprog probe fails"
+        );
+    }
+
+    /// BF10: when inprog probe returns true, current_op inspector is present.
+    #[test]
+    fn inspectors_with_inprog_include_current_op() {
+        let inspectors = MongoInstanceCatalog::inspectors_with_probes(true);
+        assert!(
+            inspectors.iter().any(|i| i.id == "mongo.current_op"),
+            "mongo.current_op must be present when inprog probe succeeds"
+        );
+    }
+
+    /// BF10: when killop probe returns false, kill row action is absent.
+    #[test]
+    fn row_actions_without_killop_omit_kill() {
+        let actions = MongoInstanceCatalog::row_actions_with_probes("mongo.current_op", false);
+        assert!(
+            actions.is_empty(),
+            "kill must be absent when killop probe fails"
+        );
+    }
+
+    /// BF10: when killop probe returns true, kill row action is present.
+    #[test]
+    fn row_actions_with_killop_include_kill() {
+        let actions = MongoInstanceCatalog::row_actions_with_probes("mongo.current_op", true);
+        assert_eq!(actions.len(), 1, "must have one kill action");
+        assert_eq!(actions[0].id, "kill");
+    }
+
+    /// BF8: mongo.current_op inspector must advertise exactly one kill action.
+    #[test]
+    fn mongo_row_actions_current_op_returns_kill() {
+        let actions = MongoInstanceCatalog::static_row_actions("mongo.current_op");
+        assert_eq!(
+            actions.len(),
+            1,
+            "mongo.current_op must have exactly one row action"
+        );
+        assert_eq!(actions[0].id, "kill");
+        assert!(actions[0].is_destructive);
+    }
+
+    /// BF8: unknown inspector must return no row actions.
+    #[test]
+    fn mongo_row_actions_unknown_returns_empty() {
+        let actions = MongoInstanceCatalog::static_row_actions("mongo.does_not_exist");
+        assert!(
+            actions.is_empty(),
+            "unknown inspector must return no row actions"
+        );
+    }
+
+    /// BF7: MongoInstanceCatalog must return a non-None default dashboard with
+    /// panels that reference valid metric or inspector IDs.
+    #[test]
+    fn mongo_default_dashboard_is_non_none_and_valid() {
+        use dbflux_core::DefaultInstanceDashboard;
+
+        let dashboard: Option<DefaultInstanceDashboard> =
+            MongoInstanceCatalog::static_default_dashboard();
+
+        let dashboard =
+            dashboard.expect("MongoInstanceCatalog must return Some(default_dashboard)");
+        assert!(
+            !dashboard.panels.is_empty(),
+            "default dashboard must have at least one panel"
+        );
+        assert!(
+            !dashboard.title.is_empty(),
+            "default dashboard must have a non-empty title"
+        );
+
+        let metric_ids: Vec<String> = MongoInstanceCatalog::static_metrics()
+            .into_iter()
+            .map(|m| m.id)
+            .collect();
+        let inspector_ids: Vec<String> = MongoInstanceCatalog::static_inspectors()
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+
+        for panel in &dashboard.panels {
+            let valid =
+                metric_ids.contains(&panel.metric_id) || inspector_ids.contains(&panel.metric_id);
+            assert!(
+                valid,
+                "panel metric_id {:?} is not in static metrics or inspectors",
+                panel.metric_id
+            );
+        }
+    }
+}

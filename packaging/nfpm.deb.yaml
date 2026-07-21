@@ -1,4 +1,4 @@
-name: dbflux
+name: ${PKG_NAME}
 arch: ${ARCH}
 platform: linux
 version: ${VERSION}
@@ -25,26 +25,26 @@ recommends:
   - xdg-utils
 contents:
   - src: target/${TARGET}/release/dbflux
-    dst: /usr/bin/dbflux
+    dst: /usr/bin/${APP_ID}
   - src: packaging/dbflux.desktop
-    dst: /usr/share/applications/dbflux.desktop
+    dst: /usr/share/applications/${APP_ID}.desktop
   - src: packaging/icons/256x256/apps/dbflux.png
-    dst: /usr/share/icons/hicolor/256x256/apps/dbflux.png
+    dst: /usr/share/icons/hicolor/256x256/apps/${APP_ID}.png
   - src: packaging/icons/128x128/apps/dbflux.png
-    dst: /usr/share/icons/hicolor/128x128/apps/dbflux.png
+    dst: /usr/share/icons/hicolor/128x128/apps/${APP_ID}.png
   - src: packaging/icons/64x64/apps/dbflux.png
-    dst: /usr/share/icons/hicolor/64x64/apps/dbflux.png
+    dst: /usr/share/icons/hicolor/64x64/apps/${APP_ID}.png
   - src: packaging/icons/48x48/apps/dbflux.png
-    dst: /usr/share/icons/hicolor/48x48/apps/dbflux.png
+    dst: /usr/share/icons/hicolor/48x48/apps/${APP_ID}.png
   - src: packaging/icons/32x32/apps/dbflux.png
-    dst: /usr/share/icons/hicolor/32x32/apps/dbflux.png
+    dst: /usr/share/icons/hicolor/32x32/apps/${APP_ID}.png
   - src: packaging/icons/16x16/apps/dbflux.png
-    dst: /usr/share/icons/hicolor/16x16/apps/dbflux.png
-  - src: resources/icon.svg
-    dst: /usr/share/icons/hicolor/scalable/apps/dbflux.svg
+    dst: /usr/share/icons/hicolor/16x16/apps/${APP_ID}.png
+  - src: ${BRAND_DIR}/mark.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/${APP_ID}.svg
   - src: LICENSE-MIT
-    dst: /usr/share/licenses/dbflux/LICENSE-MIT
+    dst: /usr/share/licenses/${APP_ID}/LICENSE-MIT
   - src: LICENSE-APACHE
-    dst: /usr/share/licenses/dbflux/LICENSE-APACHE
+    dst: /usr/share/licenses/${APP_ID}/LICENSE-APACHE
 scripts:
   postinstall: packaging/scripts/postinst

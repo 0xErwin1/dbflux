@@ -1,11 +1,11 @@
 use crate::keymap::ContextId;
 use crate::ui::icons::AppIcon;
-use crate::ui::tokens::{Radii, Spacing};
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 #[cfg(test)]
 use dbflux_components::helpers::text_color_for_selected;
 use dbflux_components::primitives::{Chord, Icon, overlay_bg, surface_modal_container};
-use dbflux_components::tokens::BannerColors;
+use dbflux_components::semantic::BannerColors as SemBannerColors;
+use dbflux_components::tokens::{Radii, Spacing};
 use dbflux_components::typography::{Body, MonoCaption, MonoLabel};
 use dbflux_core::{CollectionRef, TableRef};
 use fuzzy_matcher::FuzzyMatcher;
@@ -64,6 +64,9 @@ pub enum PaletteItem {
         /// collection charts from query charts.
         is_collection_source: bool,
     },
+    /// "Import Dashboard from JSON" action (shown only when the active connection
+    /// has the `DASHBOARD_IMPORT` capability).
+    ImportDashboard,
 }
 
 /// Schema resource variants surfaced by connected profiles.
@@ -157,6 +160,7 @@ impl PaletteItem {
             } => {
                 format!("Script {} {}", name, relative_path)
             }
+            Self::ImportDashboard => "Charts Import Dashboard from JSON".to_string(),
         }
     }
 
@@ -186,6 +190,10 @@ impl PaletteItem {
                 }
             },
             Self::Script { name, .. } => ("Script".to_string(), name.clone()),
+            Self::ImportDashboard => (
+                "Charts".to_string(),
+                "Import Dashboard from JSON...".to_string(),
+            ),
         }
     }
 
@@ -195,6 +203,7 @@ impl PaletteItem {
             Self::Action { .. } => 0,
             Self::Connection { .. } => 1,
             Self::SavedChart { .. } => 2,
+            Self::ImportDashboard => 2,
             Self::Resource(_) => 3,
             Self::Script { .. } => 4,
         }
@@ -318,9 +327,21 @@ impl PaletteSection {
         match item {
             PaletteItem::Connection { .. } => Self::Connections,
             PaletteItem::Action { .. } => Self::Commands,
-            PaletteItem::SavedChart { .. } => Self::Charts,
+            PaletteItem::SavedChart { .. } | PaletteItem::ImportDashboard => Self::Charts,
             PaletteItem::Resource(_) => Self::Tables,
             PaletteItem::Script { .. } => Self::Scripts,
+        }
+    }
+
+    /// Visual ordering key. Must mirror `section_order` in `render` so that
+    /// keyboard navigation walks the list in the same order the user sees it.
+    fn sort_order(self) -> u8 {
+        match self {
+            Self::Connections => 0,
+            Self::Commands => 1,
+            Self::Charts => 2,
+            Self::Tables => 3,
+            Self::Scripts => 4,
         }
     }
 }
@@ -473,6 +494,8 @@ pub enum PaletteSelection {
     OpenSavedChart {
         chart_id: Uuid,
     },
+    /// The user selected the "Import Dashboard from JSON" entry.
+    ImportDashboard,
 }
 
 pub struct CommandPaletteClosed;
@@ -559,6 +582,7 @@ impl CommandPalette {
                 .enumerate()
                 .map(|(index, _)| FilteredItem { index, score: 0 })
                 .collect();
+            self.sort_filtered_by_section();
         }
 
         cx.notify();
@@ -584,7 +608,7 @@ impl CommandPalette {
                 .map(|(index, _)| FilteredItem { index, score: 0 })
                 .collect();
         } else {
-            let mut scored: Vec<FilteredItem> = self
+            self.filtered = self
                 .items
                 .iter()
                 .enumerate()
@@ -595,21 +619,31 @@ impl CommandPalette {
                         .map(|score| FilteredItem { index, score })
                 })
                 .collect();
-
-            scored.sort_by(|a, b| {
-                b.score.cmp(&a.score).then_with(|| {
-                    self.items[a.index]
-                        .type_priority()
-                        .cmp(&self.items[b.index].type_priority())
-                })
-            });
-
-            self.filtered = scored;
         }
+
+        self.sort_filtered_by_section();
 
         self.selected_index = 0;
         self.scroll_offset = 0;
         cx.notify();
+    }
+
+    /// Sort `self.filtered` so its index order matches the visual section
+    /// order produced by the renderer. Within a section, items are ordered by
+    /// fuzzy-match score (desc) and then by `type_priority` as a tiebreaker.
+    /// Keeping these in sync ensures up/down keyboard navigation walks the
+    /// list in the order the user sees it instead of jumping across sections.
+    fn sort_filtered_by_section(&mut self) {
+        self.filtered.sort_by(|a, b| {
+            let item_a = &self.items[a.index];
+            let item_b = &self.items[b.index];
+            let sec_a = PaletteSection::for_item(item_a).sort_order();
+            let sec_b = PaletteSection::for_item(item_b).sort_order();
+            sec_a
+                .cmp(&sec_b)
+                .then_with(|| b.score.cmp(&a.score))
+                .then_with(|| item_a.type_priority().cmp(&item_b.type_priority()))
+        });
     }
 
     pub fn select_next(&mut self, cx: &mut Context<Self>) {
@@ -727,6 +761,7 @@ impl CommandPalette {
                 PaletteItem::SavedChart { id, .. } => {
                     PaletteSelection::OpenSavedChart { chart_id: *id }
                 }
+                PaletteItem::ImportDashboard => PaletteSelection::ImportDashboard,
             };
 
             self.visible = false;
@@ -740,6 +775,7 @@ impl CommandPalette {
         item: &PaletteItem,
         is_selected: bool,
         theme: &gpui_component::theme::Theme,
+        warning_bg: gpui::Hsla,
     ) -> Stateful<Div> {
         let (category, name) = item.display_label();
 
@@ -754,7 +790,8 @@ impl CommandPalette {
             PaletteItem::Connection { .. }
             | PaletteItem::Resource(_)
             | PaletteItem::Script { .. }
-            | PaletteItem::SavedChart { .. } => item
+            | PaletteItem::SavedChart { .. }
+            | PaletteItem::ImportDashboard => item
                 .qualifier()
                 .map(|q| palette_qualifier_text(q, is_selected, theme).into_any_element()),
         };
@@ -780,8 +817,7 @@ impl CommandPalette {
             .cursor_pointer()
             .border_l_2()
             .when(is_selected, |d| {
-                d.bg(BannerColors::warning_bg(theme))
-                    .border_color(theme.primary)
+                d.bg(warning_bg).border_color(theme.primary)
             })
             .when(!is_selected, |d| {
                 d.border_color(gpui::transparent_black())
@@ -809,6 +845,7 @@ impl Render for CommandPalette {
         }
 
         let theme = cx.theme();
+        let warning_bg = SemBannerColors::for_current(cx).warning_bg;
         let input_state = self.input_state.clone();
 
         // Build the windowed list (scroll_offset..+VISIBLE_ITEMS) then group
@@ -961,6 +998,7 @@ impl Render for CommandPalette {
                                             &item,
                                             is_selected,
                                             theme,
+                                            warning_bg,
                                         )
                                         .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                             cx.stop_propagation();
@@ -1051,8 +1089,8 @@ impl Render for CommandPalette {
 
 #[cfg(test)]
 mod tests {
-    use super::{PaletteCommand, palette_qualifier_text, palette_shortcut_text};
-    use crate::ui::theme;
+    use super::{PaletteCommand, PaletteItem, palette_qualifier_text, palette_shortcut_text};
+    use dbflux_components::theme;
     use dbflux_components::tokens::FontSizes;
     use dbflux_components::typography::AppFonts;
     use gpui::TestAppContext;
@@ -1172,5 +1210,85 @@ mod tests {
         assert!(source.contains(".bg(overlay_bg(theme))"));
         assert!(source.contains("this.hide(cx);"));
         assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
+    }
+
+    // R.1 — Import label cleanup
+
+    #[test]
+    fn command_palette_import_label_contains_no_cloudwatch() {
+        let (_category, label) = PaletteItem::ImportDashboard.display_label();
+        assert!(
+            !label.contains("CloudWatch"),
+            "ImportDashboard display label must not reference CloudWatch; got: {label:?}"
+        );
+        let search = PaletteItem::ImportDashboard.search_text();
+        assert!(
+            !search.contains("CloudWatch"),
+            "ImportDashboard search_text must not reference CloudWatch; got: {search:?}"
+        );
+    }
+
+    #[test]
+    fn command_palette_import_label_is_exactly_correct() {
+        let (_category, label) = PaletteItem::ImportDashboard.display_label();
+        assert_eq!(label, "Import Dashboard from JSON...");
+    }
+
+    // R.2 — New palette entries
+
+    #[test]
+    fn command_palette_contains_no_cloudwatch_substring_in_any_action_label() {
+        // All PaletteItem::Action entries come from default_commands(), which are
+        // turned into PaletteItem::Action. We verify none reference "CloudWatch".
+        use super::super::super::views::workspace::Workspace;
+
+        let commands = Workspace::palette_commands_for_test();
+        for cmd in &commands {
+            assert!(
+                !cmd.name.contains("CloudWatch"),
+                "Command {:?} name must not reference CloudWatch",
+                cmd.name
+            );
+            assert!(
+                !cmd.category.contains("CloudWatch"),
+                "Command {:?} category must not reference CloudWatch",
+                cmd.category
+            );
+        }
+    }
+
+    #[test]
+    fn command_palette_includes_new_dashboard_entry() {
+        use super::super::super::views::workspace::Workspace;
+
+        let commands = Workspace::palette_commands_for_test();
+        let found = commands
+            .iter()
+            .any(|c| c.name == "New Dashboard..." && c.category == "Dashboards");
+        assert!(
+            found,
+            "Palette must include 'Dashboards: New Dashboard...' entry"
+        );
+    }
+
+    #[test]
+    fn command_palette_does_not_include_import_dashboard_in_commands() {
+        // ImportDashboard is a PaletteItem::ImportDashboard, not a PaletteCommand.
+        // It should never appear in default_commands().
+        use super::super::super::views::workspace::Workspace;
+
+        let commands = Workspace::palette_commands_for_test();
+        let import_in_commands = commands
+            .iter()
+            .any(|c| c.name.contains("Import") && c.name.contains("Dashboard"));
+        assert!(
+            !import_in_commands,
+            "ImportDashboard must not appear in default_commands(); found: {:?}",
+            commands
+                .iter()
+                .filter(|c| c.name.contains("Import"))
+                .map(|c| c.name)
+                .collect::<Vec<_>>()
+        );
     }
 }

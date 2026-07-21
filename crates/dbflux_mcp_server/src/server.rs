@@ -301,22 +301,34 @@ impl McpConnectionFactory {
             );
         }
 
-        let auth_provider = if let Some(auth_profile) = auth_profile.as_ref() {
+        let (auth_profile, auth_provider) = if let Some(profile) = auth_profile {
             let provider = self
                 .state
                 .auth_provider_registry
-                .get(&auth_profile.provider_id)
+                .get(&profile.provider_id)
                 .cloned()
                 .ok_or_else(|| {
-                    format!(
-                        "Auth provider '{}' is not available",
-                        auth_profile.provider_id
-                    )
+                    format!("Auth provider '{}' is not available", profile.provider_id)
                 })?;
 
-            Some(SharedDynAuthProvider::boxed(provider))
+            let profile_registry_snapshot: Vec<dbflux_core::auth::AuthProfile> = {
+                let manager = self.state.auth_profile_manager.read().await;
+                manager.items.clone()
+            };
+            let expanded = dbflux_core::auth::expand_auth_profile_refs(
+                &profile,
+                provider.form_def(),
+                &|target_id| {
+                    profile_registry_snapshot
+                        .iter()
+                        .find(|p| p.id == *target_id)
+                        .cloned()
+                },
+            );
+
+            (Some(expanded), Some(SharedDynAuthProvider::boxed(provider)))
         } else {
-            None
+            (None, None)
         };
 
         let resolver = CompositeValueResolver::new(Arc::new(ValueCache::new(
@@ -358,7 +370,6 @@ pub(crate) struct DbFluxServer {
     pub(crate) state: ServerState,
     #[allow(dead_code)] // Used for policy evaluation
     pub(crate) governance: GovernanceMiddleware,
-    #[allow(dead_code)] // Built by the #[tool_router] macro; held to keep tool routes alive
     pub(crate) tool_router: ToolRouter<DbFluxServer>,
 }
 
@@ -630,7 +641,7 @@ impl DbFluxServer {
     }
 }
 
-#[tool_handler]
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for DbFluxServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(
@@ -774,7 +785,10 @@ mod tests {
 
         ServerState {
             client_id: "test-client".to_string(),
-            runtime: Arc::new(RwLock::new(McpRuntime::new(audit_service))),
+            runtime: Arc::new(RwLock::new(McpRuntime::new(
+                audit_service,
+                Box::new(dbflux_approval::InMemoryPendingExecutionStore::default()),
+            ))),
             profile_manager: Arc::new(RwLock::new(profile_manager)),
             auth_profile_manager: Arc::new(RwLock::new(dbflux_core::AuthProfileManager::default())),
             driver_registry: Arc::new(HashMap::from([(driver_id.to_string(), driver)])),
@@ -786,6 +800,25 @@ mod tests {
             connection_setup_lock: Arc::new(tokio::sync::Mutex::new(())),
             secret_manager: Arc::new(dbflux_core::SecretManager::new(Box::new(NoopSecretStore))),
             mcp_enabled_by_default: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn server_handler_exposes_tools_from_all_sub_routers() {
+        let driver = Arc::new(FakeDriver::new(DbKind::Postgres)) as Arc<dyn DbDriver>;
+        let profile = ConnectionProfile::new("test-pg", DbConfig::default_postgres());
+        let state = test_state_with_driver("postgres", driver, profile);
+
+        let server = DbFluxServer::new(state);
+        let tools = server.tool_router.list_all();
+
+        assert!(!tools.is_empty(), "combined tool router must not be empty");
+        for tool in tools {
+            assert!(
+                ServerHandler::get_tool(&server, &tool.name).is_some(),
+                "tool '{}' must be exposed through the ServerHandler",
+                tool.name
+            );
         }
     }
 

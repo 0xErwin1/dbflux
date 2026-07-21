@@ -7,23 +7,36 @@ use std::time::Instant;
 
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo, ColumnInfo, ColumnKind,
-    ColumnMeta, Connection, ConnectionExt, ConnectionProfile, ConstraintInfo, ConstraintKind,
-    CreateIndexRequest, CrudResult, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
-    DbSchemaInfo, DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection,
-    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, DropIndexRequest,
-    ExplainRequest, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData, IndexInfo,
-    IsolationLevel, KeyValueConnection, MutationCapabilities, OrderByColumn, PaginationStyle,
-    PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalConnection,
-    RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SQLITE_FORM, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind,
-    SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SyntaxInfo,
-    TableInfo, TransactionCapabilities, Value, ViewInfo, WhereOperator, generate_delete_template,
-    generate_drop_table, generate_insert_template, generate_select_star, generate_update_template,
-    render_semantic_filter_sql,
+    AddColumnRequest, AlterColumnRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator,
+    CodeGeneratorInfo, ColumnInfo, ColumnKind, ColumnMeta, Connection, ConnectionExt,
+    ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult,
+    DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities,
+    DdlRejection, DeploymentClass, DescribeRequest, DocumentConnection, DriverCapabilities,
+    DriverFormDef, DriverLimits, DriverMetadata, DropColumnRequest, DropIndexRequest,
+    ExplainRequest, ForeignKeyInfo, FormSection, FormTab, FormValues, FormattedError, Icon,
+    IndexData, IndexInfo, IsolationLevel, KeyValueConnection, MutationCapabilities, OrderByColumn,
+    PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter,
+    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest,
+    RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
+    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
+    SqlQueryBuilder, SyntaxInfo, TableInfo, TransactionCapabilities, TransferFamily, Value,
+    ViewInfo, WhereOperator, field_file_path, generate_delete_template, generate_drop_table,
+    generate_insert_template, generate_select_star, generate_update_template,
+    render_semantic_filter_sql, validate_ddl_fragment,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
+
+pub static SQLITE_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![FormTab {
+        id: "main".into(),
+        label: "Main".into(),
+        sections: vec![FormSection {
+            title: "Database".into(),
+            fields: vec![field_file_path()],
+        }],
+    }],
+});
 
 /// Connection pool for in-memory SQLite databases.
 /// Key is "profile_id:connection_id", value is the pooled connection.
@@ -36,6 +49,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     display_name: "SQLite".into(),
     description: "Embedded file-based database".into(),
     category: DatabaseCategory::Relational,
+    transfer_family: TransferFamily::Sql,
     deployment_class: Some(DeploymentClass::Embedded),
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
@@ -55,7 +69,9 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::EXPORT_JSON.bits()
             | DriverCapabilities::QUERY_CANCELLATION.bits()
             | DriverCapabilities::TRANSACTIONAL_DDL.bits()
-            | DriverCapabilities::MULTI_STATEMENT.bits(),
+            | DriverCapabilities::MULTI_STATEMENT.bits()
+            | DriverCapabilities::BULK_INSERT.bits()
+            | DriverCapabilities::DISABLE_FK_CHECKS.bits(),
     ),
     default_port: None,
     uri_scheme: "sqlite".into(),
@@ -88,6 +104,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             WhereOperator::Not,
         ],
         supports_order_by: true,
+        order_by_mode: dbflux_core::OrderByMode::AnyColumns,
         supports_group_by: true,
         supports_having: true,
         supports_distinct: true,
@@ -155,10 +172,14 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         max_identifier_length: 100_000,
         max_columns: 32766,
         max_indexes_per_table: 64,
+        max_bulk_insert_rows: 0,
     }),
     ssl_modes: None,
     ssl_cert_fields: None,
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
+    editor_profile: None,
 });
 
 /// SQLite SQL dialect implementation.
@@ -261,6 +282,14 @@ impl SqliteCodeGenerator {
     }
 }
 
+/// SQLite added `ALTER TABLE ... DROP COLUMN` support in release 3.35.0
+/// (`SQLITE_VERSION_NUMBER` 3035000, 2021-03-12). Extracted as a pure
+/// function so both the runtime check and its tests can exercise the
+/// threshold without depending on the actual bundled library version.
+fn sqlite_drop_column_supported(version_number: i32) -> bool {
+    version_number >= 3_035_000
+}
+
 impl CodeGenerator for SqliteCodeGenerator {
     fn capabilities(&self) -> CodeGenCapabilities {
         CodeGenCapabilities::CRUD
@@ -268,6 +297,8 @@ impl CodeGenerator for SqliteCodeGenerator {
             | CodeGenCapabilities::REINDEX
             | CodeGenCapabilities::CREATE_TABLE
             | CodeGenCapabilities::DROP_TABLE
+            | CodeGenCapabilities::ADD_COLUMN
+            | CodeGenCapabilities::DROP_COLUMN
     }
 
     fn generate_create_index(&self, req: &CreateIndexRequest) -> Option<String> {
@@ -297,6 +328,62 @@ impl CodeGenerator for SqliteCodeGenerator {
     fn generate_reindex(&self, req: &ReindexRequest) -> Option<String> {
         let index = self.qualified(req.schema_name, req.index_name);
         Some(format!("REINDEX {};", index))
+    }
+
+    fn generate_add_column(&self, req: &AddColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        validate_ddl_fragment(req.type_name, "column type")?;
+        if let Some(default) = req.default {
+            validate_ddl_fragment(default, "column default")?;
+        }
+
+        let table = self.qualified(req.schema_name, req.table_name);
+        let mut sql = format!(
+            "ALTER TABLE {} ADD COLUMN {} {}",
+            table,
+            self.quote(req.column_name),
+            req.type_name
+        );
+
+        if !req.nullable {
+            sql.push_str(" NOT NULL");
+        }
+        if let Some(default) = req.default {
+            sql.push_str(&format!(" DEFAULT {}", default));
+        }
+        sql.push(';');
+
+        Ok(vec![sql])
+    }
+
+    fn generate_drop_column(&self, req: &DropColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        if !sqlite_drop_column_supported(rusqlite::version_number()) {
+            return Err(DdlRejection {
+                reason: "SQLite requires a table rebuild".to_string(),
+                followup: Some("DBF-158"),
+            });
+        }
+
+        let table = self.qualified(req.schema_name, req.table_name);
+        Ok(vec![format!(
+            "ALTER TABLE {} DROP COLUMN {};",
+            table,
+            self.quote(req.column_name)
+        )])
+    }
+
+    /// SQLite has no `ALTER COLUMN` statement: changing a column's type,
+    /// nullability, or default always requires the create-copy-drop-rename
+    /// table-rebuild dance, which this seam does not perform. Every request
+    /// is rejected with the DBF-158 follow-up regardless of which fields are
+    /// set.
+    fn generate_alter_column(
+        &self,
+        _req: &AlterColumnRequest,
+    ) -> Result<Vec<String>, DdlRejection> {
+        Err(DdlRejection {
+            reason: "SQLite requires a table rebuild".to_string(),
+            followup: Some("DBF-158"),
+        })
     }
 }
 
@@ -645,6 +732,16 @@ impl Connection for SqliteConnection {
 
     fn close(&mut self) -> Result<(), DbError> {
         Ok(())
+    }
+
+    fn set_referential_integrity(&self, enabled: bool) -> Result<(), DbError> {
+        let value = if enabled { "ON" } else { "OFF" };
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+        conn.execute_batch(&format!("PRAGMA foreign_keys = {value}"))
+            .map_err(|e| format_sqlite_query_error(&e))
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
@@ -2194,13 +2291,14 @@ pub fn fetch_dependents(
 #[cfg(test)]
 mod tests {
     use super::{
-        SqliteDialect, SqliteDriver, kind_from_decltype, plan_sqlite_semantic_request,
-        sqlite_generate_create_table,
+        RusqliteConnection, SqliteDialect, SqliteDriver, kind_from_decltype,
+        plan_sqlite_semantic_request, sqlite_generate_create_table,
     };
     use dbflux_core::{
-        ColumnInfo, ColumnKind, DatabaseCategory, DbConfig, DbDriver, FormValues, MutationRequest,
-        QueryLanguage, RowInsert, SemanticRequest, SqlDialect, TableBrowseRequest, TableInfo,
-        TableRef, Value, WhereOperator,
+        ColumnInfo, ColumnKind, DatabaseCategory, DbConfig, DbDriver, DriverCapabilities,
+        FormValues, MutationRequest, QueryLanguage, RowInsert, SemanticRequest, SqlDialect,
+        SqlMutationGenerator, TableBrowseRequest, TableInfo, TableRef, TransferFamily, Value,
+        WhereOperator,
     };
 
     // --- kind_from_decltype unit tests (TDD: RED → GREEN) ---
@@ -2363,9 +2461,27 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "TODO: sqlite URI mode support"]
-    fn pending_sqlite_uri_mode_support() {
-        panic!("TODO: implement URI mode for SQLite driver and replace this pending test");
+    fn sqlite_uri_mode_ro_opens_read_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("ro.db");
+        RusqliteConnection::open(&db)
+            .unwrap()
+            .execute_batch("CREATE TABLE seed(x);")
+            .unwrap();
+
+        let uri = format!("file:{}?mode=ro", db.display());
+        let conn = RusqliteConnection::open(&uri).expect("read-only URI open should succeed");
+        let write = conn.execute_batch("CREATE TABLE t(x);");
+        assert!(write.is_err(), "write must fail on a mode=ro connection");
+    }
+
+    #[test]
+    fn sqlite_plain_path_opens_read_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("rw.db");
+        let conn = RusqliteConnection::open(&db).expect("plain path open should succeed");
+        conn.execute_batch("CREATE TABLE t(x);")
+            .expect("write must succeed on a normal file path");
     }
 
     #[test]
@@ -2374,10 +2490,74 @@ mod tests {
         let metadata = driver.metadata();
 
         assert_eq!(metadata.category, DatabaseCategory::Relational);
+        assert_eq!(metadata.transfer_family, TransferFamily::Sql);
         assert_eq!(metadata.query_language, QueryLanguage::Sql);
         assert_eq!(metadata.default_port, None);
         assert_eq!(metadata.uri_scheme, "sqlite");
         assert!(!driver.form_definition().tabs.is_empty());
+    }
+
+    #[test]
+    fn sqlite_metadata_advertises_bulk_insert_and_fk_disable_but_not_truncate() {
+        let driver = SqliteDriver::new();
+        let capabilities = driver.metadata().capabilities;
+
+        assert!(capabilities.contains(DriverCapabilities::BULK_INSERT));
+        assert!(capabilities.contains(DriverCapabilities::DISABLE_FK_CHECKS));
+        // SQLite has no `TRUNCATE TABLE` statement; the engine's Truncate
+        // load option must not be offered for this driver.
+        assert!(!capabilities.contains(DriverCapabilities::TRUNCATE_TABLE));
+    }
+
+    #[test]
+    fn sqlite_generate_bulk_insert_emits_multi_row_values() {
+        use dbflux_core::QueryGenerator;
+
+        let generator = SqlMutationGenerator::new(&SqliteDialect);
+        let columns = vec!["name".to_string(), "age".to_string()];
+        let owned_rows: Vec<Vec<Value>> = vec![
+            vec![Value::Text("Alice".to_string()), Value::Int(25)],
+            vec![Value::Text("Bob".to_string()), Value::Int(30)],
+        ];
+        let rows: Vec<&[Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
+
+        let generated = generator
+            .generate_bulk_insert(None, "users", &columns, &[], &rows)
+            .unwrap()
+            .expect("sqlite generator must support native bulk insert");
+
+        assert_eq!(
+            generated.text,
+            "INSERT INTO \"users\" (\"name\", \"age\") VALUES ('Alice', 25), ('Bob', 30)"
+        );
+    }
+
+    #[test]
+    fn sqlite_generate_create_table_preserves_types_and_pk() {
+        use dbflux_core::{CreateTableSpec, QueryGenerator, TransferColumn};
+
+        let generator = SqlMutationGenerator::new(&SqliteDialect);
+        let spec = CreateTableSpec {
+            schema: None,
+            table: "users".to_string(),
+            columns: vec![TransferColumn {
+                name: "id".to_string(),
+                type_name: Some("INTEGER".to_string()),
+                nullable: false,
+                is_primary_key: true,
+            }],
+            if_not_exists: false,
+        };
+
+        let generated = generator
+            .generate_create_table(&spec)
+            .unwrap()
+            .expect("sqlite generator must support native CREATE TABLE");
+
+        assert_eq!(
+            generated.text,
+            "CREATE TABLE \"users\" (\n    \"id\" INTEGER NOT NULL,\n    PRIMARY KEY (\"id\")\n);"
+        );
     }
 
     #[test]
@@ -2433,6 +2613,128 @@ mod tests {
         assert_eq!(
             plan.queries[0].text,
             "SELECT \"customer_id\", AVG(\"amount\") AS \"avg_amount\" FROM \"orders\" GROUP BY \"customer_id\" HAVING \"avg_amount\" > 10"
+        );
+    }
+
+    #[test]
+    fn sqlite_does_not_advertise_instance_metrics_or_inspector() {
+        use super::METADATA;
+        use dbflux_core::DriverCapabilities;
+
+        let caps = METADATA.capabilities;
+        assert!(
+            !caps.contains(DriverCapabilities::INSTANCE_METRICS),
+            "SQLite must not advertise INSTANCE_METRICS"
+        );
+        assert!(
+            !caps.contains(DriverCapabilities::INSTANCE_INSPECTOR),
+            "SQLite must not advertise INSTANCE_INSPECTOR"
+        );
+    }
+
+    // ===== Column ALTER seam (DBF-24) =====
+
+    use super::{SqliteCodeGenerator, sqlite_drop_column_supported};
+    use dbflux_core::{AddColumnRequest, AlterColumnRequest, CodeGenerator, DropColumnRequest};
+
+    #[test]
+    fn sqlite_codegen_generates_add_column_with_default() {
+        let generator = SqliteCodeGenerator;
+        let request = AddColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+            type_name: "INTEGER",
+            nullable: false,
+            default: Some("0"),
+        };
+
+        let statements = generator
+            .generate_add_column(&request)
+            .expect("sqlite should generate add column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE \"users\" ADD COLUMN \"age\" INTEGER NOT NULL DEFAULT 0;"]
+        );
+    }
+
+    #[test]
+    fn sqlite_codegen_generates_add_column_nullable_without_default() {
+        let generator = SqliteCodeGenerator;
+        let request = AddColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "nickname",
+            type_name: "TEXT",
+            nullable: true,
+            default: None,
+        };
+
+        let statements = generator
+            .generate_add_column(&request)
+            .expect("sqlite should generate add column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE \"users\" ADD COLUMN \"nickname\" TEXT;"]
+        );
+    }
+
+    #[test]
+    fn sqlite_drop_column_supported_from_3_35_0_onward() {
+        assert!(sqlite_drop_column_supported(3_035_000));
+        assert!(sqlite_drop_column_supported(3_046_001));
+    }
+
+    #[test]
+    fn sqlite_drop_column_unsupported_before_3_35_0() {
+        assert!(!sqlite_drop_column_supported(3_034_001));
+        assert!(!sqlite_drop_column_supported(3_000_000));
+    }
+
+    #[test]
+    fn sqlite_codegen_generates_drop_column_on_bundled_runtime() {
+        // rusqlite is built with the `bundled` feature, which always ships a
+        // SQLite release far newer than 3.35 (2021-03-12), so this exercises
+        // the real runtime version rather than a synthetic one.
+        let generator = SqliteCodeGenerator;
+        let request = DropColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+        };
+
+        let statements = generator
+            .generate_drop_column(&request)
+            .expect("bundled SQLite should support DROP COLUMN");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE \"users\" DROP COLUMN \"age\";"]
+        );
+    }
+
+    #[test]
+    fn sqlite_codegen_alter_column_always_rejects_with_dbf158_followup() {
+        let generator = SqliteCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+            new_type: Some("TEXT"),
+            nullable: None,
+            default: None,
+        };
+
+        let result = generator.generate_alter_column(&request);
+
+        assert_eq!(
+            result,
+            Err(dbflux_core::DdlRejection {
+                reason: "SQLite requires a table rebuild".to_string(),
+                followup: Some("DBF-158"),
+            })
         );
     }
 }

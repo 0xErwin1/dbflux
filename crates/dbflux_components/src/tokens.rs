@@ -3,6 +3,10 @@ use gpui::{BoxShadow, Hsla, Pixels, Point, px, rgb};
 pub struct Spacing;
 
 impl Spacing {
+    /// Half-step below XS — form-row label padding, chart pills. (6 px)
+    ///
+    /// Note: XXS (6) > XS (4); non-monotonic by design, locked to px(6.).
+    pub const XXS: Pixels = px(6.0);
     pub const XS: Pixels = px(4.0);
     pub const SM: Pixels = px(8.0);
     pub const MD: Pixels = px(12.0);
@@ -69,6 +73,17 @@ impl Radii {
     pub const FULL: Pixels = px(9999.0);
 }
 
+/// Border-width tokens. WIDTH context only — `.border_*` widths, stripe
+/// thicknesses. Do NOT use for margins, paddings, or radii.
+pub struct Borders;
+
+impl Borders {
+    /// Hairline border — default control/separator edge. (1 px)
+    pub const THIN: Pixels = px(1.0);
+    /// Emphasis border — danger accents, active-state edges. (2 px)
+    pub const MEDIUM: Pixels = px(2.0);
+}
+
 /// Centralized box-shadow definitions.
 ///
 /// Use these instead of constructing `BoxShadow` at call sites so the shadow
@@ -88,6 +103,7 @@ impl Shadows {
             },
             blur_radius: px(8.0),
             spread_radius: px(0.0),
+            inset: false,
         }
     }
 
@@ -104,6 +120,7 @@ impl Shadows {
             },
             blur_radius: px(24.0),
             spread_radius: px(0.0),
+            inset: false,
         }
     }
 
@@ -120,6 +137,7 @@ impl Shadows {
             },
             blur_radius: px(16.0),
             spread_radius: px(0.0),
+            inset: false,
         }
     }
 }
@@ -285,60 +303,6 @@ impl RowColors {
     }
 }
 
-/// Banner background and foreground colors for status banners.
-///
-/// Values are sourced from the design-token sheet (`tokens.css --c-banner-*`).
-/// `info` maps to `--c-banner-wait-*`, `success` to `--c-banner-ok-*`, and
-/// `danger` to `--c-banner-err-*`. `warning` derives from the theme's primary
-/// amber at reduced alpha (no separate token in tokens.css).
-pub struct BannerColors;
-
-impl BannerColors {
-    /// Info/wait banner background: `#1E3A5F`.
-    pub fn info_bg(_theme: &gpui_component::Theme) -> Hsla {
-        rgb(0x1E3A5F).into()
-    }
-
-    /// Info/wait banner foreground: `#93C5FD`.
-    pub fn info_fg(_theme: &gpui_component::Theme) -> Hsla {
-        rgb(0x93C5FD).into()
-    }
-
-    /// Success banner background: `#14532D`.
-    pub fn success_bg(_theme: &gpui_component::Theme) -> Hsla {
-        rgb(0x14532D).into()
-    }
-
-    /// Success banner foreground: `#86EFAC`.
-    pub fn success_fg(_theme: &gpui_component::Theme) -> Hsla {
-        rgb(0x86EFAC).into()
-    }
-
-    /// Warning banner background: theme primary at 0.20 alpha.
-    pub fn warning_bg(theme: &gpui_component::Theme) -> Hsla {
-        let mut color = theme.primary;
-        color.a = 0.20;
-        color
-    }
-
-    /// Warning banner foreground: theme primary at full opacity.
-    pub fn warning_fg(theme: &gpui_component::Theme) -> Hsla {
-        let mut color = theme.primary;
-        color.a = 1.0;
-        color
-    }
-
-    /// Danger banner background: `#7F1D1D`.
-    pub fn danger_bg(_theme: &gpui_component::Theme) -> Hsla {
-        rgb(0x7F1D1D).into()
-    }
-
-    /// Danger banner foreground: `#FCA5A5`.
-    pub fn danger_fg(_theme: &gpui_component::Theme) -> Hsla {
-        rgb(0xFCA5A5).into()
-    }
-}
-
 /// Status-dot palette colors for connection/task indicators.
 ///
 /// The palette returns the dot color only — animation (pulsing) is the
@@ -390,16 +354,79 @@ impl Anim {
     pub const FADE_MS: u64 = 120;
 }
 
+/// Chart-specific geometry tokens — fonts, gaps, swatch/dot sizes, row heights,
+/// and reserved column widths used by chart element factories (`axis_bar`,
+/// `point_inspector`, `legend`).
+///
+/// Chart chrome uses smaller fonts than the standard UI scale and a handful of
+/// chart-only widths that do not belong in the generic `Widths` namespace.
+/// Canvas paint geometry (line widths, tick lengths) lives directly in
+/// `chart/engine.rs` and is exempt from the spacing guardrail.
+pub struct ChartGeometry;
+
+impl ChartGeometry {
+    /// Tiny chart font — counter text, tick labels. (10 px, smaller than `FontSizes::XS`)
+    pub const FONT_TINY: Pixels = px(10.0);
+
+    /// Chart label font — legend chips, dropdown rows. (11 px)
+    pub const FONT_LABEL: Pixels = px(11.0);
+
+    /// Hairline accent stripe inside chart chrome. (1 px)
+    pub const HAIRLINE: Pixels = px(1.0);
+
+    /// Accent stripe (medium emphasis) — divider lines, checked-state borders. (2 px)
+    pub const ACCENT_STRIPE: Pixels = px(2.0);
+
+    /// Tick/gap accent — small gaps between chart sub-elements and tick spacing. (3 px)
+    pub const TICK_GAP: Pixels = px(3.0);
+
+    /// Color swatch / status dot dimension. (10 px square)
+    pub const SWATCH: Pixels = px(10.0);
+
+    /// Row height in chart dropdowns and inspector lists. (11 px)
+    pub const ROW: Pixels = px(11.0);
+
+    /// Reserved width for short axis tick labels. (60 px)
+    pub const SHORT_LABEL_COL: Pixels = px(60.0);
+
+    /// Reserved width for the point-inspector value column. (80 px)
+    pub const VALUE_COL: Pixels = px(80.0);
+
+    /// Axis-bar dropdown panel width. (140 px)
+    pub const DROPDOWN_PANEL: Pixels = px(140.0);
+}
+
 pub struct Widths;
 
 impl Widths {
     /// Width of the row inspector overlay panel.
     pub const INSPECTOR: Pixels = px(320.0);
+
+    /// Label column width in settings form grid rows (drivers, hooks sections).
+    ///
+    /// Applied to the fixed-width left column that holds field labels and
+    /// dropdown controls in two-column settings forms. (220 px)
+    pub const SETTINGS_FORM_LABEL: Pixels = px(220.0);
+
+    /// Dropdown column width in connection manager form rows.
+    ///
+    /// Applied to dropdown and field-control wrappers in the connection manager
+    /// tabs (hooks, render, access, drivers). (240 px)
+    pub const CM_FORM_DROPDOWN: Pixels = px(240.0);
+
+    /// Left list-panel width in settings sections with a master/detail layout.
+    ///
+    /// Applied to the left panel (`border_r_1`) listing selectable items in
+    /// MCP (clients, roles, policies) and driver settings sections. (300 px)
+    pub const SETTINGS_LIST_PANEL: Pixels = px(300.0);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ChromeColorSlot, ChromeEdgeRole, ChromeSurfaceRole, FontSizes, Radii, Shadows};
+    use super::{
+        Borders, ChartGeometry, ChromeColorSlot, ChromeEdgeRole, ChromeSurfaceRole, FontSizes,
+        Radii, Shadows, Spacing,
+    };
     use gpui::px;
 
     // Static-constant baseline: matches AppStyle::Default (project's flat,
@@ -469,5 +496,34 @@ mod tests {
         assert_eq!(popover.background, ChromeColorSlot::Popover);
         assert_eq!(popover.edge, ChromeEdgeRole::Popover);
         assert_eq!(popover.radius, Radii::MD);
+    }
+
+    #[test]
+    fn spacing_xxs_equals_px_6() {
+        assert_eq!(Spacing::XXS, px(6.0));
+    }
+
+    #[test]
+    fn borders_thin_equals_px_1() {
+        assert_eq!(Borders::THIN, px(1.0));
+    }
+
+    #[test]
+    fn borders_medium_equals_px_2() {
+        assert_eq!(Borders::MEDIUM, px(2.0));
+    }
+
+    #[test]
+    fn chart_geometry_tokens_match_documented_values() {
+        assert_eq!(ChartGeometry::FONT_TINY, px(10.0));
+        assert_eq!(ChartGeometry::FONT_LABEL, px(11.0));
+        assert_eq!(ChartGeometry::HAIRLINE, px(1.0));
+        assert_eq!(ChartGeometry::ACCENT_STRIPE, px(2.0));
+        assert_eq!(ChartGeometry::TICK_GAP, px(3.0));
+        assert_eq!(ChartGeometry::SWATCH, px(10.0));
+        assert_eq!(ChartGeometry::ROW, px(11.0));
+        assert_eq!(ChartGeometry::SHORT_LABEL_COL, px(60.0));
+        assert_eq!(ChartGeometry::VALUE_COL, px(80.0));
+        assert_eq!(ChartGeometry::DROPDOWN_PANEL, px(140.0));
     }
 }

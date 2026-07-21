@@ -4,15 +4,15 @@
 //! The `aud_audit_events` table is created by the unified schema migration
 //! in `dbflux_storage::migrations::mod_001_initial`.
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use dbflux_core::observability::EventRecord;
+use dbflux_storage::migrations::aud_schema;
 use dbflux_storage::repositories::audit::AuditEventDto;
 use dbflux_storage::{
-    AppendAuditEventExtended, AuditQueryFilter as StorageAuditQueryFilter, AuditRepository,
-    error::RepositoryError,
+    AppendAuditEventExtended, AuditAggregateParams, AuditQueryFilter as StorageAuditQueryFilter,
+    AuditRepository, error::RepositoryError,
 };
 use rusqlite::Connection;
 
@@ -23,6 +23,7 @@ fn to_audit_error(e: RepositoryError) -> AuditError {
     match e {
         RepositoryError::Sqlite { source } => AuditError::Sqlite(source),
         RepositoryError::NotFound(msg) => AuditError::NotFound(msg),
+        RepositoryError::Validation(msg) => AuditError::Validation(msg),
         RepositoryError::Serialization { source: _ } => {
             AuditError::Sqlite(rusqlite::Error::InvalidQuery)
         }
@@ -99,91 +100,26 @@ impl SqliteAuditStore {
         // Open the database and run migrations if needed
         let conn = Connection::open(&path)?;
 
+        // Wait on a contended database instead of failing immediately with
+        // SQLITE_BUSY. The audit database can be opened concurrently (it shares
+        // the WAL file with StorageRuntime, and tests may race on a shared temp
+        // path), so a busy timeout serializes these openers rather than
+        // surfacing a spurious "database is locked" error.
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(AuditError::Sqlite)?;
+
         // Enable WAL mode to be compatible with StorageRuntime's database configuration.
         // This must be done before any other operations to ensure proper isolation.
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(AuditError::Sqlite)?;
 
-        // Apply migrations if the table doesn't exist
-        let table_exists: bool = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='aud_audit_events'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|count| count > 0)
-            .unwrap_or(false);
+        aud_schema::create_aud_audit_events(&conn, false)?;
 
-        if !table_exists {
-            // Create the table with extended schema - note: no FK constraint since cfg_connection_profiles
-            // may not exist when used standalone (outside of StorageRuntime migrations)
-            conn.execute_batch(
-                "CREATE TABLE IF NOT EXISTS aud_audit_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    actor_id TEXT NOT NULL,
-                    tool_id TEXT NOT NULL,
-                    decision TEXT NOT NULL,
-                    reason TEXT,
-                    profile_id TEXT,
-                    classification TEXT,
-                    duration_ms INTEGER,
-                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                    created_at_epoch_ms INTEGER NOT NULL,
-                    level TEXT,
-                    category TEXT,
-                    action TEXT,
-                    outcome TEXT,
-                    actor_type TEXT,
-                    source_id TEXT,
-                    summary TEXT,
-                    connection_id TEXT,
-                    database_name TEXT,
-                    driver_id TEXT,
-                    object_type TEXT,
-                    object_id TEXT,
-                    details_json TEXT,
-                    error_code TEXT,
-                    error_message TEXT,
-                    session_id TEXT,
-                    correlation_id TEXT
-                )",
-            )?;
-        } else {
-            // Table exists but may not have extended columns - add them if missing
-            let extended_columns = [
-                "level",
-                "category",
-                "action",
-                "outcome",
-                "actor_type",
-                "source_id",
-                "summary",
-                "connection_id",
-                "database_name",
-                "driver_id",
-                "object_type",
-                "object_id",
-                "details_json",
-                "error_code",
-                "error_message",
-                "session_id",
-                "correlation_id",
-            ];
+        dbflux_storage::paths::secure_file_permissions(&path)
+            .map_err(|e| AuditError::Io(std::io::Error::other(e.to_string())))?;
 
-            let mut statement = conn.prepare("PRAGMA table_info(aud_audit_events)")?;
-            let existing_columns: HashSet<String> = statement
-                .query_map([], |row| row.get::<_, String>(1))?
-                .collect::<Result<HashSet<_>, _>>()?;
-
-            for col in extended_columns {
-                if existing_columns.contains(col) {
-                    continue;
-                }
-
-                let sql = format!("ALTER TABLE aud_audit_events ADD COLUMN {} TEXT", col);
-                conn.execute_batch(&sql)?;
-            }
-        }
+        dbflux_storage::paths::secure_db_sidecars(&path)
+            .map_err(|e| AuditError::Io(std::io::Error::other(e.to_string())))?;
 
         // Wrap in Arc<Mutex<Connection>> for AuditRepository
         let conn = Arc::new(Mutex::new(conn));
@@ -375,6 +311,21 @@ impl SqliteAuditStore {
         }
     }
 
+    /// Aggregates audit events into time buckets grouped by a chosen column.
+    ///
+    /// Delegates to `AuditRepository::aggregate`. The `params.filter` uses
+    /// the storage `AuditQueryFilter` directly (same type), so no conversion
+    /// is needed here.
+    ///
+    /// Returns `(bucket_ms, group_label, count)` tuples ordered by bucket
+    /// ascending.
+    pub fn aggregate(
+        &self,
+        params: &AuditAggregateParams,
+    ) -> Result<Vec<(i64, String, i64)>, AuditError> {
+        self.repo.aggregate(params).map_err(to_audit_error)
+    }
+
     /// Deletes audit events older than the given cutoff timestamp.
     ///
     /// ## Arguments
@@ -389,5 +340,115 @@ impl SqliteAuditStore {
         self.repo
             .delete_older_than(cutoff_ms, limit)
             .map_err(to_audit_error)
+    }
+
+    /// Persists the tracing bridge capture threshold to `cfg_audit_settings`.
+    ///
+    /// This table lives in the same `dbflux.db` file as the audit events, so
+    /// the write goes through the same connection pool without extra dependencies.
+    pub fn update_log_capture_min_level(&self, level: &str) -> Result<(), AuditError> {
+        self.repo
+            .update_log_capture_min_level(level)
+            .map_err(to_audit_error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dbflux_storage::AuditGroupColumn;
+
+    use super::*;
+
+    fn temp_store(name: &str) -> SqliteAuditStore {
+        let path = std::env::temp_dir().join(format!(
+            "dbflux_audit_store_{}_{}.db",
+            name,
+            std::process::id()
+        ));
+
+        let _ = std::fs::remove_file(&path);
+
+        SqliteAuditStore::new(&path).expect("should open store")
+    }
+
+    fn insert_event_in_store(
+        store: &SqliteAuditStore,
+        ts_ms: i64,
+        category: Option<&str>,
+        outcome: Option<&str>,
+        _level: Option<&str>,
+    ) {
+        use dbflux_core::observability::{
+            EventActorType, EventCategory, EventOutcome, EventRecord, EventSeverity, EventSourceId,
+        };
+
+        let event = EventRecord {
+            id: None,
+            ts_ms,
+            level: EventSeverity::Info,
+            category: match category {
+                Some("query") => EventCategory::Query,
+                Some("connection") => EventCategory::Connection,
+                Some("config") => EventCategory::Config,
+                _ => EventCategory::System,
+            },
+            action: "test_action".to_string(),
+            outcome: match outcome {
+                Some("failure") => EventOutcome::Failure,
+                _ => EventOutcome::Success,
+            },
+            actor_type: EventActorType::User,
+            actor_id: Some("test".to_string()),
+            source_id: EventSourceId::Local,
+            summary: "test event".to_string(),
+            connection_id: None,
+            database_name: None,
+            driver_id: None,
+            object_type: None,
+            object_id: None,
+            details_json: None,
+            error_code: None,
+            error_message: None,
+            duration_ms: None,
+            session_id: None,
+            correlation_id: None,
+        };
+
+        store.record(event).expect("record should succeed");
+    }
+
+    #[test]
+    fn sqlite_store_aggregate_delegates() {
+        let store = temp_store("delegate");
+
+        // Insert 3 events — all fall in the same bucket (bucket_ms=60_000)
+        insert_event_in_store(&store, 1_000, Some("query"), Some("success"), Some("info"));
+        insert_event_in_store(&store, 2_000, Some("query"), Some("success"), Some("info"));
+        insert_event_in_store(
+            &store,
+            3_000,
+            Some("connection"),
+            Some("success"),
+            Some("info"),
+        );
+
+        let params = AuditAggregateParams {
+            bucket_ms: 60_000,
+            group_by: AuditGroupColumn::Category,
+            filter: StorageAuditQueryFilter::default(),
+        };
+
+        let results = store.aggregate(&params).expect("aggregate should succeed");
+
+        // 2 distinct category values in bucket 0
+        assert_eq!(results.len(), 2);
+
+        let query_row = results.iter().find(|(_, l, _)| l == "query");
+        assert!(query_row.is_some());
+        assert_eq!(query_row.unwrap().2, 2);
+
+        let connection_row = results.iter().find(|(_, l, _)| l == "connection");
+        assert!(connection_row.is_some());
+        assert_eq!(connection_row.unwrap().2, 1);
     }
 }

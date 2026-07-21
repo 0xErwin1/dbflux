@@ -204,7 +204,7 @@ impl DatabaseCategory {
             DatabaseCategory::Graph => "Nodes",
             DatabaseCategory::TimeSeries => "Measurements",
             DatabaseCategory::WideColumn => "Tables",
-            DatabaseCategory::LogStream => "Log groups",
+            DatabaseCategory::LogStream => "Log Groups",
         }
     }
 
@@ -217,7 +217,7 @@ impl DatabaseCategory {
             DatabaseCategory::Graph => "Node",
             DatabaseCategory::TimeSeries => "Measurement",
             DatabaseCategory::WideColumn => "Table",
-            DatabaseCategory::LogStream => "Log group",
+            DatabaseCategory::LogStream => "Log Group",
         }
     }
 
@@ -245,6 +245,18 @@ impl DatabaseCategory {
             DatabaseCategory::WideColumn => "Row",
             DatabaseCategory::LogStream => "Log event",
         }
+    }
+
+    /// Whether the sidebar should expand the primary container folder by
+    /// default when a profile is freshly connected.
+    ///
+    /// LogStream connections (CloudWatch) routinely surface hundreds of log
+    /// groups per account/region; pre-expanding that folder buries the rest
+    /// of the tree (Dashboards, Saved Charts, Metrics) below a long list.
+    /// Other categories typically have a handful of tables/collections where
+    /// auto-expand is the productive default.
+    pub fn default_expand_container(&self) -> bool {
+        !matches!(self, DatabaseCategory::LogStream)
     }
 
     /// Bitmask of capabilities the UI should display for this category.
@@ -324,6 +336,38 @@ impl DatabaseCategory {
     }
 }
 
+/// Same-family compatibility descriptor for the data-transfer engine.
+///
+/// Deliberately distinct from [`DatabaseCategory`]: `DatabaseCategory::KeyValue`
+/// conflates Redis and DynamoDB, which are not transfer-compatible with each
+/// other. `TransferFamily` lets a driver opt into a narrower compatibility
+/// group without disturbing the UI-facing category. Drivers that have not
+/// been evaluated for the transfer engine default to `Incompatible`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum TransferFamily {
+    Sql,
+    Document,
+    KeyValue,
+    Graph,
+    TimeSeries,
+    WideColumn,
+    /// The driver has not declared a transfer family, or its data model has
+    /// no compatible transfer target yet. Never compatible with anything,
+    /// including another `Incompatible` driver.
+    #[default]
+    Incompatible,
+}
+
+/// Whether two drivers can participate in the same Export/Import/Migration
+/// flow, per their declared [`TransferFamily`].
+///
+/// Same-family and not `Incompatible` is the only compatible case; a driver
+/// that has not opted into a transfer family (`Incompatible`) is never a
+/// valid transfer source or target, even against another `Incompatible` driver.
+pub fn transfer_compatible(a: &DriverMetadata, b: &DriverMetadata) -> bool {
+    a.transfer_family == b.transfer_family && a.transfer_family != TransferFamily::Incompatible
+}
+
 bitflags! {
     /// Capabilities that a database driver may support.
     ///
@@ -368,7 +412,7 @@ bitflags! {
         /// Driver can execute a batch of multiple statements submitted as a
         /// single query (e.g. several SQL statements separated by `;`),
         /// producing one result set per statement.
-        const MULTI_STATEMENT = 1 << 47;
+        const MULTI_STATEMENT = 1 << 48;
 
         // === Schema features ===
 
@@ -504,6 +548,231 @@ bitflags! {
         /// functions) through the schema_routines seam. When set, the sidebar renders
         /// a Routines folder for each schema.
         const ROUTINES = 1 << 47;
+
+        /// Driver can execute CloudWatch GetMetricData requests and return time-series
+        /// metric data as a `QueryResult`. The UI uses this flag to gate the metrics
+        /// chart entry point — no driver_id or category checks are needed.
+        const METRIC_SERIES = 1 << 49;
+
+        /// Driver exposes a browsable metric catalog (namespaces + metrics +
+        /// dimensions) via the `MetricCatalog` trait accessor on `Connection`.
+        /// Independent from `METRIC_SERIES` — a driver MAY set one without the other.
+        const METRIC_CATALOG = 1 << 50;
+
+        /// Driver can import a dashboard from a JSON blob via the `DashboardImporter` seam.
+        ///
+        /// When set, the UI exposes an \"Import dashboard\" affordance that calls
+        /// `Connection::dashboard_importer()` to parse the JSON. The check is purely
+        /// capability-driven — no `driver_id` comparison is needed.
+        const DASHBOARD_IMPORT = 1 << 51;
+
+        /// Driver implements the `DashboardSource` trait: it can list dashboards
+        /// from the upstream system and fetch a dashboard body on demand.
+        ///
+        /// When set, the UI lists the driver's dashboards in the sidebar and
+        /// opens them read-only. Gating flows exclusively through this
+        /// capability — no `driver_id` comparisons are allowed.
+        const DASHBOARD_SYNC = 1 << 52;
+
+        /// Driver participates in DBFlux's local chart-authoring flow: users
+        /// commonly turn its query/metric results into `SavedChart`s and group
+        /// them into `Dashboard`s persisted in DBFlux's own SQLite store.
+        ///
+        /// When set, the sidebar surfaces the per-profile `Dashboards` and
+        /// `Saved Charts` folders. When unset, those folders are hidden so the
+        /// driver's tree stays focused on its native browsing model. This is
+        /// independent of `DASHBOARD_SYNC` (upstream listing) and
+        /// `DASHBOARD_IMPORT` (JSON import). Gating flows exclusively through
+        /// this capability — no `driver_id` or `category` comparisons.
+        const CHART_AUTHORING = 1 << 53;
+
+        /// Driver can list and serve chartable operational metric series
+        /// (e.g. transactions/s, cache hit ratio, active connections) via the
+        /// `InstanceCatalog` trait accessor on `Connection`. The sidebar renders
+        /// an "Instance Metrics" folder gated exclusively on this bit — no
+        /// driver_id comparisons are needed.
+        const INSTANCE_METRICS = 1 << 54;
+
+        /// Driver can list and serve live tabular inspector snapshots
+        /// (e.g. process lists, top queries, active sessions) via the
+        /// `InstanceCatalog` trait accessor on `Connection`. The sidebar renders
+        /// an "Instance Inspector" folder gated exclusively on this bit.
+        const INSTANCE_INSPECTOR = 1 << 55;
+
+        /// Driver can execute a native multi-row INSERT (`generate_bulk_insert`)
+        /// instead of one statement per row. The data-transfer engine gates its
+        /// bulk-insert path exclusively on this bit — `MutationCapabilities.supports_batch`
+        /// is unrelated and must not be used for this decision.
+        const BULK_INSERT = 1 << 56;
+
+        /// Driver supports `TRUNCATE TABLE` (or equivalent) as a distinct,
+        /// typically faster/cheaper operation than `DELETE FROM` with no `WHERE`.
+        /// Used by the data-transfer engine's `Truncate` load option.
+        const TRUNCATE_TABLE = 1 << 57;
+
+        /// Driver can temporarily disable referential-integrity (FK) checking
+        /// for the duration of a bulk load, via `Connection::set_referential_integrity`.
+        const DISABLE_FK_CHECKS = 1 << 58;
+    }
+}
+
+#[cfg(test)]
+mod capability_bits_tests {
+    use super::*;
+
+    #[test]
+    fn instance_metrics_bit_value() {
+        assert_eq!(DriverCapabilities::INSTANCE_METRICS.bits(), 1u64 << 54);
+    }
+
+    #[test]
+    fn instance_inspector_bit_value() {
+        assert_eq!(DriverCapabilities::INSTANCE_INSPECTOR.bits(), 1u64 << 55);
+    }
+
+    #[test]
+    fn bulk_insert_bit_value() {
+        assert_eq!(DriverCapabilities::BULK_INSERT.bits(), 1u64 << 56);
+    }
+
+    #[test]
+    fn truncate_table_bit_value() {
+        assert_eq!(DriverCapabilities::TRUNCATE_TABLE.bits(), 1u64 << 57);
+    }
+
+    #[test]
+    fn disable_fk_checks_bit_value() {
+        assert_eq!(DriverCapabilities::DISABLE_FK_CHECKS.bits(), 1u64 << 58);
+    }
+
+    #[test]
+    fn all_named_bits_are_unique() {
+        let named: &[DriverCapabilities] = &[
+            DriverCapabilities::MULTIPLE_DATABASES,
+            DriverCapabilities::SCHEMAS,
+            DriverCapabilities::SSH_TUNNEL,
+            DriverCapabilities::SSL,
+            DriverCapabilities::AUTHENTICATION,
+            DriverCapabilities::QUERY_CANCELLATION,
+            DriverCapabilities::QUERY_TIMEOUT,
+            DriverCapabilities::TRANSACTIONS,
+            DriverCapabilities::PREPARED_STATEMENTS,
+            DriverCapabilities::MULTI_STATEMENT,
+            DriverCapabilities::VIEWS,
+            DriverCapabilities::FOREIGN_KEYS,
+            DriverCapabilities::INDEXES,
+            DriverCapabilities::CHECK_CONSTRAINTS,
+            DriverCapabilities::UNIQUE_CONSTRAINTS,
+            DriverCapabilities::CUSTOM_TYPES,
+            DriverCapabilities::TRIGGERS,
+            DriverCapabilities::STORED_PROCEDURES,
+            DriverCapabilities::SEQUENCES,
+            DriverCapabilities::INSERT,
+            DriverCapabilities::UPDATE,
+            DriverCapabilities::DELETE,
+            DriverCapabilities::RETURNING,
+            DriverCapabilities::PAGINATION,
+            DriverCapabilities::SORTING,
+            DriverCapabilities::FILTERING,
+            DriverCapabilities::EXPORT_CSV,
+            DriverCapabilities::EXPORT_JSON,
+            DriverCapabilities::NESTED_DOCUMENTS,
+            DriverCapabilities::ARRAYS,
+            DriverCapabilities::AGGREGATION,
+            DriverCapabilities::KV_SCAN,
+            DriverCapabilities::KV_GET,
+            DriverCapabilities::KV_SET,
+            DriverCapabilities::KV_DELETE,
+            DriverCapabilities::KV_EXISTS,
+            DriverCapabilities::KV_TTL,
+            DriverCapabilities::KV_KEY_TYPES,
+            DriverCapabilities::KV_VALUE_SIZE,
+            DriverCapabilities::KV_RENAME,
+            DriverCapabilities::KV_BULK_GET,
+            DriverCapabilities::KV_STREAM_RANGE,
+            DriverCapabilities::KV_STREAM_ADD,
+            DriverCapabilities::KV_STREAM_DELETE,
+            DriverCapabilities::PUBSUB,
+            DriverCapabilities::GRAPH_TRAVERSAL,
+            DriverCapabilities::EDGE_PROPERTIES,
+            DriverCapabilities::TRANSACTIONAL_DDL,
+            DriverCapabilities::ROUTINES,
+            DriverCapabilities::METRIC_SERIES,
+            DriverCapabilities::METRIC_CATALOG,
+            DriverCapabilities::DASHBOARD_IMPORT,
+            DriverCapabilities::DASHBOARD_SYNC,
+            DriverCapabilities::CHART_AUTHORING,
+            DriverCapabilities::INSTANCE_METRICS,
+            DriverCapabilities::INSTANCE_INSPECTOR,
+            DriverCapabilities::BULK_INSERT,
+            DriverCapabilities::TRUNCATE_TABLE,
+            DriverCapabilities::DISABLE_FK_CHECKS,
+        ];
+
+        let mut seen_bits: u64 = 0;
+        for cap in named {
+            let bits = cap.bits();
+            assert_eq!(
+                bits.count_ones(),
+                1,
+                "expected single-bit flag, got {bits:#x}"
+            );
+            assert_eq!(
+                seen_bits & bits,
+                0,
+                "duplicate bit detected: {bits:#x} already in {seen_bits:#x}"
+            );
+            seen_bits |= bits;
+        }
+    }
+}
+
+#[cfg(test)]
+mod transfer_family_tests {
+    use super::*;
+
+    fn metadata_with_family(family: TransferFamily) -> DriverMetadata {
+        DriverMetadataBuilder::new(
+            "test",
+            "Test",
+            DatabaseCategory::Relational,
+            QueryLanguage::Sql,
+        )
+        .transfer_family(family)
+        .build()
+    }
+
+    #[test]
+    fn same_family_is_compatible() {
+        let a = metadata_with_family(TransferFamily::Sql);
+        let b = metadata_with_family(TransferFamily::Sql);
+        assert!(transfer_compatible(&a, &b));
+    }
+
+    #[test]
+    fn cross_family_is_incompatible() {
+        let a = metadata_with_family(TransferFamily::Sql);
+        let b = metadata_with_family(TransferFamily::Document);
+        assert!(!transfer_compatible(&a, &b));
+    }
+
+    #[test]
+    fn both_incompatible_is_incompatible() {
+        let a = metadata_with_family(TransferFamily::Incompatible);
+        let b = metadata_with_family(TransferFamily::Incompatible);
+        assert!(!transfer_compatible(&a, &b));
+    }
+
+    #[test]
+    fn incompatible_against_anything_is_incompatible() {
+        let a = metadata_with_family(TransferFamily::Incompatible);
+        let b = metadata_with_family(TransferFamily::Sql);
+        assert!(!transfer_compatible(&a, &b));
+    }
+
+    #[test]
+    fn default_transfer_family_is_incompatible() {
+        assert_eq!(TransferFamily::default(), TransferFamily::Incompatible);
     }
 }
 
@@ -824,50 +1093,107 @@ impl QueryLanguage {
     pub fn statement_count(&self, text: &str) -> usize {
         self.split_statements(text).len()
     }
+
+    /// Byte bounds of the statement containing `offset` in `text`.
+    ///
+    /// Statement boundaries follow the same rules as
+    /// [`QueryLanguage::split_statements`]; for non-SQL editor modes the whole
+    /// buffer is a single statement.
+    pub fn statement_bounds_at(&self, text: &str, offset: usize) -> std::ops::Range<usize> {
+        if self.editor_mode() != "sql" {
+            return 0..text.len();
+        }
+
+        let offset = offset.min(text.len());
+        sql_statement_ranges(text)
+            .into_iter()
+            .find(|range| offset <= range.end)
+            .unwrap_or(0..text.len())
+    }
+}
+
+/// How a driver's query editor should present and behave, independent of the
+/// raw [`QueryLanguage`] enum.
+///
+/// Defaults derive from the language (see [`EditorLanguageProfile::from_language`])
+/// so existing drivers need no change; a driver with a bespoke editor surface
+/// overrides individual fields via [`DriverMetadata::editor_profile`]. The UI reads
+/// presentation from this profile rather than matching on a concrete driver.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditorLanguageProfile {
+    /// Syntax-highlighting mode id (e.g. `"sql"`, `"javascript"`, `"plaintext"`).
+    pub editor_mode: String,
+
+    /// Whether the connection-aware completion provider engages.
+    pub supports_connection_context: bool,
+
+    /// Editor placeholder text.
+    pub placeholder: String,
+
+    /// Line-comment prefix.
+    pub comment_prefix: String,
+}
+
+impl EditorLanguageProfile {
+    /// Default profile derived entirely from the driver's [`QueryLanguage`],
+    /// reproducing the language accessors byte-for-byte.
+    pub fn from_language(language: &QueryLanguage) -> Self {
+        Self {
+            editor_mode: language.editor_mode().to_string(),
+            supports_connection_context: language.supports_connection_context(),
+            placeholder: language.placeholder().to_string(),
+            comment_prefix: language.comment_prefix().to_string(),
+        }
+    }
 }
 
 /// `;`-delimited SQL statement splitter that is aware of strings, identifiers,
 /// comments, and dollar-quoted bodies. See [`QueryLanguage::split_statements`].
 fn split_sql_statements(text: &str) -> Vec<String> {
-    let chars: Vec<char> = text.chars().collect();
+    sql_statement_ranges(text)
+        .into_iter()
+        .filter_map(|range| {
+            let statement = text[range].trim();
+            (!statement.is_empty()).then(|| statement.to_string())
+        })
+        .collect()
+}
+
+/// Byte ranges of the `;`-delimited segments in `text` (separators excluded,
+/// segments untrimmed, empty segments kept). Shared scanner behind
+/// [`split_sql_statements`] and [`QueryLanguage::statement_bounds_at`].
+fn sql_statement_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
     let len = chars.len();
 
-    let mut statements = Vec::new();
-    let mut current = String::new();
+    let mut ranges = Vec::new();
+    let mut segment_start = 0usize;
     let mut index = 0;
 
     while index < len {
-        let ch = chars[index];
+        let (byte, ch) = chars[index];
 
         // Line comment: -- ... up to end of line.
-        if ch == '-' && index + 1 < len && chars[index + 1] == '-' {
-            while index < len && chars[index] != '\n' {
-                current.push(chars[index]);
+        if ch == '-' && index + 1 < len && chars[index + 1].1 == '-' {
+            while index < len && chars[index].1 != '\n' {
                 index += 1;
             }
             continue;
         }
 
         // Block comment: /* ... */ with PostgreSQL-style nesting.
-        if ch == '/' && index + 1 < len && chars[index + 1] == '*' {
-            current.push('/');
-            current.push('*');
+        if ch == '/' && index + 1 < len && chars[index + 1].1 == '*' {
             index += 2;
 
             let mut depth = 1;
             while index < len && depth > 0 {
-                if chars[index] == '/' && index + 1 < len && chars[index + 1] == '*' {
+                if chars[index].1 == '/' && index + 1 < len && chars[index + 1].1 == '*' {
                     depth += 1;
-                    current.push('/');
-                    current.push('*');
                     index += 2;
-                } else if chars[index] == '*' && index + 1 < len && chars[index + 1] == '/' {
+                } else if chars[index].1 == '*' && index + 1 < len && chars[index + 1].1 == '/' {
                     depth -= 1;
-                    current.push('*');
-                    current.push('/');
                     index += 2;
                 } else {
-                    current.push(chars[index]);
                     index += 1;
                 }
             }
@@ -876,33 +1202,26 @@ fn split_sql_statements(text: &str) -> Vec<String> {
 
         // Single-quoted string literal ('' and backslash escapes).
         if ch == '\'' {
-            current.push(ch);
             index += 1;
 
             while index < len {
-                let inner = chars[index];
+                let inner = chars[index].1;
 
                 if inner == '\\' && index + 1 < len {
-                    current.push(inner);
-                    current.push(chars[index + 1]);
                     index += 2;
                     continue;
                 }
 
                 if inner == '\'' {
-                    if index + 1 < len && chars[index + 1] == '\'' {
-                        current.push('\'');
-                        current.push('\'');
+                    if index + 1 < len && chars[index + 1].1 == '\'' {
                         index += 2;
                         continue;
                     }
 
-                    current.push('\'');
                     index += 1;
                     break;
                 }
 
-                current.push(inner);
                 index += 1;
             }
             continue;
@@ -911,17 +1230,14 @@ fn split_sql_statements(text: &str) -> Vec<String> {
         // Quoted identifier: "..." (standard SQL) or `...` (MySQL).
         if ch == '"' || ch == '`' {
             let quote = ch;
-            current.push(ch);
             index += 1;
 
             while index < len {
-                let inner = chars[index];
-                current.push(inner);
+                let inner = chars[index].1;
                 index += 1;
 
                 if inner == quote {
-                    if index < len && chars[index] == quote {
-                        current.push(quote);
+                    if index < len && chars[index].1 == quote {
                         index += 1;
                         continue;
                     }
@@ -935,20 +1251,16 @@ fn split_sql_statements(text: &str) -> Vec<String> {
         if ch == '$'
             && let Some(tag_end) = dollar_tag_end(&chars, index)
         {
-            let tag: String = chars[index..=tag_end].iter().collect();
-            let tag_len = tag.chars().count();
-
-            current.push_str(&tag);
+            let tag_start = index;
+            let tag_len = tag_end + 1 - tag_start;
             index = tag_end + 1;
 
             while index < len {
-                if chars[index] == '$' && matches_tag(&chars, index, &tag) {
-                    current.push_str(&tag);
+                if chars[index].1 == '$' && matches_tag(&chars, index, tag_start, tag_end) {
                     index += tag_len;
                     break;
                 }
 
-                current.push(chars[index]);
                 index += 1;
             }
             continue;
@@ -956,36 +1268,28 @@ fn split_sql_statements(text: &str) -> Vec<String> {
 
         // Statement terminator.
         if ch == ';' {
-            let trimmed = current.trim();
-            if !trimmed.is_empty() {
-                statements.push(trimmed.to_string());
-            }
-            current.clear();
+            ranges.push(segment_start..byte);
+            segment_start = byte + 1;
             index += 1;
             continue;
         }
 
-        current.push(ch);
         index += 1;
     }
 
-    let trimmed = current.trim();
-    if !trimmed.is_empty() {
-        statements.push(trimmed.to_string());
-    }
-
-    statements
+    ranges.push(segment_start..text.len());
+    ranges
 }
 
 /// If `chars[start]` opens a dollar-quote tag, returns the index of the closing
 /// `$` of that opening tag. The tag identifier must be empty (`$$`) or a valid
 /// identifier (letters, digits, underscore, not starting with a digit), which
 /// also prevents misreading parameter placeholders such as `$1`.
-fn dollar_tag_end(chars: &[char], start: usize) -> Option<usize> {
+fn dollar_tag_end(chars: &[(usize, char)], start: usize) -> Option<usize> {
     let mut index = start + 1;
 
     while index < chars.len() {
-        let ch = chars[index];
+        let ch = chars[index].1;
 
         if ch == '$' {
             return Some(index);
@@ -1003,14 +1307,15 @@ fn dollar_tag_end(chars: &[char], start: usize) -> Option<usize> {
     None
 }
 
-/// Whether `tag` matches the characters starting at `chars[index]`.
-fn matches_tag(chars: &[char], index: usize, tag: &str) -> bool {
-    let tag_chars: Vec<char> = tag.chars().collect();
-    if index + tag_chars.len() > chars.len() {
+/// Whether the opening tag at `chars[tag_start..=tag_end]` repeats starting at
+/// `chars[index]`.
+fn matches_tag(chars: &[(usize, char)], index: usize, tag_start: usize, tag_end: usize) -> bool {
+    let tag_len = tag_end + 1 - tag_start;
+    if index + tag_len > chars.len() {
         return false;
     }
 
-    chars[index..index + tag_chars.len()] == tag_chars[..]
+    (0..tag_len).all(|offset| chars[index + offset].1 == chars[tag_start + offset].1)
 }
 
 // ============================================================================
@@ -1056,6 +1361,24 @@ impl Default for SyntaxInfo {
 // Query Capabilities
 // ============================================================================
 
+/// How a driver allows result ordering, beyond the boolean `supports_order_by`.
+///
+/// Lets a store advertise a constrained ordering surface (e.g. DynamoDB orders
+/// only on the sort key, by direction) so the query builder never offers an
+/// ordering the driver cannot execute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum OrderByMode {
+    /// No ordering support; the builder hides the order-by section.
+    None,
+
+    /// Ordering on any projected column, in any direction (relational default).
+    #[default]
+    AnyColumns,
+
+    /// Ordering only on the sort key, expressed as a single direction toggle.
+    SortKeyOnly,
+}
+
 /// Query-related capabilities supported by a driver.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryCapabilities {
@@ -1070,6 +1393,13 @@ pub struct QueryCapabilities {
 
     /// Whether the driver supports ORDER BY.
     pub supports_order_by: bool,
+
+    /// Granular ordering surface offered by the driver.
+    ///
+    /// Defaults to [`OrderByMode::AnyColumns`] so existing relational drivers
+    /// keep the multi-column sort UI unchanged.
+    #[serde(default)]
+    pub order_by_mode: OrderByMode,
 
     /// Maximum number of ORDER BY columns (0 = unlimited).
     pub max_order_by_columns: u32,
@@ -1139,6 +1469,7 @@ impl Default for QueryCapabilities {
             ],
             max_query_parameters: 0,
             supports_order_by: true,
+            order_by_mode: OrderByMode::AnyColumns,
             max_order_by_columns: 0,
             supports_group_by: true,
             max_group_by_columns: 0,
@@ -1374,6 +1705,11 @@ pub struct DriverLimits {
 
     /// Maximum number of indexes per table (0 = unlimited).
     pub max_indexes_per_table: u32,
+
+    /// Maximum number of rows a single native multi-row `INSERT` (`generate_bulk_insert`)
+    /// may carry in one statement (0 = unlimited). The data-transfer engine reads
+    /// this to cap chunk size instead of hardcoding a per-driver constant.
+    pub max_bulk_insert_rows: u32,
 }
 
 impl Default for DriverLimits {
@@ -1387,6 +1723,7 @@ impl Default for DriverLimits {
             max_identifier_length: 63,
             max_columns: 0,
             max_indexes_per_table: 0,
+            max_bulk_insert_rows: 0,
         }
     }
 }
@@ -1456,6 +1793,14 @@ pub struct DriverMetadata {
     /// Database category (Relational, Document, etc.).
     pub category: DatabaseCategory,
 
+    /// Same-family compatibility descriptor for the data-transfer engine.
+    ///
+    /// Defaults to `TransferFamily::Incompatible` when absent from an older
+    /// serialized manifest (e.g. an external RPC-backed driver that predates
+    /// this field), which correctly excludes it from every transfer flow.
+    #[serde(default)]
+    pub transfer_family: TransferFamily,
+
     /// Operational deployment classification (Self-hosted, Embedded, Cloud-managed).
     ///
     /// `None` means the driver has not declared a deployment class — UI surfaces
@@ -1524,6 +1869,31 @@ pub struct DriverMetadata {
     /// Note: Not serialized - must be re-established on deserialization.
     #[serde(skip)]
     pub classification_override: Option<Box<dyn OperationClassifier>>,
+
+    /// Default number of rows per chunk for `ChunkedTransaction` mutation mode.
+    ///
+    /// `None` means the driver defers to the UI default (5,000). Drivers with
+    /// known performance characteristics (e.g. SQLite embedded, MSSQL row-locks)
+    /// should set an explicit value.
+    #[serde(default)]
+    pub default_chunk_size: Option<usize>,
+
+    /// Whether the driver supports a lock-timeout hint before DML execution.
+    ///
+    /// When `true`, the execution section exposes a lock-timeout input. When
+    /// `false`, the input is hidden. Postgres, MySQL, and MSSQL support this;
+    /// SQLite does not.
+    #[serde(default)]
+    pub supports_lock_timeout: bool,
+
+    /// Editor presentation override for drivers whose surface diverges from the
+    /// defaults derived from `query_language`.
+    ///
+    /// `None` (the common case) means the editor presentation is derived from
+    /// `query_language` via [`DriverMetadata::editor_profile`]. A driver with a
+    /// bespoke surface sets `Some(...)`.
+    #[serde(default)]
+    pub editor_profile: Option<EditorLanguageProfile>,
 }
 
 impl Debug for DriverMetadata {
@@ -1533,6 +1903,7 @@ impl Debug for DriverMetadata {
             .field("display_name", &self.display_name)
             .field("description", &self.description)
             .field("category", &self.category)
+            .field("transfer_family", &self.transfer_family)
             .field("deployment_class", &self.deployment_class)
             .field("query_language", &self.query_language)
             .field("capabilities", &self.capabilities)
@@ -1548,6 +1919,9 @@ impl Debug for DriverMetadata {
             .field("ssl_modes", &self.ssl_modes)
             .field("ssl_cert_fields", &self.ssl_cert_fields)
             .field("classification_override", &"...")
+            .field("default_chunk_size", &self.default_chunk_size)
+            .field("supports_lock_timeout", &self.supports_lock_timeout)
+            .field("editor_profile", &self.editor_profile)
             .finish()
     }
 }
@@ -1559,6 +1933,7 @@ impl Clone for DriverMetadata {
             display_name: self.display_name.clone(),
             description: self.description.clone(),
             category: self.category,
+            transfer_family: self.transfer_family,
             deployment_class: self.deployment_class,
             query_language: self.query_language.clone(),
             capabilities: self.capabilities,
@@ -1576,6 +1951,9 @@ impl Clone for DriverMetadata {
             // Note: classification_override is not cloned as it requires
             // concrete type knowledge. Use None after clone.
             classification_override: None,
+            default_chunk_size: self.default_chunk_size,
+            supports_lock_timeout: self.supports_lock_timeout,
+            editor_profile: self.editor_profile.clone(),
         }
     }
 }
@@ -1604,6 +1982,17 @@ impl DriverMetadata {
     /// Check if this is a log-stream service (e.g. CloudWatch Logs).
     pub fn is_log_stream(&self) -> bool {
         self.category == DatabaseCategory::LogStream
+    }
+
+    /// Editor presentation profile for this driver.
+    ///
+    /// Returns the driver's `editor_profile` override when set, otherwise a
+    /// profile derived from `query_language` (the behavior every existing
+    /// driver had before this field existed).
+    pub fn editor_profile(&self) -> EditorLanguageProfile {
+        self.editor_profile
+            .clone()
+            .unwrap_or_else(|| EditorLanguageProfile::from_language(&self.query_language))
     }
 }
 
@@ -1647,6 +2036,7 @@ pub struct DriverMetadataBuilder {
     display_name: String,
     description: String,
     category: DatabaseCategory,
+    transfer_family: TransferFamily,
     deployment_class: Option<DeploymentClass>,
     query_language: QueryLanguage,
     capabilities: DriverCapabilities,
@@ -1662,6 +2052,9 @@ pub struct DriverMetadataBuilder {
     ssl_modes: Option<&'static [SslModeOption]>,
     ssl_cert_fields: Option<SslCertFields>,
     classification_override: Option<Box<dyn OperationClassifier>>,
+    default_chunk_size: Option<usize>,
+    supports_lock_timeout: bool,
+    editor_profile: Option<EditorLanguageProfile>,
 }
 
 impl DriverMetadataBuilder {
@@ -1677,6 +2070,7 @@ impl DriverMetadataBuilder {
             display_name: display_name.into(),
             description: String::new(),
             category,
+            transfer_family: TransferFamily::default(),
             deployment_class: None,
             query_language,
             capabilities: DriverCapabilities::empty(),
@@ -1692,6 +2086,9 @@ impl DriverMetadataBuilder {
             ssl_modes: None,
             ssl_cert_fields: None,
             classification_override: None,
+            default_chunk_size: None,
+            supports_lock_timeout: false,
+            editor_profile: None,
         }
     }
 
@@ -1704,6 +2101,12 @@ impl DriverMetadataBuilder {
     /// Set the deployment class.
     pub fn deployment_class(mut self, class: DeploymentClass) -> Self {
         self.deployment_class = Some(class);
+        self
+    }
+
+    /// Set the transfer-compatibility family. Defaults to `TransferFamily::Incompatible`.
+    pub fn transfer_family(mut self, family: TransferFamily) -> Self {
+        self.transfer_family = family;
         self
     }
 
@@ -1798,6 +2201,7 @@ impl DriverMetadataBuilder {
             display_name: self.display_name,
             description: self.description,
             category: self.category,
+            transfer_family: self.transfer_family,
             deployment_class: self.deployment_class,
             query_language: self.query_language,
             capabilities: self.capabilities,
@@ -1813,7 +2217,22 @@ impl DriverMetadataBuilder {
             ssl_modes: self.ssl_modes,
             ssl_cert_fields: self.ssl_cert_fields,
             classification_override: self.classification_override,
+            default_chunk_size: self.default_chunk_size,
+            supports_lock_timeout: self.supports_lock_timeout,
+            editor_profile: self.editor_profile,
         }
+    }
+
+    /// Set the default chunk size for `ChunkedTransaction` mode.
+    pub fn default_chunk_size(mut self, size: usize) -> Self {
+        self.default_chunk_size = Some(size);
+        self
+    }
+
+    /// Indicate that this driver supports a lock-timeout hint.
+    pub fn supports_lock_timeout(mut self, supported: bool) -> Self {
+        self.supports_lock_timeout = supported;
+        self
     }
 }
 
@@ -1927,6 +2346,106 @@ mod tests {
     }
 
     #[test]
+    fn statement_bounds_at_whole_buffer_without_semicolon() {
+        let text = "SELECT inv.total_amount FROM invoices inv";
+        assert_eq!(
+            QueryLanguage::Sql.statement_bounds_at(text, 9),
+            0..text.len()
+        );
+    }
+
+    #[test]
+    fn statement_bounds_at_selects_statement_under_cursor() {
+        let text = "SELECT 1; SELECT inv.issued_at FROM invoices inv; SELECT 3";
+        let range = QueryLanguage::Sql.statement_bounds_at(text, 12);
+        assert_eq!(&text[range], " SELECT inv.issued_at FROM invoices inv");
+
+        let last = QueryLanguage::Sql.statement_bounds_at(text, text.len());
+        assert_eq!(&text[last], " SELECT 3");
+    }
+
+    #[test]
+    fn statement_bounds_at_ignores_semicolons_in_strings_and_comments() {
+        let text = "SELECT ';' AS x, inv.total_amount FROM invoices inv -- trailing; comment";
+        assert_eq!(
+            QueryLanguage::Sql.statement_bounds_at(text, 20),
+            0..text.len()
+        );
+    }
+
+    #[test]
+    fn statement_bounds_at_non_sql_returns_whole_buffer() {
+        let text = "db.users.find(); db.orders.find()";
+        assert_eq!(
+            QueryLanguage::MongoQuery.statement_bounds_at(text, 25),
+            0..text.len()
+        );
+    }
+
+    #[test]
+    fn editor_profile_from_language_matches_accessors() {
+        let variants = [
+            QueryLanguage::Sql,
+            QueryLanguage::CloudWatchLogsInsightsQl,
+            QueryLanguage::OpenSearchPpl,
+            QueryLanguage::OpenSearchSql,
+            QueryLanguage::MongoQuery,
+            QueryLanguage::RedisCommands,
+            QueryLanguage::Cypher,
+            QueryLanguage::InfluxQuery,
+            QueryLanguage::Flux,
+            QueryLanguage::Cql,
+            QueryLanguage::Lua,
+            QueryLanguage::Python,
+            QueryLanguage::Bash,
+            QueryLanguage::Custom("DynamoDB".to_string()),
+        ];
+
+        for language in &variants {
+            let profile = EditorLanguageProfile::from_language(language);
+
+            assert_eq!(
+                profile.editor_mode,
+                language.editor_mode(),
+                "editor_mode mismatch for {language:?}"
+            );
+            assert_eq!(
+                profile.supports_connection_context,
+                language.supports_connection_context(),
+                "supports_connection_context mismatch for {language:?}"
+            );
+            assert_eq!(
+                profile.placeholder,
+                language.placeholder(),
+                "placeholder mismatch for {language:?}"
+            );
+            assert_eq!(
+                profile.comment_prefix,
+                language.comment_prefix(),
+                "comment_prefix mismatch for {language:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn editor_profile_defaults_when_metadata_has_no_override() {
+        let derived = EditorLanguageProfile::from_language(&QueryLanguage::MongoQuery);
+
+        assert_eq!(derived.editor_mode, "javascript");
+        assert!(derived.supports_connection_context);
+        assert_eq!(derived.comment_prefix, "//");
+    }
+
+    #[test]
+    fn order_by_mode_default_is_any_columns() {
+        assert_eq!(OrderByMode::default(), OrderByMode::AnyColumns);
+        assert_eq!(
+            QueryCapabilities::default().order_by_mode,
+            OrderByMode::AnyColumns
+        );
+    }
+
+    #[test]
     fn test_category_names() {
         assert_eq!(DatabaseCategory::Relational.container_name(), "Tables");
         assert_eq!(DatabaseCategory::Document.container_name(), "Collections");
@@ -1983,6 +2502,16 @@ mod tests {
             DriverCapabilities::ROUTINES.bits(),
             1u64 << 47,
             "ROUTINES must be bit 47"
+        );
+        assert_eq!(
+            DriverCapabilities::MULTI_STATEMENT.bits(),
+            1u64 << 48,
+            "MULTI_STATEMENT must be bit 48"
+        );
+        assert_eq!(
+            DriverCapabilities::ROUTINES.bits() & DriverCapabilities::MULTI_STATEMENT.bits(),
+            0,
+            "ROUTINES and MULTI_STATEMENT must not share a bit"
         );
         assert!(
             DatabaseCategory::Relational
@@ -2613,5 +3142,246 @@ mod tests {
         for _variant in all {
             assert!(matches!(_variant, _));
         }
+    }
+
+    // T-5: METRIC_CATALOG bit must equal exactly 1 << 50 and must be a power
+    // of two independent from METRIC_SERIES. Guards against accidental bit reuse.
+    #[test]
+    fn metric_catalog_capability_bit_value_and_unique() {
+        let bits = DriverCapabilities::METRIC_CATALOG.bits();
+
+        assert_eq!(bits, 1u64 << 50, "METRIC_CATALOG must equal 1 << 50");
+        assert_eq!(
+            bits.count_ones(),
+            1,
+            "METRIC_CATALOG must be a power of two"
+        );
+        assert_ne!(
+            bits,
+            DriverCapabilities::METRIC_SERIES.bits(),
+            "METRIC_CATALOG must not collide with METRIC_SERIES"
+        );
+
+        // Spot-check against a representative set of existing flags.
+        let collision_check = [
+            DriverCapabilities::MULTIPLE_DATABASES,
+            DriverCapabilities::METRIC_SERIES,
+            DriverCapabilities::TRANSACTIONAL_DDL,
+            DriverCapabilities::ROUTINES,
+            DriverCapabilities::MULTI_STATEMENT,
+        ];
+        for other in collision_check {
+            assert_ne!(
+                bits,
+                other.bits(),
+                "METRIC_CATALOG bit ({bits}) collides with another flag ({})",
+                other.bits()
+            );
+        }
+    }
+
+    // T-4: METRIC_SERIES bit must be a power of two and must not collide with
+    // any existing flag. Guards against accidental bit reuse.
+    #[test]
+    fn metric_series_capability_bit_unique() {
+        let bits = DriverCapabilities::METRIC_SERIES.bits();
+
+        // A power-of-two value has exactly one bit set.
+        assert_eq!(bits.count_ones(), 1, "METRIC_SERIES must be a power of two");
+
+        // Must not equal any other defined flag.
+        let all_others = [
+            DriverCapabilities::MULTIPLE_DATABASES,
+            DriverCapabilities::SCHEMAS,
+            DriverCapabilities::SSH_TUNNEL,
+            DriverCapabilities::SSL,
+            DriverCapabilities::AUTHENTICATION,
+            DriverCapabilities::QUERY_CANCELLATION,
+            DriverCapabilities::QUERY_TIMEOUT,
+            DriverCapabilities::TRANSACTIONS,
+            DriverCapabilities::PREPARED_STATEMENTS,
+            DriverCapabilities::VIEWS,
+            DriverCapabilities::FOREIGN_KEYS,
+            DriverCapabilities::INDEXES,
+            DriverCapabilities::CHECK_CONSTRAINTS,
+            DriverCapabilities::UNIQUE_CONSTRAINTS,
+            DriverCapabilities::CUSTOM_TYPES,
+            DriverCapabilities::TRIGGERS,
+            DriverCapabilities::STORED_PROCEDURES,
+            DriverCapabilities::SEQUENCES,
+            DriverCapabilities::INSERT,
+            DriverCapabilities::UPDATE,
+            DriverCapabilities::DELETE,
+            DriverCapabilities::RETURNING,
+            DriverCapabilities::PAGINATION,
+            DriverCapabilities::SORTING,
+            DriverCapabilities::FILTERING,
+            DriverCapabilities::EXPORT_CSV,
+            DriverCapabilities::EXPORT_JSON,
+            DriverCapabilities::NESTED_DOCUMENTS,
+            DriverCapabilities::ARRAYS,
+            DriverCapabilities::AGGREGATION,
+            DriverCapabilities::KV_SCAN,
+            DriverCapabilities::KV_GET,
+            DriverCapabilities::KV_SET,
+            DriverCapabilities::KV_DELETE,
+            DriverCapabilities::KV_EXISTS,
+            DriverCapabilities::KV_TTL,
+            DriverCapabilities::KV_KEY_TYPES,
+            DriverCapabilities::KV_VALUE_SIZE,
+            DriverCapabilities::KV_RENAME,
+            DriverCapabilities::KV_BULK_GET,
+            DriverCapabilities::KV_STREAM_RANGE,
+            DriverCapabilities::KV_STREAM_ADD,
+            DriverCapabilities::KV_STREAM_DELETE,
+            DriverCapabilities::PUBSUB,
+            DriverCapabilities::GRAPH_TRAVERSAL,
+            DriverCapabilities::EDGE_PROPERTIES,
+            DriverCapabilities::TRANSACTIONAL_DDL,
+        ];
+
+        for other in all_others {
+            assert_ne!(
+                bits,
+                other.bits(),
+                "METRIC_SERIES bit ({bits}) collides with an existing flag ({})",
+                other.bits()
+            );
+        }
+    }
+
+    #[test]
+    fn test_dashboard_import_bit_value() {
+        assert_eq!(
+            DriverCapabilities::DASHBOARD_IMPORT.bits(),
+            1u64 << 51,
+            "DASHBOARD_IMPORT must equal 1 << 51"
+        );
+    }
+
+    #[test]
+    fn test_dashboard_import_no_collision() {
+        let bits = DriverCapabilities::DASHBOARD_IMPORT.bits();
+
+        // Exactly one bit must be set (power of two).
+        assert_eq!(
+            bits.count_ones(),
+            1,
+            "DASHBOARD_IMPORT must be a power of two"
+        );
+
+        // No other named constant may share the same bit.
+        for (name, cap) in DriverCapabilities::all().iter_names() {
+            if name == "DASHBOARD_IMPORT" {
+                continue;
+            }
+            assert_eq!(
+                cap.bits() & bits,
+                0,
+                "DASHBOARD_IMPORT bit (1 << 51) collides with existing flag '{name}'"
+            );
+        }
+    }
+
+    #[test]
+    fn test_dashboard_sync_bit_value() {
+        assert_eq!(
+            DriverCapabilities::DASHBOARD_SYNC.bits(),
+            1u64 << 52,
+            "DASHBOARD_SYNC must equal 1 << 52"
+        );
+    }
+
+    #[test]
+    fn test_dashboard_sync_no_collision() {
+        let bits = DriverCapabilities::DASHBOARD_SYNC.bits();
+
+        assert_eq!(
+            bits.count_ones(),
+            1,
+            "DASHBOARD_SYNC must be a power of two"
+        );
+
+        for (name, cap) in DriverCapabilities::all().iter_names() {
+            if name == "DASHBOARD_SYNC" {
+                continue;
+            }
+            assert_eq!(
+                cap.bits() & bits,
+                0,
+                "DASHBOARD_SYNC bit (1 << 52) collides with existing flag '{name}'"
+            );
+        }
+    }
+
+    #[test]
+    fn test_dashboard_sync_composes_with_dashboard_import() {
+        let combined = DriverCapabilities::DASHBOARD_IMPORT | DriverCapabilities::DASHBOARD_SYNC;
+        assert!(combined.contains(DriverCapabilities::DASHBOARD_IMPORT));
+        assert!(combined.contains(DriverCapabilities::DASHBOARD_SYNC));
+        // Both bits must round-trip through Debug.
+        let dbg = format!("{combined:?}");
+        assert!(dbg.contains("DASHBOARD_IMPORT"));
+        assert!(dbg.contains("DASHBOARD_SYNC"));
+    }
+
+    #[test]
+    fn test_chart_authoring_bit_value() {
+        assert_eq!(
+            DriverCapabilities::CHART_AUTHORING.bits(),
+            1u64 << 53,
+            "CHART_AUTHORING must equal 1 << 53"
+        );
+    }
+
+    #[test]
+    fn test_chart_authoring_no_collision() {
+        let bits = DriverCapabilities::CHART_AUTHORING.bits();
+
+        assert_eq!(
+            bits.count_ones(),
+            1,
+            "CHART_AUTHORING must be a power of two"
+        );
+
+        for (name, cap) in DriverCapabilities::all().iter_names() {
+            if name == "CHART_AUTHORING" {
+                continue;
+            }
+            assert_eq!(
+                cap.bits() & bits,
+                0,
+                "CHART_AUTHORING bit (1 << 53) collides with existing flag '{name}'"
+            );
+        }
+    }
+
+    // T-19 — [RED] Tests for DriverMetadata new fields (design §4, §6, R-D3)
+    #[test]
+    fn driver_metadata_has_default_chunk_size_field() {
+        let meta = DriverMetadataBuilder::new(
+            "test",
+            "Test",
+            DatabaseCategory::Relational,
+            QueryLanguage::Sql,
+        )
+        .build();
+
+        // Field must exist and be accessible; default is None
+        let _: Option<usize> = meta.default_chunk_size;
+    }
+
+    #[test]
+    fn driver_metadata_has_supports_lock_timeout_field() {
+        let meta = DriverMetadataBuilder::new(
+            "test",
+            "Test",
+            DatabaseCategory::Relational,
+            QueryLanguage::Sql,
+        )
+        .build();
+
+        // Field must exist and be accessible; default is false
+        let _: bool = meta.supports_lock_timeout;
     }
 }

@@ -14,16 +14,16 @@ For the branching model, version rules, tag flow, and release procedure, use `do
 
 ```bash
 cargo check --workspace              # Fast type checking
-cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,mssql,aws  # Debug build
-cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,mssql,aws --release  # Release build
-cargo run -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,mssql,aws    # Run app
+cargo build -p dbflux --features sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,aws  # Debug build
+cargo build -p dbflux --features sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,aws --release  # Release build
+cargo run -p dbflux --features sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,aws    # Run app
 
 # MCP server (AI integration) - included by default
 cargo build -p dbflux  # MCP included in default features
 ./target/debug/dbflux mcp --client-id test-client
 
 # Build without MCP support (smaller binary, no AI integration)
-cargo build -p dbflux --no-default-features --features sqlite,postgres,mysql,mongodb,redis,dynamodb,mssql,lua,aws
+cargo build -p dbflux --no-default-features --features sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,lua,aws
 
 cargo fmt --all                      # Format
 cargo clippy --workspace -- -D warnings  # Lint
@@ -32,7 +32,9 @@ cargo test --workspace test_name     # Single test
 cargo test -p dbflux_core            # Tests in specific crate
 cargo test -p dbflux_driver_dynamodb --test live_integration -- --ignored  # Docker-backed live tests
 
-# Faster test runner (provided by the Nix dev shell). Does NOT run doctests.
+# Preferred test runner: always use `cargo nextest run` over `cargo test` when
+# available (provided by the Nix dev shell). It is faster and gives clearer
+# output. Note it does NOT run doctests, so run those separately.
 cargo nextest run --workspace        # All tests (unit + integration)
 cargo test --doc --workspace         # Doctests (run separately)
 cargo nextest run -p dbflux_driver_sqlite --run-ignored all  # Include #[ignore]d live tests
@@ -64,11 +66,23 @@ manager. Windows and macOS use their default linker and are unaffected.
 
 - Avoid `unwrap()` and functions that panic; use `?` to propagate errors
 - Be careful with indexing operations that may panic on out-of-bounds
-- Never silently discard errors with `let _ =` on fallible operations:
-  - Propagate with `?` when the caller should handle them
-  - Use `.log_err()` when ignoring but wanting visibility
-  - Use `match` or `if let Err(...)` for custom logic
-- Ensure async errors propagate to UI so users get meaningful feedback
+- **Never use `let _ =` on a fallible expression.** Silently discarding `Result` / `Option` errors hides real failures from users, logs, and the audit trail. This rule has no exceptions for "fire and forget" — pick one of the alternatives below instead:
+  - **Propagate** with `?` when the caller should handle it.
+  - **Log** with `.log_err()` (from `dbflux_core`) when ignoring but wanting at least one stderr/audit trace.
+  - **Branch explicitly** with `match` / `if let Err(e) = ...` when you need custom logic.
+  - **Surface to the user** with `report_error` / `report_error_async` (`dbflux_ui_base::user_error`) when the failure is something the user just triggered. Producing a toast + audit row is preferred over `log::error!` for any user-facing operation; this also drives the status-bar error badge.
+  - If you genuinely want to drop a value — not an error — bind it to `_name` instead of `_`. Reserve the bare `let _ =` pattern for that intent only.
+- Ensure async errors propagate to the UI so users get meaningful feedback. Background tasks that fail without a path to the foreground are a bug, not a feature.
+
+#### User-facing error reporting (`dbflux_ui_base::user_error`)
+
+When a user-triggered operation fails (storage, network, driver, config, hook, auth), route it through the centralized seam instead of `log::error!` + manual `Toast::error(...)`. The seam attaches a UUID v7 correlation id to the toast and the audit row, drives the status-bar error badge, and provides a "View in Audit" action wired to that correlation id.
+
+- Foreground (`&mut App` / `&mut Context<T>`): `report_error(UserFacingError::new(ErrorKind::Storage, msg), cx)`
+- Background (`cx.spawn(async ...)` / `background_executor`): `report_error_async(UserFacingError::new(ErrorKind::Network, msg), &cx)`
+- Driver errors: prefer `UserFacingError::from_formatted(ErrorKind::Driver, fe)` so the driver's `ErrorFormatter` output feeds `cause` directly — keeps the UI driver-agnostic.
+- `ErrorKind` variants: `Storage`, `Network`, `Auth`, `Hook`, `Driver`, `User`, `Config`.
+- Convention: only the **first catch site** reports. Propagators above must NOT re-report — there is no runtime deduplication, double-toasts are a code-review concern.
 
 ### File Organization
 
@@ -256,6 +270,19 @@ Returns `Subscription`; store in `_subscriptions: Vec<Subscription>` field.
 
 Architecture details live in `ARCHITECTURE.md`. This file only keeps the agent-facing rules that affect how changes should be made.
 
+### UI crate split (6 crates)
+
+The UI layer is split into six crates (see `ARCHITECTURE.md` § Layered crate map for the full diagram):
+
+- `dbflux_components` — domain-free leaf: theme, tokens, icons, primitives, composites, controls, data_table, document_tree, result_panel, chart engine, modals. No `dbflux_app` dependency.
+- `dbflux_ui_base` — AppStateEntity, events, keymap helpers, toast, modal_frame, platform detection, sql_preview_modal, sso_wizard.
+- `dbflux_ui_document` — tab/pane system, all document types (CodeDocument, DataDocument, ChartDocument, KeyValueDocument, AuditDocument), data_grid_panel, governance view.
+- `dbflux_ui_sidebar` — connections + scripts sidebar tree.
+- `dbflux_ui_windows` — settings window and connection manager window.
+- `dbflux_ui` — thin integrator (~11.5k LOC): workspace, status_bar, tasks_panel, dock, remaining overlays (command_palette, login_modal, shutdown_overlay), keymap glue, assets, ipc_server. Re-exports moved subsystems via `pub use` shims at the old module paths so internal call-sites still compile against `crate::ui::...`.
+
+`dbflux_ui` has **no per-driver feature flags** and no driver dependencies. Per-driver features live on `dbflux_app` (which registers drivers) and on the `dbflux` binary. The cross-cutting `lua`/`aws`/`mcp` features on UI crates only forward to `dbflux_app` and sibling UI crates.
+
 ### Driver/UI Decoupling
 
 **Never add driver-specific logic in UI code.** The UI must remain agnostic to specific database implementations.
@@ -304,6 +331,7 @@ Key abstractions for UI adaptation:
 - `CollectionChildInfo`: Declares driver-owned child sources that appear in the sidebar without the UI inferring them from driver-specific conventions
 - `EventStreamTarget`: Lets the workspace/audit viewer open driver-backed event streams without embedding driver-specific routing
 - `SourceContextSpec`: Lets drivers declare extra query-context controls while the UI stays generic
+- `FormFieldKind::AuthProfileRef { provider_id: Option<String> }`: Drives the connection-manager auth-profile dropdown. Drivers that need the picker declare a `profile` field as `AuthProfileRef { provider_id: None }`; the UI renders and field-syncs this arm generically instead of matching driver ids (DEC-1). A `None` filter enumerates built-in and external RPC-backed providers alike.
 
 ### Generic Deduplication Patterns
 
@@ -324,7 +352,7 @@ Key abstractions for UI adaptation:
 - The runtime seam for service discovery/classification lives in `dbflux_app::rpc_services`; extend that boundary for future RPC capabilities instead of hardcoding new driver-only bootstrap logic in `app_state.rs`.
 - Preserve compatibility for external driver registration IDs as `rpc:<socket_id>`.
 - `DynAuthProvider::fetch_dynamic_options` is a real trait method (default implementation returns `Permanent("not supported")`); `RpcAuthProvider` implements it by dispatching `FetchDynamicOptions` requests over IPC.
-- The auth-provider IPC protocol is at v1.2 and gained `FetchDynamicOptions` request / `DynamicOptions` response variants, plus the `secret_dependency_opt_in` manifest flag. Providers advertising v1.2 have `fetch_dynamic_options` available; older providers get `Permanent("not supported")`.
+- The auth-provider IPC protocol is at v1.3. v1.2 added the `FetchDynamicOptions` request / `DynamicOptions` response variants plus the `secret_dependency_opt_in` manifest flag; v1.3 added the `audit_emit_opt_in` manifest flag and audit event emission (`EmitAuditEvent`). Providers advertising v1.2+ have `fetch_dynamic_options` available; older providers get `Permanent("not supported")`.
 - The Settings UI for Auth Profiles is provider-agnostic. To surface dynamic dropdowns a provider must declare `FormFieldKind::DynamicSelect` fields in its manifest. The host strips secret field values from dependency maps unless the provider sets `secret_dependency_opt_in: true`.
 - `AuthSession.data` round-trips opaquely through the IPC DTO via JSON downcast and is never persisted.
 
@@ -340,18 +368,22 @@ Key abstractions for UI adaptation:
 - Editor-run Lua scripts use `LuaCapabilities::all_enabled()` and stream live output into a document-owned buffer via channel, not a shared mutex string
 - Failure policies: Disconnect (abort flow), Warn (continue with warning), Ignore (log only)
 - Hooks section in Settings for global definitions; Hooks tab in Connection Manager for per-profile bindings
-- Types and logic in `dbflux_core/src/connection/hook.rs`, UI in `settings/hooks.rs` and `connection_manager/hooks_tab.rs`
+- Types and logic in `dbflux_core/src/connection/hook.rs`, UI in `crates/dbflux_ui_windows/src/settings/hooks.rs` and `crates/dbflux_ui_windows/src/connection_manager/hooks_tab.rs`
 
 ### Adding a New Driver
 
 1. Create `crates/dbflux_driver_<name>/`
 2. Implement `DbDriver` and `Connection` from `dbflux_core`
 3. Define `DriverMetadata` with appropriate `DatabaseCategory`, `QueryLanguage`, and `DriverCapabilities`
-4. Implement `ErrorFormatter` for driver-specific error messages
-5. Implement `QueryGenerator` when the driver can generate native mutation/read templates for UI previews, copy-as-query, or MCP previews
-6. Add feature flag in `crates/dbflux/Cargo.toml`
-7. Register in `AppState::new()` under `#[cfg(feature = "name")]`
-8. **Set `ColumnMeta::kind` on every column** using the `ColumnKind` enum (Timestamp, Float, Integer, Text, Unknown). The chart engine uses `ColumnKind` exclusively — it never inspects `type_name` strings or driver identifiers. Columns with `kind = Unknown` are excluded from chart auto-detection. Use `ColumnKind::Timestamp` for time columns, `ColumnKind::Float`/`Integer` for numeric columns, and `ColumnKind::Text` for string columns.
+4. Define the connection form in the driver crate (e.g. `const DRIVER_FORM: DriverFormDef`) and return it from `DbDriver::form_definition()`. Form definitions live with the driver, not in `dbflux_core`.
+5. Implement `ErrorFormatter` for driver-specific error messages
+6. Implement `QueryGenerator` when the driver can generate native mutation/read templates for UI previews, copy-as-query, or MCP previews
+7. Implement `LanguageService` when the driver speaks a non-SQL dialect (e.g. `TSqlLanguageService` lives in `dbflux_driver_mssql`). SQL drivers can reuse `SqlLanguageService` from `dbflux_core`.
+8. Add feature flag in `crates/dbflux/Cargo.toml` (binary) and `crates/dbflux_app/Cargo.toml`. No UI crate gains a per-driver feature flag.
+9. Register in `AppState::new()` under `#[cfg(feature = "name")]`
+10. **Set `ColumnMeta::kind` on every column** using the `ColumnKind` enum (Timestamp, Float, Integer, Text, Unknown). The chart engine uses `ColumnKind` exclusively — it never inspects `type_name` strings or driver identifiers. Columns with `kind = Unknown` are excluded from chart auto-detection. Use `ColumnKind::Timestamp` for time columns, `ColumnKind::Float`/`Integer` for numeric columns, and `ColumnKind::Text` for string columns.
+11. Optional: implement `DashboardSource` and/or `DashboardImporter` and advertise `DriverCapabilities::DASHBOARD_SYNC` / `DASHBOARD_IMPORT` to let the UI browse/import upstream dashboards (see `docs/DASHBOARDS.md`).
+12. Optional: implement `InstanceCatalog` (`dbflux_core/src/connection/instance_catalog.rs`) and advertise `DriverCapabilities::INSTANCE_METRICS` (time-series) and/or `INSTANCE_INSPECTOR` (tabular snapshots). The catalog exposes metrics, inspectors, a `DefaultInstanceDashboard` descriptor for the read-only Instance Overview, and optional `InspectorRowAction`s gated by per-driver privilege probes. See `docs/DASHBOARDS.md` § Instance metrics and inspectors.
 
 For external RPC-backed drivers, keep discovery/adaptation in `dbflux_app::rpc_services` rather than adding a parallel bootstrap path.
 
@@ -373,19 +405,19 @@ Drivers declare their capabilities via `DriverMetadata`:
 
 Documents are open-tab entities managed through a closure-erasing shell. The polymorphism mechanism is `PaneHandle`, not a closed enum. See `ARCHITECTURE.md` § Document System for the full picture.
 
-1. **Shell**: `PaneHandle` (`document/pane.rs`) wraps the typed `Entity<T>` with `Box<dyn Fn>` closures for 22 operations (render, focus, dispatch_command, meta_snapshot, dedup, subscribe, etc.). `PaneHandle` is `!Clone`. Each document provides `XxxDocument::into_pane(entity, cx) -> PaneHandle` in its own `pane.rs`.
-2. **Tab**: `Tab::Pane(Box<PaneHandle>)` (`document/tab_manager.rs`) — `#[non_exhaustive]` single-variant enum for forward-compat.
-3. **Event**: documents emit `DocumentEvent` directly (`document/handle.rs`, 29 LOC). No per-document event enums.
-4. **Dedup**: `DocumentKey` enum (`document/dedup.rs`) — variants `Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`. Find existing tabs via `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`. No `is_*` methods.
+1. **Shell**: `PaneHandle` (`crates/dbflux_ui_document/src/pane.rs`) wraps the typed `Entity<T>` with `Box<dyn Fn>` closures for 22 operations (render, focus, dispatch_command, meta_snapshot, dedup, subscribe, etc.). `PaneHandle` is `!Clone`. Each document provides `XxxDocument::into_pane(entity, cx) -> PaneHandle` in its own `pane.rs`.
+2. **Tab**: `Tab::Pane(Box<PaneHandle>)` (`crates/dbflux_ui_document/src/tab_manager.rs`) — `#[non_exhaustive]` single-variant enum for forward-compat.
+3. **Event**: documents emit `DocumentEvent` directly (`crates/dbflux_ui_document/src/handle.rs`, 29 LOC). No per-document event enums.
+4. **Dedup**: `DocumentKey` enum (`crates/dbflux_ui_document/src/dedup.rs`) — variants `Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`, `Routine`, `MetricChart`, `Dashboard`, `InstanceMetric`, `InstanceInspector`, `InstanceOverview`. Find existing tabs via `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`. No `is_*` methods.
 5. **Chrome**: `ResultPanel` + `ViewHandle` (`dbflux_components::result_panel`) is the universal chrome host for data-result views. View entities expose `into_view_handle(entity, cx) -> ViewHandle` whose `toolbar_segments` closure returns `ToolbarSegment`s positioned `Left | Center | Right` with `index`. Filter bars, axis bars, range chips all become segments — the chrome row uses `flex_wrap` so segments wrap when narrow.
-6. **Scripts**: Lua/Python/Bash use `CodeDocument` and execute as scripts, not DB queries; script output streams into `code/live_output.rs`.
+6. **Scripts**: Lua/Python/Bash use `CodeDocument` and execute as scripts, not DB queries; script output streams into `crates/dbflux_ui_document/src/code/live_output.rs`.
 7. **Focus**: Documents receive `FocusTarget::Document` and manage internal focus via their own `FocusHandle`.
 
 **Adding a new document type** (zero changes to `workspace/mod.rs`, `tab_manager.rs`, `tab_bar.rs`, `handle.rs`):
-1. Create `document/<name>/mod.rs` with the entity
-2. Create `<name>/pane.rs` with `into_pane(entity, cx) -> PaneHandle`
-3. Add a `DocumentKey` variant if dedup is needed
-4. Add `open_<name>` in `workspace/actions.rs`
+1. Create `crates/dbflux_ui_document/src/<name>/mod.rs` with the entity
+2. Create `crates/dbflux_ui_document/src/<name>/pane.rs` with `into_pane(entity, cx) -> PaneHandle`
+3. Add a `DocumentKey` variant in `crates/dbflux_ui_document/src/dedup.rs` if dedup is needed
+4. Add `open_<name>` in `crates/dbflux_ui/src/ui/views/workspace/actions.rs`
 
 **Known constraint**: `KeyValueView` and `LogStreamView` are boundary structs in their `view.rs` files, NOT separate GPUI entities. `impl Render` remains on the host document because GPUI's single-`Context<T>` borrow model with `cx.listener()` closures over `Self` makes entity-level extraction infeasible without relocating all domain state. The boundary is file-level (render helpers + render code in sibling files), not entity-level.
 
@@ -404,8 +436,11 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 
 **Important runtime rules**:
 - `preview_mutation` must stay read-only and must never execute the mutation being previewed
-- `preview_ddl` is intentionally not exposed until DBFlux has a safe non-mutating schema preview path
 - `select_data` rejects unsupported `joins` explicitly instead of ignoring them
+
+**Trust model**:
+
+MCP authentication is process-identity only: presenting `--client-id` is the sole authentication signal. Any local process that knows the client ID can connect. This is not a cryptographic guarantee. Do not expose the MCP server beyond localhost without an additional authentication layer. A cryptographic MCP auth layer is a P3 follow-up item.
 
 **Policy Engine** (`dbflux_policy`):
 - `PolicyEngine::evaluate()` takes actor, connection, tool, and classification
@@ -447,12 +482,55 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - `AuditDocument` as the unified audit viewer for all event categories (no separate MCP audit surface)
 - `LoginModal` and `SsoWizard` overlays for AWS SSO authentication flow
 
+### Dashboards & Saved Charts
+
+- Saved charts and dashboards are persisted in SQLite under the `viz_*` table prefix (`viz_dashboards`, `viz_dashboard_panels`, `viz_saved_charts`, `viz_saved_chart_series`, `viz_saved_chart_binding_y`, `viz_saved_chart_source_metric_*`). Repositories live in `crates/dbflux_storage/src/repositories/viz_*.rs`.
+- In-memory managers wrap the repositories: `DashboardManager` (`crates/dbflux_ui_base/src/dashboard_manager.rs`) for `Dashboard` / `DashboardPanel` / `DashboardPanelKind { Chart { saved_chart_id } | Divider { markdown } | Inspector { metric_id } }`, and `SavedChartManager` (`crates/dbflux_ui_base/src/saved_chart_manager.rs`) for `SavedChart` + `SavedChartRefreshPolicy`. Writes go to the repo first; caches update only on success.
+- `DashboardDocument` (`crates/dbflux_ui_document/src/dashboard/`) hosts a 12-column grid of chart, divider, and inspector panels with a shared `TimeRangePanel`. Dedup keys: `DocumentKey::Dashboard { dashboard_id }` (persisted) or `DocumentKey::InstanceOverview { profile_id }` (auto-generated read-only Instance Overview).
+- Refresh timers (dashboard, standalone chart, inspector) check `AppState::connections()` before each tick and skip work when the underlying profile is disconnected; the timer itself stays alive so refresh resumes on reconnect without re-arming.
+- Driver seams (UI never branches on driver id):
+  - `DashboardSource` (`dbflux_core/src/connection/dashboard_source.rs`) — lists upstream dashboards; gated by `DriverCapabilities::DASHBOARD_SYNC`.
+  - `DashboardImporter` (`dbflux_core/src/connection/dashboard_import.rs`) — parses upstream JSON into `WidgetImportSpec`s; gated by `DriverCapabilities::DASHBOARD_IMPORT`.
+  - `InstanceCatalog` (`dbflux_core/src/connection/instance_catalog.rs`) — exposes per-driver metrics, inspectors, default-dashboard descriptor, and row actions; gated by `DriverCapabilities::INSTANCE_METRICS` / `INSTANCE_INSPECTOR`.
+  - CloudWatch is the reference implementation for `DashboardSource` / `DashboardImporter`. PostgreSQL, MySQL/MariaDB, MongoDB, Redis, and SQL Server are the reference implementations for `InstanceCatalog`.
+- Remote dashboard listings are session-scoped via `RemoteDashboardCache` (`crates/dbflux_app/src/remote_dashboard_cache.rs`); they do not persist across restart.
+
+Full reference: `docs/DASHBOARDS.md`.
+
+### Visual Query Builder
+
+The right-rail builder composes SELECT / UPDATE / DELETE without writing SQL. It is **driver-agnostic**: gated on `QueryLanguage::Sql` with no per-driver branching, so every relational driver gets it.
+
+- Specs live in `dbflux_core/src/query/visual_query.rs` (re-exported from `dbflux_core::query`): `VisualQuerySpec`, `VisualMutationSpec`, and `EditableBinding`.
+- SQL generation extends the existing `QueryGenerator` trait (`dbflux_core/src/query/generator.rs`) with defaulted `generate_select` / `generate_update_from_spec` / `generate_delete_from_spec`; `SqlSelectBuilder` renders the dialect-specific SQL (SQLite, PostgreSQL, MySQL/MariaDB, SQL Server). Add new builder shapes here, not in the UI.
+- `MutationPolicy` (`dbflux_core/src/connection/manager.rs`) composes to `Allowed` / `ReadOnly` / `ApprovalRequired`. `MutationExecutor` (`crates/dbflux_ui_document/src/data_grid_panel/mutation_executor.rs`) runs the chosen mode: `SingleTransaction`, `ChunkedTransaction` (keyset over the PK), or `DirectAutocommit`.
+- No-`WHERE` UPDATE/DELETE is gated by the shared dangerous-query dispatcher (see Language Services), not a builder-local check.
+- UI lives in `crates/dbflux_ui_document/src/query_builder/` (panel, view, `sections/`, `mutation_state`, `completion`, `events`) and integrates into the DataView through `crates/dbflux_ui_document/src/data_grid_panel/`.
+- Inline edit on builder-generated SELECT results is driven by `EditableBinding`: the result must be *editable-safe* (maps 1:1 to one table with every PK column projected under its original name); otherwise the grid is read-only. The proof lives in `dbflux_core` over generic spec/metadata types — keep it there, not in `dbflux_ui`.
+- Persistence: migration `017_qry_saved_queries`, the `qry_*` tables, `SavedQueryRepo` (`crates/dbflux_storage/src/repositories/qry_saved_queries.rs`), and the in-memory `SavedQueryManager` (`crates/dbflux_ui_base/src/saved_query_manager.rs`) wired into `AppStateEntity`. Cross-connection import verifies table existence through a `TableProbe` seam rather than reaching into driver code.
+
+### Language Services
+
+- `LanguageService` trait in `crates/dbflux_core/src/query/language_service.rs` exposes `validate`, `detect_dangerous`, and `editor_diagnostics`. `SqlLanguageService` is the default impl for relational drivers.
+- Non-SQL dialects ship their `LanguageService` from the driver crate (e.g. `TSqlLanguageService` lives in `dbflux_driver_mssql`; MongoDB and Redis dangerous detection live in their own driver crates and route through `classify_query_for_language(&QueryLanguage, &str)`).
+- `DangerousQueryKind` enumerates risky patterns across SQL (`DeleteNoWhere`, `UpdateNoWhere`, `Truncate`, `Drop`, `Alter`, `Script`), MongoDB (`deleteMany`, `updateMany`, `dropCollection`, `dropDatabase`), and Redis (`FlushAll`, `FlushDb`, `MultiDelete`, `KeysPattern`).
+- The UI must call into the dispatcher; do NOT add per-driver dangerous-query branches in `dbflux_ui`.
+
 ### Platform Detection
 
-`crates/dbflux_ui/src/platform.rs` handles X11/Wayland differences:
+`crates/dbflux_ui_base/src/platform.rs` handles X11/Wayland differences:
 - X11 treats `WindowKind::Floating` as transient dialogs (can cause rendering issues)
 - `floating_window_kind()` returns `None` on X11, `Some(Floating)` elsewhere
 - `apply_window_options()` sets min size so X11 WMs emit `WM_NORMAL_HINTS`
+
+A `pub use dbflux_ui_base::platform::*` shim remains at `crates/dbflux_ui/src/platform.rs` for internal compatibility.
+
+### Release Channels & Branding
+
+- `ReleaseChannel` (`crates/dbflux_core/src/release_channel.rs`) derives the channel (`Stable` / `Rc` / `Nightly`) once from the compiled `CARGO_PKG_VERSION`. CI stamps the version before building, so the channel is baked into the binary.
+- Read channel identity through the accessors — `app_id()`, `display_name()`, `db_file_name()` — never branch on the raw version string and never hardcode `dbflux` / `dbflux-nightly` identifiers. Nightly returns a distinct `app_id` and DB file so it coexists with stable; `Rc` shares stable's identity.
+- The channel-aware DB path lives in `crates/dbflux_storage/src/paths.rs` (`dbflux_db_path`); nightly can opt into the stable DB via `set_nightly_shares_stable_db` / `nightly_shares_stable_db`.
+- Brand assets live under `resources/branding/{stable,nightly}/` (served per channel in `crates/dbflux_ui/src/assets.rs`). Packaging and Nix files substitute channel placeholders. The release/nightly flow is documented in `docs/RELEASE.md`.
 
 ## Common Pitfalls
 

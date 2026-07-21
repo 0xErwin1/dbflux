@@ -28,7 +28,7 @@ impl ConnectionProfileGovernanceBindingRolesRepository {
             .prepare(
                 r#"
                 SELECT id, binding_id, role_id
-                FROM cfg_connection_profile_governance_binding_roles
+                FROM cfg_connection_profile_gov_binding_roles
                 WHERE binding_id = ?1
                 ORDER BY role_id ASC
                 "#,
@@ -77,7 +77,7 @@ impl ConnectionProfileGovernanceBindingRolesRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO cfg_connection_profile_governance_binding_roles (id, binding_id, role_id)
+                INSERT INTO cfg_connection_profile_gov_binding_roles (id, binding_id, role_id)
                 VALUES (?1, ?2, ?3)
                 "#,
                 params![role.id, role.binding_id, role.role_id],
@@ -93,7 +93,7 @@ impl ConnectionProfileGovernanceBindingRolesRepository {
     pub fn delete_for_binding(&self, binding_id: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "DELETE FROM cfg_connection_profile_governance_binding_roles WHERE binding_id = ?1",
+                "DELETE FROM cfg_connection_profile_gov_binding_roles WHERE binding_id = ?1",
                 [binding_id],
             )
             .map_err(|source| StorageError::Sqlite {

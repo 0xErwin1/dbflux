@@ -1,13 +1,13 @@
 use rmcp::{
-    ErrorData,
-    handler::server::wrapper::Parameters,
-    model::{CallToolResult, Content},
-    schemars::JsonSchema,
+    ErrorData, handler::server::wrapper::Parameters, model::CallToolResult, schemars::JsonSchema,
     tool, tool_router,
 };
 use serde::Deserialize;
 
-use crate::{helper::IntoErrorData, server::DbFluxServer};
+use crate::{
+    helper::{IntoErrorData, to_json_content},
+    server::DbFluxServer,
+};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ConnectParams {
@@ -80,9 +80,9 @@ impl DbFluxServer {
                         .collect();
 
                     let json_output = serde_json::json!({ "connections": connections });
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&json_output).unwrap(),
-                    )]))
+                    Ok(CallToolResult::success(vec![to_json_content(
+                        &json_output,
+                    )?]))
                 },
             )
             .await
@@ -108,13 +108,12 @@ impl DbFluxServer {
                         .await
                         .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&serde_json::json!({
+                    Ok(CallToolResult::success(vec![to_json_content(
+                        &serde_json::json!({
                             "success": true,
                             "message": format!("Connected to {}", connection_id)
-                        }))
-                        .unwrap(),
-                    )]))
+                        }),
+                    )?]))
                 },
             )
             .await
@@ -141,13 +140,12 @@ impl DbFluxServer {
                         cache.remove_connection_variants(&connection_id);
                     }
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&serde_json::json!({
+                    Ok(CallToolResult::success(vec![to_json_content(
+                        &serde_json::json!({
                             "success": true,
                             "message": format!("Disconnected from {}", connection_id)
-                        }))
-                        .unwrap(),
-                    )]))
+                        }),
+                    )?]))
                 },
             )
             .await
@@ -230,9 +228,7 @@ impl DbFluxServer {
                         info["current_database"] = serde_json::Value::String(db);
                     }
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&info).unwrap(),
-                    )]))
+                    Ok(CallToolResult::success(vec![to_json_content(&info)?]))
                 },
             )
             .await

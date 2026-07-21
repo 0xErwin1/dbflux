@@ -16,8 +16,8 @@ pub enum ApprovalHandlerError {
 pub fn request_execution(
     approval_service: &mut ApprovalService,
     plan: &ExecutionPlan,
-) -> PendingExecution {
-    approval_service.request_execution(plan)
+) -> Result<PendingExecution, ApprovalHandlerError> {
+    Ok(approval_service.request_execution(plan)?)
 }
 
 pub fn approve_execution(
@@ -39,6 +39,7 @@ pub fn get_pending_execution(
 
     approval_service
         .list_pending()
+        .map_err(ApprovalHandlerError::Approval)?
         .into_iter()
         .find(|pending| pending.id == pending_id)
         .ok_or(ApprovalError::PendingNotFound(pending_id).into())

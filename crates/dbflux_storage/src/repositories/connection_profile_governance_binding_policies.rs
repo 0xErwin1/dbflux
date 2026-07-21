@@ -28,7 +28,7 @@ impl ConnectionProfileGovernanceBindingPoliciesRepository {
             .prepare(
                 r#"
                 SELECT id, binding_id, policy_id
-                FROM cfg_connection_profile_governance_binding_policies
+                FROM cfg_connection_profile_gov_binding_policies
                 WHERE binding_id = ?1
                 ORDER BY policy_id ASC
                 "#,
@@ -77,7 +77,7 @@ impl ConnectionProfileGovernanceBindingPoliciesRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO cfg_connection_profile_governance_binding_policies
+                INSERT INTO cfg_connection_profile_gov_binding_policies
                     (id, binding_id, policy_id)
                 VALUES (?1, ?2, ?3)
                 "#,
@@ -94,7 +94,7 @@ impl ConnectionProfileGovernanceBindingPoliciesRepository {
     pub fn delete_for_binding(&self, binding_id: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "DELETE FROM cfg_connection_profile_governance_binding_policies WHERE binding_id = ?1",
+                "DELETE FROM cfg_connection_profile_gov_binding_policies WHERE binding_id = ?1",
                 [binding_id],
             )
             .map_err(|source| StorageError::Sqlite {

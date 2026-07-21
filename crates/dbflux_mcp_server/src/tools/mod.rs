@@ -13,7 +13,6 @@ pub mod approval;
 pub mod audit;
 pub mod connection;
 pub mod ddl;
-pub mod ddl_preview;
 pub mod destructive;
 pub mod query;
 pub mod read;

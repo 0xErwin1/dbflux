@@ -105,9 +105,8 @@ impl From<&str> for Diagnostic {
 
 /// Categories of potentially dangerous queries that require user confirmation.
 ///
-/// Each variant maps to a destructive pattern detected by heuristic analysis.
-/// Both SQL and document-database patterns are represented here so the core
-/// owns the full definition and the UI never needs to know query syntax.
+/// Each variant maps to a destructive pattern detected by driver-local or
+/// shared heuristic analysis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DangerousQueryKind {
     // SQL patterns
@@ -138,6 +137,11 @@ pub enum DangerousQueryKind {
     RedisMultiDelete,
     /// KEYS * — performance hazard on large databases
     RedisKeysPattern,
+
+    // Visual mutation builder
+    /// At least one SET assignment uses a raw SQL expression rather than a
+    /// bound parameter. Forces the hard-confirm modal regardless of other gates.
+    RawExpressionInSet,
 }
 
 impl DangerousQueryKind {
@@ -159,13 +163,97 @@ impl DangerousQueryKind {
             Self::RedisKeysPattern => {
                 "KEYS with a pattern is a performance hazard on large databases"
             }
+            Self::RawExpressionInSet => {
+                "SET clause contains a raw SQL expression — bypasses parameter binding"
+            }
         }
+    }
+}
+
+/// The result of the double-gate classification applied to a `VisualMutationSpec`.
+///
+/// Both `spec_kinds` and `text_kinds` are checked independently; `effective`
+/// is their union (deduplicated). `requires_hard_confirm` is true when the
+/// effective set is non-empty OR when `RawExpressionInSet` is present.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClassifiedMutation {
+    /// Dangers detected by inspecting the spec structure (no-WHERE, raw expression).
+    pub spec_kinds: Vec<DangerousQueryKind>,
+    /// Dangers detected by running the generated SQL text through the language gate.
+    /// Always empty for visual-spec classification (text check is caller's responsibility).
+    pub text_kinds: Vec<DangerousQueryKind>,
+    /// Deduplicated union of `spec_kinds` and `text_kinds`.
+    pub effective: Vec<DangerousQueryKind>,
+    /// True when any effective kind warrants the hard-confirm flow (Danger modal +
+    /// TypeToConfirm). All current effective kinds qualify.
+    pub requires_hard_confirm: bool,
+}
+
+/// Classifies a `VisualMutationSpec` for dangerous patterns at the spec level.
+///
+/// This is one half of the double-gate (DR-7.1, DR-7.2, DR-7.4). The other
+/// half — text-level classification of the generated SQL — is the caller's
+/// responsibility via `classify_query_for_language`.
+pub fn classify_visual_mutation(
+    spec: &crate::query::visual_query::VisualMutationSpec,
+) -> ClassifiedMutation {
+    use crate::query::visual_query::{AssignmentValue, MutationKind};
+
+    let mut spec_kinds: Vec<DangerousQueryKind> = Vec::new();
+
+    match &spec.kind {
+        MutationKind::Delete => {
+            if spec.filter.is_none() {
+                spec_kinds.push(DangerousQueryKind::DeleteNoWhere);
+            }
+        }
+
+        MutationKind::Update { assignments } => {
+            if spec.filter.is_none() {
+                spec_kinds.push(DangerousQueryKind::UpdateNoWhere);
+            }
+
+            let has_raw_expression = assignments
+                .iter()
+                .any(|a| matches!(&a.value, AssignmentValue::Expression(_)));
+
+            if has_raw_expression {
+                spec_kinds.push(DangerousQueryKind::RawExpressionInSet);
+            }
+        }
+    }
+
+    let effective = spec_kinds.clone();
+    let requires_hard_confirm = !effective.is_empty();
+
+    ClassifiedMutation {
+        spec_kinds,
+        text_kinds: Vec::new(),
+        effective,
+        requires_hard_confirm,
     }
 }
 
 pub fn classify_query_for_language(
     query_language: &QueryLanguage,
     query: &str,
+) -> ExecutionClassification {
+    classify_query_for_language_with_service(query_language, query, None)
+}
+
+/// Classify a query's execution impact, optionally delegating a `Custom`
+/// language to the driver's own [`LanguageService`].
+///
+/// For the built-in languages the classification is keyed off the language. For
+/// a `Custom(_)` language the classifier consults `service` (when present) so a
+/// driver-defined surface (e.g. PartiQL) is classified by the driver rather than
+/// dead-ending at a conservative `Write`. With no service it falls back to
+/// `Write`, preserving the previous conservative default for non-connection
+/// callers.
+pub fn classify_query_for_language_with_service(
+    query_language: &QueryLanguage,
+    query: &str,
+    service: Option<&dyn LanguageService>,
 ) -> ExecutionClassification {
     match query_language {
         QueryLanguage::Sql => classify_sql_execution(query),
@@ -174,6 +262,9 @@ pub fn classify_query_for_language(
         | QueryLanguage::OpenSearchSql => ExecutionClassification::Read,
         QueryLanguage::MongoQuery => classify_mongo_query(query),
         QueryLanguage::RedisCommands => classify_redis_query(query),
+        QueryLanguage::Custom(_) => service
+            .and_then(|service| service.classify_execution(query))
+            .unwrap_or(ExecutionClassification::Write),
         _ => ExecutionClassification::Write,
     }
 }
@@ -185,8 +276,26 @@ fn classify_mongo_query(query: &str) -> ExecutionClassification {
         return ExecutionClassification::Metadata;
     }
 
-    if let Some(kind) = detect_dangerous_mongo(query) {
-        return classification_from_dangerous_kind(kind);
+    if normalized.contains(".dropdatabase(") {
+        return ExecutionClassification::Destructive;
+    }
+
+    if normalized.contains(".drop(") && !normalized.contains(".dropdatabase(") {
+        return ExecutionClassification::Destructive;
+    }
+
+    if let Some(pos) = normalized.find(".deletemany(") {
+        let after_paren = &normalized[pos + 12..];
+        if is_empty_filter(after_paren) {
+            return ExecutionClassification::Write;
+        }
+    }
+
+    if let Some(pos) = normalized.find(".updatemany(") {
+        let after_paren = &normalized[pos + 12..];
+        if is_empty_filter(after_paren) {
+            return ExecutionClassification::Write;
+        }
     }
 
     if normalized.contains(".find(") || normalized.contains(".aggregate(") {
@@ -222,13 +331,18 @@ fn classify_redis_query(query: &str) -> ExecutionClassification {
         return ExecutionClassification::Metadata;
     }
 
-    if let Some(kind) = detect_dangerous_redis(query) {
-        return classification_from_dangerous_kind(kind);
-    }
-
     let Some(command) = normalized.split_whitespace().next() else {
         return ExecutionClassification::Metadata;
     };
+
+    match command {
+        "flushall" | "flushdb" => return ExecutionClassification::Destructive,
+        "del" if normalized.split_whitespace().skip(1).count() > 1 => {
+            return ExecutionClassification::Write;
+        }
+        "keys" => return ExecutionClassification::Read,
+        _ => {}
+    }
 
     match command {
         "info" | "dbsize" | "type" | "ttl" | "pttl" | "exists" | "llen" | "hget" | "hmget"
@@ -238,25 +352,6 @@ fn classify_redis_query(query: &str) -> ExecutionClassification {
         "command" | "help" => ExecutionClassification::Metadata,
         "config" | "acl" | "script" | "module" => ExecutionClassification::Admin,
         _ => ExecutionClassification::Write,
-    }
-}
-
-fn classification_from_dangerous_kind(kind: DangerousQueryKind) -> ExecutionClassification {
-    match kind {
-        DangerousQueryKind::Drop
-        | DangerousQueryKind::Truncate
-        | DangerousQueryKind::MongoDropCollection
-        | DangerousQueryKind::MongoDropDatabase
-        | DangerousQueryKind::RedisFlushAll
-        | DangerousQueryKind::RedisFlushDb => ExecutionClassification::Destructive,
-        DangerousQueryKind::DeleteNoWhere
-        | DangerousQueryKind::UpdateNoWhere
-        | DangerousQueryKind::MongoDeleteMany
-        | DangerousQueryKind::MongoUpdateMany
-        | DangerousQueryKind::RedisMultiDelete => ExecutionClassification::Write,
-        DangerousQueryKind::Alter => ExecutionClassification::Admin,
-        DangerousQueryKind::Script => ExecutionClassification::Write,
-        DangerousQueryKind::RedisKeysPattern => ExecutionClassification::Read,
     }
 }
 
@@ -301,6 +396,17 @@ pub trait LanguageService: Send + Sync {
     fn editor_diagnostics(&self, _query: &str) -> Vec<EditorDiagnostic> {
         vec![]
     }
+
+    /// Classify a query's execution impact for governance.
+    ///
+    /// Returns `None` (the default) when the driver does not provide a bespoke
+    /// classifier, letting the core fall back to its language-keyed
+    /// classification. A driver whose `QueryLanguage` is `Custom(_)` (e.g. a
+    /// PartiQL surface) overrides this so its statements are classified by the
+    /// driver rather than dead-ending at a conservative `Write`.
+    fn classify_execution(&self, _query: &str) -> Option<ExecutionClassification> {
+        None
+    }
 }
 
 /// Default SQL language service that handles standard SQL dangerous-query detection.
@@ -320,33 +426,6 @@ impl LanguageService for SqlLanguageService {
 
     fn editor_diagnostics(&self, query: &str) -> Vec<EditorDiagnostic> {
         sql_editor_diagnostics(query)
-    }
-}
-
-/// Language service for T-SQL (Microsoft SQL Server).
-///
-/// Behaves like `SqlLanguageService` for dangerous-query detection (the
-/// destructive keywords DROP/TRUNCATE/DELETE are spelled identically), but
-/// skips the live parse diagnostics entirely. The shared `tree-sitter-sequel`
-/// grammar follows generic ANSI SQL and flags T-SQL-only constructs as
-/// errors — `SELECT TOP n`, `OUTPUT INSERTED.*`, `MERGE`, `CROSS APPLY /
-/// OUTER APPLY`, table hints like `WITH (NOLOCK)`, `OFFSET … ROWS FETCH
-/// NEXT … ROWS ONLY`, etc. The server is the source of truth for syntax
-/// validity; surfacing parser false-positives in the editor only adds
-/// noise.
-pub struct TSqlLanguageService;
-
-impl LanguageService for TSqlLanguageService {
-    fn validate(&self, _query: &str) -> ValidationResult {
-        ValidationResult::Valid
-    }
-
-    fn detect_dangerous(&self, query: &str) -> Option<DangerousQueryKind> {
-        detect_dangerous_sql(query)
-    }
-
-    fn editor_diagnostics(&self, _query: &str) -> Vec<EditorDiagnostic> {
-        Vec::new()
     }
 }
 
@@ -514,76 +593,8 @@ pub fn detect_dangerous_sql(query: &str) -> Option<DangerousQueryKind> {
     detect_dangerous_single(statements[0])
 }
 
-/// Detect dangerous MongoDB shell commands using heuristic pattern matching.
-pub fn detect_dangerous_mongo(query: &str) -> Option<DangerousQueryKind> {
-    let normalized = query.trim().to_lowercase();
-
-    if normalized.contains(".dropdatabase(") {
-        return Some(DangerousQueryKind::MongoDropDatabase);
-    }
-
-    if normalized.contains(".drop(") && !normalized.contains(".dropdatabase(") {
-        return Some(DangerousQueryKind::MongoDropCollection);
-    }
-
-    if let Some(pos) = normalized.find(".deletemany(") {
-        let after_paren = &normalized[pos + 12..];
-        if is_empty_filter(after_paren) {
-            return Some(DangerousQueryKind::MongoDeleteMany);
-        }
-    }
-
-    if let Some(pos) = normalized.find(".updatemany(") {
-        let after_paren = &normalized[pos + 12..];
-        if is_empty_filter(after_paren) {
-            return Some(DangerousQueryKind::MongoUpdateMany);
-        }
-    }
-
-    None
-}
-
-/// Detect dangerous Redis commands using keyword matching.
-pub fn detect_dangerous_redis(query: &str) -> Option<DangerousQueryKind> {
-    let normalized = query.trim().to_lowercase();
-
-    let first_word = normalized.split_whitespace().next().unwrap_or("");
-
-    if first_word == "flushall" {
-        return Some(DangerousQueryKind::RedisFlushAll);
-    }
-
-    if first_word == "flushdb" {
-        return Some(DangerousQueryKind::RedisFlushDb);
-    }
-
-    if first_word == "del" {
-        let args: Vec<&str> = normalized.split_whitespace().skip(1).collect();
-        if args.len() > 1 {
-            return Some(DangerousQueryKind::RedisMultiDelete);
-        }
-    }
-
-    if first_word == "keys" {
-        return Some(DangerousQueryKind::RedisKeysPattern);
-    }
-
-    None
-}
-
-/// Unified entry point: auto-detects language and checks for dangerous patterns.
-///
-/// Detects MongoDB shell syntax (`db.`) vs SQL automatically.
+/// Unified entry point for shared SQL dangerous-query checks.
 pub fn detect_dangerous_query(query: &str) -> Option<DangerousQueryKind> {
-    let clean = strip_leading_comments(query);
-    if clean.is_empty() {
-        return None;
-    }
-
-    if clean.trim().starts_with("db.") {
-        return detect_dangerous_mongo(clean);
-    }
-
     detect_dangerous_sql(query)
 }
 
@@ -632,7 +643,41 @@ fn skip_cte_prefix(sql: &str) -> &str {
 }
 
 fn contains_where_clause(normalized_sql: &str) -> bool {
-    normalized_sql.contains(" where ")
+    strip_single_quoted_literals(normalized_sql)
+        .split(|c: char| c.is_whitespace() || c == '(' || c == ')')
+        .any(|token| token == "where")
+}
+
+/// Replace the contents of single-quoted string literals with spaces so that
+/// keyword detection never matches text that lives inside a value. Escaped
+/// quotes (`''`) are treated as part of the literal, not a delimiter.
+fn strip_single_quoted_literals(sql: &str) -> String {
+    let mut result = String::with_capacity(sql.len());
+    let mut chars = sql.chars().peekable();
+    let mut in_literal = false;
+
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' if !in_literal => {
+                in_literal = true;
+                result.push('\'');
+            }
+            '\'' if in_literal => {
+                if chars.peek() == Some(&'\'') {
+                    chars.next();
+                    result.push(' ');
+                    result.push(' ');
+                } else {
+                    in_literal = false;
+                    result.push('\'');
+                }
+            }
+            _ if in_literal => result.push(' '),
+            _ => result.push(c),
+        }
+    }
+
+    result
 }
 
 fn is_empty_filter(args_start: &str) -> bool {
@@ -746,6 +791,28 @@ mod tests {
             detect_dangerous_query("update users set active = false"),
             Some(DangerousQueryKind::UpdateNoWhere)
         );
+    }
+
+    #[test]
+    fn update_with_multiline_where_is_safe() {
+        let sql =
+            "UPDATE business_nad_status\nSET last_error = 'error 193'\nWHERE business_id = 193;";
+        assert_eq!(detect_dangerous_query(sql), None);
+    }
+
+    #[test]
+    fn update_with_where_word_inside_string_value_is_dangerous() {
+        let sql = "UPDATE notes SET body = 'see the where clause docs'";
+        assert_eq!(
+            detect_dangerous_query(sql),
+            Some(DangerousQueryKind::UpdateNoWhere)
+        );
+    }
+
+    #[test]
+    fn update_with_escaped_quote_before_where_is_safe() {
+        let sql = "UPDATE t SET note = 'it''s fine' WHERE id = 1";
+        assert_eq!(detect_dangerous_query(sql), None);
     }
 
     // ==================== TRUNCATE tests ====================
@@ -1114,115 +1181,25 @@ mod tests {
         assert!(!DangerousQueryKind::MongoUpdateMany.message().is_empty());
         assert!(!DangerousQueryKind::MongoDropCollection.message().is_empty());
         assert!(!DangerousQueryKind::MongoDropDatabase.message().is_empty());
+        assert!(!DangerousQueryKind::RedisFlushAll.message().is_empty());
+        assert!(!DangerousQueryKind::RedisFlushDb.message().is_empty());
+        assert!(!DangerousQueryKind::RedisMultiDelete.message().is_empty());
+        assert!(!DangerousQueryKind::RedisKeysPattern.message().is_empty());
+        assert!(!DangerousQueryKind::RawExpressionInSet.message().is_empty());
     }
 
-    // ==================== MongoDB tests ====================
-
+    // T-05/T-06 — RawExpressionInSet variant (spec scenario DR-2.5, design R-D1)
     #[test]
-    fn mongo_delete_many_empty_filter_is_dangerous() {
-        assert_eq!(
-            detect_dangerous_query("db.users.deleteMany({})"),
-            Some(DangerousQueryKind::MongoDeleteMany)
+    fn raw_expression_in_set_variant_exists_and_has_message() {
+        let kind = DangerousQueryKind::RawExpressionInSet;
+        let msg = kind.message();
+        assert!(
+            !msg.is_empty(),
+            "RawExpressionInSet must have a non-empty message"
         );
-    }
-
-    #[test]
-    fn mongo_delete_many_no_args_is_dangerous() {
-        assert_eq!(
-            detect_dangerous_query("db.users.deleteMany()"),
-            Some(DangerousQueryKind::MongoDeleteMany)
-        );
-    }
-
-    #[test]
-    fn mongo_delete_many_with_filter_is_safe() {
-        assert_eq!(
-            detect_dangerous_query(r#"db.users.deleteMany({"archived": true})"#),
-            None
-        );
-    }
-
-    #[test]
-    fn mongo_update_many_empty_filter_is_dangerous() {
-        assert_eq!(
-            detect_dangerous_query(r#"db.users.updateMany({}, {"$set": {"active": false}})"#),
-            Some(DangerousQueryKind::MongoUpdateMany)
-        );
-    }
-
-    #[test]
-    fn mongo_update_many_with_filter_is_safe() {
-        assert_eq!(
-            detect_dangerous_query(
-                r#"db.users.updateMany({"status": "old"}, {"$set": {"archived": true}})"#
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn mongo_drop_collection_is_dangerous() {
-        assert_eq!(
-            detect_dangerous_query("db.temp_collection.drop()"),
-            Some(DangerousQueryKind::MongoDropCollection)
-        );
-    }
-
-    #[test]
-    fn mongo_drop_database_is_dangerous() {
-        assert_eq!(
-            detect_dangerous_query("db.dropDatabase()"),
-            Some(DangerousQueryKind::MongoDropDatabase)
-        );
-    }
-
-    #[test]
-    fn mongo_find_is_safe() {
-        assert_eq!(detect_dangerous_query("db.users.find()"), None);
-        assert_eq!(detect_dangerous_query("db.users.find({})"), None);
-        assert_eq!(
-            detect_dangerous_query(r#"db.users.find({"name": "John"})"#),
-            None
-        );
-    }
-
-    #[test]
-    fn mongo_delete_one_is_safe() {
-        assert_eq!(
-            detect_dangerous_query(r#"db.users.deleteOne({"_id": "123"})"#),
-            None
-        );
-    }
-
-    #[test]
-    fn mongo_insert_is_safe() {
-        assert_eq!(
-            detect_dangerous_query(r#"db.users.insertOne({"name": "Alice"})"#),
-            None
-        );
-        assert_eq!(
-            detect_dangerous_query(r#"db.users.insertMany([{"name": "A"}, {"name": "B"}])"#),
-            None
-        );
-    }
-
-    #[test]
-    fn mongo_aggregate_is_safe() {
-        assert_eq!(
-            detect_dangerous_query(r#"db.orders.aggregate([{"$match": {"status": "active"}}])"#),
-            None
-        );
-    }
-
-    #[test]
-    fn mongo_case_insensitive() {
-        assert_eq!(
-            detect_dangerous_query("db.users.DELETEMANY({})"),
-            Some(DangerousQueryKind::MongoDeleteMany)
-        );
-        assert_eq!(
-            detect_dangerous_query("db.users.DeleteMany({})"),
-            Some(DangerousQueryKind::MongoDeleteMany)
+        assert!(
+            msg.contains("expression") || msg.contains("binding") || msg.contains("SET"),
+            "message should describe the risk: {msg}"
         );
     }
 
@@ -1305,83 +1282,6 @@ END $$;"#;
         assert!(!diags.is_empty());
     }
 
-    // ==================== Redis tests ====================
-
-    #[test]
-    fn redis_flushall_is_dangerous() {
-        assert_eq!(
-            detect_dangerous_redis("FLUSHALL"),
-            Some(DangerousQueryKind::RedisFlushAll)
-        );
-        assert_eq!(
-            detect_dangerous_redis("flushall"),
-            Some(DangerousQueryKind::RedisFlushAll)
-        );
-        assert_eq!(
-            detect_dangerous_redis("FLUSHALL ASYNC"),
-            Some(DangerousQueryKind::RedisFlushAll)
-        );
-    }
-
-    #[test]
-    fn redis_flushdb_is_dangerous() {
-        assert_eq!(
-            detect_dangerous_redis("FLUSHDB"),
-            Some(DangerousQueryKind::RedisFlushDb)
-        );
-        assert_eq!(
-            detect_dangerous_redis("flushdb ASYNC"),
-            Some(DangerousQueryKind::RedisFlushDb)
-        );
-    }
-
-    #[test]
-    fn redis_del_multi_key_is_dangerous() {
-        assert_eq!(
-            detect_dangerous_redis("DEL key1 key2"),
-            Some(DangerousQueryKind::RedisMultiDelete)
-        );
-        assert_eq!(
-            detect_dangerous_redis("del a b c"),
-            Some(DangerousQueryKind::RedisMultiDelete)
-        );
-    }
-
-    #[test]
-    fn redis_del_single_key_is_safe() {
-        assert_eq!(detect_dangerous_redis("DEL mykey"), None);
-    }
-
-    #[test]
-    fn redis_keys_is_dangerous() {
-        assert_eq!(
-            detect_dangerous_redis("KEYS *"),
-            Some(DangerousQueryKind::RedisKeysPattern)
-        );
-        assert_eq!(
-            detect_dangerous_redis("keys user:*"),
-            Some(DangerousQueryKind::RedisKeysPattern)
-        );
-    }
-
-    #[test]
-    fn redis_get_is_safe() {
-        assert_eq!(detect_dangerous_redis("GET mykey"), None);
-    }
-
-    #[test]
-    fn redis_set_is_safe() {
-        assert_eq!(detect_dangerous_redis("SET mykey myvalue"), None);
-    }
-
-    #[test]
-    fn redis_kind_messages_are_non_empty() {
-        assert!(!DangerousQueryKind::RedisFlushAll.message().is_empty());
-        assert!(!DangerousQueryKind::RedisFlushDb.message().is_empty());
-        assert!(!DangerousQueryKind::RedisMultiDelete.message().is_empty());
-        assert!(!DangerousQueryKind::RedisKeysPattern.message().is_empty());
-    }
-
     #[test]
     fn language_classification_escalates_ambiguous_queries() {
         assert_eq!(
@@ -1393,5 +1293,270 @@ END $$;"#;
             classify_query_for_language(&QueryLanguage::RedisCommands, "CONFIG SET a b"),
             ExecutionClassification::Admin
         );
+    }
+
+    #[test]
+    fn custom_language_without_service_falls_back_to_write() {
+        let language = QueryLanguage::Custom("DynamoDB".to_string());
+
+        assert_eq!(
+            classify_query_for_language(&language, "SELECT * FROM \"t\""),
+            ExecutionClassification::Write
+        );
+        assert_eq!(
+            classify_query_for_language_with_service(&language, "SELECT * FROM \"t\"", None),
+            ExecutionClassification::Write
+        );
+    }
+
+    #[test]
+    fn custom_language_routes_classification_through_service() {
+        struct PartiqlService;
+        impl LanguageService for PartiqlService {
+            fn validate(&self, _query: &str) -> ValidationResult {
+                ValidationResult::Valid
+            }
+            fn detect_dangerous(&self, _query: &str) -> Option<DangerousQueryKind> {
+                None
+            }
+            fn classify_execution(&self, query: &str) -> Option<ExecutionClassification> {
+                let normalized = query.trim_start().to_ascii_uppercase();
+                if normalized.starts_with("SELECT") {
+                    Some(ExecutionClassification::Read)
+                } else if normalized.starts_with("DELETE") {
+                    Some(ExecutionClassification::Destructive)
+                } else {
+                    None
+                }
+            }
+        }
+
+        let language = QueryLanguage::Custom("DynamoDB".to_string());
+        let service = PartiqlService;
+
+        assert_eq!(
+            classify_query_for_language_with_service(
+                &language,
+                "SELECT * FROM \"t\"",
+                Some(&service),
+            ),
+            ExecutionClassification::Read
+        );
+        assert_eq!(
+            classify_query_for_language_with_service(
+                &language,
+                "DELETE FROM \"t\" WHERE pk = 'a'",
+                Some(&service),
+            ),
+            ExecutionClassification::Destructive
+        );
+        assert_eq!(
+            classify_query_for_language_with_service(&language, "weird", Some(&service)),
+            ExecutionClassification::Write
+        );
+    }
+
+    // T-11 — [RED] Tests for classify_visual_mutation (spec scenarios C-1 through C-6, DR-7.1–DR-7.6)
+
+    #[cfg(test)]
+    mod classify_visual_mutation_tests {
+        use super::*;
+        use crate::query::table_browser::TableRef;
+        use crate::query::visual_query::{
+            Assignment, AssignmentValue, Comparator, FilterNode, LiteralValue, MutationKind,
+            Predicate, PredicateValue, ScalarLiteral, VisualMutationSpec,
+        };
+
+        fn table_ref(name: &str) -> TableRef {
+            TableRef {
+                schema: None,
+                name: name.to_string(),
+            }
+        }
+
+        fn filter_id_eq_1() -> FilterNode {
+            FilterNode::Predicate(Predicate {
+                source_alias: "t".to_string(),
+                column: "id".to_string(),
+                comparator: Comparator::Eq,
+                value: PredicateValue::Single(LiteralValue::Integer(1)),
+                node_id: 0,
+            })
+        }
+
+        fn literal_assignment(col: &str) -> Assignment {
+            Assignment {
+                column: col.to_string(),
+                value: AssignmentValue::Literal(ScalarLiteral::Text("v".to_string())),
+            }
+        }
+
+        fn expr_assignment(col: &str) -> Assignment {
+            Assignment {
+                column: col.to_string(),
+                value: AssignmentValue::Expression("price * 1.1".to_string()),
+            }
+        }
+
+        // C-1: spec-level gate — Delete no WHERE → DeleteNoWhere
+        #[test]
+        fn c1_delete_no_filter_returns_delete_no_where() {
+            let spec = VisualMutationSpec {
+                from: table_ref("orders"),
+                filter: None,
+                kind: MutationKind::Delete,
+            };
+            let result = classify_visual_mutation(&spec);
+            assert!(
+                result
+                    .spec_kinds
+                    .contains(&DangerousQueryKind::DeleteNoWhere)
+            );
+            assert!(
+                result
+                    .effective
+                    .contains(&DangerousQueryKind::DeleteNoWhere)
+            );
+        }
+
+        // C-2: spec-level gate — Update no WHERE → UpdateNoWhere
+        #[test]
+        fn c2_update_no_filter_returns_update_no_where() {
+            let spec = VisualMutationSpec {
+                from: table_ref("users"),
+                filter: None,
+                kind: MutationKind::Update {
+                    assignments: vec![literal_assignment("name")],
+                },
+            };
+            let result = classify_visual_mutation(&spec);
+            assert!(
+                result
+                    .spec_kinds
+                    .contains(&DangerousQueryKind::UpdateNoWhere)
+            );
+            assert!(
+                result
+                    .effective
+                    .contains(&DangerousQueryKind::UpdateNoWhere)
+            );
+        }
+
+        // C-3: spec-level gate passes with filter
+        #[test]
+        fn c3_delete_with_filter_no_spec_danger() {
+            let spec = VisualMutationSpec {
+                from: table_ref("orders"),
+                filter: Some(filter_id_eq_1()),
+                kind: MutationKind::Delete,
+            };
+            let result = classify_visual_mutation(&spec);
+            assert!(
+                !result
+                    .spec_kinds
+                    .contains(&DangerousQueryKind::DeleteNoWhere)
+            );
+            assert!(
+                !result
+                    .spec_kinds
+                    .contains(&DangerousQueryKind::UpdateNoWhere)
+            );
+        }
+
+        // C-6: both checks clear for safe mutation
+        #[test]
+        fn c6_update_with_filter_and_literal_is_safe() {
+            let spec = VisualMutationSpec {
+                from: table_ref("users"),
+                filter: Some(filter_id_eq_1()),
+                kind: MutationKind::Update {
+                    assignments: vec![literal_assignment("name")],
+                },
+            };
+            let result = classify_visual_mutation(&spec);
+            assert!(result.spec_kinds.is_empty());
+            assert!(!result.requires_hard_confirm);
+        }
+
+        // RawExpressionInSet when any assignment uses Expression variant
+        #[test]
+        fn raw_expression_triggers_raw_expression_in_set() {
+            let spec = VisualMutationSpec {
+                from: table_ref("products"),
+                filter: Some(filter_id_eq_1()),
+                kind: MutationKind::Update {
+                    assignments: vec![expr_assignment("price")],
+                },
+            };
+            let result = classify_visual_mutation(&spec);
+            assert!(
+                result
+                    .spec_kinds
+                    .contains(&DangerousQueryKind::RawExpressionInSet)
+            );
+            assert!(
+                result
+                    .effective
+                    .contains(&DangerousQueryKind::RawExpressionInSet)
+            );
+            assert!(result.requires_hard_confirm);
+        }
+
+        // RawExpressionInSet forces hard confirm even when filter is present
+        #[test]
+        fn raw_expression_with_filter_still_hard_confirm() {
+            let spec = VisualMutationSpec {
+                from: table_ref("products"),
+                filter: Some(filter_id_eq_1()),
+                kind: MutationKind::Update {
+                    assignments: vec![literal_assignment("name"), expr_assignment("computed")],
+                },
+            };
+            let result = classify_visual_mutation(&spec);
+            assert!(result.requires_hard_confirm);
+        }
+
+        // effective contains union of spec_kinds (no text_kinds for visual specs)
+        #[test]
+        fn effective_is_superset_of_spec_kinds() {
+            let spec = VisualMutationSpec {
+                from: table_ref("orders"),
+                filter: None,
+                kind: MutationKind::Delete,
+            };
+            let result = classify_visual_mutation(&spec);
+            for k in &result.spec_kinds {
+                assert!(
+                    result.effective.contains(k),
+                    "effective must include all spec_kinds"
+                );
+            }
+        }
+
+        // Delete with no filter is hard confirm
+        #[test]
+        fn delete_no_where_requires_hard_confirm() {
+            let spec = VisualMutationSpec {
+                from: table_ref("orders"),
+                filter: None,
+                kind: MutationKind::Delete,
+            };
+            let result = classify_visual_mutation(&spec);
+            assert!(result.requires_hard_confirm);
+        }
+
+        // Update with no filter is hard confirm
+        #[test]
+        fn update_no_where_requires_hard_confirm() {
+            let spec = VisualMutationSpec {
+                from: table_ref("users"),
+                filter: None,
+                kind: MutationKind::Update {
+                    assignments: vec![literal_assignment("status")],
+                },
+            };
+            let result = classify_visual_mutation(&spec);
+            assert!(result.requires_hard_confirm);
+        }
     }
 }

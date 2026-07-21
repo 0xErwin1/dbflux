@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -6,27 +7,31 @@ use std::time::Instant;
 
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
-    AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo,
-    ColumnInfo, ColumnKind, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
-    ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult,
-    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
-    DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection, DriverCapabilities,
-    DriverFormDef, DriverLimits, DriverMetadata, DropForeignKeyRequest, DropIndexRequest,
-    ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData,
-    IndexInfo, IsolationLevel, KeyValueConnection, MYSQL_FORM, MutationCapabilities, OrderByColumn,
-    PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter,
-    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity,
-    RelationalConnection, RelationalSchema, RoutineInfo, RoutineKind, Row, RowDelete, RowInsert,
-    RowPatch, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest,
-    SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SyntaxInfo,
-    TableInfo, TransactionCapabilities, Value, ViewInfo, WhereOperator, generate_delete_template,
-    generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
-    generate_update_template, render_semantic_filter_sql, sanitize_uri,
+    AddColumnRequest, AddForeignKeyRequest, AlterColumnRequest, CodeGenCapabilities, CodeGenScope,
+    CodeGenerator, CodeGeneratorInfo, ColumnInfo, ColumnKind, ColumnMeta, Connection,
+    ConnectionErrorFormatter, ConnectionExt, ConnectionProfile, ConstraintInfo, ConstraintKind,
+    CreateIndexRequest, CrudResult, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError,
+    DbKind, DbSchemaInfo, DdlCapabilities, DdlRejection, DefaultSpec, DeploymentClass,
+    DescribeRequest, DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits,
+    DriverMetadata, DropColumnRequest, DropForeignKeyRequest, DropIndexRequest,
+    ExecutionSourceContext, ExplainRequest, FieldExportTransform, ForeignKeyBuilder,
+    ForeignKeyInfo, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon,
+    IndexData, IndexInfo, InstanceCatalog, IsolationLevel, KeyValueConnection,
+    MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
+    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, RecordIdentity, RelationalConnection, RelationalSchema, RoutineInfo,
+    RoutineKind, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
+    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
+    SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities,
+    TransferFamily, Value, ViewInfo, WhereOperator, field, field_password, field_required,
+    field_use_uri, generate_delete_template, generate_drop_table, generate_insert_template,
+    generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
+    sanitize_uri, ssh_tab, validate_ddl_fragment, when_checked, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
-use mysql::{Conn, Opts, OptsBuilder, SslOpts};
+use mysql::{ClientIdentity, Conn, Opts, OptsBuilder, SslOpts};
 
 /// MySQL driver metadata.
 pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -34,6 +39,7 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
     display_name: "MySQL".into(),
     description: "Popular open-source relational database".into(),
     category: DatabaseCategory::Relational,
+    transfer_family: TransferFamily::Sql,
     deployment_class: Some(DeploymentClass::SelfHosted),
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
@@ -45,7 +51,13 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
             | DriverCapabilities::CHECK_CONSTRAINTS.bits()
             | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
             | DriverCapabilities::ROUTINES.bits()
-            | DriverCapabilities::MULTI_STATEMENT.bits(),
+            | DriverCapabilities::MULTI_STATEMENT.bits()
+            | DriverCapabilities::INSTANCE_METRICS.bits()
+            | DriverCapabilities::INSTANCE_INSPECTOR.bits()
+            | DriverCapabilities::CHART_AUTHORING.bits()
+            | DriverCapabilities::BULK_INSERT.bits()
+            | DriverCapabilities::TRUNCATE_TABLE.bits()
+            | DriverCapabilities::DISABLE_FK_CHECKS.bits(),
     ),
     default_port: Some(3306),
     uri_scheme: "mysql".into(),
@@ -78,6 +90,7 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
             WhereOperator::Not,
         ],
         supports_order_by: true,
+        order_by_mode: dbflux_core::OrderByMode::AnyColumns,
         supports_group_by: true,
         supports_having: true,
         supports_distinct: true,
@@ -149,6 +162,7 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
         max_identifier_length: 64,
         max_columns: 4096,
         max_indexes_per_table: 64,
+        max_bulk_insert_rows: 0,
     }),
     ssl_modes: Some(&[
         dbflux_core::SslModeOption {
@@ -177,6 +191,9 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
         client_cert: true,
     }),
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
+    editor_profile: None,
 });
 
 /// MariaDB driver metadata.
@@ -185,6 +202,7 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
     display_name: "MariaDB".into(),
     description: "Community-developed fork of MySQL".into(),
     category: DatabaseCategory::Relational,
+    transfer_family: TransferFamily::Sql,
     deployment_class: Some(DeploymentClass::SelfHosted),
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
@@ -196,7 +214,12 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
             | DriverCapabilities::CHECK_CONSTRAINTS.bits()
             | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
             | DriverCapabilities::ROUTINES.bits()
-            | DriverCapabilities::MULTI_STATEMENT.bits(),
+            | DriverCapabilities::MULTI_STATEMENT.bits()
+            | DriverCapabilities::INSTANCE_METRICS.bits()
+            | DriverCapabilities::INSTANCE_INSPECTOR.bits()
+            | DriverCapabilities::BULK_INSERT.bits()
+            | DriverCapabilities::TRUNCATE_TABLE.bits()
+            | DriverCapabilities::DISABLE_FK_CHECKS.bits(),
     ),
     default_port: Some(3306),
     uri_scheme: "mariadb".into(),
@@ -230,6 +253,7 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
             WhereOperator::Not,
         ],
         supports_order_by: true,
+        order_by_mode: dbflux_core::OrderByMode::AnyColumns,
         supports_group_by: true,
         supports_having: true,
         supports_distinct: true,
@@ -302,6 +326,7 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
         max_identifier_length: 64,
         max_columns: 4096,
         max_indexes_per_table: 64,
+        max_bulk_insert_rows: 0,
     }),
     ssl_modes: Some(&[
         dbflux_core::SslModeOption {
@@ -330,6 +355,9 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
         client_cert: true,
     }),
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
+    editor_profile: None,
 });
 
 /// MySQL/MariaDB SQL dialect implementation.
@@ -348,8 +376,17 @@ impl SqlDialect for MysqlDialect {
         value_to_mysql_literal(value)
     }
 
+    /// Satisfies the `SqlDialect` trait contract.
+    ///
+    /// MySQL string literals are produced exclusively by `value_to_literal` /
+    /// `mysql_text_literal` (mode-independent hex encoding). This method is
+    /// never reached for MySQL because `MysqlDialect::value_to_literal`
+    /// overrides the default body that would otherwise call `escape_string`.
+    /// No production caller should use this method to construct MySQL literals:
+    /// no single inner-quote escaping strategy is safe under both the default
+    /// sql_mode and `NO_BACKSLASH_ESCAPES`.
     fn escape_string(&self, s: &str) -> String {
-        mysql_escape_string(s)
+        s.replace('\'', "''")
     }
 
     fn placeholder_style(&self) -> PlaceholderStyle {
@@ -434,6 +471,9 @@ impl CodeGenerator for MysqlCodeGenerator {
             | CodeGenCapabilities::CREATE_TABLE
             | CodeGenCapabilities::DROP_TABLE
             | CodeGenCapabilities::ALTER_TABLE
+            | CodeGenCapabilities::ADD_COLUMN
+            | CodeGenCapabilities::DROP_COLUMN
+            | CodeGenCapabilities::ALTER_COLUMN
     }
 
     fn generate_create_index(&self, req: &CreateIndexRequest) -> Option<String> {
@@ -512,9 +552,167 @@ impl CodeGenerator for MysqlCodeGenerator {
             self.quote(req.constraint_name)
         ))
     }
+
+    fn generate_add_column(&self, req: &AddColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        validate_ddl_fragment(req.type_name, "column type")?;
+        if let Some(default) = req.default {
+            validate_ddl_fragment(default, "column default")?;
+        }
+
+        let table = self.qualified(req.schema_name, req.table_name);
+        let mut sql = format!(
+            "ALTER TABLE {} ADD COLUMN {} {}",
+            table,
+            self.quote(req.column_name),
+            req.type_name
+        );
+
+        if !req.nullable {
+            sql.push_str(" NOT NULL");
+        }
+        if let Some(default) = req.default {
+            sql.push_str(&format!(" DEFAULT {}", default));
+        }
+        sql.push(';');
+
+        Ok(vec![sql])
+    }
+
+    fn generate_drop_column(&self, req: &DropColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        let table = self.qualified(req.schema_name, req.table_name);
+        Ok(vec![format!(
+            "ALTER TABLE {} DROP COLUMN {};",
+            table,
+            self.quote(req.column_name)
+        )])
+    }
+
+    /// MySQL's `MODIFY COLUMN` redefines the entire column: nullability and
+    /// default are reset to MySQL's own defaults (nullable, no default)
+    /// whenever they aren't explicitly re-specified alongside a type change.
+    /// Callers changing the type must pass the full desired nullable/default
+    /// state to avoid silently losing the current one. When only the
+    /// default changes, the standalone `ALTER COLUMN ... SET/DROP DEFAULT`
+    /// form is used instead, which does not touch type or nullability.
+    fn generate_alter_column(&self, req: &AlterColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        if let Some(new_type) = req.new_type {
+            validate_ddl_fragment(new_type, "column type")?;
+        }
+        if let Some(DefaultSpec::Set(value)) = req.default {
+            validate_ddl_fragment(value, "column default")?;
+        }
+
+        let table = self.qualified(req.schema_name, req.table_name);
+        let column = self.quote(req.column_name);
+
+        if let Some(new_type) = req.new_type {
+            let mut sql = format!(
+                "ALTER TABLE {} MODIFY COLUMN {} {}",
+                table, column, new_type
+            );
+
+            if let Some(nullable) = req.nullable {
+                sql.push_str(if nullable { " NULL" } else { " NOT NULL" });
+            }
+
+            match req.default {
+                Some(DefaultSpec::Set(value)) => sql.push_str(&format!(" DEFAULT {}", value)),
+                Some(DefaultSpec::Drop) | None => {}
+            }
+
+            sql.push(';');
+            return Ok(vec![sql]);
+        }
+
+        if req.nullable.is_some() {
+            return Err(DdlRejection {
+                reason: "MySQL requires the column type to change nullability (MODIFY COLUMN needs the full column definition)".to_string(),
+                followup: None,
+            });
+        }
+
+        match req.default {
+            Some(DefaultSpec::Drop) => Ok(vec![format!(
+                "ALTER TABLE {} ALTER COLUMN {} DROP DEFAULT;",
+                table, column
+            )]),
+            Some(DefaultSpec::Set(value)) => Ok(vec![format!(
+                "ALTER TABLE {} ALTER COLUMN {} SET DEFAULT {};",
+                table, column, value
+            )]),
+            None => Err(DdlRejection {
+                reason: "ALTER COLUMN requires at least one of: type, nullable, default"
+                    .to_string(),
+                followup: None,
+            }),
+        }
+    }
 }
 
 // =============================================================================
+
+pub static MYSQL_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![
+        FormTab {
+            id: "main".into(),
+            label: "Main".into(),
+            sections: vec![
+                FormSection {
+                    title: "Server".into(),
+                    fields: vec![
+                        field_use_uri(),
+                        when_checked(
+                            field_required(
+                                "uri",
+                                "Connection URI",
+                                FormFieldKind::Text,
+                                "mysql://user:pass@localhost:3306/db",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("host", "Host", FormFieldKind::Text, "localhost"),
+                                "localhost",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("port", "Port", FormFieldKind::Number, "3306"),
+                                "3306",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            field(
+                                "database",
+                                "Database",
+                                FormFieldKind::Text,
+                                "optional - leave empty to browse all",
+                            ),
+                            "use_uri",
+                        ),
+                    ],
+                },
+                FormSection {
+                    title: "Authentication".into(),
+                    fields: vec![
+                        when_unchecked(
+                            with_default(
+                                field_required("user", "User", FormFieldKind::Text, "root"),
+                                "root",
+                            ),
+                            "use_uri",
+                        ),
+                        field_password(),
+                    ],
+                },
+            ],
+        },
+        ssh_tab(),
+    ],
+});
 
 pub struct MysqlDriver {
     kind: DbKind,
@@ -570,6 +768,7 @@ impl DbDriver for MysqlDriver {
                 config.database.as_deref(),
                 password,
                 &config.ssl_mode,
+                &config.ssl_paths,
             )
         } else {
             self.connect_direct(
@@ -579,6 +778,7 @@ impl DbDriver for MysqlDriver {
                 config.database.as_deref(),
                 password,
                 &config.ssl_mode,
+                &config.ssl_paths,
             )
         }
     }
@@ -590,6 +790,24 @@ impl DbDriver for MysqlDriver {
 
     fn form_definition(&self) -> &DriverFormDef {
         &MYSQL_FORM
+    }
+
+    fn export_field_transform(&self, field_id: &str, values: &FormValues) -> FieldExportTransform {
+        if field_id != "uri" {
+            return FieldExportTransform::None;
+        }
+
+        let use_uri = values.get("use_uri").map(|s| s == "true").unwrap_or(false);
+        if !use_uri {
+            return FieldExportTransform::None;
+        }
+
+        let uri = match values.get("uri") {
+            Some(u) if !u.is_empty() => u.as_str(),
+            _ => return FieldExportTransform::None,
+        };
+
+        split_mysql_uri_secret(uri)
     }
 
     fn build_config(&self, values: &FormValues) -> Result<DbConfig, DbError> {
@@ -769,7 +987,20 @@ struct ExtractedMysqlConfig {
     database: Option<String>,
     /// MySQL native ssl-mode identifier (e.g. `"PREFERRED"`, `"VERIFY_CA"`). Defaults to `"PREFERRED"` when absent.
     ssl_mode: String,
+    ssl_paths: MysqlSslPaths,
     ssh_tunnel: Option<SshTunnelConfig>,
+}
+
+/// Filesystem paths for TLS certificate material, populated by the generic
+/// connection-manager SSL section (see `SslCertFields` in the driver metadata).
+///
+/// `root_cert` verifies the server chain for the `VERIFY_CA` / `VERIFY_IDENTITY`
+/// modes; `client_cert` + `client_key` present a client identity for mutual TLS.
+#[derive(Clone, Default)]
+struct MysqlSslPaths {
+    root_cert: Option<String>,
+    client_cert: Option<String>,
+    client_key: Option<String>,
 }
 
 /// Map a MySQL column to a canonical SQL type label (e.g. `VARCHAR`,
@@ -914,6 +1145,9 @@ fn extract_mysql_config(config: &DbConfig) -> Result<ExtractedMysqlConfig, DbErr
             user,
             database,
             ssl_mode,
+            ssl_root_cert_path,
+            ssl_client_cert_path,
+            ssl_client_key_path,
             ssh_tunnel,
             ..
         } => Ok(ExtractedMysqlConfig {
@@ -924,6 +1158,11 @@ fn extract_mysql_config(config: &DbConfig) -> Result<ExtractedMysqlConfig, DbErr
             user: user.clone(),
             database: database.clone(),
             ssl_mode: ssl_mode.clone().unwrap_or_else(|| "PREFERRED".to_string()),
+            ssl_paths: MysqlSslPaths {
+                root_cert: ssl_root_cert_path.clone(),
+                client_cert: ssl_client_cert_path.clone(),
+                client_key: ssl_client_key_path.clone(),
+            },
             ssh_tunnel: ssh_tunnel.clone(),
         }),
         _ => Err(DbError::InvalidProfile(
@@ -936,9 +1175,15 @@ fn extract_mysql_config(config: &DbConfig) -> Result<ExtractedMysqlConfig, DbErr
 ///
 /// Maps MySQL native ssl-mode identifiers to the appropriate `SslOpts`:
 /// - `"DISABLED"` — no TLS
-/// - `"PREFERRED"` — TLS preferred, accept self-signed certs (fall back handled by the mysql crate)
-/// - `"REQUIRED"` — TLS required, self-signed certs accepted
-/// - `"VERIFY_CA"` / `"VERIFY_IDENTITY"` — TLS with full certificate validation
+/// - `"PREFERRED"` — TLS preferred, server cert not verified (crate may fall back to plain)
+/// - `"REQUIRED"` — TLS required, server cert not verified
+/// - `"VERIFY_CA"` — TLS required, verify the server chain but skip hostname validation
+/// - `"VERIFY_IDENTITY"` — TLS required, verify both the server chain and the hostname
+///
+/// For every TLS mode a client identity (mutual TLS) is attached when both a
+/// client cert and key are configured. For the verifying modes a custom root
+/// certificate replaces the system trust store when one is configured.
+#[allow(clippy::too_many_arguments)]
 fn build_mysql_opts(
     host: &str,
     port: u16,
@@ -946,6 +1191,7 @@ fn build_mysql_opts(
     database: Option<&str>,
     password: Option<&str>,
     ssl_mode: &str,
+    ssl_paths: &MysqlSslPaths,
 ) -> Opts {
     let host = normalize_mysql_tcp_host(host);
 
@@ -964,29 +1210,56 @@ fn build_mysql_opts(
         "DISABLED" => {
             // No SSL — leave ssl_opts unset.
         }
-        "PREFERRED" => {
-            // TLS preferred; accept self-signed certs so the crate can fall back to plain.
+        "PREFERRED" | "REQUIRED" => {
+            // TLS without server verification; still present a client identity
+            // for mutual TLS when one is configured.
             let ssl_opts = SslOpts::default().with_danger_accept_invalid_certs(true);
-            builder = builder.ssl_opts(ssl_opts);
+            builder = builder.ssl_opts(apply_client_identity(ssl_opts, ssl_paths));
         }
-        "REQUIRED" => {
-            // TLS required; accept self-signed certs.
-            let ssl_opts = SslOpts::default().with_danger_accept_invalid_certs(true);
-            builder = builder.ssl_opts(ssl_opts);
+        "VERIFY_CA" => {
+            // Verify the server chain against the (optionally custom) CA, but do
+            // not require the hostname to match the certificate.
+            let ssl_opts = SslOpts::default().with_danger_skip_domain_validation(true);
+            let ssl_opts = apply_root_cert(ssl_opts, ssl_paths);
+            builder = builder.ssl_opts(apply_client_identity(ssl_opts, ssl_paths));
         }
-        "VERIFY_CA" | "VERIFY_IDENTITY" => {
-            // TLS required with full certificate validation.
-            let ssl_opts = SslOpts::default();
-            builder = builder.ssl_opts(ssl_opts);
+        "VERIFY_IDENTITY" => {
+            // Full validation: verify the server chain and the hostname.
+            let ssl_opts = apply_root_cert(SslOpts::default(), ssl_paths);
+            builder = builder.ssl_opts(apply_client_identity(ssl_opts, ssl_paths));
         }
         _ => {
             // Unknown mode — treat as PREFERRED (accept-invalid, allow fallback).
             let ssl_opts = SslOpts::default().with_danger_accept_invalid_certs(true);
-            builder = builder.ssl_opts(ssl_opts);
+            builder = builder.ssl_opts(apply_client_identity(ssl_opts, ssl_paths));
         }
     }
 
     builder.into()
+}
+
+/// Attaches a custom root certificate to `ssl_opts` when one is configured,
+/// so the verifying SSL modes trust a private CA instead of the system store.
+fn apply_root_cert(ssl_opts: SslOpts, ssl_paths: &MysqlSslPaths) -> SslOpts {
+    match ssl_paths.root_cert.as_deref().filter(|p| !p.is_empty()) {
+        Some(path) => ssl_opts.with_root_cert_path(Some(PathBuf::from(path))),
+        None => ssl_opts,
+    }
+}
+
+/// Attaches a client identity (cert chain + private key) for mutual TLS when
+/// both paths are configured; otherwise leaves `ssl_opts` unchanged.
+fn apply_client_identity(ssl_opts: SslOpts, ssl_paths: &MysqlSslPaths) -> SslOpts {
+    match (
+        ssl_paths.client_cert.as_deref().filter(|p| !p.is_empty()),
+        ssl_paths.client_key.as_deref().filter(|p| !p.is_empty()),
+    ) {
+        (Some(cert), Some(key)) => ssl_opts.with_client_identity(Some(ClientIdentity::new(
+            PathBuf::from(cert),
+            PathBuf::from(key),
+        ))),
+        _ => ssl_opts,
+    }
 }
 
 fn normalize_mysql_tcp_host(host: &str) -> &str {
@@ -1026,7 +1299,7 @@ impl MysqlDriver {
         );
 
         Ok(Box::new(MysqlConnection {
-            catalog_conn: Mutex::new(catalog_conn),
+            catalog_conn: Arc::new(Mutex::new(catalog_conn)),
             query_conn: Mutex::new(QueryConnState {
                 conn: query_conn,
                 current_database: None,
@@ -1040,6 +1313,7 @@ impl MysqlDriver {
         }))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn connect_direct(
         &self,
         host: &str,
@@ -1048,6 +1322,7 @@ impl MysqlDriver {
         database: Option<&str>,
         password: Option<&str>,
         ssl_mode: &str,
+        ssl_paths: &MysqlSslPaths,
     ) -> Result<Box<dyn Connection>, DbError> {
         log::info!(
             "Connecting directly to MySQL at {}:{} as {} (database: {:?}, ssl: {})",
@@ -1060,7 +1335,8 @@ impl MysqlDriver {
 
         // For PREFERRED mode: attempt SSL first, fall back to plain on failure.
         let (opts, catalog_conn) = if ssl_mode == "PREFERRED" {
-            let ssl_opts = build_mysql_opts(host, port, user, database, password, "PREFERRED");
+            let ssl_opts =
+                build_mysql_opts(host, port, user, database, password, "PREFERRED", ssl_paths);
             match Conn::new(ssl_opts.clone()) {
                 Ok(c) => {
                     log::info!("[SSL] Catalog connection established with SSL (PREFERRED mode)");
@@ -1071,15 +1347,16 @@ impl MysqlDriver {
                         "[SSL] SSL connection failed ({}), falling back to non-SSL",
                         ssl_err
                     );
-                    let no_ssl_opts =
-                        build_mysql_opts(host, port, user, database, password, "DISABLED");
+                    let no_ssl_opts = build_mysql_opts(
+                        host, port, user, database, password, "DISABLED", ssl_paths,
+                    );
                     let c = Conn::new(no_ssl_opts.clone())
                         .map_err(|e| format_mysql_error(&e, host, port))?;
                     (no_ssl_opts, c)
                 }
             }
         } else {
-            let opts = build_mysql_opts(host, port, user, database, password, ssl_mode);
+            let opts = build_mysql_opts(host, port, user, database, password, ssl_mode, ssl_paths);
             let c = Conn::new(opts.clone()).map_err(|e| format_mysql_error(&e, host, port))?;
             (opts, c)
         };
@@ -1102,7 +1379,7 @@ impl MysqlDriver {
         );
 
         Ok(Box::new(MysqlConnection {
-            catalog_conn: Mutex::new(catalog_conn),
+            catalog_conn: Arc::new(Mutex::new(catalog_conn)),
             query_conn: Mutex::new(QueryConnState {
                 conn: query_conn,
                 current_database: None,
@@ -1127,6 +1404,7 @@ impl MysqlDriver {
         database: Option<&str>,
         db_password: Option<&str>,
         ssl_mode: &str,
+        ssl_paths: &MysqlSslPaths,
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
 
@@ -1157,6 +1435,7 @@ impl MysqlDriver {
                 database,
                 db_password,
                 "PREFERRED",
+                ssl_paths,
             );
             match Conn::new(ssl_opts) {
                 Ok(c) => {
@@ -1172,6 +1451,7 @@ impl MysqlDriver {
                         database,
                         db_password,
                         "DISABLED",
+                        ssl_paths,
                     );
                     let c = Conn::new(no_ssl_opts)
                         .map_err(|e| format_mysql_error(&e, "127.0.0.1", local_port1))?;
@@ -1186,6 +1466,7 @@ impl MysqlDriver {
                 database,
                 db_password,
                 ssl_mode,
+                ssl_paths,
             );
             let c =
                 Conn::new(opts).map_err(|e| format_mysql_error(&e, "127.0.0.1", local_port1))?;
@@ -1209,6 +1490,7 @@ impl MysqlDriver {
             database,
             db_password,
             working_ssl_mode,
+            ssl_paths,
         );
         let mut query_conn = Conn::new(query_opts.clone())
             .map_err(|e| format_mysql_error(&e, "127.0.0.1", local_port2))?;
@@ -1233,7 +1515,7 @@ impl MysqlDriver {
         );
 
         Ok(Box::new(MysqlConnection {
-            catalog_conn: Mutex::new(catalog_conn),
+            catalog_conn: Arc::new(Mutex::new(catalog_conn)),
             query_conn: Mutex::new(QueryConnState {
                 conn: query_conn,
                 current_database: None,
@@ -1366,6 +1648,46 @@ fn format_mysql_uri_error<E: std::fmt::Display>(e: &E, uri: &str) -> DbError {
     DbError::connection_failed(message)
 }
 
+fn split_mysql_uri_secret(uri: &str) -> FieldExportTransform {
+    if !uri.starts_with("mysql://") {
+        return FieldExportTransform::None;
+    }
+
+    let prefix = "mysql://";
+    let rest = &uri[prefix.len()..];
+
+    let at_pos = match rest.find('@') {
+        Some(p) => p,
+        None => return FieldExportTransform::None,
+    };
+
+    let user_pass = &rest[..at_pos];
+    let after_at = &rest[at_pos..];
+
+    let colon_pos = match user_pass.find(':') {
+        Some(p) => p,
+        None => return FieldExportTransform::None,
+    };
+
+    let user = &user_pass[..colon_pos];
+    let encoded_pass = &user_pass[colon_pos + 1..];
+
+    if encoded_pass.is_empty() {
+        return FieldExportTransform::None;
+    }
+
+    let password = urlencoding::decode(encoded_pass)
+        .unwrap_or_else(|_| encoded_pass.into())
+        .into_owned();
+
+    let skeleton = format!("{}{}:{}", prefix, user, after_at);
+
+    FieldExportTransform::SplitSecret {
+        skeleton,
+        secret: dbflux_core::secrecy::SecretString::from(password),
+    }
+}
+
 fn inject_password_into_mysql_uri(base_uri: &str, password: Option<&str>) -> String {
     let password = match password {
         Some(p) if !p.is_empty() => p,
@@ -1407,7 +1729,7 @@ struct QueryConnState {
 
 pub struct MysqlConnection {
     /// Connection for catalog/schema operations (schema browsing, table details).
-    catalog_conn: Mutex<Conn>,
+    catalog_conn: Arc<Mutex<Conn>>,
 
     /// Connection for query execution (editor queries, table browser).
     query_conn: Mutex<QueryConnState>,
@@ -1643,6 +1965,15 @@ impl Connection for MysqlConnection {
         }
     }
 
+    fn language_service(&self) -> &dyn dbflux_core::LanguageService {
+        // MySQL and MariaDB have DCL constructs that the shared tree-sitter-sequel
+        // parser doesn't recognise (CREATE USER 'u'@'h' IDENTIFIED BY '...',
+        // GRANT ALL PRIVILEGES ON db.* TO 'u'@'h', FLUSH PRIVILEGES, etc.).
+        // Returning the MySQL-aware service suppresses the noisy parse diagnostics
+        // while keeping dangerous-query detection intact.
+        &crate::language_service::MySqlLanguageService
+    }
+
     fn ping(&self) -> Result<(), DbError> {
         let mut conn = self
             .catalog_conn
@@ -1657,8 +1988,71 @@ impl Connection for MysqlConnection {
         Ok(())
     }
 
+    fn set_referential_integrity(&self, enabled: bool) -> Result<(), DbError> {
+        let value = if enabled { 1 } else { 0 };
+        // FOREIGN_KEY_CHECKS is session-scoped, so it must be set on the same
+        // session that runs the data-loading INSERTs (query_conn) — not the
+        // separate catalog/metadata session — or the toggle has no effect.
+        let mut state = self
+            .query_conn
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+
+        state
+            .conn
+            .query_drop(format!("SET FOREIGN_KEY_CHECKS = {value}"))
+            .map_err(|e| format_mysql_query_error(&e))
+    }
+
+    fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
+        let mut conn = self.catalog_conn.lock().ok()?;
+        let ps_available =
+            crate::instance_catalog::MysqlInstanceCatalog::probe_performance_schema(&mut conn);
+        let process_privilege =
+            crate::instance_catalog::MysqlInstanceCatalog::probe_process_privilege(&mut conn);
+        let connection_admin =
+            crate::instance_catalog::MysqlInstanceCatalog::probe_connection_admin(&mut conn);
+
+        Some(Box::new(
+            crate::instance_catalog::MysqlInstanceCatalog::new_probed(
+                Arc::clone(&self.catalog_conn),
+                ps_available,
+                process_privilege,
+                connection_admin,
+            ),
+        ))
+    }
+
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
         self.cancelled.store(false, Ordering::SeqCst);
+
+        if let Some(source) = req
+            .execution_context
+            .as_ref()
+            .and_then(|ctx| ctx.source.as_ref())
+        {
+            match source {
+                ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
+                    let mut conn = self.query_conn.lock().map_err(|_| {
+                        DbError::QueryFailed("mysql conn mutex poisoned".to_string().into())
+                    })?;
+                    return crate::instance_catalog::dispatch_metric_series(
+                        &mut conn.conn,
+                        metric_id,
+                    );
+                }
+                ExecutionSourceContext::InstanceInspectorQuery { metric_id } => {
+                    let mut conn = self.query_conn.lock().map_err(|_| {
+                        DbError::QueryFailed("mysql conn mutex poisoned".to_string().into())
+                    })?;
+                    return crate::instance_catalog::dispatch_inspector_snapshot(
+                        &mut conn.conn,
+                        metric_id,
+                    );
+                }
+                _ => {}
+            }
+        }
 
         let start = Instant::now();
 
@@ -2857,22 +3251,22 @@ fn value_to_mysql_literal(value: &Value) -> String {
                 f.to_string()
             }
         }
-        Value::Decimal(s) => format!("'{}'", mysql_escape_string(s)),
-        Value::Text(s) => format!("'{}'", mysql_escape_string(s)),
-        Value::Json(s) => format!("'{}'", mysql_escape_string(s)),
+        Value::Decimal(s) => mysql_text_literal(s),
+        Value::Text(s) => mysql_text_literal(s),
+        Value::Json(s) => mysql_text_literal(s),
         Value::Bytes(b) => format!("X'{}'", hex::encode(b)),
         Value::DateTime(dt) => format!("'{}'", dt.format("%Y-%m-%d %H:%M:%S")),
         Value::Date(d) => format!("'{}'", d.format("%Y-%m-%d")),
         Value::Time(t) => format!("'{}'", t.format("%H:%M:%S")),
-        Value::ObjectId(id) => format!("'{}'", mysql_escape_string(id)),
+        Value::ObjectId(id) => mysql_text_literal(id),
         Value::Unsupported(_) => "NULL".to_string(),
         Value::Array(arr) => {
             let json = serde_json::to_string(arr).unwrap_or_else(|_| "[]".to_string());
-            format!("'{}'", mysql_escape_string(&json))
+            mysql_text_literal(&json)
         }
         Value::Document(doc) => {
             let json = serde_json::to_string(doc).unwrap_or_else(|_| "{}".to_string());
-            format!("'{}'", mysql_escape_string(&json))
+            mysql_text_literal(&json)
         }
     }
 }
@@ -2921,14 +3315,26 @@ fn mysql_qualified_name(schema: Option<&str>, name: &str) -> String {
     }
 }
 
-/// Escape a string for use inside a MySQL single-quoted literal.
-fn mysql_escape_string(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('\'', "\\'")
-        .replace('"', "\\\"")
-        .replace('\0', "\\0")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
+/// Renders a MySQL string literal that is safe under ALL `sql_mode` settings,
+/// including `NO_BACKSLASH_ESCAPES`.
+///
+/// If the value contains a single quote, a backslash, or any control character
+/// (which includes NUL), it is emitted as a hex string literal `X'<hex>'` — a form
+/// MySQL interprets identically regardless of `sql_mode`. Otherwise the value has no
+/// characters needing escaping and is emitted verbatim inside single quotes, keeping
+/// the common case human-readable.
+///
+/// Backslash-escaping (`\'`) is deliberately NOT used: under `NO_BACKSLASH_ESCAPES`
+/// the server treats `\` as literal, turning `\'` into a string terminator and
+/// reopening injection. Quote-doubling-without-backslash is also rejected: under the
+/// DEFAULT mode a trailing backslash would escape the doubled closing quote. Conditional
+/// hex is the only form correct under BOTH modes.
+fn mysql_text_literal(s: &str) -> String {
+    if s.chars().any(|c| c == '\'' || c == '\\' || c.is_control()) {
+        format!("X'{}'", hex::encode(s.as_bytes()))
+    } else {
+        format!("'{}'", s)
+    }
 }
 
 fn fetch_tables_shallow(conn: &mut Conn, database: &str) -> Result<Vec<TableInfo>, DbError> {
@@ -3147,7 +3553,7 @@ fn fetch_foreign_keys(
         );
     }
 
-    Ok(builder.build())
+    Ok(builder.build_sorted())
 }
 
 /// Translate a Value filter expression to a SQL WHERE clause string for MySQL.
@@ -3513,13 +3919,15 @@ pub fn fetch_dependents(
 #[cfg(test)]
 mod tests {
     use super::{
-        MysqlDialect, MysqlDriver, inject_password_into_mysql_uri, mysql_routine_type_to_kind,
-        normalize_mysql_tcp_host, plan_mysql_semantic_request,
+        MysqlCodeGenerator, MysqlDialect, MysqlDriver, inject_password_into_mysql_uri,
+        mysql_routine_type_to_kind, mysql_text_literal, normalize_mysql_tcp_host,
+        plan_mysql_semantic_request,
     };
     use dbflux_core::{
-        DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, FormValues, MutationRequest,
+        AddColumnRequest, AlterColumnRequest, CodeGenerator, DatabaseCategory, DbConfig, DbDriver,
+        DbError, DbKind, DdlRejection, DefaultSpec, DropColumnRequest, FormValues, MutationRequest,
         OrderByColumn, QueryLanguage, RoutineKind, RowInsert, SemanticRequest, SqlDialect,
-        TableBrowseRequest, TableRef, Value,
+        SqlMutationGenerator, TableBrowseRequest, TableRef, TransferFamily, Value,
     };
 
     #[test]
@@ -3727,10 +4135,12 @@ mod tests {
         let mariadb = MysqlDriver::new(DbKind::MariaDB);
 
         assert_eq!(mysql.metadata().category, DatabaseCategory::Relational);
+        assert_eq!(mysql.metadata().transfer_family, TransferFamily::Sql);
         assert_eq!(mysql.metadata().query_language, QueryLanguage::Sql);
         assert_eq!(mysql.metadata().default_port, Some(3306));
 
         assert_eq!(mariadb.metadata().category, DatabaseCategory::Relational);
+        assert_eq!(mariadb.metadata().transfer_family, TransferFamily::Sql);
         assert_eq!(mariadb.metadata().query_language, QueryLanguage::Sql);
         assert_eq!(mariadb.metadata().default_port, Some(3306));
 
@@ -3756,6 +4166,89 @@ mod tests {
     }
 
     #[test]
+    fn mysql_and_mariadb_metadata_advertise_bulk_transfer_capabilities() {
+        use dbflux_core::DriverCapabilities;
+
+        let mysql = MysqlDriver::new(DbKind::MySQL);
+        let mariadb = MysqlDriver::new(DbKind::MariaDB);
+
+        for metadata in [mysql.metadata(), mariadb.metadata()] {
+            assert!(
+                metadata
+                    .capabilities
+                    .contains(DriverCapabilities::BULK_INSERT)
+            );
+            assert!(
+                metadata
+                    .capabilities
+                    .contains(DriverCapabilities::TRUNCATE_TABLE)
+            );
+            assert!(
+                metadata
+                    .capabilities
+                    .contains(DriverCapabilities::DISABLE_FK_CHECKS)
+            );
+        }
+    }
+
+    #[test]
+    fn mysql_generate_bulk_insert_emits_multi_row_values() {
+        use dbflux_core::QueryGenerator;
+
+        let generator = SqlMutationGenerator::new(&MysqlDialect);
+        let columns = vec!["name".to_string(), "age".to_string()];
+        let owned_rows: Vec<Vec<dbflux_core::Value>> = vec![
+            vec![
+                dbflux_core::Value::Text("Alice".to_string()),
+                dbflux_core::Value::Int(25),
+            ],
+            vec![
+                dbflux_core::Value::Text("Bob".to_string()),
+                dbflux_core::Value::Int(30),
+            ],
+        ];
+        let rows: Vec<&[dbflux_core::Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
+
+        let generated = generator
+            .generate_bulk_insert(None, "users", &columns, &[], &rows)
+            .unwrap()
+            .expect("mysql generator must support native bulk insert");
+
+        assert_eq!(
+            generated.text,
+            "INSERT INTO `users` (`name`, `age`) VALUES ('Alice', 25), ('Bob', 30)"
+        );
+    }
+
+    #[test]
+    fn mysql_generate_create_table_preserves_types_and_pk() {
+        use dbflux_core::QueryGenerator;
+
+        let generator = SqlMutationGenerator::new(&MysqlDialect);
+        let spec = dbflux_core::CreateTableSpec {
+            schema: None,
+            table: "users".to_string(),
+            columns: vec![dbflux_core::TransferColumn {
+                name: "id".to_string(),
+                type_name: Some("int".to_string()),
+                nullable: false,
+                is_primary_key: true,
+            }],
+            if_not_exists: false,
+        };
+
+        let generated = generator
+            .generate_create_table(&spec)
+            .unwrap()
+            .expect("mysql generator must support native CREATE TABLE");
+
+        assert_eq!(
+            generated.text,
+            "CREATE TABLE `users` (\n    `id` int NOT NULL,\n    PRIMARY KEY (`id`)\n);"
+        );
+    }
+
+    #[test]
     fn mysql_routine_type_to_kind_mapping() {
         assert_eq!(
             mysql_routine_type_to_kind("FUNCTION"),
@@ -3769,6 +4262,250 @@ mod tests {
         assert_eq!(
             mysql_routine_type_to_kind("UNKNOWN"),
             RoutineKind::Procedure
+        );
+    }
+
+    #[test]
+    fn mysql_metadata_advertises_chart_authoring() {
+        use super::MYSQL_METADATA;
+        use dbflux_core::DriverCapabilities;
+
+        assert!(
+            MYSQL_METADATA
+                .capabilities
+                .contains(DriverCapabilities::CHART_AUTHORING),
+            "CHART_AUTHORING must be set: MySQL advertises INSTANCE_METRICS and needs \
+             CHART_AUTHORING so the sidebar surfaces Dashboards / Saved Charts folders"
+        );
+    }
+
+    #[test]
+    fn mysql_metadata_advertises_instance_metrics() {
+        use super::MYSQL_METADATA;
+        use dbflux_core::DriverCapabilities;
+
+        assert!(
+            MYSQL_METADATA
+                .capabilities
+                .contains(DriverCapabilities::INSTANCE_METRICS),
+            "INSTANCE_METRICS must remain set on MySQL driver"
+        );
+    }
+
+    // --- Phase 2.4: URI transform splits password (R-SEC-1 / C1 / ADR-1) ---
+
+    #[test]
+    fn uri_transform_splits_password() {
+        use dbflux_core::secrecy::ExposeSecret;
+        use dbflux_core::{FieldExportTransform, FormValues};
+
+        let driver = MysqlDriver::new(DbKind::MySQL);
+        let mut values = FormValues::new();
+        values.insert("use_uri".to_string(), "true".to_string());
+        values.insert(
+            "uri".to_string(),
+            "mysql://root:s3cr3t@db.example:3306/app".to_string(),
+        );
+
+        let transform = driver.export_field_transform("uri", &values);
+
+        let FieldExportTransform::SplitSecret { skeleton, secret } = transform else {
+            panic!("expected SplitSecret but got None");
+        };
+
+        assert!(
+            !skeleton.contains("s3cr3t"),
+            "skeleton must not contain the password: {skeleton}"
+        );
+        assert_eq!(secret.expose_secret(), "s3cr3t");
+    }
+
+    // --- SEC2-5: mode-independent MySQL string literals ---
+
+    #[test]
+    fn mysql_literal_no_backslash_escapes_injection_guard() {
+        let lit = mysql_text_literal("it's a test");
+        assert!(
+            !lit.contains("\\'"),
+            "literal must not contain backslash-quote (unsafe under NO_BACKSLASH_ESCAPES): {lit}"
+        );
+        assert!(
+            lit.starts_with("X'"),
+            "literal containing a single quote must be hex-encoded: {lit}"
+        );
+    }
+
+    #[test]
+    fn mysql_literal_default_mode_trailing_backslash_guard() {
+        let input = "abc\\";
+        let lit = mysql_text_literal(input);
+        assert_eq!(
+            lit,
+            format!("X'{}'", hex::encode(input.as_bytes())),
+            "trailing backslash must be hex-encoded, not quote-escaped"
+        );
+        assert!(
+            !lit.ends_with("\\'"),
+            "literal must not end with backslash-quote: {lit}"
+        );
+    }
+
+    #[test]
+    fn mysql_literal_plain_value_stays_readable() {
+        let lit = mysql_text_literal("plain value 123");
+        assert_eq!(lit, "'plain value 123'");
+    }
+
+    // ===== Column ALTER seam (DBF-24) =====
+
+    #[test]
+    fn mysql_codegen_generates_add_column_with_default() {
+        let generator = MysqlCodeGenerator;
+        let request = AddColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+            type_name: "INT",
+            nullable: false,
+            default: Some("0"),
+        };
+
+        let statements = generator
+            .generate_add_column(&request)
+            .expect("mysql should generate add column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE `users` ADD COLUMN `age` INT NOT NULL DEFAULT 0;"]
+        );
+    }
+
+    #[test]
+    fn mysql_codegen_generates_drop_column() {
+        let generator = MysqlCodeGenerator;
+        let request = DropColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+        };
+
+        let statements = generator
+            .generate_drop_column(&request)
+            .expect("mysql should generate drop column sql");
+
+        assert_eq!(statements, vec!["ALTER TABLE `users` DROP COLUMN `age`;"]);
+    }
+
+    #[test]
+    fn mysql_codegen_alter_column_modifies_type_with_explicit_nullable_and_default() {
+        let generator = MysqlCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+            new_type: Some("BIGINT"),
+            nullable: Some(false),
+            default: Some(DefaultSpec::Set("0")),
+        };
+
+        let statements = generator
+            .generate_alter_column(&request)
+            .expect("mysql should generate alter column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE `users` MODIFY COLUMN `age` BIGINT NOT NULL DEFAULT 0;"]
+        );
+    }
+
+    #[test]
+    fn mysql_codegen_alter_column_modify_omits_nullable_clause_when_unspecified() {
+        let generator = MysqlCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+            new_type: Some("BIGINT"),
+            nullable: None,
+            default: None,
+        };
+
+        let statements = generator
+            .generate_alter_column(&request)
+            .expect("mysql should generate alter column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE `users` MODIFY COLUMN `age` BIGINT;"]
+        );
+    }
+
+    #[test]
+    fn mysql_codegen_alter_column_can_change_default_alone() {
+        let generator = MysqlCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+            new_type: None,
+            nullable: None,
+            default: Some(DefaultSpec::Drop),
+        };
+
+        let statements = generator
+            .generate_alter_column(&request)
+            .expect("mysql should generate alter column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE `users` ALTER COLUMN `age` DROP DEFAULT;"]
+        );
+    }
+
+    #[test]
+    fn mysql_codegen_alter_column_rejects_nullable_change_without_type() {
+        let generator = MysqlCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+            new_type: None,
+            nullable: Some(false),
+            default: None,
+        };
+
+        let result = generator.generate_alter_column(&request);
+
+        assert_eq!(
+            result,
+            Err(DdlRejection {
+                reason: "MySQL requires the column type to change nullability (MODIFY COLUMN needs the full column definition)".to_string(),
+                followup: None,
+            })
+        );
+    }
+
+    #[test]
+    fn mysql_codegen_alter_column_rejects_when_nothing_to_change() {
+        let generator = MysqlCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: None,
+            column_name: "age",
+            new_type: None,
+            nullable: None,
+            default: None,
+        };
+
+        let result = generator.generate_alter_column(&request);
+
+        assert_eq!(
+            result,
+            Err(DdlRejection {
+                reason: "ALTER COLUMN requires at least one of: type, nullable, default"
+                    .to_string(),
+                followup: None,
+            })
         );
     }
 }

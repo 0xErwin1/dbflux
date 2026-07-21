@@ -62,7 +62,11 @@ impl HookExecutor for CompositeExecutor {
     }
 }
 
-#[cfg(test)]
+// Gated on `lua`: the sole test routes a mixed command+Lua batch and asserts
+// the Lua hook produced output, which only holds when the Lua executor is
+// compiled in. Without the feature the executor rejects Lua hooks by design,
+// so the test would fail under a default (`lua`-off) `cargo test`/`nextest`.
+#[cfg(all(test, feature = "lua"))]
 mod tests {
     use super::*;
     use dbflux_core::{
@@ -102,6 +106,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             inherit_env: true,
+            env_denylist: Vec::new(),
             timeout_ms: None,
             execution_mode: dbflux_core::HookExecutionMode::Blocking,
             ready_signal: None,
@@ -121,6 +126,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             inherit_env: true,
+            env_denylist: Vec::new(),
             timeout_ms: None,
             execution_mode: dbflux_core::HookExecutionMode::Blocking,
             ready_signal: None,

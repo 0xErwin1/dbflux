@@ -133,10 +133,10 @@ fn run_server(
 
         let response = handle_request(&config, &mut validate_session_sequence, request);
         match response {
-            FakeResponse::Single(envelope) => framing::send_msg(&mut stream, &envelope)?,
+            FakeResponse::Single(envelope) => framing::send_msg(&mut stream, &*envelope)?,
             FakeResponse::Streaming(progress, terminal) => {
-                framing::send_msg(&mut stream, &progress)?;
-                framing::send_msg(&mut stream, &terminal)?;
+                framing::send_msg(&mut stream, &*progress)?;
+                framing::send_msg(&mut stream, &*terminal)?;
             }
         }
     }
@@ -145,8 +145,11 @@ fn run_server(
 }
 
 enum FakeResponse {
-    Single(AuthProviderResponseEnvelope),
-    Streaming(AuthProviderResponseEnvelope, AuthProviderResponseEnvelope),
+    Single(Box<AuthProviderResponseEnvelope>),
+    Streaming(
+        Box<AuthProviderResponseEnvelope>,
+        Box<AuthProviderResponseEnvelope>,
+    ),
 }
 
 fn handle_request(
@@ -155,7 +158,7 @@ fn handle_request(
     request: AuthProviderRequestEnvelope,
 ) -> FakeResponse {
     if request.protocol_version.major != AUTH_PROVIDER_RPC_API_CONTRACT.version.major {
-        return FakeResponse::Single(AuthProviderResponseEnvelope::error(
+        return FakeResponse::Single(Box::new(AuthProviderResponseEnvelope::error(
             request.protocol_version,
             request.request_id,
             AuthProviderRpcErrorCode::VersionMismatch,
@@ -165,25 +168,25 @@ fn handle_request(
                 AUTH_PROVIDER_RPC_API_CONTRACT.version.minor
             ),
             false,
-        ));
+        )));
     }
 
     match request.body {
         AuthProviderRequestBody::Hello(hello) => {
             if config.expected_auth_token.as_deref() != hello.auth_token.as_deref() {
-                return FakeResponse::Single(AuthProviderResponseEnvelope::error(
+                return FakeResponse::Single(Box::new(AuthProviderResponseEnvelope::error(
                     request.protocol_version,
                     request.request_id,
                     AuthProviderRpcErrorCode::Transport,
                     "unauthorized auth-provider request",
                     false,
-                ));
+                )));
             }
 
             let Some(selected_version) =
                 negotiate_auth_provider_version(&config.supported_versions)
             else {
-                return FakeResponse::Single(AuthProviderResponseEnvelope::error(
+                return FakeResponse::Single(Box::new(AuthProviderResponseEnvelope::error(
                     request.protocol_version,
                     request.request_id,
                     AuthProviderRpcErrorCode::VersionMismatch,
@@ -193,7 +196,7 @@ fn handle_request(
                         AUTH_PROVIDER_RPC_API_CONTRACT.version.minor
                     ),
                     false,
-                ));
+                )));
             };
 
             let body = if selected_version.minor >= 1 {
@@ -204,7 +207,7 @@ fn handle_request(
                     provider_id: config.provider_id.clone(),
                     display_name: config.display_name.clone(),
                     form_definition: config.form_definition.clone(),
-                    capabilities: config.capabilities,
+                    capabilities: config.capabilities.clone(),
                 })
             } else {
                 AuthProviderResponseBody::Hello(AuthProviderHelloResponse {
@@ -217,11 +220,11 @@ fn handle_request(
                 })
             };
 
-            FakeResponse::Single(AuthProviderResponseEnvelope::ok(
+            FakeResponse::Single(Box::new(AuthProviderResponseEnvelope::ok(
                 selected_version,
                 request.request_id,
                 body,
-            ))
+            )))
         }
         AuthProviderRequestBody::ValidateSession(validate) => {
             let _ = parse_auth_profile(&validate.profile_json);
@@ -232,20 +235,20 @@ fn handle_request(
 
             match session_state {
                 FakeAuthRpcResult::Ok(state) => {
-                    FakeResponse::Single(AuthProviderResponseEnvelope::ok(
+                    FakeResponse::Single(Box::new(AuthProviderResponseEnvelope::ok(
                         request.protocol_version,
                         request.request_id,
                         AuthProviderResponseBody::SessionState {
                             state: state.into(),
                         },
-                    ))
+                    )))
                 }
                 FakeAuthRpcResult::Err(error) => {
-                    FakeResponse::Single(AuthProviderResponseEnvelope::ok(
+                    FakeResponse::Single(Box::new(AuthProviderResponseEnvelope::ok(
                         request.protocol_version,
                         request.request_id,
                         AuthProviderResponseBody::Error(error),
-                    ))
+                    )))
                 }
             }
         }
@@ -269,15 +272,15 @@ fn handle_request(
 
             if let Some(progress_url) = &config.login_progress {
                 FakeResponse::Streaming(
-                    AuthProviderResponseEnvelope::login_url_progress(
+                    Box::new(AuthProviderResponseEnvelope::login_url_progress(
                         request.protocol_version,
                         request.request_id,
                         progress_url.clone(),
-                    ),
-                    terminal,
+                    )),
+                    Box::new(terminal),
                 )
             } else {
-                FakeResponse::Single(terminal)
+                FakeResponse::Single(Box::new(terminal))
             }
         }
         AuthProviderRequestBody::ResolveCredentials(resolve) => {
@@ -285,20 +288,20 @@ fn handle_request(
 
             match &config.resolve_credentials {
                 FakeAuthRpcResult::Ok(credentials) => {
-                    FakeResponse::Single(AuthProviderResponseEnvelope::ok(
+                    FakeResponse::Single(Box::new(AuthProviderResponseEnvelope::ok(
                         request.protocol_version,
                         request.request_id,
                         AuthProviderResponseBody::Credentials {
                             credentials: credentials.clone(),
                         },
-                    ))
+                    )))
                 }
                 FakeAuthRpcResult::Err(error) => {
-                    FakeResponse::Single(AuthProviderResponseEnvelope::ok(
+                    FakeResponse::Single(Box::new(AuthProviderResponseEnvelope::ok(
                         request.protocol_version,
                         request.request_id,
                         AuthProviderResponseBody::Error(error.clone()),
-                    ))
+                    )))
                 }
             }
         }
@@ -307,18 +310,18 @@ fn handle_request(
 
             match &config.fetch_dynamic_options {
                 FakeAuthRpcResult::Ok(response) => {
-                    FakeResponse::Single(AuthProviderResponseEnvelope::ok(
+                    FakeResponse::Single(Box::new(AuthProviderResponseEnvelope::ok(
                         request.protocol_version,
                         request.request_id,
                         AuthProviderResponseBody::DynamicOptions(response.clone()),
-                    ))
+                    )))
                 }
                 FakeAuthRpcResult::Err(error) => {
-                    FakeResponse::Single(AuthProviderResponseEnvelope::ok(
+                    FakeResponse::Single(Box::new(AuthProviderResponseEnvelope::ok(
                         request.protocol_version,
                         request.request_id,
                         AuthProviderResponseBody::Error(error.clone()),
-                    ))
+                    )))
                 }
             }
         }

@@ -390,7 +390,7 @@ build_from_source() {
     cargo build --release --features sqlite,postgres,mysql
 
     # Create package structure in tmp_dir
-    mkdir -p "$tmp_dir/pkg/resources/icons"
+    mkdir -p "$tmp_dir/pkg/resources/branding/stable"
     mkdir -p "$tmp_dir/pkg/resources/desktop"
     mkdir -p "$tmp_dir/pkg/resources/mime"
     mkdir -p "$tmp_dir/pkg/scripts"
@@ -398,8 +398,8 @@ build_from_source() {
     cp "$repo_dir/target/release/dbflux" "$tmp_dir/pkg/dbflux"
     chmod +x "$tmp_dir/pkg/dbflux"
 
-    if [[ -f "$repo_dir/resources/icons/dbflux.svg" ]]; then
-        cp "$repo_dir/resources/icons/dbflux.svg" "$tmp_dir/pkg/resources/icons/"
+    if [[ -f "$repo_dir/resources/branding/stable/mark.svg" ]]; then
+        cp "$repo_dir/resources/branding/stable/mark.svg" "$tmp_dir/pkg/resources/branding/stable/mark.svg"
     fi
     if [[ -f "$repo_dir/resources/desktop/dbflux.desktop" ]]; then
         cp "$repo_dir/resources/desktop/dbflux.desktop" "$tmp_dir/pkg/resources/desktop/"
@@ -461,16 +461,22 @@ install_files() {
             echo "[DRY-RUN] sed -i 's|@EXEC_PATH@|$PREFIX/bin/dbflux|g' $PREFIX/share/applications/dbflux.desktop"
         else
             cp "$src_dir/resources/desktop/dbflux.desktop" "$PREFIX/share/applications/dbflux.desktop"
-            # Replace @EXEC_PATH@ with the actual binary path
-            sed -i "s|@EXEC_PATH@|$PREFIX/bin/dbflux|g" "$PREFIX/share/applications/dbflux.desktop"
+            # Resolve the binary path and the stable branding placeholders. This
+            # installer ships the stable identity; per-channel coexistence is
+            # provided by the deb/rpm/AppImage artifacts.
+            sed -i \
+                -e "s|@EXEC_PATH@|$PREFIX/bin/dbflux|g" \
+                -e "s|@APP_NAME@|DBFlux|g" \
+                -e "s|@APP_ID@|dbflux|g" \
+                "$PREFIX/share/applications/dbflux.desktop"
             chmod 644 "$PREFIX/share/applications/dbflux.desktop"
         fi
     fi
 
     # Icon
-    if [[ -f "$src_dir/resources/icons/dbflux.svg" ]]; then
+    if [[ -f "$src_dir/resources/branding/stable/mark.svg" ]]; then
         mkdir_safe "$PREFIX/share/icons/hicolor/scalable/apps"
-        cp_safe "$src_dir/resources/icons/dbflux.svg" "$PREFIX/share/icons/hicolor/scalable/apps/dbflux.svg"
+        cp_safe "$src_dir/resources/branding/stable/mark.svg" "$PREFIX/share/icons/hicolor/scalable/apps/dbflux.svg"
         chmod_safe "$PREFIX/share/icons/hicolor/scalable/apps/dbflux.svg" 644
     fi
 
@@ -478,6 +484,9 @@ install_files() {
     if [[ -f "$src_dir/resources/mime/dbflux-sql.xml" ]]; then
         mkdir_safe "$PREFIX/share/mime/packages"
         cp_safe "$src_dir/resources/mime/dbflux-sql.xml" "$PREFIX/share/mime/packages/dbflux-sql.xml"
+        if [[ "$DRY_RUN" == "false" ]]; then
+            sed -i "s|@APP_ID@|dbflux|g" "$PREFIX/share/mime/packages/dbflux-sql.xml"
+        fi
         chmod_safe "$PREFIX/share/mime/packages/dbflux-sql.xml" 644
 
         if [[ "$DRY_RUN" == "false" ]] && command -v update-mime-database &>/dev/null; then

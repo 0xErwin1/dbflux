@@ -1,0 +1,822 @@
+use super::*;
+use dbflux_core::MutationCategory;
+use dbflux_ui_base::sql_preview_modal::SqlGenerationType;
+
+impl Sidebar {
+    pub(super) fn get_code_generators_for_item(
+        &self,
+        item_id: &str,
+        node_kind: SchemaNodeKind,
+        cx: &App,
+    ) -> Vec<ContextMenuItem> {
+        let Some(parts) = parse_node_id(item_id)
+            .as_ref()
+            .and_then(ItemIdParts::from_node_id)
+        else {
+            return vec![];
+        };
+
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections().get(&parts.profile_id) else {
+            return vec![];
+        };
+
+        let scope_filter = match node_kind {
+            SchemaNodeKind::Table => {
+                |s: CodeGenScope| matches!(s, CodeGenScope::Table | CodeGenScope::TableOrView)
+            }
+            SchemaNodeKind::View => {
+                |s: CodeGenScope| matches!(s, CodeGenScope::View | CodeGenScope::TableOrView)
+            }
+            _ => return vec![],
+        };
+
+        let all_generators = conn.connection.code_generators();
+        let mut generators: Vec<_> = all_generators
+            .iter()
+            .filter(|g| scope_filter(g.scope))
+            .filter(|g| g.id != "select_star")
+            .collect();
+
+        generators.sort_by_key(|g| g.order);
+
+        let mut items_with_order: Vec<_> = generators
+            .into_iter()
+            .map(|g| {
+                let item = if g.destructive {
+                    ContextMenuItem::danger(
+                        g.label.to_string(),
+                        ContextMenuAction::GenerateCode(g.id.to_string()),
+                    )
+                } else {
+                    ContextMenuItem::item(
+                        g.label.to_string(),
+                        ContextMenuAction::GenerateCode(g.id.to_string()),
+                    )
+                };
+
+                (g.order, item)
+            })
+            .collect();
+
+        if let Some(generator) = conn.connection.query_generator()
+            && generator
+                .supported_categories()
+                .contains(&MutationCategory::Sql)
+        {
+            let query_items: &[(u32, &str, &str)] = match node_kind {
+                SchemaNodeKind::Table => &[
+                    (0, "select_where", "SELECT WHERE"),
+                    (5, "insert", "INSERT INTO"),
+                    (6, "update", "UPDATE"),
+                    (7, "delete", "DELETE"),
+                ],
+                SchemaNodeKind::View => &[(0, "select_star", "SELECT *")],
+                _ => &[],
+            };
+
+            for (order, generator_id, label) in query_items.iter().copied() {
+                let item = if generator_id == "delete" {
+                    ContextMenuItem::danger(
+                        label.to_string(),
+                        ContextMenuAction::GenerateCode(generator_id.to_string()),
+                    )
+                } else {
+                    ContextMenuItem::item(
+                        label.to_string(),
+                        ContextMenuAction::GenerateCode(generator_id.to_string()),
+                    )
+                };
+
+                items_with_order.push((order, item));
+            }
+        }
+
+        items_with_order.sort_by_key(|(order, _)| *order);
+
+        items_with_order.into_iter().map(|(_, item)| item).collect()
+    }
+
+    pub(super) fn generate_code(
+        &mut self,
+        item_id: &str,
+        generator_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let is_view = parse_node_kind(item_id) == SchemaNodeKind::View;
+
+        // For views, generate code directly (no columns needed)
+        if is_view {
+            self.generate_code_for_view(item_id, generator_id, cx);
+            return;
+        }
+
+        // For tables, ensure details are loaded first
+        let pending = PendingAction::GenerateCode {
+            item_id: item_id.to_string(),
+            generator_id: generator_id.to_string(),
+        };
+
+        match self.ensure_table_details(item_id, pending, cx) {
+            TableDetailsStatus::Ready => {
+                self.generate_code_impl(item_id, generator_id, cx);
+            }
+            TableDetailsStatus::Loading => {
+                // Will be handled by complete_pending_action when done
+            }
+            TableDetailsStatus::NotFound => {
+                log::warn!("Code generation failed: table not found");
+            }
+        }
+    }
+
+    fn generate_code_for_view(
+        &mut self,
+        item_id: &str,
+        generator_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(parts) = parse_node_id(item_id)
+            .as_ref()
+            .and_then(ItemIdParts::from_node_id)
+        else {
+            return;
+        };
+
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections().get(&parts.profile_id) else {
+            return;
+        };
+
+        let view_from_db_schemas = conn
+            .database_schemas
+            .get(&parts.schema_name)
+            .and_then(|db_schema| db_schema.views.iter().find(|v| v.name == parts.object_name));
+
+        let view_from_per_db = || {
+            parts
+                .database
+                .as_deref()
+                .and_then(|db| conn.database_connections.get(db))
+                .and_then(|dc| dc.schema.as_ref())
+                .and_then(|schema| {
+                    Self::find_view_in_schema(&parts.schema_name, &parts.object_name, schema)
+                })
+        };
+
+        let view = view_from_db_schemas
+            .or_else(view_from_per_db)
+            .or_else(|| Self::find_view_for_item(&parts, &conn.schema));
+
+        let Some(view) = view else {
+            log::warn!(
+                "Code generation for view '{}' failed: view not found",
+                parts.object_name
+            );
+            return;
+        };
+
+        // Create a TableInfo from the ViewInfo for code generation
+        let table_info = TableInfo {
+            name: view.name.clone(),
+            schema: view.schema.clone(),
+            columns: None,
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: dbflux_core::CollectionPresentation::DataGrid,
+            child_items: None,
+        };
+
+        if let Some(gen_type) = SqlGenerationType::from_generator_id(generator_id) {
+            cx.emit(SidebarEvent::RequestSqlPreview {
+                profile_id: parts.profile_id,
+                table_info,
+                generation_type: gen_type,
+            });
+            return;
+        }
+
+        match conn.connection.generate_code(generator_id, &table_info) {
+            Ok(sql) => cx.emit(SidebarEvent::GenerateSql(sql)),
+            Err(e) => {
+                log::error!("Code generation for view failed: {}", e);
+                self.pending_toast = Some(PendingToast {
+                    message: format!("Code generation failed: {}", e),
+                    is_error: true,
+                });
+                cx.notify();
+            }
+        }
+    }
+
+    pub(super) fn generate_code_impl(
+        &mut self,
+        item_id: &str,
+        generator_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(parts) = parse_node_id(item_id)
+            .as_ref()
+            .and_then(ItemIdParts::from_node_id)
+        else {
+            return;
+        };
+
+        let generation_type = SqlGenerationType::from_generator_id(generator_id);
+
+        let resolved = {
+            let state = self.app_state.read(cx);
+            let Some(conn) = state.connections().get(&parts.profile_id) else {
+                return;
+            };
+
+            let cache_db = parts.cache_database();
+            let cache_key = (
+                cache_db.to_string(),
+                Some(parts.schema_name.clone()),
+                parts.object_name.clone(),
+            );
+
+            if let Some(table) = conn.table_details.get(&cache_key) {
+                Some(table.clone())
+            } else {
+                let from_db_schemas = conn
+                    .database_schemas
+                    .get(&parts.schema_name)
+                    .and_then(|ds| ds.tables.iter().find(|t| t.name == parts.object_name));
+
+                let from_per_db = || {
+                    parts
+                        .database
+                        .as_deref()
+                        .and_then(|db| conn.database_connections.get(db))
+                        .and_then(|dc| dc.schema.as_ref())
+                        .and_then(|s| {
+                            Self::find_table_in_schema(&parts.schema_name, &parts.object_name, s)
+                        })
+                };
+
+                from_db_schemas
+                    .or_else(from_per_db)
+                    .or_else(|| Self::find_table_for_item(&parts, &conn.schema))
+                    .cloned()
+            }
+        };
+
+        let Some(table) = resolved else {
+            log::warn!(
+                "Code generation for '{}' failed: table not found",
+                parts.object_name
+            );
+            return;
+        };
+
+        if let Some(gen_type) = generation_type {
+            cx.emit(SidebarEvent::RequestSqlPreview {
+                profile_id: parts.profile_id,
+                table_info: table,
+                generation_type: gen_type,
+            });
+            return;
+        }
+
+        let state = self.app_state.read(cx);
+        if let Some(conn) = state.connections().get(&parts.profile_id) {
+            match conn.connection.generate_code(generator_id, &table) {
+                Ok(sql) => cx.emit(SidebarEvent::GenerateSql(sql)),
+                Err(e) => {
+                    log::error!("Code generation failed: {}", e);
+                    self.pending_toast = Some(PendingToast {
+                        message: format!("Code generation failed: {}", e),
+                        is_error: true,
+                    });
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    /// Search for a table within a specific schema of a `SchemaSnapshot`.
+    fn find_table_in_schema<'a>(
+        schema_name: &str,
+        table_name: &str,
+        snapshot: &'a SchemaSnapshot,
+    ) -> Option<&'a TableInfo> {
+        for db_schema in snapshot.schemas() {
+            if db_schema.name == schema_name {
+                return db_schema.tables.iter().find(|t| t.name == table_name);
+            }
+        }
+        snapshot.tables().iter().find(|t| t.name == table_name)
+    }
+
+    /// Search for a view within a specific schema of a `SchemaSnapshot`.
+    fn find_view_in_schema<'a>(
+        schema_name: &str,
+        view_name: &str,
+        snapshot: &'a SchemaSnapshot,
+    ) -> Option<&'a ViewInfo> {
+        for db_schema in snapshot.schemas() {
+            if db_schema.name == schema_name {
+                return db_schema.views.iter().find(|v| v.name == view_name);
+            }
+        }
+        snapshot.views().iter().find(|v| v.name == view_name)
+    }
+
+    pub(super) fn get_current_database(conn: &ConnectedProfile) -> String {
+        conn.active_database
+            .clone()
+            .or_else(|| {
+                conn.schema
+                    .as_ref()
+                    .and_then(|s| s.current_database().map(str::to_owned))
+            })
+            .unwrap_or_else(|| "main".to_string())
+    }
+
+    pub(super) fn get_capabilities_for_item(&self, item_id: &str, cx: &App) -> CodeGenCapabilities {
+        let Some(profile_id) = Self::extract_profile_id_from_item(item_id) else {
+            return CodeGenCapabilities::empty();
+        };
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections().get(&profile_id) else {
+            return CodeGenCapabilities::empty();
+        };
+        conn.connection.code_gen_capabilities()
+    }
+
+    pub(super) fn extract_profile_id_from_item(item_id: &str) -> Option<Uuid> {
+        parse_node_id(item_id).and_then(|n| n.profile_id())
+    }
+
+    pub(super) fn is_enum_type(&self, item_id: &str, cx: &App) -> bool {
+        matches!(
+            self.custom_type_kind(item_id, cx),
+            Some(CustomTypeKind::Enum)
+        )
+    }
+
+    pub(super) fn create_type_sql_label(&self, item_id: &str, cx: &App) -> Option<&'static str> {
+        Some(match self.custom_type_kind(item_id, cx)? {
+            CustomTypeKind::Enum => "CREATE TYPE",
+            CustomTypeKind::Domain => "CREATE DOMAIN",
+            CustomTypeKind::Composite => return None,
+        })
+    }
+
+    fn custom_type_kind(&self, item_id: &str, cx: &App) -> Option<CustomTypeKind> {
+        let Some(SchemaNodeId::CustomType {
+            profile_id,
+            schema: schema_name,
+            name: type_name,
+        }) = parse_node_id(item_id)
+        else {
+            return None;
+        };
+
+        let state = self.app_state.read(cx);
+        let conn = state.connections().get(&profile_id)?;
+
+        let current_db = Self::get_current_database(conn);
+        let cache_key = SchemaCacheKey::new(current_db, Some(schema_name));
+        conn.schema_types
+            .get(&cache_key)
+            .and_then(|types| types.iter().find(|t| t.name == type_name))
+            .map(|type_info| type_info.kind)
+    }
+
+    pub(super) fn generate_index_sql(
+        &mut self,
+        item_id: &str,
+        action: IndexSqlAction,
+        cx: &mut Context<Self>,
+    ) {
+        let (profile_id, context_name, index_name, is_schema_level) = match parse_node_id(item_id) {
+            Some(SchemaNodeId::Index {
+                profile_id,
+                table,
+                name,
+            }) => (profile_id, table, name, false),
+            Some(SchemaNodeId::SchemaIndex {
+                profile_id,
+                schema,
+                name,
+            }) => (profile_id, schema, name, true),
+            _ => {
+                log::warn!("Failed to parse index id: {}", item_id);
+                return;
+            }
+        };
+
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections().get(&profile_id) else {
+            return;
+        };
+
+        let current_db = Self::get_current_database(conn);
+        let code_gen = conn.connection.code_generator();
+
+        // Find the index info
+        let index_info = if is_schema_level {
+            let cache_key = SchemaCacheKey::new(&current_db, Some(&context_name));
+            conn.schema_indexes.get(&cache_key).and_then(|indexes| {
+                indexes
+                    .iter()
+                    .find(|idx| idx.name == index_name)
+                    .map(|idx| (idx.table_name.clone(), idx.columns.clone(), idx.is_unique))
+            })
+        } else {
+            let table_name = context_name.clone();
+            conn.table_details
+                .values()
+                .find(|t| t.name == table_name)
+                .and_then(|t| t.indexes.as_ref())
+                .and_then(|index_data| match index_data {
+                    dbflux_core::IndexData::Relational(indexes) => indexes
+                        .iter()
+                        .find(|idx| idx.name == index_name)
+                        .map(|idx| (table_name.clone(), idx.columns.clone(), idx.is_unique)),
+                    dbflux_core::IndexData::Document(indexes) => indexes
+                        .iter()
+                        .find(|idx| idx.name == index_name)
+                        .map(|idx| {
+                            let columns: Vec<String> =
+                                idx.keys.iter().map(|(f, _)| f.clone()).collect();
+                            (table_name.clone(), columns, idx.is_unique)
+                        }),
+                })
+        };
+
+        let sql = match action {
+            IndexSqlAction::Create => {
+                if let Some((table_name, columns, is_unique)) = &index_info {
+                    let request = CreateIndexRequest {
+                        index_name: &index_name,
+                        table_name,
+                        schema_name: Some(&context_name),
+                        columns,
+                        unique: *is_unique,
+                    };
+                    code_gen.generate_create_index(&request)
+                } else {
+                    let placeholder_cols = vec!["column1".to_string(), "column2".to_string()];
+                    let request = CreateIndexRequest {
+                        index_name: &index_name,
+                        table_name: "table_name",
+                        schema_name: Some("schema"),
+                        columns: &placeholder_cols,
+                        unique: false,
+                    };
+                    code_gen.generate_create_index(&request)
+                }
+            }
+
+            IndexSqlAction::Drop => {
+                let table_name = index_info.as_ref().map(|(t, _, _)| t.as_str());
+                let request = DropIndexRequest {
+                    index_name: &index_name,
+                    table_name,
+                    schema_name: Some(&context_name),
+                };
+                code_gen.generate_drop_index(&request)
+            }
+
+            IndexSqlAction::Reindex => {
+                let request = ReindexRequest {
+                    index_name: &index_name,
+                    schema_name: Some(&context_name),
+                };
+                code_gen.generate_reindex(&request)
+            }
+        };
+
+        if let Some(sql) = sql {
+            cx.emit(SidebarEvent::GenerateSql(sql));
+        }
+    }
+
+    pub(super) fn generate_foreign_key_sql(
+        &mut self,
+        item_id: &str,
+        action: ForeignKeySqlAction,
+        cx: &mut Context<Self>,
+    ) {
+        let (profile_id, context_name, fk_name, is_schema_level) = match parse_node_id(item_id) {
+            Some(SchemaNodeId::ForeignKey {
+                profile_id,
+                table,
+                name,
+            }) => (profile_id, table, name, false),
+            Some(SchemaNodeId::SchemaForeignKey {
+                profile_id,
+                schema,
+                name,
+            }) => (profile_id, schema, name, true),
+            _ => {
+                log::warn!("Failed to parse foreign key id: {}", item_id);
+                return;
+            }
+        };
+
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections().get(&profile_id) else {
+            return;
+        };
+
+        let current_db = Self::get_current_database(conn);
+        let code_gen = conn.connection.code_generator();
+
+        // Find the FK info
+        let fk_info = if is_schema_level {
+            let cache_key = SchemaCacheKey::new(&current_db, Some(&context_name));
+            conn.schema_foreign_keys.get(&cache_key).and_then(|fks| {
+                fks.iter().find(|fk| fk.name == fk_name).map(|fk| {
+                    (
+                        fk.table_name.clone(),
+                        fk.columns.clone(),
+                        fk.referenced_schema.clone(),
+                        fk.referenced_table.clone(),
+                        fk.referenced_columns.clone(),
+                        fk.on_delete.clone(),
+                        fk.on_update.clone(),
+                    )
+                })
+            })
+        } else {
+            let table_name = context_name.clone();
+            conn.table_details
+                .values()
+                .find(|t| t.name == table_name)
+                .and_then(|t| t.foreign_keys.as_ref())
+                .and_then(|fks| {
+                    fks.iter().find(|fk| fk.name == fk_name).map(|fk| {
+                        (
+                            table_name.clone(),
+                            fk.columns.clone(),
+                            fk.referenced_schema.clone(),
+                            fk.referenced_table.clone(),
+                            fk.referenced_columns.clone(),
+                            fk.on_delete.clone(),
+                            fk.on_update.clone(),
+                        )
+                    })
+                })
+        };
+
+        let sql = match action {
+            ForeignKeySqlAction::AddConstraint => {
+                if let Some((
+                    table_name,
+                    columns,
+                    ref_schema,
+                    ref_table,
+                    ref_columns,
+                    on_delete,
+                    on_update,
+                )) = &fk_info
+                {
+                    let request = AddForeignKeyRequest {
+                        constraint_name: &fk_name,
+                        table_name,
+                        schema_name: Some(&context_name),
+                        columns,
+                        ref_table,
+                        ref_schema: ref_schema.as_deref(),
+                        ref_columns,
+                        on_delete: on_delete.as_deref(),
+                        on_update: on_update.as_deref(),
+                    };
+                    code_gen.generate_add_foreign_key(&request)
+                } else {
+                    let placeholder_cols = vec!["column_name".to_string()];
+                    let placeholder_ref_cols = vec!["ref_column".to_string()];
+                    let request = AddForeignKeyRequest {
+                        constraint_name: &fk_name,
+                        table_name: "table_name",
+                        schema_name: Some("schema"),
+                        columns: &placeholder_cols,
+                        ref_table: "ref_table",
+                        ref_schema: None,
+                        ref_columns: &placeholder_ref_cols,
+                        on_delete: None,
+                        on_update: None,
+                    };
+                    code_gen.generate_add_foreign_key(&request)
+                }
+            }
+
+            ForeignKeySqlAction::DropConstraint => {
+                let table_name = fk_info
+                    .as_ref()
+                    .map(|(t, ..)| t.as_str())
+                    .unwrap_or("table_name");
+                let request = DropForeignKeyRequest {
+                    constraint_name: &fk_name,
+                    table_name,
+                    schema_name: Some(&context_name),
+                };
+                code_gen.generate_drop_foreign_key(&request)
+            }
+        };
+
+        if let Some(sql) = sql {
+            cx.emit(SidebarEvent::GenerateSql(sql));
+        }
+    }
+
+    pub(super) fn generate_type_sql(
+        &mut self,
+        item_id: &str,
+        action: TypeSqlAction,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(SchemaNodeId::CustomType {
+            profile_id,
+            schema: schema_name,
+            name: type_name,
+        }) = parse_node_id(item_id)
+        else {
+            log::warn!("Failed to parse custom type id: {}", item_id);
+            return;
+        };
+
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections().get(&profile_id) else {
+            return;
+        };
+
+        let code_gen = conn.connection.code_generator();
+        let current_db = Self::get_current_database(conn);
+
+        let cache_key = SchemaCacheKey::new(current_db, Some(&schema_name));
+        let type_info = conn
+            .schema_types
+            .get(&cache_key)
+            .and_then(|types| types.iter().find(|t| t.name == type_name));
+
+        let sql = match action {
+            TypeSqlAction::Create => {
+                let definition = type_info.and_then(|type_info| match type_info.kind {
+                    CustomTypeKind::Enum => type_info
+                        .enum_values
+                        .clone()
+                        .map(|values| TypeDefinition::Enum { values }),
+                    CustomTypeKind::Domain => type_info
+                        .base_type
+                        .clone()
+                        .map(|base_type| TypeDefinition::Domain { base_type }),
+                    CustomTypeKind::Composite => None,
+                });
+
+                definition.and_then(|definition| {
+                    let request = CreateTypeRequest {
+                        type_name: &type_name,
+                        schema_name: Some(&schema_name),
+                        definition,
+                    };
+                    code_gen.generate_create_type(&request)
+                })
+            }
+
+            TypeSqlAction::AddEnumValue => {
+                let request = AddEnumValueRequest {
+                    type_name: &type_name,
+                    schema_name: Some(&schema_name),
+                    new_value: "new_value",
+                };
+                code_gen.generate_add_enum_value(&request)
+            }
+
+            TypeSqlAction::Drop => {
+                let request = DropTypeRequest {
+                    type_name: &type_name,
+                    schema_name: Some(&schema_name),
+                };
+                code_gen.generate_drop_type(&request)
+            }
+        };
+
+        if let Some(sql) = sql {
+            cx.emit(SidebarEvent::GenerateSql(sql));
+        } else if matches!(action, TypeSqlAction::Create)
+            && matches!(
+                type_info.map(|type_info| &type_info.kind),
+                Some(&CustomTypeKind::Composite)
+            )
+        {
+            self.pending_toast = Some(PendingToast {
+                message:
+                    "Composite CREATE TYPE SQL is unavailable from the sidebar because composite attribute metadata is not loaded"
+                        .to_string(),
+                is_error: true,
+            });
+            cx.notify();
+        }
+    }
+
+    pub(super) fn generate_collection_code(
+        &mut self,
+        item_id: &str,
+        kind: CollectionCodeKind,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(SchemaNodeId::Collection { name, .. }) = parse_node_id(item_id) else {
+            return;
+        };
+
+        let badge = match kind {
+            CollectionCodeKind::Find => "find",
+            CollectionCodeKind::InsertOne => "insertOne",
+            CollectionCodeKind::UpdateOne => "updateOne",
+            CollectionCodeKind::DeleteOne => "deleteOne",
+        };
+
+        let query = match kind {
+            CollectionCodeKind::Find => {
+                format!("db.{name}.find({{}})")
+            }
+            CollectionCodeKind::InsertOne => {
+                format!("db.{name}.insertOne({{\n  \n}})")
+            }
+            CollectionCodeKind::UpdateOne => {
+                format!("db.{name}.updateOne(\n  {{ _id: \"\" }},\n  {{ $set: {{}} }}\n)")
+            }
+            CollectionCodeKind::DeleteOne => {
+                format!("db.{name}.deleteOne({{ _id: \"\" }})")
+            }
+        };
+
+        cx.emit(SidebarEvent::RequestQueryPreview {
+            language: QueryLanguage::MongoQuery,
+            badge: badge.to_string(),
+            query,
+        });
+    }
+
+    /// Open a new code document pre-seeded with a query template for this measurement.
+    ///
+    /// Calls `QueryGenerator::template_for_collection` on the driver — no driver-id
+    /// branching. If the driver does not implement the method the action is a no-op.
+    pub(super) fn query_collection(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let Some(SchemaNodeId::Collection {
+            profile_id,
+            database,
+            name,
+        }) = parse_node_id(item_id)
+        else {
+            return;
+        };
+
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections().get(&profile_id) else {
+            return;
+        };
+
+        let Some(query_gen) = conn.connection.query_generator() else {
+            return;
+        };
+
+        let request = dbflux_core::CollectionTemplateRequest {
+            collection: &name,
+            database: &database,
+        };
+
+        let Some(generated) = query_gen.template_for_collection(&request) else {
+            return;
+        };
+
+        cx.emit(SidebarEvent::OpenNewQueryWithContent {
+            profile_id,
+            language: generated.language,
+            query: generated.text,
+        });
+    }
+
+    /// Open a new empty code document for the given database/bucket node.
+    ///
+    /// The workspace will activate this profile's connection and pre-select the
+    /// bucket in the source-context dropdown via `OpenNewQueryWithContent`.
+    pub(super) fn new_query_for_database(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let Some(SchemaNodeId::Database { profile_id, .. }) = parse_node_id(item_id) else {
+            return;
+        };
+
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections().get(&profile_id) else {
+            return;
+        };
+
+        let language = conn.connection.metadata().query_language.clone();
+
+        // Emit an empty query — the workspace opens a blank code document with
+        // the profile already active so the user can select the bucket and type.
+        cx.emit(SidebarEvent::OpenNewQueryWithContent {
+            profile_id,
+            language,
+            query: String::new(),
+        });
+    }
+}

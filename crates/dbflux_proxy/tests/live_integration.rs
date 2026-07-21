@@ -7,54 +7,62 @@ use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
 use dbflux_proxy::{ProxyCredentials, ProxyProtocol, ProxyTunnel, ProxyTunnelConfig};
-use testcontainers::clients::Cli;
-use testcontainers::core::WaitFor;
-use testcontainers::{GenericImage, RunnableImage};
+use testcontainers::core::{ContainerPort, WaitFor};
+use testcontainers::runners::SyncRunner;
+use testcontainers::{GenericImage, ImageExt};
 
 /// Docker bridge gateway IP — routes from inside containers back to the host.
 const DOCKER_GATEWAY: &str = "172.17.0.1";
 
-fn start_postgres(docker: &Cli) -> (testcontainers::Container<'_, GenericImage>, u16) {
+fn start_postgres() -> (testcontainers::Container<GenericImage>, u16) {
     let image = GenericImage::new("postgres", "16")
-        .with_env_var("POSTGRES_USER", "postgres")
-        .with_env_var("POSTGRES_PASSWORD", "postgres")
-        .with_env_var("POSTGRES_DB", "postgres")
-        .with_exposed_port(5432)
+        .with_exposed_port(ContainerPort::Tcp(5432))
         .with_wait_for(WaitFor::message_on_stdout(
             "database system is ready to accept connections",
-        ));
+        ))
+        .with_env_var("POSTGRES_USER", "postgres")
+        .with_env_var("POSTGRES_PASSWORD", "postgres")
+        .with_env_var("POSTGRES_DB", "postgres");
 
-    let container = docker.run(image);
-    let port = container.get_host_port_ipv4(5432);
+    let container = image.start().expect("failed to start postgres container");
+    let port = container
+        .get_host_port_ipv4(5432)
+        .expect("failed to get postgres host port");
     (container, port)
 }
 
-fn start_socks5_proxy(docker: &Cli) -> (testcontainers::Container<'_, GenericImage>, u16) {
+fn start_socks5_proxy() -> (testcontainers::Container<GenericImage>, u16) {
     let image = GenericImage::new("serjs/go-socks5-proxy", "latest")
-        .with_env_var("REQUIRE_AUTH", "false")
-        .with_exposed_port(1080)
+        .with_exposed_port(ContainerPort::Tcp(1080))
         .with_wait_for(WaitFor::message_on_stderr(
             "Start listening proxy service on",
-        ));
+        ))
+        .with_env_var("REQUIRE_AUTH", "false");
 
-    let container = docker.run(image);
-    let port = container.get_host_port_ipv4(1080);
+    let container = image
+        .start()
+        .expect("failed to start socks5 proxy container");
+    let port = container
+        .get_host_port_ipv4(1080)
+        .expect("failed to get socks5 proxy host port");
     (container, port)
 }
 
-fn start_socks5_proxy_with_auth(
-    docker: &Cli,
-) -> (testcontainers::Container<'_, GenericImage>, u16) {
+fn start_socks5_proxy_with_auth() -> (testcontainers::Container<GenericImage>, u16) {
     let image = GenericImage::new("serjs/go-socks5-proxy", "latest")
+        .with_exposed_port(ContainerPort::Tcp(1080))
+        .with_wait_for(WaitFor::message_on_stderr(
+            "Start listening proxy service on",
+        ))
         .with_env_var("PROXY_USER", "testuser")
-        .with_env_var("PROXY_PASSWORD", "testpass")
-        .with_exposed_port(1080)
-        .with_wait_for(WaitFor::message_on_stderr(
-            "Start listening proxy service on",
-        ));
+        .with_env_var("PROXY_PASSWORD", "testpass");
 
-    let container = docker.run(image);
-    let port = container.get_host_port_ipv4(1080);
+    let container = image
+        .start()
+        .expect("failed to start socks5 proxy container");
+    let port = container
+        .get_host_port_ipv4(1080)
+        .expect("failed to get socks5 proxy host port");
     (container, port)
 }
 
@@ -91,9 +99,8 @@ fn wait_for_postgres(tunnel_port: u16, timeout: Duration) {
 fn socks5_tunnel_connects_to_postgres() {
     let _ = env_logger::try_init();
 
-    let docker = Cli::default();
-    let (_pg_container, pg_port) = start_postgres(&docker);
-    let (_proxy_container, proxy_port) = start_socks5_proxy(&docker);
+    let (_pg_container, pg_port) = start_postgres();
+    let (_proxy_container, proxy_port) = start_socks5_proxy();
 
     let config = ProxyTunnelConfig {
         protocol: ProxyProtocol::Socks5,
@@ -136,9 +143,8 @@ fn socks5_tunnel_connects_to_postgres() {
 fn socks5_tunnel_with_auth_connects_to_postgres() {
     let _ = env_logger::try_init();
 
-    let docker = Cli::default();
-    let (_pg_container, pg_port) = start_postgres(&docker);
-    let (_proxy_container, proxy_port) = start_socks5_proxy_with_auth(&docker);
+    let (_pg_container, pg_port) = start_postgres();
+    let (_proxy_container, proxy_port) = start_socks5_proxy_with_auth();
 
     let config = ProxyTunnelConfig {
         protocol: ProxyProtocol::Socks5,
@@ -178,9 +184,8 @@ fn socks5_tunnel_with_auth_connects_to_postgres() {
 fn socks5_tunnel_wrong_auth_fails() {
     let _ = env_logger::try_init();
 
-    let docker = Cli::default();
-    let (_pg_container, pg_port) = start_postgres(&docker);
-    let (_proxy_container, proxy_port) = start_socks5_proxy_with_auth(&docker);
+    let (_pg_container, pg_port) = start_postgres();
+    let (_proxy_container, proxy_port) = start_socks5_proxy_with_auth();
 
     let config = ProxyTunnelConfig {
         protocol: ProxyProtocol::Socks5,
@@ -201,8 +206,7 @@ fn socks5_tunnel_wrong_auth_fails() {
 fn socks5_tunnel_unreachable_target_fails() {
     let _ = env_logger::try_init();
 
-    let docker = Cli::default();
-    let (_proxy_container, proxy_port) = start_socks5_proxy(&docker);
+    let (_proxy_container, proxy_port) = start_socks5_proxy();
 
     let config = ProxyTunnelConfig {
         protocol: ProxyProtocol::Socks5,
@@ -221,9 +225,8 @@ fn socks5_tunnel_unreachable_target_fails() {
 fn socks5_tunnel_multiple_connections() {
     let _ = env_logger::try_init();
 
-    let docker = Cli::default();
-    let (_pg_container, pg_port) = start_postgres(&docker);
-    let (_proxy_container, proxy_port) = start_socks5_proxy(&docker);
+    let (_pg_container, pg_port) = start_postgres();
+    let (_proxy_container, proxy_port) = start_socks5_proxy();
 
     let config = ProxyTunnelConfig {
         protocol: ProxyProtocol::Socks5,
@@ -265,9 +268,8 @@ fn socks5_tunnel_multiple_connections() {
 fn socks5_tunnel_drops_cleanly() {
     let _ = env_logger::try_init();
 
-    let docker = Cli::default();
-    let (_pg_container, pg_port) = start_postgres(&docker);
-    let (_proxy_container, proxy_port) = start_socks5_proxy(&docker);
+    let (_pg_container, pg_port) = start_postgres();
+    let (_proxy_container, proxy_port) = start_socks5_proxy();
 
     let config = ProxyTunnelConfig {
         protocol: ProxyProtocol::Socks5,
@@ -300,14 +302,16 @@ fn socks5_tunnel_drops_cleanly() {
 // HTTP CONNECT tests
 // ---------------------------------------------------------------------------
 
-fn start_tinyproxy(docker: &Cli) -> (testcontainers::Container<'_, GenericImage>, u16) {
+fn start_tinyproxy() -> (testcontainers::Container<GenericImage>, u16) {
     let image = GenericImage::new("monokal/tinyproxy", "latest")
-        .with_exposed_port(8888)
-        .with_wait_for(WaitFor::message_on_stdout("Accepting connections"));
+        .with_exposed_port(ContainerPort::Tcp(8888))
+        .with_wait_for(WaitFor::message_on_stdout("Accepting connections"))
+        .with_cmd(vec!["ANY".to_string()]);
 
-    let args = vec!["ANY".to_string()];
-    let container = docker.run(RunnableImage::from((image, args)));
-    let port = container.get_host_port_ipv4(8888);
+    let container = image.start().expect("failed to start tinyproxy container");
+    let port = container
+        .get_host_port_ipv4(8888)
+        .expect("failed to get tinyproxy host port");
     (container, port)
 }
 
@@ -316,9 +320,8 @@ fn start_tinyproxy(docker: &Cli) -> (testcontainers::Container<'_, GenericImage>
 fn http_connect_tunnel_to_postgres() {
     let _ = env_logger::try_init();
 
-    let docker = Cli::default();
-    let (_pg_container, pg_port) = start_postgres(&docker);
-    let (_proxy_container, proxy_port) = start_tinyproxy(&docker);
+    let (_pg_container, pg_port) = start_postgres();
+    let (_proxy_container, proxy_port) = start_tinyproxy();
 
     let config = ProxyTunnelConfig {
         protocol: ProxyProtocol::HttpConnect,

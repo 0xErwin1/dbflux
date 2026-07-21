@@ -15,7 +15,6 @@ path = "src/lib.rs"
 [dependencies]
 dbflux_core.workspace = true
 dbflux_storage.workspace = true
-dirs.workspace = true
 hex.workspace = true
 regex.workspace = true
 rusqlite.workspace = true

@@ -1143,6 +1143,12 @@ pub struct ConnectionProfile {
     /// Per-connection MCP governance controls.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_governance: Option<ConnectionMcpGovernance>,
+
+    /// When `true`, mutation operations (UPDATE / DELETE) are forbidden for this
+    /// profile regardless of actor context. Settable in Connection Manager.
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub read_only_flag: bool,
 }
 
 impl ConnectionProfile {
@@ -1164,6 +1170,7 @@ impl ConnectionProfile {
             value_refs: HashMap::new(),
             access_kind: None,
             mcp_governance: None,
+            read_only_flag: false,
         }
     }
 
@@ -1187,6 +1194,7 @@ impl ConnectionProfile {
             auth_profile_id: None,
             value_refs: HashMap::new(),
             access_kind: None,
+            read_only_flag: false,
             mcp_governance: None,
         }
     }
@@ -1214,6 +1222,7 @@ impl ConnectionProfile {
             value_refs: HashMap::new(),
             access_kind: None,
             mcp_governance: None,
+            read_only_flag: false,
         }
     }
 
@@ -1246,6 +1255,7 @@ impl ConnectionProfile {
             value_refs: HashMap::new(),
             access_kind: None,
             mcp_governance: None,
+            read_only_flag: false,
         }
     }
 

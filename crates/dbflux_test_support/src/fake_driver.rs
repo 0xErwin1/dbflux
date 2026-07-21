@@ -1,14 +1,22 @@
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    CLOUDWATCH_FORM, Connection, ConnectionProfile, DYNAMODB_FORM, DatabaseCategory, DbConfig,
-    DbDriver, DbError, DbKind, DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits,
-    DriverMetadata, FormValues, INFLUXDB_FORM, Icon, MONGODB_FORM, MYSQL_FORM,
-    MutationCapabilities, POSTGRES_FORM, QueryCapabilities, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, REDIS_FORM, SQLITE_FORM, SchemaLoadingStrategy, SchemaSnapshot,
-    SqlDialect, SqlLanguageService, SyntaxInfo, TransactionCapabilities,
+    Connection, ConnectionProfile, CrudResult, DatabaseCategory, DbConfig, DbDriver, DbError,
+    DbKind, DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
+    FormValues, Icon, MutationCapabilities, QueryCapabilities, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch, SchemaLoadingStrategy,
+    SchemaSnapshot, SqlDialect, SqlLanguageService, SyntaxInfo, TransactionCapabilities,
+    TransferFamily,
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
-use dbflux_driver_redis::RedisLanguageService;
+use dbflux_driver_cloudwatch::CLOUDWATCH_FORM;
+use dbflux_driver_dynamodb::DYNAMODB_FORM;
+use dbflux_driver_influxdb::INFLUXDB_FORM;
+use dbflux_driver_mongodb::MONGODB_FORM;
+use dbflux_driver_mssql::SQLSERVER_FORM;
+use dbflux_driver_mysql::MYSQL_FORM;
+use dbflux_driver_postgres::POSTGRES_FORM;
+use dbflux_driver_redis::{REDIS_FORM, RedisLanguageService};
+use dbflux_driver_sqlite::SQLITE_FORM;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -38,9 +46,18 @@ impl FakeQueryOutcome {
     }
 }
 
+/// A single recorded CRUD call made through `FakeConnection`.
+#[derive(Debug, Clone)]
+pub enum CrudOp {
+    Update(RowPatch),
+    Insert(RowInsert),
+    Delete(RowDelete),
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct FakeDriverStats {
     pub executed_requests: Vec<QueryRequest>,
+    pub crud_ops: Vec<CrudOp>,
     pub cancelled_handle_count: usize,
     pub cancel_active_calls: usize,
     pub close_calls: usize,
@@ -52,6 +69,7 @@ struct FakeDriverState {
     query_outcomes: RwLock<HashMap<String, FakeQueryOutcome>>,
     default_outcome: RwLock<Option<FakeQueryOutcome>>,
     executed_requests: Mutex<Vec<QueryRequest>>,
+    crud_ops: Mutex<Vec<CrudOp>>,
     cancelled_handles: Mutex<Vec<QueryHandle>>,
     cancel_active_calls: AtomicUsize,
     close_calls: AtomicUsize,
@@ -120,6 +138,7 @@ impl FakeDriver {
     pub fn stats(&self) -> FakeDriverStats {
         FakeDriverStats {
             executed_requests: mutex_lock(&self.state.executed_requests).clone(),
+            crud_ops: mutex_lock(&self.state.crud_ops).clone(),
             cancelled_handle_count: mutex_lock(&self.state.cancelled_handles).len(),
             cancel_active_calls: self.state.cancel_active_calls.load(Ordering::Relaxed),
             close_calls: self.state.close_calls.load(Ordering::Relaxed),
@@ -128,6 +147,13 @@ impl FakeDriver {
 
     pub fn as_driver_arc(self) -> Arc<dyn DbDriver> {
         Arc::new(self)
+    }
+
+    /// Connect and return the connection as `Arc<dyn Connection>` for use with
+    /// `ConnectedProfile` in GPUI tests.
+    pub fn connect_arc(&self, profile: &ConnectionProfile) -> Result<Arc<dyn Connection>, DbError> {
+        let connection = self.connect_with_secrets(profile, None, None)?;
+        Ok(Arc::from(connection))
     }
 }
 
@@ -527,6 +553,21 @@ impl Connection for FakeConnection {
         }
     }
 
+    fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
+        mutex_lock(&self.state.crud_ops).push(CrudOp::Update(patch.clone()));
+        Ok(CrudResult::new(1, None))
+    }
+
+    fn insert_row(&self, insert: &RowInsert) -> Result<CrudResult, DbError> {
+        mutex_lock(&self.state.crud_ops).push(CrudOp::Insert(insert.clone()));
+        Ok(CrudResult::new(1, None))
+    }
+
+    fn delete_row(&self, delete: &RowDelete) -> Result<CrudResult, DbError> {
+        mutex_lock(&self.state.crud_ops).push(CrudOp::Delete(delete.clone()));
+        Ok(CrudResult::new(1, None))
+    }
+
     fn language_service(&self) -> &dyn dbflux_core::LanguageService {
         match self.kind {
             DbKind::Redis => &REDIS_LANGUAGE_SERVICE,
@@ -580,7 +621,7 @@ fn form_for_kind(kind: DbKind) -> &'static DriverFormDef {
         DbKind::DynamoDB => &DYNAMODB_FORM,
         DbKind::CloudWatchLogs => &CLOUDWATCH_FORM,
         DbKind::InfluxDB => &INFLUXDB_FORM,
-        DbKind::SqlServer => &dbflux_core::SQLSERVER_FORM,
+        DbKind::SqlServer => &SQLSERVER_FORM,
     }
 }
 
@@ -646,6 +687,7 @@ static FAKE_POSTGRES_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Drive
     display_name: "Fake PostgreSQL".into(),
     description: "Deterministic fake driver for tests".into(),
     category: DatabaseCategory::Relational,
+    transfer_family: TransferFamily::Sql,
     deployment_class: None,
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::RELATIONAL_BASE,
@@ -678,6 +720,9 @@ static FAKE_POSTGRES_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Drive
     ssl_modes: None,
     ssl_cert_fields: None,
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
+    editor_profile: None,
 });
 
 static FAKE_SQLITE_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -685,6 +730,7 @@ static FAKE_SQLITE_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
     display_name: "Fake SQLite".into(),
     description: "Deterministic fake driver for tests".into(),
     category: DatabaseCategory::Relational,
+    transfer_family: TransferFamily::Sql,
     deployment_class: None,
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::RELATIONAL_BASE,
@@ -734,6 +780,9 @@ static FAKE_SQLITE_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
     ssl_modes: None,
     ssl_cert_fields: None,
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
+    editor_profile: None,
 });
 
 static FAKE_MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -741,6 +790,7 @@ static FAKE_MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMe
     display_name: "Fake MySQL".into(),
     description: "Deterministic fake driver for tests".into(),
     category: DatabaseCategory::Relational,
+    transfer_family: TransferFamily::Sql,
     deployment_class: None,
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::RELATIONAL_BASE,
@@ -774,6 +824,9 @@ static FAKE_MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMe
     ssl_modes: None,
     ssl_cert_fields: None,
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
+    editor_profile: None,
 });
 
 static FAKE_MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -781,6 +834,7 @@ static FAKE_MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
     display_name: "Fake MariaDB".into(),
     description: "Deterministic fake driver for tests".into(),
     category: DatabaseCategory::Relational,
+    transfer_family: TransferFamily::Sql,
     deployment_class: None,
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::RELATIONAL_BASE,
@@ -814,6 +868,9 @@ static FAKE_MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
     ssl_modes: None,
     ssl_cert_fields: None,
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
+    editor_profile: None,
 });
 
 static FAKE_MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -821,6 +878,7 @@ static FAKE_MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
     display_name: "Fake MongoDB".into(),
     description: "Deterministic fake driver for tests".into(),
     category: DatabaseCategory::Document,
+    transfer_family: TransferFamily::Incompatible,
     deployment_class: None,
     query_language: QueryLanguage::MongoQuery,
     capabilities: DriverCapabilities::DOCUMENT_BASE,
@@ -868,6 +926,9 @@ static FAKE_MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
     ssl_modes: None,
     ssl_cert_fields: None,
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
+    editor_profile: None,
 });
 
 static FAKE_REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -875,6 +936,7 @@ static FAKE_REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMe
     display_name: "Fake Redis".into(),
     description: "Deterministic fake driver for tests".into(),
     category: DatabaseCategory::KeyValue,
+    transfer_family: TransferFamily::Incompatible,
     deployment_class: None,
     query_language: QueryLanguage::RedisCommands,
     capabilities: DriverCapabilities::KEYVALUE_BASE,
@@ -917,6 +979,9 @@ static FAKE_REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMe
     ssl_modes: None,
     ssl_cert_fields: None,
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
+    editor_profile: None,
 });
 
 static FAKE_DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -924,6 +989,7 @@ static FAKE_DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Drive
     display_name: "Fake DynamoDB".into(),
     description: "Deterministic fake driver for tests".into(),
     category: DatabaseCategory::Document,
+    transfer_family: TransferFamily::Incompatible,
     deployment_class: None,
     query_language: QueryLanguage::Custom("DynamoDB".into()),
     capabilities: DriverCapabilities::DOCUMENT_BASE,
@@ -947,6 +1013,9 @@ static FAKE_DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Drive
     ssl_modes: None,
     ssl_cert_fields: None,
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
+    editor_profile: None,
 });
 
 static FAKE_CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -954,6 +1023,7 @@ static FAKE_CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Dri
     display_name: "Fake CloudWatch Logs".into(),
     description: "Deterministic fake driver for tests".into(),
     category: DatabaseCategory::Document,
+    transfer_family: TransferFamily::Incompatible,
     deployment_class: None,
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::AUTHENTICATION,
@@ -977,6 +1047,9 @@ static FAKE_CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Dri
     ssl_modes: None,
     ssl_cert_fields: None,
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
+    editor_profile: None,
 });
 
 static FAKE_INFLUXDB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -984,6 +1057,7 @@ static FAKE_INFLUXDB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Drive
     display_name: "Fake InfluxDB".into(),
     description: "Deterministic fake driver for tests".into(),
     category: dbflux_core::DatabaseCategory::TimeSeries,
+    transfer_family: TransferFamily::Incompatible,
     deployment_class: None,
     query_language: QueryLanguage::Flux,
     capabilities: DriverCapabilities::AUTHENTICATION,
@@ -1007,6 +1081,9 @@ static FAKE_INFLUXDB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Drive
     ssl_modes: None,
     ssl_cert_fields: None,
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
+    editor_profile: None,
 });
 
 #[cfg(test)]

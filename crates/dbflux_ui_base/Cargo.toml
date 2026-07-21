@@ -1,0 +1,39 @@
+[package]
+name = "dbflux_ui_base"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "App-state-aware UI base layer for DBFlux (AppStateEntity + GPUI event types)"
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[lib]
+
+[dependencies]
+gpui.workspace = true
+gpui-component.workspace = true
+dbflux_app.workspace = true
+dbflux_storage.workspace = true
+dbflux_components.workspace = true
+dbflux_core.workspace = true
+dbflux_mcp = { workspace = true, optional = true }
+dbflux_aws = { workspace = true, optional = true }
+tracing.workspace = true
+uuid.workspace = true
+log.workspace = true
+anyhow = { workspace = true }
+chrono.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+tempfile = "3"
+rusqlite.workspace = true
+serde_json.workspace = true
+
+[features]
+default = []
+mcp = ["dbflux_mcp", "dbflux_app/mcp"]
+lua = ["dbflux_app/lua"]
+aws = ["dbflux_aws", "dbflux_app/aws"]

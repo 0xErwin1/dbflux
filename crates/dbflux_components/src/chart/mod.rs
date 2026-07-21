@@ -15,6 +15,7 @@
 
 pub mod axis;
 pub mod axis_bar;
+pub mod data_source;
 pub mod decimate;
 pub mod detect;
 pub mod engine;
@@ -24,15 +25,18 @@ pub mod spec;
 pub mod stats;
 
 pub use axis_bar::{AxisPill, axis_bar_element};
-pub use detect::{ChartDetection, detect_chart_columns};
-pub use engine::{
-    CHART_ACCENT_CYAN, CHART_ACCENT_PRIMARY, CHART_PALETTE, ChartBuildError, ChartView,
-    format_x_value, format_y_value,
+pub use data_source::{
+    AuditAggregateSpec, AuditGroupBy, AuditSource, ChartDataPlan, ChartDataSource,
+    ChartSourceDescription, ChartSourceError, InstanceMetricSource, MetricSource, TimeWindow,
+    resolve_source,
 };
+pub use detect::{ChartDetection, detect_chart_columns};
+pub use engine::{ChartBuildError, ChartView, format_x_value, format_y_value};
+pub use legend::legend_element;
 pub use point_inspector::{DataPointRef, SourceRowRef, point_inspector_element};
 pub use spec::{
     AggKind, AxisKind, AxisSpec, BindingSpec, ChartKind, ChartSpec, ManualChartSelection,
-    SeriesSpec,
+    SeriesSpec, YScale,
 };
 pub use stats::{
     SeriesStats, compute_series_stats, count_columns_for_why, format_resolution, format_span,

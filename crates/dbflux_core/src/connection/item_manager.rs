@@ -1,6 +1,5 @@
 use crate::auth::AuthProfile;
-use crate::{ConnectionProfile, JsonStore, ProxyProfile, SshTunnelProfile};
-use log::{error, info};
+use crate::{ConnectionProfile, ProxyProfile, SshTunnelProfile};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use uuid::Uuid;
@@ -9,10 +8,10 @@ pub trait Identifiable {
     fn id(&self) -> Uuid;
 }
 
-/// CRUD manager with optional persistence.
+/// In-memory CRUD manager. Items are loaded externally (from SQLite) and
+/// mutated in memory; callers persist changes via their own repositories.
 pub struct ItemManager<T> {
     pub items: Vec<T>,
-    store: Option<JsonStore<T>>,
     label: &'static str,
 }
 
@@ -20,43 +19,26 @@ impl<T: Identifiable + Serialize + DeserializeOwned> ItemManager<T> {
     pub fn new(_filename: &str, label: &'static str) -> Self {
         Self {
             items: Vec::new(),
-            store: None,
             label,
         }
     }
 
-    /// Creates a manager with pre-loaded items and an optional store.
-    pub fn with_items(items: Vec<T>, store: Option<JsonStore<T>>, label: &'static str) -> Self {
-        Self {
-            items,
-            store,
-            label,
-        }
+    /// Creates a manager with pre-loaded items.
+    pub fn with_items(items: Vec<T>, _store: Option<()>, label: &'static str) -> Self {
+        Self { items, label }
     }
 
     pub fn save(&self) {
-        let Some(ref store) = self.store else {
-            log::warn!("Cannot save {}: store not available", self.label);
-            return;
-        };
-
-        if let Err(e) = store.save(&self.items) {
-            error!("Failed to save {}: {:?}", self.label, e);
-        } else {
-            info!("Saved {} {} to disk", self.items.len(), self.label);
-        }
+        log::warn!("Cannot save {}: no store attached", self.label);
     }
 
     pub fn add(&mut self, item: T) {
         self.items.push(item);
-        self.save();
     }
 
     pub fn remove(&mut self, idx: usize) -> Option<T> {
         if idx < self.items.len() {
-            let removed = self.items.remove(idx);
-            self.save();
-            Some(removed)
+            Some(self.items.remove(idx))
         } else {
             None
         }
@@ -66,7 +48,6 @@ impl<T: Identifiable + Serialize + DeserializeOwned> ItemManager<T> {
         let target_id = item.id();
         if let Some(existing) = self.items.iter_mut().find(|i| i.id() == target_id) {
             *existing = item;
-            self.save();
         }
     }
 }
@@ -115,17 +96,5 @@ pub type AuthProfileManager = ItemManager<AuthProfile>;
 impl DefaultFilename for AuthProfileManager {
     fn meta() -> (&'static str, &'static str) {
         ("auth_profiles.json", "auth profiles")
-    }
-}
-
-#[cfg(test)]
-impl<T: Identifiable + Serialize + DeserializeOwned> ItemManager<T> {
-    pub fn with_store(store: JsonStore<T>, label: &'static str) -> Result<Self, crate::DbError> {
-        let items = store.load()?;
-        Ok(Self {
-            items,
-            store: Some(store),
-            label,
-        })
     }
 }

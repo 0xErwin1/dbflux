@@ -4,9 +4,9 @@
 
 use gpui::prelude::*;
 use gpui::{AnyElement, App, FontWeight, SharedString, Window, div};
-use gpui_component::ActiveTheme;
 
-use crate::tokens::{BannerColors, FontSizes, Radii, Spacing};
+use crate::semantic::BannerColors as SemBannerColors;
+use crate::tokens::{FontSizes, Radii, Spacing};
 use crate::typography::AppFonts;
 
 /// Semantic variant controlling banner colors.
@@ -66,32 +66,20 @@ impl BannerBlock {
         self
     }
 
-    fn resolve_colors(
-        variant: BannerVariant,
-        theme: &gpui_component::Theme,
-    ) -> (gpui::Hsla, gpui::Hsla) {
+    fn resolve_colors(variant: BannerVariant, cx: &App) -> (gpui::Hsla, gpui::Hsla) {
+        let b = SemBannerColors::for_current(cx);
         match variant {
-            BannerVariant::Info => (BannerColors::info_bg(theme), BannerColors::info_fg(theme)),
-            BannerVariant::Success => (
-                BannerColors::success_bg(theme),
-                BannerColors::success_fg(theme),
-            ),
-            BannerVariant::Warning => (
-                BannerColors::warning_bg(theme),
-                BannerColors::warning_fg(theme),
-            ),
-            BannerVariant::Danger => (
-                BannerColors::danger_bg(theme),
-                BannerColors::danger_fg(theme),
-            ),
+            BannerVariant::Info => (b.info_bg, b.info_fg),
+            BannerVariant::Success => (b.success_bg, b.success_fg),
+            BannerVariant::Warning => (b.warning_bg, b.warning_fg),
+            BannerVariant::Danger => (b.error_bg, b.error_fg),
         }
     }
 }
 
 impl RenderOnce for BannerBlock {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = cx.theme();
-        let (bg, fg) = Self::resolve_colors(self.variant, theme);
+        let (bg, fg) = Self::resolve_colors(self.variant, cx);
 
         let mut pre_tint = fg;
         pre_tint.a = 0.08;

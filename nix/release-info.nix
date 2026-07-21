@@ -1,13 +1,16 @@
 {
-  version = "0.6.0-dev.5";
+  version = "0.6.0";
 
   # SHA256 SRI hashes of each prebuilt artifact published in the matching
-  # GitHub Release. Stable (vX.Y.Z) and -dev.N prereleases are reflected
-  # here; -rc.N release-branch prereleases are not.
+  # GitHub Release. This file is a per-branch channel pointer: on `main` it
+  # tracks the newest published rc or stable tag; on a release/vX.Y branch it
+  # tracks that line's newest tag (-rc.N, then vX.Y.0, then patches). The
+  # rolling nightly channel is separate (see nix/nightly-info.nix). See
+  # docs/RELEASE.md.
   #
   # To refresh after a new release:
   #
-  #   ver=X.Y.Z[-dev.N]
+  #   ver=X.Y.Z[-rc.N]
   #   for arch in amd64 arm64; do
   #     curl -fsSL -o /tmp/dbflux-$arch.tar.gz \
   #       "https://github.com/0xErwin1/dbflux/releases/download/v$ver/dbflux-linux-$arch.tar.gz"
@@ -18,12 +21,12 @@
   # Then update `version`, the two `url`s, and the two `hash`es below.
   artifacts = {
     "x86_64-linux" = {
-      url = "https://github.com/0xErwin1/dbflux/releases/download/v0.6.0-dev.5/dbflux-linux-amd64.tar.gz";
-      hash = "sha256-D8Ya3L3BuZTgd9/sfwsYFWunjQDvoSbD9D0iyHfDqD8=";
+      url = "https://github.com/0xErwin1/dbflux/releases/download/v0.6.0/dbflux-linux-amd64.tar.gz";
+      hash = "sha256-QbyKIjbIPbudb8IwS86UcN25Y7LcHgi2cjwP/BzCd/A=";
     };
     "aarch64-linux" = {
-      url = "https://github.com/0xErwin1/dbflux/releases/download/v0.6.0-dev.5/dbflux-linux-arm64.tar.gz";
-      hash = "sha256-bPO0Gb/c6Dr7KSahmu+8VtJCWcxb4iSi1C9AFLYxjbY=";
+      url = "https://github.com/0xErwin1/dbflux/releases/download/v0.6.0/dbflux-linux-arm64.tar.gz";
+      hash = "sha256-E1FFudu+kdYyVHPajxTuvnDP63/JhemDiMkaxGrc1VQ=";
     };
   };
 }

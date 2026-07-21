@@ -79,7 +79,7 @@ fn field_row_inner(
         .child(
             div()
                 .w(label_width)
-                .pt(px(6.0))
+                .pt(Spacing::XXS)
                 .flex_shrink_0()
                 .child(label_el),
         )
@@ -96,7 +96,7 @@ fn field_row_vertical_inner(
 
     let mut col = div()
         .flex_col()
-        .gap(px(4.0))
+        .gap(Spacing::XS)
         .child(label_el)
         .child(div().w_full().child(control));
 

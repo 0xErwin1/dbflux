@@ -11,26 +11,91 @@ use std::sync::Arc;
 
 use bson::{Bson, Document, doc};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
+
+use crate::language_service::MongoLanguageService;
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionIndexInfo, ColumnKind, ColumnMeta,
     Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile, CrudResult,
-    DangerousQueryKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind,
-    DbSchemaInfo, DdlCapabilities, DeploymentClass, DescribeRequest, Diagnostic,
-    DiagnosticSeverity, DocumentConnection, DocumentDelete, DocumentInsert, DocumentSchema,
-    DocumentUpdate, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
-    EditorDiagnostic, FieldInfo, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues,
-    FormattedError, Icon, IndexData, IndexDirection, KeyValueConnection, LanguageService,
-    MONGODB_FORM, MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle,
-    QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle,
-    QueryLanguage, QueryRequest, QueryResult, RelationalConnection, Row, SchemaDropTarget,
-    SchemaLoadingStrategy, SchemaObjectKind, SchemaSnapshot, SemanticFieldRef, SemanticFilter,
-    SemanticPlan, SemanticPlanKind, SemanticRequest, SqlDialect, SshTunnelConfig, TableInfo,
-    TextPosition, TextPositionRange, TransactionCapabilities, ValidationResult, Value, ViewInfo,
-    WhereOperator, detect_dangerous_mongo, sanitize_uri,
+    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
+    DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection, DocumentDelete,
+    DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities, DriverFormDef,
+    DriverLimits, DriverMetadata, ExecutionSourceContext, FieldExportTransform, FieldInfo,
+    FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, IndexData,
+    IndexDirection, InstanceCatalog, KeyValueConnection, LanguageService, MutationCapabilities,
+    OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
+    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    RelationalConnection, Row, SchemaDropTarget, SchemaLoadingStrategy, SchemaObjectKind,
+    SchemaSnapshot, SemanticFieldRef, SemanticFilter, SemanticPlan, SemanticPlanKind,
+    SemanticRequest, SqlDialect, SshTunnelConfig, TableInfo, TransactionCapabilities,
+    TransferFamily, Value, ViewInfo, WhereOperator, field, field_password, field_required,
+    field_use_uri, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};
 use uuid::Uuid;
+
+pub static MONGODB_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![
+        FormTab {
+            id: "main".into(),
+            label: "Main".into(),
+            sections: vec![
+                FormSection {
+                    title: "Server".into(),
+                    fields: vec![
+                        field_use_uri(),
+                        when_checked(
+                            field_required(
+                                "uri",
+                                "Connection URI",
+                                FormFieldKind::Text,
+                                "mongodb://host:port or mongodb+srv://...",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("host", "Host", FormFieldKind::Text, "localhost"),
+                                "localhost",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("port", "Port", FormFieldKind::Number, "27017"),
+                                "27017",
+                            ),
+                            "use_uri",
+                        ),
+                        field(
+                            "database",
+                            "Database",
+                            FormFieldKind::Text,
+                            "optional - leave empty to browse all",
+                        ),
+                    ],
+                },
+                FormSection {
+                    title: "Authentication".into(),
+                    fields: vec![
+                        field("user", "User", FormFieldKind::Text, "optional"),
+                        field_password(),
+                        when_unchecked(
+                            field(
+                                "auth_database",
+                                "Auth Database",
+                                FormFieldKind::Text,
+                                "admin (default)",
+                            ),
+                            "use_uri",
+                        ),
+                    ],
+                },
+            ],
+        },
+        ssh_tab(),
+    ],
+});
 
 /// MongoDB driver metadata.
 pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -38,13 +103,17 @@ pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
     display_name: "MongoDB".into(),
     description: "Document database for modern applications".into(),
     category: DatabaseCategory::Document,
+    transfer_family: TransferFamily::Incompatible,
     deployment_class: Some(DeploymentClass::SelfHosted),
     query_language: QueryLanguage::MongoQuery,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::DOCUMENT_BASE.bits()
             | DriverCapabilities::AGGREGATION.bits()
             | DriverCapabilities::SSH_TUNNEL.bits()
-            | DriverCapabilities::INDEXES.bits(),
+            | DriverCapabilities::INDEXES.bits()
+            | DriverCapabilities::INSTANCE_METRICS.bits()
+            | DriverCapabilities::INSTANCE_INSPECTOR.bits()
+            | DriverCapabilities::CHART_AUTHORING.bits(),
     ),
     default_port: Some(27017),
     uri_scheme: "mongodb".into(),
@@ -66,8 +135,14 @@ pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
             WhereOperator::Not,
         ],
         supports_order_by: true,
-        supports_group_by: true,
-        supports_having: true,
+        order_by_mode: dbflux_core::OrderByMode::AnyColumns,
+        // The visual builder emits `find()` reads, which have no GROUP BY / HAVING
+        // form (those belong to the aggregation pipeline the builder does not
+        // generate). Advertising them would render builder sections whose run path
+        // rejects the spec as `InvalidSpec`, so they are reported as unsupported to
+        // keep the offered sections truthful.
+        supports_group_by: false,
+        supports_having: false,
         supports_distinct: false,
         supports_limit: true,
         supports_offset: true,
@@ -133,6 +208,7 @@ pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
         max_identifier_length: 63,
         max_columns: 0,
         max_indexes_per_table: 64,
+        max_bulk_insert_rows: 0,
     }),
     ssl_modes: Some(&[
         dbflux_core::SslModeOption {
@@ -153,6 +229,9 @@ pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
         client_cert: true,
     }),
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
+    editor_profile: None,
 });
 
 pub struct MongoDriver;
@@ -199,6 +278,7 @@ impl DbDriver for MongoDriver {
                             default_value: "100".into(),
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
+                            disabled_when_field_set: None,
                             help: None,
                         },
                         FormFieldDef {
@@ -210,6 +290,7 @@ impl DbDriver for MongoDriver {
                             default_value: "false".into(),
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
+                            disabled_when_field_set: None,
                             help: None,
                         },
                     ],
@@ -220,6 +301,24 @@ impl DbDriver for MongoDriver {
 
     fn form_definition(&self) -> &DriverFormDef {
         &MONGODB_FORM
+    }
+
+    fn export_field_transform(&self, field_id: &str, values: &FormValues) -> FieldExportTransform {
+        if field_id != "uri" {
+            return FieldExportTransform::None;
+        }
+
+        let use_uri = values.get("use_uri").map(|s| s == "true").unwrap_or(false);
+        if !use_uri {
+            return FieldExportTransform::None;
+        }
+
+        let uri = match values.get("uri") {
+            Some(u) if !u.is_empty() => u.as_str(),
+            _ => return FieldExportTransform::None,
+        };
+
+        split_mongodb_uri_secret(uri)
     }
 
     fn build_config(&self, values: &FormValues) -> Result<DbConfig, DbError> {
@@ -546,7 +645,7 @@ impl MongoDriver {
         log::info!("[CONNECT] MongoDB connection established via URI");
 
         Ok(Box::new(MongoConnection {
-            client: Mutex::new(client),
+            client: Arc::new(Mutex::new(client)),
             default_database: database,
             schema_settings,
             ssh_tunnel: None,
@@ -584,7 +683,7 @@ impl MongoDriver {
         log::info!("[CONNECT] MongoDB connection established");
 
         Ok(Box::new(MongoConnection {
-            client: Mutex::new(client),
+            client: Arc::new(Mutex::new(client)),
             default_database: database,
             schema_settings,
             ssh_tunnel: None,
@@ -673,7 +772,7 @@ impl MongoDriver {
         );
 
         Ok(Box::new(MongoConnection {
-            client: Mutex::new(client),
+            client: Arc::new(Mutex::new(client)),
             default_database: database,
             schema_settings,
             ssh_tunnel: Some(tunnel),
@@ -991,6 +1090,52 @@ fn parse_srv_uri(uri: &str) -> FormValues {
     values
 }
 
+/// Extract the password from a mongodb:// or mongodb+srv:// URI into a `SplitSecret`.
+///
+/// Returns `None` when the URI has no embedded credentials or when the password is
+/// already empty. The runtime password-injection path (`inject_credentials_into_uri`)
+/// re-merges the skeleton + secret at connect time.
+fn split_mongodb_uri_secret(uri: &str) -> FieldExportTransform {
+    let (prefix, rest) = if let Some(r) = uri.strip_prefix("mongodb+srv://") {
+        ("mongodb+srv://", r)
+    } else if let Some(r) = uri.strip_prefix("mongodb://") {
+        ("mongodb://", r)
+    } else {
+        return FieldExportTransform::None;
+    };
+
+    let at_pos = match rest.find('@') {
+        Some(p) => p,
+        None => return FieldExportTransform::None,
+    };
+
+    let user_pass = &rest[..at_pos];
+    let after_at = &rest[at_pos..];
+
+    let colon_pos = match user_pass.find(':') {
+        Some(p) => p,
+        None => return FieldExportTransform::None,
+    };
+
+    let user = &user_pass[..colon_pos];
+    let encoded_pass = &user_pass[colon_pos + 1..];
+
+    if encoded_pass.is_empty() {
+        return FieldExportTransform::None;
+    }
+
+    let password = urlencoding::decode(encoded_pass)
+        .unwrap_or_else(|_| encoded_pass.into())
+        .into_owned();
+
+    let skeleton = format!("{}{}:{}", prefix, user, after_at);
+
+    FieldExportTransform::SplitSecret {
+        skeleton,
+        secret: dbflux_core::secrecy::SecretString::from(password),
+    }
+}
+
 fn inject_credentials_into_uri(
     base_uri: &str,
     user: Option<&str>,
@@ -1106,7 +1251,7 @@ fn format_mongo_query_error(e: &mongodb::error::Error) -> DbError {
 }
 
 pub struct MongoConnection {
-    client: Mutex<Client>,
+    client: Arc<Mutex<Client>>,
     default_database: Option<String>,
     schema_settings: MongoSchemaSettings,
     #[allow(dead_code)]
@@ -1584,6 +1729,57 @@ fn plan_mongo_semantic_request(request: &SemanticRequest) -> Result<SemanticPlan
     }
 }
 
+/// Column definitions for the schema field-listing result returned by `describe_table`.
+///
+/// Extracted as a pure function so tests can assert `ColumnKind` values without a
+/// live MongoDB connection. Column order must match the row values built in `describe_table`.
+fn schema_listing_columns() -> Vec<ColumnMeta> {
+    vec![
+        ColumnMeta {
+            name: "field_name".to_string(),
+            type_name: "text".to_string(),
+            kind: ColumnKind::Text,
+            nullable: false,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "common_type".to_string(),
+            type_name: "text".to_string(),
+            kind: ColumnKind::Text,
+            nullable: false,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "occurrence_rate".to_string(),
+            type_name: "float".to_string(),
+            kind: ColumnKind::Float,
+            nullable: true,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "is_indexed".to_string(),
+            type_name: "bool".to_string(),
+            kind: ColumnKind::Integer,
+            nullable: false,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "index_names".to_string(),
+            type_name: "text".to_string(),
+            kind: ColumnKind::Text,
+            nullable: true,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "nested_field_count".to_string(),
+            type_name: "int".to_string(),
+            kind: ColumnKind::Integer,
+            nullable: false,
+            is_primary_key: false,
+        },
+    ]
+}
+
 impl Connection for MongoConnection {
     fn metadata(&self) -> &DriverMetadata {
         &MONGODB_METADATA
@@ -1609,8 +1805,50 @@ impl Connection for MongoConnection {
         Ok(())
     }
 
+    fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
+        let client_guard = self.client.lock().ok()?;
+        let cluster_monitor =
+            crate::instance_catalog::MongoInstanceCatalog::probe_cluster_monitor(&client_guard);
+        let inprog = crate::instance_catalog::MongoInstanceCatalog::probe_inprog(&client_guard);
+        let killop = crate::instance_catalog::MongoInstanceCatalog::probe_killop(&client_guard);
+
+        Some(Box::new(
+            crate::instance_catalog::MongoInstanceCatalog::new_probed(
+                Arc::clone(&self.client),
+                cluster_monitor,
+                inprog,
+                killop,
+            ),
+        ))
+    }
+
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
         self.cancelled.store(false, Ordering::SeqCst);
+
+        if let Some(source) = req
+            .execution_context
+            .as_ref()
+            .and_then(|ctx| ctx.source.as_ref())
+        {
+            match source {
+                ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
+                    let client = self.client.lock().map_err(|_| {
+                        DbError::QueryFailed("mongo client mutex poisoned".to_string().into())
+                    })?;
+                    return crate::instance_catalog::dispatch_metric_series(&client, metric_id);
+                }
+                ExecutionSourceContext::InstanceInspectorQuery { metric_id } => {
+                    let client = self.client.lock().map_err(|_| {
+                        DbError::QueryFailed("mongo client mutex poisoned".to_string().into())
+                    })?;
+                    return crate::instance_catalog::dispatch_inspector_snapshot(
+                        &client, metric_id,
+                    );
+                }
+                _ => {}
+            }
+        }
+
         let query_id = Uuid::new_v4();
         let _active_query_guard = ActiveQueryGuard::activate(&self.active_query, query_id)?;
 
@@ -1973,52 +2211,12 @@ impl Connection for MongoConnection {
             })
             .collect();
 
-        let columns = vec![
-            ColumnMeta {
-                name: "field_name".to_string(),
-                type_name: "text".to_string(),
-                kind: ColumnKind::Unknown,
-                nullable: false,
-                is_primary_key: false,
-            },
-            ColumnMeta {
-                name: "common_type".to_string(),
-                type_name: "text".to_string(),
-                kind: ColumnKind::Unknown,
-                nullable: false,
-                is_primary_key: false,
-            },
-            ColumnMeta {
-                name: "occurrence_rate".to_string(),
-                type_name: "float".to_string(),
-                kind: ColumnKind::Float,
-                nullable: true,
-                is_primary_key: false,
-            },
-            ColumnMeta {
-                name: "is_indexed".to_string(),
-                type_name: "bool".to_string(),
-                kind: ColumnKind::Unknown,
-                nullable: false,
-                is_primary_key: false,
-            },
-            ColumnMeta {
-                name: "index_names".to_string(),
-                type_name: "text".to_string(),
-                kind: ColumnKind::Unknown,
-                nullable: true,
-                is_primary_key: false,
-            },
-            ColumnMeta {
-                name: "nested_field_count".to_string(),
-                type_name: "int".to_string(),
-                kind: ColumnKind::Integer,
-                nullable: false,
-                is_primary_key: false,
-            },
-        ];
-
-        Ok(QueryResult::table(columns, rows, None, start.elapsed()))
+        Ok(QueryResult::table(
+            schema_listing_columns(),
+            rows,
+            None,
+            start.elapsed(),
+        ))
     }
 
     fn view_details(
@@ -2358,115 +2556,6 @@ impl ConnectionExt for MongoConnection {
     }
 }
 
-/// MongoDB language service that validates shell syntax and detects dangerous operations.
-struct MongoLanguageService;
-
-impl LanguageService for MongoLanguageService {
-    fn validate(&self, query: &str) -> ValidationResult {
-        let trimmed = query.trim();
-        if trimmed.is_empty() {
-            return ValidationResult::Valid;
-        }
-
-        let lower = trimmed.to_lowercase();
-        if lower.starts_with("select ")
-            || lower.starts_with("insert into")
-            || lower.starts_with("update ")
-            || lower.starts_with("delete from")
-        {
-            return ValidationResult::WrongLanguage {
-                expected: QueryLanguage::MongoQuery,
-                message: "SQL syntax not supported for MongoDB. Use db.collection.method() or db.method() syntax."
-                    .to_string(),
-            };
-        }
-
-        match crate::query_parser::validate_query(query) {
-            Ok(_) => ValidationResult::Valid,
-            Err(e) => ValidationResult::SyntaxError(
-                Diagnostic::error(format!("Invalid MongoDB query: {}", e))
-                    .with_hint("Use db.collection.method() or db.method() syntax"),
-            ),
-        }
-    }
-
-    fn detect_dangerous(&self, query: &str) -> Option<DangerousQueryKind> {
-        detect_dangerous_mongo(query)
-    }
-
-    fn editor_diagnostics(&self, query: &str) -> Vec<EditorDiagnostic> {
-        let trimmed = query.trim();
-
-        if trimmed.is_empty() {
-            return vec![];
-        }
-
-        let lower = trimmed.to_lowercase();
-        if lower.starts_with("select ")
-            || lower.starts_with("insert into")
-            || lower.starts_with("update ")
-            || lower.starts_with("delete from")
-        {
-            return vec![EditorDiagnostic {
-                severity: DiagnosticSeverity::Error,
-                message: "SQL syntax not supported for MongoDB. Use db.collection.method() or db.method() syntax."
-                    .to_string(),
-                range: full_first_line_range(query),
-            }];
-        }
-
-        let errors = crate::query_parser::validate_query_positional(query);
-        errors
-            .into_iter()
-            .map(|err| {
-                let range = byte_offset_to_range(query, err.offset, err.len);
-                EditorDiagnostic {
-                    severity: DiagnosticSeverity::Error,
-                    message: err.message,
-                    range,
-                }
-            })
-            .collect()
-    }
-}
-
-fn byte_offset_to_range(source: &str, offset: usize, len: usize) -> TextPositionRange {
-    let clamped_offset = offset.min(source.len());
-    let clamped_end = (offset + len.max(1))
-        .min(source.len())
-        .max(clamped_offset + 1);
-
-    let start = byte_offset_to_position(source, clamped_offset);
-    let end = byte_offset_to_position(source, clamped_end);
-
-    if start == end {
-        let end_col = start.column + 1;
-        return TextPositionRange::new(start, TextPosition::new(start.line, end_col));
-    }
-
-    TextPositionRange::new(start, end)
-}
-
-fn byte_offset_to_position(source: &str, offset: usize) -> TextPosition {
-    let before = &source[..offset.min(source.len())];
-    let line = before.matches('\n').count() as u32;
-    let last_newline = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
-    let column = before[last_newline..].chars().count() as u32;
-    TextPosition::new(line, column)
-}
-
-fn full_first_line_range(query: &str) -> TextPositionRange {
-    let first_line_len = query
-        .lines()
-        .next()
-        .map(|line| line.chars().count())
-        .unwrap_or(1) as u32;
-
-    let end_col = first_line_len.max(1);
-
-    TextPositionRange::new(TextPosition::new(0, 0), TextPosition::new(0, end_col))
-}
-
 /// Stub dialect for MongoDB. SQL generation is not used for document databases.
 struct MongoDialect;
 
@@ -2741,7 +2830,7 @@ fn execute_mongo_query(
                 columns: vec![ColumnMeta {
                     name: "count".to_string(),
                     type_name: "Int64".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Integer,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -2783,7 +2872,7 @@ fn execute_mongo_query(
                 columns: vec![ColumnMeta {
                     name: "insertedCount".to_string(),
                     type_name: "Int64".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Integer,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -2815,21 +2904,21 @@ fn execute_mongo_query(
                     ColumnMeta {
                         name: "matchedCount".to_string(),
                         type_name: "Int64".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "modifiedCount".to_string(),
                         type_name: "Int64".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "upserted".to_string(),
                         type_name: "Bool".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
@@ -2866,21 +2955,21 @@ fn execute_mongo_query(
                     ColumnMeta {
                         name: "matchedCount".to_string(),
                         type_name: "Int64".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "modifiedCount".to_string(),
                         type_name: "Int64".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "upserted".to_string(),
                         type_name: "Bool".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
@@ -2906,7 +2995,7 @@ fn execute_mongo_query(
                 columns: vec![ColumnMeta {
                     name: "deletedCount".to_string(),
                     type_name: "Int64".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Integer,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -2927,7 +3016,7 @@ fn execute_mongo_query(
                 columns: vec![ColumnMeta {
                     name: "deletedCount".to_string(),
                     type_name: "Int64".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Integer,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -2959,21 +3048,21 @@ fn execute_mongo_query(
                     ColumnMeta {
                         name: "matchedCount".to_string(),
                         type_name: "Int64".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "modifiedCount".to_string(),
                         type_name: "Int64".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "upserted".to_string(),
                         type_name: "Bool".to_string(),
-                        kind: ColumnKind::Unknown,
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     },
@@ -2997,7 +3086,7 @@ fn execute_mongo_query(
                 columns: vec![ColumnMeta {
                     name: "result".to_string(),
                     type_name: "Text".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Text,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3035,7 +3124,7 @@ fn execute_db_operation(
                 columns: vec![ColumnMeta {
                     name: "name".to_string(),
                     type_name: "Text".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Text,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3056,7 +3145,7 @@ fn execute_db_operation(
                 columns: vec![ColumnMeta {
                     name: "collection".to_string(),
                     type_name: "Text".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Text,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3081,7 +3170,7 @@ fn execute_db_operation(
                     let mut doc = Document::new();
                     doc.insert("name", spec.name);
                     doc.insert("type", format!("{:?}", spec.collection_type));
-                    if let Ok(bson) = bson::to_bson(&spec.options) {
+                    if let Ok(bson) = bson::serialize_to_bson(&spec.options) {
                         doc.insert("options", bson);
                     }
                     doc
@@ -3118,7 +3207,7 @@ fn execute_db_operation(
                 columns: vec![ColumnMeta {
                     name: "result".to_string(),
                     type_name: "Text".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Text,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3134,7 +3223,7 @@ fn execute_db_operation(
                 columns: vec![ColumnMeta {
                     name: "result".to_string(),
                     type_name: "Text".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Text,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3174,7 +3263,7 @@ fn execute_db_operation(
                 columns: vec![ColumnMeta {
                     name: "version".to_string(),
                     type_name: "Text".to_string(),
-                    kind: ColumnKind::Unknown,
+                    kind: ColumnKind::Text,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3205,6 +3294,45 @@ fn execute_db_operation(
             "Operation requires a collection target".to_string(),
         )),
     }
+}
+
+/// Map a single BSON value to a `ColumnKind`. Returns `Unknown` for types
+/// that have no useful chart representation (arrays, documents, object IDs, etc.).
+///
+/// `Bson::DateTime` maps to `ColumnKind::Timestamp` because `bson_to_value`
+/// converts it to `Value::DateTime`, which the chart engine extracts as epoch-ms.
+/// `Bson::Timestamp` is an oplog logical clock emitted as `Value::Text`; it
+/// carries no wall-clock meaning and remains `Unknown`.
+fn bson_to_column_kind(value: &Bson) -> ColumnKind {
+    match value {
+        Bson::Int32(_) | Bson::Int64(_) => ColumnKind::Integer,
+        Bson::Double(_) | Bson::Decimal128(_) => ColumnKind::Float,
+        // Value::Bool plots as 0/1 in the chart engine (like MSSQL BIT).
+        Bson::Boolean(_) => ColumnKind::Integer,
+        // Bson::DateTime is converted to Value::DateTime by bson_to_value and
+        // can now be plotted on a time axis as epoch-ms.
+        Bson::DateTime(_) => ColumnKind::Timestamp,
+        // Bson::Timestamp is an oplog logical clock, not a wall-clock instant.
+        // bson_to_value renders it as Value::Text("Timestamp(t, i)"), which is
+        // not plottable on a time axis.
+        Bson::Timestamp(_) => ColumnKind::Unknown,
+        Bson::String(_) => ColumnKind::Text,
+        _ => ColumnKind::Unknown,
+    }
+}
+
+/// Infer the `ColumnKind` for `field` by scanning `documents` for the first
+/// value that maps to a known kind, skipping Unknown-mapping values.
+fn infer_document_field_kind(documents: &[Document], field: &str) -> ColumnKind {
+    for doc in documents {
+        if let Some(value) = doc.get(field) {
+            let kind = bson_to_column_kind(value);
+            if kind != ColumnKind::Unknown {
+                return kind;
+            }
+        }
+    }
+    ColumnKind::Unknown
 }
 
 fn documents_to_result(documents: Vec<Document>) -> Result<QueryResultInternal, DbError> {
@@ -3240,7 +3368,7 @@ fn documents_to_result(documents: Vec<Document>) -> Result<QueryResultInternal, 
         .map(|name| ColumnMeta {
             name: name.clone(),
             type_name: "BSON".to_string(),
-            kind: ColumnKind::Unknown,
+            kind: infer_document_field_kind(&documents, name),
             nullable: true,
             is_primary_key: name == "_id",
         })
@@ -3621,10 +3749,52 @@ mod tests {
     use super::*;
     use crate::query_parser::parse_query;
     use dbflux_core::{
-        CollectionBrowseRequest, CollectionCountRequest, CollectionRef, DatabaseCategory, DbDriver,
-        DbError, QueryLanguage, SemanticFilter, SemanticPlanKind, SemanticRequest, Value,
-        WhereOperator,
+        CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ColumnKind,
+        DatabaseCategory, DbDriver, DbError, QueryLanguage, SemanticFilter, SemanticPlanKind,
+        SemanticRequest, Value, WhereOperator,
     };
+
+    #[test]
+    fn schema_listing_column_kinds() {
+        let columns = schema_listing_columns();
+
+        let find = |name: &str| {
+            columns
+                .iter()
+                .find(|c| c.name == name)
+                .unwrap_or_else(|| panic!("column '{name}' not found in schema_listing_columns"))
+        };
+
+        assert_eq!(find("field_name").kind, ColumnKind::Text);
+        assert_eq!(find("common_type").kind, ColumnKind::Text);
+        assert_eq!(find("occurrence_rate").kind, ColumnKind::Float);
+        // Value::Bool plots as 0/1 in the chart engine (like MSSQL BIT).
+        assert_eq!(find("is_indexed").kind, ColumnKind::Integer);
+        assert_eq!(find("index_names").kind, ColumnKind::Text);
+        assert_eq!(find("nested_field_count").kind, ColumnKind::Integer);
+
+        assert_eq!(
+            columns.len(),
+            6,
+            "column count must match describe_table output"
+        );
+
+        // Assert exact column order so any future reordering breaks this test.
+        // Order must match the row values produced in describe_table.
+        let names: Vec<&str> = columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "field_name",
+                "common_type",
+                "occurrence_rate",
+                "is_indexed",
+                "index_names",
+                "nested_field_count",
+            ],
+            "column order must match describe_table row construction"
+        );
+    }
 
     #[test]
     fn build_config_requires_uri_in_uri_mode() {
@@ -4206,6 +4376,45 @@ mod tests {
     }
 
     #[test]
+    fn documents_to_result_bson_column_kind_inference() {
+        use bson::oid::ObjectId;
+
+        let docs = vec![doc! {
+            "count": Bson::Int64(10),
+            "ratio": Bson::Double(0.5),
+            "label": Bson::String("hello".to_string()),
+            "active": Bson::Boolean(true),
+            "id": Bson::ObjectId(ObjectId::new()),
+            "created_at": Bson::DateTime(bson::DateTime::now()),
+            "oplog_ts": Bson::Timestamp(bson::Timestamp { time: 1, increment: 0 }),
+        }];
+
+        let result = documents_to_result(docs).expect("should succeed");
+
+        let kind_of = |name: &str| {
+            result
+                .columns
+                .iter()
+                .find(|c| c.name == name)
+                .unwrap_or_else(|| panic!("column '{name}' not found"))
+                .kind
+        };
+
+        assert_eq!(kind_of("count"), ColumnKind::Integer);
+        assert_eq!(kind_of("ratio"), ColumnKind::Float);
+        assert_eq!(kind_of("label"), ColumnKind::Text);
+        // Value::Bool plots as 0/1 in the chart engine (like MSSQL BIT).
+        assert_eq!(kind_of("active"), ColumnKind::Integer);
+        assert_eq!(kind_of("id"), ColumnKind::Unknown);
+        // Bson::DateTime maps to Value::DateTime, which the chart engine now
+        // extracts as epoch-ms, so it must be Timestamp.
+        assert_eq!(kind_of("created_at"), ColumnKind::Timestamp);
+        // Bson::Timestamp is an oplog logical clock emitted as Value::Text;
+        // it has no wall-clock meaning and must remain Unknown.
+        assert_eq!(kind_of("oplog_ts"), ColumnKind::Unknown);
+    }
+
+    #[test]
     fn settings_schema_exposes_schema_fields() {
         let driver = MongoDriver::new();
         let schema = driver
@@ -4517,6 +4726,27 @@ mod tests {
     }
 
     #[test]
+    fn mongodb_metadata_advertises_chart_authoring() {
+        assert!(
+            MONGODB_METADATA
+                .capabilities
+                .contains(DriverCapabilities::CHART_AUTHORING),
+            "CHART_AUTHORING must be set: MongoDB advertises INSTANCE_METRICS and needs \
+             CHART_AUTHORING so the sidebar surfaces Dashboards / Saved Charts folders"
+        );
+    }
+
+    #[test]
+    fn mongodb_metadata_advertises_instance_metrics() {
+        assert!(
+            MONGODB_METADATA
+                .capabilities
+                .contains(DriverCapabilities::INSTANCE_METRICS),
+            "INSTANCE_METRICS must remain set on MongoDB driver"
+        );
+    }
+
+    #[test]
     fn mongo_ssl_mode_verify_with_separate_cert_and_key_uses_combined_pem_path() {
         // Simulates the post-concatenation hand-off: callers resolve the combined
         // temp PEM path before invoking the URI-params helper.
@@ -4531,5 +4761,57 @@ mod tests {
         assert!(params.contains("tls=true"));
         assert!(params.contains("tlsCAFile=%2Fetc%2Fssl%2Fca.pem"));
         assert!(params.contains("tlsCertificateKeyFile=%2Ftmp%2Fdbflux-mongo-pem-xyz.pem"));
+    }
+
+    // --- Phase 2.4: URI transform splits password (R-SEC-1 / C1 / ADR-1) ---
+
+    #[test]
+    fn uri_transform_splits_password() {
+        use dbflux_core::secrecy::ExposeSecret;
+        use dbflux_core::{FieldExportTransform, FormValues};
+
+        let driver = MongoDriver;
+        let mut values = FormValues::new();
+        values.insert("use_uri".to_string(), "true".to_string());
+        values.insert(
+            "uri".to_string(),
+            "mongodb://alice:s3cr3t@cluster.example.net/mydb".to_string(),
+        );
+
+        let transform = driver.export_field_transform("uri", &values);
+
+        let FieldExportTransform::SplitSecret { skeleton, secret } = transform else {
+            panic!("expected SplitSecret but got None");
+        };
+
+        assert!(
+            !skeleton.contains("s3cr3t"),
+            "skeleton must not contain the password: {skeleton}"
+        );
+        assert_eq!(secret.expose_secret(), "s3cr3t");
+    }
+
+    #[test]
+    fn uri_transform_srv_splits_password() {
+        use dbflux_core::secrecy::ExposeSecret;
+        use dbflux_core::{FieldExportTransform, FormValues};
+
+        let driver = MongoDriver;
+        let mut values = FormValues::new();
+        values.insert("use_uri".to_string(), "true".to_string());
+        values.insert(
+            "uri".to_string(),
+            "mongodb+srv://alice:s3cr3t@cluster0.example.net/main".to_string(),
+        );
+
+        let transform = driver.export_field_transform("uri", &values);
+
+        let FieldExportTransform::SplitSecret { skeleton, secret } = transform else {
+            panic!("expected SplitSecret for SRV URI but got None");
+        };
+
+        assert!(!skeleton.contains("s3cr3t"));
+        assert!(skeleton.starts_with("mongodb+srv://"));
+        assert_eq!(secret.expose_secret(), "s3cr3t");
     }
 }

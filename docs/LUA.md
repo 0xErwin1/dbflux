@@ -1,14 +1,14 @@
 # The Embedded Lua Runtime
 
-Personal working notes on the `dbflux_lua` crate: DBFlux's sandboxed Lua 5.4 runtime for connection hooks.
+The `dbflux_lua` crate is DBFlux's sandboxed Lua 5.4 runtime for connection hooks. This document describes the crate's architecture, the Lua API exposed to hook scripts, the sandbox and timeout model, and how the runtime is wired into the application.
 
 ---
 
 ## What This Crate Does
 
-`dbflux_lua` lets users write Lua scripts that run during connection lifecycle events (pre-connect, post-connect, pre-disconnect, post-disconnect). Think of it like database migration hooks but more general — you can use them for SSO login flows, environment setup, audit logging, or triggering external tools before/after a connection opens.
+`dbflux_lua` lets users write Lua scripts that run during connection lifecycle events (pre-connect, post-connect, pre-disconnect, post-disconnect). The hooks are general-purpose: they can drive SSO login flows, environment setup, audit logging, or triggering external tools before/after a connection opens.
 
-The crate exposes exactly one public type: `LuaExecutor`. Everything else — the VM factory, the API modules, the shared state — is crate-internal. From the outside, you call `executor.execute_hook(hook, context, cancel_token, parent_cancel_token, output)` and get back a `HookResult`.
+The crate exposes exactly one public type: `LuaExecutor`. Everything else — the VM factory, the API modules, the shared state — is crate-internal. From the outside, you call `executor.execute_hook(hook, context, cancel_token, parent_cancel_token, output, detached)` and get back a `HookResult`. The final `detached: Option<&DetachedProcessSender>` argument lets the executor hand long-running detached processes back to the caller.
 
 ---
 
@@ -100,6 +100,10 @@ Plus the Lua built-ins that don't require library loading: `type()`, `tostring()
 | `coroutine` | Not dangerous per se, but adds complexity to the timeout/cancellation model (coroutines can yield past the instruction hook).                                |
 
 The sandbox is "allowlist, not blocklist." Only the four explicitly loaded libraries plus the registered API functions exist. If it's not in the list above, it doesn't exist in the Lua VM.
+
+### Memory Limit
+
+Each VM is created with an enforced memory cap of 16 MiB (`lua.set_memory_limit(16 * 1024 * 1024)` in `engine.rs`). A script that allocates past this limit fails with a memory error rather than being allowed to exhaust the host's memory.
 
 ---
 
@@ -204,18 +208,22 @@ hook.ok()
 
 | Field        | Type     | Required | Description                                                            |
 | ------------ | -------- | -------- | ---------------------------------------------------------------------- |
-| `program`    | string   | yes      | Executable name or path                                                |
+| `program`    | string   | yes      | Bare command name (no path separators)                                 |
 | `allowlist`  | string   | yes      | Must match a known allowlist name                                      |
 | `args`       | string[] | no       | Command arguments                                                      |
-| `timeout_ms` | integer  | no       | Per-process timeout (ms). Hook-level timeout still applies above this. |
+| `timeout_ms` | integer  | no\*     | Per-process timeout (ms). Hook-level timeout still applies above this. |
 | `cwd`        | string   | no       | Working directory                                                      |
 | `stream`     | boolean  | no       | Stream stdout/stderr to the caller while the process is still running  |
+| `detached`   | boolean  | no       | Hand the spawned process back to the caller and return immediately, instead of waiting for it to exit |
+
+\* For a non-detached `run`, `timeout_ms` is effectively required when there is no hook-level timeout: a call with neither a `timeout_ms` nor a hook-level timeout fails with the runtime error `"dbflux.process.run requires a timeout_ms when no hook-level timeout is set"`. A detached `run` is exempt from this constraint.
 
 **Return value:**
 
 | Field       | Type        | Description                                |
 | ----------- | ----------- | ------------------------------------------ |
-| `ok`        | boolean     | `true` if exit code is 0 and not timed out |
+| `ok`        | boolean     | `true` if the process was detached, or if exit code is 0 and not timed out |
+| `detached`  | boolean     | `true` if the process was handed off as detached (in which case the output/exit fields below are empty/nil) |
 | `exit_code` | integer/nil | Process exit code                          |
 | `stdout`    | string      | Captured stdout                            |
 | `stderr`    | string      | Captured stderr                            |
@@ -232,9 +240,9 @@ hook.ok()
 | `gcloud_cli`  | `gcloud`, `gcloud.cmd`, `gcloud.exe`             |
 | `az_cli`      | `az`, `az.cmd`, `az.exe`                         |
 
-Program matching is case-insensitive, and only the filename is checked (not the full path). So `program = "/usr/local/bin/aws"` matches the `aws_cli` allowlist because the filename is `aws`.
+`program` must be a **bare command name**. Path-qualified names are rejected before the allowlist is checked: any program containing a `/` or `\`, made up of multiple path components, or starting with `~` fails with the runtime error `"Program '...' must be a bare command name (no path separators)"`. So `program = "/usr/local/bin/aws"` is rejected outright — pass `program = "aws"` instead and let it resolve via `PATH`. Matching of the bare name against the allowlist is case-insensitive.
 
-This design serves a specific use case: hooks that need to trigger cloud CLI tools (SSO login, tunnel setup, secrets retrieval) without opening a full shell escape. The hardcoded allowlists can be extended later as new use cases emerge.
+This design serves a specific use case: hooks that need to trigger cloud CLI tools (SSO login, tunnel setup, secrets retrieval) without opening a full shell escape. The allowlist is an ergonomics and footgun guard — it prevents typos and accidental execution of unexpected programs. It is **not** a security isolation boundary: a user who controls `PATH` can still substitute a different binary under the same name. The hardcoded allowlists can be extended later as new use cases emerge.
 
 ---
 
@@ -352,6 +360,7 @@ pub struct LuaRuntimeState {
     pub outcome: Arc<Mutex<LuaHookOutcome>>,
     pub log_buffer: Arc<Mutex<Vec<String>>>,
     pub output: Option<OutputSender>,
+    pub detached: Option<DetachedProcessSender>,
     pub cancel_token: CancelToken,
     pub parent_cancel_token: Option<CancelToken>,
     pub hook_started_at: Instant,
@@ -508,6 +517,10 @@ The process allowlists are hardcoded. Adding a new tool requires a code change, 
 
 gpui-component (v0.5.0) does not include a `tree-sitter-lua` grammar. When editing Lua scripts in the code editor, there's no syntax highlighting. The `editor_mode()` returns `"lua"` which gracefully falls back to plaintext. Python and Bash scripts get full highlighting.
 
+### Bounded Memory
+
+Each VM is capped at 16 MiB of Lua-allocated memory. Scripts that try to build very large data structures in memory will hit this ceiling and fail. This is a sandbox guard, not a tunable per-hook setting.
+
 ### Output Is API-Driven
 
 The supported way to communicate progress and diagnostics is `dbflux.log.*`. That output is buffered into the final `HookResult`, and it can also be streamed live when the caller requests it.
@@ -518,23 +531,31 @@ The supported way to communicate progress and diagnostics is `dbflux.log.*`. Tha
 
 ### Feature Flag
 
-In `crates/dbflux/Cargo.toml`:
+The optional `dbflux_lua` dependency and its `lua` feature live on the app crate, `crates/dbflux_app/Cargo.toml`:
 
 ```toml
 dbflux_lua = { workspace = true, optional = true }
 # ...
 [features]
 lua = ["dbflux_lua"]
-default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "lua"]
+```
+
+The binary crate, `crates/dbflux/Cargo.toml`, has no direct `dbflux_lua` dependency. Its `lua` feature simply forwards to the app and UI crates, and is part of the default set:
+
+```toml
+[features]
+lua = ["dbflux_app/lua", "dbflux_ui/lua"]
+default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "cloudwatch", "influxdb", "mssql", "lua", "aws", "mcp"]
 ```
 
 The `lua` feature is in the default set, so it's always enabled in normal builds. It can be disabled for builds that don't need Lua (reduces binary size by ~200KB).
 
 ### CompositeExecutor
 
-`crates/dbflux/src/hook_executor.rs` defines the router:
+`crates/dbflux_app/src/hook_executor.rs` defines the router (re-exported from `crates/dbflux_app/src/lib.rs`):
 
 ```rust
+#[derive(Clone)]
 pub struct CompositeExecutor {
     process: ProcessExecutor,
     #[cfg(feature = "lua")]
@@ -586,7 +607,7 @@ The instruction hook fires every 1,000 instructions. This means:
 - Setting it too low (e.g., every instruction) measurably impacts performance for computational scripts
 - Setting it too high (e.g., every 100,000) makes cancellation feel sluggish
 
-1,000 is the sweet spot found through testing.
+1,000 balances cancellation responsiveness against per-check overhead.
 
 ### process_run Timeout Layering
 
@@ -594,7 +615,7 @@ The three-layer timeout (instruction hook, shared process executor, per-process 
 
 ### Why Not Just Allow `os.execute()`?
 
-It might seem simpler to load the `os` library and let users run whatever they want. The problem is that `os.execute()` provides no output capture, no timeout, no cancellation, and no program filtering. The `dbflux.process.run` API gives us all of these. The allowlist is the price of having a reasonable security model for a GUI app that runs user scripts.
+It might seem simpler to load the `os` library and let users run whatever they want. The problem is that `os.execute()` provides no output capture, no timeout, no cancellation, and no program filtering. The `dbflux.process.run` API gives us all of these. The allowlist is the price of constraining which programs a hook can launch in a GUI app that runs user scripts. It is an ergonomics/footgun guard rather than a security isolation boundary — PATH substitution can still swap the binary behind an allowed name.
 
 ### Fresh VM Per Execution — Cost vs. Safety
 

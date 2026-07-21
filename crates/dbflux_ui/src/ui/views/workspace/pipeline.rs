@@ -4,7 +4,7 @@ use gpui::{Context, EventEmitter, Window, div, px};
 use gpui_component::ActiveTheme;
 
 use crate::ui::icons::AppIcon;
-use crate::ui::tokens::{FontSizes, Spacing};
+use dbflux_components::tokens::{FontSizes, Spacing};
 
 use dbflux_core::{PipelineState, StateWatcher};
 

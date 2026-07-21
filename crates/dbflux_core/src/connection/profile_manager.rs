@@ -1,16 +1,14 @@
-use crate::{ConnectionProfile, ProfileStore};
-use log::{error, info};
+use crate::ConnectionProfile;
 use uuid::Uuid;
 
 pub struct ProfileManager {
     pub profiles: Vec<ConnectionProfile>,
-    store: Option<ProfileStore>,
 }
 
 impl ProfileManager {
-    /// Creates a manager with pre-loaded profiles and an optional store.
-    pub fn with_profiles(profiles: Vec<ConnectionProfile>, store: Option<ProfileStore>) -> Self {
-        Self { profiles, store }
+    /// Creates a manager with pre-loaded profiles.
+    pub fn with_profiles(profiles: Vec<ConnectionProfile>, _store: Option<()>) -> Self {
+        Self { profiles }
     }
 
     /// Creates an empty in-memory manager.
@@ -19,31 +17,19 @@ impl ProfileManager {
     }
 
     /// Creates a new in-memory ProfileManager that does not persist to disk.
-    /// Use this for tests that should not pollute ~/.config/dbflux/.
     pub fn new_in_memory() -> Self {
         Self {
             profiles: Vec::new(),
-            store: None,
         }
     }
 
     pub fn save(&self) {
-        let Some(ref store) = self.store else {
-            log::warn!("Cannot save profiles: profile store not available");
-            return;
-        };
-
-        if let Err(e) = store.save(&self.profiles) {
-            error!("Failed to save profiles: {:?}", e);
-        } else {
-            info!("Saved {} profiles to disk", self.profiles.len());
-        }
+        log::warn!("Cannot save profiles: no profile store attached");
     }
 
     pub fn update(&mut self, profile: ConnectionProfile) {
         if let Some(existing) = self.profiles.iter_mut().find(|p| p.id == profile.id) {
             *existing = profile;
-            self.save();
         }
     }
 
@@ -53,14 +39,11 @@ impl ProfileManager {
 
     pub fn add(&mut self, profile: ConnectionProfile) {
         self.profiles.push(profile);
-        self.save();
     }
 
     pub fn remove(&mut self, idx: usize) -> Option<ConnectionProfile> {
         if idx < self.profiles.len() {
-            let removed = self.profiles.remove(idx);
-            self.save();
-            Some(removed)
+            Some(self.profiles.remove(idx))
         } else {
             None
         }

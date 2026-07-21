@@ -145,7 +145,8 @@ mod tests {
     use crate::classification::ExecutionClassification;
 
     use super::{
-        PolicyDecision, PolicyDecisionReason, PolicyEngine, PolicyEvaluationRequest, ToolPolicy,
+        PolicyDecision, PolicyDecisionReason, PolicyEngine, PolicyEngineError,
+        PolicyEvaluationRequest, PolicyRole, ToolPolicy,
     };
 
     fn request(connection_id: &str) -> PolicyEvaluationRequest {
@@ -239,5 +240,143 @@ mod tests {
             decision,
             PolicyDecision::Deny(PolicyDecisionReason::ClassificationDenied)
         );
+    }
+
+    fn read_query_assignment(
+        role_ids: Vec<String>,
+        policy_ids: Vec<String>,
+    ) -> ConnectionPolicyAssignment {
+        ConnectionPolicyAssignment {
+            actor_id: "alice".to_string(),
+            scope: PolicyBindingScope {
+                connection_id: "A".to_string(),
+            },
+            role_ids,
+            policy_ids,
+        }
+    }
+
+    fn read_query_policy(id: &str) -> ToolPolicy {
+        ToolPolicy {
+            id: id.to_string(),
+            allowed_tools: vec!["read_query".to_string()],
+            allowed_classes: vec![ExecutionClassification::Read],
+        }
+    }
+
+    #[test]
+    fn allows_via_role_resolved_policy() {
+        let engine = PolicyEngine::new(
+            vec![read_query_assignment(
+                vec!["reader".to_string()],
+                Vec::new(),
+            )],
+            vec![PolicyRole {
+                id: "reader".to_string(),
+                policy_ids: vec!["read-a".to_string()],
+            }],
+            vec![read_query_policy("read-a")],
+        );
+
+        let decision = engine
+            .evaluate(&request("A"))
+            .expect("evaluation should succeed");
+
+        assert_eq!(decision, PolicyDecision::Allow);
+    }
+
+    #[test]
+    fn missing_role_is_an_engine_error() {
+        let engine = PolicyEngine::new(
+            vec![read_query_assignment(
+                vec!["ghost-role".to_string()],
+                Vec::new(),
+            )],
+            Vec::new(),
+            vec![read_query_policy("read-a")],
+        );
+
+        let error = engine
+            .evaluate(&request("A"))
+            .expect_err("a role_id absent from the roles set must surface an error");
+
+        assert!(matches!(error, PolicyEngineError::MissingRole(role) if role == "ghost-role"));
+    }
+
+    #[test]
+    fn tool_denied_when_policy_matches_but_tool_not_allowed() {
+        let engine = PolicyEngine::new(
+            vec![read_query_assignment(
+                Vec::new(),
+                vec!["write-only".to_string()],
+            )],
+            Vec::new(),
+            vec![ToolPolicy {
+                id: "write-only".to_string(),
+                allowed_tools: vec!["write_query".to_string()],
+                allowed_classes: vec![ExecutionClassification::Read],
+            }],
+        );
+
+        let decision = engine
+            .evaluate(&request("A"))
+            .expect("evaluation should succeed");
+
+        assert_eq!(
+            decision,
+            PolicyDecision::Deny(PolicyDecisionReason::ToolDenied)
+        );
+    }
+
+    #[test]
+    fn no_policy_when_policy_set_is_empty() {
+        let engine = PolicyEngine::new(
+            vec![read_query_assignment(
+                Vec::new(),
+                vec!["read-a".to_string()],
+            )],
+            Vec::new(),
+            Vec::new(),
+        );
+
+        let decision = engine
+            .evaluate(&request("A"))
+            .expect("evaluation should succeed");
+
+        assert_eq!(
+            decision,
+            PolicyDecision::Deny(PolicyDecisionReason::NoPolicy)
+        );
+    }
+
+    #[test]
+    fn actor_draws_policies_from_both_direct_id_and_role() {
+        // The direct policy_id grants a tool the request does not use; the role's
+        // policy is the one that authorizes read_query. Allow must come from the
+        // union of both sources, not from either alone.
+        let engine = PolicyEngine::new(
+            vec![read_query_assignment(
+                vec!["reader".to_string()],
+                vec!["meta-only".to_string()],
+            )],
+            vec![PolicyRole {
+                id: "reader".to_string(),
+                policy_ids: vec!["read-a".to_string()],
+            }],
+            vec![
+                ToolPolicy {
+                    id: "meta-only".to_string(),
+                    allowed_tools: vec!["describe_table".to_string()],
+                    allowed_classes: vec![ExecutionClassification::Metadata],
+                },
+                read_query_policy("read-a"),
+            ],
+        );
+
+        let decision = engine
+            .evaluate(&request("A"))
+            .expect("evaluation should succeed");
+
+        assert_eq!(decision, PolicyDecision::Allow);
     }
 }

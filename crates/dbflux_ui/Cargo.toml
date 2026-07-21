@@ -14,13 +14,13 @@ license.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
 dbflux_components.workspace = true
+dbflux_ui_base.workspace = true
+dbflux_ui_document.workspace = true
+dbflux_ui_windows.workspace = true
+dbflux_ui_sidebar.workspace = true
 dbflux_core.workspace = true
 dbflux_storage.workspace = true
 dbflux_app.workspace = true
-dbflux_lua = { workspace = true, optional = true }
-dbflux_export.workspace = true
-dbflux_ssh.workspace = true
-dbflux_proxy.workspace = true
 dbflux_ipc.workspace = true
 dbflux_driver_ipc.workspace = true
 dbflux_mcp = { workspace = true, optional = true }
@@ -31,78 +31,33 @@ dbflux_audit.workspace = true
 dbflux_schema_viz.workspace = true
 petgraph.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
+dbflux_ssh.workspace = true
 uuid.workspace = true
+chrono.workspace = true
 log.workspace = true
-env_logger.workspace = true
 serde_json.workspace = true
-dirs.workspace = true
 rfd.workspace = true
 fuzzy-matcher.workspace = true
-async-trait = "0.1"
-anyhow = "1"
-lsp-types = "0.97"
-bincode = "1"
 interprocess.workspace = true
 open = "5"
-indexmap = "2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-[dependencies.dbflux_driver_sqlite]
-workspace = true
-optional = true
-
-[dependencies.dbflux_driver_postgres]
-workspace = true
-optional = true
-
-[dependencies.dbflux_driver_mysql]
-workspace = true
-optional = true
-
-[dependencies.dbflux_driver_mongodb]
-workspace = true
-optional = true
-
-[dependencies.dbflux_driver_redis]
-workspace = true
-optional = true
-
-[dependencies.dbflux_driver_dynamodb]
-workspace = true
-optional = true
-
-[dependencies.dbflux_driver_cloudwatch]
-workspace = true
-optional = true
-
-[dependencies.dbflux_driver_mssql]
-workspace = true
-optional = true
-
-[dependencies.dbflux_aws]
-workspace = true
-optional = true
-
-[dependencies.dbflux_ssm]
-workspace = true
-optional = true
-
 [features]
-default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "cloudwatch", "mssql", "lua", "aws", "mcp"]
-sqlite = ["dbflux_driver_sqlite", "dbflux_mcp_server?/sqlite"]
-postgres = ["dbflux_driver_postgres", "dbflux_mcp_server?/postgres"]
-mysql = ["dbflux_driver_mysql", "dbflux_mcp_server?/mysql"]
-mongodb = ["dbflux_driver_mongodb", "dbflux_mcp_server?/mongodb"]
-redis = ["dbflux_driver_redis", "dbflux_mcp_server?/redis"]
-dynamodb = ["dbflux_driver_dynamodb", "dbflux_mcp_server?/dynamodb"]
-cloudwatch = ["dbflux_driver_cloudwatch"]
-mssql = ["dbflux_driver_mssql"]
-lua = ["dbflux_lua", "dbflux_app/lua"]
-aws = ["dbflux_aws", "dbflux_ssm", "dbflux_mcp_server?/aws", "dbflux_app/aws"]
-mcp = ["dbflux_mcp", "dbflux_mcp_server", "dbflux_policy", "dbflux_approval", "dbflux_app/mcp"]
+# dbflux_ui is driver-agnostic: it has no per-driver features and no driver
+# dependencies. The cross-cutting features only forward to the workspace/app and
+# the sibling UI crates so a single feature set is unified across the build.
+default = ["lua", "aws", "mcp"]
+lua = ["dbflux_app/lua", "dbflux_ui_base/lua", "dbflux_ui_document/lua", "dbflux_ui_windows/lua", "dbflux_ui_sidebar/lua"]
+aws = ["dbflux_app/aws", "dbflux_ui_base/aws", "dbflux_ui_document/aws", "dbflux_ui_windows/aws", "dbflux_ui_sidebar/aws"]
+mcp = ["dbflux_app/mcp", "dbflux_ui_base/mcp", "dbflux_ui_document/mcp", "dbflux_ui_windows/mcp", "dbflux_ui_sidebar/mcp"]
 vendored-openssl = ["dbflux_ssh/vendored-openssl"]
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+
+[package.metadata.cargo-machete]
+# dbflux_ssh is used only via the vendored-openssl feature passthrough
+# (no direct source usage needed — the dep only forwards the feature).
+ignored = ["dbflux_ssh"]

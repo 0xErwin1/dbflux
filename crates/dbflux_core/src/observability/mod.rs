@@ -34,6 +34,9 @@ pub mod query;
 pub mod source;
 pub mod types;
 
+#[cfg(feature = "tracing-bridge")]
+pub mod tracing_bridge;
+
 // Re-export commonly used types
 pub use actions::AuditAction;
 pub use context::{AuditContext, EventOrigin, new_correlation_id};

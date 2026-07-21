@@ -16,9 +16,6 @@ pub enum StorageError {
         source: std::io::Error,
     },
 
-    #[error("config directory not found — cannot resolve storage path")]
-    ConfigDirUnavailable,
-
     #[error("data directory not found — cannot resolve state database path")]
     DataDirUnavailable,
 
@@ -37,6 +34,9 @@ pub enum RepositoryError {
 
     #[error("entity not found: {0}")]
     NotFound(String),
+
+    #[error("validation error: {0}")]
+    Validation(String),
 
     #[error("serialization error: {source}")]
     Serialization { source: serde_json::Error },
@@ -80,9 +80,6 @@ impl From<StorageError> for dbflux_core::DbError {
                 dbflux_core::DbError::query_failed(source.to_string())
             }
             StorageError::Io { source, .. } => dbflux_core::DbError::IoError(source),
-            StorageError::ConfigDirUnavailable => {
-                dbflux_core::DbError::InvalidProfile("config directory not available".to_string())
-            }
             StorageError::DataDirUnavailable => {
                 dbflux_core::DbError::InvalidProfile("data directory not available".to_string())
             }
@@ -102,6 +99,7 @@ impl From<RepositoryError> for StorageError {
                 source,
             },
             RepositoryError::NotFound(msg) => StorageError::Data(msg),
+            RepositoryError::Validation(msg) => StorageError::Data(msg),
             RepositoryError::Serialization { source } => {
                 StorageError::Data(format!("serialization error: {}", source))
             }

@@ -16,14 +16,23 @@ pub mod tokens;
 pub mod typography;
 
 pub mod chart;
+pub mod common;
+pub mod components;
 pub mod composites;
 pub mod controls;
+pub mod icons;
+pub mod modals;
 pub mod primitives;
 pub mod result_panel;
 pub mod result_view;
 pub mod saved_chart;
+pub mod theme;
 
-pub use saved_chart::{
-    SavedChart, SavedChartManager, SavedChartRefreshPolicy, SavedChartStore, TimeRangePreset,
-    open_saved_charts_store,
-};
+pub mod sql_preview;
+
+#[cfg(test)]
+mod style_guardrails;
+
+pub use composites::refresh_split_button;
+pub use saved_chart::{SavedChart, SavedChartRefreshPolicy, SavedChartSource, TimeRangePreset};
+pub use sql_preview::{SqlGenerationType, SqlPreviewContext};

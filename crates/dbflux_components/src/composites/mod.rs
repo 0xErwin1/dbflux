@@ -2,11 +2,14 @@ mod collapsible_section;
 mod control_shell;
 mod field_row;
 mod menu_item;
+mod menu_popup;
 mod modal_frame;
 mod panel_header;
+mod refresh_split_button;
 mod section_header;
 mod split_toolbar_action;
 mod tab_strip;
+mod wizard_rail;
 
 pub(crate) use control_shell::control_shell_with_padding;
 
@@ -17,6 +20,7 @@ pub use field_row::{
     field_row_with_label_width,
 };
 pub use menu_item::{MenuItem, render_menu_container, render_menu_item, render_separator};
+pub use menu_popup::{render_menu_items, render_menu_overlay};
 pub use modal_frame::{
     ModalFrame, ModalFrameInspection, ModalFrameVariant, inspect_modal_frame, modal_frame,
     modal_frame_with_header_extra,
@@ -27,9 +31,11 @@ pub use panel_header::{
     panel_header_custom, panel_header_variant, panel_header_variant_with_actions,
     panel_header_with_actions,
 };
+pub use refresh_split_button::refresh_split_button;
 pub use section_header::{
     SectionHeaderInspection, SectionHeaderVariant, inspect_section_header, section_header,
     section_header_variant, section_header_variant_with_action, section_header_with_action,
 };
 pub use split_toolbar_action::split_toolbar_action;
 pub use tab_strip::tab_strip;
+pub use wizard_rail::{RailItem, render_wizard_rail};

@@ -8,14 +8,16 @@
 //! - Keymap actions and dispatcher
 
 pub mod app;
-pub mod app_state_entity;
 pub mod assets;
 pub mod ipc_server;
 pub mod keymap;
-pub mod platform;
 pub mod ui;
+
+// Re-exports for external consumers that previously used dbflux_ui::{platform, ui::theme}
+pub use dbflux_components::theme;
+pub use dbflux_ui_base::platform;
 
 // Re-exports for convenience
 #[cfg(feature = "mcp")]
-pub use app_state_entity::McpRuntimeEventRaised;
-pub use app_state_entity::{AppStateChanged, AppStateEntity, AuthProfileCreated};
+pub use dbflux_ui_base::McpRuntimeEventRaised;
+pub use dbflux_ui_base::{AppStateChanged, AppStateEntity, AuthProfileCreated};

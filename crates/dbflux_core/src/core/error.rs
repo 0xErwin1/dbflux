@@ -60,6 +60,14 @@ pub enum DbError {
     /// Filesystem or network I/O error.
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
+
+    /// Failed to parse input data (JSON, CSV, etc.) — not a DB-level error.
+    #[error("Parse error: {0}")]
+    Parse(String),
+
+    /// The requested operation or format is not supported by this driver or context.
+    #[error("Unsupported: {0}")]
+    Unsupported(String),
 }
 
 impl DbError {
@@ -110,7 +118,9 @@ impl DbError {
             | Self::NotSupported(_)
             | Self::InvalidProfile(_)
             | Self::ValueResolutionFailed(_)
-            | Self::IoError(_) => None,
+            | Self::IoError(_)
+            | Self::Parse(_)
+            | Self::Unsupported(_) => None,
         }
     }
 

@@ -1,9 +1,10 @@
+use crate::LogErr;
 use crate::{
     CollectionChildrenCache, CollectionChildrenPage, CollectionChildrenRequest, CollectionRef,
-    Connection, ConnectionHooks, ConnectionProfile, CustomTypeInfo, DbDriver, DbKind, DbSchemaInfo,
-    HookContext, ProxyProfile, RelationRef, RoutineInfo, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaLoadingStrategy, SchemaSnapshot, SecretStore, ShutdownCoordinator, ShutdownPhase,
-    SshTunnelProfile, TableInfo, TaskTarget,
+    Connection, ConnectionHooks, ConnectionProfile, CustomTypeInfo, DbDriver, DbError, DbKind,
+    DbSchemaInfo, HookContext, ProxyProfile, RelationRef, RoutineInfo, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SecretStore, ShutdownCoordinator,
+    ShutdownPhase, SshTunnelProfile, TableInfo, TaskTarget,
 };
 use log::{error, info};
 use secrecy::SecretString;
@@ -25,6 +26,7 @@ pub enum CacheKey {
     },
     TableDetails {
         database: String,
+        schema: Option<String>,
         table: String,
     },
     CollectionChildren {
@@ -56,9 +58,14 @@ impl CacheKey {
         }
     }
 
-    pub fn table_details(database: impl Into<String>, table: impl Into<String>) -> Self {
+    pub fn table_details(
+        database: impl Into<String>,
+        schema: Option<impl Into<String>>,
+        table: impl Into<String>,
+    ) -> Self {
         Self::TableDetails {
             database: database.into(),
+            schema: schema.map(|s| s.into()),
             table: table.into(),
         }
     }
@@ -122,6 +129,7 @@ pub enum OwnedCacheEntry {
     },
     TableDetails {
         database: String,
+        schema: Option<String>,
         table: String,
         details: TableInfo,
     },
@@ -273,20 +281,69 @@ impl std::fmt::Display for PrepareConnectError {
     }
 }
 
+/// Controls whether mutation operations (UPDATE / DELETE) are permitted for a
+/// connected profile and, if so, whether they require additional approval.
+///
+/// Computed at connect time by `ProfilePolicyResolver::resolve` and cached on
+/// `ConnectedProfile`. The default value for a locally-connected profile is
+/// `Allowed`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MutationPolicy {
+    /// No extra gate beyond classification and confirmation flows.
+    #[default]
+    Allowed,
+    /// Mode selector hides UPDATE and DELETE in the query builder panel.
+    ReadOnly,
+    /// Execution is deferred through `ApprovalService` instead of running immediately.
+    ApprovalRequired,
+}
+
+/// Resolves the `MutationPolicy` for a given connection profile and actor context.
+///
+/// Injected into `AppState` at startup. The default `DefaultMutationPolicyResolver`
+/// applies simple rules; future implementations may consult a role service.
+pub trait ProfilePolicyResolver: Send + Sync {
+    fn resolve(&self, profile: &ConnectionProfile, is_mcp_actor: bool) -> MutationPolicy;
+}
+
+/// Default policy resolution rules (v1):
+/// 1. MCP-governed actor → `ApprovalRequired`.
+/// 2. Profile has `read_only_flag` set → `ReadOnly`.
+/// 3. Otherwise → `Allowed`.
+pub struct DefaultMutationPolicyResolver;
+
+impl ProfilePolicyResolver for DefaultMutationPolicyResolver {
+    fn resolve(&self, profile: &ConnectionProfile, is_mcp_actor: bool) -> MutationPolicy {
+        if is_mcp_actor {
+            return MutationPolicy::ApprovalRequired;
+        }
+        if profile.read_only_flag {
+            return MutationPolicy::ReadOnly;
+        }
+        MutationPolicy::Allowed
+    }
+}
+
 pub struct ConnectedProfile {
     pub profile: ConnectionProfile,
     pub connection: Arc<dyn Connection>,
     pub schema: Option<SchemaSnapshot>,
+    /// Mutation policy resolved at connect time.
+    pub mutation_policy: MutationPolicy,
     /// Lazy-loaded schemas per database (MySQL/MariaDB).
     pub database_schemas: HashMap<String, DbSchemaInfo>,
-    pub table_details: HashMap<(String, String), TableInfo>,
+    /// Table details keyed by `(database, schema, table)` — the schema is part
+    /// of the key so same-named tables in different schemas cache independently.
+    pub table_details: HashMap<(String, Option<String>, String), TableInfo>,
     pub collection_children: HashMap<(String, String), CollectionChildrenCache>,
     pub schema_types: HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
     pub schema_indexes: HashMap<SchemaCacheKey, Vec<SchemaIndexInfo>>,
     pub schema_foreign_keys: HashMap<SchemaCacheKey, Vec<SchemaForeignKeyInfo>>,
     pub schema_routines: HashMap<SchemaCacheKey, Vec<RoutineInfo>>,
-    /// Dependent objects (views, FK children, triggers) per table, keyed by `(database, table)`.
-    pub dependents_cache: HashMap<(String, String), Vec<RelationRef>>,
+    /// Dependent objects (views, FK children, triggers) per table, keyed by
+    /// `(database, schema, table)` — the schema is part of the key so
+    /// same-named tables in different schemas keep independent dependents.
+    pub dependents_cache: HashMap<(String, Option<String>, String), Vec<RelationRef>>,
     /// Active database for query context (MySQL/MariaDB USE).
     pub active_database: Option<String>,
     pub redis_key_cache: RedisKeyCache,
@@ -308,9 +365,13 @@ impl ConnectedProfile {
                 .get(database.as_str())
                 .map(CacheEntry::DatabaseSchema),
 
-            CacheKey::TableDetails { database, table } => self
+            CacheKey::TableDetails {
+                database,
+                schema,
+                table,
+            } => self
                 .table_details
-                .get(&(database.clone(), table.clone()))
+                .get(&(database.clone(), schema.clone(), table.clone()))
                 .map(CacheEntry::TableDetails),
 
             CacheKey::CollectionChildren {
@@ -361,10 +422,12 @@ impl ConnectedProfile {
 
             OwnedCacheEntry::TableDetails {
                 database,
+                schema,
                 table,
                 details,
             } => {
-                self.table_details.insert((database, table), details);
+                self.table_details
+                    .insert((database, schema, table), details);
             }
 
             OwnedCacheEntry::CollectionChildren {
@@ -442,26 +505,36 @@ impl ConnectedProfile {
             .unwrap_or_else(|| self.connection.clone())
     }
 
-    /// Return all cached dependents for the given `(database, table)` pair.
+    /// Return all cached dependents for the given `(database, schema, table)`.
     ///
     /// Returns an empty `Vec` when nothing has been populated yet, which is
     /// correct for drivers that have not called `populate_dependents`.
-    pub fn dependents(&self, database: &str, table: &str) -> Vec<RelationRef> {
+    pub fn dependents(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Vec<RelationRef> {
         self.dependents_cache
-            .get(&(database.to_string(), table.to_string()))
+            .get(&(
+                database.to_string(),
+                schema.map(String::from),
+                table.to_string(),
+            ))
             .cloned()
             .unwrap_or_default()
     }
 
-    /// Store the dependent objects for a specific `(database, table)` pair.
+    /// Store the dependent objects for a specific `(database, schema, table)`.
     pub fn populate_dependents(
         &mut self,
         database: impl Into<String>,
+        schema: Option<String>,
         table: impl Into<String>,
         deps: Vec<RelationRef>,
     ) {
         self.dependents_cache
-            .insert((database.into(), table.into()), deps);
+            .insert((database.into(), schema, table.into()), deps);
     }
 
     /// Resolve the effective connection for query execution.
@@ -523,6 +596,7 @@ pub struct ConnectionManager {
     pub connections: HashMap<Uuid, ConnectedProfile>,
     pub active_connection_id: Option<Uuid>,
     pub pending_operations: HashSet<PendingOperation>,
+    policy_resolver: Box<dyn ProfilePolicyResolver>,
 }
 
 impl ConnectionManager {
@@ -532,7 +606,17 @@ impl ConnectionManager {
             connections: HashMap::new(),
             active_connection_id: None,
             pending_operations: HashSet::new(),
+            policy_resolver: Box::new(DefaultMutationPolicyResolver),
         }
+    }
+
+    /// Sets a custom policy resolver for mutation policy computation.
+    ///
+    /// Must be called before any connections are established. The resolver is
+    /// invoked once per connection at connect time and its result is cached in
+    /// `ConnectedProfile.mutation_policy`.
+    pub fn set_policy_resolver(&mut self, resolver: Box<dyn ProfilePolicyResolver>) {
+        self.policy_resolver = resolver;
     }
 
     pub fn active_connection(&self) -> Option<&ConnectedProfile> {
@@ -603,14 +687,17 @@ impl ConnectionManager {
         connection: Arc<dyn Connection>,
         schema: Option<SchemaSnapshot>,
         proxy_tunnel: Option<Box<dyn Any + Send + Sync>>,
+        is_mcp_actor: bool,
     ) {
         let id = profile.id;
+        let mutation_policy = self.policy_resolver.resolve(&profile, is_mcp_actor);
         self.connections.insert(
             id,
             ConnectedProfile {
                 profile,
                 connection,
                 schema,
+                mutation_policy,
                 database_schemas: HashMap::new(),
                 table_details: HashMap::new(),
                 collection_children: HashMap::new(),
@@ -628,27 +715,38 @@ impl ConnectionManager {
         self.active_connection_id = Some(id);
     }
 
-    pub fn disconnect(&mut self, profile_id: Uuid) {
-        if let Some(connected) = self.connections.remove(&profile_id) {
+    /// Removes the connection and tears it down on a background thread.
+    ///
+    /// Teardown includes cancelling active work (which may open a separate
+    /// kill connection over the same tunnel) and dropping the connection
+    /// handles. Returns the teardown thread's handle so callers that must
+    /// order work after the connection is fully closed — post-disconnect
+    /// hooks in particular — can wait for it. Dropping the handle detaches
+    /// the thread, preserving the old fire-and-forget behavior.
+    pub fn disconnect(&mut self, profile_id: Uuid) -> Option<std::thread::JoinHandle<()>> {
+        let teardown = self.connections.remove(&profile_id).map(|connected| {
             std::thread::spawn(move || {
-                let _ = connected.connection.cancel_active();
+                connected.connection.cancel_active().log_err();
                 for db_conn in connected.database_connections.values() {
-                    let _ = db_conn.connection.cancel_active();
+                    db_conn.connection.cancel_active().log_err();
                 }
                 drop(connected);
-            });
-        }
+            })
+        });
 
         if self.active_connection_id == Some(profile_id) {
             self.active_connection_id = self.connections.keys().next().copied();
         }
+
+        teardown
     }
 
     #[allow(dead_code)]
     pub fn disconnect_all(&mut self) {
         let ids: Vec<Uuid> = self.connections.keys().copied().collect();
         for id in ids {
-            self.disconnect(id);
+            // Bulk teardown stays detached; nothing is ordered after it.
+            let _teardown = self.disconnect(id);
         }
     }
 
@@ -684,11 +782,15 @@ impl ConnectionManager {
         &self,
         profile_id: Uuid,
         database: &str,
+        schema: Option<&str>,
         table: &str,
     ) -> Option<&TableInfo> {
         self.connections.get(&profile_id).and_then(|c| {
-            c.table_details
-                .get(&(database.to_string(), table.to_string()))
+            c.table_details.get(&(
+                database.to_string(),
+                schema.map(String::from),
+                table.to_string(),
+            ))
         })
     }
 
@@ -696,12 +798,14 @@ impl ConnectionManager {
         &mut self,
         profile_id: Uuid,
         database: String,
+        schema: Option<String>,
         table: String,
         details: TableInfo,
     ) {
         if let Some(connected) = self.connections.get_mut(&profile_id) {
             connected.cache_set(OwnedCacheEntry::TableDetails {
                 database,
+                schema,
                 table,
                 details,
             });
@@ -712,16 +816,23 @@ impl ConnectionManager {
         &mut self,
         profile_id: Uuid,
         database: String,
+        schema: Option<String>,
         table: String,
         deps: Vec<RelationRef>,
     ) {
         if let Some(connected) = self.connections.get_mut(&profile_id) {
-            connected.populate_dependents(database, table, deps);
+            connected.populate_dependents(database, schema, table, deps);
         }
     }
 
-    pub fn needs_table_details(&self, profile_id: Uuid, database: &str, table: &str) -> bool {
-        let key = CacheKey::table_details(database, table);
+    pub fn needs_table_details(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> bool {
+        let key = CacheKey::table_details(database, schema, table);
         self.connections
             .get(&profile_id)
             .is_some_and(|c| !c.cache_contains(&key))
@@ -1090,8 +1201,9 @@ impl ConnectionManager {
         connection: Arc<dyn Connection>,
         schema: Option<SchemaSnapshot>,
         proxy_tunnel: Option<Box<dyn Any + Send + Sync>>,
+        is_mcp_actor: bool,
     ) {
-        self.add_connection(profile, connection, schema, proxy_tunnel);
+        self.add_connection(profile, connection, schema, proxy_tunnel, is_mcp_actor);
     }
 
     pub fn prepare_switch_database(
@@ -1226,6 +1338,7 @@ impl ConnectionManager {
                 profile: original_profile,
                 connection,
                 schema,
+                mutation_policy: MutationPolicy::default(),
                 database_schemas: HashMap::new(),
                 table_details: HashMap::new(),
                 collection_children: HashMap::new(),
@@ -1285,7 +1398,11 @@ impl ConnectionManager {
             .get(&profile_id)
             .ok_or_else(|| "Profile not connected".to_string())?;
 
-        let cache_key = (database.to_string(), table.to_string());
+        let cache_key = (
+            database.to_string(),
+            schema.map(String::from),
+            table.to_string(),
+        );
         if let Some(details) = connected.table_details.get(&cache_key)
             && (details.columns.is_some() || details.sample_fields.is_some())
         {
@@ -1700,11 +1817,13 @@ pub struct FetchTableDetailsParams {
 
 #[allow(dead_code)]
 impl FetchTableDetailsParams {
-    pub fn execute(self) -> Result<FetchTableDetailsResult, String> {
-        let details = self
-            .connection
-            .table_details(&self.database, self.schema.as_deref(), &self.table)
-            .map_err(|e| e.to_string())?;
+    /// Errors keep the typed [`DbError`] so callers can distinguish a genuine
+    /// "object does not exist" (`DbError::ObjectNotFound`) from a real fetch
+    /// failure instead of collapsing both into a string.
+    pub fn execute(self) -> Result<FetchTableDetailsResult, DbError> {
+        let details =
+            self.connection
+                .table_details(&self.database, self.schema.as_deref(), &self.table)?;
 
         let dependents = self
             .connection
@@ -1714,6 +1833,7 @@ impl FetchTableDetailsParams {
         Ok(FetchTableDetailsResult {
             profile_id: self.profile_id,
             database: self.database,
+            schema: self.schema,
             table: self.table,
             details,
             dependents,
@@ -1725,6 +1845,8 @@ impl FetchTableDetailsParams {
 pub struct FetchTableDetailsResult {
     pub profile_id: Uuid,
     pub database: String,
+    /// The schema the details were fetched for — part of the cache key.
+    pub schema: Option<String>,
     pub table: String,
     pub details: TableInfo,
     /// Dependent objects fetched alongside the table details (views, FK children, triggers).
@@ -1908,6 +2030,7 @@ mod tests {
                     display_name: format!("{kind:?}"),
                     description: "test".to_string(),
                     category: crate::DatabaseCategory::Relational,
+                    transfer_family: crate::TransferFamily::Sql,
                     deployment_class: None,
                     query_language: QueryLanguage::Sql,
                     capabilities: DriverCapabilities::empty(),
@@ -1923,6 +2046,9 @@ mod tests {
                     ssl_modes: None,
                     ssl_cert_fields: None,
                     classification_override: None,
+                    default_chunk_size: None,
+                    supports_lock_timeout: false,
+                    editor_profile: None,
                 },
             }
         }
@@ -1987,6 +2113,7 @@ mod tests {
             profile,
             connection: primary,
             schema,
+            mutation_policy: MutationPolicy::default(),
             database_schemas: HashMap::new(),
             table_details: HashMap::new(),
             collection_children: HashMap::new(),
@@ -2269,10 +2396,11 @@ mod tests {
     // --- ConnectProfileParams::execute tests ---
 
     use crate::{
-        DatabaseCategory, DriverFormDef, FormValues, Icon, POSTGRES_FORM, SshAuthMethod,
-        SshTunnelConfig,
+        DatabaseCategory, DriverFormDef, FormValues, Icon, SshAuthMethod, SshTunnelConfig,
     };
     use std::sync::LazyLock;
+
+    static TEST_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef { tabs: vec![] });
 
     struct TestDriver {
         metadata: DriverMetadata,
@@ -2287,6 +2415,7 @@ mod tests {
                     display_name: "TestPG".to_string(),
                     description: "test".to_string(),
                     category: DatabaseCategory::Relational,
+                    transfer_family: crate::TransferFamily::Sql,
                     deployment_class: None,
                     query_language: QueryLanguage::Sql,
                     capabilities: DriverCapabilities::empty(),
@@ -2302,8 +2431,11 @@ mod tests {
                     ssl_modes: None,
                     ssl_cert_fields: None,
                     classification_override: None,
+                    default_chunk_size: None,
+                    supports_lock_timeout: false,
+                    editor_profile: None,
                 },
-                form: &POSTGRES_FORM,
+                form: &TEST_FORM,
             })
         }
     }
@@ -2488,6 +2620,7 @@ mod tests {
                     display_name: "TestSQLite".to_string(),
                     description: "test".to_string(),
                     category: DatabaseCategory::Relational,
+                    transfer_family: crate::TransferFamily::Sql,
                     deployment_class: None,
                     query_language: QueryLanguage::Sql,
                     capabilities: DriverCapabilities::empty(),
@@ -2503,6 +2636,9 @@ mod tests {
                     ssl_modes: None,
                     ssl_cert_fields: None,
                     classification_override: None,
+                    default_chunk_size: None,
+                    supports_lock_timeout: false,
+                    editor_profile: None,
                 });
                 &META
             }
@@ -2562,6 +2698,105 @@ mod tests {
     }
 
     #[test]
+    fn connection_for_database_prefers_the_per_database_connection_over_the_primary() {
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let primary = make_connection(
+            DbKind::Postgres,
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+        );
+        let reports = make_connection(
+            DbKind::Postgres,
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+        );
+
+        let mut db_connections = HashMap::new();
+        db_connections.insert(
+            "reports".to_string(),
+            DatabaseConnection {
+                connection: reports.clone(),
+                schema: Some(relational_schema_with_current_database("reports")),
+            },
+        );
+
+        let schema = relational_schema_with_current_database("main_db");
+        let connected = connected_profile(profile, primary.clone(), Some(schema), db_connections);
+
+        assert!(Arc::ptr_eq(
+            &connected.connection_for_database("reports"),
+            &reports
+        ));
+        assert!(Arc::ptr_eq(
+            &connected.connection_for_database("main_db"),
+            &primary
+        ));
+    }
+
+    #[test]
+    fn table_details_cache_keeps_same_named_tables_in_different_schemas_distinct() {
+        use crate::ColumnInfo;
+
+        fn table_with_column(schema: &str, column: &str) -> TableInfo {
+            TableInfo {
+                name: "users".to_string(),
+                schema: Some(schema.to_string()),
+                columns: Some(vec![ColumnInfo {
+                    name: column.to_string(),
+                    type_name: "text".to_string(),
+                    nullable: true,
+                    is_primary_key: false,
+                    default_value: None,
+                    enum_values: None,
+                }]),
+                indexes: None,
+                foreign_keys: None,
+                constraints: None,
+                sample_fields: None,
+                presentation: Default::default(),
+                child_items: None,
+            }
+        }
+
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let connection = make_connection(
+            DbKind::Postgres,
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+        );
+        let mut connected = connected_profile(profile, connection, None, HashMap::new());
+
+        connected.cache_set(OwnedCacheEntry::TableDetails {
+            database: "app".to_string(),
+            schema: Some("public".to_string()),
+            table: "users".to_string(),
+            details: table_with_column("public", "email"),
+        });
+        connected.cache_set(OwnedCacheEntry::TableDetails {
+            database: "app".to_string(),
+            schema: Some("audit".to_string()),
+            table: "users".to_string(),
+            details: table_with_column("audit", "changed_at"),
+        });
+
+        let column_for = |schema: &str| -> String {
+            let key = CacheKey::table_details("app", Some(schema), "users");
+            match connected.cache_get(&key) {
+                Some(CacheEntry::TableDetails(info)) => {
+                    info.columns.as_ref().unwrap()[0].name.clone()
+                }
+                _ => panic!("expected cached table details for schema {schema}"),
+            }
+        };
+
+        assert_eq!(column_for("public"), "email");
+        assert_eq!(column_for("audit"), "changed_at");
+
+        let unqualified = CacheKey::table_details("app", None::<String>, "users");
+        assert!(
+            connected.cache_get(&unqualified).is_none(),
+            "schema-less key must not alias a schema-qualified entry"
+        );
+    }
+
+    #[test]
     fn dependents_roundtrip_returns_stored_relations() {
         use crate::{RelationKind, RelationRef};
 
@@ -2583,9 +2818,9 @@ mod tests {
             },
         ];
 
-        connected.populate_dependents("mydb", "users", deps.clone());
+        connected.populate_dependents("mydb", Some("public".to_string()), "users", deps.clone());
 
-        let retrieved = connected.dependents("mydb", "users");
+        let retrieved = connected.dependents("mydb", Some("public"), "users");
         assert_eq!(retrieved, deps);
     }
 
@@ -2602,6 +2837,7 @@ mod tests {
 
         connected.populate_dependents(
             "mydb",
+            Some("public".to_string()),
             "users",
             vec![RelationRef {
                 kind: RelationKind::Trigger,
@@ -2609,11 +2845,54 @@ mod tests {
             }],
         );
 
-        let retrieved = connected.dependents("mydb", "orders");
+        let retrieved = connected.dependents("mydb", Some("public"), "orders");
         assert!(
             retrieved.is_empty(),
             "expected empty for unknown table, got {:?}",
             retrieved
+        );
+    }
+
+    #[test]
+    fn dependents_cache_keeps_same_named_tables_in_different_schemas_distinct() {
+        use crate::{RelationKind, RelationRef};
+
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let connection = make_connection(
+            DbKind::Postgres,
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+        );
+        let mut connected = connected_profile(profile, connection, None, HashMap::new());
+
+        let public_deps = vec![RelationRef {
+            kind: RelationKind::View,
+            qualified_name: "public.audit".to_string(),
+        }];
+        let sales_deps = vec![RelationRef {
+            kind: RelationKind::ForeignKeyChild,
+            qualified_name: "sales.line_items".to_string(),
+        }];
+
+        connected.populate_dependents(
+            "app",
+            Some("public".to_string()),
+            "orders",
+            public_deps.clone(),
+        );
+        connected.populate_dependents(
+            "app",
+            Some("sales".to_string()),
+            "orders",
+            sales_deps.clone(),
+        );
+
+        assert_eq!(
+            connected.dependents("app", Some("public"), "orders"),
+            public_deps
+        );
+        assert_eq!(
+            connected.dependents("app", Some("sales"), "orders"),
+            sales_deps
         );
     }
 
@@ -2628,7 +2907,7 @@ mod tests {
             SchemaLoadingStrategy::ConnectionPerDatabase,
         );
         let mut manager = ConnectionManager::new(HashMap::new());
-        manager.add_connection(profile.clone(), connection, None, None);
+        manager.add_connection(profile.clone(), connection, None, None, false);
 
         let profile_id = profile.id;
 
@@ -2668,5 +2947,184 @@ mod tests {
         } else {
             panic!("Expected CacheEntry::SchemaRoutines but got something else");
         }
+    }
+
+    // =========================================================================
+    // T-07 / T-08 — MutationPolicy and ConnectedProfile (spec scenarios H-4, DR-12.1–12.7)
+    // =========================================================================
+
+    #[test]
+    fn mutation_policy_variants_accessible() {
+        let _allowed = MutationPolicy::Allowed;
+        let _read_only = MutationPolicy::ReadOnly;
+        let _approval = MutationPolicy::ApprovalRequired;
+    }
+
+    #[test]
+    fn mutation_policy_default_is_allowed() {
+        let policy = MutationPolicy::default();
+        assert_eq!(
+            policy,
+            MutationPolicy::Allowed,
+            "default must be Allowed (H-4)"
+        );
+    }
+
+    fn sqlite_profile(name: &str) -> ConnectionProfile {
+        use std::path::PathBuf;
+        ConnectionProfile::new(
+            name,
+            DbConfig::SQLite {
+                path: PathBuf::from(":memory:"),
+                connection_id: None,
+            },
+        )
+    }
+
+    #[test]
+    fn default_resolver_allows_for_normal_actor() {
+        let resolver = DefaultMutationPolicyResolver;
+        let profile = sqlite_profile("test");
+        assert_eq!(
+            resolver.resolve(&profile, false),
+            MutationPolicy::Allowed,
+            "non-MCP actor with default profile must be Allowed"
+        );
+    }
+
+    #[test]
+    fn default_resolver_requires_approval_for_mcp_actor() {
+        let resolver = DefaultMutationPolicyResolver;
+        let profile = sqlite_profile("test");
+        assert_eq!(
+            resolver.resolve(&profile, true),
+            MutationPolicy::ApprovalRequired,
+            "MCP actor must require approval (H-3)"
+        );
+    }
+
+    #[test]
+    fn default_resolver_read_only_for_flagged_profile() {
+        let resolver = DefaultMutationPolicyResolver;
+        let mut profile = sqlite_profile("test");
+        profile.read_only_flag = true;
+        assert_eq!(
+            resolver.resolve(&profile, false),
+            MutationPolicy::ReadOnly,
+            "read_only_flag=true must resolve to ReadOnly (H-1)"
+        );
+    }
+
+    #[test]
+    fn connection_profile_read_only_flag_defaults_false() {
+        let profile = sqlite_profile("test");
+        assert!(
+            !profile.read_only_flag,
+            "read_only_flag must default to false (H-4, DR-12.7)"
+        );
+    }
+
+    /// Connection whose `cancel_active` blocks until the test releases a gate,
+    /// mimicking a driver opening a kill connection over a slow tunnel.
+    struct GatedCancelConnection {
+        inner: TestConnection,
+        gate: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+    }
+
+    impl Connection for GatedCancelConnection {
+        fn metadata(&self) -> &DriverMetadata {
+            self.inner.metadata()
+        }
+
+        fn ping(&self) -> Result<(), DbError> {
+            self.inner.ping()
+        }
+
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn execute(&self, req: &crate::QueryRequest) -> Result<crate::QueryResult, DbError> {
+            self.inner.execute(req)
+        }
+
+        fn cancel(&self, handle: &crate::QueryHandle) -> Result<(), DbError> {
+            self.inner.cancel(handle)
+        }
+
+        fn cancel_active(&self) -> Result<(), DbError> {
+            let (lock, condvar) = &*self.gate;
+
+            let mut released = lock.lock().expect("gate lock");
+            while !*released {
+                released = condvar.wait(released).expect("gate wait");
+            }
+
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            self.inner.schema()
+        }
+
+        fn kind(&self) -> DbKind {
+            self.inner.kind()
+        }
+
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            self.inner.schema_loading_strategy()
+        }
+
+        fn dialect(&self) -> &dyn crate::SqlDialect {
+            self.inner.dialect()
+        }
+    }
+
+    #[test]
+    fn disconnect_teardown_handle_completes_only_after_cancel_finishes() {
+        let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let connection = Arc::new(GatedCancelConnection {
+            inner: TestConnection::new(DbKind::MySQL, SchemaLoadingStrategy::LazyPerDatabase),
+            gate: gate.clone(),
+        });
+
+        let profile = ConnectionProfile::new("gated", DbConfig::default_postgres());
+        let profile_id = profile.id;
+
+        let mut manager = ConnectionManager::new(HashMap::new());
+        manager.add_connection(profile, connection, None, None, false);
+
+        let teardown = manager
+            .disconnect(profile_id)
+            .expect("connected profile must yield a teardown handle");
+
+        assert!(
+            !manager.connections.contains_key(&profile_id),
+            "connection must be removed from the manager immediately"
+        );
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(
+            !teardown.is_finished(),
+            "teardown must not report finished while cancel_active is still running"
+        );
+
+        {
+            let (lock, condvar) = &*gate;
+            *lock.lock().expect("gate lock") = true;
+            condvar.notify_all();
+        }
+
+        teardown.join().expect("teardown thread must finish");
+    }
+
+    #[test]
+    fn disconnect_returns_no_teardown_for_unknown_profile() {
+        let mut manager = ConnectionManager::new(HashMap::new());
+
+        assert!(
+            manager.disconnect(Uuid::new_v4()).is_none(),
+            "unknown profile must not spawn a teardown thread"
+        );
     }
 }

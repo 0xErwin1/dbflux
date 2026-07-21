@@ -64,7 +64,7 @@ pub fn connection_not_found(connection_id: &str) -> String {
          • Run 'list_connections' to see available connections\n\
          • Verify connection was not deleted in DBFlux GUI\n\
          • Check if connection was created in a different DBFlux profile\n\
-         • Connection profiles are stored in ~/.config/dbflux/profiles.json",
+         • Connection profiles are stored in the DBFlux database — open the Connection Manager in the DBFlux GUI to manage them",
         connection_id
     )
 }
@@ -87,7 +87,7 @@ pub fn driver_not_available(driver_id: &str, available_drivers: &[String]) -> St
          Resolution:\n\
          • Use a connection with a different driver (run 'list_connections')\n\
          • Rebuild server with driver: cargo build -p dbflux --features {}\n\
-         • Check connection profile driver_id in ~/.config/dbflux/profiles.json",
+         • Check the connection profile driver_id via the Connection Manager in the DBFlux GUI",
         driver_id, drivers_list, driver_id
     )
 }
@@ -250,7 +250,7 @@ pub fn config_error(
 ) -> String {
     let path_info = config_path
         .map(|p| format!("Config path: {}", p.display()))
-        .unwrap_or_else(|| "Config path: ~/.config/dbflux".to_string());
+        .unwrap_or_else(|| "Config path: ~/.local/share/dbflux".to_string());
 
     format!(
         "Failed to {}: {}\n\
@@ -332,4 +332,28 @@ pub fn unknown_tool(tool_id: &str, category: &str) -> String {
          • Check MCP protocol version compatibility",
         tool_id, category
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_strings_do_not_reference_legacy_config_dir() {
+        let msgs = [
+            connection_not_found("test-id"),
+            driver_not_available("postgres", &["sqlite".to_string()]),
+            config_error("load config", None, "disk full"),
+        ];
+        for msg in &msgs {
+            assert!(
+                !msg.contains(".config/dbflux"),
+                "error message still references legacy config path: {msg}"
+            );
+            assert!(
+                !msg.contains("profiles.json"),
+                "error message still references legacy profiles.json: {msg}"
+            );
+        }
+    }
 }

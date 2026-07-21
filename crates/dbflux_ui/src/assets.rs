@@ -1,14 +1,32 @@
 use gpui::{AssetSource, SharedString};
 use std::borrow::Cow;
 
-use crate::ui::icons::ALL_ICONS;
+use crate::ui::icons::{ALL_ICONS, embedded_bytes};
 
 pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
+        // Full-color brand marks, served for `img(...)`. Pre-rendered PNGs are
+        // used rather than the SVG because gpui's `img` SVG path does not apply
+        // the display scale factor, so a runtime-rasterized SVG looks blurry on
+        // HiDPI; a high-resolution PNG downscales crisply.
+        match path {
+            "branding/stable/mark-256.png" => {
+                return Ok(Some(Cow::Borrowed(include_bytes!(
+                    "../../../resources/branding/stable/mark-256.png"
+                ))));
+            }
+            "branding/nightly/mark-256.png" => {
+                return Ok(Some(Cow::Borrowed(include_bytes!(
+                    "../../../resources/branding/nightly/mark-256.png"
+                ))));
+            }
+            _ => {}
+        }
+
         if let Some(icon) = ALL_ICONS.iter().find(|icon| icon.path() == path) {
-            return Ok(Some(Cow::Borrowed(icon.embedded_bytes())));
+            return Ok(Some(Cow::Borrowed(embedded_bytes(*icon))));
         }
 
         // gpui_component icons resolve via paths like "icons/<file>.svg" without
@@ -20,7 +38,7 @@ impl AssetSource for Assets {
         {
             let aliased = format!("icons/ui/{rest}");
             if let Some(icon) = ALL_ICONS.iter().find(|icon| icon.path() == aliased) {
-                return Ok(Some(Cow::Borrowed(icon.embedded_bytes())));
+                return Ok(Some(Cow::Borrowed(embedded_bytes(*icon))));
             }
         }
 

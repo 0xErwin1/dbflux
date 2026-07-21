@@ -2,14 +2,58 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use secrecy::SecretString;
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Capabilities advertised by an auth provider that supports file-backed editing.
+///
+/// All string fields carry the final-rendered text; the UI uses them verbatim
+/// without further substitution.  `dangling_messages` is keyed by the
+/// `dangling_origin` token stored on the profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthEditCapabilities {
+    /// Full banner text shown when a profile is reflected from an external
+    /// source and is therefore read-only. Providers supply the destination
+    /// description verbatim.
+    pub mirror_label: String,
+
+    /// Status text displayed after a successful clean write of a new profile.
+    pub success_written: String,
+
+    /// Hint shown next to the disabled name field on a reflected profile.
+    /// Empty string means the hint element is suppressed entirely.
+    pub name_field_hint: String,
+
+    /// Messages keyed by `dangling_origin` token.  The UI looks up the
+    /// active profile's `dangling_origin` and falls back to
+    /// `dangling_fallback()` when the key is absent.
+    #[serde(default)]
+    pub dangling_messages: HashMap<String, DanglingMessage>,
+}
+
+/// Title and body for a dangling-profile banner, sourced from the provider.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DanglingMessage {
+    pub title: String,
+    pub body: String,
+}
+
+/// Top-level capability descriptor for an auth provider.
+///
+/// `Copy` was intentionally removed when `edit: Option<AuthEditCapabilities>`
+/// was added — `String` fields inside `AuthEditCapabilities` are not `Copy`.
+/// All previous consumers that implicitly copied the struct now clone or borrow.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthProviderCapabilities {
     #[serde(default)]
     pub login: AuthProviderLoginCapabilities,
+
+    /// Present when the provider supports file-backed profile editing.
+    /// `None` means the edit UI affordances are hidden for this provider.
+    #[serde(default)]
+    pub edit: Option<AuthEditCapabilities>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,13 +67,70 @@ pub struct AuthProviderLoginCapabilities {
 /// `AuthProfile` uses a custom `Deserialize` impl to handle migration from
 /// the legacy `"config"` format (see impl below). `Serialize` is derived
 /// normally and always writes the new `"fields"` format.
-#[derive(Debug, Clone, Serialize)]
+///
+/// `read_only` is `true` for profiles that are reflected live from AWS config
+/// files and must not be edited in DBFlux. Stored profiles always have
+/// `read_only = false`. This field is never persisted to SQLite; reflected
+/// profiles are never serialized.
+#[derive(Clone, Serialize)]
 pub struct AuthProfile {
     pub id: Uuid,
     pub name: String,
     pub provider_id: String,
     pub fields: HashMap<String, String>,
+    /// Secret-kind field values (`Password` / `WriteOnly`).
+    ///
+    /// Held as `SecretString` so the value is zeroized on drop and never leaks
+    /// through `Debug` or serde output. These are persisted to the OS keyring,
+    /// never to SQLite in plaintext, and re-hydrated at load time. The default
+    /// derived `Serialize` skips this field; the only place secrets are exposed
+    /// on the wire is the auth-provider IPC boundary, which re-merges them into
+    /// the flat `fields` map the external provider expects.
+    ///
+    /// A secret saved before this routing existed may still live in `fields` as
+    /// plaintext until startup migration moves it here. That migration is
+    /// deferred (never destructive) when the keyring is unavailable, so such a
+    /// legacy value can remain in `fields` for a session.
+    #[serde(skip)]
+    pub secret_fields: HashMap<String, SecretString>,
     pub enabled: bool,
+    /// Whether this profile is a live reflection and must not be edited in DBFlux.
+    ///
+    /// Defaults to `false` for stored profiles. `true` for AWS reflected profiles.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
+    /// Why this stored profile is dangling, if it is.
+    ///
+    /// Opaque provider-defined token. The human-readable description for each
+    /// token value is supplied by the owning provider via
+    /// `AuthEditCapabilities.dangling_messages`. DBFlux core does not interpret
+    /// or enumerate the possible values.
+    ///
+    /// `None` for healthy stored profiles and for all reflected (virtual) profiles.
+    /// This field is never persisted by serialization; it is populated at load time
+    /// from the `dangling_origin` column in `cfg_auth_profiles`.
+    #[serde(skip)]
+    pub dangling_origin: Option<String>,
+}
+
+impl std::fmt::Debug for AuthProfile {
+    /// Redacts secret values: `secret_fields` prints its key names only, never
+    /// the `SecretString` contents. Mirrors the `ResolvedCredentials` Debug
+    /// policy so `{:?}` in logs can never leak credentials.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let secret_keys: Vec<&str> = self.secret_fields.keys().map(String::as_str).collect();
+
+        f.debug_struct("AuthProfile")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("provider_id", &self.provider_id)
+            .field("fields", &self.fields)
+            .field("secret_fields", &secret_keys)
+            .field("enabled", &self.enabled)
+            .field("read_only", &self.read_only)
+            .field("dangling_origin", &self.dangling_origin)
+            .finish()
+    }
 }
 
 /// Provider ID rewrites for old `config.type` values.
@@ -122,12 +223,20 @@ impl<'de> Deserialize<'de> for AuthProfile {
             (HashMap::new(), provider_id)
         };
 
+        let read_only = obj
+            .get("read_only")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         Ok(AuthProfile {
             id,
             name,
             provider_id,
             fields,
+            secret_fields: HashMap::new(),
             enabled,
+            read_only,
+            dangling_origin: None,
         })
     }
 }
@@ -143,12 +252,11 @@ impl AuthProfile {
             name: name.into(),
             provider_id: provider_id.into(),
             fields,
+            secret_fields: HashMap::new(),
             enabled: true,
+            read_only: false,
+            dangling_origin: None,
         }
-    }
-
-    pub fn secret_ref(&self) -> String {
-        format!("dbflux:auth:{}", self.id)
     }
 }
 
@@ -321,7 +429,10 @@ mod tests {
             name: "Prod".to_string(),
             provider_id: "aws-sso".to_string(),
             fields: fields.clone(),
+            secret_fields: HashMap::new(),
             enabled: true,
+            read_only: false,
+            dangling_origin: None,
         };
 
         let serialized = serde_json::to_value(&original).unwrap();
@@ -332,6 +443,75 @@ mod tests {
         assert_eq!(deserialized.provider_id, original.provider_id);
         assert_eq!(deserialized.fields, original.fields);
         assert_eq!(deserialized.enabled, original.enabled);
+    }
+
+    #[test]
+    fn serialize_omits_secret_fields() {
+        let mut secret_fields = HashMap::new();
+        secret_fields.insert(
+            "secret_access_key".to_string(),
+            SecretString::from("AKIAVERYSECRETVALUE".to_string()),
+        );
+
+        let mut fields = HashMap::new();
+        fields.insert("region".to_string(), "us-east-1".to_string());
+
+        let profile = AuthProfile {
+            id: Uuid::parse_str(&make_uuid()).unwrap(),
+            name: "Static".to_string(),
+            provider_id: "custom".to_string(),
+            fields,
+            secret_fields,
+            enabled: true,
+            read_only: false,
+            dangling_origin: None,
+        };
+
+        let json = serde_json::to_string(&profile).unwrap();
+
+        assert!(
+            !json.contains("AKIAVERYSECRETVALUE"),
+            "serialized profile must not contain the secret value: {json}"
+        );
+        assert!(
+            !json.contains("secret_access_key"),
+            "serialized profile must not even name the secret field: {json}"
+        );
+        assert!(
+            json.contains("region"),
+            "non-secret fields must still serialize: {json}"
+        );
+    }
+
+    #[test]
+    fn debug_redacts_secret_values() {
+        let mut secret_fields = HashMap::new();
+        secret_fields.insert(
+            "secret_access_key".to_string(),
+            SecretString::from("AKIAVERYSECRETVALUE".to_string()),
+        );
+
+        let profile = AuthProfile {
+            id: Uuid::parse_str(&make_uuid()).unwrap(),
+            name: "Static".to_string(),
+            provider_id: "custom".to_string(),
+            fields: HashMap::new(),
+            secret_fields,
+            enabled: true,
+            read_only: false,
+            dangling_origin: None,
+        };
+
+        let debug = format!("{profile:?}");
+
+        assert!(
+            !debug.contains("AKIAVERYSECRETVALUE"),
+            "Debug must never print the secret value: {debug}"
+        );
+        assert!(
+            debug.contains("secret_access_key"),
+            "Debug should still list the secret field key: {debug}"
+        );
     }
 
     #[test]

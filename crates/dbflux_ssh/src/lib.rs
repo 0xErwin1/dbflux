@@ -12,8 +12,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD_NO_PAD;
 use dbflux_core::{DbError, SshAuthMethod, SshTunnelConfig};
 use dbflux_tunnel_core::{ForwardingConnection, Tunnel, TunnelConnector, adaptive_sleep};
+use sha2::{Digest, Sha256};
 use ssh2::Session;
 use uuid::Uuid;
 
@@ -277,7 +280,52 @@ fn expand_tilde(path: &Path) -> std::path::PathBuf {
     path.to_path_buf()
 }
 
+// ---------------------------------------------------------------------------
+// Host-key fingerprint helpers
+// ---------------------------------------------------------------------------
+
+/// Outcome of comparing a stored known-hosts entry against the server's current key.
+#[derive(Debug, PartialEq, Eq)]
+enum HostKeyMatch {
+    /// Stored entry is already in `SHA256:<base64-nopad>` format and matches.
+    NewFormat,
+    /// Stored entry is the legacy lowercase-hex encoding of the same key bytes.
+    /// The caller should migrate the entry to `NewFormat` in place.
+    LegacyHex,
+    /// Neither format matches — the key has changed or is unknown.
+    Mismatch,
+}
+
+/// Returns the `SHA256:<base64-nopad>` fingerprint of `key`, byte-identical to
+/// `ssh-keygen -lf` output for the same raw key bytes.
+fn sha256_base64_fingerprint(key: &[u8]) -> String {
+    format!("SHA256:{}", STANDARD_NO_PAD.encode(Sha256::digest(key)))
+}
+
+/// Compares `stored` (a line from `ssh_known_hosts`) against the server's current
+/// `key` bytes and classifies the relationship.
+///
+/// Migration invariant: `LegacyHex` is returned ONLY when re-deriving the legacy
+/// hex from the SAME `key` bytes via `hex_encode` equals `stored`. This guarantees
+/// migration never widens acceptance — a stored legacy-hex entry that would have been
+/// rejected under the old comparison (because the key changed) still yields `Mismatch`.
+fn host_key_matches_stored(stored: &str, key: &[u8]) -> HostKeyMatch {
+    if stored == sha256_base64_fingerprint(key) {
+        return HostKeyMatch::NewFormat;
+    }
+
+    if !stored.starts_with("SHA256:") && stored == hex_encode(key) {
+        return HostKeyMatch::LegacyHex;
+    }
+
+    HostKeyMatch::Mismatch
+}
+
 fn verify_or_store_host_key(session: &Session, host: &str, port: u16) -> Result<(), DbError> {
+    let (key, _) = session.host_key().ok_or_else(|| {
+        DbError::connection_failed("SSH server did not present a host key".to_string())
+    })?;
+
     let fingerprint = current_host_key_fingerprint(session)?;
 
     let known_hosts_path = tofu_known_hosts_path()?;
@@ -285,14 +333,20 @@ fn verify_or_store_host_key(session: &Session, host: &str, port: u16) -> Result<
     let entry_key = format!("{}\t{}", host, port);
 
     if let Some(existing) = entries.get(&entry_key) {
-        if existing == &fingerprint {
-            return Ok(());
+        match host_key_matches_stored(existing, key) {
+            HostKeyMatch::NewFormat => return Ok(()),
+            HostKeyMatch::LegacyHex => {
+                entries.insert(entry_key, fingerprint);
+                save_tofu_known_hosts(&known_hosts_path, &entries)?;
+                return Ok(());
+            }
+            HostKeyMatch::Mismatch => {
+                return Err(DbError::connection_failed(format!(
+                    "SSH host key mismatch for {}:{} (possible MITM attack)",
+                    host, port
+                )));
+            }
         }
-
-        return Err(DbError::connection_failed(format!(
-            "SSH host key mismatch for {}:{} (possible MITM attack)",
-            host, port
-        )));
     }
 
     entries.insert(entry_key, fingerprint);
@@ -312,20 +366,90 @@ fn current_host_key_fingerprint(session: &Session) -> Result<String, DbError> {
         DbError::connection_failed("SSH server did not present a host key".to_string())
     })?;
 
-    Ok(hex_encode(key))
+    Ok(sha256_base64_fingerprint(key))
 }
 
+const KNOWN_HOSTS_FILE: &str = "ssh_known_hosts";
+
 fn tofu_known_hosts_path() -> Result<PathBuf, DbError> {
-    let config_dir = dirs::config_dir().ok_or_else(|| {
-        DbError::connection_failed("Could not find config directory for SSH known hosts")
+    let dir = dbflux_storage::paths::data_dir().map_err(|e| {
+        DbError::connection_failed(format!(
+            "Failed to resolve data directory for SSH known hosts: {e}"
+        ))
     })?;
+    let new_path = dir.join(KNOWN_HOSTS_FILE);
+    migrate_legacy_known_hosts(&new_path);
+    Ok(new_path)
+}
 
-    let app_dir = config_dir.join("dbflux");
-    std::fs::create_dir_all(&app_dir).map_err(|error| {
-        DbError::connection_failed(format!("Failed to create config directory: {}", error))
-    })?;
+/// One-time best-effort move of the pre-0.7 SSH known-hosts file from the legacy
+/// config directory (`~/.config/dbflux/ssh_known_hosts`) into the data directory.
+///
+/// Runs at most once per process via `Once`. Never blocks startup and never
+/// errors out: any failure leaves the new path absent, which simply triggers a
+/// fresh TOFU acceptance on the next SSH connect (the pre-existing clean-break
+/// behavior). All best-effort failures are logged with `log::warn!`, never
+/// silently dropped via `let _ =`.
+fn migrate_legacy_known_hosts(new_path: &Path) {
+    static MIGRATED: std::sync::Once = std::sync::Once::new();
+    MIGRATED.call_once(|| {
+        if new_path.exists() {
+            return;
+        }
+        let Some(config_dir) = dirs::config_dir() else {
+            return;
+        };
+        let old_path = config_dir.join("dbflux").join(KNOWN_HOSTS_FILE);
+        if !old_path.exists() {
+            return;
+        }
+        migrate_known_hosts_paths(&old_path, new_path);
+    });
+}
 
-    Ok(app_dir.join("ssh_known_hosts"))
+/// Pure, path-injected core of the known-hosts migration. Best-effort; returns
+/// nothing. Caller supplies old and new paths so this is unit-testable without
+/// mutating process environment variables.
+///
+/// Attempts an atomic `fs::rename` first; falls back to copy-then-remove on
+/// cross-device or other rename failures. All best-effort failures are logged
+/// with `log::warn!`, never silently discarded.
+fn migrate_known_hosts_paths(old_path: &Path, new_path: &Path) {
+    if new_path.exists() {
+        return;
+    }
+    if !old_path.exists() {
+        return;
+    }
+
+    match std::fs::rename(old_path, new_path) {
+        Ok(()) => {
+            if let Err(e) = dbflux_storage::paths::secure_file_permissions(new_path) {
+                log::warn!("Migrated SSH known_hosts but failed to set 0o600: {e}");
+            }
+            log::info!("Migrated SSH known_hosts from {old_path:?} to {new_path:?}");
+        }
+        Err(rename_err) => match std::fs::copy(old_path, new_path) {
+            Ok(_) => {
+                if let Err(e) = dbflux_storage::paths::secure_file_permissions(new_path) {
+                    log::warn!("Copied SSH known_hosts but failed to set 0o600: {e}");
+                }
+                if let Err(e) = std::fs::remove_file(old_path) {
+                    log::warn!(
+                        "Copied SSH known_hosts to new path but failed to remove old file {old_path:?}: {e}"
+                    );
+                } else {
+                    log::info!("Migrated (copy) SSH known_hosts from {old_path:?} to {new_path:?}");
+                }
+            }
+            Err(copy_err) => {
+                log::warn!(
+                    "Could not migrate SSH known_hosts (rename: {rename_err}; copy: {copy_err}); \
+                         a fresh TOFU prompt will occur on next connect"
+                );
+            }
+        },
+    }
 }
 
 fn load_tofu_known_hosts(path: &Path) -> Result<BTreeMap<String, String>, DbError> {
@@ -620,5 +744,170 @@ mod tests {
             "Debug output must not expose passphrase: {debug_str}",
         );
         assert!(debug_str.contains("SessionPassphraseVault"));
+    }
+
+    // SHA-256 fingerprint helper tests
+
+    #[test]
+    fn sha256_base64_fingerprint_matches_ssh_keygen_format() {
+        // Known input: 4 zero bytes.  Expected: SHA256-base64-nopad of [0,0,0,0].
+        // base64-std-nopad of SHA256([0,0,0,0]) = 3z9hmASpL9tAVxktxD3XSOp3itxSvEmM6AUkwBS4ERk
+        // (standard alphabet, no '=' padding)
+        let key: &[u8] = &[0u8; 4];
+        let fp = sha256_base64_fingerprint(key);
+        assert!(fp.starts_with("SHA256:"), "must start with 'SHA256:': {fp}");
+        assert!(!fp.contains('='), "must not contain '=' padding: {fp}");
+        assert_eq!(fp, "SHA256:3z9hmASpL9tAVxktxD3XSOp3itxSvEmM6AUkwBS4ERk");
+    }
+
+    #[test]
+    fn legacy_hex_entry_is_recognized_and_upgraded() {
+        const KEY: &[u8] = b"test-key-bytes";
+        let legacy = hex_encode(KEY);
+        let new_fp = sha256_base64_fingerprint(KEY);
+
+        assert_eq!(
+            host_key_matches_stored(&legacy, KEY),
+            HostKeyMatch::LegacyHex,
+            "stored legacy-hex of same key must be LegacyHex"
+        );
+        assert_eq!(
+            host_key_matches_stored(&new_fp, KEY),
+            HostKeyMatch::NewFormat,
+            "stored SHA256: of same key must be NewFormat"
+        );
+    }
+
+    #[test]
+    fn genuine_key_change_is_mismatch() {
+        const KEY_A: &[u8] = b"key-a";
+        const KEY_B: &[u8] = b"key-b";
+
+        let legacy_a = hex_encode(KEY_A);
+        let new_a = sha256_base64_fingerprint(KEY_A);
+
+        assert_eq!(
+            host_key_matches_stored(&legacy_a, KEY_B),
+            HostKeyMatch::Mismatch,
+            "legacy hex of key_A must not match key_B"
+        );
+        assert_eq!(
+            host_key_matches_stored(&new_a, KEY_B),
+            HostKeyMatch::Mismatch,
+            "SHA256 fingerprint of key_A must not match key_B"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Known-hosts path + migration tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn known_hosts_path_parent_is_data_dir() {
+        let path = tofu_known_hosts_path().expect("must resolve known hosts path");
+        let data_dir = dbflux_storage::paths::data_dir().expect("must resolve data dir");
+
+        assert_eq!(
+            path.parent().expect("known hosts path must have a parent"),
+            data_dir,
+            "ssh_known_hosts must be located under the data directory"
+        );
+        assert_eq!(
+            path.file_name().and_then(|n| n.to_str()),
+            Some("ssh_known_hosts"),
+            "known hosts file must be named 'ssh_known_hosts'"
+        );
+    }
+
+    #[test]
+    fn migration_moves_old_file_to_new() {
+        let dir = tempfile::TempDir::new().expect("create temp dir");
+        let old_path = dir.path().join("old_known_hosts");
+        let new_path = dir.path().join("new_known_hosts");
+
+        let content = "host\t22\tSHA256:abc";
+        std::fs::write(&old_path, content).expect("write old file");
+
+        migrate_known_hosts_paths(&old_path, &new_path);
+
+        assert!(new_path.exists(), "new file must exist after migration");
+        assert!(
+            !old_path.exists(),
+            "old file must be removed after migration"
+        );
+        let new_content = std::fs::read_to_string(&new_path).expect("read new file");
+        assert_eq!(new_content, content, "new file must have the same content");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&new_path)
+                .expect("metadata readable")
+                .permissions()
+                .mode();
+            assert_eq!(
+                mode & 0o777,
+                0o600,
+                "migrated file must be 0o600, got {:o}",
+                mode & 0o777
+            );
+        }
+    }
+
+    #[test]
+    fn migration_noop_when_new_exists() {
+        let dir = tempfile::TempDir::new().expect("create temp dir");
+        let old_path = dir.path().join("old_known_hosts");
+        let new_path = dir.path().join("new_known_hosts");
+
+        std::fs::write(&old_path, "old content").expect("write old file");
+        std::fs::write(&new_path, "new content").expect("write new file");
+
+        migrate_known_hosts_paths(&old_path, &new_path);
+
+        let new_content = std::fs::read_to_string(&new_path).expect("read new file");
+        assert_eq!(
+            new_content, "new content",
+            "new file must remain unchanged when it already exists"
+        );
+        assert!(
+            old_path.exists(),
+            "old file must remain when new already exists"
+        );
+    }
+
+    #[test]
+    fn migration_noop_when_old_absent() {
+        let dir = tempfile::TempDir::new().expect("create temp dir");
+        let old_path = dir.path().join("old_known_hosts");
+        let new_path = dir.path().join("new_known_hosts");
+
+        migrate_known_hosts_paths(&old_path, &new_path);
+
+        assert!(
+            !new_path.exists(),
+            "new file must not be created when old is absent"
+        );
+    }
+
+    #[test]
+    fn migration_failure_tolerated() {
+        let dir = tempfile::TempDir::new().expect("create temp dir");
+        let old_path = dir.path().join("old_known_hosts");
+        // Point new_path at a location whose parent does not exist.
+        let new_path = dir
+            .path()
+            .join("nonexistent_parent")
+            .join("new_known_hosts");
+
+        std::fs::write(&old_path, "content").expect("write old file");
+
+        // Must not panic; rename and copy both fail due to missing parent.
+        migrate_known_hosts_paths(&old_path, &new_path);
+
+        assert!(
+            !new_path.exists(),
+            "new file must not exist after a failed migration"
+        );
     }
 }

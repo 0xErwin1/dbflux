@@ -177,28 +177,13 @@ fn load_valid_access_token(profile_name: &str, sso_start_url: &str) -> Result<St
     let target_start_url = normalize_start_url(sso_start_url);
     let cache_path = sso_cache_path(sso_start_url);
 
-    if cache_path.exists() {
-        let cache_entry = load_cache_entry(&cache_path)?;
-
-        if !start_url_matches(&cache_entry.start_url, target_start_url.as_str()) {
-            return Err(DbError::ValueResolutionFailed(format!(
-                "Login required: AWS SSO cache '{}' does not match start URL '{}'; run 'aws sso login --profile {}'",
-                cache_path.display(),
-                sso_start_url,
-                profile_name
-            )));
-        }
-
-        if Utc::now() < cache_entry.expires_at {
-            return Ok(cache_entry.access_token);
-        }
-
-        return Err(DbError::ValueResolutionFailed(format!(
-            "Login required: AWS SSO session expired for profile '{}'; run 'aws sso login --profile {}'",
-            profile_name, profile_name
-        )));
-    }
-
+    // Do not trust the hash-named file. AWS CLI v2 keys the cache by
+    // `sha1(session_name)` when the profile uses an `sso_session` block, and
+    // even for direct-URL logins it keys by the exact URL form (trailing slash
+    // included), while `sso_cache_path` normalizes the slash away. A stale,
+    // expired file can therefore sit at the hashed path while the fresh token
+    // lives under a different filename. Always scan the directory and pick the
+    // newest non-expired entry whose `startUrl` matches.
     let cache_dir = cache_path.parent().map(Path::to_path_buf).ok_or_else(|| {
         DbError::ValueResolutionFailed(format!(
             "Login required: invalid AWS SSO cache path '{}'; run 'aws sso login --profile {}'",
@@ -207,7 +192,23 @@ fn load_valid_access_token(profile_name: &str, sso_start_url: &str) -> Result<St
         ))
     })?;
 
-    let cache_entries = std::fs::read_dir(&cache_dir).map_err(|err| {
+    select_freshest_access_token(&cache_dir, target_start_url.as_str(), profile_name)
+}
+
+/// Scans every `.json` file in `cache_dir`, keeps the entries whose `startUrl`
+/// matches `target_start_url`, and returns the access token of the most
+/// recently expiring non-expired one.
+///
+/// This deliberately ignores the hash-derived filename: AWS CLI v2 keys the
+/// file by `sha1(session_name)` for `sso_session` profiles and by the exact
+/// URL form for direct-URL logins, so a stale expired file can shadow the
+/// fresh token at the path `sso_cache_path` would compute.
+fn select_freshest_access_token(
+    cache_dir: &Path,
+    target_start_url: &str,
+    profile_name: &str,
+) -> Result<String, DbError> {
+    let cache_entries = std::fs::read_dir(cache_dir).map_err(|err| {
         DbError::ValueResolutionFailed(format!(
             "Login required: failed to read AWS SSO cache directory '{}': {}. Run 'aws sso login --profile {}'",
             cache_dir.display(),
@@ -237,7 +238,7 @@ fn load_valid_access_token(profile_name: &str, sso_start_url: &str) -> Result<St
             continue;
         };
 
-        if !start_url_matches(&cache_entry.start_url, target_start_url.as_str()) {
+        if !start_url_matches(&cache_entry.start_url, target_start_url) {
             continue;
         }
 
@@ -279,71 +280,6 @@ struct CacheEntry {
     start_url: String,
     access_token: String,
     expires_at: DateTime<Utc>,
-}
-
-fn load_cache_entry(path: &Path) -> Result<CacheEntry, DbError> {
-    let contents = std::fs::read_to_string(path).map_err(|err| {
-        DbError::ValueResolutionFailed(format!(
-            "failed to read AWS SSO cache '{}': {}",
-            path.display(),
-            err
-        ))
-    })?;
-
-    let parsed: serde_json::Value = serde_json::from_str(&contents).map_err(|err| {
-        DbError::ValueResolutionFailed(format!(
-            "invalid AWS SSO cache '{}': {}",
-            path.display(),
-            err
-        ))
-    })?;
-
-    let start_url = parsed
-        .get("startUrl")
-        .and_then(|value| value.as_str())
-        .map(ToString::to_string)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            DbError::ValueResolutionFailed(format!(
-                "AWS SSO cache '{}' missing startUrl",
-                path.display()
-            ))
-        })?;
-
-    let access_token = parsed
-        .get("accessToken")
-        .and_then(|value| value.as_str())
-        .map(ToString::to_string)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            DbError::ValueResolutionFailed(format!(
-                "AWS SSO cache '{}' missing access token",
-                path.display()
-            ))
-        })?;
-
-    let expires_at_str = parsed
-        .get("expiresAt")
-        .and_then(|value| value.as_str())
-        .ok_or_else(|| {
-            DbError::ValueResolutionFailed(format!(
-                "AWS SSO cache '{}' missing expiry",
-                path.display()
-            ))
-        })?;
-
-    let expires_at = parse_sso_expiry(expires_at_str).ok_or_else(|| {
-        DbError::ValueResolutionFailed(format!(
-            "AWS SSO cache '{}' has invalid expiry",
-            path.display()
-        ))
-    })?;
-
-    Ok(CacheEntry {
-        start_url,
-        access_token,
-        expires_at,
-    })
 }
 
 fn load_cache_entry_for_scan(path: &Path) -> Option<CacheEntry> {
@@ -463,4 +399,97 @@ where
         })?;
 
     runtime.block_on(future)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::Path;
+
+    fn write_cache_file(dir: &Path, name: &str, start_url: &str, token: &str, expires_at: &str) {
+        let contents = format!(
+            r#"{{"startUrl":"{start_url}","accessToken":"{token}","expiresAt":"{expires_at}"}}"#
+        );
+        fs::write(dir.join(format!("{name}.json")), contents).unwrap();
+    }
+
+    const START_URL: &str = "https://example.awsapps.com/start/";
+    const PROFILE_NAME: &str = "example-profile";
+
+    #[test]
+    fn picks_fresh_token_over_stale_file_with_different_filename() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Stale file under the URL-hashed name (what `sso_cache_path` would
+        // compute, with the slash normalized away): matching start URL but
+        // already expired.
+        write_cache_file(
+            dir.path(),
+            "stale-hashed",
+            "https://example.awsapps.com/start",
+            "stale-token",
+            "2020-01-01T00:00:00Z",
+        );
+
+        // Fresh token under a different filename (e.g. session-keyed or the
+        // trailing-slash URL form), with a far-future expiry.
+        write_cache_file(
+            dir.path(),
+            "fresh-other",
+            START_URL,
+            "fresh-token",
+            "2999-01-01T00:00:00Z",
+        );
+
+        let token =
+            select_freshest_access_token(dir.path(), &normalize_start_url(START_URL), PROFILE_NAME)
+                .expect("fresh token should be selected despite the stale hashed file");
+
+        assert_eq!(token, "fresh-token");
+    }
+
+    #[test]
+    fn reports_session_expired_when_all_matching_entries_expired() {
+        let dir = tempfile::tempdir().unwrap();
+
+        write_cache_file(
+            dir.path(),
+            "anyhash",
+            "https://example.awsapps.com/start",
+            "stale-token",
+            "2020-01-01T00:00:00Z",
+        );
+
+        let result =
+            select_freshest_access_token(dir.path(), &normalize_start_url(START_URL), PROFILE_NAME);
+
+        let err = result.expect_err("expired-only cache must not return a token");
+        assert!(
+            err.to_string().contains("session expired"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn reports_login_required_when_no_entry_matches_start_url() {
+        let dir = tempfile::tempdir().unwrap();
+
+        write_cache_file(
+            dir.path(),
+            "other",
+            "https://other.awsapps.com/start",
+            "other-token",
+            "2999-01-01T00:00:00Z",
+        );
+
+        let result =
+            select_freshest_access_token(dir.path(), &normalize_start_url(START_URL), PROFILE_NAME);
+
+        let err = result.expect_err("no matching start URL must not return a token");
+        assert!(
+            err.to_string().contains("Login required"),
+            "unexpected error: {err}"
+        );
+    }
 }

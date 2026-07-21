@@ -11,4 +11,4 @@
 
 pub mod driver;
 
-pub use driver::{METADATA, SqliteDriver};
+pub use driver::{METADATA, SQLITE_FORM, SqliteDriver};

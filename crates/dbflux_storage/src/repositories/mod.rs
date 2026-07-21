@@ -3,6 +3,7 @@
 //! Each repository provides CRUD operations for a specific config domain.
 //! Config repositories operate on `dbflux.db`.
 
+pub mod app_meta;
 pub mod audit;
 pub mod audit_settings;
 pub mod saved_filters;
@@ -43,3 +44,15 @@ pub mod ssh_tunnel_auth;
 pub mod ssh_tunnel_profiles;
 
 pub mod state;
+
+pub mod viz_dashboard_panels;
+pub mod viz_dashboards;
+pub mod viz_saved_chart_binding_y;
+pub mod viz_saved_chart_series;
+pub mod viz_saved_chart_source_metric_dimensions;
+pub mod viz_saved_chart_source_metric_series;
+pub mod viz_saved_charts;
+
+pub mod qry_saved_queries;
+
+pub mod sch_schema_snapshots;

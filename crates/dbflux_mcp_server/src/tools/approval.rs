@@ -10,16 +10,13 @@
 use dbflux_approval::store::ExecutionPlan;
 use dbflux_policy::ExecutionClassification;
 use rmcp::{
-    ErrorData,
-    handler::server::wrapper::Parameters,
-    model::{CallToolResult, Content},
-    schemars::JsonSchema,
+    ErrorData, handler::server::wrapper::Parameters, model::CallToolResult, schemars::JsonSchema,
     tool, tool_router,
 };
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::server::DbFluxServer;
+use crate::{helper::to_json_content, server::DbFluxServer};
 
 const DEFAULT_REJECTION_REASON: &str = "rejected by approver";
 
@@ -99,7 +96,9 @@ impl DbFluxServer {
 
                     let pending = {
                         let mut runtime = state.runtime.write().await;
-                        runtime.request_execution_mut(plan)
+                        runtime
+                            .request_execution_mut(plan)
+                            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
                     };
 
                     let response = serde_json::json!({
@@ -109,9 +108,7 @@ impl DbFluxServer {
                         "message": "Execution request created. Awaiting approval."
                     });
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&response).unwrap(),
-                    )]))
+                    Ok(CallToolResult::success(vec![to_json_content(&response)?]))
                 },
             )
             .await
@@ -133,7 +130,9 @@ impl DbFluxServer {
                     let pending_list = {
                         let runtime = state.runtime.read().await;
                         let approval_service = runtime.approval_service();
-                        approval_service.list_pending()
+                        approval_service
+                            .list_pending()
+                            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
                     };
 
                     // Filter by actor_id if provided
@@ -151,9 +150,7 @@ impl DbFluxServer {
                         "count": filtered.len()
                     });
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&response).unwrap(),
-                    )]))
+                    Ok(CallToolResult::success(vec![to_json_content(&response)?]))
                 },
             )
             .await
@@ -181,14 +178,15 @@ impl DbFluxServer {
                         let approval_service = runtime.approval_service();
                         approval_service
                             .list_pending()
+                            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
                             .into_iter()
                             .find(|p| p.id == pending_id)
                     };
 
                     match pending {
-                        Some(pending) => Ok(CallToolResult::success(vec![Content::text(
-                            serde_json::to_string_pretty(&pending).unwrap(),
-                        )])),
+                        Some(pending) => {
+                            Ok(CallToolResult::success(vec![to_json_content(&pending)?]))
+                        }
                         None => Err(ErrorData::invalid_params(
                             format!("Pending execution not found: {}", pending_id),
                             None,
@@ -222,6 +220,7 @@ impl DbFluxServer {
                         runtime
                             .approval_service()
                             .list_pending()
+                            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
                             .into_iter()
                             .find(|pending| pending.id == pending_id)
                             .map(|pending| pending.plan)
@@ -264,9 +263,7 @@ impl DbFluxServer {
                         )
                     });
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&response).unwrap(),
-                    )]))
+                    Ok(CallToolResult::success(vec![to_json_content(&response)?]))
                 },
             )
             .await
@@ -308,9 +305,7 @@ impl DbFluxServer {
                         "reason": rejection_reason
                     });
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&response).unwrap(),
-                    )]))
+                    Ok(CallToolResult::success(vec![to_json_content(&response)?]))
                 },
             )
             .await
@@ -351,12 +346,12 @@ impl DbFluxServer {
             "delete_records" | "truncate_table" => Some(ExecutionClassification::Destructive),
 
             // Admin operations
-            "create_table" | "create_index" | "drop_index" | "create_type" | "delete_script" => {
+            "create_table" | "create_index" | "create_type" | "delete_script" => {
                 Some(ExecutionClassification::Admin)
             }
 
             // Dynamic or strongly destructive operations default to the stricter class.
-            "alter_table" | "execute_script" | "drop_table" | "drop_database" => {
+            "alter_table" | "execute_script" | "drop_table" | "drop_database" | "drop_index" => {
                 Some(ExecutionClassification::AdminDestructive)
             }
 
@@ -421,5 +416,62 @@ mod tests {
     #[test]
     fn reject_execution_uses_runtime_default_reason_when_missing() {
         assert_eq!(effective_rejection_reason(None), DEFAULT_REJECTION_REASON);
+    }
+
+    #[test]
+    fn test_drop_index_classification_admin_destructive() {
+        assert_eq!(
+            DbFluxServer::classify_tool("drop_index"),
+            Some(ExecutionClassification::AdminDestructive),
+            "drop_index must be classified AdminDestructive, not Admin"
+        );
+        assert_eq!(
+            DbFluxServer::classify_tool("create_index"),
+            Some(ExecutionClassification::Admin),
+            "create_index classification must remain Admin"
+        );
+    }
+
+    #[test]
+    fn test_drop_index_denied_by_admin_destructive_policy() {
+        use dbflux_policy::{
+            ConnectionPolicyAssignment, PolicyBindingScope, PolicyDecision, PolicyDecisionReason,
+            PolicyEngine, PolicyEvaluationRequest, ToolPolicy,
+        };
+
+        let engine = PolicyEngine::new(
+            vec![ConnectionPolicyAssignment {
+                actor_id: "actor".to_string(),
+                scope: PolicyBindingScope {
+                    connection_id: "conn".to_string(),
+                },
+                role_ids: vec![],
+                policy_ids: vec!["admin-only".to_string()],
+            }],
+            vec![],
+            vec![ToolPolicy {
+                id: "admin-only".to_string(),
+                allowed_tools: vec!["drop_index".to_string()],
+                allowed_classes: vec![ExecutionClassification::Admin],
+            }],
+        );
+
+        let classification = DbFluxServer::classify_tool("drop_index")
+            .expect("drop_index must have a classification");
+
+        let decision = engine
+            .evaluate(&PolicyEvaluationRequest {
+                actor_id: "actor".to_string(),
+                connection_id: "conn".to_string(),
+                tool_id: "drop_index".to_string(),
+                classification,
+            })
+            .expect("evaluation must not error");
+
+        assert_eq!(
+            decision,
+            PolicyDecision::Deny(PolicyDecisionReason::ClassificationDenied),
+            "an Admin-only policy must not authorize drop_index when it is classified AdminDestructive"
+        );
     }
 }

@@ -1,0 +1,25 @@
+[package]
+name = "dbflux_transfer"
+version.workspace = true
+publish = false
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+dbflux_core = { path = "../dbflux_core" }
+dbflux_export.workspace = true
+thiserror = "2"
+serde.workspace = true
+serde_json.workspace = true
+csv.workspace = true
+
+[dev-dependencies]
+dbflux_test_support.workspace = true
+dbflux_driver_postgres.workspace = true

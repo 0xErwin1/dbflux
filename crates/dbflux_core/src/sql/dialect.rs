@@ -72,6 +72,64 @@ pub trait SqlDialect: Send + Sync {
         format!("{} {} {}", col_name, op, literal)
     }
 
+    /// Normalise an identifier for case-insensitive comparison.
+    ///
+    /// The default lowercases the name, matching the behaviour of PostgreSQL
+    /// and SQLite for unquoted identifiers. Dialects where comparison is
+    /// case-preserving (e.g. SQL Server with a case-sensitive collation) may
+    /// override this to return the name unchanged.
+    fn normalize_identifier<'a>(&self, name: &'a str) -> std::borrow::Cow<'a, str> {
+        std::borrow::Cow::Owned(name.to_lowercase())
+    }
+
+    /// Whether this dialect supports row-value constructors in IN lists.
+    ///
+    /// Standard SQL and most engines (PostgreSQL, MySQL, SQLite) accept:
+    ///   `(col_a, col_b) IN ((?, ?), (?, ?))`
+    ///
+    /// SQL Server (T-SQL) does NOT — composite PK chunks must be expressed as
+    /// OR-of-AND predicates instead. Returns `true` for all dialects except
+    /// the MSSQL override.
+    fn supports_row_constructor_in(&self) -> bool {
+        true
+    }
+
+    /// Returns the dialect-appropriate clause to append at the END of a SELECT
+    /// to limit rows. Safe to append after `ORDER BY`.
+    ///
+    /// Most dialects use `LIMIT n`. SQL Server (T-SQL) requires
+    /// `OFFSET 0 ROWS FETCH NEXT n ROWS ONLY` because `LIMIT` is not valid T-SQL.
+    fn limit_clause(&self, n: u32) -> String {
+        format!("LIMIT {}", n)
+    }
+
+    /// Returns the dialect-appropriate clause for OFFSET-based pagination
+    /// without a keyset predicate (used by the data-transfer engine's
+    /// `TableSource` when a table has no single-column primary key to page
+    /// by). Safe to append after `ORDER BY`.
+    ///
+    /// Most dialects use `LIMIT n OFFSET m`. SQL Server (T-SQL) has no LIMIT
+    /// keyword at all and requires `OFFSET m ROWS FETCH NEXT n ROWS ONLY`,
+    /// which is why this is a separate method from [`Self::limit_clause`]
+    /// rather than the caller concatenating `limit_clause` with a literal
+    /// `OFFSET m`.
+    fn limit_offset_clause(&self, n: u32, offset: u64) -> String {
+        if offset == 0 {
+            return self.limit_clause(n);
+        }
+        format!("LIMIT {} OFFSET {}", n, offset)
+    }
+
+    /// Whether this dialect requires HAVING clauses to repeat the full aggregate
+    /// expression rather than referencing the column alias.
+    ///
+    /// SQL Server does not allow aliases defined in the SELECT list to be
+    /// referenced in HAVING; the aggregate expression must be repeated.
+    /// All other supported dialects (PostgreSQL, SQLite, MySQL) accept aliases.
+    fn having_repeats_aggregate_expressions(&self) -> bool {
+        false
+    }
+
     /// Build an UPSERT statement for this dialect.
     fn build_upsert_statement(
         &self,
@@ -206,5 +264,77 @@ impl SqlDialect for DefaultSqlDialect {
             "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO UPDATE SET {}",
             table, columns, values, conflict_columns, update_clause
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct NopDialect;
+
+    impl SqlDialect for NopDialect {
+        fn quote_identifier(&self, name: &str) -> String {
+            format!("\"{}\"", name)
+        }
+
+        fn qualified_table(&self, _schema: Option<&str>, table: &str) -> String {
+            table.to_string()
+        }
+
+        fn value_to_literal(&self, _value: &crate::Value) -> String {
+            "?".to_string()
+        }
+
+        fn escape_string(&self, s: &str) -> String {
+            s.to_string()
+        }
+
+        fn placeholder_style(&self) -> PlaceholderStyle {
+            PlaceholderStyle::QuestionMark
+        }
+    }
+
+    #[test]
+    fn normalize_default_lowercases() {
+        let dialect = NopDialect;
+        assert_eq!(
+            dialect.normalize_identifier("Created_By_Id"),
+            "created_by_id"
+        );
+    }
+
+    #[test]
+    fn normalize_default_preserves_already_lowercase() {
+        let dialect = NopDialect;
+        assert_eq!(dialect.normalize_identifier("email"), "email");
+    }
+
+    // F-R3-1: limit_clause default returns LIMIT n (used by Postgres, MySQL, SQLite)
+    #[test]
+    fn postgres_limit_clause_uses_limit() {
+        let dialect = NopDialect;
+        assert_eq!(dialect.limit_clause(5), "LIMIT 5");
+    }
+
+    // F-R3-1: limit_clause with n=1
+    #[test]
+    fn default_limit_clause_single_row() {
+        let dialect = NopDialect;
+        assert_eq!(dialect.limit_clause(1), "LIMIT 1");
+    }
+
+    // Data-transfer engine's offset-fallback pagination (T15): tables without a
+    // single-column PK page by LIMIT/OFFSET instead of a keyset predicate.
+    #[test]
+    fn default_limit_offset_clause_with_zero_offset_matches_limit_clause() {
+        let dialect = NopDialect;
+        assert_eq!(dialect.limit_offset_clause(5, 0), "LIMIT 5");
+    }
+
+    #[test]
+    fn default_limit_offset_clause_with_nonzero_offset_appends_offset() {
+        let dialect = NopDialect;
+        assert_eq!(dialect.limit_offset_clause(5, 10), "LIMIT 5 OFFSET 10");
     }
 }

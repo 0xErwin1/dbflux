@@ -1,8 +1,8 @@
 use dbflux_components::tokens::Heights;
 use dbflux_storage::bootstrap::StorageRuntime;
-use dbflux_ui::app_state_entity::AppStateEntity;
+use dbflux_ui::AppStateEntity;
+use dbflux_ui::theme;
 use dbflux_ui::ui::document::{AuditDocument, KeyValueDocument};
-use dbflux_ui::ui::theme;
 use gpui::prelude::*;
 use gpui::{AppContext, Context, Entity, Modifiers, Render, TestAppContext, Window, div, px};
 use uuid::Uuid;
@@ -22,7 +22,7 @@ fn isolated_test_app_state(cx: &mut TestAppContext) -> Entity<AppStateEntity> {
     cx.update(|cx| {
         cx.new(|_| {
             let storage_runtime = StorageRuntime::in_memory().expect("isolated storage runtime");
-            AppStateEntity::new_with_storage_runtime(storage_runtime)
+            AppStateEntity::new_with_storage_runtime(storage_runtime).expect("test storage setup")
         })
     })
 }
@@ -34,7 +34,13 @@ struct ProductionRefreshDropdownHarness {
 
 impl ProductionRefreshDropdownHarness {
     fn new(app_state: Entity<AppStateEntity>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let audit_document = cx.new(|cx| AuditDocument::new(app_state.clone(), window, cx));
+        let audit_repo = app_state
+            .read(cx)
+            .storage_runtime()
+            .audit()
+            .expect("audit repo should open in test");
+        let audit_document =
+            cx.new(|cx| AuditDocument::new(audit_repo, app_state.clone(), window, cx));
         let key_value_document = cx.new(|cx| {
             KeyValueDocument::new(Uuid::nil(), "0".to_string(), app_state.clone(), window, cx)
         });

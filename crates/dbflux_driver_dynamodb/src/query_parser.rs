@@ -52,6 +52,10 @@ pub struct DynamoReadOptions {
     pub index_name: Option<String>,
     pub consistent_read: bool,
     pub filter_fallback: DynamoFilterFallback,
+    /// Sort-key scan direction. `Some(true)` = ascending (DynamoDB default),
+    /// `Some(false)` = descending, `None` = leave the API default. Only affects
+    /// `Query` reads; `Scan` does not order by the sort key.
+    pub scan_index_forward: Option<bool>,
 }
 
 impl Default for DynamoReadOptions {
@@ -60,6 +64,7 @@ impl Default for DynamoReadOptions {
             index_name: None,
             consistent_read: false,
             filter_fallback: DynamoFilterFallback::ClientSide,
+            scan_index_forward: None,
         }
     }
 }
@@ -106,6 +111,7 @@ pub fn parse_command_envelope(input: &str) -> Result<DynamoCommandEnvelope, DbEr
                     "consistent_read",
                     "allow_filter_fallback",
                     "require_server_filter",
+                    "scan_index_forward",
                 ],
             )?;
 
@@ -135,6 +141,7 @@ pub fn parse_command_envelope(input: &str) -> Result<DynamoCommandEnvelope, DbEr
                     "consistent_read",
                     "allow_filter_fallback",
                     "require_server_filter",
+                    "scan_index_forward",
                 ],
             )?;
 
@@ -368,6 +375,7 @@ fn parse_read_options(
     let consistent_read = optional_bool(object, "consistent_read")?.unwrap_or(false);
     let allow_filter_fallback = optional_bool(object, "allow_filter_fallback")?.unwrap_or(true);
     let require_server_filter = optional_bool(object, "require_server_filter")?.unwrap_or(false);
+    let scan_index_forward = optional_bool(object, "scan_index_forward")?;
 
     if allow_filter_fallback && require_server_filter {
         return Err(DbError::query_failed(format!(
@@ -391,6 +399,7 @@ fn parse_read_options(
         index_name,
         consistent_read,
         filter_fallback,
+        scan_index_forward,
     })
 }
 
@@ -582,6 +591,37 @@ mod tests {
             }
             other => panic!("expected query envelope, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_query_envelope_with_scan_index_forward() {
+        let descending = parse_command_envelope(
+            r#"{"op":"query","table":"users","filter":{"pk":"A"},"scan_index_forward":false}"#,
+        )
+        .expect("query envelope with scan_index_forward should parse");
+
+        match descending {
+            DynamoCommandEnvelope::Query { read_options, .. } => {
+                assert_eq!(read_options.scan_index_forward, Some(false));
+            }
+            other => panic!("expected query envelope, got {other:?}"),
+        }
+
+        let default =
+            parse_command_envelope(r#"{"op":"query","table":"users","filter":{"pk":"A"}}"#)
+                .expect("query envelope without scan_index_forward should parse");
+
+        match default {
+            DynamoCommandEnvelope::Query { read_options, .. } => {
+                assert_eq!(read_options.scan_index_forward, None);
+            }
+            other => panic!("expected query envelope, got {other:?}"),
+        }
+
+        let non_bool =
+            parse_command_envelope(r#"{"op":"query","table":"users","scan_index_forward":"asc"}"#)
+                .expect_err("non-bool scan_index_forward must fail");
+        assert!(matches!(non_bool, DbError::QueryFailed(_)));
     }
 
     #[test]

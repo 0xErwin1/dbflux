@@ -78,6 +78,10 @@ pub struct RedactionResult {
 
 /// Redacts sensitive values from a JSON string.
 ///
+/// Key-name-based redaction (SENSITIVE_JSON_KEYS) runs unconditionally regardless
+/// of `redact_sensitive`. Setting `redact_sensitive=false` disables only the
+/// pattern-based pass over string values.
+///
 /// ## Arguments
 ///
 /// * `input` - The JSON string to redact
@@ -292,11 +296,30 @@ mod tests {
     }
 
     #[test]
-    fn test_redact_disabled() {
+    fn test_key_based_redaction_is_unconditional() {
         let json = r#"{"password": "secret123"}"#;
         let result = redact_json(json, false);
         assert!(result.redacted.contains("[REDACTED]"));
         assert_eq!(result.redaction_count, 1);
+    }
+
+    #[test]
+    fn test_pattern_redaction_disabled_when_flag_false() {
+        // A value that matches a pattern-based rule (long hex string) but whose
+        // key is NOT in SENSITIVE_JSON_KEYS.
+        let json = r#"{"trace_id": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"}"#;
+
+        let result_off = redact_json(json, false);
+        assert_eq!(
+            result_off.redaction_count, 0,
+            "pattern-based redaction must not fire when redact_sensitive=false"
+        );
+
+        let result_on = redact_json(json, true);
+        assert!(
+            result_on.redaction_count >= 1,
+            "pattern-based redaction must fire when redact_sensitive=true"
+        );
     }
 
     #[test]

@@ -1,13 +1,12 @@
 //! `SavedChart` — persisted record for a named chart with its query and spec.
 //!
-//! Stored in `~/.config/dbflux/saved_charts.json` via [`SavedChartStore`] /
-//! [`SavedChartManager`].
+//! `SavedChart` is the domain type for a named chart. Persistence is handled by
+//! `dbflux_ui_base::SavedChartManager` backed by SQLite.
 //!
 //! # Crate placement
 //!
 //! `SavedChart` lives in `dbflux_components` rather than `dbflux_core` because
 //! it embeds `ChartSpec` and `BindingSpec`, which are owned by this crate.
-//! The JSON store and item manager infrastructure is imported from `dbflux_core`.
 //!
 //! # Schema note
 //!
@@ -19,7 +18,7 @@
 
 use crate::chart::{BindingSpec, ChartSpec};
 use chrono::{DateTime, Utc};
-use dbflux_core::{CollectionRef, Identifiable, JsonStore, ResolvedWindow};
+use dbflux_core::{CollectionRef, Identifiable, ResolvedWindow};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -27,12 +26,37 @@ use uuid::Uuid;
 // SavedChartSource
 // ---------------------------------------------------------------------------
 
+/// One CloudWatch metric series persisted on a multi-series chart.
+///
+/// Each series carries its own namespace, metric name, dimensions, sampling
+/// period, statistic, region override, and optional display label. The chart
+/// engine receives one Y column per series in the result set.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MetricSeries {
+    pub namespace: String,
+    pub metric_name: String,
+    /// Ordered (name, value) dimension pairs. Empty for scalar metrics.
+    pub dimensions: Vec<(String, String)>,
+    /// Sampling period in seconds.
+    pub period_seconds: u32,
+    /// CloudWatch statistic (e.g. "Average", "Sum").
+    pub statistic: String,
+    /// AWS region override; `None` means use the connection's default region.
+    pub region: Option<String>,
+    /// Optional display label for the legend; falls back to `metric_name` when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
 /// The data source for a saved chart.
 ///
 /// `Query` wraps a SQL/Flux/etc. query string and is executed inside
 /// `ChartDocument`. `Collection` represents a collection-browse source
 /// (Mongo collection, InfluxDB measurement) — opening it re-opens the
-/// underlying `DataDocument` in chart mode.
+/// underlying `DataDocument` in chart mode. `Metric` persists a list of
+/// CloudWatch metric series so one chart can plot N metrics on shared axes;
+/// importing a CloudWatch widget with multiple `metrics` entries yields one
+/// `SavedChart` with one `MetricSeries` per entry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum SavedChartSource {
@@ -44,6 +68,14 @@ pub enum SavedChartSource {
         /// The time window that was active when the chart was saved, if any.
         time_window: Option<ResolvedWindow>,
     },
+    /// A CloudWatch metric source. Carries one or more series; the chart opens
+    /// via `MetricSource` (which holds the same list) and the driver issues a
+    /// single GetMetricData request batching every series.
+    Metric { series: Vec<MetricSeries> },
+    /// A per-driver instance metric source. Identified by a driver-defined
+    /// `metric_id` string (e.g. `"pg.cache_hit_ratio"`). The chart opens a
+    /// time-bounded query via `InstanceMetricQuery`.
+    InstanceMetric { metric_id: String },
 }
 
 impl Default for SavedChartSource {
@@ -177,11 +209,40 @@ impl SavedChart {
         }
     }
 
+    /// Create a new `SavedChart` from a CloudWatch metric source.
+    ///
+    /// `series` must be non-empty; callers building from a single metric pass
+    /// a one-element vec. Each entry is plotted as a distinct line/series on
+    /// the chart.
+    pub fn new_metric(
+        name: String,
+        profile_id: Uuid,
+        series: Vec<MetricSeries>,
+        chart_spec: ChartSpec,
+        bindings: BindingSpec,
+    ) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4(),
+            name,
+            profile_id,
+            source: SavedChartSource::Metric { series },
+            chart_spec,
+            bindings,
+            time_range_preset: None,
+            refresh_policy: SavedChartRefreshPolicy::Off,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
     /// Convenience: returns the query string if this chart has a `Query` source.
     pub fn query(&self) -> Option<&str> {
         match &self.source {
             SavedChartSource::Query { query } => Some(query.as_str()),
-            SavedChartSource::Collection { .. } => None,
+            SavedChartSource::Collection { .. }
+            | SavedChartSource::Metric { .. }
+            | SavedChartSource::InstanceMetric { .. } => None,
         }
     }
 
@@ -189,128 +250,16 @@ impl SavedChart {
     pub fn is_collection_source(&self) -> bool {
         matches!(self.source, SavedChartSource::Collection { .. })
     }
+
+    /// Returns `true` if this chart has a `Metric` source.
+    pub fn is_metric_source(&self) -> bool {
+        matches!(self.source, SavedChartSource::Metric { .. })
+    }
 }
 
 impl Identifiable for SavedChart {
     fn id(&self) -> Uuid {
         self.id
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Store and manager
-// ---------------------------------------------------------------------------
-
-/// JSON-file store backed by `~/.config/dbflux/saved_charts.json`.
-pub type SavedChartStore = JsonStore<SavedChart>;
-
-/// Open (or create) the saved-charts store.
-///
-/// If the file does not exist yet, `load()` on the returned store will return
-/// an empty `Vec` without error.
-#[allow(clippy::result_large_err)]
-pub fn open_saved_charts_store() -> Result<SavedChartStore, dbflux_core::DbError> {
-    JsonStore::new("saved_charts.json")
-}
-
-/// Manager for `SavedChart` records with profile-scoped queries and upsert.
-pub struct SavedChartManager {
-    items: Vec<SavedChart>,
-    store: Option<SavedChartStore>,
-}
-
-impl SavedChartManager {
-    /// Load from the default `~/.config/dbflux/saved_charts.json`.
-    ///
-    /// If the file is absent or the store cannot be opened, the manager starts
-    /// empty without panicking.
-    pub fn load() -> Self {
-        match open_saved_charts_store() {
-            Ok(store) => {
-                let items = store.load().unwrap_or_else(|e| {
-                    log::warn!("Failed to load saved charts: {e}; starting empty");
-                    Vec::new()
-                });
-                Self {
-                    items,
-                    store: Some(store),
-                }
-            }
-            Err(e) => {
-                log::warn!("Cannot open saved-charts store: {e}; starting with empty manager");
-                Self::empty()
-            }
-        }
-    }
-
-    /// Create a manager backed by `store` (useful in tests with a temp path).
-    #[allow(clippy::result_large_err)]
-    pub fn from_store(store: SavedChartStore) -> Result<Self, dbflux_core::DbError> {
-        let items = store.load()?;
-        Ok(Self {
-            items,
-            store: Some(store),
-        })
-    }
-
-    /// Create an in-memory manager with no backing store.
-    pub fn empty() -> Self {
-        Self {
-            items: Vec::new(),
-            store: None,
-        }
-    }
-
-    /// Persist the current item list to disk.
-    fn save(&self) {
-        let Some(ref store) = self.store else {
-            log::warn!("SavedChartManager: cannot save — no backing store");
-            return;
-        };
-        if let Err(e) = store.save(&self.items) {
-            log::error!("SavedChartManager: failed to save: {e}");
-        }
-    }
-
-    /// Insert or replace a chart by `id`.
-    ///
-    /// Returns `true` when an existing record was replaced, `false` when a new
-    /// record was inserted.
-    pub fn upsert(&mut self, mut chart: SavedChart) -> bool {
-        chart.updated_at = Utc::now();
-        if let Some(existing) = self.items.iter_mut().find(|c| c.id == chart.id) {
-            *existing = chart;
-            self.save();
-            true
-        } else {
-            self.items.push(chart);
-            self.save();
-            false
-        }
-    }
-
-    /// All charts whose `profile_id` matches the given id.
-    pub fn charts_for_profile(&self, profile_id: Uuid) -> Vec<&SavedChart> {
-        self.items
-            .iter()
-            .filter(|c| c.profile_id == profile_id)
-            .collect()
-    }
-
-    /// All charts, regardless of profile.
-    pub fn all_charts(&self) -> &[SavedChart] {
-        &self.items
-    }
-
-    /// Remove a chart by id. Returns `true` if a record was removed.
-    pub fn remove(&mut self, id: Uuid) -> bool {
-        let before = self.items.len();
-        self.items.retain(|c| c.id != id);
-        let removed = before != self.items.len();
-        if removed {
-            self.save();
-        }
-        removed
     }
 }
 
@@ -342,6 +291,7 @@ mod tests {
             decimation_threshold: 10_000,
             binding: BindingSpec::default(),
             track_source_indices: false,
+            y_scale: crate::chart::YScale::Linear,
         }
     }
 
@@ -378,182 +328,115 @@ mod tests {
         )
     }
 
-    /// T-CE-C05: Empty file → empty manager.
-    #[test]
-    fn empty_store_returns_empty_manager() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = SavedChartStore::from_path(dir.path().join("saved_charts.json"));
-        let manager = SavedChartManager::from_store(store).unwrap();
-        assert!(manager.all_charts().is_empty());
-    }
-
-    /// T-CE-C05: Upsert dedup — upserting the same id twice yields one record.
-    #[test]
-    fn upsert_same_id_replaces_record() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = SavedChartStore::from_path(dir.path().join("saved_charts.json"));
-        let mut manager = SavedChartManager::from_store(store).unwrap();
-
-        let profile_id = Uuid::new_v4();
-        let mut chart = sample_chart("First name", profile_id);
-        let id = chart.id;
-
-        manager.upsert(chart.clone());
-        assert_eq!(manager.all_charts().len(), 1);
-
-        chart.name = "Updated name".to_string();
-        manager.upsert(chart);
-
-        assert_eq!(manager.all_charts().len(), 1, "one record after upsert");
-        assert_eq!(manager.all_charts()[0].name, "Updated name");
-        assert_eq!(manager.all_charts()[0].id, id);
-    }
-
-    /// T-CE-C05: charts_for_profile filter.
-    #[test]
-    fn charts_for_profile_filters_by_profile_id() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = SavedChartStore::from_path(dir.path().join("saved_charts.json"));
-        let mut manager = SavedChartManager::from_store(store).unwrap();
-
-        let p1 = Uuid::new_v4();
-        let p2 = Uuid::new_v4();
-
-        manager.upsert(sample_chart("chart-a", p1));
-        manager.upsert(sample_chart("chart-b", p1));
-        manager.upsert(sample_chart("chart-c", p2));
-
-        let p1_charts = manager.charts_for_profile(p1);
-        assert_eq!(p1_charts.len(), 2);
-
-        let p2_charts = manager.charts_for_profile(p2);
-        assert_eq!(p2_charts.len(), 1);
-        assert_eq!(p2_charts[0].name, "chart-c");
-
-        let unknown = manager.charts_for_profile(Uuid::new_v4());
-        assert!(unknown.is_empty());
-    }
-
-    /// T-CE-C05: Save then reload — chart appears in charts_for_profile.
-    #[test]
-    fn save_reload_chart_appears_in_profile() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("saved_charts.json");
-
-        let profile_id = Uuid::new_v4();
-        let chart_id;
-
-        {
-            let store = SavedChartStore::from_path(path.clone());
-            let mut manager = SavedChartManager::from_store(store).unwrap();
-            let chart = sample_chart("My chart", profile_id);
-            chart_id = chart.id;
-            manager.upsert(chart);
-        }
-
-        {
-            let store = SavedChartStore::from_path(path.clone());
-            let manager = SavedChartManager::from_store(store).unwrap();
-            let charts = manager.charts_for_profile(profile_id);
-            assert_eq!(charts.len(), 1);
-            assert_eq!(charts[0].id, chart_id);
-            assert_eq!(charts[0].name, "My chart");
-        }
-    }
-
-    /// T-CE-C05: File is valid JSON after save.
-    #[test]
-    fn saved_file_is_valid_json() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("saved_charts.json");
-
-        let store = SavedChartStore::from_path(path.clone());
-        let mut manager = SavedChartManager::from_store(store).unwrap();
-        manager.upsert(sample_chart("test", Uuid::new_v4()));
-
-        let content = std::fs::read_to_string(&path).unwrap();
-        let parsed: Result<Vec<serde_json::Value>, _> = serde_json::from_str(&content);
-        assert!(parsed.is_ok(), "saved_charts.json must be valid JSON");
-    }
-
-    /// T-CE-I07: Round-trip — Collection source survives save + reload.
-    #[test]
-    fn collection_source_round_trips_through_store() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("saved_charts.json");
-
-        let profile_id = Uuid::new_v4();
-        let chart_id;
-        let collection = CollectionRef::new("mydb", "measurements");
-
-        {
-            let store = SavedChartStore::from_path(path.clone());
-            let mut manager = SavedChartManager::from_store(store).unwrap();
-            let chart = sample_collection_chart("CPU chart", profile_id);
-            chart_id = chart.id;
-            manager.upsert(chart);
-        }
-
-        {
-            let store = SavedChartStore::from_path(path.clone());
-            let manager = SavedChartManager::from_store(store).unwrap();
-            let charts = manager.charts_for_profile(profile_id);
-            assert_eq!(charts.len(), 1);
-            let loaded = &charts[0];
-            assert_eq!(loaded.id, chart_id);
-            assert!(
-                loaded.is_collection_source(),
-                "source must be Collection after reload"
-            );
-            match &loaded.source {
-                SavedChartSource::Collection {
-                    collection_ref,
-                    time_window,
-                } => {
-                    assert_eq!(*collection_ref, collection);
-                    assert!(time_window.is_none());
-                }
-                _ => panic!("expected Collection source"),
-            }
-        }
-    }
-
-    /// T-CE-I07: Backward compat — JSON without `source` field deserialises
-    /// into `Query { query: "" }` default.
-    #[test]
-    fn json_without_source_field_uses_default_query_source() {
-        // Old-format JSON: no `source` key at all.
-        let old_json = serde_json::json!([{
-            "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-            "name": "old chart",
-            "profile_id": "9c4fab12-1234-5678-abcd-000000000001",
-            "chart_spec": {
-                "kind": "Line",
-                "x_axis": { "column_index": 0, "label": "time", "kind": "Time", "unit": null },
-                "series": [],
-                "legend_visible": false,
-                "decimation_threshold": 10000,
-                "binding": {
-                    "x": 0, "y": [], "group_by": null, "filter": null, "aggregation": "None"
-                },
-                "track_source_indices": false
+    fn sample_metric_chart(name: &str, profile_id: Uuid) -> SavedChart {
+        SavedChart::new_metric(
+            name.to_string(),
+            profile_id,
+            vec![MetricSeries {
+                namespace: "AWS/EC2".to_string(),
+                metric_name: "CPUUtilization".to_string(),
+                dimensions: vec![
+                    ("InstanceId".to_string(), "i-12345".to_string()),
+                    ("Region".to_string(), "us-east-1".to_string()),
+                ],
+                period_seconds: 300,
+                statistic: "Average".to_string(),
+                region: Some("us-east-1".to_string()),
+                label: None,
+            }],
+            sample_spec(),
+            BindingSpec {
+                x: 0,
+                y: vec![1],
+                group_by: None,
+                filter: None,
+                aggregation: AggKind::None,
             },
-            "bindings": { "x": 0, "y": [], "group_by": null, "filter": null, "aggregation": "None" },
-            "created_at": "2026-01-01T00:00:00Z",
-            "updated_at": "2026-01-01T00:00:00Z"
-        }]);
+        )
+    }
 
-        let charts: Vec<SavedChart> = serde_json::from_value(old_json)
-            .expect("old JSON without source field must deserialise without panic");
+    /// Metric source: `query()` returns `None` and `is_metric_source()` returns `true`.
+    #[test]
+    fn metric_source_query_returns_none() {
+        let profile_id = Uuid::new_v4();
+        let chart = sample_metric_chart("test", profile_id);
+        assert_eq!(chart.query(), None);
+        assert!(!chart.is_collection_source());
+        assert!(chart.is_metric_source());
+    }
 
-        assert_eq!(charts.len(), 1);
-        match &charts[0].source {
-            SavedChartSource::Query { query } => {
-                // Default yields an empty query string.
-                assert_eq!(query, "", "default source must be Query with empty string");
-            }
-            other => panic!("expected default Query source, got: {:?}", other),
+    /// Metric source: every series field survives a round-trip through `SavedChartSource`.
+    #[test]
+    fn metric_source_fields_accessible() {
+        let profile_id = Uuid::new_v4();
+        let chart = sample_metric_chart("my-chart", profile_id);
+        if let SavedChartSource::Metric { series } = &chart.source {
+            assert_eq!(series.len(), 1);
+            let s = &series[0];
+            assert_eq!(s.namespace, "AWS/EC2");
+            assert_eq!(s.metric_name, "CPUUtilization");
+            assert_eq!(s.dimensions.len(), 2);
+            assert_eq!(
+                s.dimensions[0],
+                ("InstanceId".to_string(), "i-12345".to_string())
+            );
+            assert_eq!(
+                s.dimensions[1],
+                ("Region".to_string(), "us-east-1".to_string())
+            );
+            assert_eq!(s.period_seconds, 300);
+            assert_eq!(s.statistic, "Average");
+            assert_eq!(s.region.as_deref(), Some("us-east-1"));
+            assert!(s.label.is_none());
+        } else {
+            panic!("expected Metric variant");
         }
+    }
+
+    /// Multi-series metric chart: each series is independently accessible.
+    #[test]
+    fn metric_source_supports_multiple_series() {
+        let profile_id = Uuid::new_v4();
+        let chart = SavedChart::new_metric(
+            "multi".to_string(),
+            profile_id,
+            vec![
+                MetricSeries {
+                    namespace: "AWS/RDS".to_string(),
+                    metric_name: "CPUUtilization".to_string(),
+                    dimensions: vec![(
+                        "DBInstanceIdentifier".to_string(),
+                        "primary-db".to_string(),
+                    )],
+                    period_seconds: 60,
+                    statistic: "Average".to_string(),
+                    region: Some("us-east-1".to_string()),
+                    label: None,
+                },
+                MetricSeries {
+                    namespace: "AWS/RDS".to_string(),
+                    metric_name: "CPUUtilization".to_string(),
+                    dimensions: vec![(
+                        "DBInstanceIdentifier".to_string(),
+                        "replica-db".to_string(),
+                    )],
+                    period_seconds: 60,
+                    statistic: "Average".to_string(),
+                    region: Some("us-east-1".to_string()),
+                    label: Some("Replica".to_string()),
+                },
+            ],
+            sample_spec(),
+            BindingSpec::default(),
+        );
+
+        let SavedChartSource::Metric { series } = &chart.source else {
+            panic!("expected Metric variant");
+        };
+        assert_eq!(series.len(), 2);
+        assert_eq!(series[0].dimensions[0].1, "primary-db");
+        assert_eq!(series[1].dimensions[0].1, "replica-db");
+        assert_eq!(series[1].label.as_deref(), Some("Replica"));
     }
 
     /// T-CE-I07: Query source query() helper returns Some.
@@ -572,30 +455,5 @@ mod tests {
         let chart = sample_collection_chart("test", profile_id);
         assert_eq!(chart.query(), None);
         assert!(chart.is_collection_source());
-    }
-
-    /// T-CE-C05: Chart with unknown profile loads without panic.
-    #[test]
-    fn load_chart_with_unknown_profile_does_not_panic() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("saved_charts.json");
-
-        let orphan_profile_id = Uuid::new_v4();
-
-        {
-            let store = SavedChartStore::from_path(path.clone());
-            let mut manager = SavedChartManager::from_store(store).unwrap();
-            manager.upsert(sample_chart("orphan", orphan_profile_id));
-        }
-
-        let store = SavedChartStore::from_path(path.clone());
-        let manager = SavedChartManager::from_store(store).unwrap();
-
-        let active_profile = Uuid::new_v4();
-        let charts = manager.charts_for_profile(active_profile);
-        assert!(charts.is_empty());
-
-        // Orphan still present — no silent deletion.
-        assert_eq!(manager.all_charts().len(), 1);
     }
 }

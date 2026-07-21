@@ -21,26 +21,33 @@ RPC services are stored in SQLite at `~/.local/share/dbflux/dbflux.db`, not in a
 ## Schema
 
 ```sql
+-- Base table (migration 001). `service_kind` is added by migration 005 and
+-- `api_family`/`api_major`/`api_minor` by migration 006; they are shown here
+-- inline for reference but are not part of the base DDL.
 CREATE TABLE cfg_services (
-    socket_id TEXT NOT NULL UNIQUE,
-    service_kind TEXT NOT NULL DEFAULT 'driver',
-    command TEXT,
-    startup_timeout_ms INTEGER DEFAULT 5000,
+    socket_id TEXT PRIMARY KEY,
     enabled INTEGER DEFAULT 1,
-    api_family TEXT,
-    api_major INTEGER,
-    api_minor INTEGER
+    command TEXT,
+    startup_timeout_ms INTEGER,        -- no SQL-level default; the 5000ms
+                                       -- fallback (DEFAULT_STARTUP_TIMEOUT_MS)
+                                       -- is applied in app code
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    service_kind TEXT NOT NULL DEFAULT 'driver',  -- added by migration 005
+    api_family TEXT,                              -- added by migration 006
+    api_major INTEGER,                            -- added by migration 006
+    api_minor INTEGER                             -- added by migration 006
 );
 
 CREATE TABLE cfg_service_args (
-    id INTEGER PRIMARY KEY,
+    id TEXT PRIMARY KEY,
     service_id TEXT NOT NULL REFERENCES cfg_services(socket_id),
     position INTEGER NOT NULL,
     value TEXT NOT NULL
 );
 
 CREATE TABLE cfg_service_env (
-    id INTEGER PRIMARY KEY,
+    id TEXT PRIMARY KEY,
     service_id TEXT NOT NULL REFERENCES cfg_services(socket_id),
     key TEXT NOT NULL,
     value TEXT NOT NULL
@@ -64,7 +71,7 @@ Notes:
 - `Auth Provider` services are active in runtime auth-provider registries only; they never appear as drivers.
 - DBFlux preserves compatibility for driver registration IDs as `rpc:<socket_id>`.
 - If API metadata is missing on an existing driver row, DBFlux defaults it to the current `driver_rpc` contract at version `1.1`.
-- If API metadata is missing on an auth-provider row, DBFlux defaults it to the current `auth_provider_rpc` contract at version `1.0`.
+- If API metadata is missing on an auth-provider row, DBFlux defaults it to the current `auth_provider_rpc` contract at version `1.2`.
 - `api_family` / `api_major` are used as startup preflight for auth providers before DBFlux probes the socket.
 
 ## Semantics

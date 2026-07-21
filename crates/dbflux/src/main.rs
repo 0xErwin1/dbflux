@@ -7,17 +7,20 @@ use dbflux_app::mcp_command::run_mcp_command;
 use dbflux_audit::AuditService;
 use dbflux_core::ShutdownPhase;
 use dbflux_core::observability::actions::{SYSTEM_SHUTDOWN, SYSTEM_STARTUP};
+use dbflux_core::observability::tracing_bridge::{
+    BridgeConfig, BridgeHandle, FmtWriter, ShutdownError,
+};
 use dbflux_core::observability::{EventCategory, EventOutcome, EventRecord, EventSeverity};
 use dbflux_driver_ipc::shutdown_managed_hosts;
 use dbflux_ipc::{
     APP_CONTROL_VERSION, framing, init_process_auth_tokens,
     protocol::{AppControlRequest, AppControlResponse, IpcMessage, IpcResponse},
-    read_app_control_token, socket_name,
+    read_app_control_token, shutdown_managed_auth_provider_hosts, socket_name,
 };
 use dbflux_ui::AppStateEntity;
 use dbflux_ui::assets::Assets;
 use dbflux_ui::ipc_server::IpcServer;
-use dbflux_ui::keymap::input_context_keybindings;
+use dbflux_ui::keymap::{input_context_keybindings, workspace_keybindings};
 use dbflux_ui::platform;
 use dbflux_ui::ui::overlays::command_palette::command_palette_keybindings;
 use dbflux_ui::ui::views::workspace::Workspace;
@@ -28,44 +31,20 @@ use interprocess::local_socket::{
     prelude::*,
 };
 use log::info;
-use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Initialise the global logger early — before any code that calls `log::*!`
-/// macros, otherwise those records are silently dropped.
-///
-/// When `DBFLUX_LOG_FILE` is set, log lines are appended to that file (created
-/// if missing) instead of stderr. Useful on Windows where the GUI subsystem
-/// makes stderr invisible.
-fn init_logging() {
-    let mut builder =
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
-    builder.format_timestamp_millis();
-
-    if let Some(path) = std::env::var_os("DBFLUX_LOG_FILE").map(PathBuf::from) {
-        match OpenOptions::new().create(true).append(true).open(&path) {
-            Ok(file) => {
-                builder.target(env_logger::Target::Pipe(Box::new(file)));
-            }
-            Err(err) => {
-                eprintln!(
-                    "Failed to open DBFLUX_LOG_FILE={:?}: {} — falling back to stderr",
-                    path, err
-                );
-            }
-        }
-    }
-
-    builder.init();
-}
-
 /// Global holder for the audit service, used by the panic hook.
-/// The panic hook needs access to the audit service, which is created
-/// inside GPUI's closure. We store it here so the panic hook can access it.
 static AUDIT_SERVICE_FOR_PANIC: Mutex<Option<AuditService>> = Mutex::new(None);
+
+/// Global holder for the tracing bridge handle.
+///
+/// Kept here so the shutdown sequence can call `BridgeHandle::shutdown()` even
+/// though `BridgeHandle` is created in `run_gui` before the GPUI closure runs.
+static BRIDGE_HANDLE: Mutex<Option<BridgeHandle>> = Mutex::new(None);
 
 /// Previous panic hook, chained after our hook.
 #[allow(clippy::type_complexity)]
@@ -77,16 +56,76 @@ const CONNECTION_CLOSE_TIMEOUT: Duration = Duration::from_millis(3000);
 const TOTAL_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(10000);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
+/// Cadence for observing `SHUTDOWN_SIGNAL_RECEIVED`. Deliberately coarser than
+/// `POLL_INTERVAL`: this timer lives for the whole process lifetime, so it is
+/// traded against idle wakeups. The added latency is imperceptible to a user
+/// pressing Ctrl+C.
+#[cfg(unix)]
+const SIGNAL_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Set by `handle_shutdown_signal` when SIGINT or SIGTERM arrives; polled on
+/// the GPUI foreground thread so the same graceful-shutdown path used by
+/// window close also runs for terminal signals.
+#[cfg(unix)]
+static SHUTDOWN_SIGNAL_RECEIVED: AtomicBool = AtomicBool::new(false);
+
+/// Signal handler for SIGINT and SIGTERM.
+///
+/// This runs in an async-signal-unsafe context (arbitrary interrupted code,
+/// possibly mid-allocation or mid-lock), so it must only perform
+/// async-signal-safe operations. Setting an `AtomicBool` is safe; anything
+/// else (logging, allocating, taking locks) is not. The actual shutdown work
+/// happens later, on the GPUI foreground thread, once the flag is observed.
+#[cfg(unix)]
+extern "C" fn handle_shutdown_signal(_signum: std::ffi::c_int) {
+    SHUTDOWN_SIGNAL_RECEIVED.store(true, Ordering::SeqCst);
+}
+
+/// Registers `handle_shutdown_signal` for SIGINT and SIGTERM via `sigaction`.
+///
+/// `SA_RESTART` is required: without it, installing these handlers would make
+/// blocking syscalls elsewhere in the process (IPC accept/read, driver I/O)
+/// fail with `EINTR` on every delivery.
+#[cfg(unix)]
+fn install_shutdown_signal_handlers() {
+    let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+    action.sa_sigaction = handle_shutdown_signal as *const () as usize;
+    action.sa_flags = libc::SA_RESTART;
+    unsafe {
+        libc::sigemptyset(&mut action.sa_mask);
+    }
+
+    for (signum, name) in [(libc::SIGINT, "SIGINT"), (libc::SIGTERM, "SIGTERM")] {
+        let result = unsafe { libc::sigaction(signum, &action, std::ptr::null_mut()) };
+
+        if result != 0 {
+            log::warn!(
+                "Failed to install {name} handler, graceful shutdown on {name} unavailable: {}",
+                io::Error::last_os_error()
+            );
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn install_shutdown_signal_handlers() {}
+
 /// Installs a chained best-effort panic hook that:
 /// 1. Attempts to record the panic via AuditService::record_panic_best_effort
 /// 2. Falls back to stderr logging if the service is unavailable or fails
 /// 3. Always delegates to the previously installed panic hook
 fn install_panic_hook() {
     let prev = std::panic::take_hook();
-    *PREV_PANIC_HOOK.lock().unwrap() = Some(Box::new(prev));
+    *PREV_PANIC_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Box::new(prev));
 
     std::panic::set_hook(Box::new(|panic_info: &std::panic::PanicHookInfo| {
-        if let Some(audit_service) = AUDIT_SERVICE_FOR_PANIC.lock().unwrap().clone() {
+        let audit_guard = AUDIT_SERVICE_FOR_PANIC
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        if let Some(audit_service) = audit_guard.clone() {
             let panic_location = panic_info
                 .location()
                 .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()))
@@ -105,20 +144,23 @@ fn install_panic_hook() {
             match audit_service.record_panic_best_effort(&panic_info_str) {
                 Some(_) => {}
                 None => {
-                    eprintln!("[dbflux_audit] panic hook: record_panic_best_effort returned None");
+                    let _ = std::io::stderr().write_all(
+                        b"[dbflux_audit] panic hook: record_panic_best_effort returned None\n",
+                    );
                 }
             }
         } else {
-            eprintln!(
-                "[dbflux_audit] panic hook: audit service not available, panic at {}",
-                panic_info
-                    .location()
-                    .map(|loc| format!("{}:{}", loc.file(), loc.line()))
-                    .unwrap_or_else(|| "unknown location".to_string())
-            );
+            let _ = std::io::stderr()
+                .write_all(b"[dbflux_audit] panic hook: audit service not available\n");
         }
 
-        if let Some(ref prev_hook) = *PREV_PANIC_HOOK.lock().unwrap() {
+        drop(audit_guard);
+
+        let prev_guard = PREV_PANIC_HOOK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        if let Some(ref prev_hook) = *prev_guard {
             prev_hook(panic_info);
         }
     }));
@@ -160,8 +202,27 @@ fn emit_system_shutdown(audit_service: &AuditService) {
     }
 }
 
+/// Installs a process-wide rustls crypto provider.
+///
+/// rustls 0.23 only auto-selects a provider when exactly one backend is
+/// compiled in. Several are linked here (the AWS SDK enables `ring`, reqwest
+/// and the TLS drivers enable `aws-lc-rs`), so any consumer that builds a
+/// rustls client via the auto path — notably the `mysql` driver — would panic
+/// with "Could not automatically determine the process-level CryptoProvider".
+/// Installing one explicitly, before any handshake, resolves that for every
+/// consumer that relies on the process default.
+fn install_default_crypto_provider() {
+    if rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .is_err()
+    {
+        log::debug!("rustls crypto provider was already installed");
+    }
+}
+
 fn main() {
     install_panic_hook();
+    install_default_crypto_provider();
 
     let args: Vec<String> = std::env::args().collect();
 
@@ -242,7 +303,27 @@ fn send_focus_request<S: Read + Write>(stream: &mut S, request_id: u64) -> io::R
 }
 
 fn run_gui() {
-    init_logging();
+    let fmt_writer = if let Some(path) = std::env::var_os("DBFLUX_LOG_FILE").map(PathBuf::from) {
+        FmtWriter::NonBlockingFile(path)
+    } else {
+        FmtWriter::Stderr
+    };
+
+    let bridge_config = BridgeConfig {
+        include_audit_layer: true,
+        fmt_writer,
+        env_filter_default: "info,hyper=warn,tokio=warn",
+        ..BridgeConfig::default()
+    };
+
+    match dbflux_core::observability::tracing_bridge::init_tracing(bridge_config) {
+        Ok(handle) => {
+            *BRIDGE_HANDLE.lock().unwrap() = Some(handle);
+        }
+        Err(err) => {
+            eprintln!("Failed to initialize tracing: {err}");
+        }
+    }
 
     let auth_token = match init_process_auth_tokens() {
         Ok(token) => token,
@@ -259,91 +340,158 @@ fn run_gui() {
 
     info!("IPC socket bound successfully");
 
-    gpui_platform::application()
-        .with_assets(Assets)
-        .run(|cx: &mut App| {
-            dbflux_ui::ui::theme::init(cx);
-            dbflux_ui::ui::components::data_table::init(cx);
-            dbflux_ui::ui::components::document_tree::init(cx);
+    gpui_platform::application().with_assets(Assets).run(|cx: &mut App| {
+        dbflux_ui::theme::init(cx);
+        dbflux_ui::ui::components::data_table::init(cx);
+        dbflux_ui::ui::components::document_tree::init(cx);
 
-            let app_state = cx.new(|_cx| AppStateEntity::new());
+        let app_state_inner = match AppStateEntity::new() {
+            Ok(state) => state,
+            Err(e) => {
+                eprintln!(
+                    "DBFlux: failed to initialize storage — cannot open database: {e}\n\
+                     Check that ~/.local/share/dbflux is accessible and not corrupted."
+                );
+                cx.quit();
+                return;
+            }
+        };
+        let app_state = cx.new(|_cx| app_state_inner);
 
-            let audit_service = app_state.read(cx).audit_service().clone();
-            *AUDIT_SERVICE_FOR_PANIC.lock().unwrap() = Some(audit_service.clone());
+        // Wire the bridge into the audit service before cloning it out.
+        // `attach_tracing_bridge` must be called on the owned `AppState`
+        // because `AuditService.bridge_min_level` is not shared across clones.
+        let persisted_min_level = app_state.read(cx).log_capture_min_level_setting();
+        if let Some(handle) = BRIDGE_HANDLE.lock().unwrap().as_ref() {
+            app_state.update(cx, |state, _| {
+                state.attach_tracing_bridge(handle.min_level.clone(), handle.drop_counter.clone());
+            });
 
-            emit_system_startup(&audit_service);
+            let seeded_level =
+                dbflux_core::observability::EventSeverity::from_str_repr(&persisted_min_level)
+                    .unwrap_or(dbflux_core::observability::EventSeverity::Info);
+            handle.set_min_level(seeded_level);
 
-            let general_settings = app_state.read(cx).general_settings().clone();
-            let theme_setting = general_settings.theme;
-            let style_setting = general_settings.style;
+            let audit_service_arc = Arc::new(app_state.read(cx).audit_service().clone());
+            if let Err(err) = handle.install_sink(audit_service_arc) {
+                log::warn!("Failed to install audit bridge sink: {err}");
+            }
+        }
 
-            // Set up the density global and apply the persisted theme+style so
-            // radius tokens are correct from the very first frame.
-            dbflux_ui::ui::theme::init_with_settings(theme_setting, style_setting, cx);
+        let audit_service = app_state.read(cx).audit_service().clone();
+        *AUDIT_SERVICE_FOR_PANIC.lock().unwrap() = Some(audit_service.clone());
 
-            let mut main_window_options = WindowOptions {
-                app_id: Some("dbflux".into()),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("DBFlux".into()),
-                    ..Default::default()
-                }),
-                // Request client-side decorations on Linux to enable native Wayland support.
-                // On other platforms this returns Server explicitly.
-                window_decorations: platform::main_window_decoration_request(),
+        emit_system_startup(&audit_service);
+
+        let general_settings = app_state.read(cx).general_settings().clone();
+        let theme_setting = general_settings.theme;
+        let style_setting = general_settings.style;
+
+        // Set up the density global and apply the persisted theme+style so
+        // radius tokens are correct from the very first frame.
+        dbflux_ui::theme::init_with_settings(theme_setting, style_setting, cx);
+
+        let channel = dbflux_core::ReleaseChannel::current();
+        let mut main_window_options = WindowOptions {
+            app_id: Some(channel.app_id().into()),
+            titlebar: Some(TitlebarOptions {
+                title: Some(channel.display_name().into()),
                 ..Default::default()
-            };
-            platform::apply_window_options(&mut main_window_options, 800.0, 600.0);
+            }),
+            // Request client-side decorations on Linux to enable native Wayland support.
+            // On other platforms this returns Server explicitly.
+            window_decorations: platform::main_window_decoration_request(),
+            ..Default::default()
+        };
+        platform::apply_window_options(&mut main_window_options, 800.0, 600.0);
 
-            let window_handle = cx
-                .open_window(main_window_options, |window, cx| {
-                    cx.bind_keys(command_palette_keybindings());
-                    cx.bind_keys(input_context_keybindings());
+        let window_handle = cx
+            .open_window(main_window_options, |window, cx| {
+                cx.bind_keys(command_palette_keybindings());
+                cx.bind_keys(input_context_keybindings());
+                cx.bind_keys(workspace_keybindings());
 
-                    let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
+                let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
 
-                    IpcServer::start_with_listener(listener, workspace.clone(), auth_token, cx);
-                    info!("IPC server started");
+                IpcServer::start_with_listener(
+                    listener,
+                    workspace.clone(),
+                    window.window_handle(),
+                    auth_token,
+                    cx,
+                );
+                info!("IPC server started");
 
-                    cx.new(|cx| Root::new(workspace, window, cx))
-                })
-                .expect("Failed to open main window");
+                cx.new(|cx| Root::new(workspace, window, cx))
+            })
+            .expect("Failed to open main window");
 
-            let app_state_for_close = app_state.clone();
-            window_handle
-                .update(cx, |_root, window, cx| {
-                    window.on_window_should_close(cx, move |_window, cx| {
-                        let already_shutting_down = app_state_for_close.read(cx).is_shutting_down();
-                        if already_shutting_down {
-                            let phase = app_state_for_close.read(cx).shutdown_phase();
-                            if matches!(phase, ShutdownPhase::Complete | ShutdownPhase::Failed) {
-                                return true;
-                            }
-                            return false;
+        let app_state_for_close = app_state.clone();
+        window_handle
+            .update(cx, |_root, window, cx| {
+                window.on_window_should_close(cx, move |_window, cx| {
+                    let already_shutting_down = app_state_for_close.read(cx).is_shutting_down();
+                    if already_shutting_down {
+                        let phase = app_state_for_close.read(cx).shutdown_phase();
+                        if matches!(phase, ShutdownPhase::Complete | ShutdownPhase::Failed) {
+                            return true;
                         }
+                        return false;
+                    }
 
-                        info!("Starting graceful shutdown...");
-                        let initiated_shutdown =
-                            app_state_for_close.update(cx, |state, _| state.begin_shutdown());
+                    initiate_graceful_shutdown(&app_state_for_close, cx);
 
-                        if initiated_shutdown {
-                            let audit_service =
-                                app_state_for_close.read(cx).audit_service().clone();
-                            emit_system_shutdown(&audit_service);
-
-                            let app_state_shutdown = app_state_for_close.clone();
-                            cx.spawn(async move |cx| {
-                                run_shutdown_sequence(app_state_shutdown, cx).await;
-                            })
-                            .detach();
-                        }
-
-                        false
-                    });
-                })
-                .unwrap_or_else(|error| {
-                    log::warn!("Failed to install window close handler: {:?}", error);
+                    false
                 });
-        });
+            })
+            .unwrap_or_else(|error| {
+                log::warn!("Failed to install window close handler: {:?}", error);
+            });
+
+        install_shutdown_signal_handlers();
+
+        #[cfg(unix)]
+        {
+            let app_state_for_signal = app_state.clone();
+            cx.spawn(async move |cx| {
+                loop {
+                    cx.background_executor().timer(SIGNAL_POLL_INTERVAL).await;
+
+                    if !SHUTDOWN_SIGNAL_RECEIVED.load(Ordering::SeqCst) {
+                        continue;
+                    }
+
+                    info!("Received shutdown signal from terminal");
+
+                    cx.update(|cx| {
+                        initiate_graceful_shutdown(&app_state_for_signal, cx);
+                    });
+
+                    break;
+                }
+            })
+            .detach();
+        }
+    });
+}
+
+/// Single entry point for graceful shutdown, reached from both window close
+/// and OS signals (SIGINT/SIGTERM). Marks shutdown as begun, records the
+/// audit event, and spawns the async shutdown sequence.
+fn initiate_graceful_shutdown(app_state: &Entity<AppStateEntity>, cx: &mut App) {
+    info!("Starting graceful shutdown...");
+    let initiated_shutdown = app_state.update(cx, |state, _| state.begin_shutdown());
+
+    if initiated_shutdown {
+        let audit_service = app_state.read(cx).audit_service().clone();
+        emit_system_shutdown(&audit_service);
+
+        let app_state_shutdown = app_state.clone();
+        cx.spawn(async move |cx| {
+            run_shutdown_sequence(app_state_shutdown, cx).await;
+        })
+        .detach();
+    }
 }
 
 async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut AsyncApp) {
@@ -364,7 +512,14 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
             if stopped > 0 {
                 info!("Stopped {} managed RPC host process(es)", stopped);
             }
-            cx.update(|cx| cx.quit());
+            let auth_stopped = shutdown_managed_auth_provider_hosts();
+            if auth_stopped > 0 {
+                info!(
+                    "Stopped {} managed auth-provider host process(es)",
+                    auth_stopped
+                );
+            }
+            let _ = cx.update(|cx| cx.quit());
             return;
         }
 
@@ -398,7 +553,14 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
             if stopped > 0 {
                 info!("Stopped {} managed RPC host process(es)", stopped);
             }
-            cx.update(|cx| cx.quit());
+            let auth_stopped = shutdown_managed_auth_provider_hosts();
+            if auth_stopped > 0 {
+                info!(
+                    "Stopped {} managed auth-provider host process(es)",
+                    auth_stopped
+                );
+            }
+            let _ = cx.update(|cx| cx.quit());
             return;
         }
 
@@ -418,7 +580,7 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
     }
 
     info!("Shutdown phase: Flushing logs...");
-    cx.update(|cx| {
+    let _ = cx.update(|cx| {
         app_state.update(cx, |state, _| {
             state.shutdown().advance_phase(
                 ShutdownPhase::ClosingConnections,
@@ -427,12 +589,29 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
         });
     });
 
+    if let Some(handle) = BRIDGE_HANDLE.lock().unwrap().take() {
+        match handle.shutdown() {
+            Ok(()) => {}
+            Err(ShutdownError::DrainTimeout {
+                remaining_in_flight,
+            }) => {
+                eprintln!(
+                    "dbflux: audit bridge shutdown timed out, dropped {} in-flight events",
+                    remaining_in_flight
+                );
+            }
+            Err(ShutdownError::JoinPanic) => {
+                eprintln!("dbflux: audit bridge drain thread panicked during shutdown");
+            }
+        }
+    }
+
     cx.background_executor()
         .timer(Duration::from_millis(100))
         .await;
 
     info!("Shutdown complete in {:?}", start.elapsed());
-    cx.update(|cx| {
+    let _ = cx.update(|cx| {
         app_state.update(cx, |state, _| {
             state.complete_shutdown();
         });
@@ -443,7 +622,15 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
         info!("Stopped {} managed RPC host process(es)", stopped);
     }
 
-    cx.update(|cx| {
+    let auth_stopped = shutdown_managed_auth_provider_hosts();
+    if auth_stopped > 0 {
+        info!(
+            "Stopped {} managed auth-provider host process(es)",
+            auth_stopped
+        );
+    }
+
+    let _ = cx.update(|cx| {
         cx.quit();
     });
 }

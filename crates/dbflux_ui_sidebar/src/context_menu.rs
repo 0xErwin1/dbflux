@@ -1,0 +1,1883 @@
+use super::*;
+use dbflux_core::DdlCapabilities;
+
+impl ContextMenuState {
+    /// Transition the menu when the still-visible parent (left) menu is hovered at
+    /// `index` while a submenu is open. Returns `true` when the menu changed and the
+    /// view must redraw.
+    ///
+    /// Behaves like a standard nested menu instead of trailing the cursor: hovering the
+    /// item that owns the open submenu leaves it fixed, hovering a different item that
+    /// itself opens a submenu switches to (and re-anchors on) that item's submenu, and
+    /// hovering a plain item collapses the submenu back to the parent menu.
+    fn hover_parent_item(&mut self, index: usize) -> bool {
+        let Some((parent_items, owner_index)) = self.parent_stack.last() else {
+            return false;
+        };
+
+        if index == *owner_index {
+            return false;
+        }
+
+        let Some(item) = parent_items.get(index) else {
+            return false;
+        };
+
+        if !item.is_selectable() {
+            return false;
+        }
+
+        let submenu_items = match &item.action {
+            ContextMenuAction::Submenu(sub_items) => Some(sub_items.clone()),
+            _ => None,
+        };
+
+        match submenu_items {
+            Some(sub_items) => {
+                if let Some((_, owner_index)) = self.parent_stack.last_mut() {
+                    *owner_index = index;
+                }
+                self.items = sub_items;
+                self.selected_index = self
+                    .items
+                    .iter()
+                    .position(ContextMenuItem::is_selectable)
+                    .unwrap_or(0);
+            }
+            None => {
+                if let Some((parent_items, _)) = self.parent_stack.pop() {
+                    self.items = parent_items;
+                    self.selected_index = index;
+                }
+            }
+        }
+
+        true
+    }
+}
+
+impl Sidebar {
+    fn append_menu_section(
+        items: &mut Vec<ContextMenuItem>,
+        section: impl IntoIterator<Item = ContextMenuItem>,
+    ) {
+        let mut section_items: Vec<ContextMenuItem> = section
+            .into_iter()
+            .filter(ContextMenuItem::is_selectable)
+            .collect();
+
+        if section_items.is_empty() {
+            return;
+        }
+
+        if !items.is_empty() {
+            items.push(ContextMenuItem::separator());
+        }
+
+        items.append(&mut section_items);
+    }
+
+    fn first_selectable_index(items: &[ContextMenuItem]) -> usize {
+        items
+            .iter()
+            .position(ContextMenuItem::is_selectable)
+            .unwrap_or(0)
+    }
+
+    fn last_selectable_index(items: &[ContextMenuItem]) -> usize {
+        items
+            .iter()
+            .rposition(ContextMenuItem::is_selectable)
+            .unwrap_or(0)
+    }
+
+    fn next_selectable_index(items: &[ContextMenuItem], current_index: usize) -> Option<usize> {
+        items
+            .iter()
+            .enumerate()
+            .skip(current_index.saturating_add(1))
+            .find(|(_, item)| item.is_selectable())
+            .map(|(index, _)| index)
+    }
+
+    fn previous_selectable_index(items: &[ContextMenuItem], current_index: usize) -> Option<usize> {
+        items[..current_index]
+            .iter()
+            .rposition(ContextMenuItem::is_selectable)
+    }
+
+    pub(super) fn view_table_schema(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        self.set_expanded(item_id, true, cx);
+    }
+
+    pub fn open_item_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let entry = self.active_tree_state().read(cx).selected_entry().cloned();
+
+        let Some(entry) = entry else {
+            return;
+        };
+
+        let item_id = entry.item().id.to_string();
+        self.open_menu_for_item(&item_id, position, cx);
+    }
+
+    pub fn open_menu_for_item(
+        &mut self,
+        item_id: &str,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let node_kind = parse_node_kind(item_id);
+        let items = self.build_context_menu_items(node_kind, item_id, cx);
+
+        if items.is_empty() {
+            return;
+        }
+
+        self.context_menu = Some(ContextMenuState {
+            item_id: item_id.to_string(),
+            selected_index: Self::first_selectable_index(&items),
+            items,
+            parent_stack: Vec::new(),
+            position,
+        });
+        cx.notify();
+    }
+
+    /// Whether the table's connection supports the data-transfer Export/
+    /// Migrate flows. Gated on `TransferFamily::Sql` (D1) — never on driver
+    /// id — so any current or future SQL driver picks this up for free.
+    fn table_supports_transfer(&self, item_id: &str, cx: &App) -> bool {
+        let Some(SchemaNodeId::Table { profile_id, .. }) = parse_node_id(item_id) else {
+            return false;
+        };
+
+        self.app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .is_some_and(|connected| {
+                connected.connection.metadata().transfer_family == dbflux_core::TransferFamily::Sql
+            })
+    }
+
+    /// Whether the profile's connection supports the data-transfer Import
+    /// flow. Gated on `TransferFamily::Sql` (D1) — never on driver id — so
+    /// any current or future SQL driver picks this up for free (T24).
+    fn profile_supports_import(&self, item_id: &str, cx: &App) -> bool {
+        let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(item_id) else {
+            return false;
+        };
+
+        self.app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .is_some_and(|connected| {
+                connected.connection.metadata().transfer_family == dbflux_core::TransferFamily::Sql
+            })
+    }
+
+    /// Whether the connection/database node supports the schema-diff workflow.
+    /// Gated on `DatabaseCategory::Relational` — never a driver id — so any
+    /// current or future relational driver picks it up for free.
+    fn node_supports_schema_diff(&self, item_id: &str, cx: &App) -> bool {
+        let profile_id = match parse_node_id(item_id) {
+            Some(SchemaNodeId::Profile { profile_id }) => profile_id,
+            Some(SchemaNodeId::Database { profile_id, .. }) => profile_id,
+            _ => return false,
+        };
+
+        self.app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .is_some_and(|connected| {
+                connected.connection.metadata().category
+                    == dbflux_core::DatabaseCategory::Relational
+            })
+    }
+
+    /// Emits `SidebarEvent::RequestSchemaDiff` for a connection or database
+    /// node. Non-relational nodes get an explicit "unsupported" toast rather
+    /// than a silent no-op.
+    fn open_schema_diff_from_context(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let (profile_id, database) = match parse_node_id(item_id) {
+            Some(SchemaNodeId::Profile { profile_id }) => {
+                let database = self
+                    .app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .and_then(|connected| connected.active_database.clone());
+                (profile_id, database)
+            }
+            Some(SchemaNodeId::Database { profile_id, name }) => (profile_id, Some(name)),
+            _ => return,
+        };
+
+        if !self.node_supports_schema_diff(item_id, cx) {
+            dbflux_ui_base::toast::Toast::warning(
+                "Schema diff is only available for relational connections.",
+            )
+            .push(cx);
+            return;
+        }
+
+        cx.emit(SidebarEvent::RequestSchemaDiff {
+            profile_id,
+            database,
+        });
+    }
+
+    /// Returns "Delete N items" when the right-clicked node is part of a
+    /// multi-selection that contains more than one deletable item, otherwise
+    /// `None`. Used to relabel the per-node "Delete" entry into a batch action
+    /// when several items are selected.
+    fn batch_delete_label(&self, item_id: &str) -> Option<String> {
+        if !self.active_selection().contains(item_id) {
+            return None;
+        }
+        let count = self.deletable_multi_selection().len();
+        (count > 1).then(|| format!("Delete {count} items"))
+    }
+
+    /// If the right-clicked item is part of a deletable multi-selection of >1
+    /// items, open the batch delete confirmation and return `true`. Returns
+    /// `false` otherwise so the caller can fall back to single-item flow.
+    fn try_dispatch_batch_delete(&mut self, item_id: &str, cx: &mut Context<Self>) -> bool {
+        if !self.active_selection().contains(item_id) {
+            return false;
+        }
+        let ids = self.deletable_multi_selection();
+        if ids.len() <= 1 {
+            return false;
+        }
+        self.show_delete_confirm_modal_for_many(ids, cx);
+        true
+    }
+
+    pub(super) fn build_context_menu_items(
+        &self,
+        node_kind: SchemaNodeKind,
+        item_id: &str,
+        cx: &App,
+    ) -> Vec<ContextMenuItem> {
+        match node_kind {
+            SchemaNodeKind::Table | SchemaNodeKind::View => {
+                let mut items = Vec::new();
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item("Open", ContextMenuAction::Open)],
+                );
+
+                if self.collection_supports_child_picker(item_id, cx) {
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Browse Event Streams",
+                            ContextMenuAction::OpenChildPicker,
+                        )],
+                    );
+                }
+
+                Self::append_menu_section(
+                    &mut items,
+                    [
+                        ContextMenuItem::item("View Schema", ContextMenuAction::ViewSchema),
+                        ContextMenuItem::item("Refresh", ContextMenuAction::RefreshObject),
+                    ],
+                );
+
+                // Add "View Relationships" only for Table nodes (Views don't have FK metadata)
+                if node_kind == SchemaNodeKind::Table
+                    && self.is_relational_with_fk_support(item_id, cx)
+                {
+                    items.push(ContextMenuItem::item(
+                        "View Relationships",
+                        ContextMenuAction::ViewRelationships,
+                    ));
+                }
+
+                // Get code generators from driver (if connected)
+                let generators = self.get_code_generators_for_item(item_id, node_kind, cx);
+                if !generators.is_empty() {
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Generate SQL",
+                            ContextMenuAction::Submenu(generators),
+                        )
+                        .with_icon(AppIcon::Code)],
+                    );
+                }
+
+                // Export (Table -> folder bundle, via the Export wizard) is
+                // gated on the connection's transfer_family, never on driver
+                // id (R7). Views are excluded — this batch scopes bulk export
+                // to writable tables only. Format/folder/segment-size are
+                // chosen in the wizard, not from this menu.
+                if node_kind == SchemaNodeKind::Table && self.table_supports_transfer(item_id, cx) {
+                    let count = self.export_table_selection_count(item_id);
+                    let label = if count > 1 {
+                        format!("Export {count} Tables…")
+                    } else {
+                        "Export Table…".to_string()
+                    };
+
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            label,
+                            ContextMenuAction::ExportTables,
+                        )],
+                    );
+                }
+
+                // Migrate (Table -> Table, cross-connection) is gated the
+                // same way as Export — `TransferFamily::Sql`, never driver id
+                // (R6/R7/R8). Opens the Migrate wizard pre-populated with the
+                // resolved table selection; the wizard itself filters valid
+                // targets to connected + transfer-compatible connections.
+                if node_kind == SchemaNodeKind::Table && self.table_supports_transfer(item_id, cx) {
+                    let count = self.migrate_table_selection_count(item_id);
+                    let label = if count > 1 {
+                        format!("Migrate {count} Tables…")
+                    } else {
+                        "Migrate Table…".to_string()
+                    };
+
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            label,
+                            ContextMenuAction::MigrateTables,
+                        )],
+                    );
+                }
+
+                // Drop items gated on DDL capabilities
+                if let Some(ddl) = self.get_ddl_capabilities(item_id, cx) {
+                    let drop_allowed = match node_kind {
+                        SchemaNodeKind::Table => ddl.supports_drop_table,
+                        SchemaNodeKind::View => ddl.supports_drop_view,
+                        _ => false,
+                    };
+                    if drop_allowed {
+                        let label = match node_kind {
+                            SchemaNodeKind::View => "Drop View",
+                            _ => "Drop Table",
+                        };
+                        Self::append_menu_section(
+                            &mut items,
+                            [ContextMenuItem::danger(label, ContextMenuAction::DropTable)],
+                        );
+                    }
+                }
+
+                items
+            }
+            SchemaNodeKind::Collection => {
+                let mut items = Vec::new();
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item("Open", ContextMenuAction::Open)],
+                );
+
+                if self.collection_supports_child_picker(item_id, cx) {
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Browse Event Streams",
+                            ContextMenuAction::OpenChildPicker,
+                        )],
+                    );
+                }
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item(
+                        "Refresh",
+                        ContextMenuAction::RefreshObject,
+                    )],
+                );
+
+                // "Query Measurement" is available for any time-series collection that
+                // has a driver-provided template. The UI stays generic — no driver-id
+                // branching here. The driver's QueryGenerator::template_for_collection
+                // produces the correct language and query text.
+                if self.collection_is_time_series(item_id, cx)
+                    && self.collection_has_query_template(item_id, cx)
+                {
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Query Measurement",
+                            ContextMenuAction::QueryCollection,
+                        )],
+                    );
+                }
+
+                // The Generate Query submenu contains MongoDB-specific operation names.
+                // Time-series measurements share the Collection node kind but do not use
+                // this submenu — their query model is Flux/InfluxQL, not MQL.
+                if !self.collection_is_event_stream(item_id, cx)
+                    && !self.collection_is_time_series(item_id, cx)
+                {
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Generate Query",
+                            ContextMenuAction::Submenu(vec![
+                                ContextMenuItem::item(
+                                    "find",
+                                    ContextMenuAction::GenerateCollectionCode(
+                                        CollectionCodeKind::Find,
+                                    ),
+                                ),
+                                ContextMenuItem::item(
+                                    "insertOne",
+                                    ContextMenuAction::GenerateCollectionCode(
+                                        CollectionCodeKind::InsertOne,
+                                    ),
+                                ),
+                                ContextMenuItem::item(
+                                    "updateOne",
+                                    ContextMenuAction::GenerateCollectionCode(
+                                        CollectionCodeKind::UpdateOne,
+                                    ),
+                                ),
+                                ContextMenuItem::item(
+                                    "deleteOne",
+                                    ContextMenuAction::GenerateCollectionCode(
+                                        CollectionCodeKind::DeleteOne,
+                                    ),
+                                ),
+                            ]),
+                        )
+                        .with_icon(AppIcon::Code)],
+                    );
+                }
+
+                // Drop collection gated on DDL capabilities; not applicable to time-series
+                // measurements which are not directly droppable through the collection abstraction.
+                if !self.collection_is_time_series(item_id, cx)
+                    && self
+                        .get_ddl_capabilities(item_id, cx)
+                        .is_some_and(|ddl| ddl.supports_drop_table)
+                {
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::danger(
+                            "Drop Collection",
+                            ContextMenuAction::DropCollection,
+                        )],
+                    );
+                }
+
+                items
+            }
+            SchemaNodeKind::Profile => {
+                let is_connected =
+                    if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(item_id) {
+                        self.app_state
+                            .read(cx)
+                            .connections()
+                            .contains_key(&profile_id)
+                    } else {
+                        false
+                    };
+
+                let mut items = Vec::new();
+
+                if is_connected {
+                    Self::append_menu_section(
+                        &mut items,
+                        [
+                            ContextMenuItem::item("Disconnect", ContextMenuAction::Disconnect),
+                            ContextMenuItem::item("Refresh", ContextMenuAction::Refresh),
+                        ],
+                    );
+                } else {
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item("Connect", ContextMenuAction::Connect)],
+                    );
+                }
+
+                Self::append_menu_section(
+                    &mut items,
+                    [
+                        ContextMenuItem::item("Edit", ContextMenuAction::Edit),
+                        ContextMenuItem::item("Duplicate", ContextMenuAction::Duplicate),
+                        ContextMenuItem::item("Rename", ContextMenuAction::RenameFolder),
+                        ContextMenuItem::item("Export\u{2026}", ContextMenuAction::Export),
+                    ],
+                );
+
+                // Import (folder bundle -> tables) is offered for any connected
+                // SQL-family profile, gated on `TransferFamily::Sql` like Export —
+                // never on driver id (R7/R8).
+                if is_connected && self.profile_supports_import(item_id, cx) {
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Import\u{2026}",
+                            ContextMenuAction::ImportTables,
+                        )],
+                    );
+                }
+
+                // Compare Schema (relational only) — opens the schema-diff
+                // document with this connection as the live target. Gated on
+                // `DatabaseCategory::Relational`, never a driver id.
+                if is_connected && self.node_supports_schema_diff(item_id, cx) {
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Compare Schema\u{2026}",
+                            ContextMenuAction::CompareSchema,
+                        )],
+                    );
+                }
+
+                // Add "Move to..." submenu with available folders
+                let move_to_items = self.build_move_to_submenu(item_id, cx);
+                if !move_to_items.is_empty() {
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Move to...",
+                            ContextMenuAction::Submenu(move_to_items),
+                        )
+                        .with_icon(AppIcon::Folder)],
+                    );
+                }
+
+                let delete_label = self
+                    .batch_delete_label(item_id)
+                    .unwrap_or_else(|| "Delete".to_string());
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::danger(
+                        delete_label,
+                        ContextMenuAction::Delete,
+                    )],
+                );
+
+                items
+            }
+            SchemaNodeKind::Database => {
+                let is_loaded = self.is_database_schema_loaded(item_id, cx);
+                let mut items = Vec::new();
+
+                if is_loaded {
+                    // Only show Close for databases that support it (MySQL/MariaDB)
+                    if self.database_supports_close(item_id, cx) {
+                        Self::append_menu_section(
+                            &mut items,
+                            [ContextMenuItem::item(
+                                "Close",
+                                ContextMenuAction::CloseDatabase,
+                            )],
+                        );
+                    }
+
+                    if self.is_relational_with_fk_support(item_id, cx) {
+                        Self::append_menu_section(
+                            &mut items,
+                            [ContextMenuItem::item(
+                                "View Schema Diagram",
+                                ContextMenuAction::ViewSchemaDiagram,
+                            )],
+                        );
+                    }
+
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Refresh",
+                            ContextMenuAction::RefreshDatabase,
+                        )],
+                    );
+
+                    // Compare Schema (relational only), scoped to this database.
+                    if self.node_supports_schema_diff(item_id, cx) {
+                        Self::append_menu_section(
+                            &mut items,
+                            [ContextMenuItem::item(
+                                "Compare Schema\u{2026}",
+                                ContextMenuAction::CompareSchema,
+                            )],
+                        );
+                    }
+
+                    // "New Query" opens an empty code document with this bucket/database
+                    // pre-selected in the source-context dropdown. Available for any
+                    // time-series database node — no driver-id branching.
+                    if self.database_is_time_series(item_id, cx) {
+                        Self::append_menu_section(
+                            &mut items,
+                            [ContextMenuItem::item(
+                                "New Query",
+                                ContextMenuAction::NewQueryForDatabase,
+                            )],
+                        );
+                    }
+
+                    // Drop Database gated on DDL capabilities
+                    if self
+                        .get_ddl_capabilities(item_id, cx)
+                        .is_some_and(|ddl| ddl.supports_drop_database)
+                    {
+                        Self::append_menu_section(
+                            &mut items,
+                            [ContextMenuItem::danger(
+                                "Drop Database",
+                                ContextMenuAction::DropDatabase,
+                            )],
+                        );
+                    }
+                } else {
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Open",
+                            ContextMenuAction::OpenDatabase,
+                        )],
+                    );
+                }
+
+                items
+            }
+            SchemaNodeKind::ConnectionFolder => {
+                let mut items = Vec::new();
+
+                Self::append_menu_section(
+                    &mut items,
+                    [
+                        ContextMenuItem::item("New Connection", ContextMenuAction::NewConnection),
+                        ContextMenuItem::item("New Folder", ContextMenuAction::NewFolder),
+                    ],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item(
+                        "Rename",
+                        ContextMenuAction::RenameFolder,
+                    )],
+                );
+
+                let move_to_items = self.build_move_to_submenu(item_id, cx);
+                if !move_to_items.is_empty() {
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Move to...",
+                            ContextMenuAction::Submenu(move_to_items),
+                        )
+                        .with_icon(AppIcon::Folder)],
+                    );
+                }
+
+                let delete_label = self
+                    .batch_delete_label(item_id)
+                    .unwrap_or_else(|| "Delete".to_string());
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::danger(
+                        delete_label,
+                        ContextMenuAction::DeleteFolder,
+                    )],
+                );
+
+                items
+            }
+
+            SchemaNodeKind::Index | SchemaNodeKind::SchemaIndex => {
+                let caps = self.get_capabilities_for_item(item_id, cx);
+                let mut submenu = Vec::new();
+
+                if caps.contains(CodeGenCapabilities::CREATE_INDEX) {
+                    submenu.push(ContextMenuItem::item(
+                        "CREATE INDEX",
+                        ContextMenuAction::GenerateIndexSql(IndexSqlAction::Create),
+                    ));
+                }
+
+                if caps.contains(CodeGenCapabilities::DROP_INDEX) {
+                    submenu.push(ContextMenuItem::item(
+                        "DROP INDEX",
+                        ContextMenuAction::GenerateIndexSql(IndexSqlAction::Drop),
+                    ));
+                }
+
+                if caps.contains(CodeGenCapabilities::REINDEX) {
+                    submenu.push(ContextMenuItem::item(
+                        "REINDEX",
+                        ContextMenuAction::GenerateIndexSql(IndexSqlAction::Reindex),
+                    ));
+                }
+
+                if submenu.is_empty() {
+                    vec![]
+                } else {
+                    vec![
+                        ContextMenuItem::item("Generate SQL", ContextMenuAction::Submenu(submenu))
+                            .with_icon(AppIcon::Code),
+                    ]
+                }
+            }
+
+            SchemaNodeKind::ForeignKey | SchemaNodeKind::SchemaForeignKey => {
+                let caps = self.get_capabilities_for_item(item_id, cx);
+                let mut submenu = Vec::new();
+
+                if caps.contains(CodeGenCapabilities::ADD_FOREIGN_KEY) {
+                    submenu.push(ContextMenuItem::item(
+                        "ADD CONSTRAINT",
+                        ContextMenuAction::GenerateForeignKeySql(
+                            ForeignKeySqlAction::AddConstraint,
+                        ),
+                    ));
+                }
+
+                if caps.contains(CodeGenCapabilities::DROP_FOREIGN_KEY) {
+                    submenu.push(ContextMenuItem::item(
+                        "DROP CONSTRAINT",
+                        ContextMenuAction::GenerateForeignKeySql(
+                            ForeignKeySqlAction::DropConstraint,
+                        ),
+                    ));
+                }
+
+                if submenu.is_empty() {
+                    vec![]
+                } else {
+                    vec![
+                        ContextMenuItem::item("Generate SQL", ContextMenuAction::Submenu(submenu))
+                            .with_icon(AppIcon::Code),
+                    ]
+                }
+            }
+
+            SchemaNodeKind::CustomType => {
+                let caps = self.get_capabilities_for_item(item_id, cx);
+                let mut submenu = Vec::new();
+
+                if caps.contains(CodeGenCapabilities::CREATE_TYPE)
+                    && let Some(label) = self.create_type_sql_label(item_id, cx)
+                {
+                    submenu.push(ContextMenuItem::item(
+                        label,
+                        ContextMenuAction::GenerateTypeSql(TypeSqlAction::Create),
+                    ));
+                }
+
+                if caps.contains(CodeGenCapabilities::ALTER_TYPE) && self.is_enum_type(item_id, cx)
+                {
+                    submenu.push(ContextMenuItem::item(
+                        "ADD VALUE",
+                        ContextMenuAction::GenerateTypeSql(TypeSqlAction::AddEnumValue),
+                    ));
+                }
+
+                if caps.contains(CodeGenCapabilities::DROP_TYPE) {
+                    submenu.push(ContextMenuItem::item(
+                        "DROP TYPE",
+                        ContextMenuAction::GenerateTypeSql(TypeSqlAction::Drop),
+                    ));
+                }
+
+                if submenu.is_empty() {
+                    vec![]
+                } else {
+                    vec![
+                        ContextMenuItem::item("Generate SQL", ContextMenuAction::Submenu(submenu))
+                            .with_icon(AppIcon::Code),
+                    ]
+                }
+            }
+
+            SchemaNodeKind::ScriptsFolder => {
+                let mut items = Vec::new();
+
+                Self::append_menu_section(
+                    &mut items,
+                    [
+                        ContextMenuItem::item("New File", ContextMenuAction::NewScriptFile),
+                        ContextMenuItem::item("New Folder", ContextMenuAction::NewScriptFolder),
+                    ],
+                );
+
+                // Only show rename/delete for subfolders, not the root
+                if let Some(SchemaNodeId::ScriptsFolder { path: Some(_) }) = parse_node_id(item_id)
+                {
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Rename",
+                            ContextMenuAction::RenameScript,
+                        )],
+                    );
+
+                    let delete_label = self
+                        .batch_delete_label(item_id)
+                        .unwrap_or_else(|| "Delete".to_string());
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::danger(
+                            delete_label,
+                            ContextMenuAction::DeleteScript,
+                        )],
+                    );
+                }
+
+                Self::append_menu_section(
+                    &mut items,
+                    [
+                        ContextMenuItem::item(
+                            "Reveal in File Manager",
+                            ContextMenuAction::RevealInFileManager,
+                        ),
+                        ContextMenuItem::item("Copy Path", ContextMenuAction::CopyPath),
+                    ],
+                );
+
+                items
+            }
+
+            SchemaNodeKind::ScriptFile => {
+                let mut items = Vec::new();
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item("Open", ContextMenuAction::OpenScript)],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item(
+                        "Rename",
+                        ContextMenuAction::RenameScript,
+                    )],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [
+                        ContextMenuItem::item(
+                            "Reveal in File Manager",
+                            ContextMenuAction::RevealInFileManager,
+                        ),
+                        ContextMenuItem::item("Copy Path", ContextMenuAction::CopyPath),
+                    ],
+                );
+
+                let delete_label = self
+                    .batch_delete_label(item_id)
+                    .unwrap_or_else(|| "Delete".to_string());
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::danger(
+                        delete_label,
+                        ContextMenuAction::DeleteScript,
+                    )],
+                );
+
+                items
+            }
+
+            SchemaNodeKind::DashboardsFolder => {
+                let mut items = Vec::new();
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item(
+                        "New Dashboard...",
+                        ContextMenuAction::NewDashboard,
+                    )],
+                );
+
+                // "Import Dashboard from JSON..." is gated on the driver's
+                // DASHBOARD_IMPORT capability — only drivers that vend
+                // importable dashboard JSON (CloudWatch-style metric dashboards)
+                // advertise this bit.
+                let can_import = parse_node_id(item_id)
+                    .and_then(|node_id| {
+                        if let SchemaNodeId::DashboardsFolder { profile_id } = node_id {
+                            Some(profile_id)
+                        } else {
+                            None
+                        }
+                    })
+                    .and_then(|profile_id| {
+                        let state = self.app_state.read(cx);
+                        let conn = state.connections().get(&profile_id)?;
+                        Some(conn.connection.metadata().capabilities)
+                    })
+                    .is_some_and(|caps| {
+                        caps.contains(dbflux_core::DriverCapabilities::DASHBOARD_IMPORT)
+                    });
+
+                if can_import {
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Import Dashboard from JSON...",
+                            ContextMenuAction::ImportDashboard,
+                        )],
+                    );
+                }
+
+                items
+            }
+
+            SchemaNodeKind::RemoteDashboardsFolder => {
+                vec![ContextMenuItem::item(
+                    "Refresh",
+                    ContextMenuAction::RefreshRemoteDashboards,
+                )]
+            }
+
+            SchemaNodeKind::SavedChartsFolder => {
+                vec![ContextMenuItem::item(
+                    "New Saved Chart...",
+                    ContextMenuAction::NewSavedChart,
+                )]
+            }
+
+            SchemaNodeKind::DashboardItem => {
+                let mut items = Vec::new();
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item("Open", ContextMenuAction::Open)],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [
+                        ContextMenuItem::item("Rename...", ContextMenuAction::RenameDashboard),
+                        ContextMenuItem::item("Duplicate", ContextMenuAction::DuplicateDashboard),
+                    ],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::danger(
+                        "Delete...",
+                        ContextMenuAction::DeleteDashboard,
+                    )],
+                );
+
+                items
+            }
+
+            SchemaNodeKind::SavedChartItem => {
+                let mut items = Vec::new();
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item("Open", ContextMenuAction::Open)],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [
+                        ContextMenuItem::item("Rename...", ContextMenuAction::RenameSavedChart),
+                        ContextMenuItem::item("Duplicate", ContextMenuAction::DuplicateSavedChart),
+                    ],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::danger(
+                        "Delete...",
+                        ContextMenuAction::DeleteSavedChart,
+                    )],
+                );
+
+                items
+            }
+
+            SchemaNodeKind::DatabasesFolder => {
+                vec![ContextMenuItem::item("Refresh", ContextMenuAction::Refresh)]
+            }
+
+            SchemaNodeKind::InstanceMetricsFolder => {
+                vec![ContextMenuItem::item(
+                    "Refresh",
+                    ContextMenuAction::RefreshInstanceCatalog,
+                )]
+            }
+
+            SchemaNodeKind::InstanceInspectorsFolder => {
+                vec![ContextMenuItem::item(
+                    "Refresh",
+                    ContextMenuAction::RefreshInstanceCatalog,
+                )]
+            }
+
+            SchemaNodeKind::InstanceMetricLeaf => {
+                let mut items = Vec::new();
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item("Open", ContextMenuAction::Open)],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item(
+                        "Copy Metric ID",
+                        ContextMenuAction::CopyItemId,
+                    )],
+                );
+
+                items
+            }
+
+            SchemaNodeKind::InstanceInspectorLeaf => {
+                let mut items = Vec::new();
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item("Open", ContextMenuAction::Open)],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item(
+                        "Copy Inspector ID",
+                        ContextMenuAction::CopyItemId,
+                    )],
+                );
+
+                items
+            }
+
+            SchemaNodeKind::InstanceOverviewLeaf => {
+                let mut items = Vec::new();
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item("Open", ContextMenuAction::Open)],
+                );
+                items
+            }
+
+            _ => vec![],
+        }
+    }
+
+    /// Builds the "Move to..." submenu items for a profile or folder.
+    fn build_move_to_submenu(&self, item_id: &str, cx: &App) -> Vec<ContextMenuItem> {
+        let state = self.app_state.read(cx);
+        let mut items = Vec::new();
+
+        // Determine current node info (works for both profiles and folders)
+        let (current_parent, current_node_id) = match parse_node_id(item_id) {
+            Some(SchemaNodeId::Profile { profile_id }) => {
+                let node = state.connection_tree().find_by_profile(profile_id);
+                (node.and_then(|n| n.parent_id), node.map(|n| n.id))
+            }
+            Some(SchemaNodeId::ConnectionFolder { node_id }) => {
+                let node = state.connection_tree().find_by_id(node_id);
+                (node.and_then(|n| n.parent_id), Some(node_id))
+            }
+            _ => (None, None),
+        };
+
+        // Add "Root" option if not already at root
+        if current_parent.is_some() {
+            items.push(ContextMenuItem::item(
+                "Root",
+                ContextMenuAction::MoveToFolder(None),
+            ));
+        }
+
+        // Add all folders (except self and descendants for folders)
+        let descendants = current_node_id
+            .map(|id| state.connection_tree().get_descendants(id))
+            .unwrap_or_default();
+
+        for folder in state.connection_tree().folders() {
+            // Skip if this is the current parent
+            if Some(folder.id) == current_parent {
+                continue;
+            }
+            // Skip self (for folders)
+            if Some(folder.id) == current_node_id {
+                continue;
+            }
+            // Skip descendants (would create cycle)
+            if descendants.contains(&folder.id) {
+                continue;
+            }
+
+            items.push(ContextMenuItem::item(
+                folder.name.clone(),
+                ContextMenuAction::MoveToFolder(Some(folder.id)),
+            ));
+        }
+
+        items
+    }
+
+    pub(super) fn is_database_schema_loaded(&self, item_id: &str, cx: &App) -> bool {
+        let Some(SchemaNodeId::Database { profile_id, name }) = parse_node_id(item_id) else {
+            return false;
+        };
+
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections().get(&profile_id) else {
+            return false;
+        };
+
+        if conn.database_schemas.contains_key(&name) {
+            return true;
+        }
+
+        if conn.database_connections.contains_key(&name) {
+            return true;
+        }
+
+        conn.schema
+            .as_ref()
+            .and_then(|s| s.current_database())
+            .is_some_and(|current| current == name)
+    }
+
+    /// Whether a database node supports Close (not available for the primary database).
+    pub(super) fn database_supports_close(&self, item_id: &str, cx: &App) -> bool {
+        let Some(SchemaNodeId::Database { profile_id, name }) = parse_node_id(item_id) else {
+            return false;
+        };
+
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections().get(&profile_id) else {
+            return false;
+        };
+
+        let strategy = conn.connection.schema_loading_strategy();
+
+        match strategy {
+            SchemaLoadingStrategy::LazyPerDatabase => conn.database_schemas.contains_key(&name),
+            SchemaLoadingStrategy::ConnectionPerDatabase => {
+                conn.database_connections.contains_key(&name)
+            }
+            _ => false,
+        }
+    }
+
+    /// Extract DDL capabilities from the driver metadata for the given item.
+    pub(super) fn get_ddl_capabilities(&self, item_id: &str, cx: &App) -> Option<DdlCapabilities> {
+        let profile_id = Self::extract_profile_id_from_item(item_id)?;
+        let state = self.app_state.read(cx);
+        let conn = state.connections().get(&profile_id)?;
+        conn.connection.metadata().ddl.clone()
+    }
+
+    pub(super) fn collection_info_for_item(&self, item_id: &str, cx: &App) -> Option<TableInfo> {
+        let SchemaNodeId::Collection {
+            profile_id,
+            database,
+            name,
+        } = parse_node_id(item_id)?
+        else {
+            return None;
+        };
+
+        let state = self.app_state.read(cx);
+        let conn = state.connections().get(&profile_id)?;
+        let cache_key = (database.clone(), Some(database.clone()), name.clone());
+
+        if let Some(details) = conn.table_details.get(&cache_key) {
+            return Some(details.clone());
+        }
+
+        conn.database_schemas
+            .get(&database)
+            .and_then(|schema| schema.tables.iter().find(|table| table.name == name))
+            .cloned()
+            .or_else(|| {
+                conn.schema.as_ref().and_then(|schema| {
+                    schema.collections().iter().find_map(|collection| {
+                        if collection.name != name {
+                            return None;
+                        }
+
+                        if collection
+                            .database
+                            .as_deref()
+                            .is_some_and(|db| db != database)
+                        {
+                            return None;
+                        }
+
+                        Some(TableInfo {
+                            name: collection.name.clone(),
+                            schema: Some(database.clone()),
+                            columns: None,
+                            indexes: collection.indexes.clone().map(IndexData::Document),
+                            foreign_keys: None,
+                            constraints: None,
+                            sample_fields: collection.sample_fields.clone(),
+                            presentation: collection.presentation,
+                            child_items: collection.child_items.clone(),
+                        })
+                    })
+                })
+            })
+    }
+
+    fn collection_supports_child_picker(&self, item_id: &str, cx: &App) -> bool {
+        self.collection_info_for_item(item_id, cx)
+            .is_some_and(|collection| {
+                collection.presentation == CollectionPresentation::EventStream
+                    || collection
+                        .child_items
+                        .as_ref()
+                        .is_some_and(|items| !items.is_empty())
+            })
+    }
+
+    fn collection_is_event_stream(&self, item_id: &str, cx: &App) -> bool {
+        self.collection_info_for_item(item_id, cx)
+            .is_some_and(|collection| {
+                collection.presentation == CollectionPresentation::EventStream
+            })
+    }
+
+    /// Returns true when the collection node belongs to a time-series connection.
+    ///
+    /// Used to suppress document-database-specific menu items (e.g. MongoDB generate
+    /// query submenu) for measurements that are rendered as Collection nodes.
+    fn collection_is_time_series(&self, item_id: &str, cx: &App) -> bool {
+        let Some(profile_id) = Self::extract_profile_id_from_item(item_id) else {
+            return false;
+        };
+        let state = self.app_state.read(cx);
+        state
+            .connections()
+            .get(&profile_id)
+            .and_then(|conn| conn.schema.as_ref())
+            .is_some_and(|schema| schema.is_time_series())
+    }
+
+    /// Returns true when the driver's `QueryGenerator` can produce a query template
+    /// for this collection node. Used to gate the "Query Measurement" menu item.
+    fn collection_has_query_template(&self, item_id: &str, cx: &App) -> bool {
+        let Some(SchemaNodeId::Collection {
+            profile_id,
+            database,
+            name,
+        }) = parse_node_id(item_id)
+        else {
+            return false;
+        };
+
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections().get(&profile_id) else {
+            return false;
+        };
+
+        let Some(query_gen) = conn.connection.query_generator() else {
+            return false;
+        };
+
+        let request = dbflux_core::CollectionTemplateRequest {
+            collection: &name,
+            database: &database,
+        };
+
+        query_gen.template_for_collection(&request).is_some()
+    }
+
+    /// Returns true when the database node belongs to a time-series connection.
+    ///
+    /// Used to show the "New Query" action on bucket/database nodes for
+    /// time-series drivers without branching on a specific driver ID.
+    fn database_is_time_series(&self, item_id: &str, cx: &App) -> bool {
+        let Some(profile_id) = Self::extract_profile_id_from_item(item_id) else {
+            return false;
+        };
+        let state = self.app_state.read(cx);
+        state
+            .connections()
+            .get(&profile_id)
+            .and_then(|conn| conn.schema.as_ref())
+            .is_some_and(|schema| schema.is_time_series())
+    }
+
+    fn open_child_picker(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let pending = PendingAction::OpenChildPicker {
+            item_id: item_id.to_string(),
+        };
+
+        let status = match parse_node_id(item_id) {
+            Some(SchemaNodeId::Collection {
+                profile_id,
+                database,
+                name,
+            }) if self.collection_is_event_stream(item_id, cx) => {
+                self.ensure_collection_children(profile_id, &database, &name, pending, cx)
+            }
+            _ => self.ensure_table_details(item_id, pending, cx),
+        };
+
+        match status {
+            TableDetailsStatus::Ready => {
+                self.pending_child_picker_item = Some(item_id.to_string());
+            }
+            TableDetailsStatus::Loading => {
+                self.pending_toast = Some(PendingToast {
+                    message: "Loading event streams...".to_string(),
+                    is_error: false,
+                });
+            }
+            TableDetailsStatus::NotFound => {
+                self.pending_toast = Some(PendingToast {
+                    message: "Event streams are not available for this collection".to_string(),
+                    is_error: true,
+                });
+            }
+        }
+    }
+
+    pub fn context_menu_select_next(&mut self, cx: &mut Context<Self>) {
+        if let Some(ref mut menu) = self.context_menu
+            && let Some(next_index) = Self::next_selectable_index(&menu.items, menu.selected_index)
+        {
+            menu.selected_index = next_index;
+            cx.notify();
+        }
+    }
+
+    pub fn context_menu_select_prev(&mut self, cx: &mut Context<Self>) {
+        if let Some(ref mut menu) = self.context_menu
+            && let Some(previous_index) =
+                Self::previous_selectable_index(&menu.items, menu.selected_index)
+        {
+            menu.selected_index = previous_index;
+            cx.notify();
+        }
+    }
+
+    pub fn context_menu_select_first(&mut self, cx: &mut Context<Self>) {
+        if let Some(ref mut menu) = self.context_menu {
+            let first = Self::first_selectable_index(&menu.items);
+
+            if menu.selected_index != first {
+                menu.selected_index = first;
+                cx.notify();
+            }
+        }
+    }
+
+    pub fn context_menu_select_last(&mut self, cx: &mut Context<Self>) {
+        if let Some(ref mut menu) = self.context_menu {
+            let last = Self::last_selectable_index(&menu.items);
+
+            if menu.selected_index != last {
+                menu.selected_index = last;
+                cx.notify();
+            }
+        }
+    }
+
+    pub fn context_menu_hover_at(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(ref mut menu) = self.context_menu {
+            let Some(item) = menu.items.get(index) else {
+                return;
+            };
+
+            if !item.is_selectable() || menu.selected_index == index {
+                return;
+            }
+
+            menu.selected_index = index;
+            cx.notify();
+        }
+    }
+
+    pub fn context_menu_parent_hover_at(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(menu) = self.context_menu.as_mut()
+            && menu.hover_parent_item(index)
+        {
+            cx.notify();
+        }
+    }
+
+    pub fn context_menu_execute(&mut self, cx: &mut Context<Self>) {
+        let Some(ref mut menu) = self.context_menu else {
+            return;
+        };
+
+        let Some(item) = menu.items.get(menu.selected_index).cloned() else {
+            return;
+        };
+
+        if !item.is_selectable() {
+            return;
+        }
+
+        let item_id = menu.item_id.clone();
+
+        match item.action {
+            ContextMenuAction::Submenu(sub_items) => {
+                // Navigate into submenu
+                let current_items = std::mem::take(&mut menu.items);
+                let current_index = menu.selected_index;
+                menu.parent_stack.push((current_items, current_index));
+                menu.items = sub_items;
+                menu.selected_index = Self::first_selectable_index(&menu.items);
+                cx.notify();
+                return;
+            }
+            ContextMenuAction::Open => {
+                let node_kind = parse_node_kind(&item_id);
+                match node_kind {
+                    SchemaNodeKind::Collection => {
+                        self.browse_collection(&item_id, cx);
+                    }
+                    SchemaNodeKind::DashboardItem | SchemaNodeKind::SavedChartItem => {
+                        // Delegate to execute_item which emits the correct sidebar event.
+                        self.execute_item(&item_id, cx);
+                    }
+                    _ => {
+                        self.browse_table(&item_id, cx);
+                    }
+                }
+            }
+            ContextMenuAction::OpenChildPicker => {
+                self.open_child_picker(&item_id, cx);
+            }
+            ContextMenuAction::ViewSchema => {
+                self.set_expanded(&item_id, true, cx);
+            }
+            ContextMenuAction::ViewRelationships => {
+                self.open_schema_viz(&item_id, cx);
+            }
+            ContextMenuAction::ViewSchemaDiagram => {
+                self.open_schema_diagram(&item_id, cx);
+            }
+            ContextMenuAction::GenerateCode(generator_id) => {
+                self.generate_code(&item_id, &generator_id, cx);
+            }
+            ContextMenuAction::Connect => {
+                if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(&item_id) {
+                    self.connect_to_profile(profile_id, cx);
+                }
+            }
+            ContextMenuAction::Disconnect => {
+                if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(&item_id) {
+                    self.disconnect_profile(profile_id, cx);
+                }
+            }
+            ContextMenuAction::Refresh => {
+                let profile_id = match parse_node_id(&item_id) {
+                    Some(SchemaNodeId::Profile { profile_id }) => Some(profile_id),
+                    Some(SchemaNodeId::DatabasesFolder { profile_id }) => Some(profile_id),
+                    _ => None,
+                };
+                if let Some(profile_id) = profile_id {
+                    self.refresh_connection(profile_id, cx);
+                }
+            }
+            ContextMenuAction::Edit => {
+                if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(&item_id) {
+                    self.edit_profile(profile_id, cx);
+                }
+            }
+            ContextMenuAction::Export => {
+                if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(&item_id) {
+                    cx.emit(SidebarEvent::RequestExportConnection { profile_id });
+                }
+            }
+            ContextMenuAction::ExportTables => {
+                self.request_export_wizard(&item_id, cx);
+            }
+            ContextMenuAction::ImportTables => {
+                if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(&item_id) {
+                    let database = self
+                        .app_state
+                        .read(cx)
+                        .connections()
+                        .get(&profile_id)
+                        .and_then(|connected| connected.active_database.clone());
+                    cx.emit(SidebarEvent::RequestImportWizard {
+                        profile_id,
+                        database,
+                    });
+                }
+            }
+            ContextMenuAction::MigrateTables => {
+                self.migrate_selected_tables(&item_id, cx);
+            }
+            ContextMenuAction::Duplicate => {
+                self.duplicate_profile(&item_id, cx);
+            }
+            ContextMenuAction::Delete => {
+                if !self.try_dispatch_batch_delete(&item_id, cx) {
+                    self.show_delete_confirm_modal(&item_id, cx);
+                }
+            }
+            ContextMenuAction::OpenDatabase => {
+                self.execute_item(&item_id, cx);
+            }
+            ContextMenuAction::CloseDatabase => {
+                self.close_database(&item_id, cx);
+            }
+            ContextMenuAction::NewFolder => {
+                self.create_folder_from_context(&item_id, cx);
+            }
+            ContextMenuAction::NewConnection => {
+                self.create_connection_in_folder(&item_id, cx);
+            }
+            ContextMenuAction::RenameFolder => {
+                self.pending_rename_item = Some(item_id.clone());
+            }
+            ContextMenuAction::DeleteFolder => {
+                if !self.try_dispatch_batch_delete(&item_id, cx) {
+                    self.show_delete_confirm_modal(&item_id, cx);
+                }
+            }
+            ContextMenuAction::MoveToFolder(target_folder_id) => {
+                self.move_item_to_folder(&item_id, target_folder_id, cx);
+            }
+            ContextMenuAction::GenerateIndexSql(action) => {
+                self.generate_index_sql(&item_id, action, cx);
+            }
+            ContextMenuAction::GenerateForeignKeySql(action) => {
+                self.generate_foreign_key_sql(&item_id, action, cx);
+            }
+            ContextMenuAction::GenerateTypeSql(action) => {
+                self.generate_type_sql(&item_id, action, cx);
+            }
+            ContextMenuAction::GenerateCollectionCode(kind) => {
+                self.generate_collection_code(&item_id, kind, cx);
+            }
+            ContextMenuAction::QueryCollection => {
+                self.query_collection(&item_id, cx);
+            }
+            ContextMenuAction::NewQueryForDatabase => {
+                self.new_query_for_database(&item_id, cx);
+            }
+            ContextMenuAction::OpenScript => {
+                self.execute_item(&item_id, cx);
+            }
+            ContextMenuAction::RenameScript => {
+                self.pending_rename_item = Some(item_id.clone());
+            }
+            ContextMenuAction::DeleteScript => {
+                if !self.try_dispatch_batch_delete(&item_id, cx) {
+                    self.show_delete_confirm_modal(&item_id, cx);
+                }
+            }
+            ContextMenuAction::NewScriptFile => {
+                let parent = Self::parent_dir_from_item_id(&item_id);
+                self.create_script_file_in(parent, cx);
+            }
+            ContextMenuAction::NewScriptFolder => {
+                let parent = Self::parent_dir_from_item_id(&item_id);
+                self.create_script_folder_in(parent, cx);
+            }
+            ContextMenuAction::RevealInFileManager => {
+                self.reveal_in_file_manager(&item_id, cx);
+            }
+            ContextMenuAction::CopyPath => {
+                self.copy_path_to_clipboard(&item_id, cx);
+            }
+            ContextMenuAction::RefreshDatabase => {
+                self.refresh_schema_database(&item_id, cx);
+            }
+            ContextMenuAction::RefreshObject => {
+                self.refresh_schema_object(&item_id, cx);
+            }
+            ContextMenuAction::DropDatabase => {
+                self.show_ddl_confirm_modal(&item_id, "Database", cx);
+            }
+            ContextMenuAction::DropTable => {
+                let node_kind = parse_node_kind(&item_id);
+                let object_type = if node_kind == SchemaNodeKind::View {
+                    "View"
+                } else {
+                    "Table"
+                };
+                self.show_ddl_confirm_modal(&item_id, object_type, cx);
+            }
+            ContextMenuAction::DropCollection => {
+                self.show_ddl_confirm_modal(&item_id, "Collection", cx);
+            }
+            ContextMenuAction::NewDashboard => {
+                if let Some(SchemaNodeId::DashboardsFolder { profile_id }) = parse_node_id(&item_id)
+                {
+                    cx.emit(SidebarEvent::RequestCreateDashboard { profile_id });
+                }
+            }
+            ContextMenuAction::ImportDashboard => {
+                if let Some(SchemaNodeId::DashboardsFolder { profile_id }) = parse_node_id(&item_id)
+                {
+                    cx.emit(SidebarEvent::RequestImportDashboard { profile_id });
+                }
+            }
+            ContextMenuAction::RefreshRemoteDashboards => {
+                if let Some(SchemaNodeId::RemoteDashboardsFolder { profile_id }) =
+                    parse_node_id(&item_id)
+                {
+                    // Drop the cached listing and re-fetch so the next render
+                    // shows the current upstream set.
+                    self.app_state
+                        .read(cx)
+                        .remote_dashboard_cache()
+                        .invalidate(profile_id);
+                    self.spawn_fetch_remote_dashboards(profile_id, cx);
+                    self.rebuild_tree_with_overrides(cx);
+                }
+            }
+            ContextMenuAction::RenameDashboard => {
+                if let Some(SchemaNodeId::DashboardItem { dashboard_id, .. }) =
+                    parse_node_id(&item_id)
+                {
+                    cx.emit(SidebarEvent::RequestRenameDashboard { dashboard_id });
+                }
+            }
+            ContextMenuAction::DeleteDashboard => {
+                if let Some(SchemaNodeId::DashboardItem { dashboard_id, .. }) =
+                    parse_node_id(&item_id)
+                {
+                    cx.emit(SidebarEvent::RequestDeleteDashboard { dashboard_id });
+                }
+            }
+            ContextMenuAction::DuplicateDashboard => {
+                if let Some(SchemaNodeId::DashboardItem { dashboard_id, .. }) =
+                    parse_node_id(&item_id)
+                {
+                    cx.emit(SidebarEvent::RequestDuplicateDashboard { dashboard_id });
+                }
+            }
+            ContextMenuAction::NewSavedChart => {
+                // No action needed from the context menu; "New Saved Chart" is only
+                // reachable by saving from a ChartDocument. The menu item is present
+                // so users discover the feature; clicking it is a no-op for now.
+            }
+            ContextMenuAction::RenameSavedChart => {
+                if let Some(SchemaNodeId::SavedChartItem { chart_id, .. }) = parse_node_id(&item_id)
+                {
+                    cx.emit(SidebarEvent::RequestRenameSavedChart { chart_id });
+                }
+            }
+            ContextMenuAction::DeleteSavedChart => {
+                if let Some(SchemaNodeId::SavedChartItem { chart_id, .. }) = parse_node_id(&item_id)
+                {
+                    cx.emit(SidebarEvent::RequestDeleteSavedChart { chart_id });
+                }
+            }
+            ContextMenuAction::DuplicateSavedChart => {
+                if let Some(SchemaNodeId::SavedChartItem { chart_id, .. }) = parse_node_id(&item_id)
+                {
+                    cx.emit(SidebarEvent::RequestDuplicateSavedChart { chart_id });
+                }
+            }
+            ContextMenuAction::RefreshInstanceCatalog => {
+                if let Some(profile_id) = parse_node_id(&item_id).and_then(|n| n.profile_id()) {
+                    self.clear_instance_catalog_cache(profile_id);
+                    self.spawn_fetch_instance_catalog(profile_id, cx);
+                    self.rebuild_tree_with_overrides(cx);
+                }
+            }
+            ContextMenuAction::CopyItemId => {
+                if let Some(node_id) = parse_node_id(&item_id) {
+                    let id_str = match &node_id {
+                        SchemaNodeId::InstanceMetricLeaf { metric_id, .. } => metric_id.clone(),
+                        SchemaNodeId::InstanceInspectorLeaf { metric_id, .. } => metric_id.clone(),
+                        other => other.to_string(),
+                    };
+                    cx.write_to_clipboard(ClipboardItem::new_string(id_str));
+                }
+            }
+            ContextMenuAction::CompareSchema => {
+                self.open_schema_diff_from_context(&item_id, cx);
+            }
+        }
+
+        // Close menu after executing action
+        self.context_menu = None;
+        cx.notify();
+    }
+
+    /// Execute menu action at a specific index (for mouse clicks).
+    pub fn context_menu_execute_at(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(ref mut menu) = self.context_menu {
+            if index >= menu.items.len() {
+                log::warn!(
+                    "context_menu_execute_at: invalid index {} for {} items",
+                    index,
+                    menu.items.len()
+                );
+                return;
+            }
+
+            if !menu.items[index].is_selectable() {
+                return;
+            }
+
+            menu.selected_index = index;
+        }
+        self.context_menu_execute(cx);
+    }
+
+    pub fn context_menu_go_back(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(ref mut menu) = self.context_menu else {
+            return false;
+        };
+
+        if let Some((parent_items, parent_index)) = menu.parent_stack.pop() {
+            menu.items = parent_items;
+            menu.selected_index = parent_index;
+            cx.notify();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Go back to parent menu and execute action at given index.
+    pub fn context_menu_parent_execute_at(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.context_menu_go_back(cx) {
+            self.context_menu_execute_at(index, cx);
+        }
+    }
+
+    pub fn close_context_menu(&mut self, cx: &mut Context<Self>) {
+        if self.context_menu.is_some() {
+            self.context_menu = None;
+            cx.notify();
+        }
+    }
+
+    pub fn has_context_menu_open(&self) -> bool {
+        self.context_menu.is_some()
+    }
+
+    pub fn context_menu_state(&self) -> Option<&ContextMenuState> {
+        self.context_menu.as_ref()
+    }
+
+    /// Returns an approximate position for the context menu based on the selected item.
+    /// Used for keyboard-triggered menu opening (m key).
+    pub fn selected_item_menu_position(&self, cx: &App) -> Point<Pixels> {
+        let header_height = px(40.0);
+        let row_height = px(28.0);
+        let menu_x = px(180.0);
+
+        let index = self
+            .active_tree_state()
+            .read(cx)
+            .selected_index()
+            .unwrap_or(0);
+        let y = header_height + (row_height * (index as f32));
+
+        Point::new(menu_x, y)
+    }
+
+    /// Returns true if the profile supports FK metadata for schema visualization.
+    /// Checks that the driver is Relational and has FOREIGN_KEYS capability.
+    pub(super) fn is_relational_with_fk_support(&self, item_id: &str, cx: &App) -> bool {
+        let Some(profile_id) = Self::extract_profile_id_from_item(item_id) else {
+            return false;
+        };
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections().get(&profile_id) else {
+            return false;
+        };
+        let metadata = conn.connection.metadata();
+        metadata.category == DatabaseCategory::Relational
+            && metadata
+                .capabilities
+                .contains(DriverCapabilities::FOREIGN_KEYS)
+    }
+}
+
+#[cfg(test)]
+mod parent_hover_tests {
+    use super::{ContextMenuAction, ContextMenuItem, ContextMenuState};
+    use gpui::{point, px};
+
+    fn item(label: &str) -> ContextMenuItem {
+        ContextMenuItem::item(label, ContextMenuAction::Open)
+    }
+
+    fn submenu_item(label: &str, children: Vec<ContextMenuItem>) -> ContextMenuItem {
+        ContextMenuItem::item(label, ContextMenuAction::Submenu(children))
+    }
+
+    /// Top-level menu with two submenu items and one plain item, opened into the first
+    /// submenu (owner index 0).
+    fn state_in_first_submenu() -> ContextMenuState {
+        let export_children = vec![item("as CSV"), item("as JSON")];
+        let migrate_children = vec![item("to Postgres"), item("to MySQL")];
+
+        let top_items = vec![
+            submenu_item("Export Table", export_children.clone()),
+            submenu_item("Migrate Table", migrate_children),
+            item("Drop Table"),
+        ];
+
+        ContextMenuState {
+            item_id: "table".to_string(),
+            selected_index: 0,
+            items: export_children,
+            parent_stack: vec![(top_items, 0)],
+            position: point(px(0.0), px(0.0)),
+        }
+    }
+
+    #[test]
+    fn hovering_the_owning_item_keeps_the_submenu_fixed() {
+        let mut state = state_in_first_submenu();
+
+        let changed = state.hover_parent_item(0);
+
+        assert!(!changed);
+        assert_eq!(state.parent_stack.last().unwrap().1, 0);
+        assert_eq!(state.items.len(), 2);
+        assert_eq!(state.items[0].label, "as CSV");
+    }
+
+    #[test]
+    fn hovering_another_submenu_item_switches_and_reanchors() {
+        let mut state = state_in_first_submenu();
+
+        let changed = state.hover_parent_item(1);
+
+        assert!(changed);
+        assert_eq!(state.parent_stack.last().unwrap().1, 1);
+        assert_eq!(state.items[0].label, "to Postgres");
+        assert_eq!(state.selected_index, 0);
+    }
+
+    #[test]
+    fn hovering_a_plain_item_collapses_the_submenu() {
+        let mut state = state_in_first_submenu();
+
+        let changed = state.hover_parent_item(2);
+
+        assert!(changed);
+        assert!(state.parent_stack.is_empty());
+        assert_eq!(state.selected_index, 2);
+        assert_eq!(state.items[0].label, "Export Table");
+    }
+
+    #[test]
+    fn hovering_with_no_submenu_open_does_nothing() {
+        let mut state = state_in_first_submenu();
+        state.parent_stack.clear();
+
+        assert!(!state.hover_parent_item(1));
+    }
+}

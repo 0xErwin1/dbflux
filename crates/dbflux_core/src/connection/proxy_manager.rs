@@ -12,17 +12,7 @@ impl DefaultFilename for ProxyManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ProxyAuth, ProxyKind, ProxyProfile, ProxyStore};
-
-    fn temp_manager() -> (tempfile::TempDir, ProxyManager) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("proxies.json");
-        let store = ProxyStore::from_path(path);
-        (
-            dir,
-            ProxyManager::with_store(store, "proxy profiles").unwrap(),
-        )
-    }
+    use crate::{ProxyAuth, ProxyKind, ProxyProfile};
 
     fn sample_proxy(name: &str) -> ProxyProfile {
         ProxyProfile {
@@ -39,23 +29,19 @@ mod tests {
     }
 
     #[test]
-    fn add_persists_to_disk() {
-        let (dir, mut mgr) = temp_manager();
+    fn add_item() {
+        let mut mgr = ProxyManager::new("proxies.json", "proxy profiles");
         let proxy = sample_proxy("Corporate Proxy");
         let id = proxy.id;
 
         mgr.add(proxy);
         assert_eq!(mgr.items.len(), 1);
-
-        let fresh_store = ProxyStore::from_path(dir.path().join("proxies.json"));
-        let loaded = fresh_store.load().unwrap();
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].id, id);
+        assert_eq!(mgr.items[0].id, id);
     }
 
     #[test]
     fn remove_by_index() {
-        let (_dir, mut mgr) = temp_manager();
+        let mut mgr = ProxyManager::new("proxies.json", "proxy profiles");
         let p0 = sample_proxy("Zero");
         let p1 = sample_proxy("One");
         let p2 = sample_proxy("Two");
@@ -77,7 +63,7 @@ mod tests {
 
     #[test]
     fn remove_out_of_bounds_noop() {
-        let (_dir, mut mgr) = temp_manager();
+        let mut mgr = ProxyManager::new("proxies.json", "proxy profiles");
         mgr.add(sample_proxy("Only"));
 
         let result = mgr.remove(99);
@@ -87,7 +73,7 @@ mod tests {
 
     #[test]
     fn update_existing_proxy() {
-        let (dir, mut mgr) = temp_manager();
+        let mut mgr = ProxyManager::new("proxies.json", "proxy profiles");
         let mut proxy = sample_proxy("Original");
         let id = proxy.id;
         mgr.add(proxy.clone());
@@ -96,18 +82,14 @@ mod tests {
         proxy.host = "new-proxy.local".to_string();
         mgr.update(proxy);
 
+        assert_eq!(mgr.items[0].id, id);
         assert_eq!(mgr.items[0].name, "Updated");
         assert_eq!(mgr.items[0].host, "new-proxy.local");
-
-        let fresh_store = ProxyStore::from_path(dir.path().join("proxies.json"));
-        let loaded = fresh_store.load().unwrap();
-        assert_eq!(loaded[0].id, id);
-        assert_eq!(loaded[0].name, "Updated");
     }
 
     #[test]
     fn update_nonexistent_is_noop() {
-        let (dir, mut mgr) = temp_manager();
+        let mut mgr = ProxyManager::new("proxies.json", "proxy profiles");
         mgr.add(sample_proxy("Existing"));
 
         let ghost = sample_proxy("Ghost");
@@ -115,9 +97,5 @@ mod tests {
 
         assert_eq!(mgr.items.len(), 1);
         assert_eq!(mgr.items[0].name, "Existing");
-
-        let fresh_store = ProxyStore::from_path(dir.path().join("proxies.json"));
-        let loaded = fresh_store.load().unwrap();
-        assert_eq!(loaded.len(), 1);
     }
 }

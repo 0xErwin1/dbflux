@@ -27,30 +27,37 @@ dbflux_driver_dynamodb = { workspace = true, optional = true }
 dbflux_driver_cloudwatch = { workspace = true, optional = true }
 dbflux_driver_influxdb = { workspace = true, optional = true }
 dbflux_driver_mssql = { workspace = true, optional = true }
+dbflux_portability.workspace = true
 dbflux_lua = { workspace = true, optional = true }
+dbflux_approval = { workspace = true, optional = true }
 dbflux_mcp = { workspace = true, optional = true }
 dbflux_mcp_server = { workspace = true, optional = true }
 dbflux_policy = { workspace = true, optional = true }
 dbflux_aws = { workspace = true, optional = true }
 dbflux_ssm = { workspace = true, optional = true }
+chrono.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 log.workspace = true
 indexmap.workspace = true
-async-trait = "0.1"
+async-trait = { workspace = true }
 
 [features]
 default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "cloudwatch", "mssql"]
-sqlite = ["dbflux_driver_sqlite"]
-postgres = ["dbflux_driver_postgres"]
-mysql = ["dbflux_driver_mysql"]
-mongodb = ["dbflux_driver_mongodb"]
-redis = ["dbflux_driver_redis"]
-dynamodb = ["dbflux_driver_dynamodb"]
+# Per-driver features enable the driver crate (for registration here) and, when
+# the MCP server is compiled in, forward the matching driver feature to it. This
+# relay used to live in dbflux_ui; it belongs here because dbflux_app owns both
+# the driver crates and the optional dbflux_mcp_server dependency.
+sqlite = ["dbflux_driver_sqlite", "dbflux_mcp_server?/sqlite"]
+postgres = ["dbflux_driver_postgres", "dbflux_mcp_server?/postgres"]
+mysql = ["dbflux_driver_mysql", "dbflux_mcp_server?/mysql"]
+mongodb = ["dbflux_driver_mongodb", "dbflux_mcp_server?/mongodb"]
+redis = ["dbflux_driver_redis", "dbflux_mcp_server?/redis"]
+dynamodb = ["dbflux_driver_dynamodb", "dbflux_mcp_server?/dynamodb"]
 cloudwatch = ["dbflux_driver_cloudwatch"]
 influxdb = ["dep:dbflux_driver_influxdb"]
 mssql = ["dep:dbflux_driver_mssql"]
 lua = ["dbflux_lua"]
-aws = ["dbflux_aws", "dbflux_ssm"]
-mcp = ["dbflux_mcp", "dbflux_mcp_server", "dbflux_policy"]
+aws = ["dbflux_aws", "dbflux_ssm", "dbflux_mcp_server?/aws"]
+mcp = ["dbflux_approval", "dbflux_mcp", "dbflux_mcp_server", "dbflux_policy", "dbflux_core/mcp"]

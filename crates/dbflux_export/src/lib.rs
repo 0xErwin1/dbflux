@@ -1,6 +1,7 @@
 mod binary;
 mod csv;
 mod json;
+mod streaming;
 mod text;
 
 use dbflux_core::{QueryResult, QueryResultShape};
@@ -10,6 +11,7 @@ use thiserror::Error;
 pub use binary::{BinaryExportMode, BinaryExporter};
 pub use csv::CsvExporter;
 pub use json::JsonExporter;
+pub use streaming::{CsvStreamWriter, JsonStreamWriter};
 pub use text::TextExporter;
 
 #[derive(Debug, Error)]

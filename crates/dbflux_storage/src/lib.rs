@@ -3,6 +3,7 @@ pub mod bootstrap;
 pub mod error;
 pub mod migrations;
 pub mod paths;
+pub mod pending_executions;
 pub mod repositories;
 pub mod service_configs;
 pub mod sqlite;
@@ -10,9 +11,13 @@ pub mod sqlite_tree_store;
 
 pub use artifacts::ArtifactStore;
 pub use bootstrap::{OwnedConnection, StorageRuntime};
+pub use repositories::app_meta::AppMetaRepository;
 pub use repositories::audit::{
-    AppendAuditEvent, AppendAuditEventExtended, AuditEventDto, AuditQueryFilter, AuditRepository,
+    AppendAuditEvent, AppendAuditEventExtended, AuditAggregateParams, AuditEventDto,
+    AuditGroupColumn, AuditQueryFilter, AuditRepository,
 };
+pub use repositories::qry_saved_queries::{SavedQueryRepo, SavedQuerySummary};
+pub use repositories::sch_schema_snapshots::{SchemaSnapshotRepo, SchemaSnapshotSummary};
 pub use repositories::state::{
     query_history::QueryHistoryRepository, recent_items::RecentItemsRepository,
     saved_queries::SavedQueriesRepository, sessions::SessionRepository,

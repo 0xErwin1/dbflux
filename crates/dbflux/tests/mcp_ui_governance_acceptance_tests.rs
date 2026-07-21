@@ -6,13 +6,36 @@ fn read_workspace_file(relative_path: &str) -> String {
     fs::read_to_string(root.join(relative_path)).expect("file should be readable")
 }
 
+/// Reads every `.rs` file under a module directory and concatenates them.
+///
+/// Used for source-wiring assertions against modules that are split into a
+/// directory of sibling files, so the checks stay agnostic to which file a
+/// given symbol lives in.
+fn read_workspace_module(relative_dir: &str) -> String {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let dir = root.join(relative_dir);
+
+    let mut entries: Vec<PathBuf> = fs::read_dir(&dir)
+        .expect("module directory should be readable")
+        .map(|entry| entry.expect("dir entry should be readable").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+        .collect();
+    entries.sort();
+
+    entries
+        .iter()
+        .map(|path| fs::read_to_string(path).expect("file should be readable"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[test]
 fn ui_contains_trusted_client_and_connection_policy_controls() {
-    let mcp_settings = read_workspace_file("../dbflux_ui/src/ui/windows/settings/mcp_section.rs");
+    let mcp_settings = read_workspace_file("../dbflux_ui_windows/src/settings/mcp_section.rs");
     let connection_form =
-        read_workspace_file("../dbflux_ui/src/ui/windows/connection_manager/form.rs");
+        read_workspace_file("../dbflux_ui_windows/src/connection_manager/form.rs");
     let connection_tabs =
-        read_workspace_file("../dbflux_ui/src/ui/windows/connection_manager/render_tabs.rs");
+        read_workspace_file("../dbflux_ui_windows/src/connection_manager/render_tabs.rs");
 
     assert!(mcp_settings.contains("mcp-client-save"));
     assert!(mcp_settings.contains("mcp-client-toggle-active"));
@@ -25,9 +48,9 @@ fn ui_contains_trusted_client_and_connection_policy_controls() {
 
 #[test]
 fn ui_contains_approval_and_audit_controls_with_workspace_wiring() {
-    let governance_view = read_workspace_file("../dbflux_ui/src/ui/document/governance.rs");
-    let workspace_actions = read_workspace_file("../dbflux_ui/src/ui/views/workspace/actions.rs");
-    let workspace_dispatch = read_workspace_file("../dbflux_ui/src/ui/views/workspace/dispatch.rs");
+    let governance_view = read_workspace_file("../dbflux_ui_document/src/governance.rs");
+    let workspace_actions = read_workspace_module("../dbflux_ui/src/ui/views/workspace/actions");
+    let workspace_dispatch = read_workspace_module("../dbflux_ui/src/ui/views/workspace/dispatch");
     let workspace_mod = read_workspace_file("../dbflux_ui/src/ui/views/workspace/mod.rs");
 
     assert!(governance_view.contains("mcp-approval-approve"));
@@ -47,8 +70,8 @@ fn ui_contains_approval_and_audit_controls_with_workspace_wiring() {
 
 #[test]
 fn audit_workspace_actions_retarget_existing_document_and_close_governance_overlay() {
-    let audit_document = read_workspace_file("../dbflux_ui/src/ui/document/audit/mod.rs");
-    let workspace_actions = read_workspace_file("../dbflux_ui/src/ui/views/workspace/actions.rs");
+    let audit_document = read_workspace_file("../dbflux_ui_document/src/audit/mod.rs");
+    let workspace_actions = read_workspace_module("../dbflux_ui/src/ui/views/workspace/actions");
 
     assert!(audit_document.contains("pub fn set_category_filter"));
     assert!(audit_document.contains("doc.pending_initial_load = false;"));
@@ -61,7 +84,7 @@ fn audit_workspace_actions_retarget_existing_document_and_close_governance_overl
 
 #[test]
 fn approvals_view_surfaces_failures_instead_of_swallowing_them() {
-    let governance_view = read_workspace_file("../dbflux_ui/src/ui/document/governance.rs");
+    let governance_view = read_workspace_file("../dbflux_ui_document/src/governance.rs");
 
     assert!(!governance_view.contains("let _ = state.approve_mcp_pending_execution"));
     assert!(!governance_view.contains("let _ = state.reject_mcp_pending_execution"));

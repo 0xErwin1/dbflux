@@ -6,13 +6,21 @@ use crate::error::StorageError;
 
 /// Opens (or creates) a SQLite database at `path` and applies the standard
 /// PRAGMA set that every internal DBFlux database should use.
+///
+/// On Unix the database file is narrowed to `0o600` immediately after opening.
+/// There is a brief TOCTOU window between `Connection::open` and the chmod; this
+/// matches the accepted pattern in `dbflux_ipc::auth`.
 pub fn open_database(path: &Path) -> Result<Connection, StorageError> {
     let conn = Connection::open(path).map_err(|source| StorageError::Sqlite {
         path: path.to_path_buf(),
         source,
     })?;
 
+    crate::paths::secure_file_permissions(path)?;
+
     apply_default_pragmas(&conn, path)?;
+
+    crate::paths::secure_db_sidecars(path)?;
 
     Ok(conn)
 }
@@ -22,6 +30,7 @@ pub fn open_database(path: &Path) -> Result<Connection, StorageError> {
 /// - WAL journal mode for concurrent readers.
 /// - NORMAL synchronous for a good durability/performance balance.
 /// - Foreign keys ON so schema constraints are enforced.
+/// - busy_timeout of 5000ms so concurrent writers retry rather than returning SQLITE_BUSY.
 fn apply_default_pragmas(conn: &Connection, path: &Path) -> Result<(), StorageError> {
     conn.pragma_update(None, "journal_mode", "WAL")
         .map_err(|source| StorageError::Sqlite {
@@ -41,7 +50,27 @@ fn apply_default_pragmas(conn: &Connection, path: &Path) -> Result<(), StorageEr
             source,
         })?;
 
+    conn.pragma_update(None, "busy_timeout", 5000)
+        .map_err(|source| StorageError::Sqlite {
+            path: path.to_path_buf(),
+            source,
+        })?;
+
     Ok(())
+}
+
+/// Toggles foreign-key enforcement on `conn`.
+///
+/// Must be called OUTSIDE any open transaction — `PRAGMA foreign_keys` is a
+/// no-op while a transaction is active. Migrations that rebuild a table (drop +
+/// recreate to change constraints) require enforcement OFF, otherwise dropping
+/// a referenced parent triggers cascading deletes on its child rows.
+pub fn set_foreign_keys(conn: &Connection, enabled: bool) -> Result<(), StorageError> {
+    conn.pragma_update(None, "foreign_keys", if enabled { "ON" } else { "OFF" })
+        .map_err(|source| StorageError::Sqlite {
+            path: std::path::PathBuf::from("<dbflux>"),
+            source,
+        })
 }
 
 #[cfg(test)]
@@ -51,6 +80,97 @@ mod tests {
 
     fn temp_db(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("dbflux_storage_test_{}.sqlite", name))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_database_secures_wal_shm_sidecars_0o600() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = temp_db("sidecars");
+        let wal = PathBuf::from({
+            let mut p = path.as_os_str().to_owned();
+            p.push("-wal");
+            p
+        });
+        let shm = PathBuf::from({
+            let mut p = path.as_os_str().to_owned();
+            p.push("-shm");
+            p
+        });
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&wal);
+        let _ = std::fs::remove_file(&shm);
+
+        // Open the DB and write data so SQLite actually creates real WAL/SHM sidecars.
+        {
+            let conn = open_database(&path).expect("first open");
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS t (x INTEGER); INSERT INTO t VALUES (1);",
+            )
+            .expect("create and insert");
+        }
+
+        // After the write the sidecars should exist; widen them to simulate the
+        // process-umask exposure before the next open (the gap this task closes).
+        for sidecar in [&wal, &shm] {
+            if sidecar.exists() {
+                std::fs::set_permissions(sidecar, std::fs::Permissions::from_mode(0o644))
+                    .expect("widen sidecar permissions");
+            }
+        }
+
+        // Re-open: open_database must narrow whichever sidecars it finds.
+        open_database(&path).expect("second open");
+
+        for (label, sidecar) in [("wal", &wal), ("shm", &shm)] {
+            if sidecar.exists() {
+                let mode = std::fs::metadata(sidecar)
+                    .expect("metadata readable")
+                    .permissions()
+                    .mode();
+                assert_eq!(
+                    mode & 0o777,
+                    0o600,
+                    "{} sidecar should be 0o600 after reopen, got {:o}",
+                    label,
+                    mode & 0o777
+                );
+            }
+        }
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&wal);
+        let _ = std::fs::remove_file(&shm);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_database_secures_file_0o600() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = temp_db("secure");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
+
+        open_database(&path).expect("open_database should succeed");
+
+        let mode = std::fs::metadata(&path)
+            .expect("metadata readable")
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "db file should be 0o600, got {:o}",
+            mode & 0o777
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
     }
 
     #[test]

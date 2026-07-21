@@ -4,6 +4,641 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+* **Context-aware SQL autocomplete in the query editor** — Completion in the
+  SQL editor now follows where the cursor sits instead of listing every
+  identifier the connection knows: tables and views after `FROM`/`JOIN`,
+  columns scoped to the tables actually referenced in the statement, relation
+  aliases, CTE names, and `SELECT` output aliases in `GROUP BY` / `ORDER BY` /
+  `HAVING`. It parses with tree-sitter so it holds up on half-typed queries,
+  prefetches column metadata in the background so a table no longer needs a
+  sidebar expand first, and hydrates from the latest deep schema snapshot on
+  connect so it starts warm after a restart. Every relational driver benefits;
+  non-SQL dialects keep their existing keyword completion.
+
+* **Data transfer — Export, Import, and same-engine Migration for SQL databases** —
+  A new transfer engine moves SQL data without leaving DBFlux. Multi-select
+  tables in the sidebar and **Export** them to a folder (one CSV or JSON file
+  per table plus a `manifest.json` that makes the bundle re-importable),
+  **Import** a previously exported bundle into a connected database, or
+  **Migrate** tables directly from one connection to another through a guided,
+  multi-phase wizard — pick the source tables and the target database from a
+  connection → database → schema → table tree, review the mapping in a
+  Source / Target / Mapping / Transform grid, and move through Options,
+  Confirm, and Run steps tracked in a phase sidebar, in a larger centered
+  modal. Migration orders
+  tables by foreign-key dependencies (parents before children), with a manual
+  reorder step when the graph has cycles and an optional
+  disable-referential-integrity toggle during transfer. Target tables can be
+  auto-created from the source schema (Create / Use existing / Recreate / Skip),
+  columns auto-map by name with adjustable overrides, and destructive modes
+  (Recreate, Truncate) require explicit confirmation. This first release covers
+  same-engine SQL transfers (PostgreSQL, MySQL/MariaDB, SQLite, SQL Server);
+  cross-engine and NoSQL migration are not yet supported.
+
+* **Export / import standalone profiles from Settings (#214)** — SSH tunnels,
+  proxies, and auth profiles can now be exported and imported directly from
+  their Settings sections, building on the connection portability pipeline
+  (#213). Each profile editor gains an **Export** action in its footer
+  (keyboard-navigable alongside Save / Delete) that opens the same
+  passphrase-encrypted TOML bundle modal, scoped to that single profile; each
+  section's list header gains an **Import…** action (also reachable with `i`
+  when the profile list is focused) that opens the import wizard with its
+  conflict / required-reference resolution. The import wizard now presents as a
+  modal dialog with the same chrome as the export modal — in Settings and in the
+  Connection Manager alike — so export and import look and behave consistently.
+  AWS reflected auth profiles stay reference-only and cannot be exported. Secret
+  material travels only inside the encrypted secrets section, passphrase
+  encryption is on by default, and the bundle format is unchanged.
+
+### Fixed
+
+* **Standalone MCP server failed to start and listed no tools** — The
+  governance binding role/policy repositories queried table names that did not
+  match the migrated schema, so `dbflux mcp` aborted with "no such table" for
+  any profile with a governance binding (the same mismatch also broke saving
+  these bindings in the main app). Startup then panicked on a blocking lock
+  read inside the async runtime, and `tools/list` returned an empty catalog
+  because the tool handler served an empty router instead of the combined one.
+
+* **SSH tunnel / proxy list icon vanishing on long hosts** — The globe icon in
+  the Settings SSH tunnels and proxies lists could be squeezed to zero width by
+  long, unbreakable hostnames (e.g. EC2 `ec2-…compute.amazonaws.com` addresses),
+  so some rows appeared to have no icon. The icon container is now
+  `flex_shrink_0` and the text column `min_w_0`, so the icon always renders and
+  the subtitle truncates instead.
+
+* **Chart auto-detection across four drivers (#204)** — Drivers now assign
+  `ColumnKind` honestly so the chart engine includes genuine numeric columns
+  and excludes non-plottable ones. CloudWatch CWL Insights `@timestamp` and
+  `@ingestionTime` values are normalised from CWLI format (`YYYY-MM-DD
+  HH:MM:SS.mmm`, UTC) to RFC3339 so the time axis can parse them; the kind
+  scanner now skips `Text` samples and keeps scanning for a numeric value,
+  so mixed-type columns resolve correctly. DynamoDB infers column kind from
+  `AttributeValue` (`N` → `Integer` when the string parses as `i64`, else
+  `Float`; `S` → `Text`; `Bool` → `Integer`; anything else → `Unknown`).
+  MongoDB document and query results infer column kinds from BSON value types
+  (Int32/Int64 → Integer, Double/Decimal128 → Float, Boolean → Integer,
+  String → Text, DateTime → Timestamp); BSON `Timestamp` (oplog logical
+  clock) stays `Unknown` because it carries no wall-clock meaning. InfluxDB
+  Flux and InfluxQL kind mappers classify `boolean` as `Integer`. Across all
+  drivers, `Value::Bool` now plots as 0/1, matching MSSQL BIT behaviour. The
+  chart engine now extracts `Value::DateTime` and `Value::Date` as
+  epoch-milliseconds on a time axis (Date as midnight UTC), so datetime/date
+  columns from any driver can drive a time axis. `Value::Time` has no absolute
+  epoch and remains unplottable, so SQL Server `TIME` columns are now
+  classified `Unknown` instead of `Timestamp` (they would otherwise be offered
+  as an empty time axis).
+
+## [0.6.0] - 2026-06-04
+
+### Added
+
+* **Visual UPDATE / DELETE query builder (#163)** — The
+  `QueryBuilderPanel` gains a mode selector that extends the visual SELECT
+  builder with UPDATE and DELETE modes, reusing the relational filter bar
+  for `WHERE` composition. The SQL preview is always visible and
+  regenerates synchronously on every builder change. New core types
+  (`VisualMutationSpec`, `MutationKind`, `ColumnAssignment`,
+  `AssignmentValue`) feed `QueryGenerator::generate_update_from_spec` /
+  `generate_delete_from_spec`, which emit keyset-paginated chunked DML for
+  all four SQL dialects; a raw-expression assignment is tracked via a
+  `used_raw_expression` flag rather than a textual marker. Execution runs
+  through a `MutationExecutor` state machine with three modes —
+  `SingleTransaction`, `ChunkedTransaction`, `DirectAutocommit` —
+  auto-suggested from the count estimate, the `TRANSACTIONS` capability,
+  and primary-key availability, with a tradeoff modal on user override.
+  Chunked runs use keyset pagination over the table PK (chunk size
+  clamped to `[1000, 10000]`, default 5000), surface per-chunk entries in
+  the Tasks panel with cancellation between chunks, and `ROLLBACK` on
+  chunk failure. No-`WHERE` UPDATE/DELETE is gated by a doubled
+  spec-level + text-level `DangerousQueryKind` check, and a new
+  `MutationPolicy` seam (`Allowed` / `ReadOnly` / `ApprovalRequired`)
+  composes MCP-actor, per-profile read-only, and default resolution.
+  Driver-agnostic by construction: gated on `QueryLanguage::Sql` with no
+  per-driver branching.
+
+* **Inline edit on builder-generated SELECT results (#170)** — Inline
+  cell edit and row delete now work on results produced by the visual
+  query builder, not just plain table browses, when the result is
+  provably *editable-safe*: it maps 1:1 to a single underlying table
+  and every primary-key column of that table is projected under its
+  original name. The builder computes an `EditableBinding` from the
+  committed `VisualQuerySpec` and threads it into the DataView, so edits
+  and deletes reuse the existing single-table mutation path with a
+  `WHERE` built from the projected PK values — no parsing of the
+  generated SQL. JOINs are allowed: columns originating from the source
+  table are editable while joined columns are marked read-only. The
+  result falls back to read-only — with a toolbar hint explaining why —
+  when any rule fails: aggregates / `GROUP BY` / `HAVING`, a wildcard
+  projection across a JOIN, a primary key that is missing or projected
+  under an alias, or a schema cache that has not yet loaded the table's
+  keys (the grid upgrades to editable on its own once the keys arrive).
+  Free-form editor SQL stays read-only; this is scoped to builder-
+  generated queries. Driver-agnostic by construction: the editable-safe
+  proof lives in `dbflux_core` over generic spec and metadata types with
+  no per-driver branching, so every relational driver picks it up.
+
+* **GROUP BY and aggregates in the visual query builder (#161)** — The
+  visual SELECT builder gains a `Group By / Aggregates` section between
+  Joins and Sort, with a separate `Having` section that reuses the same
+  predicate editor as `Filters` (WHERE). Supported aggregate functions:
+  `COUNT`, `COUNT(*)`, `COUNT(DISTINCT)`, `SUM`, `AVG`, `MIN`, `MAX`,
+  each with an editable alias that auto-generates from the function and
+  column. When the spec becomes grouped, the projection section is
+  replaced by a read-only effective `SELECT` preview composed of group
+  columns followed by aggregate aliases; sort entries are restricted to
+  group columns and aggregate aliases, with invalid entries rejected
+  with a visible error. The DataView reshapes in place: rows reflect
+  the aggregated result, pagination switches to a `COUNT(*)` subquery
+  over the grouped SELECT so the total page count is accurate, and
+  aggregate result columns receive the correct `ColumnKind` so chart
+  auto-detection keeps working (`COUNT*` → Integer, `AVG` → Float,
+  `SUM` preserves Integer/Float, `MIN`/`MAX` preserve input). Editing
+  is gated when the result is aggregated: add-row, delete-row,
+  edit-cell, and inspect-row become unavailable with explanatory
+  tooltips, and the footer surfaces a count of incomplete aggregate
+  rows so silently-dropped rows are visible to the user. Driver-
+  agnostic by construction: gated on `QueryLanguage::Sql` with no
+  per-driver branching, and the existing `SqlSelectBuilder` is extended
+  with `build_group_by`, `build_having`, and `build_count_of_grouped`
+  shared across SQLite, PostgreSQL, MySQL/MariaDB, and SQL Server.
+
+* **Schema-aware autocomplete for the visual query builder and DataView
+  filter (#165)** — Inline suggestion popovers now appear on the
+  builder rail's single-line inputs (filter / sort / projected columns,
+  join target table, join `ON` left and right sides) and on the
+  DataView toolbar's WHERE filter input. Suggestions are sourced from
+  the live schema and the builder's own spec — source-table columns,
+  declared join aliases (`alias.column`), and joined-table columns
+  fetched lazily through the existing background metadata pattern.
+  After typing `<alias>.`, results are scoped to that alias's columns
+  only. Arrow keys navigate, `Tab` / `Enter` commits, `Esc` and focus
+  loss dismiss. Prefix-only filtering for now (substring and SQL
+  keyword completion are deliberately deferred). Driver-agnostic by
+  construction: suggestions consume `dbflux_core` metadata types
+  without branching on driver id, so every relational driver picks the
+  feature up automatically.
+
+* **Relational filters in the DataView filter bar (#162)** — The filter
+  bar now accepts ORM-style dotted paths like
+  `created_by.email LIKE '%@acme.com'` or
+  `created_by.organization.name = 'Acme'`. Paths are resolved against
+  foreign-key metadata cached on the data grid; the resolver lowers the
+  expression into a `VisualQuerySpec` with `JoinOn::FkPath` joins and
+  routes it through the same builder pipeline that ships with the
+  visual SELECT builder (#146), so there is no second SQL generation
+  path. Ambiguous segments surface an inline chip with an "Open in
+  builder" action seeded with the joins resolved so far. The feature is
+  driver-agnostic and gated on `QueryLanguage::Sql`; non-dotted input
+  keeps today's raw-WHERE behavior.
+
+* **Visual SELECT query builder (#146)** — A right-rail query builder
+  composes SELECT statements without writing SQL: projection, FROM with
+  alias, JOINs, a recursive `WHERE` predicate tree, `ORDER BY`, and
+  `LIMIT`/`OFFSET`, with a live parameterized SQL preview. The foundation
+  is the new `VisualQuerySpec` (and supporting `FilterNode`, `Predicate`,
+  `JoinStep`, `JoinOn`, `Projection`, `SortEntry` types) in
+  `dbflux_core`, rendered by `SqlSelectBuilder` behind the defaulted
+  `QueryGenerator::generate_select` trait method with dialect-specific
+  placeholders for SQLite, PostgreSQL, MySQL/MariaDB, and SQL Server.
+  Builders can be saved and reopened: migration 017 adds `qry_saved_queries`
+  and its child tables (columns, sorts, joins) with cascading FKs and a
+  `UNIQUE (profile_id, name)` constraint, fronted by `SavedQueryRepo` and
+  an in-memory `SavedQueryManager`. A `TableProbe` seam verifies table
+  existence when importing a saved query onto another connection without
+  reaching into driver code. A `column_kind` inference fallback maps
+  `type_name` to `ColumnKind` so charts keep working on builder results.
+  Driver-agnostic by construction: gated on `QueryLanguage::Sql`.
+
+* **Instance metrics charts and inspectors across drivers (#93)** —
+  PostgreSQL, MySQL/MariaDB, MongoDB, Redis, and SQL Server now expose
+  live server metrics (time series) and tabular inspectors (sessions,
+  processlist, currentOp, CLIENT LIST) through a new `InstanceCatalog`
+  driver seam and two capability flags: `INSTANCE_METRICS` and
+  `INSTANCE_INSPECTOR`. Each catalog publishes a driver-defined
+  **Instance Overview** dashboard that opens read-only and can be
+  cloned via "Save as editable" into a persisted, user-owned dashboard.
+  Dashboards gain a new `Inspector` panel kind alongside `Chart` and
+  `Divider`, persisted via `viz_dashboard_panels.panel_kind`
+  (migration 014). Inspector rows expose driver-supplied row actions
+  (e.g. *Terminate connection* / *Kill session*) gated by per-driver
+  privilege probes (`pg_monitor`, `PROCESS` / `CONNECTION_ADMIN`,
+  MongoDB `killOp`, Redis `CLIENT KILL`). Destructive actions route
+  through `report_error_async` so failures land in the audit log with a
+  correlation id, and every refresh timer (dashboard, chart, inspector)
+  skips its tick when the underlying connection is gone so closing a
+  connection no longer floods the toast layer.
+* **External RPC drivers and auth providers can emit audit events (#157)**
+  RPC-backed drivers (driver protocol v1.2, capability `AuditEmit`) and
+  auth providers (auth-provider protocol v1.3, hello flag
+  `audit_emit_opt_in`) can now write to the audit log over IPC by sending
+  `EmitAuditEvent` frames as intermediate `done=false` responses. The host
+  sanitizes every event: forces `actor_type`/`source_id` to new
+  `ExternalDriver` / `ExternalAuthProvider` variants, fills `actor_id`
+  with the registered RPC service ID, overrides connection context from
+  `AppState`, enforces a per-source category whitelist (drivers:
+  `Connection`/`Query`/`System`; auth providers: `Connection` only), and
+  truncates `details_json` to the configured `max_detail_bytes`. A
+  per-`socket_id` token-bucket rate limiter (100 events/minute, configurable)
+  caps emission; overflow events are dropped silently — the IPC session
+  is never blocked or errored — and counted on
+  `AuditService::external_audit_dropped`. Older RPC peers that don't
+  advertise the capability/flag remain silent.
+- Centralized user-facing error reporting (`report_error` / `report_error_async` in `dbflux_ui_base`). Failures across mutations, file save, settings, and workspace actions now surface as a styled toast with a "View in Audit" action, increment a status-bar error badge, and emit a tracing event correlated with the audit row (#156).
+- `EventRecord.correlation_id` is now populated from the `correlation_id` tracing field across all `dbflux` targets, regardless of whether the field is recorded via `%` (Display) or `?` (Debug) sigil (#156).
+- **Tracing-to-audit bridge for centralized log capture (#154)** — A new `tracing-bridge` feature installs an `AuditLayer` subscriber in the `dbflux`, `dbflux_mcp_server`, and `dbflux_driver_host` binaries that funnels `tracing` events into the audit log through a bounded background queue with an atomic drop counter and in-flight gauge. A configurable `log_capture_min_level` audit setting (default `info`, persisted via migration 014) gates capture and updates the shared level atomic immediately. The layer applies a recursion guard, level gate, and summary truncation, and `AuditService::dropped_log_event_count()` exposes overflow drops.
+
+### Changed
+
+- Toast host applies a severity-aware throttle (capacity 5, refill 1 token / 2 s) to Warning and Info toasts so connection-storm noise does not bury the UI; Error and Fatal toasts bypass the throttle (#156).
+- **Provider-neutral auth-profile edit seam (#155)** — The auth-profile edit path no longer carries AWS-specific types in the public core API. `dbflux_core::auth::edit` now exposes a provider-neutral `AuthEditSnapshot` (opaque `Arc<dyn Any>`), `AuthEditTarget`, and `AuthSaveOutcome`; the former `AwsEditFile` / `AwsEditSnapshot` / `AwsSectionHash` types moved to a private `dbflux_aws::edit` module, and `AuthProviderCapabilities` gained an optional `edit` field (serde-defaulted for backward compatibility). All three AWS providers were rewired to the neutral types with no behavior change.
+
+### Fixed
+
+- **Scripts-tab folders can be collapsed again** — Chevron clicks were routed through the connections tree only, so script-folder expansion lookups always returned `false` and every click tried to expand. Toggling now routes through the active tab's tree, propagates the override into the scripts tree state, and applies expansion overrides when building script items so collapses survive a refresh.
+- **Syntax highlighting preserved across `AppStateChanged`** — `CodeDocument` re-applied the highlighter mode on every `AppStateChanged`, and `InputState::set_highlighter` clears the cached highlighter until the next render — wiping SQL coloring after running a query until the next keystroke. The document now tracks the last applied `editor_mode` and only re-applies the highlighter when it actually changes.
+- **NULL rendered as an empty field in CSV export** — CSV export emitted the PostgreSQL `\COPY` sentinel `\N` for NULL, which most CSV consumers (Excel, Sheets, generic parsers) read as the literal string. NULL now exports as an empty field, the de facto CSV convention.
+- **Inactive tab background no longer mismatches the tab bar.**
+- **Multiline UPDATE/DELETE no longer falsely flagged as missing a `WHERE`** — The dangerous-query check matched only the literal substring `" where "`, so a `WHERE` placed on its own line (preceded by a newline rather than a space) was never found and the statement was wrongly reported as affecting all rows. Detection now strips single-quoted string literals (honoring `''` escapes) and matches `where` as a whitespace/paren-delimited token, fixing the false positive for both UPDATE and DELETE while still catching `where` text that only appears inside a value.
+
+## [0.6.0-dev.10] - 2026-05-29
+
+### Added
+
+* **Saved charts, dashboards, and CloudWatch dashboard browsing (#152)** —
+  Charts created from query results can now be saved, organized into
+  dashboards, and reopened from the sidebar. CloudWatch connections gain a
+  browse view that lists the account's dashboards as a read-only catalog so
+  they can be inspected without round-tripping through the AWS console.
+  The change also lands the workspace's PaneHandle/ResultPanel refactor:
+  document tabs share a single closure-erased shell and a universal chrome
+  row built from `ToolbarSegment`s, so the mode bar, filter bar, and
+  refresh dropdown wrap responsively on narrow windows instead of pushing
+  controls off-screen.
+* **AWS profiles reflected live from `~/.aws` as source of truth (#149)** —
+  AWS SSO, SSO-session, and shared-credentials profiles are now enumerated
+  on demand from `~/.aws/config` and `~/.aws/credentials` via mtime-guarded
+  caches, with a deterministic UUIDv5 identity per `(provider_id, name)` so
+  reflected profiles are stable across launches without ever being stored.
+  DBFlux holds zero AWS key material on disk (ADR-7): the static-credentials
+  provider and its write-back paths are gone, and all `~/.aws/config`
+  writers now go through the atomic locked primitive so concurrent edits
+  can no longer truncate the file. Reflected entries surface in the auth
+  picker as read-only and are distinguished from stored profiles by a new
+  `AuthProfile.read_only` flag.
+* **AWS SSO sessions as first-class auth profiles** — A new `aws-sso-session`
+  auth provider models the `[sso-session NAME]` block of `~/.aws/config` as
+  its own profile, and `aws-sso` profiles reference it via a generic
+  `FormFieldKind::AuthProfileRef` dropdown instead of duplicating
+  `sso_start_url` / `sso_region` inline. A new `expand_auth_profile_refs`
+  pass merges the referenced session's fields into consumers at pipeline-input
+  and MCP-resolution time (consumer overrides win). Settings now renders the
+  selected session as inert text via `disabled_when_field_set`, and the
+  AWS-profile importer routes `[sso-session …]` blocks into the session
+  provider so re-importing matches sessions by name. Account/role dropdowns
+  always probe with a session marker, so they populate as soon as a valid
+  SSO session exists without forcing a new login.
+* **Copy-to-clipboard export from the data grid (#153)** — The data-grid
+  export menu now offers *Copy to clipboard* alongside *Save as file* for
+  every text-friendly format. Binary export is deliberately disabled with
+  guidance to use Hex or Base64 instead.
+
+### Changed
+
+* **Single Settings window across all entry points** — The four entry points
+  that opened Settings (workspace action, auth-profiles deep link, Connection
+  Manager section jump, sidebar footer) now all funnel through a shared
+  `open_or_focus_settings` helper. Previously only the workspace path used
+  `AppState::settings_window` for dedup, so the other three could stack
+  duplicate Settings windows on top of each other.
+
+### Fixed
+
+* **Native file dialog now has a fallback path with user feedback (#153)** —
+  `rfd::AsyncFileDialog::save_file()` returns `None` on both user-cancel and
+  backend-failure, so on Linux systems without `xdg-desktop-portal` /
+  `zenity` / `kdialog` the data-grid export and script *Save As* silently
+  dropped the action. DBFlux now pre-flights the backend via a PATH probe;
+  when none is available it writes to `~/.local/share/dbflux/exports/` with
+  a non-clobbering filename, raises a warning toast, and emits a
+  `result_export_fallback` audit event. When a backend exists, `None` is
+  treated as a genuine cancel. Script *Save As* mirrors the same pattern
+  and now surfaces write failures via toast instead of a silent log line.
+* **Schema drift modal no longer fires on every SELECT for multi-FK tables
+  (#151)** — The MySQL/MariaDB and MSSQL drivers built their foreign-key
+  list from a `HashMap`'s values, whose iteration order is nondeterministic.
+  Drift compares cached vs fresh foreign keys positionally and hashes the
+  fingerprint in order, so two identical fetches in a different order looked
+  like a change. Both drivers now use `ForeignKeyBuilder::build_sorted()`,
+  matching the order the SQL `ORDER BY` already specifies and the Postgres
+  driver's behavior.
+* **MariaDB and InfluxDB profiles default to the correct config variants**
+  — `default_db_config_for_kind` fell through to `default_postgres()` for
+  MariaDB and InfluxDB, so a profile loaded via this fallback got a Postgres
+  config while keeping its real kind; saving then persisted the mismatch,
+  and connecting failed with *"Expected MySQL configuration"* for MariaDB.
+  MariaDB now maps to `default_mysql()` and InfluxDB to `default_influxdb()`;
+  the catch-all arm is removed so new `DbKind` variants fail to compile
+  instead of silently degrading to Postgres.
+* **AWS SSO login no longer hangs after a successful browser flow** — The
+  cache lookup that polled for the new SSO token relied on
+  `sha1(start_url)` as the filename. AWS CLI v2 actually names the file
+  `sha1(session_name)` whenever the profile uses an `sso_session` block, so
+  the fast path silently returned an unrelated, expired file and the polling
+  loop spun forever even after `aws sso login` printed *"Successfully logged
+  into Start URL"*. `find_sso_cache_contents` now always scans the cache
+  directory and picks the newest entry whose `startUrl` field matches,
+  covering both the legacy URL-keyed and modern session-keyed schemes.
+* **Inline SSO login panel replaces the cross-window modal** — The login
+  panel, verification URL, *Open Browser* / *Copy URL* / *Cancel* buttons,
+  and the new `abort_sso_login` plumbing now live inside the Auth Profiles
+  settings section. Cancel actually kills the running `aws sso login` child
+  process via a shared abort flag and a per-profile abort registry. The
+  stdout scanner was also rewritten with a bounded `recv_timeout` loop so
+  PKCE-flow URLs (which never print `user_code=`) are surfaced immediately
+  instead of blocking indefinitely.
+
+## [0.6.0-dev.9] - 2026-05-26
+
+### Added
+
+* **Metric picker rail tab for chart documents** — CloudWatch metric charts now
+  open with an interactive picker rail (320 px overlay) that lets users browse
+  namespaces, metrics, and dimension combinations fetched live via
+  `ListMetrics` pagination. Selecting a metric and pressing Apply swaps the
+  chart's data source and auto-runs the query. Results are cached for the
+  session by `MetricCatalogCache`. No driver names or categories are hardcoded
+  in the UI layer; the Metric tab is gated solely on the generic
+  `METRIC_CATALOG` capability bit (#96).
+* **Time-range macros for InfluxQL and Flux** — user-written InfluxDB queries
+  can opt into UI-driven time-range substitution via Grafana-style tokens
+  (`$timeFilter`, `$__from`, `$__to` for InfluxQL; `v.timeRangeStart`,
+  `v.timeRangeStop` for Flux). Substitution happens at the execution
+  chokepoint in both `CodeDocument` and `ChartDocument`; the InfluxDB driver's
+  inject-when-absent path is skipped when macros are present so they take
+  precedence without double-injection. Queries without macros keep today's
+  byte-for-byte behavior. Documented in the driver README (#119).
+
+### Changed
+
+* **Driver-owned connection form definitions** — Built-in connection form
+  schemas moved out of `dbflux_core` and into their owning driver crates.
+  Core now keeps only the generic `DriverFormDef` primitives and helper
+  builders, while the connection manager reads forms through the existing
+  `DbDriver::form_definition()` seam. This removes driver-specific defaults,
+  URI placeholders, tab layouts, and conditional field rules from core with
+  no connection-manager behavior change (#140).
+* **Dialect-specific language services leave core** — SQL Server's
+  `TSqlLanguageService` now lives in `dbflux_driver_mssql`, matching the
+  MongoDB and MySQL driver-owned language-service pattern. Core retains the
+  generic `LanguageService` seam and shared SQL helpers, but no longer exports
+  the T-SQL-specific implementation (#129).
+* **MongoDB and Redis dangerous-query detection moved to drivers** — MongoDB
+  and Redis dangerous-operation classifiers now live in their driver language
+  services, and code execution asks the active connection's language service
+  to classify dangerous queries. Core still owns the shared
+  `DangerousQueryKind` type and SQL classifier, but no longer exports
+  Mongo/Redis-specific detection helpers (#139).
+* **Sidebar collapses single-database wrapper** — Connections whose driver
+  exposes exactly one database (CloudWatch's `logs`, DynamoDB's default
+  region, single-file SQLite, etc.) no longer render the redundant database
+  level. Child nodes (Collections, Metrics, Tables) attach directly under the
+  connection node. Multi-database drivers (Postgres, MySQL, MongoDB) are
+  unaffected — the wrapper still discriminates between databases (#131).
+* **CloudWatch metric catalog hardening** — The `RealCloudWatchClient` adapter
+  now reuses a single long-lived Tokio runtime across `list_metrics` calls
+  (previously a new runtime was constructed per call, wasting file descriptors
+  during full-namespace sweeps). The namespace sweep is also bounded at 50
+  pages (~25,000 metrics) to cap the worst case on very large AWS accounts; the
+  cap is documented in the driver README. A future change will replace the cap
+  with full timeout + cancellation infrastructure (#96).
+* **Sidebar metric leaves dedupe by metric name** — On accounts with
+  per-instance metric explosion (e.g. AWS/EC2 with 1000 instances) the
+  CloudWatch driver returns one `MetricDescriptor` per `(metric_name,
+  dimension_combo)` pair. The sidebar now collapses these into one leaf per
+  distinct `metric_name`; dimension refinement still happens inside the chart
+  document's picker rail (#96).
+* **Metric chart entry point moved to the sidebar** — Clicking a metric leaf
+  in the connection sidebar (Metrics > Namespace > Metric) opens a chart
+  pre-populated with defaults (Average statistic / 5 min period / aggregate
+  across all dimensions) and immediately executes it. The picker rail opens
+  alongside for refinement of dimensions, period, and statistic. Duplicate
+  clicks on the same metric leaf focus the existing tab (#96).
+* **Centralized `TimeRangePanel` custom-picker rendering** — A new
+  `render_custom_picker_row` helper (and `CustomPickerSlots` for hosts that
+  need per-slot decoration) is shared across `ChartDocument`, `CodeDocument`,
+  the data-grid chart toolbar, and the audit document. The data-grid chart
+  toolbar gains the custom date/hour/minute picker that previously was
+  missing under "Custom…", and audit migrates off the last hand-rolled
+  row. Behavior-preserving — public accessors and emitted events are
+  unchanged (#121).
+* **Chart toolbar wraps on narrow viewports** — The shared chart toolbar
+  used by `ChartDocument` and `DataGridPanel` switched from a single
+  non-wrapping flex row to the codebase's responsive pattern
+  (`flex_wrap` + `gap_x/gap_y`, `min_h(34px)`). Trailing controls (TYPE
+  chips, Stats / PNG / Save) no longer push off-screen when the document
+  is narrow; rows grow downward instead of clipping (#136).
+* **Stats rail gains an in-rail close affordance** — `ChartDocument`'s Stats
+  rail now renders a header with a STATS title and an `×` close button so
+  users can dismiss it without hunting for the toolbar toggle (#136).
+
+### Removed
+
+* `open_metrics_chart` workspace action and command-palette entry — the sidebar
+  tree is now the single entry point for metric charts.
+* `ChartDocument::new_empty_metric_chart` constructor — replaced by
+  `new_with_source` with a pre-built `MetricSource` and `setup_metric_picker`.
+
+### Fixed
+
+* **Command palette keyboard navigation follows visual sections** — Filtered
+  command-palette items now sort by rendered section order before match score,
+  so Up/Down navigation moves through Connections, Commands, Charts, Tables,
+  and Scripts exactly as displayed. Pressing Up from the first item in a
+  section now lands on the previous visible section instead of jumping within
+  the score-sorted backing list (#143).
+* **Modal sizing & button overflow** — three confirm dialogs (Run entire
+  script, Dangerous query, sidebar Delete/Drop) now use the shared
+  `ModalShell` primitive with consistent widths and a dedicated footer
+  button row. Buttons no longer overflow into the body, and the
+  Drop Database / Delete confirms no longer render at half the size of
+  the other confirm modals (#130).
+* **Chart axis tick density on wide/tall plots** — Three targeted
+  adjustments to the chart engine raise tick density without over-ticking
+  small charts: `NICE_TIME_STEPS_MS` gains 2h / 3h / 12h / 2d / 3d entries
+  (a 3-week range with 12 target ticks no longer collapses to 3 weekly
+  ticks), the X-tick clamp floor drops from 4 to 3 so ~400px charts can
+  render 3 ticks, and the Y-axis target switches from a build-time
+  constant of 5 to a render-time `(plot_h / 60).clamp(3, 12)` that mirrors
+  the existing X dynamic path (covers line / area / StackedBar / log).
+  PR #123's dynamic edge-label padding is preserved (#132).
+* **`ChartDocument` Stats rail toggle now actually renders** — The toggle
+  state machine was complete but `render_chart_content` had no
+  `ChartRailTab::Stats` branch, so clicking Stats appeared to do nothing.
+  The rail now renders for query-result, saved-chart, and CloudWatch
+  metric hosts with SERIES / STATS / WINDOW / SOURCE sections matching
+  `DataGridPanel`. Closes #133 (#136).
+* **MySQL editor diagnostics no longer flag DCL statements** — the MySQL
+  driver was using the generic `SqlLanguageService` (tree-sitter-sequel
+  / ANSI SQL), which chokes on `CREATE USER 'u'@'h' IDENTIFIED BY '…'`,
+  `GRANT … TO 'u'@'h'`, `FLUSH PRIVILEGES`, etc., surfacing spurious
+  "Unexpected …" errors. A new `MySqlLanguageService` (mirrors the
+  MongoDB pattern) overrides `Connection::language_service()` to return
+  empty editor diagnostics — the server stays the source of truth.
+  MariaDB shares the impl and is covered automatically. Closes #126
+  (#128).
+* **`TimeRangePanel` window preserved against stale source-input
+  clobber** — The result-panel chart toolbar's panel emitted
+  `TimeRangeChanged` on every preset click, but `run_query_text` then
+  unconditionally rebuilt `exec_ctx.source` from the once-populated
+  `source_*_input` text fields, silently overwriting the panel's
+  selection. A new `pending_window_override` on `CodeDocument` carries
+  the authoritative panel bounds through a pure
+  `resolve_source_context` helper that gives the override precedence
+  over the input-driven fallback (and suppresses input validation
+  errors when an override is present). `ChartDocument` was unaffected
+  (no dual source of truth) (#124).
+* **X-axis edge labels no longer clipped on charts** — the label paint
+  loop centered labels on tick screen-X with no right-bound clamping,
+  and the fixed `MARGIN_RIGHT = 16` did not reserve space for label
+  overhang. A pre-shape pass in the paint closure now measures label
+  widths and derives effective horizontal padding as
+  `max(MARGIN_*, max_label_w / 2.0)` (base margins as a floor), with a
+  symmetric left-edge guard. The Y-tick column tracks the effective
+  left pad so it stays flush with the plot. Extracted as
+  `effective_x_label_padding` with 6 unit tests (#120).
+* **`ChartDocument` custom-range apply race** — `apply_custom_range`
+  now sets `pending_time_window` and `pending_chart_reexecute`
+  synchronously from the validated `(start_ms, end_ms)` returned by
+  the panel, instead of waiting for the deferred `TimeRangeChanged`
+  subscription. The subscription still fires for `selected_time_range`
+  mirroring, but re-execution is no longer gated on its delivery
+  timing (#121).
+* **Connection + sidebar UX batch** — cancelling a connect task now
+  also clears the profile-level pending-operation entry so the
+  sidebar exits the "(connecting...)" state immediately. Editing a
+  currently-connected profile surfaces a "Reconnect now / Later"
+  toast; the edit always persists and the live session refreshes
+  only on opt-in. Reopening Settings after closing it no longer
+  wastes the first click (stale window handle cleared on close and
+  on focus failure). Ctrl+click in the sidebar now seeds the
+  keyboard-focused item into the multi-selection before toggling,
+  matching the visual cursor (#145).
+* **Row inspector follows the active tab and selection** — the
+  workspace inspector rail used to be a singleton with no per-tab
+  state, so switching tabs left a previous table's inspector
+  rendered against the new tab's chrome. `DataGridPanel` now
+  remembers `(row, col)` when the inspector opens and re-snapshots
+  the row on tab activation, result refresh, and selection
+  changes (click / arrow keys). Rows that fall out of bounds after
+  a refresh close the rail cleanly. Explicit dismissal (× / ESC)
+  drops the cached coords so the rail stays closed on return.
+  Inspector column-name and value cells now share a flex layout
+  (140px / 220px basis) with ellipsis truncation, so long names
+  no longer wrap and resizing the rail redistributes width across
+  both columns. `Ctrl+A` / `Cmd+A` inside an inline cell editor
+  now selects the input text instead of all table rows (#145).
+
+## [0.6.0-dev.8] - 2026-05-23
+
+### Added
+
+* **Audit event charts** — the Audit document now has a Table/Chart view
+  toggle that visualizes the currently filtered audit events as counts
+  over time, with one series per group value (grouped by category, outcome,
+  or level). The chart honors the document's active time range and
+  auto-refresh. Charts are ephemeral (a view mode, not a saved artifact).
+* **Logarithmic Y axis for charts** — charts can switch the Y axis between
+  linear and logarithmic (log1p) scale, so large spikes no longer flatten
+  the rest of the data. Exposed in the audit chart toolbar.
+* **CloudWatch metric charts** — CloudWatch connections can graph real
+  metrics (via `GetMetricData`) as a time-series chart. An "Open Metrics
+  Chart" command is available whenever the active driver advertises the
+  generic metric-series capability; the chart refreshes over the active
+  time window. The metric is currently fixed (AWS/Lambda Invocations,
+  average over 5-minute periods); an in-app metric picker is a follow-up.
+* **Generic `ChartDataSource` seam (W0)** — a driver-agnostic chart data
+  trait that the audit and CloudWatch chart features both consume. The UI
+  never branches on driver identity; charts are wired through metadata and
+  capabilities.
+
+### Changed
+
+* **Charts respond to the active theme** — chart canvas chrome (gridlines,
+  tick labels, crosshair, hover dot, readout overlays) and chart overlays
+  (legend, axis bar, point inspector, picker) now route through a new
+  `semantic::ChartColors` palette resolved per active theme. The Light
+  theme no longer renders the dark series palette over a light canvas;
+  Mirage and Dark use theme-driven series colors via the engine's
+  `theme.chart_1..chart_5`. Dark series colors remain byte-identical to
+  prior releases. Three deliberate Dark chrome divergences (gridlines via
+  `theme.border`, tick labels via `theme.muted_foreground`, hover-dot
+  background via `theme.background`) carry through and were validated by
+  visual QA.
+* **Document toolbar styling unified** — every document type's toolbar now
+  uses the same shared primitives (icons, separators, spacing) so the look
+  is consistent across SQL editors, chart documents, audit views, and the
+  data grid.
+* **UI split into six layered crates** — the monolithic `dbflux_ui` crate
+  was split into `dbflux_components` (domain-free leaf), `dbflux_ui_base`
+  (events/keymap/AppState seam), `dbflux_ui_document` (tabs, panes, all
+  document types), `dbflux_ui_windows` (settings + connection manager),
+  `dbflux_ui_sidebar`, and a thin `dbflux_ui` integrator. Per-driver
+  feature flags no longer live on UI crates (they belong to `dbflux_app`,
+  which registers drivers). Incremental rebuilds are noticeably faster.
+* **Design tokens consolidated across every UI crate** — every UI crate
+  now consumes the centralized `dbflux_components::tokens` scale
+  (`Spacing`, `Borders`, `Widths`, `ChartGeometry`) and routes banner
+  colors through a single `semantic::BannerColors`. Each crate is locked
+  by a source-scanning guardrail test that prevents regressions. Chart
+  factory files (`axis_bar`, `point_inspector`, `legend`) sit under the
+  guardrail; only `chart/engine.rs` stays exempt for canvas geometry math.
+  Behavior-preserving.
+* **`dbflux` binary dependency cleanup** — the binary's `Cargo.toml` no
+  longer declares the driver/runtime crates as direct optional deps; they
+  are activated through `dbflux_app/<feature>`. Feature relays unchanged
+  from a user perspective; `--features sqlite,…,lua,aws,mcp` continues to
+  work identically.
+
+### Fixed
+
+* **Audit row detail expanded full-width with custom range inputs
+  visible** — the Audit document's row detail panel now spans the full
+  width of the document and the custom date-range inputs are no longer
+  clipped behind toolbar chrome.
+* **Audit SQLite "database is locked" errors under contention** — the
+  audit store now sets a 5s `busy_timeout` when opening its connection.
+  Since the audit database shares a WAL file with `StorageRuntime` (and
+  tests may race on a shared temp path), concurrent openers previously
+  failed immediately with `SQLITE_BUSY` instead of waiting; they now
+  serialize. Fixes intermittent test failures in the MCP governance
+  suite.
+
+## [0.6.0-dev.7] - 2026-05-21
+
+### Fixed
+
+* **Focus shortcuts on macOS/Windows** — `Ctrl+Shift+1..4` (Focus
+  Sidebar / Editor / Results / Tasks) now fire on every platform. GPUI
+  normalizes `Shift`+digit chords at the platform layer (e.g. macOS
+  delivers `Ctrl+Shift+2` as `@` with `shift=false`), so the literal
+  `KeymapStack` matchers never matched the runtime keystroke. The four
+  shortcuts are now registered as native GPUI key bindings, which GPUI
+  normalizes per platform/layout at registration time. The `KeymapStack`
+  entries are retained solely as the command-palette shortcut-label
+  source.
+* **DriverCapabilities bit collision** — `MULTI_STATEMENT` and `ROUTINES`
+  were both defined as `1 << 47` in the same bitflags, so a driver
+  advertising one silently advertised the other. `MULTI_STATEMENT` now
+  occupies bit 48, with a regression test asserting the bits are
+  distinct.
+* **DynamoDB upsert capability** — `MutationCapabilities.supports_upsert`
+  was `false` even though the driver implements single-item upsert
+  (`PutItem`) and only rejects `many + upsert`. The flag is now `true`,
+  so the MCP write tool no longer rejects a supported operation.
+
 ## [0.6.0-dev.6] - 2026-05-20
 
 ### Added

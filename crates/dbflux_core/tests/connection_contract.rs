@@ -257,6 +257,7 @@ impl dbflux_core::Connection for PlannedExecutionConnection {
                 display_name: "Planned Test".into(),
                 description: "planned test".into(),
                 category: dbflux_core::DatabaseCategory::Relational,
+                transfer_family: dbflux_core::TransferFamily::Sql,
                 deployment_class: None,
                 query_language: QueryLanguage::Sql,
                 capabilities: dbflux_core::DriverCapabilities::empty(),
@@ -272,6 +273,9 @@ impl dbflux_core::Connection for PlannedExecutionConnection {
                 ssl_modes: None,
                 ssl_cert_fields: None,
                 classification_override: None,
+                default_chunk_size: None,
+                supports_lock_timeout: false,
+                editor_profile: None,
             });
 
         &METADATA

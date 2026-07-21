@@ -87,6 +87,26 @@ pub fn build_v2_flux_url(base: &str, org: &str) -> String {
     format!("{base}/api/v2/query?org={org_enc}")
 }
 
+/// Build the JSON body for a v2 Flux query request.
+///
+/// The `dialect.annotations` request is required: without it, InfluxDB v2
+/// returns annotation-free CSV (header + data only), so the response parser
+/// cannot recover column types and every column degrades to text — which in
+/// turn breaks chart auto-detection (no Timestamp / numeric columns). We request
+/// all three annotations the CSV parser understands.
+pub fn build_flux_request_body(query: &str) -> serde_json::Value {
+    serde_json::json!({
+        "query": query,
+        "type": "flux",
+        "dialect": {
+            "annotations": ["datatype", "group", "default"],
+            "header": true,
+            "delimiter": ",",
+            "dateTimeFormat": "RFC3339"
+        }
+    })
+}
+
 /// Build the Authorization header value for the given credentials.
 ///
 /// v2 tokens use the `Token <value>` scheme. v1 credentials use HTTP Basic
@@ -186,8 +206,14 @@ impl HttpClient {
     }
 
     /// Issue a POST request with a Flux query body.
+    ///
+    /// The `dialect.annotations` request is required: without it, InfluxDB v2
+    /// returns annotation-free CSV (header + data only), so the response parser
+    /// cannot recover column types and every column degrades to text — which in
+    /// turn breaks chart auto-detection (no Timestamp / numeric columns). We
+    /// request all three annotations the CSV parser understands.
     fn post_flux(&self, url: &str, query: &str) -> Result<HttpResponseBody, HttpError> {
-        let body = serde_json::json!({ "query": query, "type": "flux" });
+        let body = build_flux_request_body(query);
 
         let mut req = self
             .client
@@ -302,6 +328,25 @@ mod tests {
         assert!(
             url.contains("org=my-org"),
             "must carry org param, got: {url}"
+        );
+    }
+
+    #[test]
+    fn flux_request_body_requests_datatype_annotations() {
+        let body = build_flux_request_body("from(bucket: \"b\") |> range(start: -1h)");
+
+        assert_eq!(body["type"], "flux");
+        assert_eq!(body["query"], "from(bucket: \"b\") |> range(start: -1h)");
+
+        let annotations = body["dialect"]["annotations"]
+            .as_array()
+            .expect("annotations must be an array");
+
+        // The datatype annotation is what lets the CSV parser recover column
+        // types (Timestamp / Float); without it, charts cannot auto-detect.
+        assert!(
+            annotations.iter().any(|a| a == "datatype"),
+            "dialect must request the datatype annotation, got: {annotations:?}"
         );
     }
 

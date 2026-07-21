@@ -7,12 +7,14 @@
 - Supports query cancellation via SQLite interrupt handles.
 - Includes SQL/code generation for CRUD, indexes, reindex, create table, and drop table.
 - Multi-statement scripts (several `;`-separated statements) are split and executed statement by statement, each through the typed prepared path, returning one result set per statement. (`rusqlite::prepare` only parses the first statement of a string, so a script must be split.)
+- Data-transfer engine: native multi-row `INSERT` bulk-load (`BULK_INSERT`), driver-native `CREATE TABLE` DDL from a source table's columns, and a per-connection referential-integrity toggle (`PRAGMA foreign_keys`) for FK-safe migrations.
 
 ## Limitations
 
 - Local file driver only; no network transport, SSH tunneling, or TLS/SSL mode.
 - SQL-only driver; it does not expose document or key-value APIs.
 - SQLite schema model has no server-side multi-schema namespace equivalent.
+- No `TRUNCATE TABLE` statement; the data-transfer engine's Truncate load option is unavailable for SQLite targets (`DriverCapabilities::TRUNCATE_TABLE` is not set).
 
 ## DDL Capabilities
 

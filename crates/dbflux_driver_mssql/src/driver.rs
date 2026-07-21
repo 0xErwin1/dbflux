@@ -8,22 +8,25 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dbflux_core::QueryGenerator;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
-    ColumnAssignment, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
-    ConnectionProfile, ConstraintInfo, ConstraintKind, CrudResult, CustomTypeInfo, CustomTypeKind,
-    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
-    DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection, DriverCapabilities,
-    DriverFormDef, DriverLimits, DriverMetadata, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo,
-    FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection,
-    MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
-    QueryCapabilities, QueryErrorFormatter, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    RecordIdentity, RelationalConnection, RelationalSchema, RoutineInfo, RoutineKind, Row,
-    RowDelete, RowInsert, RowPatch, SQLSERVER_FORM, SchemaFeatures, SchemaForeignKeyBuilder,
+    AddColumnRequest, AlterColumnRequest, CodeGenCapabilities, CodeGenerator, ColumnAssignment,
+    ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile,
+    ConstraintInfo, ConstraintKind, CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory,
+    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DdlRejection,
+    DeploymentClass, DescribeRequest, DocumentConnection, DriverCapabilities, DriverFormDef,
+    DriverLimits, DriverMetadata, DropColumnRequest, ExecutionSourceContext, ExplainRequest,
+    ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind, FormSection, FormTab, FormValues,
+    FormattedError, Icon, IndexData, IndexInfo, InstanceCatalog, IsolationLevel,
+    KeyValueConnection, MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle,
+    QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, RecordIdentity, RelationalConnection, RelationalSchema, RoutineInfo,
+    RoutineKind, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
     SchemaForeignKeyInfo, SchemaIndexBuilder, SchemaIndexInfo, SchemaLoadingStrategy,
     SchemaSnapshot, SortDirection, SqlDialect, SqlMutationGenerator, SshTunnelConfig, SyntaxInfo,
-    TableBrowseRequest, TableCountRequest, TableInfo, TransactionCapabilities, Value, ViewInfo,
-    WhereOperator, generate_delete_template, generate_drop_table, generate_insert_template,
-    generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
-    sanitize_uri,
+    TableBrowseRequest, TableCountRequest, TableInfo, TransactionCapabilities, TransferFamily,
+    Value, ViewInfo, WhereOperator, field, field_password, field_required, field_use_uri,
+    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
+    generate_truncate, generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab,
+    validate_ddl_fragment, when_checked, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 use tiberius::{AuthMethod, Client, Config, EncryptionLevel, SqlBrowser};
@@ -33,12 +36,85 @@ use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
 type TiberiusClient = Client<Compat<TcpStream>>;
 
+pub static SQLSERVER_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![
+        FormTab {
+            id: "main".into(),
+            label: "Main".into(),
+            sections: vec![
+                FormSection {
+                    title: "Server".into(),
+                    fields: vec![
+                        field_use_uri(),
+                        when_checked(
+                            field_required(
+                                "uri",
+                                "Connection URI",
+                                FormFieldKind::Text,
+                                "sqlserver://user:pass@localhost:1433/db",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("host", "Host", FormFieldKind::Text, "localhost"),
+                                "localhost",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("port", "Port", FormFieldKind::Number, "1433"),
+                                "1433",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            field(
+                                "database",
+                                "Database",
+                                FormFieldKind::Text,
+                                "optional - leave empty for default",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            field(
+                                "instance",
+                                "Instance",
+                                FormFieldKind::Text,
+                                "optional - e.g. SQLEXPRESS",
+                            ),
+                            "use_uri",
+                        ),
+                    ],
+                },
+                FormSection {
+                    title: "Authentication".into(),
+                    fields: vec![
+                        when_unchecked(
+                            with_default(
+                                field_required("user", "User", FormFieldKind::Text, "sa"),
+                                "sa",
+                            ),
+                            "use_uri",
+                        ),
+                        field_password(),
+                    ],
+                },
+            ],
+        },
+        ssh_tab(),
+    ],
+});
+
 /// SQL Server driver metadata.
 pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
     id: "mssql".into(),
     display_name: "SQL Server".into(),
     description: "Microsoft SQL Server relational database".into(),
     category: DatabaseCategory::Relational,
+    transfer_family: TransferFamily::Sql,
     deployment_class: Some(DeploymentClass::SelfHosted),
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
@@ -52,7 +128,12 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
             | DriverCapabilities::TRANSACTIONAL_DDL.bits()
             | DriverCapabilities::ROUTINES.bits()
-            | DriverCapabilities::MULTI_STATEMENT.bits(),
+            | DriverCapabilities::MULTI_STATEMENT.bits()
+            | DriverCapabilities::INSTANCE_METRICS.bits()
+            | DriverCapabilities::INSTANCE_INSPECTOR.bits()
+            | DriverCapabilities::CHART_AUTHORING.bits()
+            | DriverCapabilities::BULK_INSERT.bits()
+            | DriverCapabilities::TRUNCATE_TABLE.bits(),
     ),
     default_port: Some(1433),
     uri_scheme: "sqlserver".into(),
@@ -91,6 +172,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             WhereOperator::Not,
         ],
         supports_order_by: true,
+        order_by_mode: dbflux_core::OrderByMode::AnyColumns,
         supports_group_by: true,
         supports_having: true,
         supports_distinct: true,
@@ -164,6 +246,8 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         max_identifier_length: 128,
         max_columns: 1024,
         max_indexes_per_table: 999,
+        // T-SQL caps a single multi-row INSERT ... VALUES statement at 1000 rows.
+        max_bulk_insert_rows: 1000,
     }),
     ssl_modes: Some(&[
         dbflux_core::SslModeOption {
@@ -184,6 +268,9 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         client_cert: false,
     }),
     classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
+    editor_profile: None,
 });
 
 // =============================================================================
@@ -229,6 +316,28 @@ impl SqlDialect for MssqlDialect {
         // SQL Server returns affected rows via the OUTPUT clause rather than
         // RETURNING. The driver's CRUD methods build the OUTPUT clause
         // directly; SqlQueryBuilder's RETURNING path is bypassed.
+        true
+    }
+
+    fn supports_row_constructor_in(&self) -> bool {
+        // T-SQL does not support row-value constructors in IN lists:
+        //   (col_a, col_b) IN ((?, ?), ...)
+        // Composite PK chunked DML must use OR-of-AND predicates instead.
+        false
+    }
+
+    fn limit_clause(&self, n: u32) -> String {
+        // T-SQL has no LIMIT keyword. The equivalent is OFFSET ... FETCH NEXT,
+        // which must appear after ORDER BY. The caller is responsible for
+        // including ORDER BY before this clause.
+        format!("OFFSET 0 ROWS FETCH NEXT {} ROWS ONLY", n)
+    }
+
+    fn limit_offset_clause(&self, n: u32, offset: u64) -> String {
+        format!("OFFSET {} ROWS FETCH NEXT {} ROWS ONLY", offset, n)
+    }
+
+    fn having_repeats_aggregate_expressions(&self) -> bool {
         true
     }
 
@@ -323,6 +432,116 @@ fn value_to_mssql_literal(value: &Value) -> String {
             format!("N'{}'", json.replace('\'', "''"))
         }
         Value::Unsupported(_) => "NULL".to_string(),
+    }
+}
+
+// =============================================================================
+// SQL Server Code Generator
+// =============================================================================
+
+pub struct MssqlCodeGenerator;
+
+static MSSQL_CODE_GENERATOR: MssqlCodeGenerator = MssqlCodeGenerator;
+
+impl MssqlCodeGenerator {
+    fn quote(&self, name: &str) -> String {
+        MSSQL_DIALECT.quote_identifier(name)
+    }
+
+    fn qualified(&self, schema: Option<&str>, name: &str) -> String {
+        MSSQL_DIALECT.qualified_table(schema, name)
+    }
+}
+
+impl CodeGenerator for MssqlCodeGenerator {
+    fn capabilities(&self) -> CodeGenCapabilities {
+        CodeGenCapabilities::ADD_COLUMN
+            | CodeGenCapabilities::DROP_COLUMN
+            | CodeGenCapabilities::ALTER_COLUMN
+    }
+
+    /// T-SQL's `ALTER TABLE ... ADD` grammar has no `COLUMN` keyword (unlike
+    /// `DROP COLUMN` / `ALTER COLUMN`, which both require it).
+    fn generate_add_column(&self, req: &AddColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        validate_ddl_fragment(req.type_name, "column type")?;
+        if let Some(default) = req.default {
+            validate_ddl_fragment(default, "column default")?;
+        }
+
+        let table = self.qualified(req.schema_name, req.table_name);
+        let mut sql = format!(
+            "ALTER TABLE {} ADD {} {}",
+            table,
+            self.quote(req.column_name),
+            req.type_name
+        );
+
+        if !req.nullable {
+            sql.push_str(" NOT NULL");
+        }
+        if let Some(default) = req.default {
+            sql.push_str(&format!(" DEFAULT {}", default));
+        }
+        sql.push(';');
+
+        Ok(vec![sql])
+    }
+
+    fn generate_drop_column(&self, req: &DropColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        let table = self.qualified(req.schema_name, req.table_name);
+        Ok(vec![format!(
+            "ALTER TABLE {} DROP COLUMN {};",
+            table,
+            self.quote(req.column_name)
+        )])
+    }
+
+    /// SQL Server's `ALTER COLUMN` always requires the full data type, and
+    /// omitting `NULL`/`NOT NULL` leaves the server to decide nullability —
+    /// this generator never relies on that ambiguity, so a type change
+    /// without an explicit nullable is rejected rather than guessed.
+    ///
+    /// Column defaults are separate named constraint objects in SQL Server
+    /// (`ALTER TABLE ... ADD CONSTRAINT ... DEFAULT ... FOR col`), so
+    /// changing or dropping one requires the constraint's name, which this
+    /// request does not carry. Default changes are rejected for that reason.
+    fn generate_alter_column(&self, req: &AlterColumnRequest) -> Result<Vec<String>, DdlRejection> {
+        if req.default.is_some() {
+            return Err(DdlRejection {
+                reason: "SQL Server default constraints must be dropped and re-added by name; not derivable from this request".to_string(),
+                followup: None,
+            });
+        }
+
+        if let Some(new_type) = req.new_type {
+            validate_ddl_fragment(new_type, "column type")?;
+        }
+
+        let table = self.qualified(req.schema_name, req.table_name);
+        let column = self.quote(req.column_name);
+
+        match (req.new_type, req.nullable) {
+            (Some(new_type), Some(nullable)) => {
+                let null_clause = if nullable { "NULL" } else { "NOT NULL" };
+                Ok(vec![format!(
+                    "ALTER TABLE {} ALTER COLUMN {} {} {};",
+                    table, column, new_type, null_clause
+                )])
+            }
+            (Some(_), None) => Err(DdlRejection {
+                reason: "SQL Server requires an explicit nullability together with a type change (ALTER COLUMN needs the full column definition)".to_string(),
+                followup: None,
+            }),
+            (None, Some(_)) => Err(DdlRejection {
+                reason: "SQL Server requires the column type to change nullability (ALTER COLUMN needs the full column definition)".to_string(),
+                followup: None,
+            }),
+            (None, None) => Err(DdlRejection {
+                reason: "ALTER COLUMN requires at least one of: type, nullable, default"
+                    .to_string(),
+                followup: None,
+            }),
+        }
     }
 }
 
@@ -1027,9 +1246,9 @@ fn build_mssql_connection(
 // MssqlConnection
 // =============================================================================
 
-struct MssqlConnectionInner {
-    client: Option<TiberiusClient>,
-    runtime: Runtime,
+pub(crate) struct MssqlConnectionInner {
+    pub(crate) client: Option<TiberiusClient>,
+    pub(crate) runtime: Runtime,
 }
 
 pub struct MssqlConnection {
@@ -1151,27 +1370,25 @@ impl MssqlConnection {
 
         // Multi-statement batches in SQL Server can produce multiple result
         // sets (e.g. `SELECT 1; SELECT 2;` or a stored procedure with
-        // several `SELECT`s). We return the LAST non-empty set as the
-        // primary `QueryResult` (preserving the historical "last statement
-        // wins" UX) and attach every earlier non-empty set to
-        // `additional_results` in batch order, so callers that want the
-        // full batch can walk it via `QueryResult::iter_result_sets()`.
-        // Pure preparation batches (`SET LOCK_TIMEOUT 5000`) produce no
-        // result sets and surface as an empty primary, which is what
-        // callers already expect.
+        // several `SELECT`s). We return the LAST result set as the primary
+        // `QueryResult` (preserving the historical "last statement wins" UX)
+        // and attach every earlier set to `additional_results` in batch
+        // order, so callers that want the full batch can walk it via
+        // `QueryResult::iter_result_sets()`. Column metadata comes from each
+        // set's METADATA token, so a `SELECT` that returned zero rows still
+        // carries its column headers. Pure preparation batches
+        // (`SET LOCK_TIMEOUT 5000`) emit no metadata, produce no result set,
+        // and surface as an empty primary, which is what callers expect.
         let collected = self.with_client(|runtime, client| {
             runtime.block_on(async move {
-                let stream = client
+                let mut stream = client
                     .simple_query(sql_owned)
                     .await
                     .map_err(|e| format_mssql_query_error(&e))?;
 
-                let result_sets = stream
-                    .into_results()
-                    .await
-                    .map_err(|e| format_mssql_query_error(&e))?;
+                let result_sets = collect_result_sets(&mut stream).await?;
 
-                Ok::<_, DbError>(convert_result_sets(result_sets))
+                Ok::<_, DbError>(result_sets)
             })
         })?;
 
@@ -1190,32 +1407,64 @@ impl MssqlConnection {
     }
 }
 
-/// Convert tiberius's raw result sets into `(columns, rows)` pairs, dropping
-/// any empty sets so the multi-set splitter sees only meaningful output.
-fn convert_result_sets(result_sets: Vec<Vec<tiberius::Row>>) -> Vec<(Vec<ColumnMeta>, Vec<Row>)> {
-    result_sets
-        .into_iter()
-        .filter(|set| !set.is_empty())
-        .map(convert_single_result_set)
-        .collect()
+/// Drive a tiberius `QueryStream` item by item, capturing column metadata from
+/// the result-set METADATA tokens rather than from rows.
+///
+/// Each `Metadata` item starts a new `(columns, rows)` pair built from the
+/// declared columns, so a result set that produced zero rows still carries its
+/// columns. Each `Row` item is appended to the most recently started pair.
+/// Statements that emit no metadata (e.g. `SET LOCK_TIMEOUT 5000`) create no
+/// pair at all.
+///
+/// The returned pairs are passed through [`finalize_result_sets`] so empty,
+/// metadata-less batches are dropped while empty-but-columned sets are kept.
+async fn collect_result_sets(
+    stream: &mut tiberius::QueryStream<'_>,
+) -> Result<Vec<(Vec<ColumnMeta>, Vec<Row>)>, DbError> {
+    use futures_util::TryStreamExt;
+
+    let mut sets: Vec<(Vec<ColumnMeta>, Vec<Row>)> = Vec::new();
+
+    while let Some(item) = stream
+        .try_next()
+        .await
+        .map_err(|e| format_mssql_query_error(&e))?
+    {
+        if let Some(metadata) = item.as_metadata() {
+            let columns = metadata
+                .columns()
+                .iter()
+                .map(tiberius_column_to_meta)
+                .collect();
+            sets.push((columns, Vec::new()));
+            continue;
+        }
+
+        if let Some(row) = item.into_row() {
+            let converted: Row = (0..row.columns().len())
+                .map(|idx| tiberius_value_to_value(&row, idx))
+                .collect();
+
+            match sets.last_mut() {
+                Some((_, rows)) => rows.push(converted),
+                None => sets.push((Vec::new(), vec![converted])),
+            }
+        }
+    }
+
+    Ok(finalize_result_sets(sets))
 }
 
-fn convert_single_result_set(set: Vec<tiberius::Row>) -> (Vec<ColumnMeta>, Vec<Row>) {
-    let columns = set
-        .first()
-        .map(|row| row.columns().iter().map(tiberius_column_to_meta).collect())
-        .unwrap_or_default();
-
-    let rows: Vec<Row> = set
-        .iter()
-        .map(|row| {
-            (0..row.columns().len())
-                .map(|idx| tiberius_value_to_value(row, idx))
-                .collect::<Row>()
-        })
-        .collect();
-
-    (columns, rows)
+/// Drop result sets that carry neither columns nor rows, while preserving
+/// empty-but-columned sets (a `SELECT` that returned zero rows still has its
+/// column headers). Factored out so it can be unit-tested without a live
+/// SQL Server.
+fn finalize_result_sets(
+    sets: Vec<(Vec<ColumnMeta>, Vec<Row>)>,
+) -> Vec<(Vec<ColumnMeta>, Vec<Row>)> {
+    sets.into_iter()
+        .filter(|(columns, rows)| !columns.is_empty() || !rows.is_empty())
+        .collect()
 }
 
 fn tiberius_column_to_meta(column: &tiberius::Column) -> ColumnMeta {
@@ -1228,14 +1477,14 @@ fn tiberius_column_to_meta(column: &tiberius::Column) -> ColumnMeta {
     }
 }
 
-/// Splits a list of non-empty result sets into a primary `QueryResult` plus
-/// additional sets, mirroring the multi-result-set contract on
+/// Splits a list of result sets into a primary `QueryResult` plus additional
+/// sets, mirroring the multi-result-set contract on
 /// `QueryResult::additional_results`.
 ///
-/// The LAST non-empty set becomes the primary (this preserves the historical
-/// "last statement wins" UX for `SELECT 1; SELECT 2;` style batches), and
-/// every earlier non-empty set is attached to `additional_results` in batch
-/// order. Empty input yields an empty primary.
+/// The LAST set becomes the primary (this preserves the historical "last
+/// statement wins" UX for `SELECT 1; SELECT 2;` style batches), and every
+/// earlier set is attached to `additional_results` in batch order. Empty
+/// input yields an empty primary.
 ///
 /// Factored out of `execute_simple` so it can be unit-tested without a live
 /// SQL Server.
@@ -1315,7 +1564,9 @@ fn tiberius_value_to_value(row: &tiberius::Row, idx: usize) -> Value {
 ///
 /// Variants whose semantic category isn't representable (`Guid`, `Xml`, `Udt`,
 /// `BigVarBin`/`BigBinary`/`Image`, `SSVariant`, `Null`) map to `Unknown` so
-/// chart auto-detect excludes them rather than treating them as text.
+/// chart auto-detect excludes them rather than treating them as text. `TIME`
+/// also maps to `Unknown`: it yields a wall-clock `Value::Time` the chart
+/// engine cannot place on a time axis.
 fn tiberius_column_to_kind(column_type: tiberius::ColumnType) -> dbflux_core::ColumnKind {
     use dbflux_core::ColumnKind;
     use tiberius::ColumnType;
@@ -1339,14 +1590,7 @@ fn tiberius_column_to_kind(column_type: tiberius::ColumnType) -> dbflux_core::Co
         | ColumnType::Datetimen
         | ColumnType::Datetime2
         | ColumnType::Daten
-        | ColumnType::Timen
         | ColumnType::DatetimeOffsetn => ColumnKind::Timestamp,
-        ColumnType::BigVarChar
-        | ColumnType::BigChar
-        | ColumnType::NVarchar
-        | ColumnType::NChar
-        | ColumnType::Text
-        | ColumnType::NText => ColumnKind::Text,
         ColumnType::Null
         | ColumnType::Guid
         | ColumnType::Xml
@@ -1354,7 +1598,17 @@ fn tiberius_column_to_kind(column_type: tiberius::ColumnType) -> dbflux_core::Co
         | ColumnType::BigVarBin
         | ColumnType::BigBinary
         | ColumnType::Image
-        | ColumnType::SSVariant => ColumnKind::Unknown,
+        | ColumnType::SSVariant
+        // TIME yields Value::Time (a wall-clock time-of-day with no absolute
+        // instant); the chart engine cannot plot it on a time axis, so it must
+        // not advertise Timestamp.
+        | ColumnType::Timen => ColumnKind::Unknown,
+        ColumnType::BigVarChar
+        | ColumnType::BigChar
+        | ColumnType::NVarchar
+        | ColumnType::NChar
+        | ColumnType::Text
+        | ColumnType::NText => ColumnKind::Text,
     }
 }
 
@@ -1391,7 +1645,21 @@ impl Connection for MssqlConnection {
         // WITH (NOLOCK), OFFSET ROWS FETCH NEXT, etc.). Returning the
         // T-SQL-aware service suppresses the noisy parse diagnostics
         // while keeping dangerous-query detection.
-        &dbflux_core::TSqlLanguageService
+        &crate::TSqlLanguageService
+    }
+
+    fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
+        let mut inner = self.inner.lock().ok()?;
+        let view_server_state_available =
+            crate::instance_catalog::MssqlInstanceCatalog::probe_view_server_state(&mut inner);
+        drop(inner);
+
+        Some(Box::new(
+            crate::instance_catalog::MssqlInstanceCatalog::new(
+                Arc::clone(&self.inner),
+                view_server_state_available,
+            ),
+        ))
     }
 
     fn ping(&self) -> Result<(), DbError> {
@@ -1418,6 +1686,30 @@ impl Connection for MssqlConnection {
         // Support explicit database override per query, mirroring postgres/mysql.
         if let Some(database) = req.database.as_deref() {
             self.set_active_database(Some(database))?;
+        }
+
+        if let Some(source) = req
+            .execution_context
+            .as_ref()
+            .and_then(|ctx| ctx.source.as_ref())
+        {
+            match source {
+                ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
+                    let mut inner = self.inner.lock().map_err(|_| {
+                        DbError::QueryFailed("mssql inner mutex poisoned".to_string().into())
+                    })?;
+                    return crate::instance_catalog::dispatch_metric_series(&mut inner, metric_id);
+                }
+                ExecutionSourceContext::InstanceInspectorQuery { metric_id } => {
+                    let mut inner = self.inner.lock().map_err(|_| {
+                        DbError::QueryFailed("mssql inner mutex poisoned".to_string().into())
+                    })?;
+                    return crate::instance_catalog::dispatch_inspector_snapshot(
+                        &mut inner, metric_id,
+                    );
+                }
+                _ => {}
+            }
         }
 
         // Slice by char boundary, not byte index: SQL with multi-byte UTF-8
@@ -2138,6 +2430,10 @@ impl Connection for MssqlConnection {
         &MSSQL_DIALECT
     }
 
+    fn code_generator(&self) -> &dyn CodeGenerator {
+        &MSSQL_CODE_GENERATOR
+    }
+
     fn query_generator(&self) -> Option<&dyn QueryGenerator> {
         static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&MSSQL_DIALECT);
         Some(&GENERATOR)
@@ -2448,7 +2744,7 @@ impl MssqlConnection {
             );
         }
 
-        Ok(builder.build())
+        Ok(builder.build_sorted())
     }
 
     fn fetch_constraints(
@@ -3511,6 +3807,34 @@ fn format_mssql_uri_error(e: &tiberius::error::Error, uri: &str) -> DbError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dbflux_core::DefaultSpec;
+
+    #[test]
+    fn time_type_is_not_classified_as_timestamp() {
+        use dbflux_core::ColumnKind;
+        use tiberius::ColumnType;
+
+        // TIME emits Value::Time, which the chart engine cannot place on a time
+        // axis (no absolute instant), so it must not advertise Timestamp.
+        assert_eq!(
+            tiberius_column_to_kind(ColumnType::Timen),
+            ColumnKind::Unknown
+        );
+
+        // DATE (Value::Date) and the datetime types stay Timestamp — those plot.
+        assert_eq!(
+            tiberius_column_to_kind(ColumnType::Daten),
+            ColumnKind::Timestamp
+        );
+        assert_eq!(
+            tiberius_column_to_kind(ColumnType::Datetime2),
+            ColumnKind::Timestamp
+        );
+        assert_eq!(
+            tiberius_column_to_kind(ColumnType::DatetimeOffsetn),
+            ColumnKind::Timestamp
+        );
+    }
 
     #[test]
     fn mssql_type_to_routine_kind_mapping() {
@@ -4020,6 +4344,387 @@ mod tests {
         assert_eq!(
             names,
             vec!["c".to_string(), "a".to_string(), "b".to_string()]
+        );
+    }
+
+    #[test]
+    fn finalize_drops_only_sets_without_columns_and_rows() {
+        let empty_columned: (Vec<ColumnMeta>, Vec<Row>) =
+            (vec![col("id"), col("name")], Vec::new());
+        let metadata_less: (Vec<ColumnMeta>, Vec<Row>) = (Vec::new(), Vec::new());
+
+        let kept = finalize_result_sets(vec![metadata_less, empty_columned, one_row_set("data")]);
+
+        // The metadata-less set (no columns, no rows) is dropped; the
+        // empty-but-columned set and the populated set are retained.
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0].0.len(), 2);
+        assert!(kept[0].1.is_empty());
+        assert_eq!(kept[1].0[0].name, "data");
+    }
+
+    #[test]
+    fn empty_but_columned_set_becomes_primary_with_columns() {
+        let empty_columned: (Vec<ColumnMeta>, Vec<Row>) =
+            (vec![col("user_id"), col("email")], Vec::new());
+
+        let collected = finalize_result_sets(vec![empty_columned]);
+        let result = build_multi_result(collected, std::time::Duration::ZERO);
+
+        // The regression guard: a zero-row SELECT keeps its column headers.
+        assert!(!result.columns.is_empty());
+        assert_eq!(result.columns.len(), 2);
+        assert_eq!(result.columns[0].name, "user_id");
+        assert_eq!(result.columns[1].name, "email");
+        assert!(result.rows.is_empty());
+    }
+
+    #[test]
+    fn mssql_metadata_advertises_chart_authoring() {
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::CHART_AUTHORING),
+            "CHART_AUTHORING must be set: MSSQL advertises INSTANCE_METRICS and needs \
+             CHART_AUTHORING so the sidebar surfaces Dashboards / Saved Charts folders"
+        );
+    }
+
+    #[test]
+    fn mssql_metadata_advertises_instance_metrics() {
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::INSTANCE_METRICS),
+            "INSTANCE_METRICS must remain set on MSSQL driver"
+        );
+    }
+
+    #[test]
+    fn mssql_metadata_declares_sql_transfer_family() {
+        assert_eq!(METADATA.category, DatabaseCategory::Relational);
+        assert_eq!(METADATA.transfer_family, TransferFamily::Sql);
+    }
+
+    #[test]
+    fn mssql_metadata_advertises_bulk_insert_and_truncate() {
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::BULK_INSERT)
+        );
+        assert!(
+            METADATA
+                .capabilities
+                .contains(DriverCapabilities::TRUNCATE_TABLE)
+        );
+    }
+
+    #[test]
+    fn mssql_limits_report_the_1000_row_bulk_insert_cap() {
+        let limits = METADATA.limits.as_ref().expect("mssql must declare limits");
+        assert_eq!(limits.max_bulk_insert_rows, 1000);
+    }
+
+    #[test]
+    fn mssql_referential_integrity_toggle_stays_unsupported() {
+        // Per the design's flagged open question: T-SQL's per-table NOCHECK
+        // model does not fit the global set_referential_integrity signature,
+        // so MSSQL does not override the default and must not set the
+        // DISABLE_FK_CHECKS capability bit.
+        assert!(
+            !METADATA
+                .capabilities
+                .contains(DriverCapabilities::DISABLE_FK_CHECKS)
+        );
+    }
+
+    #[test]
+    fn mssql_generate_bulk_insert_emits_multi_row_values() {
+        use dbflux_core::QueryGenerator;
+
+        let generator = SqlMutationGenerator::new(&MSSQL_DIALECT);
+        let columns = vec!["name".to_string(), "age".to_string()];
+        let owned_rows: Vec<Vec<dbflux_core::Value>> = vec![
+            vec![
+                dbflux_core::Value::Text("Alice".to_string()),
+                dbflux_core::Value::Int(25),
+            ],
+            vec![
+                dbflux_core::Value::Text("Bob".to_string()),
+                dbflux_core::Value::Int(30),
+            ],
+        ];
+        let rows: Vec<&[dbflux_core::Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
+
+        let generated = generator
+            .generate_bulk_insert(None, "users", &columns, &[], &rows)
+            .unwrap()
+            .expect("mssql generator must support native bulk insert");
+
+        assert!(generated.text.starts_with("INSERT INTO "));
+        assert!(generated.text.contains("VALUES"));
+        assert_eq!(generated.text.matches("), (").count() + 1, 2);
+    }
+
+    #[test]
+    fn mssql_generate_create_table_preserves_types_and_pk() {
+        use dbflux_core::QueryGenerator;
+
+        let generator = SqlMutationGenerator::new(&MSSQL_DIALECT);
+        let spec = dbflux_core::CreateTableSpec {
+            schema: None,
+            table: "users".to_string(),
+            columns: vec![dbflux_core::TransferColumn {
+                name: "id".to_string(),
+                type_name: Some("INT".to_string()),
+                nullable: false,
+                is_primary_key: true,
+            }],
+            if_not_exists: false,
+        };
+
+        let generated = generator
+            .generate_create_table(&spec)
+            .unwrap()
+            .expect("mssql generator must support native CREATE TABLE");
+
+        assert!(generated.text.contains("PRIMARY KEY"));
+        assert!(generated.text.contains("NOT NULL"));
+    }
+
+    // F-R3-1: T-SQL limit_clause must use OFFSET/FETCH, not LIMIT.
+    #[test]
+    fn mssql_limit_clause_uses_offset_fetch() {
+        assert_eq!(
+            MSSQL_DIALECT.limit_clause(5),
+            "OFFSET 0 ROWS FETCH NEXT 5 ROWS ONLY",
+            "T-SQL must use OFFSET/FETCH syntax, not LIMIT"
+        );
+    }
+
+    // F-R3-1: T-SQL limit_clause with n=1000 (typical chunk size).
+    #[test]
+    fn mssql_limit_clause_uses_offset_fetch_thousand() {
+        let clause = MSSQL_DIALECT.limit_clause(1000);
+        assert!(
+            clause.contains("OFFSET 0 ROWS FETCH NEXT 1000 ROWS ONLY"),
+            "got: {}",
+            clause
+        );
+        assert!(
+            !clause.to_ascii_uppercase().contains("LIMIT"),
+            "must not contain LIMIT; got: {}",
+            clause
+        );
+    }
+
+    // T15: the data-transfer engine's no-PK fallback pagination must use
+    // OFFSET/FETCH for MSSQL even for a non-zero offset, where plain
+    // `LIMIT n OFFSET m` (the trait's default) would be invalid T-SQL.
+    #[test]
+    fn mssql_limit_offset_clause_uses_offset_fetch_for_nonzero_offset() {
+        assert_eq!(
+            MSSQL_DIALECT.limit_offset_clause(5, 10),
+            "OFFSET 10 ROWS FETCH NEXT 5 ROWS ONLY"
+        );
+    }
+
+    #[test]
+    fn mssql_limit_offset_clause_uses_offset_fetch_for_zero_offset() {
+        assert_eq!(
+            MSSQL_DIALECT.limit_offset_clause(5, 0),
+            "OFFSET 0 ROWS FETCH NEXT 5 ROWS ONLY"
+        );
+    }
+
+    // F-R3-1: The PK SELECT built by run_chunked_tx for MSSQL must use OFFSET/FETCH.
+    // This tests the clause construction pattern directly so no live connection is needed.
+    #[test]
+    fn mssql_chunked_pk_select_uses_offset_fetch() {
+        use dbflux_core::SqlDialect;
+        let chunk_size: u32 = 1000;
+        let limit = MSSQL_DIALECT.limit_clause(chunk_size);
+        let select_sql = format!("SELECT [id] FROM [orders] ORDER BY [id] {}", limit);
+        assert!(
+            select_sql.contains("OFFSET 0 ROWS FETCH NEXT 1000 ROWS ONLY"),
+            "chunked PK SELECT for MSSQL must use OFFSET/FETCH; got: {}",
+            select_sql
+        );
+        assert!(
+            !select_sql.to_ascii_uppercase().contains(" LIMIT "),
+            "chunked PK SELECT for MSSQL must not use LIMIT; got: {}",
+            select_sql
+        );
+    }
+
+    // F-R3-1: The sample rows SELECT for MSSQL must use OFFSET/FETCH.
+    #[test]
+    fn mssql_sample_rows_uses_offset_fetch() {
+        use dbflux_core::SqlDialect;
+        let limit = MSSQL_DIALECT.limit_clause(5);
+        let sql = format!("SELECT * FROM [orders] {}", limit);
+        assert!(
+            sql.contains("OFFSET 0 ROWS FETCH NEXT 5 ROWS ONLY"),
+            "sample rows SELECT for MSSQL must use OFFSET/FETCH; got: {}",
+            sql
+        );
+        assert!(
+            !sql.to_ascii_uppercase().contains(" LIMIT "),
+            "sample rows SELECT for MSSQL must not use LIMIT; got: {}",
+            sql
+        );
+    }
+
+    // ===== Column ALTER seam (DBF-24) =====
+
+    #[test]
+    fn mssql_codegen_generates_add_column_without_column_keyword() {
+        let generator = MssqlCodeGenerator;
+        let request = AddColumnRequest {
+            table_name: "users",
+            schema_name: Some("dbo"),
+            column_name: "age",
+            type_name: "INT",
+            nullable: false,
+            default: Some("0"),
+        };
+
+        let statements = generator
+            .generate_add_column(&request)
+            .expect("mssql should generate add column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE [dbo].[users] ADD [age] INT NOT NULL DEFAULT 0;"]
+        );
+    }
+
+    #[test]
+    fn mssql_codegen_generates_drop_column_with_column_keyword() {
+        let generator = MssqlCodeGenerator;
+        let request = DropColumnRequest {
+            table_name: "users",
+            schema_name: Some("dbo"),
+            column_name: "age",
+        };
+
+        let statements = generator
+            .generate_drop_column(&request)
+            .expect("mssql should generate drop column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE [dbo].[users] DROP COLUMN [age];"]
+        );
+    }
+
+    #[test]
+    fn mssql_codegen_alter_column_requires_explicit_type_and_nullable_together() {
+        let generator = MssqlCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: Some("dbo"),
+            column_name: "age",
+            new_type: Some("BIGINT"),
+            nullable: Some(true),
+            default: None,
+        };
+
+        let statements = generator
+            .generate_alter_column(&request)
+            .expect("mssql should generate alter column sql");
+
+        assert_eq!(
+            statements,
+            vec!["ALTER TABLE [dbo].[users] ALTER COLUMN [age] BIGINT NULL;"]
+        );
+    }
+
+    #[test]
+    fn mssql_codegen_alter_column_rejects_type_change_without_explicit_nullable() {
+        let generator = MssqlCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: Some("dbo"),
+            column_name: "age",
+            new_type: Some("BIGINT"),
+            nullable: None,
+            default: None,
+        };
+
+        let result = generator.generate_alter_column(&request);
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().reason,
+            "SQL Server requires an explicit nullability together with a type change (ALTER COLUMN needs the full column definition)"
+        );
+    }
+
+    #[test]
+    fn mssql_codegen_alter_column_rejects_nullable_change_without_type() {
+        let generator = MssqlCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: Some("dbo"),
+            column_name: "age",
+            new_type: None,
+            nullable: Some(false),
+            default: None,
+        };
+
+        let result = generator.generate_alter_column(&request);
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().reason,
+            "SQL Server requires the column type to change nullability (ALTER COLUMN needs the full column definition)"
+        );
+    }
+
+    #[test]
+    fn mssql_codegen_alter_column_rejects_default_changes() {
+        let generator = MssqlCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: Some("dbo"),
+            column_name: "age",
+            new_type: None,
+            nullable: None,
+            default: Some(DefaultSpec::Set("0")),
+        };
+
+        let result = generator.generate_alter_column(&request);
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().reason,
+            "SQL Server default constraints must be dropped and re-added by name; not derivable from this request"
+        );
+    }
+
+    #[test]
+    fn mssql_codegen_alter_column_rejects_when_nothing_to_change() {
+        let generator = MssqlCodeGenerator;
+        let request = AlterColumnRequest {
+            table_name: "users",
+            schema_name: Some("dbo"),
+            column_name: "age",
+            new_type: None,
+            nullable: None,
+            default: None,
+        };
+
+        let result = generator.generate_alter_column(&request);
+
+        assert_eq!(
+            result,
+            Err(DdlRejection {
+                reason: "ALTER COLUMN requires at least one of: type, nullable, default"
+                    .to_string(),
+                followup: None,
+            })
         );
     }
 }

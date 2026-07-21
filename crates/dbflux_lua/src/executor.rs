@@ -67,20 +67,24 @@ impl HookExecutor for LuaExecutor {
         let cancel = cancel_token.clone();
         let parent = parent_cancel_token.cloned();
 
-        vm.lua.set_hook(
-            HookTriggers::new().every_nth_instruction(1_000),
-            move |_, _| {
-                if cancel.is_cancelled() || parent.as_ref().is_some_and(CancelToken::is_cancelled) {
-                    return Err(LuaError::RuntimeError("Lua hook cancelled".to_string()));
-                }
+        vm.lua
+            .set_hook(
+                HookTriggers::new().every_nth_instruction(1_000),
+                move |_, _| {
+                    if cancel.is_cancelled()
+                        || parent.as_ref().is_some_and(CancelToken::is_cancelled)
+                    {
+                        return Err(LuaError::RuntimeError("Lua hook cancelled".to_string()));
+                    }
 
-                if timeout.is_some_and(|max| start.elapsed() > max) {
-                    return Err(LuaError::RuntimeError("Lua hook timed out".to_string()));
-                }
+                    if timeout.is_some_and(|max| start.elapsed() > max) {
+                        return Err(LuaError::RuntimeError("Lua hook timed out".to_string()));
+                    }
 
-                Ok(VmState::Continue)
-            },
-        );
+                    Ok(VmState::Continue)
+                },
+            )
+            .map_err(|e| format!("Failed to install Lua hook: {e}"))?;
 
         let exec_result = vm.lua.load(&script_content).exec();
         vm.lua.remove_hook();
@@ -114,6 +118,7 @@ impl HookExecutor for LuaExecutor {
                 stdout,
                 stderr: String::new(),
                 timed_out: true,
+                detached: false,
                 warnings: Vec::new(),
             }),
             Err(error) => Ok(HookResult {
@@ -121,6 +126,7 @@ impl HookExecutor for LuaExecutor {
                 stdout,
                 stderr: error.to_string(),
                 timed_out: false,
+                detached: false,
                 warnings: Vec::new(),
             }),
         }
@@ -143,6 +149,7 @@ fn map_outcome(stdout: String, outcome: LuaHookOutcome) -> HookResult {
             stdout,
             stderr: String::new(),
             timed_out: false,
+            detached: false,
             warnings: Vec::new(),
         },
         LuaHookOutcome::Warn(message) => HookResult {
@@ -150,6 +157,7 @@ fn map_outcome(stdout: String, outcome: LuaHookOutcome) -> HookResult {
             stdout,
             stderr: String::new(),
             timed_out: false,
+            detached: false,
             warnings: vec![message],
         },
         LuaHookOutcome::Fail(message) => HookResult {
@@ -157,6 +165,7 @@ fn map_outcome(stdout: String, outcome: LuaHookOutcome) -> HookResult {
             stdout,
             stderr: message,
             timed_out: false,
+            detached: false,
             warnings: Vec::new(),
         },
     }
@@ -201,6 +210,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             inherit_env: true,
+            env_denylist: Vec::new(),
             timeout_ms: None,
             execution_mode: HookExecutionMode::Blocking,
             ready_signal: None,
@@ -223,6 +233,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             inherit_env: true,
+            env_denylist: Vec::new(),
             timeout_ms: None,
             execution_mode: HookExecutionMode::Blocking,
             ready_signal: None,
@@ -365,7 +376,7 @@ mod tests {
             .execute_hook(
                 &lua_hook_with_capabilities(
                     &format!(
-                        "local result = dbflux.process.run({{ program = '{python}', allowlist = 'python_cli', args = {{'-c', 'print(\"hello-process\")'}} }})\nif not result.ok then hook.fail(result.stderr) end"
+                        "local result = dbflux.process.run({{ program = '{python}', allowlist = 'python_cli', timeout_ms = 5000, args = {{'-c', 'print(\"hello-process\")'}} }})\nif not result.ok then hook.fail(result.stderr) end"
                     ),
                     LuaCapabilities {
                         process_run: true,
@@ -489,7 +500,7 @@ mod tests {
 
         let hook = lua_hook_with_capabilities(
             &format!(
-                "dbflux.log.info('hello-log')\nlocal result = dbflux.process.run({{ program = '{python}', allowlist = 'python_cli', stream = true, args = {{'-c', 'print(\"hello-stream\")'}} }})\nif not result.ok then hook.fail(result.stderr) end"
+                "dbflux.log.info('hello-log')\nlocal result = dbflux.process.run({{ program = '{python}', allowlist = 'python_cli', timeout_ms = 5000, stream = true, args = {{'-c', 'print(\"hello-stream\")'}} }})\nif not result.ok then hook.fail(result.stderr) end"
             ),
             LuaCapabilities {
                 process_run: true,
@@ -533,7 +544,7 @@ mod tests {
 
         let hook = lua_hook_with_capabilities(
             &format!(
-                "dbflux.log.info('hello-log')\nlocal result = dbflux.process.run({{ program = '{python}', allowlist = 'python_cli', args = {{'-c', 'print(\"hello-buffered\")'}} }})\nif not result.ok then hook.fail(result.stderr) end"
+                "dbflux.log.info('hello-log')\nlocal result = dbflux.process.run({{ program = '{python}', allowlist = 'python_cli', timeout_ms = 5000, args = {{'-c', 'print(\"hello-buffered\")'}} }})\nif not result.ok then hook.fail(result.stderr) end"
             ),
             LuaCapabilities {
                 process_run: true,

@@ -11,16 +11,18 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use sha1::{Digest, Sha1};
 
 use aws_sdk_sts::config::ProvideCredentials;
 
+use crate::edit::{AwsEditFileKind, AwsEditSnapshot};
 use dbflux_core::DbError;
 use dbflux_core::auth::{
-    AuthFormDef, AuthProfile, AuthProviderCapabilities, AuthProviderLoginCapabilities, AuthSession,
-    AuthSessionState, FetchOptionsError, FetchOptionsRequest, FetchOptionsResponse,
-    ImportableProfile, ResolvedCredentials, UrlCallback,
+    AuthEditCapabilities, AuthEditSnapshot, AuthFormDef, AuthProfile, AuthProviderCapabilities,
+    AuthProviderLoginCapabilities, AuthSaveOutcome, AuthSession, AuthSessionState, DanglingMessage,
+    FetchOptionsError, FetchOptionsRequest, FetchOptionsResponse, ImportableProfile,
+    ResolvedCredentials, UrlCallback, aws_profile_uuid,
 };
 use dbflux_core::{
     FormFieldDef, FormFieldKind, FormSection, FormTab, RefreshTrigger, SelectOption,
@@ -39,52 +41,6 @@ const SSO_LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 /// The `verification_url` is extracted from `aws sso login` stdout and is
 /// ready to be surfaced in the UI. The login is not yet complete — the caller
 /// must still wait (poll the SSO cache) for the session to appear.
-/// All SSO fields needed to write a complete `[profile X]` block in `~/.aws/config`.
-pub struct SsoProfileConfig {
-    pub profile_name: String,
-    pub region: String,
-    pub sso_start_url: String,
-    pub sso_account_id: String,
-    pub sso_role_name: String,
-}
-
-/// Writes (or updates) a `[profile <name>]` block in `~/.aws/config` with
-/// all SSO fields so that `aws sso login --profile <name>` runs non-interactively.
-///
-/// Only writes fields that are non-empty. Existing lines for the profile are
-/// replaced; unrelated parts of the file are left untouched.
-pub fn ensure_aws_profile_configured(config: &SsoProfileConfig) -> Result<(), DbError> {
-    // Skip if we don't have the minimum required fields to make the profile useful.
-    if config.sso_start_url.trim().is_empty()
-        || config.sso_account_id.trim().is_empty()
-        || config.sso_role_name.trim().is_empty()
-    {
-        return Ok(());
-    }
-
-    let config_path = aws_config_path();
-    let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
-
-    let profile_header = format!("[profile {}]", config.profile_name);
-    let new_block = build_sso_profile_block(config);
-
-    let updated = replace_or_append_profile_block(&existing, &profile_header, &new_block);
-
-    // Ensure the directory exists before writing.
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| {
-            DbError::ValueResolutionFailed(format!(
-                "Could not create AWS config directory: {}",
-                err
-            ))
-        })?;
-    }
-
-    std::fs::write(&config_path, updated).map_err(|err| {
-        DbError::ValueResolutionFailed(format!("Could not write ~/.aws/config: {}", err))
-    })
-}
-
 fn aws_config_path() -> std::path::PathBuf {
     // AWS_CONFIG_FILE env var overrides the default location.
     if let Ok(path) = std::env::var("AWS_CONFIG_FILE") {
@@ -94,76 +50,6 @@ fn aws_config_path() -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("~"))
         .join(".aws")
         .join("config")
-}
-
-fn build_sso_profile_block(config: &SsoProfileConfig) -> String {
-    let mut lines = vec![
-        format!("[profile {}]", config.profile_name),
-        format!("sso_start_url = {}", config.sso_start_url),
-        format!("sso_region = {}", config.region),
-        format!("sso_account_id = {}", config.sso_account_id),
-        format!("sso_role_name = {}", config.sso_role_name),
-    ];
-
-    if !config.region.is_empty() {
-        lines.push(format!("region = {}", config.region));
-    }
-
-    lines.push("output = json".to_string());
-    lines.push(String::new()); // trailing newline after block
-
-    lines.join("\n")
-}
-
-/// Replaces an existing `[profile X]` block in the INI content with
-/// `new_block`, or appends it if the profile does not exist yet.
-///
-/// A profile block spans from its header line until the next `[` section
-/// header (or end of file).
-fn replace_or_append_profile_block(content: &str, header: &str, new_block: &str) -> String {
-    let mut result = String::with_capacity(content.len() + new_block.len());
-    let mut inside_target = false;
-    let mut replaced = false;
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-
-        if trimmed == header {
-            // Start of the target profile — emit the new block instead.
-            result.push_str(new_block);
-            inside_target = true;
-            replaced = true;
-            continue;
-        }
-
-        if inside_target {
-            // Skip lines belonging to the old profile block.
-            if trimmed.starts_with('[') {
-                // Next section starts — stop skipping and emit this line.
-                inside_target = false;
-                result.push_str(line);
-                result.push('\n');
-            }
-            // else: still inside old block, discard.
-            continue;
-        }
-
-        result.push_str(line);
-        result.push('\n');
-    }
-
-    if !replaced {
-        // Profile didn't exist — append with a blank line separator.
-        if !result.ends_with("\n\n") {
-            if !result.ends_with('\n') {
-                result.push('\n');
-            }
-            result.push('\n');
-        }
-        result.push_str(new_block);
-    }
-
-    result
 }
 
 pub struct SsoLoginHandle {
@@ -192,16 +78,27 @@ pub struct SsoLoginHandle {
 /// After getting the handle, the caller must separately wait for the
 /// SSO session to appear in the token cache via `wait_for_sso_session_blocking`.
 pub fn start_sso_login_blocking(profile_name: &str) -> Result<SsoLoginHandle, DbError> {
-    use std::io::BufRead;
     use std::process::{Command, Stdio};
 
     log::debug!(
-        "Spawning 'aws sso login --no-browser --profile {}'",
+        "Spawning 'aws sso login --no-browser --use-device-code --profile {}'",
         profile_name
     );
 
+    // `--use-device-code` forces the device-authorization grant instead of the
+    // modern PKCE/loopback default. It yields a short verification URL with the
+    // code autofilled (`...#/device?user_code=XXXX-YYYY`) — far cleaner to show
+    // and copy than the long `/authorize?...&redirect_uri=127.0.0.1...` URL, and
+    // it needs no local loopback listener (works on headless/remote setups).
     let mut child = Command::new("aws")
-        .args(["sso", "login", "--no-browser", "--profile", profile_name])
+        .args([
+            "sso",
+            "login",
+            "--no-browser",
+            "--use-device-code",
+            "--profile",
+            profile_name,
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -244,81 +141,120 @@ pub fn start_sso_login_blocking(profile_name: &str) -> Result<SsoLoginHandle, Db
         }
     });
 
-    // Scan stdout for the device-verification URL, then hand the reader to a
-    // drain thread that keeps the pipe open until the process exits.
+    // Scan stdout for the device-verification URL. We need to handle two
+    // distinct AWS CLI output flows:
     //
-    // `--no-browser` makes the AWS CLI print something like:
+    // 1. **Device-code flow** (older / `--use-device-code`):
     //
-    //   Please visit the following URL:
-    //   https://example.awsapps.com/start/#/device
+    //        Please visit the following URL:
+    //        https://example.awsapps.com/start/#/device
     //
-    //   Then enter the code: XXXX-YYYY
+    //        Then enter the code: XXXX-YYYY
     //
-    //   Alternatively, you may visit the following URL which will autofill the code:
-    //   https://example.awsapps.com/start/#/device?user_code=XXXX-YYYY
+    //        Alternatively, you may visit the following URL which will autofill the code:
+    //        https://example.awsapps.com/start/#/device?user_code=XXXX-YYYY
     //
-    // We prefer the autofill URL (contains `user_code=`) because it is a
-    // single click for the user. Fall back to any https:// URL if that line
-    // is not found.
+    //    Here the autofill URL (with `user_code=`) is the one to surface.
     //
-    // IMPORTANT: we must NOT drop stdout before the process exits. Closing the
-    // read end of the pipe sends SIGPIPE to the aws CLI process, killing it
-    // before the user can complete the browser flow. We hand the BufReader to
-    // a drain thread once the URL is found so the pipe stays open.
+    // 2. **PKCE / loopback flow** (modern default for AWS CLI v2):
+    //
+    //        Browser will not be automatically opened.
+    //        Please visit the following URL:
+    //
+    //        https://oidc.<region>.amazonaws.com/authorize?...&redirect_uri=http://127.0.0.1:PORT/oauth/callback...
+    //
+    //    The CLI then sits on a local HTTP listener and prints nothing more
+    //    until the user completes the browser flow. There is no `user_code=`
+    //    URL to wait for, so blocking on `read_line` for one would hang
+    //    forever.
+    //
+    // Strategy: stream lines from a reader thread into a channel and use a
+    // recv-with-deadline scheme. Once we see the first `https://` URL, wait
+    // a short grace period for a `user_code=` variant; if none arrives,
+    // accept the first URL and return.
+    //
+    // IMPORTANT: we must NOT drop stdout before the process exits. Closing
+    // the read end of the pipe sends SIGPIPE to the aws CLI process, killing
+    // it before the user can complete the browser flow. The reader thread
+    // keeps the pipe open until the process exits naturally, until the abort
+    // flag fires, or until the URL-scanning side decides we have what we
+    // need.
     let verification_url = {
-        let mut reader = std::io::BufReader::new(stdout);
-        let mut found_url: Option<String> = None;
-        let mut fallback_url: Option<String> = None;
+        let (line_tx, line_rx) = std::sync::mpsc::channel::<String>();
 
-        loop {
-            let mut line = String::new();
-            match reader.read_line(&mut line) {
-                Ok(0) => break, // EOF — process exited before printing a URL
-                Ok(_) => {}
-                Err(_) => break,
-            }
+        let abort_flag_for_reader = Arc::clone(&abort_flag_for_drain);
+        let child_for_reader = Arc::clone(&child_for_drain);
 
-            let trimmed = line.trim().to_string();
-            log::debug!("[aws sso login stdout] {}", trimmed);
-
-            if trimmed.starts_with("https://") {
-                if trimmed.contains("user_code=") {
-                    found_url = Some(trimmed);
-                    break; // Best URL found — drain the rest in a thread
-                } else if fallback_url.is_none() {
-                    fallback_url = Some(trimmed);
-                    // Keep scanning — the autofill URL may be on a later line
-                }
-            }
-        }
-
-        // Hand the reader to a drain thread that keeps the pipe open until
-        // the aws CLI process exits naturally, or until the abort flag fires.
-        //
-        // Dropping stdout here would close the read-end of the pipe and send
-        // SIGPIPE to the CLI process, killing it before the user can approve.
         std::thread::spawn(move || {
-            use std::io::BufRead;
-            let mut line = String::new();
-            loop {
-                // Check for abort signal before each read.
-                if abort_flag_for_drain.load(std::sync::atomic::Ordering::Acquire) {
+            use std::io::{BufRead, BufReader};
+            let reader = BufReader::new(stdout);
+            for line in reader.lines().map_while(Result::ok) {
+                if abort_flag_for_reader.load(std::sync::atomic::Ordering::Acquire) {
                     log::debug!("[aws sso login drain] abort signalled, killing process");
-                    if let Ok(mut guard) = child_for_drain.lock()
+                    if let Ok(mut guard) = child_for_reader.lock()
                         && let Some(mut child) = guard.take()
                     {
                         let _ = child.kill();
                     }
                     return;
                 }
+                log::debug!("[aws sso login stdout] {}", line);
+                if line_tx.send(line).is_err() {
+                    // Receiver dropped — drain remaining output silently.
+                    break;
+                }
+            }
+            // Process ended; if the URL-scanning side is still waiting it
+            // will observe `Disconnected` and fall back to whatever it had.
+        });
 
-                match reader.read_line(&mut line) {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {
-                        log::debug!("[aws sso login stdout drain] {}", line.trim());
-                        line.clear();
+        // Initial wait for the first URL — give the CLI up to 30s to print
+        // its first https:// line. After that we accept whatever we have.
+        const INITIAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+        // Once a URL is found, wait briefly for a `user_code=` variant that
+        // would be a better fit (device-code flow).
+        const AUTOFILL_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
+
+        let mut found_url: Option<String> = None;
+        let mut fallback_url: Option<String> = None;
+        let deadline = std::time::Instant::now() + INITIAL_TIMEOUT;
+
+        while found_url.is_none() {
+            let now = std::time::Instant::now();
+            let timeout = if let Some(start) = fallback_url.as_ref().map(|_| now) {
+                let _ = start;
+                AUTOFILL_GRACE
+            } else if now >= deadline {
+                break;
+            } else {
+                deadline - now
+            };
+
+            match line_rx.recv_timeout(timeout) {
+                Ok(line) => {
+                    let trimmed = line.trim().to_string();
+                    if trimmed.starts_with("https://") {
+                        if trimmed.contains("user_code=") {
+                            found_url = Some(trimmed);
+                            break;
+                        } else if fallback_url.is_none() {
+                            fallback_url = Some(trimmed);
+                            // Continue waiting briefly for the autofill variant.
+                        }
                     }
                 }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        // Drain remaining lines in a background thread so the pipe stays
+        // open until the CLI exits. Without this drain the OS pipe buffer
+        // fills and the CLI blocks on its writes.
+        std::thread::spawn(move || {
+            for _line in line_rx {
+                // Drop lines silently — they were already logged by the
+                // reader thread above.
             }
         });
 
@@ -402,6 +338,114 @@ impl AwsSsoAuthProvider {
         let mut cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
         cache.profiles().to_vec()
     }
+
+    /// Reflects all `[profile NAME]` SSO sections from `~/.aws/config` into
+    /// `AuthProfile` records.
+    ///
+    /// Each reflected profile has:
+    /// - `provider_id = "aws-sso"`
+    /// - `id = aws_profile_uuid("aws-sso", name)`
+    /// - `read_only = true`
+    /// - `fields` populated from the parsed config section; `sso_session`
+    ///   indirection is folded in from the referenced `[sso-session]` block.
+    ///
+    /// Malformed sections (empty name, required fields absent) are skipped
+    /// with a log warning. Missing or empty config returns an empty vec.
+    pub fn reflect_profiles(&self) -> Vec<AuthProfile> {
+        let profiles = {
+            let mut cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
+            cache.profiles().to_vec()
+        };
+
+        // Build a lookup for [sso-session NAME] blocks so we can fold them
+        // into profiles that use the sso_session = NAME indirection.
+        let session_lookup: HashMap<String, &crate::config::AwsProfileInfo> = profiles
+            .iter()
+            .filter(|p| p.is_sso_session)
+            .map(|p| (p.name.to_lowercase(), p))
+            .collect::<HashMap<_, _>>();
+        // Work around the lifetime issue: collect session data into owned vecs.
+        let session_map: HashMap<String, crate::config::AwsProfileInfo> = profiles
+            .iter()
+            .filter(|p| p.is_sso_session)
+            .map(|p| (p.name.to_lowercase(), p.clone()))
+            .collect();
+        drop(session_lookup); // was only used to build session_map
+
+        profiles
+            .iter()
+            .filter(|p| p.is_sso && !p.is_sso_session)
+            .filter_map(|p| {
+                if p.name.is_empty() {
+                    log::warn!("aws-config-reflect: skipping SSO profile with empty name");
+                    return None;
+                }
+
+                let mut fields = HashMap::new();
+                fields.insert("profile_name".to_string(), p.name.clone());
+
+                if let Some(ref region) = p.region {
+                    fields.insert("region".to_string(), region.clone());
+                }
+
+                // Fold sso_session indirection: if the profile references a
+                // [sso-session NAME] block, merge start_url and sso_region
+                // from the session into the profile's fields.
+                if let Some(ref session_name) = p.sso_session {
+                    fields.insert("sso_session".to_string(), session_name.clone());
+
+                    if let Some(session) = session_map.get(&session_name.to_lowercase()) {
+                        // Expose the referenced session's deterministic UUID
+                        // under the form's `sso_session_ref` field so the
+                        // Settings dropdown pre-selects it on load. The value
+                        // must match the id minted by the sso-session provider,
+                        // so derive it from the section's canonical header name.
+                        fields.insert(
+                            "sso_session_ref".to_string(),
+                            aws_profile_uuid("aws-sso-session", &session.name).to_string(),
+                        );
+
+                        if let Some(ref url) = session.sso_start_url {
+                            fields.insert("sso_start_url".to_string(), url.clone());
+                        }
+                        if let Some(ref sso_region) = session.sso_region {
+                            fields.insert("sso_region".to_string(), sso_region.clone());
+                        }
+                    }
+                } else {
+                    if let Some(ref url) = p.sso_start_url {
+                        fields.insert("sso_start_url".to_string(), url.clone());
+                    }
+                    if let Some(ref sso_region) = p.sso_region {
+                        fields.insert("sso_region".to_string(), sso_region.clone());
+                    }
+                }
+
+                if let Some(ref account_id) = p.sso_account_id {
+                    fields.insert("sso_account_id".to_string(), account_id.clone());
+                }
+                if let Some(ref role_name) = p.sso_role_name {
+                    fields.insert("sso_role_name".to_string(), role_name.clone());
+                }
+
+                let id = aws_profile_uuid("aws-sso", &p.name);
+
+                Some(AuthProfile {
+                    id,
+                    name: p.name.clone(),
+                    provider_id: "aws-sso".to_string(),
+                    fields,
+                    // Reflected AWS profiles never carry key material; secrets
+                    // live in ~/.aws/credentials, not in DBFlux storage.
+                    secret_fields: std::collections::HashMap::new(),
+                    enabled: true,
+                    // Reflected non-dangling profiles are editable (design §13).
+                    read_only: false,
+                    dangling_origin: None,
+                })
+            })
+            .collect()
+    }
 }
 
 impl Default for AwsSsoAuthProvider {
@@ -410,29 +454,169 @@ impl Default for AwsSsoAuthProvider {
     }
 }
 
-pub struct AwsSharedCredentialsAuthProvider;
+/// Auth provider that models an `[sso-session <name>]` block in
+/// `~/.aws/config`. It is a data container — it does not own a login flow
+/// on its own; other `aws-sso` profiles reference it via the
+/// `sso_session_ref` field on their form, and the auth profile expansion
+/// step merges the session's `sso_start_url` / `sso_region` into the
+/// consumer profile before login.
+pub struct AwsSsoSessionAuthProvider {
+    config_cache: Mutex<CachedAwsConfig>,
+}
 
-impl AwsSharedCredentialsAuthProvider {
+impl AwsSsoSessionAuthProvider {
     pub fn new() -> Self {
-        Self
+        Self {
+            config_cache: Mutex::new(CachedAwsConfig::new()),
+        }
+    }
+
+    /// Reflects all `[sso-session NAME]` sections from `~/.aws/config` into
+    /// `AuthProfile` records.
+    ///
+    /// Each reflected profile has:
+    /// - `provider_id = "aws-sso-session"`
+    /// - `id = aws_profile_uuid("aws-sso-session", name)` — distinct from
+    ///   the same name under `aws-sso` (S17, provider-id scoping)
+    /// - `read_only = true`
+    ///
+    /// Malformed sections (empty name) are skipped with a log warning.
+    pub fn reflect_profiles(&self) -> Vec<AuthProfile> {
+        let mut cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
+        let profiles = cache.profiles().to_vec();
+
+        profiles
+            .iter()
+            .filter(|p| p.is_sso_session)
+            .filter_map(|p| {
+                if p.name.is_empty() {
+                    log::warn!("aws-config-reflect: skipping sso-session profile with empty name");
+                    return None;
+                }
+
+                let mut fields = HashMap::new();
+                fields.insert("profile_name".to_string(), p.name.clone());
+
+                if let Some(ref url) = p.sso_start_url {
+                    fields.insert("sso_start_url".to_string(), url.clone());
+                }
+                if let Some(ref sso_region) = p.sso_region {
+                    fields.insert("sso_region".to_string(), sso_region.clone());
+                }
+
+                let id = aws_profile_uuid("aws-sso-session", &p.name);
+
+                Some(AuthProfile {
+                    id,
+                    name: p.name.clone(),
+                    provider_id: "aws-sso-session".to_string(),
+                    fields,
+                    // Reflected AWS profiles never carry key material; secrets
+                    // live in ~/.aws/credentials, not in DBFlux storage.
+                    secret_fields: std::collections::HashMap::new(),
+                    enabled: true,
+                    // Reflected non-dangling profiles are editable (design §13).
+                    read_only: false,
+                    dangling_origin: None,
+                })
+            })
+            .collect()
     }
 }
 
-impl Default for AwsSharedCredentialsAuthProvider {
+impl Default for AwsSsoSessionAuthProvider {
     fn default() -> Self {
         Self::new()
     }
 }
 
-pub struct AwsStaticCredentialsAuthProvider;
+pub struct AwsSharedCredentialsAuthProvider {
+    config_cache: Mutex<CachedAwsConfig>,
+}
 
-impl AwsStaticCredentialsAuthProvider {
+impl AwsSharedCredentialsAuthProvider {
     pub fn new() -> Self {
-        Self
+        Self {
+            config_cache: Mutex::new(CachedAwsConfig::new()),
+        }
+    }
+
+    /// Reflects all non-SSO profile names from `~/.aws/config` and
+    /// `~/.aws/credentials` into `AuthProfile` records.
+    ///
+    /// Uses `shared_profile_names()` which unions the non-SSO config sections
+    /// with the credentials-file section names (deduped, case-preserving).
+    ///
+    /// Reflected fields contain `profile_name` and optionally `region` from
+    /// the config file. Key material (`aws_access_key_id`,
+    /// `aws_secret_access_key`) is NEVER included — the AWS SDK reads those
+    /// directly from `~/.aws/credentials` at connect time.
+    pub fn reflect_profiles(&self) -> Vec<AuthProfile> {
+        let mut cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
+        let names = cache.shared_profile_names();
+
+        // Build a region lookup from the config profiles (names only; no keys).
+        let config_profiles = cache.profiles().to_vec();
+        let region_lookup: HashMap<String, String> = config_profiles
+            .iter()
+            .filter(|p| !p.is_sso && !p.is_sso_session)
+            .filter_map(|p| {
+                p.region
+                    .as_ref()
+                    .map(|r| (p.name.to_lowercase(), r.clone()))
+            })
+            .collect();
+
+        names
+            .into_iter()
+            .filter_map(|name| {
+                if name.is_empty() {
+                    log::warn!(
+                        "aws-config-reflect: skipping shared-credentials profile with empty name"
+                    );
+                    return None;
+                }
+
+                let mut fields = HashMap::new();
+                fields.insert("profile_name".to_string(), name.clone());
+
+                if let Some(region) = region_lookup.get(&name.to_lowercase()) {
+                    fields.insert("region".to_string(), region.clone());
+                }
+
+                // Security invariant: no key material in reflected fields.
+                // aws_access_key_id and aws_secret_access_key are intentionally
+                // absent — the AWS SDK reads them from ~/.aws/credentials.
+                debug_assert!(
+                    !fields.contains_key("aws_access_key_id"),
+                    "aws-config-reflect: key material must never appear in reflected fields"
+                );
+                debug_assert!(
+                    !fields.contains_key("aws_secret_access_key"),
+                    "aws-config-reflect: key material must never appear in reflected fields"
+                );
+
+                let id = aws_profile_uuid("aws-shared-credentials", &name);
+
+                Some(AuthProfile {
+                    id,
+                    name: name.clone(),
+                    provider_id: "aws-shared-credentials".to_string(),
+                    fields,
+                    // Reflected AWS profiles never carry key material; secrets
+                    // live in ~/.aws/credentials, not in DBFlux storage.
+                    secret_fields: std::collections::HashMap::new(),
+                    enabled: true,
+                    // Reflected non-dangling profiles are editable (design §13).
+                    read_only: false,
+                    dangling_origin: None,
+                })
+            })
+            .collect()
     }
 }
 
-impl Default for AwsStaticCredentialsAuthProvider {
+impl Default for AwsSharedCredentialsAuthProvider {
     fn default() -> Self {
         Self::new()
     }
@@ -448,20 +632,7 @@ fn required_text_field(id: &str, label: &str, placeholder: &str) -> FormFieldDef
         default_value: String::new(),
         enabled_when_checked: None,
         enabled_when_unchecked: None,
-        help: None,
-    }
-}
-
-fn password_field(id: &str, label: &str, placeholder: &str, required: bool) -> FormFieldDef {
-    FormFieldDef {
-        id: id.to_string(),
-        label: label.to_string(),
-        kind: FormFieldKind::Password,
-        placeholder: placeholder.to_string(),
-        required,
-        default_value: String::new(),
-        enabled_when_checked: None,
-        enabled_when_unchecked: None,
+        disabled_when_field_set: None,
         help: None,
     }
 }
@@ -475,17 +646,44 @@ fn build_aws_sso_form() -> AuthFormDef {
                 title: "AWS SSO".to_string(),
                 fields: vec![
                     required_text_field("profile_name", "AWS Profile Name", "dev"),
-                    required_text_field(
-                        "sso_start_url",
-                        "SSO Start URL",
-                        "https://my-org.awsapps.com/start",
-                    ),
+                    FormFieldDef {
+                        id: "sso_session_ref".to_string(),
+                        label: "SSO Session".to_string(),
+                        kind: FormFieldKind::AuthProfileRef {
+                            provider_id: Some("aws-sso-session".to_string()),
+                        },
+                        placeholder: String::new(),
+                        required: false,
+                        default_value: String::new(),
+                        enabled_when_checked: None,
+                        enabled_when_unchecked: None,
+                        disabled_when_field_set: None,
+                        help: Some(
+                            "Optional. When set, SSO Start URL and SSO Region come from the referenced session and the fields below can be left empty.".to_string(),
+                        ),
+                    },
+                    FormFieldDef {
+                        id: "sso_start_url".to_string(),
+                        label: "SSO Start URL".to_string(),
+                        kind: FormFieldKind::Text,
+                        placeholder: "https://my-org.awsapps.com/start/".to_string(),
+                        required: false,
+                        default_value: String::new(),
+                        enabled_when_checked: None,
+                        enabled_when_unchecked: None,
+                        disabled_when_field_set: Some("sso_session_ref".to_string()),
+                        help: None,
+                    },
                     required_text_field("region", "Region", "us-east-1"),
                     FormFieldDef {
                         id: "sso_account_id".to_string(),
                         label: "Account ID".to_string(),
                         kind: FormFieldKind::DynamicSelect {
-                            depends_on: vec!["region".to_string(), "sso_start_url".to_string()],
+                            depends_on: vec![
+                                "region".to_string(),
+                                "sso_start_url".to_string(),
+                                "sso_session_ref".to_string(),
+                            ],
                             refresh: RefreshTrigger::OnLoginComplete,
                             requires_session: true,
                             allow_freeform: false,
@@ -495,6 +693,7 @@ fn build_aws_sso_form() -> AuthFormDef {
                         default_value: String::new(),
                         enabled_when_checked: None,
                         enabled_when_unchecked: None,
+                        disabled_when_field_set: None,
                         help: None,
                     },
                     FormFieldDef {
@@ -511,6 +710,7 @@ fn build_aws_sso_form() -> AuthFormDef {
                         default_value: String::new(),
                         enabled_when_checked: None,
                         enabled_when_unchecked: None,
+                        disabled_when_field_set: None,
                         help: None,
                     },
                 ],
@@ -524,29 +724,99 @@ fn build_aws_shared_credentials_form() -> AuthFormDef {
         tabs: vec![FormTab {
             id: "main".to_string(),
             label: "Main".to_string(),
-            sections: vec![FormSection {
-                title: "AWS Shared Credentials".to_string(),
-                fields: vec![
-                    required_text_field("profile_name", "AWS Profile Name", "default"),
-                    required_text_field("region", "Region", "us-east-1"),
-                ],
-            }],
+            sections: vec![
+                FormSection {
+                    title: "AWS Shared Credentials".to_string(),
+                    fields: vec![
+                        required_text_field("profile_name", "AWS Profile Name", "default"),
+                        required_text_field("region", "Region", "us-east-1"),
+                        FormFieldDef {
+                            id: "aws_access_key_id".to_string(),
+                            label: "Access Key ID".to_string(),
+                            kind: FormFieldKind::Text,
+                            placeholder: "AKIAIOSFODNN7EXAMPLE".to_string(),
+                            required: false,
+                            default_value: String::new(),
+                            enabled_when_checked: None,
+                            enabled_when_unchecked: None,
+                            disabled_when_field_set: None,
+                            help: Some(
+                                "Written to the [name] section in ~/.aws/credentials.".to_string(),
+                            ),
+                        },
+                    ],
+                },
+                FormSection {
+                    title: "Credentials (write-only)".to_string(),
+                    fields: vec![
+                        FormFieldDef {
+                            id: "aws_secret_access_key".to_string(),
+                            label: "Secret Access Key".to_string(),
+                            kind: FormFieldKind::WriteOnly,
+                            placeholder: "Leave blank to keep current".to_string(),
+                            required: false,
+                            default_value: String::new(),
+                            enabled_when_checked: None,
+                            enabled_when_unchecked: None,
+                            disabled_when_field_set: None,
+                            help: Some(
+                                "Write-only. Leave blank to preserve the existing value in \
+                                 ~/.aws/credentials. Enter a value to overwrite it."
+                                    .to_string(),
+                            ),
+                        },
+                        FormFieldDef {
+                            id: "aws_session_token".to_string(),
+                            label: "Session Token".to_string(),
+                            kind: FormFieldKind::WriteOnly,
+                            placeholder: "Leave blank to keep current".to_string(),
+                            required: false,
+                            default_value: String::new(),
+                            enabled_when_checked: None,
+                            enabled_when_unchecked: None,
+                            disabled_when_field_set: None,
+                            help: Some(
+                                "Optional. Write-only. Leave blank to preserve the existing \
+                                 value in ~/.aws/credentials."
+                                    .to_string(),
+                            ),
+                        },
+                    ],
+                },
+            ],
         }],
     }
 }
 
-fn build_aws_static_credentials_form() -> AuthFormDef {
+fn build_aws_sso_session_form() -> AuthFormDef {
     AuthFormDef {
         tabs: vec![FormTab {
             id: "main".to_string(),
             label: "Main".to_string(),
             sections: vec![FormSection {
-                title: "AWS Static Credentials".to_string(),
+                title: "AWS SSO Session".to_string(),
                 fields: vec![
-                    required_text_field("access_key_id", "Access Key ID", "AKIAIOSFODNN7EXAMPLE"),
-                    password_field("secret_access_key", "Secret Access Key", "", true),
-                    password_field("session_token", "Session Token", "", false),
-                    required_text_field("region", "Region", "us-east-1"),
+                    required_text_field(
+                        "sso_start_url",
+                        "SSO Start URL",
+                        "https://my-org.awsapps.com/start/",
+                    ),
+                    required_text_field("sso_region", "SSO Region", "us-east-1"),
+                    FormFieldDef {
+                        id: "sso_registration_scopes".to_string(),
+                        label: "Registration Scopes".to_string(),
+                        kind: FormFieldKind::Text,
+                        placeholder: "sso:account:access".to_string(),
+                        required: false,
+                        default_value: "sso:account:access".to_string(),
+                        enabled_when_checked: None,
+                        enabled_when_unchecked: None,
+                        disabled_when_field_set: None,
+                        help: Some(
+                            "Comma-separated OAuth scopes. Default works for most setups."
+                                .to_string(),
+                        ),
+                    },
                 ],
             }],
         }],
@@ -565,6 +835,42 @@ fn non_expiring_login(
         profile_id: profile.id,
         expires_at: None,
         data: None,
+    }
+}
+
+/// Returns the edit capabilities shared by all three AWS file-backed providers.
+///
+/// All string fields are final-rendered; the UI uses them verbatim.
+fn aws_edit_capabilities() -> AuthEditCapabilities {
+    let mut dangling = std::collections::HashMap::with_capacity(2);
+
+    dangling.insert(
+        "keyring-only".to_string(),
+        DanglingMessage {
+            title: "Profile reference not found in ~/.aws/config".to_string(),
+            body: "This profile no longer exists in ~/.aws/config. \
+                   Its credentials entry may still be in ~/.aws/credentials. \
+                   You can re-add the profile manually or remove this connection binding."
+                .to_string(),
+        },
+    );
+
+    dangling.insert(
+        "file-gone".to_string(),
+        DanglingMessage {
+            title: "Profile config file is missing".to_string(),
+            body: "The AWS config file for this profile could not be located. \
+                   Check ~/.aws/config and re-add the profile if needed."
+                .to_string(),
+        },
+    );
+
+    AuthEditCapabilities {
+        mirror_label: "Reflected from ~/.aws/config — read-only".to_string(),
+        success_written: "Profile written to ~/.aws/config.".to_string(),
+        name_field_hint: "Profile name is read from ~/.aws/config and cannot be renamed here."
+            .to_string(),
+        dangling_messages: dangling,
     }
 }
 
@@ -594,48 +900,6 @@ fn effective_aws_profile_name(profile: &AuthProfile) -> Option<&str> {
     }
 
     None
-}
-
-fn sso_profile_config_from_auth_profile(profile: &AuthProfile) -> Option<SsoProfileConfig> {
-    if profile.provider_id != "aws-sso" {
-        return None;
-    }
-
-    let profile_name = effective_aws_profile_name(profile)?.to_string();
-    let region = profile.fields.get("region")?.trim().to_string();
-    let sso_start_url = profile.fields.get("sso_start_url")?.trim().to_string();
-    let sso_account_id = profile.fields.get("sso_account_id")?.trim().to_string();
-    let sso_role_name = profile.fields.get("sso_role_name")?.trim().to_string();
-
-    if region.is_empty()
-        || sso_start_url.is_empty()
-        || sso_account_id.is_empty()
-        || sso_role_name.is_empty()
-    {
-        return None;
-    }
-
-    Some(SsoProfileConfig {
-        profile_name,
-        region,
-        sso_start_url,
-        sso_account_id,
-        sso_role_name,
-    })
-}
-
-fn ensure_sso_profile_configured_from_auth_profile(profile: &AuthProfile) {
-    let Some(config) = sso_profile_config_from_auth_profile(profile) else {
-        return;
-    };
-
-    if let Err(err) = ensure_aws_profile_configured(&config) {
-        log::warn!(
-            "Failed to sync AWS SSO profile '{}' into ~/.aws/config: {}",
-            config.profile_name,
-            err
-        );
-    }
 }
 
 fn profile_name_and_region(profile: &AuthProfile) -> (Option<&str>, &str) {
@@ -687,80 +951,6 @@ fn build_aws_value_providers_blocking(
 /// Builds an `SdkConfig` from explicit static credentials stored in the
 /// auth profile's `fields` map, bypassing the default credential chain.
 ///
-/// Reads `access_key_id`, `secret_access_key`, `session_token`, and `region`
-/// from `profile.fields`. Returns an error if `access_key_id` or
-/// `secret_access_key` is absent or empty.
-fn build_static_sdk_config_blocking(
-    profile: &AuthProfile,
-) -> Result<aws_config::SdkConfig, DbError> {
-    let access_key_id = profile
-        .fields
-        .get("access_key_id")
-        .map(String::as_str)
-        .unwrap_or("");
-    if access_key_id.is_empty() {
-        return Err(DbError::ValueResolutionFailed(
-            "Missing required field 'access_key_id' for static AWS credentials".to_string(),
-        ));
-    }
-
-    let secret_access_key = profile
-        .fields
-        .get("secret_access_key")
-        .map(String::as_str)
-        .unwrap_or("");
-    if secret_access_key.is_empty() {
-        return Err(DbError::ValueResolutionFailed(
-            "Missing required field 'secret_access_key' for static AWS credentials".to_string(),
-        ));
-    }
-
-    let session_token = profile
-        .fields
-        .get("session_token")
-        .map(String::as_str)
-        .filter(|s| !s.is_empty())
-        .map(String::from);
-
-    let region = profile
-        .fields
-        .get("region")
-        .cloned()
-        .unwrap_or_else(|| "us-east-1".to_string());
-
-    let access_key_id = access_key_id.to_string();
-    let secret_access_key = secret_access_key.to_string();
-
-    let creds = aws_sdk_sts::config::Credentials::new(
-        access_key_id,
-        secret_access_key,
-        session_token,
-        None,
-        "dbflux-static",
-    );
-
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .map_err(|err| {
-            DbError::ValueResolutionFailed(format!(
-                "Failed to create Tokio runtime for static AWS provider init: {}",
-                err
-            ))
-        })?;
-
-    runtime.block_on(async move {
-        let sdk_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
-            .credentials_provider(creds)
-            .region(aws_config::Region::new(region))
-            .load()
-            .await;
-
-        Ok(sdk_config)
-    })
-}
-
 #[async_trait::async_trait]
 impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
     fn provider_id(&self) -> &'static str {
@@ -777,19 +967,17 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
     }
 
     fn capabilities(&self) -> &AuthProviderCapabilities {
-        static CAPABILITIES: AuthProviderCapabilities = AuthProviderCapabilities {
+        static CAPABILITIES: OnceLock<AuthProviderCapabilities> = OnceLock::new();
+        CAPABILITIES.get_or_init(|| AuthProviderCapabilities {
             login: AuthProviderLoginCapabilities {
                 supported: true,
                 verification_url_progress: true,
             },
-        };
-
-        &CAPABILITIES
+            edit: Some(aws_edit_capabilities()),
+        })
     }
 
     async fn validate_session(&self, profile: &AuthProfile) -> Result<AuthSessionState, DbError> {
-        ensure_sso_profile_configured_from_auth_profile(profile);
-
         let profile_name = effective_aws_profile_name(profile).unwrap_or("");
         let sso_start_url = profile
             .fields
@@ -816,34 +1004,21 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
         let profile_name = effective_aws_profile_name(profile)
             .map(ToOwned::to_owned)
             .unwrap_or_default();
-        let region = profile.fields.get("region").cloned().unwrap_or_default();
-        let sso_start_url = profile
+        let raw_sso_start_url = profile
             .fields
             .get("sso_start_url")
-            .cloned()
-            .unwrap_or_default();
-        let sso_account_id = profile
-            .fields
-            .get("sso_account_id")
-            .cloned()
-            .unwrap_or_default();
-        let sso_role_name = profile
-            .fields
-            .get("sso_role_name")
-            .cloned()
-            .unwrap_or_default();
+            .map(String::as_str)
+            .unwrap_or("");
+        let sso_start_url =
+            resolve_sso_start_url(&profile_name, raw_sso_start_url).ok_or_else(|| {
+                DbError::InvalidProfile(format!(
+                    "AWS SSO profile '{}' has no sso_start_url (check ~/.aws/config)",
+                    profile_name
+                ))
+            })?;
 
-        let sso_config = SsoProfileConfig {
-            profile_name: profile_name.clone(),
-            region,
-            sso_start_url: sso_start_url.clone(),
-            sso_account_id,
-            sso_role_name,
-        };
-        if let Err(err) = ensure_aws_profile_configured(&sso_config) {
-            log::warn!("Could not write AWS profile config: {}", err);
-        }
-
+        // The profile section already exists in ~/.aws/config (it was reflected
+        // from the file). No write-back to the config file is needed here.
         sso_login_with_url(profile, &profile_name, &sso_start_url, url_callback).await
     }
 
@@ -868,13 +1043,194 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
         Ok(())
     }
 
+    fn abort_login(&self, profile: &AuthProfile) -> bool {
+        abort_sso_login(profile.id)
+    }
+
+    /// Captures a SHA-256 snapshot of the `[profile NAME]` section in
+    /// `~/.aws/config` at the moment the edit form opens.
+    ///
+    /// The config section is the only writable target for `aws-sso` profiles.
+    /// Returns `config_section = None` when the section is absent (new profile).
+    fn open_edit_snapshot(&self, name: &str) -> AuthEditSnapshot {
+        let config_path = {
+            let cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
+            cache.config_path().to_path_buf()
+        };
+
+        let config_section = std::fs::read_to_string(&config_path)
+            .ok()
+            .and_then(|contents| crate::config::hash_config_section(&contents, name));
+
+        AuthEditSnapshot::new(AwsEditSnapshot {
+            config_section,
+            credentials_section: None,
+        })
+    }
+
+    /// Writes the edited SSO profile fields to `~/.aws/config` atomically.
+    ///
+    /// Performs an optimistic-concurrency check under the file lock: re-hashes
+    /// the `[profile NAME]` section from disk and compares against the snapshot.
+    /// Returns `Conflict { target }` without writing if the section was modified
+    /// externally between `open_edit_snapshot` and this call.
+    ///
+    /// When the profile references an `[sso-session NAME]` block (the
+    /// `sso_session_ref` form field is set, surfaced here as
+    /// `sso_session_ref_name` after ref expansion), the written section uses
+    /// the `sso_session = NAME` indirection and omits `sso_start_url` /
+    /// `sso_region`, which belong to the session block. Otherwise those keys
+    /// are written inline.
+    ///
+    /// Fields written (inline form): `sso_start_url`, `sso_account_id`,
+    /// `sso_region`, `sso_role_name`, `region`, `output`.
+    /// Fields written (session-ref form): `sso_session`, `sso_account_id`,
+    /// `sso_role_name`, `region`, `output`.
+    fn save_edit(
+        &self,
+        name: &str,
+        fields: &HashMap<String, String>,
+        snapshot: &AuthEditSnapshot,
+    ) -> AuthSaveOutcome {
+        let aws_snapshot = match snapshot.downcast_ref::<AwsEditSnapshot>() {
+            Some(s) => s,
+            None => {
+                log::error!(
+                    "auth edit snapshot downcast failed; expected {}",
+                    std::any::type_name::<AwsEditSnapshot>()
+                );
+                return AuthSaveOutcome::Saved;
+            }
+        };
+
+        let config_path = {
+            let cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
+            cache.config_path().to_path_buf()
+        };
+
+        let session_ref_name = fields
+            .get("sso_session_ref_name")
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty());
+
+        // `sso_session` and inline `sso_start_url` / `sso_region` are mutually
+        // exclusive in a `[profile]` block: when a session is referenced the
+        // URL/region live in the `[sso-session]` block, and the AWS SDK rejects
+        // a profile that carries both. Because the block writer merges (keeps
+        // unmanaged on-disk keys), the opposite key must be removed explicitly.
+        let (config_fields, remove_keys): (Vec<(String, String)>, &[&str]) =
+            if let Some(session_name) = session_ref_name {
+                let mut collected = vec![("sso_session".to_string(), session_name.to_string())];
+                collected.extend(
+                    ["sso_account_id", "sso_role_name", "region", "output"]
+                        .iter()
+                        .filter_map(|&key| fields.get(key).map(|v| (key.to_string(), v.clone()))),
+                );
+                (collected, &["sso_start_url", "sso_region"])
+            } else {
+                let collected = [
+                    "sso_start_url",
+                    "sso_account_id",
+                    "sso_region",
+                    "sso_role_name",
+                    "region",
+                    "output",
+                ]
+                .iter()
+                .filter_map(|&key| fields.get(key).map(|v| (key.to_string(), v.clone())))
+                .collect();
+                (collected, &["sso_session"])
+            };
+
+        let snapshot_hash = aws_snapshot.config_section.as_ref().map(|h| h.0);
+
+        // Use a Cell to signal conflict from within the atomic transform.
+        // The transform is FnOnce, so we capture by reference via a local flag.
+        let conflict_detected = std::cell::Cell::new(false);
+
+        let result = crate::config::update_aws_config_atomic(&config_path, |existing| {
+            let current_hash = crate::config::hash_config_section(existing, name).map(|h| h.0);
+
+            let hashes_match = match (snapshot_hash, current_hash) {
+                (Some(snap), Some(current)) => snap == current,
+                (None, None) => true,
+                _ => false,
+            };
+
+            if !hashes_match {
+                conflict_detected.set(true);
+                return existing.to_string();
+            }
+
+            let borrowed: Vec<(&str, &str)> = config_fields
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            crate::config::replace_or_append_profile_block(existing, name, &borrowed, remove_keys)
+        });
+
+        if result.is_err() || conflict_detected.get() {
+            return AuthSaveOutcome::Conflict {
+                target: AwsEditFileKind::Config.to_target(),
+            };
+        }
+
+        AuthSaveOutcome::Saved
+    }
+
+    fn reflect_profiles(&self) -> Vec<AuthProfile> {
+        AwsSsoAuthProvider::reflect_profiles(self)
+    }
+
+    fn write_new_profile_to_config(&self, profile: &AuthProfile) -> Option<Result<(), String>> {
+        let name = profile.name.trim().to_string();
+        let sso_start_url = profile
+            .fields
+            .get("sso_start_url")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        let sso_region = profile
+            .fields
+            .get("sso_region")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        let sso_account_id = profile
+            .fields
+            .get("sso_account_id")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        let sso_role_name = profile
+            .fields
+            .get("sso_role_name")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        let region = profile
+            .fields
+            .get("region")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+
+        Some(
+            crate::config::append_aws_sso_profile(
+                &name,
+                &sso_start_url,
+                &sso_region,
+                &sso_account_id,
+                &sso_role_name,
+                &region,
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string()),
+        )
+    }
+
     fn detect_importable_profiles(&self) -> Vec<ImportableProfile> {
         let mut cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
 
         cache
             .profiles()
             .iter()
-            .filter(|profile| profile.is_sso)
+            .filter(|profile| profile.is_sso && !profile.is_sso_session)
             .map(|profile| {
                 let mut fields = HashMap::new();
                 fields.insert("profile_name".to_string(), profile.name.clone());
@@ -887,6 +1243,21 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
                     fields.insert("sso_start_url".to_string(), sso_start_url);
                 }
 
+                if let Some(sso_account_id) = profile.sso_account_id.clone() {
+                    fields.insert("sso_account_id".to_string(), sso_account_id);
+                }
+
+                if let Some(sso_role_name) = profile.sso_role_name.clone() {
+                    fields.insert("sso_role_name".to_string(), sso_role_name);
+                }
+
+                // Preserve the `sso_session = X` indirection so the import
+                // flow can wire `sso_session_ref` to the matching DBFlux
+                // `aws-sso-session` profile after both are imported.
+                if let Some(sso_session) = profile.sso_session.clone() {
+                    fields.insert("sso_session".to_string(), sso_session);
+                }
+
                 ImportableProfile {
                     display_name: profile.name.clone(),
                     provider_id: "aws-sso".to_string(),
@@ -894,38 +1265,6 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
                 }
             })
             .collect()
-    }
-
-    fn after_profile_saved(&self, profile: &AuthProfile) {
-        let Some(profile_name) = profile.fields.get("profile_name") else {
-            return;
-        };
-        let Some(sso_start_url) = profile.fields.get("sso_start_url") else {
-            return;
-        };
-        let Some(region) = profile.fields.get("region") else {
-            return;
-        };
-        let Some(sso_account_id) = profile.fields.get("sso_account_id") else {
-            return;
-        };
-        let Some(sso_role_name) = profile.fields.get("sso_role_name") else {
-            return;
-        };
-
-        let profile_info = crate::config::AwsProfileInfo {
-            name: profile_name.clone(),
-            region: Some(region.clone()),
-            is_sso: true,
-            sso_start_url: Some(sso_start_url.clone()),
-            sso_region: Some(region.clone()),
-            sso_account_id: Some(sso_account_id.clone()),
-            sso_role_name: Some(sso_role_name.clone()),
-        };
-
-        if let Err(err) = crate::config::write_profile_to_aws_config(&profile_info) {
-            log::warn!("Failed to write AWS SSO profile to config: {}", err);
-        }
     }
 
     /// Fetches runtime options for `sso_account_id` and `sso_role_name`
@@ -1087,14 +1426,14 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
     }
 
     fn capabilities(&self) -> &AuthProviderCapabilities {
-        static CAPABILITIES: AuthProviderCapabilities = AuthProviderCapabilities {
+        static CAPABILITIES: OnceLock<AuthProviderCapabilities> = OnceLock::new();
+        CAPABILITIES.get_or_init(|| AuthProviderCapabilities {
             login: AuthProviderLoginCapabilities {
                 supported: false,
                 verification_url_progress: false,
             },
-        };
-
-        &CAPABILITIES
+            edit: Some(aws_edit_capabilities()),
+        })
     }
 
     async fn validate_session(&self, _profile: &AuthProfile) -> Result<AuthSessionState, DbError> {
@@ -1134,60 +1473,235 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
         Ok(())
     }
 
-    fn after_profile_saved(&self, profile: &AuthProfile) {
-        let Some(profile_name) = profile.fields.get("profile_name") else {
-            return;
-        };
-        let Some(region) = profile.fields.get("region") else {
-            return;
+    fn reflect_profiles(&self) -> Vec<AuthProfile> {
+        AwsSharedCredentialsAuthProvider::reflect_profiles(self)
+    }
+
+    fn write_new_profile_to_config(&self, profile: &AuthProfile) -> Option<Result<(), String>> {
+        let name = profile.name.trim().to_string();
+        let region = profile
+            .fields
+            .get("region")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+
+        Some(
+            crate::config::append_aws_shared_credentials_profile(&name, &region)
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+        )
+    }
+
+    /// Captures section-hash snapshots for both `~/.aws/config` (`[profile NAME]`)
+    /// and `~/.aws/credentials` (`[NAME]`) at the moment the edit form opens.
+    ///
+    /// Either hash may be `None` when the corresponding section is absent.
+    fn open_edit_snapshot(&self, name: &str) -> AuthEditSnapshot {
+        let (config_path, credentials_path) = {
+            let cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
+            (
+                cache.config_path().to_path_buf(),
+                cache.credentials_path().to_path_buf(),
+            )
         };
 
-        let profile_info = crate::config::AwsProfileInfo {
-            name: profile_name.clone(),
-            region: Some(region.clone()),
-            is_sso: false,
-            sso_start_url: None,
-            sso_region: None,
-            sso_account_id: None,
-            sso_role_name: None,
+        let config_section = std::fs::read_to_string(&config_path)
+            .ok()
+            .and_then(|contents| crate::config::hash_config_section(&contents, name));
+
+        let credentials_section = std::fs::read_to_string(&credentials_path)
+            .ok()
+            .and_then(|contents| crate::config::hash_credentials_section(&contents, name));
+
+        AuthEditSnapshot::new(AwsEditSnapshot {
+            config_section,
+            credentials_section,
+        })
+    }
+
+    /// Writes edited shared-credentials profile fields atomically to both
+    /// `~/.aws/config` and `~/.aws/credentials` as needed.
+    ///
+    /// Config fields (`region`, `output`) go to `[profile NAME]` in
+    /// `~/.aws/config`. Credentials fields (`aws_access_key_id`,
+    /// `aws_secret_access_key`, `aws_session_token`) go to `[NAME]` in
+    /// `~/.aws/credentials`.
+    ///
+    /// Write order: config first, credentials second (ADR-11). Each write has
+    /// its own conflict check under the shared lock. If config writes but
+    /// credentials conflicts, returns `PartialSaved { written: ..., conflicted: ... }`.
+    ///
+    /// Secret fields: `aws_secret_access_key` and `aws_session_token` transit
+    /// only transiently inside the write transform and are never persisted to
+    /// DBFlux storage or logs.
+    fn save_edit(
+        &self,
+        name: &str,
+        fields: &HashMap<String, String>,
+        snapshot: &AuthEditSnapshot,
+    ) -> AuthSaveOutcome {
+        let aws_snapshot = match snapshot.downcast_ref::<AwsEditSnapshot>() {
+            Some(s) => s,
+            None => {
+                log::error!(
+                    "auth edit snapshot downcast failed; expected {}",
+                    std::any::type_name::<AwsEditSnapshot>()
+                );
+                return AuthSaveOutcome::Saved;
+            }
         };
 
-        if let Err(err) = crate::config::write_profile_to_aws_config(&profile_info) {
-            log::warn!(
-                "Failed to write AWS shared credentials profile to config: {}",
-                err
-            );
+        let (config_path, credentials_path) = {
+            let cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
+            (
+                cache.config_path().to_path_buf(),
+                cache.credentials_path().to_path_buf(),
+            )
+        };
+
+        // Config-side fields (non-secret).
+        let config_fields: Vec<(String, String)> = ["region", "output"]
+            .iter()
+            .filter_map(|&key| fields.get(key).map(|v| (key.to_string(), v.clone())))
+            .collect();
+
+        // Credentials-side fields (includes write-only secrets). Held as
+        // SecretString and exposed only at the point the credentials block is
+        // written, so the in-process copies are zeroized on drop. (The ultimate
+        // sink is the plaintext `~/.aws/credentials` file the AWS SDK reads.)
+        let creds_fields: Vec<(String, SecretString)> = [
+            "aws_access_key_id",
+            "aws_secret_access_key",
+            "aws_session_token",
+        ]
+        .iter()
+        .filter_map(|&key| {
+            fields
+                .get(key)
+                .map(|v| (key.to_string(), SecretString::from(v.clone())))
+        })
+        .collect();
+
+        let has_config_fields = !config_fields.is_empty();
+        let has_creds_fields = !creds_fields.is_empty();
+
+        // Write config section first (when there are config-side fields to write).
+        let config_written = if has_config_fields {
+            let snapshot_hash = aws_snapshot.config_section.as_ref().map(|h| h.0);
+            let conflict_detected = std::cell::Cell::new(false);
+
+            let config_fields_borrowed = config_fields.clone();
+            let result = crate::config::update_aws_config_atomic(&config_path, |existing| {
+                let current_hash = crate::config::hash_config_section(existing, name).map(|h| h.0);
+
+                let hashes_match = match (snapshot_hash, current_hash) {
+                    (Some(snap), Some(current)) => snap == current,
+                    (None, None) => true,
+                    _ => false,
+                };
+
+                if !hashes_match {
+                    conflict_detected.set(true);
+                    return existing.to_string();
+                }
+
+                let borrowed: Vec<(&str, &str)> = config_fields_borrowed
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect();
+                crate::config::replace_or_append_profile_block(existing, name, &borrowed, &[])
+            });
+
+            if result.is_err() || conflict_detected.get() {
+                return AuthSaveOutcome::Conflict {
+                    target: AwsEditFileKind::Config.to_target(),
+                };
+            }
+
+            true
+        } else {
+            false
+        };
+
+        // Write credentials section second (when there are credentials-side fields).
+        if has_creds_fields {
+            let snapshot_hash = aws_snapshot.credentials_section.as_ref().map(|h| h.0);
+            let conflict_detected = std::cell::Cell::new(false);
+
+            let creds_fields_borrowed = creds_fields.clone();
+            let result =
+                crate::config::update_aws_credentials_atomic(&credentials_path, |existing| {
+                    let current_hash =
+                        crate::config::hash_credentials_section(existing, name).map(|h| h.0);
+
+                    let hashes_match = match (snapshot_hash, current_hash) {
+                        (Some(snap), Some(current)) => snap == current,
+                        (None, None) => true,
+                        _ => false,
+                    };
+
+                    if !hashes_match {
+                        conflict_detected.set(true);
+                        return existing.to_string();
+                    }
+
+                    let borrowed: Vec<(&str, &str)> = creds_fields_borrowed
+                        .iter()
+                        .map(|(k, v)| (k.as_str(), v.expose_secret()))
+                        .collect();
+                    crate::config::replace_or_append_credentials_block(existing, name, &borrowed)
+                });
+
+            if result.is_err() || conflict_detected.get() {
+                return if config_written {
+                    AuthSaveOutcome::PartialSaved {
+                        written: AwsEditFileKind::Config.to_target(),
+                        conflicted: AwsEditFileKind::Credentials.to_target(),
+                    }
+                } else {
+                    AuthSaveOutcome::Conflict {
+                        target: AwsEditFileKind::Credentials.to_target(),
+                    }
+                };
+            }
         }
+
+        AuthSaveOutcome::Saved
     }
 }
 
 #[async_trait::async_trait]
-impl dbflux_core::auth::DynAuthProvider for AwsStaticCredentialsAuthProvider {
+impl dbflux_core::auth::DynAuthProvider for AwsSsoSessionAuthProvider {
     fn provider_id(&self) -> &'static str {
-        "aws-static-credentials"
+        "aws-sso-session"
     }
 
     fn display_name(&self) -> &'static str {
-        "AWS Static Credentials"
+        "AWS SSO Session"
     }
 
     fn form_def(&self) -> &'static AuthFormDef {
         static FORM: OnceLock<AuthFormDef> = OnceLock::new();
-        FORM.get_or_init(build_aws_static_credentials_form)
+        FORM.get_or_init(build_aws_sso_session_form)
     }
 
     fn capabilities(&self) -> &AuthProviderCapabilities {
-        static CAPABILITIES: AuthProviderCapabilities = AuthProviderCapabilities {
+        // SSO session profiles are reference targets, not login targets.
+        // Login happens via the `aws-sso` profile that points at the session.
+        static CAPABILITIES: OnceLock<AuthProviderCapabilities> = OnceLock::new();
+        CAPABILITIES.get_or_init(|| AuthProviderCapabilities {
             login: AuthProviderLoginCapabilities {
                 supported: false,
                 verification_url_progress: false,
             },
-        };
-
-        &CAPABILITIES
+            edit: Some(aws_edit_capabilities()),
+        })
     }
 
     async fn validate_session(&self, _profile: &AuthProfile) -> Result<AuthSessionState, DbError> {
+        // A session record is always considered "valid" as a data container.
+        // Token validity for the referenced URL is checked by the consumer
+        // `aws-sso` profile during its own validate_session.
         Ok(AuthSessionState::Valid { expires_at: None })
     }
 
@@ -1205,24 +1719,145 @@ impl dbflux_core::auth::DynAuthProvider for AwsStaticCredentialsAuthProvider {
 
     async fn resolve_credentials(
         &self,
-        profile: &AuthProfile,
+        _profile: &AuthProfile,
     ) -> Result<ResolvedCredentials, DbError> {
-        resolve_aws_credentials(profile).await
+        Ok(ResolvedCredentials::default())
     }
 
-    fn register_value_providers(
+    fn detect_importable_profiles(&self) -> Vec<ImportableProfile> {
+        let mut cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
+
+        cache
+            .profiles()
+            .iter()
+            .filter(|entry| entry.is_sso_session)
+            .map(|entry| {
+                let mut fields = HashMap::new();
+
+                if let Some(sso_start_url) = entry.sso_start_url.clone() {
+                    fields.insert("sso_start_url".to_string(), sso_start_url);
+                }
+
+                if let Some(sso_region) = entry.sso_region.clone() {
+                    fields.insert("sso_region".to_string(), sso_region);
+                }
+
+                ImportableProfile {
+                    display_name: entry.name.clone(),
+                    provider_id: "aws-sso-session".to_string(),
+                    fields,
+                }
+            })
+            .collect()
+    }
+
+    fn reflect_profiles(&self) -> Vec<AuthProfile> {
+        AwsSsoSessionAuthProvider::reflect_profiles(self)
+    }
+
+    fn write_new_profile_to_config(&self, profile: &AuthProfile) -> Option<Result<(), String>> {
+        let name = profile.name.trim().to_string();
+        let sso_start_url = profile
+            .fields
+            .get("sso_start_url")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        let sso_region = profile
+            .fields
+            .get("sso_region")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+
+        Some(
+            crate::config::append_aws_sso_session_profile(&name, &sso_start_url, &sso_region)
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+        )
+    }
+
+    /// Captures a SHA-256 snapshot of the `[sso-session NAME]` section in
+    /// `~/.aws/config` at the moment the edit form opens.
+    fn open_edit_snapshot(&self, name: &str) -> AuthEditSnapshot {
+        let config_path = {
+            let cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
+            cache.config_path().to_path_buf()
+        };
+
+        let config_section = std::fs::read_to_string(&config_path)
+            .ok()
+            .and_then(|contents| crate::config::hash_sso_session_section(&contents, name));
+
+        AuthEditSnapshot::new(AwsEditSnapshot {
+            config_section,
+            credentials_section: None,
+        })
+    }
+
+    /// Writes the edited sso-session fields to the `[sso-session NAME]` section
+    /// in `~/.aws/config` atomically.
+    ///
+    /// Fields written: `sso_start_url`, `sso_region`, `sso_registration_scopes`.
+    fn save_edit(
         &self,
-        profile: &AuthProfile,
-        _session: Option<&AuthSession>,
-        resolver: &mut dbflux_core::values::CompositeValueResolver,
-    ) -> Result<(), DbError> {
-        let sdk_config = build_static_sdk_config_blocking(profile)?;
+        name: &str,
+        fields: &HashMap<String, String>,
+        snapshot: &AuthEditSnapshot,
+    ) -> AuthSaveOutcome {
+        let aws_snapshot = match snapshot.downcast_ref::<AwsEditSnapshot>() {
+            Some(s) => s,
+            None => {
+                log::error!(
+                    "auth edit snapshot downcast failed; expected {}",
+                    std::any::type_name::<AwsEditSnapshot>()
+                );
+                return AuthSaveOutcome::Saved;
+            }
+        };
 
-        resolver
-            .register_secret_provider(Arc::new(AwsSecretsManagerProvider::new(sdk_config.clone())));
-        resolver.register_parameter_provider(Arc::new(AwsSsmParameterProvider::new(sdk_config)));
+        let config_path = {
+            let cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
+            cache.config_path().to_path_buf()
+        };
 
-        Ok(())
+        let session_fields: Vec<(String, String)> =
+            ["sso_start_url", "sso_region", "sso_registration_scopes"]
+                .iter()
+                .filter_map(|&key| fields.get(key).map(|v| (key.to_string(), v.clone())))
+                .collect();
+
+        let snapshot_hash = aws_snapshot.config_section.as_ref().map(|h| h.0);
+        let conflict_detected = std::cell::Cell::new(false);
+
+        let result = crate::config::update_aws_config_atomic(&config_path, |existing| {
+            let current_hash = crate::config::hash_sso_session_section(existing, name).map(|h| h.0);
+
+            let hashes_match = match (snapshot_hash, current_hash) {
+                (Some(snap), Some(current)) => snap == current,
+                (None, None) => true,
+                _ => false,
+            };
+
+            if !hashes_match {
+                conflict_detected.set(true);
+                return existing.to_string();
+            }
+
+            // Build a replacement `[sso-session NAME]` block using the
+            // sso-session-specific block builder.
+            let borrowed: Vec<(&str, &str)> = session_fields
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            crate::config::replace_or_append_sso_session_block(existing, name, &borrowed)
+        });
+
+        if result.is_err() || conflict_detected.get() {
+            return AuthSaveOutcome::Conflict {
+                target: AwsEditFileKind::Config.to_target(),
+            };
+        }
+
+        AuthSaveOutcome::Saved
     }
 }
 
@@ -1238,15 +1873,35 @@ fn resolve_sso_start_url(profile_name: &str, sso_start_url: &str) -> Option<Stri
         return Some(url.to_string());
     }
 
-    // Fall back to ~/.aws/config
+    // Fall back to ~/.aws/config, following `sso_session` indirection when the
+    // profile delegates its SSO config to an `[sso-session <name>]` section.
     let config_path = aws_config_path();
     let contents = std::fs::read_to_string(&config_path).ok()?;
     let profiles = crate::config::parse_aws_config_str(&contents);
 
+    let profile = profiles
+        .iter()
+        .find(|p| !p.is_sso_session && p.name.eq_ignore_ascii_case(profile_name))?;
+
+    let direct = profile
+        .sso_start_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|u| !u.is_empty());
+
+    if let Some(url) = direct {
+        return Some(url.to_string());
+    }
+
+    let session_name = profile.sso_session.as_deref().map(str::trim)?;
+    if session_name.is_empty() {
+        return None;
+    }
+
     profiles
-        .into_iter()
-        .find(|p| p.name.eq_ignore_ascii_case(profile_name))
-        .and_then(|p| p.sso_start_url)
+        .iter()
+        .find(|p| p.is_sso_session && p.name.eq_ignore_ascii_case(session_name))
+        .and_then(|p| p.sso_start_url.clone())
         .map(|u| u.trim().to_string())
         .filter(|u| !u.is_empty())
 }
@@ -1311,8 +1966,6 @@ pub(crate) fn validate_sso_session(sso_start_url: &str) -> Result<AuthSessionSta
 /// is safe to call from async contexts without an active Tokio reactor
 /// (e.g. the GPUI background executor).
 async fn resolve_aws_credentials(profile: &AuthProfile) -> Result<ResolvedCredentials, DbError> {
-    ensure_sso_profile_configured_from_auth_profile(profile);
-
     let profile_name = effective_aws_profile_name(profile).map(ToOwned::to_owned);
     let region = profile
         .fields
@@ -1449,7 +2102,7 @@ pub(crate) fn sso_cache_path(sso_start_url: &str) -> PathBuf {
     // "https://example.awsapps.com/start" and ".../start/" hash identically.
     let normalized = sso_start_url.trim_end_matches('/');
     let hash = Sha1::digest(normalized.as_bytes());
-    let hex = format!("{:x}", hash);
+    let hex = hex::encode(hash);
 
     sso_cache_dir().join(format!("{}.json", hex))
 }
@@ -1464,49 +2117,25 @@ fn sso_cache_dir() -> PathBuf {
 
 /// Reads the SSO cache file for the given start URL.
 ///
-/// Tries the hash-based filename first (fast path). If not found, scans all
-/// `.json` files in the cache directory and returns the first one whose
-/// `startUrl` field matches the normalized URL (ignoring trailing slashes).
-/// Returns `None` if no matching file exists or it cannot be read.
+/// AWS CLI v2 uses two different cache filename schemes:
+/// - Legacy: the file is named `sha1(start_url)` (with or without trailing slash).
+/// - Modern (`sso_session` block in `~/.aws/config`): the file is named
+///   `sha1(session_name)` instead, completely decoupled from the start URL.
+///
+/// Both schemes write the start URL into the file's `startUrl` JSON field, so
+/// the only reliable way to find the *current* token is to scan every `.json`
+/// file in the cache directory, match by `startUrl` content, and pick the most
+/// recently modified one. Relying on the hash-derived filename causes stale
+/// hash-matched files to mask fresh session-keyed tokens, leaving the login
+/// polling loop spinning forever after a successful `aws sso login`.
 fn find_sso_cache_contents(normalized_url: &str) -> Option<String> {
-    // Fast path: exact hash match. The AWS CLI may write the cache under either
-    // the trimmed or trailing-slash form of the URL, and stale files from a
-    // previous variant can coexist with a freshly-written one. Pick the most
-    // recently modified file among the candidates so a fresh `aws sso login`
-    // always wins over a stale prior cache entry.
-    let mut newest: Option<(std::time::SystemTime, std::path::PathBuf, String)> = None;
-    for candidate in [normalized_url, &format!("{}/", normalized_url)] {
-        let hash = Sha1::digest(candidate.as_bytes());
-        let path = sso_cache_dir().join(format!("{:x}.json", hash));
-
-        let metadata = match std::fs::metadata(&path) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        let mtime = metadata
-            .modified()
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-        let contents = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-
-        match &newest {
-            Some((current_mtime, _, _)) if *current_mtime >= mtime => {}
-            _ => newest = Some((mtime, path, contents)),
-        }
-    }
-    if let Some((_, path, contents)) = newest {
-        log::debug!("SSO cache hit (hash match): {}", path.display());
-        return Some(contents);
-    }
-
-    // Slow path: scan all files and compare by startUrl field value.
     let dir = sso_cache_dir();
     let entries = match std::fs::read_dir(&dir) {
         Ok(e) => e,
         Err(_) => return None,
     };
+
+    let mut newest: Option<(std::time::SystemTime, std::path::PathBuf, String)> = None;
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -1524,12 +2153,27 @@ fn find_sso_cache_contents(normalized_url: &str) -> Option<String> {
             Err(_) => continue,
         };
 
-        if let Some(url) = parsed.get("startUrl").and_then(|v| v.as_str())
-            && url.trim_end_matches('/') == normalized_url
-        {
-            log::debug!("SSO cache hit (startUrl scan): {}", path.display());
-            return Some(contents);
+        let Some(url) = parsed.get("startUrl").and_then(|v| v.as_str()) else {
+            continue;
+        };
+
+        if url.trim_end_matches('/') != normalized_url {
+            continue;
         }
+
+        let mtime = std::fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+        match &newest {
+            Some((current_mtime, _, _)) if *current_mtime >= mtime => {}
+            _ => newest = Some((mtime, path, contents)),
+        }
+    }
+
+    if let Some((_, path, contents)) = newest {
+        log::debug!("SSO cache hit: {}", path.display());
+        return Some(contents);
     }
 
     log::debug!("SSO cache miss for URL: {}", normalized_url);
@@ -1549,6 +2193,34 @@ fn find_sso_cache_contents(normalized_url: &str) -> Option<String> {
 /// with short sleeps so that GPUI can still process other events (including
 /// delivering the updated `WaitingForLogin { url: Some(...) }` state to the
 /// login modal) while the user completes the SSO flow in their browser.
+/// Registry of in-flight SSO login abort senders keyed by `AuthProfile.id`.
+/// Allows the UI to cancel a running login (kills the `aws sso login` process
+/// and unblocks the cache-polling loop).
+static ABORT_REGISTRY: OnceLock<Mutex<HashMap<uuid::Uuid, std::sync::mpsc::SyncSender<()>>>> =
+    OnceLock::new();
+
+fn abort_registry() -> &'static Mutex<HashMap<uuid::Uuid, std::sync::mpsc::SyncSender<()>>> {
+    ABORT_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Signals the in-flight `aws sso login` for `profile_id` to abort.
+///
+/// Returns `true` if an abort was signalled (a login was in flight),
+/// `false` if no login for this profile was tracked.
+pub fn abort_sso_login(profile_id: uuid::Uuid) -> bool {
+    let sender = {
+        let mut map = abort_registry().lock().unwrap_or_else(|e| e.into_inner());
+        map.remove(&profile_id)
+    };
+    match sender {
+        Some(tx) => {
+            let _ = tx.try_send(());
+            true
+        }
+        None => false,
+    }
+}
+
 async fn sso_login_with_url(
     profile: &AuthProfile,
     profile_name: &str,
@@ -1575,6 +2247,12 @@ async fn sso_login_with_url(
             }
         };
 
+        // Register the abort sender so the UI can cancel this login mid-flight.
+        {
+            let mut map = abort_registry().lock().unwrap_or_else(|e| e.into_inner());
+            map.insert(profile_id, handle.abort_tx.clone());
+        }
+
         // Fire the callback now — the URL is known, the user may still be
         // completing the browser flow.
         url_callback(handle.verification_url);
@@ -1582,6 +2260,13 @@ async fn sso_login_with_url(
         // Poll the token cache until the session appears, times out, or is aborted.
         let session =
             wait_for_sso_session_blocking(profile_id, "aws-sso", &start_url, &handle.abort_flag);
+
+        // Deregister on exit regardless of outcome.
+        {
+            let mut map = abort_registry().lock().unwrap_or_else(|e| e.into_inner());
+            map.remove(&profile_id);
+        }
+
         let _ = result_tx.send(session);
     });
 
@@ -1677,22 +2362,15 @@ impl std::future::Future for SleepFuture {
 /// Safe to call from a plain OS thread with no async runtime. Used by the
 /// Settings UI login button which runs on the GPUI background executor
 /// (which has no Tokio reactor).
+/// Performs a blocking SSO login for the given profile.
+///
+/// The profile section must already exist in `~/.aws/config` (it is reflected
+/// from the file). No write to `~/.aws/config` is performed here.
 pub fn login_sso_blocking(
     profile_id: uuid::Uuid,
     profile_name: &str,
     sso_start_url: &str,
-    sso_region: &str,
-    sso_account_id: &str,
-    sso_role_name: &str,
 ) -> Result<AuthSession, DbError> {
-    ensure_aws_profile_configured(&SsoProfileConfig {
-        profile_name: profile_name.to_string(),
-        region: sso_region.to_string(),
-        sso_start_url: sso_start_url.to_string(),
-        sso_account_id: sso_account_id.to_string(),
-        sso_role_name: sso_role_name.to_string(),
-    })?;
-
     let handle = start_sso_login_blocking(profile_name)?;
     log::debug!(
         "AWS SSO login started for profile '{}', verification URL: {:?}",
@@ -1748,7 +2426,7 @@ mod tests {
 
     fn write_sso_cache(dir: &std::path::Path, start_url: &str, json: &str) {
         let hash = Sha1::digest(start_url.as_bytes());
-        let hex = format!("{:x}", hash);
+        let hex = hex::encode(hash);
         let path = dir.join(format!("{}.json", hex));
         let mut file = std::fs::File::create(path).unwrap();
         file.write_all(json.as_bytes()).unwrap();
@@ -1771,7 +2449,7 @@ mod tests {
         // Override the cache dir by testing the underlying function with a
         // constructed path
         let hash = Sha1::digest(start_url.as_bytes());
-        let hex = format!("{:x}", hash);
+        let hex = hex::encode(hash);
         let cache_file = tmp.path().join(format!("{}.json", hex));
         let contents = std::fs::read_to_string(&cache_file).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
@@ -1843,57 +2521,6 @@ mod tests {
     }
 
     #[test]
-    fn sso_profile_config_can_be_derived_from_auth_profile_fields() {
-        let profile = AuthProfile::new(
-            "Aws example",
-            "aws-sso",
-            [
-                ("profile_name".to_string(), "example".to_string()),
-                ("region".to_string(), "us-east-1".to_string()),
-                (
-                    "sso_start_url".to_string(),
-                    "https://example.awsapps.com/start".to_string(),
-                ),
-                ("sso_account_id".to_string(), "123456789012".to_string()),
-                (
-                    "sso_role_name".to_string(),
-                    "AdministratorAccess".to_string(),
-                ),
-            ]
-            .into_iter()
-            .collect(),
-        );
-
-        let config = sso_profile_config_from_auth_profile(&profile).expect("sso profile config");
-
-        assert_eq!(config.profile_name, "example");
-        assert_eq!(config.region, "us-east-1");
-        assert_eq!(config.sso_account_id, "123456789012");
-        assert_eq!(config.sso_role_name, "AdministratorAccess");
-    }
-
-    #[test]
-    fn static_credentials_do_not_fall_back_to_auth_profile_name() {
-        let mut fields = std::collections::HashMap::new();
-        fields.insert(
-            "access_key_id".to_string(),
-            "AKIAIOSFODNN7EXAMPLE".to_string(),
-        );
-        fields.insert(
-            "secret_access_key".to_string(),
-            "wJalrXUtnFEMI/K7MDENG/bPxRfiCY".to_string(),
-        );
-        fields.insert("region".to_string(), "us-east-1".to_string());
-
-        let profile = AuthProfile::new("static-creds", "aws-static-credentials", fields);
-
-        let (profile_name, region) = profile_name_and_region(&profile);
-
-        assert_eq!(profile_name, None);
-        assert_eq!(region, "us-east-1");
-    }
-
-    #[test]
     fn aws_sso_capabilities_advertise_interactive_login() {
         let provider = AwsSsoAuthProvider::new();
 
@@ -1910,7 +2537,7 @@ mod tests {
     }
 
     #[test]
-    fn non_interactive_aws_providers_keep_login_disabled() {
+    fn shared_credentials_provider_keeps_login_disabled() {
         let shared = AwsSharedCredentialsAuthProvider::new();
         let shared_capabilities =
             <AwsSharedCredentialsAuthProvider as dbflux_core::auth::DynAuthProvider>::capabilities(
@@ -1918,14 +2545,6 @@ mod tests {
             );
         assert!(!shared_capabilities.login.supported);
         assert!(!shared_capabilities.login.verification_url_progress);
-
-        let static_provider = AwsStaticCredentialsAuthProvider::new();
-        let static_capabilities =
-            <AwsStaticCredentialsAuthProvider as dbflux_core::auth::DynAuthProvider>::capabilities(
-                &static_provider,
-            );
-        assert!(!static_capabilities.login.supported);
-        assert!(!static_capabilities.login.verification_url_progress);
     }
 
     #[test]
@@ -1933,7 +2552,7 @@ mod tests {
         let url = "https://my-sso.awsapps.com/start";
         let path = sso_cache_path(url);
 
-        let expected_hash = format!("{:x}", Sha1::digest(url.as_bytes()));
+        let expected_hash = hex::encode(Sha1::digest(url.as_bytes()));
         assert!(path.to_string_lossy().contains(&expected_hash));
         assert!(path.to_string_lossy().ends_with(".json"));
     }
@@ -1979,245 +2598,6 @@ mod tests {
         }
     }
 
-    fn field_def_by_id<'a>(fields: &'a [FormFieldDef], id: &str) -> Option<&'a FormFieldDef> {
-        fields.iter().find(|f| f.id == id)
-    }
-
-    #[test]
-    fn static_credentials_form_has_all_fields() {
-        let form = build_aws_static_credentials_form();
-
-        let fields = &form.tabs[0].sections[0].fields;
-
-        let access_key =
-            field_def_by_id(fields, "access_key_id").expect("access_key_id field missing");
-        assert_eq!(access_key.kind, FormFieldKind::Text);
-        assert!(access_key.required);
-
-        let secret_key =
-            field_def_by_id(fields, "secret_access_key").expect("secret_access_key field missing");
-        assert_eq!(secret_key.kind, FormFieldKind::Password);
-        assert!(secret_key.required);
-
-        let session_token =
-            field_def_by_id(fields, "session_token").expect("session_token field missing");
-        assert_eq!(session_token.kind, FormFieldKind::Password);
-        assert!(!session_token.required);
-
-        let region = field_def_by_id(fields, "region").expect("region field missing");
-        assert_eq!(region.kind, FormFieldKind::Text);
-        assert!(region.required);
-    }
-
-    #[test]
-    fn static_credentials_missing_access_key_returns_error() {
-        let mut fields = std::collections::HashMap::new();
-        fields.insert(
-            "secret_access_key".to_string(),
-            "wJalrXUtnFEMI/K7MDENG/bPxRfiCY".to_string(),
-        );
-        fields.insert("region".to_string(), "us-east-1".to_string());
-
-        let profile = AuthProfile::new("test-static", "aws-static-credentials", fields);
-
-        let result = build_static_sdk_config_blocking(&profile);
-        assert!(result.is_err());
-
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("access_key_id"),
-            "Error should mention access_key_id, got: {}",
-            err_msg
-        );
-    }
-
-    #[test]
-    fn static_credentials_missing_secret_key_returns_error() {
-        let mut fields = std::collections::HashMap::new();
-        fields.insert(
-            "access_key_id".to_string(),
-            "AKIAIOSFODNN7EXAMPLE".to_string(),
-        );
-        fields.insert("region".to_string(), "us-east-1".to_string());
-
-        let profile = AuthProfile::new("test-static", "aws-static-credentials", fields);
-
-        let result = build_static_sdk_config_blocking(&profile);
-        assert!(result.is_err());
-
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("secret_access_key"),
-            "Error should mention secret_access_key, got: {}",
-            err_msg
-        );
-    }
-
-    #[test]
-    fn static_credentials_empty_session_token_succeeds() {
-        let mut fields = std::collections::HashMap::new();
-        fields.insert(
-            "access_key_id".to_string(),
-            "AKIAIOSFODNN7EXAMPLE".to_string(),
-        );
-        fields.insert(
-            "secret_access_key".to_string(),
-            "wJalrXUtnFEMI/K7MDENG/bPxRfiCY".to_string(),
-        );
-        fields.insert("session_token".to_string(), String::new());
-        fields.insert("region".to_string(), "us-east-1".to_string());
-
-        let profile = AuthProfile::new("test-static", "aws-static-credentials", fields);
-
-        let result = build_static_sdk_config_blocking(&profile);
-
-        // The SdkConfig load attempts a network call to STS regional endpoints,
-        // which may fail in CI without real AWS credentials. The important
-        // assertion is that the function passes validation — it must NOT return
-        // a "missing required field" error for access_key_id, secret_access_key,
-        // or session_token (since the latter is optional and was provided as empty).
-        match result {
-            Ok(_) => {}
-            Err(err) => {
-                let msg = err.to_string();
-                let forbidden_fields = ["access_key_id", "secret_access_key", "session_token"];
-                for field in &forbidden_fields {
-                    assert!(
-                        !msg.contains(field),
-                        "Should not fail on field '{}', got error: {}",
-                        field,
-                        msg
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn static_credentials_missing_session_token_succeeds() {
-        let mut fields = std::collections::HashMap::new();
-        fields.insert(
-            "access_key_id".to_string(),
-            "AKIAIOSFODNN7EXAMPLE".to_string(),
-        );
-        fields.insert(
-            "secret_access_key".to_string(),
-            "wJalrXUtnFEMI/K7MDENG/bPxRfiCY".to_string(),
-        );
-        fields.insert("region".to_string(), "us-east-1".to_string());
-        // Deliberately NOT inserting "session_token" at all.
-
-        let profile = AuthProfile::new("test-static-no-token", "aws-static-credentials", fields);
-
-        let result = build_static_sdk_config_blocking(&profile);
-
-        // Same as the empty-session-token test — we just need to verify the
-        // function does not error on missing session_token (it's optional).
-        // Network failures from fake credentials are acceptable.
-        match result {
-            Ok(_) => {}
-            Err(err) => {
-                let msg = err.to_string();
-                assert!(
-                    !msg.contains("access_key_id"),
-                    "Should not fail on access_key_id, got: {}",
-                    msg
-                );
-                assert!(
-                    !msg.contains("secret_access_key"),
-                    "Should not fail on secret_access_key, got: {}",
-                    msg
-                );
-                assert!(
-                    !msg.contains("session_token"),
-                    "session_token is optional, got error mentioning it: {}",
-                    msg
-                );
-            }
-        }
-    }
-
-    /// Verifies that `register_value_providers()` exercises the full code path
-    /// through `build_static_sdk_config_blocking` with present-but-fake
-    /// credentials. The AWS SDK will reject the fake credentials at runtime,
-    /// but the test proves the function does not fail on missing-field
-    /// validation and that the error (if any) propagates correctly.
-    ///
-    /// The happy path (real AWS credentials resolving to a working SdkConfig
-    /// and providers being registered) requires integration testing with live
-    /// AWS credentials and is not covered here.
-    #[test]
-    fn static_credentials_register_value_providers_with_fake_credentials() {
-        let mut fields = std::collections::HashMap::new();
-        fields.insert(
-            "access_key_id".to_string(),
-            "AKIAIOSFODNN7EXAMPLE".to_string(),
-        );
-        fields.insert(
-            "secret_access_key".to_string(),
-            "wJalrXUtnFEMI/K7MDENG/bPxRfiCY".to_string(),
-        );
-        fields.insert("region".to_string(), "us-east-1".to_string());
-
-        let profile = AuthProfile::new("test-register", "aws-static-credentials", fields);
-
-        let provider = AwsStaticCredentialsAuthProvider::new();
-        let cache = Arc::new(dbflux_core::values::ValueCache::new(
-            std::time::Duration::from_secs(60),
-        ));
-        let mut resolver = dbflux_core::values::CompositeValueResolver::new(cache);
-
-        let result = dbflux_core::auth::DynAuthProvider::register_value_providers(
-            &provider,
-            &profile,
-            None,
-            &mut resolver,
-        );
-
-        // With fake credentials, the SdkConfig load may or may not succeed
-        // depending on the environment. The critical assertion is that if it
-        // fails, the error is NOT about missing required fields — proving the
-        // validation passed and the error came from the AWS SDK layer.
-        match result {
-            Ok(()) => {
-                // SdkConfig loaded successfully — verify providers were registered.
-                let secret_providers = resolver.available_secret_providers();
-                let param_providers = resolver.available_parameter_providers();
-
-                assert!(
-                    secret_providers
-                        .iter()
-                        .any(|(id, _)| *id == "aws-secrets-manager"),
-                    "Expected aws-secrets-manager provider to be registered, found: {:?}",
-                    secret_providers
-                );
-                assert!(
-                    param_providers.iter().any(|(id, _)| *id == "aws-ssm"),
-                    "Expected aws-ssm provider to be registered, found: {:?}",
-                    param_providers
-                );
-            }
-            Err(err) => {
-                let msg = err.to_string();
-                assert!(
-                    !msg.contains("access_key_id"),
-                    "Should not fail on access_key_id validation, got: {}",
-                    msg
-                );
-                assert!(
-                    !msg.contains("secret_access_key"),
-                    "Should not fail on secret_access_key validation, got: {}",
-                    msg
-                );
-                assert!(
-                    !msg.contains("session_token"),
-                    "session_token is optional, got: {}",
-                    msg
-                );
-            }
-        }
-    }
-
     // -------------------------------------------------------------------------
     // T16: fetch_dynamic_options unit tests (no live AWS calls)
     // -------------------------------------------------------------------------
@@ -2236,7 +2616,10 @@ mod tests {
             name: "Test".to_string(),
             provider_id: "aws-sso".to_string(),
             fields,
+            secret_fields: std::collections::HashMap::new(),
             enabled: true,
+            read_only: false,
+            dangling_origin: None,
         }
     }
 
@@ -2307,6 +2690,510 @@ mod tests {
         );
     }
 
+    // --- T-3.1: AwsSsoAuthProvider::reflect_profiles() ---
+
+    /// Helper: creates a `CachedAwsConfig` backed by a temp config file, wrapped
+    /// in an `AwsSsoAuthProvider`.
+    fn sso_provider_with_config(config_content: &str) -> AwsSsoAuthProvider {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&config_path, config_content).unwrap();
+        std::fs::write(&creds_path, "").unwrap();
+        let cache = crate::config::CachedAwsConfig::new_with_paths(config_path, creds_path);
+        // Leak the tempdir so the files remain for the test's duration.
+        std::mem::forget(dir);
+        AwsSsoAuthProvider {
+            config_cache: Mutex::new(cache),
+        }
+    }
+
+    #[test]
+    fn sso_reflect_produces_auth_profile_with_correct_provider_and_uuid() {
+        let config = r#"
+[profile dev-sso]
+sso_start_url = https://example.awsapps.com/start
+sso_account_id = 123456789012
+sso_role_name = DevAccess
+sso_region = us-east-1
+"#;
+        let provider = sso_provider_with_config(config);
+        let profiles = provider.reflect_profiles();
+
+        assert_eq!(profiles.len(), 1, "expected one reflected SSO profile");
+        let p = &profiles[0];
+
+        assert_eq!(p.provider_id, "aws-sso");
+        assert_eq!(p.name, "dev-sso");
+        // Non-dangling reflected profiles are editable (design §13); read_only = false.
+        assert!(
+            !p.read_only,
+            "non-dangling reflected profile must be editable (read_only = false)"
+        );
+        assert!(p.enabled);
+
+        let expected_id = dbflux_core::auth::aws_profile_uuid("aws-sso", "dev-sso");
+        assert_eq!(
+            p.id, expected_id,
+            "id must equal aws_profile_uuid(aws-sso, name)"
+        );
+
+        assert_eq!(
+            p.fields.get("sso_start_url").map(String::as_str),
+            Some("https://example.awsapps.com/start")
+        );
+        assert_eq!(
+            p.fields.get("sso_account_id").map(String::as_str),
+            Some("123456789012")
+        );
+        assert_eq!(
+            p.fields.get("sso_role_name").map(String::as_str),
+            Some("DevAccess")
+        );
+        assert_eq!(
+            p.fields.get("profile_name").map(String::as_str),
+            Some("dev-sso")
+        );
+
+        // No secret fields.
+        assert!(
+            !p.fields.contains_key("aws_access_key_id"),
+            "aws_access_key_id must not appear in reflected fields"
+        );
+        assert!(
+            !p.fields.contains_key("aws_secret_access_key"),
+            "aws_secret_access_key must not appear in reflected fields"
+        );
+    }
+
+    #[test]
+    fn sso_reflect_folds_sso_session_indirection() {
+        let config = r#"
+[profile my-sso]
+sso_session = my-org
+
+[sso-session my-org]
+sso_start_url = https://example.awsapps.com/start
+sso_region = us-east-1
+"#;
+        let provider = sso_provider_with_config(config);
+        let profiles = provider.reflect_profiles();
+
+        // Only one SSO profile (the sso-session is handled by AwsSsoSessionAuthProvider).
+        let sso = profiles
+            .iter()
+            .find(|p| p.name == "my-sso")
+            .expect("my-sso must be reflected");
+
+        assert_eq!(sso.provider_id, "aws-sso");
+        assert_eq!(
+            sso.fields.get("sso_start_url").map(String::as_str),
+            Some("https://example.awsapps.com/start"),
+            "sso_start_url must be folded from the sso-session block"
+        );
+        assert_eq!(
+            sso.fields.get("sso_region").map(String::as_str),
+            Some("us-east-1"),
+            "sso_region must be folded from the sso-session block"
+        );
+        assert_eq!(
+            sso.fields.get("sso_session").map(String::as_str),
+            Some("my-org"),
+            "sso_session reference name must be preserved in fields"
+        );
+    }
+
+    #[test]
+    fn sso_reflect_returns_empty_when_config_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        // config_path intentionally does not exist.
+        let config_path = dir.path().join("nonexistent_config");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&creds_path, "").unwrap();
+        let cache = crate::config::CachedAwsConfig::new_with_paths(config_path, creds_path);
+        let provider = AwsSsoAuthProvider {
+            config_cache: Mutex::new(cache),
+        };
+
+        let profiles = provider.reflect_profiles();
+        assert!(
+            profiles.is_empty(),
+            "missing config must yield empty list, no panic"
+        );
+    }
+
+    #[test]
+    fn sso_reflect_skips_non_sso_sections_but_reflects_sso_ones() {
+        let config = r#"
+[profile ci-user]
+region = us-west-2
+
+[profile dev-sso]
+sso_start_url = https://example.awsapps.com/start
+sso_account_id = 123456789012
+sso_role_name = DevAccess
+sso_region = us-east-1
+"#;
+        let provider = sso_provider_with_config(config);
+        let profiles = provider.reflect_profiles();
+
+        // Only SSO profiles; ci-user is shared-credentials, not SSO.
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].name, "dev-sso");
+    }
+
+    // --- T-3.2: AwsSsoSessionAuthProvider::reflect_profiles() ---
+
+    fn sso_session_provider_with_config(config_content: &str) -> AwsSsoSessionAuthProvider {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&config_path, config_content).unwrap();
+        std::fs::write(&creds_path, "").unwrap();
+        let cache = crate::config::CachedAwsConfig::new_with_paths(config_path, creds_path);
+        std::mem::forget(dir);
+        AwsSsoSessionAuthProvider {
+            config_cache: Mutex::new(cache),
+        }
+    }
+
+    #[test]
+    fn sso_session_reflect_produces_correct_provider_and_uuid() {
+        let config = r#"
+[sso-session my-org]
+sso_start_url = https://example.awsapps.com/start
+sso_region = us-east-1
+"#;
+        let provider = sso_session_provider_with_config(config);
+        let profiles = provider.reflect_profiles();
+
+        assert_eq!(profiles.len(), 1);
+        let p = &profiles[0];
+
+        assert_eq!(p.provider_id, "aws-sso-session");
+        assert_eq!(p.name, "my-org");
+        // Non-dangling reflected profiles are editable (design §13); read_only = false.
+        assert!(!p.read_only);
+
+        let expected_id = dbflux_core::auth::aws_profile_uuid("aws-sso-session", "my-org");
+        assert_eq!(p.id, expected_id);
+
+        assert_eq!(
+            p.fields.get("sso_start_url").map(String::as_str),
+            Some("https://example.awsapps.com/start")
+        );
+    }
+
+    #[test]
+    fn sso_session_uuid_differs_from_sso_same_name() {
+        let config = r#"
+[profile shared]
+sso_start_url = https://example.awsapps.com/start
+sso_account_id = 111122223333
+sso_role_name = Admin
+sso_region = us-east-1
+
+[sso-session shared]
+sso_start_url = https://example.awsapps.com/start
+sso_region = us-east-1
+"#;
+        let sso_provider = sso_provider_with_config(config);
+        let session_provider = sso_session_provider_with_config(config);
+
+        let sso_profiles = sso_provider.reflect_profiles();
+        let session_profiles = session_provider.reflect_profiles();
+
+        let sso_p = sso_profiles
+            .iter()
+            .find(|p| p.name == "shared")
+            .expect("sso shared");
+        let session_p = session_profiles
+            .iter()
+            .find(|p| p.name == "shared")
+            .expect("session shared");
+
+        assert_ne!(
+            sso_p.id, session_p.id,
+            "same name under aws-sso vs aws-sso-session must have distinct UUIDs"
+        );
+    }
+
+    #[test]
+    fn sso_session_reflect_returns_empty_when_config_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("nonexistent");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&creds_path, "").unwrap();
+        let cache = crate::config::CachedAwsConfig::new_with_paths(config_path, creds_path);
+        let provider = AwsSsoSessionAuthProvider {
+            config_cache: Mutex::new(cache),
+        };
+        assert!(provider.reflect_profiles().is_empty());
+    }
+
+    // --- T-3.3: AwsSharedCredentialsAuthProvider::reflect_profiles() ---
+
+    fn shared_provider_with_files(
+        config_content: &str,
+        credentials_content: &str,
+    ) -> AwsSharedCredentialsAuthProvider {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&config_path, config_content).unwrap();
+        std::fs::write(&creds_path, credentials_content).unwrap();
+        let cache = crate::config::CachedAwsConfig::new_with_paths(config_path, creds_path);
+        std::mem::forget(dir);
+        AwsSharedCredentialsAuthProvider {
+            config_cache: Mutex::new(cache),
+        }
+    }
+
+    #[test]
+    fn shared_reflect_includes_credentials_file_profiles() {
+        let credentials = "[ci-user]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCY\n";
+        let config = "";
+        let provider = shared_provider_with_files(config, credentials);
+        let profiles = provider.reflect_profiles();
+
+        let ci = profiles
+            .iter()
+            .find(|p| p.name == "ci-user")
+            .expect("ci-user must be reflected");
+        assert_eq!(ci.provider_id, "aws-shared-credentials");
+        // Non-dangling reflected profiles are editable (design §13); read_only = false.
+        assert!(!ci.read_only);
+
+        let expected_id = dbflux_core::auth::aws_profile_uuid("aws-shared-credentials", "ci-user");
+        assert_eq!(ci.id, expected_id);
+    }
+
+    #[test]
+    fn shared_reflect_reflects_region_from_config_when_present() {
+        let config = "[profile ci-user]\nregion = us-west-2\n";
+        let credentials = "[ci-user]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = wJalrXUtnFEMI\n";
+        let provider = shared_provider_with_files(config, credentials);
+        let profiles = provider.reflect_profiles();
+
+        let ci = profiles
+            .iter()
+            .find(|p| p.name == "ci-user")
+            .expect("ci-user");
+        assert_eq!(
+            ci.fields.get("region").map(String::as_str),
+            Some("us-west-2"),
+            "region from config must be reflected"
+        );
+    }
+
+    #[test]
+    fn shared_reflect_no_region_does_not_error() {
+        let credentials = "[my-profile]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = wJalrXUtnFEMI\n";
+        let provider = shared_provider_with_files("", credentials);
+        let profiles = provider.reflect_profiles();
+
+        let p = profiles
+            .iter()
+            .find(|p| p.name == "my-profile")
+            .expect("my-profile");
+        assert!(
+            !p.fields.contains_key("region"),
+            "absent region must not appear in fields"
+        );
+    }
+
+    /// Security assertion: reflected shared-credentials profiles must never
+    /// contain key material (ADR-7 invariant).
+    #[test]
+    fn shared_reflect_never_includes_key_material() {
+        let credentials = "[prod]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCY\n";
+        let provider = shared_provider_with_files("", credentials);
+        let profiles = provider.reflect_profiles();
+
+        for profile in &profiles {
+            let keys_present = profile.fields.contains_key("aws_access_key_id")
+                || profile.fields.contains_key("aws_secret_access_key");
+            assert!(
+                !keys_present,
+                "profile '{}' must not contain key material in reflected fields",
+                profile.name
+            );
+
+            // Also assert no AKIA-pattern value appears anywhere in the fields.
+            for (key, value) in &profile.fields {
+                assert!(
+                    !value.starts_with("AKIA"),
+                    "field '{}' contains an AKIA-pattern value, which is forbidden in reflected fields",
+                    key
+                );
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // S3–S5: write-back prohibition — config file must not be modified
+    // -------------------------------------------------------------------------
+
+    /// S3: `reflect_profiles()` must not write to `~/.aws/config`.
+    ///
+    /// Verified by checking that the config file mtime is unchanged after
+    /// reflect_profiles() completes. Uses a temp file as the config source so
+    /// the real user config is never touched.
+    #[test]
+    fn reflect_profiles_does_not_write_to_config() {
+        let config = r#"
+[profile dev-sso]
+sso_start_url = https://example.awsapps.com/start
+sso_account_id = 123456789012
+sso_role_name = DevAccess
+sso_region = us-east-1
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&config_path, config).unwrap();
+        std::fs::write(&creds_path, "").unwrap();
+
+        let mtime_before = std::fs::metadata(&config_path).unwrap().modified().unwrap();
+        let hash_before = std::fs::read(&config_path).unwrap();
+
+        let cache =
+            crate::config::CachedAwsConfig::new_with_paths(config_path.clone(), creds_path.clone());
+        let provider = AwsSsoAuthProvider {
+            config_cache: Mutex::new(cache),
+        };
+        let _ = provider.reflect_profiles();
+
+        let mtime_after = std::fs::metadata(&config_path).unwrap().modified().unwrap();
+        let hash_after = std::fs::read(&config_path).unwrap();
+
+        assert_eq!(
+            mtime_before, mtime_after,
+            "reflect_profiles() must not modify ~/.aws/config (mtime changed)"
+        );
+        assert_eq!(
+            hash_before, hash_after,
+            "reflect_profiles() must not modify ~/.aws/config (content changed)"
+        );
+    }
+
+    /// S4: `fetch_dynamic_options()` must not write to `~/.aws/config`.
+    ///
+    /// Uses an unknown field id (returns Permanent immediately without network
+    /// calls) while asserting the config file is untouched.
+    #[test]
+    fn fetch_dynamic_options_does_not_write_to_config() {
+        let config = r#"
+[profile dev-sso]
+sso_start_url = https://example.awsapps.com/start
+sso_account_id = 123456789012
+sso_role_name = DevAccess
+sso_region = us-east-1
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&config_path, config).unwrap();
+        std::fs::write(&creds_path, "").unwrap();
+
+        let mtime_before = std::fs::metadata(&config_path).unwrap().modified().unwrap();
+        let hash_before = std::fs::read(&config_path).unwrap();
+
+        let cache =
+            crate::config::CachedAwsConfig::new_with_paths(config_path.clone(), creds_path.clone());
+        let provider = AwsSsoAuthProvider {
+            config_cache: Mutex::new(cache),
+        };
+
+        let profile = make_sso_profile();
+        let request = FetchOptionsRequest {
+            field_id: "unknown_field".to_string(),
+            dependencies: std::collections::HashMap::new(),
+            session: None,
+        };
+        let _result = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(provider.fetch_dynamic_options(&profile, request));
+
+        let mtime_after = std::fs::metadata(&config_path).unwrap().modified().unwrap();
+        let hash_after = std::fs::read(&config_path).unwrap();
+
+        assert_eq!(
+            mtime_before, mtime_after,
+            "fetch_dynamic_options() must not modify ~/.aws/config (mtime changed)"
+        );
+        assert_eq!(
+            hash_before, hash_after,
+            "fetch_dynamic_options() must not modify ~/.aws/config (content changed)"
+        );
+    }
+
+    /// S5: `login()` must not write to `~/.aws/config`.
+    ///
+    /// Uses a profile without `sso_start_url` to trigger an early error before
+    /// any network calls, while asserting the config file is untouched.
+    #[test]
+    fn login_does_not_write_to_config() {
+        let config = r#"
+[profile dev-sso]
+sso_account_id = 123456789012
+sso_role_name = DevAccess
+sso_region = us-east-1
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&config_path, config).unwrap();
+        std::fs::write(&creds_path, "").unwrap();
+
+        let mtime_before = std::fs::metadata(&config_path).unwrap().modified().unwrap();
+        let hash_before = std::fs::read(&config_path).unwrap();
+
+        let cache =
+            crate::config::CachedAwsConfig::new_with_paths(config_path.clone(), creds_path.clone());
+        let provider = AwsSsoAuthProvider {
+            config_cache: Mutex::new(cache),
+        };
+
+        // Use a profile with no sso_start_url so login() errors before network
+        // calls. The profile name ("dev-sso") matches a section in the config
+        // but the provider still must not write back.
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("profile_name".to_string(), "dev-sso".to_string());
+        let profile = AuthProfile {
+            id: uuid::Uuid::new_v4(),
+            name: "dev-sso".to_string(),
+            provider_id: "aws-sso".to_string(),
+            fields,
+            secret_fields: std::collections::HashMap::new(),
+            enabled: true,
+            read_only: true,
+            dangling_origin: None,
+        };
+
+        let _result = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(provider.login(&profile, Box::new(|_url: Option<String>| {})));
+
+        let mtime_after = std::fs::metadata(&config_path).unwrap().modified().unwrap();
+        let hash_after = std::fs::read(&config_path).unwrap();
+
+        assert_eq!(
+            mtime_before, mtime_after,
+            "login() must not modify ~/.aws/config (mtime changed)"
+        );
+        assert_eq!(
+            hash_before, hash_after,
+            "login() must not modify ~/.aws/config (content changed)"
+        );
+    }
+
     /// When `sso_account_id` dependency is missing, `sso_role_name` fetch
     /// must return `Permanent`.
     #[test]
@@ -2331,5 +3218,689 @@ mod tests {
             "expected Permanent error when sso_account_id is absent, got {:?}",
             result
         );
+    }
+
+    // =========================================================================
+    // WU-E3: open_edit_snapshot + save_edit per-provider tests
+    // =========================================================================
+
+    // Helper: creates an AwsSsoAuthProvider backed by a temp config file.
+    fn sso_provider_with_config_and_creds(
+        config_content: &str,
+        creds_content: &str,
+    ) -> (
+        AwsSsoAuthProvider,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        tempfile::TempDir,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&config_path, config_content).unwrap();
+        std::fs::write(&creds_path, creds_content).unwrap();
+        let cache =
+            crate::config::CachedAwsConfig::new_with_paths(config_path.clone(), creds_path.clone());
+        let provider = AwsSsoAuthProvider {
+            config_cache: Mutex::new(cache),
+        };
+        (provider, config_path, creds_path, dir)
+    }
+
+    // Helper: creates an AwsSharedCredentialsAuthProvider backed by temp files.
+    fn shared_provider_with_paths(
+        config_content: &str,
+        creds_content: &str,
+    ) -> (
+        AwsSharedCredentialsAuthProvider,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        tempfile::TempDir,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&config_path, config_content).unwrap();
+        std::fs::write(&creds_path, creds_content).unwrap();
+        let cache =
+            crate::config::CachedAwsConfig::new_with_paths(config_path.clone(), creds_path.clone());
+        let provider = AwsSharedCredentialsAuthProvider {
+            config_cache: Mutex::new(cache),
+        };
+        (provider, config_path, creds_path, dir)
+    }
+
+    // Helper: creates an AwsSsoSessionAuthProvider backed by a temp config file.
+    fn sso_session_provider_with_config_path(
+        config_content: &str,
+    ) -> (
+        AwsSsoSessionAuthProvider,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        tempfile::TempDir,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&config_path, config_content).unwrap();
+        std::fs::write(&creds_path, "").unwrap();
+        let cache =
+            crate::config::CachedAwsConfig::new_with_paths(config_path.clone(), creds_path.clone());
+        let provider = AwsSsoSessionAuthProvider {
+            config_cache: Mutex::new(cache),
+        };
+        (provider, config_path, creds_path, dir)
+    }
+
+    // ── E3.3 (aws-sso): optimistic concurrency ────────────────────────────────
+
+    /// S28: no external change between snapshot and save → `Saved`.
+    #[test]
+    fn sso_save_edit_no_external_change_returns_saved() {
+        let config = "[profile dev-sso]\nsso_start_url = https://example.awsapps.com/start\nsso_account_id = 111111111111\n";
+        let (provider, _config, _creds, _dir) = sso_provider_with_config_and_creds(config, "");
+
+        let snapshot = provider.open_edit_snapshot("dev-sso");
+        {
+            let aws = snapshot
+                .downcast_ref::<AwsEditSnapshot>()
+                .expect("snapshot must downcast to AwsEditSnapshot");
+            assert!(
+                aws.config_section.is_some(),
+                "open_edit_snapshot must capture a hash for an existing section"
+            );
+        }
+
+        let mut fields = HashMap::new();
+        fields.insert("sso_account_id".to_string(), "999999999999".to_string());
+
+        let outcome = provider.save_edit("dev-sso", &fields, &snapshot);
+        assert!(
+            matches!(outcome, AuthSaveOutcome::Saved),
+            "expected Saved when no external change, got {:?}",
+            outcome
+        );
+    }
+
+    /// S29: same section changed on disk between snapshot and save → `Conflict`.
+    #[test]
+    fn sso_save_edit_same_section_changed_externally_returns_conflict() {
+        let config = "[profile dev-sso]\nsso_start_url = https://example.awsapps.com/start\nsso_account_id = 111111111111\n";
+        let (provider, config_path, _creds, _dir) = sso_provider_with_config_and_creds(config, "");
+
+        // Take snapshot before external change.
+        let snapshot = provider.open_edit_snapshot("dev-sso");
+
+        // Simulate external edit of the same section.
+        std::fs::write(
+            &config_path,
+            "[profile dev-sso]\nsso_start_url = https://example.awsapps.com/start\nsso_account_id = 222222222222\n",
+        )
+        .unwrap();
+
+        let mut fields = HashMap::new();
+        fields.insert("sso_account_id".to_string(), "999999999999".to_string());
+
+        let outcome = provider.save_edit("dev-sso", &fields, &snapshot);
+        assert!(
+            matches!(
+                &outcome,
+                AuthSaveOutcome::Conflict { target } if target.id == "config"
+            ),
+            "expected Conflict(config) when same section changed externally, got {:?}",
+            outcome
+        );
+
+        // File must be unchanged (nothing written on conflict).
+        let after = std::fs::read_to_string(&config_path).unwrap();
+        assert!(
+            after.contains("222222222222"),
+            "file must retain external change, not the user's edit"
+        );
+        assert!(
+            !after.contains("999999999999"),
+            "user's conflicted edit must not appear in file"
+        );
+    }
+
+    /// S30: a DIFFERENT section changed externally → save succeeds.
+    #[test]
+    fn sso_save_edit_different_section_changed_does_not_conflict() {
+        let config = "[profile dev-sso]\nsso_account_id = 111111111111\n\n[profile staging]\nsso_account_id = 555555555555\n";
+        let (provider, config_path, _creds, _dir) = sso_provider_with_config_and_creds(config, "");
+
+        let snapshot = provider.open_edit_snapshot("dev-sso");
+
+        // External change to a DIFFERENT section.
+        std::fs::write(
+            &config_path,
+            "[profile dev-sso]\nsso_account_id = 111111111111\n\n[profile staging]\nsso_account_id = 999999999999\n",
+        )
+        .unwrap();
+
+        let mut fields = HashMap::new();
+        fields.insert("sso_account_id".to_string(), "777777777777".to_string());
+
+        let outcome = provider.save_edit("dev-sso", &fields, &snapshot);
+        assert!(
+            matches!(outcome, AuthSaveOutcome::Saved),
+            "expected Saved when only a different section changed, got {:?}",
+            outcome
+        );
+
+        // Both sections must be present: dev-sso updated, staging preserved.
+        let after = std::fs::read_to_string(&config_path).unwrap();
+        assert!(
+            after.contains("777777777777"),
+            "dev-sso edit must be applied"
+        );
+        assert!(
+            after.contains("999999999999"),
+            "staging external change must be preserved"
+        );
+    }
+
+    /// Surgical write: other sections in the config file are byte-identical after save.
+    #[test]
+    fn sso_save_edit_is_surgical_other_sections_unchanged() {
+        let config = "[profile other]\nregion = eu-west-1\n\n[profile dev-sso]\nsso_account_id = 111111111111\n";
+        let (provider, config_path, _creds, _dir) = sso_provider_with_config_and_creds(config, "");
+
+        let snapshot = provider.open_edit_snapshot("dev-sso");
+        let other_hash_before = crate::config::hash_config_section(
+            &std::fs::read_to_string(&config_path).unwrap(),
+            "other",
+        );
+
+        let mut fields = HashMap::new();
+        fields.insert("sso_account_id".to_string(), "999999999999".to_string());
+        let outcome = provider.save_edit("dev-sso", &fields, &snapshot);
+        assert!(matches!(outcome, AuthSaveOutcome::Saved));
+
+        let after = std::fs::read_to_string(&config_path).unwrap();
+        let other_hash_after = crate::config::hash_config_section(&after, "other");
+
+        assert_eq!(
+            other_hash_before.map(|h| h.0),
+            other_hash_after.map(|h| h.0),
+            "other section must be byte-identical after surgical write"
+        );
+    }
+
+    /// A profile referencing a session writes `sso_session = NAME` and keeps
+    /// `sso_start_url` / `sso_region` out of the profile block (they belong to
+    /// the session block). The session name arrives via `sso_session_ref_name`,
+    /// stashed by ref expansion before save_edit is called.
+    #[test]
+    fn sso_save_edit_session_ref_persists_indirection_not_inline_url() {
+        // Pre-existing inline sso_start_url / sso_region must be removed when a
+        // session is referenced (the block writer merges, so omission alone
+        // would leave the invalid both-present combo the AWS SDK rejects).
+        let config = "[profile dev-sso]\nsso_start_url = https://stale.awsapps.com/start\nsso_region = us-west-2\nsso_account_id = 111111111111\n";
+        let (provider, config_path, _creds, _dir) = sso_provider_with_config_and_creds(config, "");
+
+        let snapshot = provider.open_edit_snapshot("dev-sso");
+
+        let mut fields = HashMap::new();
+        fields.insert("sso_session_ref_name".to_string(), "my-org".to_string());
+        // A folded URL is present on the form but must NOT be written inline.
+        fields.insert(
+            "sso_start_url".to_string(),
+            "https://example.awsapps.com/start".to_string(),
+        );
+        fields.insert("sso_account_id".to_string(), "222222222222".to_string());
+
+        let outcome = provider.save_edit("dev-sso", &fields, &snapshot);
+        assert!(matches!(outcome, AuthSaveOutcome::Saved));
+
+        let after = std::fs::read_to_string(&config_path).unwrap();
+        let section = crate::config::parse_aws_config_str(&after)
+            .into_iter()
+            .find(|p| p.name == "dev-sso")
+            .expect("dev-sso section must exist");
+
+        assert_eq!(
+            section.sso_session.as_deref(),
+            Some("my-org"),
+            "sso_session indirection must be persisted"
+        );
+        assert!(
+            !after.contains("sso_start_url"),
+            "sso_start_url must not be written inline when a session is referenced"
+        );
+    }
+
+    // ── E3.4 (aws-shared-credentials): credentials merge semantics ────────────
+
+    /// Blank secret field preserves existing on-disk value (S27).
+    #[test]
+    fn shared_save_edit_blank_secret_preserves_existing() {
+        let config = "[profile ci]\nregion = us-east-1\n";
+        // Using AWS-doc-compliant dummy values (not real credentials).
+        let creds = "[ci]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n";
+        let (provider, _config_path, creds_path, _dir) = shared_provider_with_paths(config, creds);
+
+        let snapshot = provider.open_edit_snapshot("ci");
+
+        // Leave secret blank; only update access_key_id.
+        let mut fields = HashMap::new();
+        fields.insert(
+            "aws_access_key_id".to_string(),
+            "AKIAI44QH8DHBEXAMPLE".to_string(),
+        );
+        // aws_secret_access_key intentionally absent from fields → blank = preserve.
+
+        let outcome = provider.save_edit("ci", &fields, &snapshot);
+        assert!(
+            matches!(outcome, AuthSaveOutcome::Saved),
+            "expected Saved, got {:?}",
+            outcome
+        );
+
+        let after = std::fs::read_to_string(&creds_path).unwrap();
+        assert!(
+            after.contains("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"),
+            "existing secret must be preserved when the field is omitted from edited_fields"
+        );
+        assert!(
+            after.contains("AKIAI44QH8DHBEXAMPLE"),
+            "access key id must be updated"
+        );
+    }
+
+    /// Non-blank secret field overwrites the on-disk value (S26).
+    #[test]
+    fn shared_save_edit_non_blank_secret_overwrites() {
+        let config = "";
+        let creds = "[ci]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n";
+        let (provider, _config_path, creds_path, _dir) = shared_provider_with_paths(config, creds);
+
+        let snapshot = provider.open_edit_snapshot("ci");
+
+        let mut fields = HashMap::new();
+        fields.insert(
+            "aws_secret_access_key".to_string(),
+            "je7MtGbClwBF/2Zp9Utk/h3yCo8nvbEXAMPLEKEY".to_string(),
+        );
+
+        let outcome = provider.save_edit("ci", &fields, &snapshot);
+        assert!(
+            matches!(outcome, AuthSaveOutcome::Saved),
+            "expected Saved, got {:?}",
+            outcome
+        );
+
+        let after = std::fs::read_to_string(&creds_path).unwrap();
+        assert!(
+            after.contains("je7MtGbClwBF/2Zp9Utk/h3yCo8nvbEXAMPLEKEY"),
+            "new secret must be written"
+        );
+        assert!(
+            !after.contains("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"),
+            "old secret must be replaced"
+        );
+    }
+
+    /// The `AuthSaveOutcome` returned never exposes the secret value.
+    #[test]
+    fn shared_save_edit_outcome_contains_no_secret() {
+        let config = "";
+        let creds = "[ci]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n";
+        let (provider, _config_path, _creds_path, _dir) = shared_provider_with_paths(config, creds);
+
+        let snapshot = provider.open_edit_snapshot("ci");
+        let mut fields = HashMap::new();
+        fields.insert(
+            "aws_secret_access_key".to_string(),
+            "je7MtGbClwBF/2Zp9Utk/h3yCo8nvbEXAMPLEKEY".to_string(),
+        );
+
+        let outcome = provider.save_edit("ci", &fields, &snapshot);
+
+        // The outcome is a unit-like enum — no variant carries a value payload.
+        // Assert no secret appears in the debug representation.
+        let debug_repr = format!("{:?}", outcome);
+        assert!(
+            !debug_repr.contains("je7MtGbClwBF"),
+            "AuthSaveOutcome debug must not expose the secret value"
+        );
+        assert!(
+            !debug_repr.contains("wJalrXUtnFEMI"),
+            "AuthSaveOutcome debug must not expose the old secret value"
+        );
+    }
+
+    // ── PartialSaved path ─────────────────────────────────────────────────────
+
+    /// When config writes but credentials section conflicts, returns PartialSaved.
+    #[test]
+    fn shared_save_edit_partial_saved_when_credentials_conflict() {
+        let config = "[profile ci]\nregion = us-east-1\n";
+        let creds = "[ci]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n";
+        let (provider, _config_path, creds_path, _dir) = shared_provider_with_paths(config, creds);
+
+        // Take snapshot BEFORE external change to credentials.
+        let snapshot = provider.open_edit_snapshot("ci");
+
+        // Simulate external edit of the credentials section only.
+        std::fs::write(
+            &creds_path,
+            "[ci]\naws_access_key_id = AKIAI44QH8DHBEXAMPLE\n",
+        )
+        .unwrap();
+
+        // Edit both config (region) and credentials (access key id).
+        let mut fields = HashMap::new();
+        fields.insert("region".to_string(), "eu-west-1".to_string());
+        fields.insert(
+            "aws_access_key_id".to_string(),
+            "AKIAZZZZZZZZZEXAMPLE".to_string(),
+        );
+
+        let outcome = provider.save_edit("ci", &fields, &snapshot);
+        assert!(
+            matches!(
+                &outcome,
+                AuthSaveOutcome::PartialSaved { written, conflicted }
+                    if written.id == "config" && conflicted.id == "credentials"
+            ),
+            "expected PartialSaved(config written, credentials conflicted), got {:?}",
+            outcome
+        );
+    }
+
+    // ── Surgical write: credentials file ─────────────────────────────────────
+
+    /// Other sections in ~/.aws/credentials are byte-identical after save (S31).
+    #[test]
+    fn shared_save_edit_credentials_surgical_other_sections_unchanged() {
+        let config = "";
+        let creds = "[prod]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n\n[ci]\naws_access_key_id = AKIAI44QH8DHBEXAMPLE\n";
+        let (provider, _config_path, creds_path, _dir) = shared_provider_with_paths(config, creds);
+
+        let snapshot = provider.open_edit_snapshot("ci");
+        let prod_hash_before = crate::config::hash_credentials_section(
+            &std::fs::read_to_string(&creds_path).unwrap(),
+            "prod",
+        );
+
+        let mut fields = HashMap::new();
+        fields.insert(
+            "aws_access_key_id".to_string(),
+            "AKIAZZZZZZZZZEXAMPLE".to_string(),
+        );
+        let outcome = provider.save_edit("ci", &fields, &snapshot);
+        assert!(matches!(outcome, AuthSaveOutcome::Saved));
+
+        let after = std::fs::read_to_string(&creds_path).unwrap();
+        let prod_hash_after = crate::config::hash_credentials_section(&after, "prod");
+
+        assert_eq!(
+            prod_hash_before.map(|h| h.0),
+            prod_hash_after.map(|h| h.0),
+            "prod section must be byte-identical after surgical credentials write"
+        );
+    }
+
+    // ── E3.3 (aws-sso-session): optimistic concurrency ───────────────────────
+
+    /// sso-session provider: no external change → Saved.
+    #[test]
+    fn sso_session_save_edit_no_external_change_returns_saved() {
+        let config = "[sso-session my-org]\nsso_start_url = https://example.awsapps.com/start\nsso_region = us-east-1\n";
+        let (provider, _config_path, _creds_path, _dir) =
+            sso_session_provider_with_config_path(config);
+
+        let snapshot = provider.open_edit_snapshot("my-org");
+        {
+            let aws = snapshot
+                .downcast_ref::<AwsEditSnapshot>()
+                .expect("snapshot must downcast to AwsEditSnapshot");
+            assert!(
+                aws.config_section.is_some(),
+                "snapshot must capture existing sso-session section hash"
+            );
+        }
+
+        let mut fields = HashMap::new();
+        fields.insert("sso_region".to_string(), "eu-west-1".to_string());
+
+        let outcome = provider.save_edit("my-org", &fields, &snapshot);
+        assert!(
+            matches!(outcome, AuthSaveOutcome::Saved),
+            "expected Saved when no external change, got {:?}",
+            outcome
+        );
+    }
+
+    /// sso-session provider: same section changed externally → Conflict.
+    #[test]
+    fn sso_session_save_edit_same_section_changed_returns_conflict() {
+        let config = "[sso-session my-org]\nsso_start_url = https://example.awsapps.com/start\nsso_region = us-east-1\n";
+        let (provider, config_path, _creds_path, _dir) =
+            sso_session_provider_with_config_path(config);
+
+        let snapshot = provider.open_edit_snapshot("my-org");
+
+        // External change to the same section.
+        std::fs::write(
+            &config_path,
+            "[sso-session my-org]\nsso_start_url = https://example.awsapps.com/start\nsso_region = ap-southeast-1\n",
+        )
+        .unwrap();
+
+        let mut fields = HashMap::new();
+        fields.insert("sso_region".to_string(), "eu-west-1".to_string());
+
+        let outcome = provider.save_edit("my-org", &fields, &snapshot);
+        assert!(
+            matches!(
+                &outcome,
+                AuthSaveOutcome::Conflict { target } if target.id == "config"
+            ),
+            "expected Conflict(config) when sso-session section changed, got {:?}",
+            outcome
+        );
+    }
+
+    // ── open_edit_snapshot for absent sections ────────────────────────────────
+
+    /// open_edit_snapshot returns None hashes when the section doesn't exist yet.
+    #[test]
+    fn open_edit_snapshot_absent_section_returns_none_hashes() {
+        let (provider, _config, _creds, _dir) = sso_provider_with_config_and_creds("", "");
+
+        let snapshot = provider.open_edit_snapshot("nonexistent");
+        let aws = snapshot
+            .downcast_ref::<AwsEditSnapshot>()
+            .expect("snapshot must downcast to AwsEditSnapshot");
+        assert!(
+            aws.config_section.is_none(),
+            "absent config section must produce None hash in snapshot"
+        );
+        assert!(
+            aws.credentials_section.is_none(),
+            "absent credentials section must produce None hash in snapshot"
+        );
+    }
+
+    /// shared-credentials: open_edit_snapshot captures both config and credentials hashes.
+    #[test]
+    fn shared_open_edit_snapshot_captures_both_file_hashes() {
+        let config = "[profile ci]\nregion = us-east-1\n";
+        let creds = "[ci]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n";
+        let (provider, _config_path, _creds_path, _dir) = shared_provider_with_paths(config, creds);
+
+        let snapshot = provider.open_edit_snapshot("ci");
+        let aws = snapshot
+            .downcast_ref::<AwsEditSnapshot>()
+            .expect("snapshot must downcast to AwsEditSnapshot");
+        assert!(
+            aws.config_section.is_some(),
+            "config_section hash must be Some when [profile ci] exists"
+        );
+        assert!(
+            aws.credentials_section.is_some(),
+            "credentials_section hash must be Some when [ci] exists"
+        );
+    }
+
+    // ── E5: Workspace-level security audit ────────────────────────────────────
+
+    /// E5.1: `AuthSaveOutcome` debug representation contains no secret material
+    /// after a credentials write. (Cross-crate security regression guard.)
+    #[test]
+    fn e5_auth_save_outcome_debug_never_exposes_secret() {
+        let creds = "[myprofile]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n";
+        let (provider, _config_path, _creds_path, _dir) = shared_provider_with_paths("", creds);
+
+        let snapshot = provider.open_edit_snapshot("myprofile");
+        let mut fields = HashMap::new();
+        // Use a distinct value so we can check it is not present in the outcome.
+        fields.insert(
+            "aws_secret_access_key".to_string(),
+            "A1B2C3D4E5F6EXAMPLEKEY".to_string(),
+        );
+
+        let outcome = provider.save_edit("myprofile", &fields, &snapshot);
+        let debug_repr = format!("{outcome:?}");
+
+        let secret_patterns = [
+            "A1B2C3D4E5F6",
+            "wJalrXUtnFEMI",
+            "aws_secret_access_key",
+            "AKIA",
+        ];
+        for pattern in &secret_patterns {
+            assert!(
+                !debug_repr.contains(pattern),
+                "AuthSaveOutcome debug must not contain '{pattern}': got {debug_repr}"
+            );
+        }
+    }
+
+    /// E5.2: Surgical write to `~/.aws/config` leaves non-target sections
+    /// byte-identical. Also verified in WU-E3 tests; re-stated here as a
+    /// workspace-level regression anchor.
+    #[test]
+    fn e5_surgical_write_config_leaves_other_sections_byte_identical() {
+        let config = "[profile dev]\nsso_start_url = https://before.example.com/start\n\
+                      sso_region = us-east-1\n\
+                      sso_account_id = 111111111111\n\
+                      [profile staging]\nregion = eu-west-1\n";
+        let provider = sso_provider_with_config(config);
+
+        let snapshot = provider.open_edit_snapshot("dev");
+
+        // Record the staging section hash before the write using the public hash helper.
+        let staging_hash_before = crate::config::hash_config_section(config, "staging");
+
+        let mut fields = HashMap::new();
+        fields.insert("sso_account_id".to_string(), "999999999999".to_string());
+
+        let outcome = provider.save_edit("dev", &fields, &snapshot);
+        assert!(
+            matches!(outcome, AuthSaveOutcome::Saved),
+            "save should succeed; got {outcome:?}"
+        );
+
+        // Re-read the config to get the post-write content and check staging.
+        let config_path = provider
+            .config_cache
+            .lock()
+            .unwrap()
+            .config_path()
+            .to_path_buf();
+        let after = std::fs::read_to_string(&config_path).unwrap();
+
+        let staging_hash_after = crate::config::hash_config_section(&after, "staging");
+
+        assert_eq!(
+            staging_hash_before.map(|h| h.0),
+            staging_hash_after.map(|h| h.0),
+            "[profile staging] section hash must be identical after editing [profile dev]"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // W5 — S8: save_edit with wrong-type snapshot returns Saved, does not panic
+    // -----------------------------------------------------------------------
+
+    /// S8 / AwsSsoAuthProvider: passing a snapshot whose inner type is not
+    /// `AwsEditSnapshot` must return `Saved` and must not panic.
+    #[test]
+    fn sso_save_edit_wrong_type_snapshot_returns_saved() {
+        use dbflux_core::{AuthEditSnapshot, AuthSaveOutcome, DynAuthProvider};
+
+        let provider = sso_provider_with_config("");
+        let wrong_snapshot = AuthEditSnapshot::new(42u32);
+        let fields = HashMap::new();
+
+        let outcome = provider.save_edit("any-profile", &fields, &wrong_snapshot);
+        assert!(
+            matches!(outcome, AuthSaveOutcome::Saved),
+            "AwsSsoAuthProvider::save_edit must return Saved on downcast failure; got {outcome:?}"
+        );
+    }
+
+    /// S8 / AwsSsoSessionAuthProvider: passing a snapshot whose inner type is
+    /// not `AwsEditSnapshot` must return `Saved` and must not panic.
+    #[test]
+    fn sso_session_save_edit_wrong_type_snapshot_returns_saved() {
+        use dbflux_core::{AuthEditSnapshot, AuthSaveOutcome, DynAuthProvider};
+
+        let provider = sso_session_provider_with_config("");
+        let wrong_snapshot = AuthEditSnapshot::new(42u32);
+        let fields = HashMap::new();
+
+        let outcome = provider.save_edit("any-profile", &fields, &wrong_snapshot);
+        assert!(
+            matches!(outcome, AuthSaveOutcome::Saved),
+            "AwsSsoSessionAuthProvider::save_edit must return Saved on downcast failure; got {outcome:?}"
+        );
+    }
+
+    /// S8 / AwsSharedCredentialsAuthProvider: passing a snapshot whose inner
+    /// type is not `AwsEditSnapshot` must return `Saved` and must not panic.
+    #[test]
+    fn shared_credentials_save_edit_wrong_type_snapshot_returns_saved() {
+        use dbflux_core::{AuthEditSnapshot, AuthSaveOutcome, DynAuthProvider};
+
+        let provider = shared_provider_with_files("", "");
+        let wrong_snapshot = AuthEditSnapshot::new(42u32);
+        let fields = HashMap::new();
+
+        let outcome = provider.save_edit("any-profile", &fields, &wrong_snapshot);
+        assert!(
+            matches!(outcome, AuthSaveOutcome::Saved),
+            "AwsSharedCredentialsAuthProvider::save_edit must return Saved on downcast failure; got {outcome:?}"
+        );
+    }
+
+    /// E5.3: Names-only enumeration never returns values that resemble AWS
+    /// access keys, even when the credentials file contains them.
+    #[test]
+    fn e5_names_only_enumeration_contains_no_key_material() {
+        let creds = "[ci-user]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n\
+                     aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n\
+                     [staging]\naws_access_key_id = AKIAI44QH8DHBEXAMPLE\n";
+
+        let names = crate::config::parse_aws_credentials_str(creds);
+
+        for name in &names {
+            assert!(
+                !name.starts_with("AKIA"),
+                "enumerated name '{name}' looks like an access key; key material must not be returned"
+            );
+            assert!(
+                !name.contains("secret") && !name.contains("wJalrX"),
+                "enumerated name '{name}' contains secret material"
+            );
+        }
+
+        // Exactly the two profile names must be returned.
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"ci-user".to_string()));
+        assert!(names.contains(&"staging".to_string()));
     }
 }

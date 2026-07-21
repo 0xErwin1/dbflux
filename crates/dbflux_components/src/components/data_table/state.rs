@@ -1,0 +1,1266 @@
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use crate::controls::{InputEvent, InputState};
+use gpui::{
+    AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Pixels, Point, ScrollHandle,
+    Size, Subscription, UniformListScrollHandle, Window, px,
+};
+
+use super::clipboard;
+use super::events::{DataTableEvent, Direction, Edge, SortState};
+use super::model::{EditBuffer, TableModel};
+use super::selection::{CellCoord, SelectionState};
+use super::theme::{DEFAULT_COLUMN_WIDTH, MIN_COLUMN_WIDTH, SCROLLBAR_WIDTH};
+use crate::controls::{Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged};
+
+/// Main state for the DataTable component.
+pub struct DataTableState {
+    /// The data model (Arc to avoid cloning).
+    model: Arc<TableModel>,
+
+    /// Width of each column.
+    column_widths: Vec<f32>,
+
+    /// Prefix sums of column widths for hit-testing: [0, w0, w0+w1, ...].
+    column_offsets: Vec<f32>,
+
+    /// Current sort state.
+    sort: Option<SortState>,
+
+    /// Viewport size (updated on layout).
+    viewport_size: Size<Pixels>,
+
+    /// Selection state.
+    selection: SelectionState,
+
+    /// Focus handle for keyboard input.
+    focus_handle: FocusHandle,
+
+    /// Scroll handle for vertical scrolling (uniform list).
+    vertical_scroll_handle: UniformListScrollHandle,
+
+    /// Scroll handle for horizontal scrolling.
+    horizontal_scroll_handle: ScrollHandle,
+
+    /// Cached horizontal scroll offset for header and body positioning.
+    /// Updated when scroll handle offset changes to trigger re-renders.
+    horizontal_offset: Pixels,
+
+    // --- Edit Mode ---
+    /// Cell currently being edited (inline editor is open).
+    editing_cell: Option<CellCoord>,
+
+    /// Input state for the inline cell editor.
+    cell_input: Option<Entity<InputState>>,
+
+    /// Dropdown for editing enum/set columns inline.
+    enum_dropdown: Option<Entity<Dropdown>>,
+
+    /// Subscriptions for the currently active inline editor (cell input or
+    /// enum dropdown). Held so a new `start_editing` drops the previous
+    /// editor's subscriptions before installing its own — otherwise a stale
+    /// `Blur` from the old input would arrive after the new edit started and
+    /// silently cancel it.
+    _editing_subs: Vec<Subscription>,
+
+    /// Buffer for tracking local edits before committing.
+    edit_buffer: EditBuffer,
+
+    /// Column indices that form the primary key (for row identification).
+    pk_columns: Vec<usize>,
+
+    /// Column indices that are foreign-key source columns.
+    fk_columns: HashSet<usize>,
+
+    /// Column indices that are permanently read-only regardless of `is_editable`.
+    ///
+    /// Used to mark joined columns in builder SELECT results read-only while
+    /// source-table columns remain editable.
+    readonly_columns: HashSet<usize>,
+
+    /// Whether this table is editable (requires PK for row identification).
+    is_editable: bool,
+
+    /// Whether this table supports INSERT operations (add/duplicate rows).
+    /// True for Table and Collection sources, false for query results.
+    is_insertable: bool,
+
+    /// Enum/set options per column index.
+    enum_options: std::collections::HashMap<usize, Vec<String>>,
+}
+
+impl DataTableState {
+    pub const NULL_SENTINEL: &'static str = "\0__NULL__";
+
+    pub fn new(model: Arc<TableModel>, cx: &mut Context<Self>) -> Self {
+        let col_count = model.col_count();
+        let row_count = model.row_count();
+        let column_widths: Vec<f32> = (0..col_count)
+            .map(|ix| {
+                let name_len = model
+                    .columns
+                    .get(ix)
+                    .map(|c| c.title.chars().count())
+                    .unwrap_or(0);
+                Self::initial_column_width(name_len)
+            })
+            .collect();
+        let column_offsets = Self::calculate_offsets(&column_widths);
+
+        let mut edit_buffer = EditBuffer::new();
+        edit_buffer.set_base_row_count(row_count);
+
+        Self {
+            model,
+            column_widths,
+            column_offsets,
+            sort: None,
+            viewport_size: Size::default(),
+            selection: SelectionState::new(),
+            focus_handle: cx.focus_handle(),
+            vertical_scroll_handle: UniformListScrollHandle::new(),
+            horizontal_scroll_handle: ScrollHandle::new(),
+            horizontal_offset: px(0.0),
+            editing_cell: None,
+            cell_input: None,
+            enum_dropdown: None,
+            _editing_subs: Vec::new(),
+            edit_buffer,
+            pk_columns: Vec::new(),
+            fk_columns: HashSet::new(),
+            readonly_columns: HashSet::new(),
+            is_editable: false,
+            is_insertable: false,
+            enum_options: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Compute the initial width for a column so the header name has room to render
+    /// without being truncated. The estimate uses ~7.5px per character for the
+    /// medium-weight 13px header font, plus padding for the cell, the sort indicator,
+    /// and a small buffer for the type chip / badges. Clamped to MIN_COLUMN_WIDTH.
+    fn initial_column_width(name_chars: usize) -> f32 {
+        const CHAR_WIDTH_PX: f32 = 7.5;
+        const HEADER_FIXED_OVERHEAD_PX: f32 = 56.0;
+
+        let name_width = name_chars as f32 * CHAR_WIDTH_PX + HEADER_FIXED_OVERHEAD_PX;
+        name_width.max(DEFAULT_COLUMN_WIDTH).max(MIN_COLUMN_WIDTH)
+    }
+
+    fn calculate_offsets(widths: &[f32]) -> Vec<f32> {
+        let mut offsets = vec![0.0];
+        let mut sum = 0.0;
+        for w in widths {
+            sum += w;
+            offsets.push(sum);
+        }
+        offsets
+    }
+
+    // --- Model ---
+
+    pub fn model(&self) -> &TableModel {
+        &self.model
+    }
+
+    pub fn model_arc(&self) -> &Arc<TableModel> {
+        &self.model
+    }
+
+    /// Replace the model (e.g., after a new query loads new rows).
+    /// Emits SelectionChanged so subscribers can validate that the preserved selection
+    /// is still valid in the new model (row index might be out of bounds or point to
+    /// different data).
+    #[allow(dead_code)]
+    pub fn set_model(&mut self, model: Arc<TableModel>, cx: &mut Context<Self>) {
+        self.model = model;
+        // Emit SelectionChanged so the audit viewer's subscription can validate
+        // that the selected row is still valid in the new model. If the row count
+        // decreased, the selection may now be out of bounds.
+        cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
+        cx.notify();
+    }
+
+    pub fn row_count(&self) -> usize {
+        // Include pending inserts in the row count
+        self.model.row_count() + self.edit_buffer.pending_insert_rows().len()
+    }
+
+    /// Get the base row count (excluding pending inserts).
+    #[allow(dead_code)]
+    pub fn base_row_count(&self) -> usize {
+        self.model.row_count()
+    }
+
+    pub fn col_count(&self) -> usize {
+        self.model.col_count()
+    }
+
+    // --- Column Layout ---
+
+    pub fn column_widths(&self) -> &[f32] {
+        &self.column_widths
+    }
+
+    pub fn set_column_width(&mut self, col: usize, width: f32, cx: &mut Context<Self>) {
+        if col < self.column_widths.len() {
+            let min_width = super::theme::MIN_COLUMN_WIDTH;
+            self.column_widths[col] = width.max(min_width);
+            self.column_offsets = Self::calculate_offsets(&self.column_widths);
+            cx.notify();
+        }
+    }
+
+    pub fn total_content_width(&self) -> f32 {
+        *self.column_offsets.last().unwrap_or(&0.0)
+    }
+
+    // --- Viewport ---
+
+    pub fn viewport_size(&self) -> Size<Pixels> {
+        self.viewport_size
+    }
+
+    pub fn set_viewport_size(&mut self, size: Size<Pixels>, cx: &mut Context<Self>) {
+        if self.viewport_size != size {
+            self.viewport_size = size;
+            cx.notify();
+        }
+    }
+
+    // --- Sort ---
+
+    pub fn sort(&self) -> Option<&SortState> {
+        self.sort.as_ref()
+    }
+
+    pub fn set_sort(&mut self, sort: Option<SortState>, cx: &mut Context<Self>) {
+        if self.sort != sort {
+            self.sort = sort;
+            cx.emit(DataTableEvent::SortChanged(sort));
+            cx.notify();
+        }
+    }
+
+    /// Set sort state without emitting an event (for initial state).
+    pub fn set_sort_without_emit(&mut self, sort: SortState) {
+        self.sort = Some(sort);
+    }
+
+    /// Cycle sort state for a column: none -> asc -> desc -> none
+    pub fn cycle_sort(&mut self, col_ix: usize, cx: &mut Context<Self>) {
+        let new_sort = next_sort_state(self.sort, col_ix);
+
+        self.set_sort(new_sort, cx);
+    }
+
+    // --- Selection ---
+
+    pub fn selection(&self) -> &SelectionState {
+        &self.selection
+    }
+
+    pub fn select_cell(&mut self, coord: CellCoord, cx: &mut Context<Self>) {
+        self.selection.select_cell(coord);
+        cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
+        cx.notify();
+    }
+
+    pub fn extend_selection(&mut self, coord: CellCoord, cx: &mut Context<Self>) {
+        self.selection.extend_to(coord);
+        cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
+        cx.notify();
+    }
+
+    pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
+        if !self.selection.is_empty() {
+            self.selection.clear();
+            cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
+            cx.notify();
+        }
+    }
+
+    pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        self.selection
+            .select_all(self.row_count(), self.col_count());
+        cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
+        cx.notify();
+    }
+
+    // --- Navigation ---
+
+    /// Move active cell in a direction. If extend is true, extend selection instead of moving.
+    pub fn move_active(&mut self, direction: Direction, extend: bool, cx: &mut Context<Self>) {
+        let row_count = self.row_count();
+        let col_count = self.col_count();
+
+        if row_count == 0 || col_count == 0 {
+            return;
+        }
+
+        // No selection yet - select first cell
+        let Some(current) = self.selection.active else {
+            self.select_cell(CellCoord::new(0, 0), cx);
+            self.scroll_to_cell(0, 0);
+            return;
+        };
+
+        let new_coord = match direction {
+            Direction::Up => CellCoord::new(current.row.saturating_sub(1), current.col),
+            Direction::Down => CellCoord::new((current.row + 1).min(row_count - 1), current.col),
+            Direction::Left => CellCoord::new(current.row, current.col.saturating_sub(1)),
+            Direction::Right => CellCoord::new(current.row, (current.col + 1).min(col_count - 1)),
+        };
+
+        if extend {
+            self.extend_selection(new_coord, cx);
+        } else {
+            self.select_cell(new_coord, cx);
+        }
+
+        self.scroll_to_cell(new_coord.row, new_coord.col);
+    }
+
+    /// Move to an edge of the table.
+    pub fn move_to_edge(&mut self, edge: Edge, extend: bool, cx: &mut Context<Self>) {
+        let row_count = self.row_count();
+        let col_count = self.col_count();
+
+        if row_count == 0 || col_count == 0 {
+            return;
+        }
+
+        let current = self.selection.active.unwrap_or(CellCoord::new(0, 0));
+        let new_coord = match edge {
+            Edge::Top => CellCoord::new(0, current.col),
+            Edge::Bottom => CellCoord::new(row_count - 1, current.col),
+            Edge::Left => CellCoord::new(current.row, 0),
+            Edge::Right => CellCoord::new(current.row, col_count - 1),
+            Edge::Home => CellCoord::new(0, 0),
+            Edge::End => CellCoord::new(row_count - 1, col_count - 1),
+        };
+
+        if extend {
+            self.extend_selection(new_coord, cx);
+        } else {
+            self.select_cell(new_coord, cx);
+        }
+
+        self.scroll_to_cell(new_coord.row, new_coord.col);
+    }
+
+    // --- Clipboard ---
+
+    pub fn copy_selection(&self) -> Option<String> {
+        clipboard::copy_selection(&self.model, &self.selection)
+    }
+
+    // --- Focus ---
+
+    pub fn focus_handle(&self) -> &FocusHandle {
+        &self.focus_handle
+    }
+
+    /// Focus the table for keyboard navigation and emit Focused event.
+    pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_handle.focus(window, cx);
+        cx.emit(DataTableEvent::Focused);
+    }
+
+    // --- Scroll Handles ---
+
+    pub fn vertical_scroll_handle(&self) -> &UniformListScrollHandle {
+        &self.vertical_scroll_handle
+    }
+
+    pub fn horizontal_scroll_handle(&self) -> &ScrollHandle {
+        &self.horizontal_scroll_handle
+    }
+
+    pub fn horizontal_offset(&self) -> Pixels {
+        self.horizontal_offset
+    }
+
+    /// Sync horizontal offset from scroll handle. Returns true if changed.
+    ///
+    /// Clamps the offset to the valid range based on the real viewport size,
+    /// since the phantom scroller has a 1px viewport which causes the scroll
+    /// handle to calculate an incorrect max_offset.
+    pub fn sync_horizontal_offset(&mut self, cx: &mut Context<Self>) -> bool {
+        // gpui uses negative offsets (scroll right = negative), we store positive
+        let handle_offset = -self.horizontal_scroll_handle.offset().x;
+
+        let clamped_offset = if self.viewport_size.width > px(0.0) {
+            let content_width = px(self.total_content_width());
+            let viewport_width = self.viewport_size.width - SCROLLBAR_WIDTH;
+            let max_offset = (content_width - viewport_width).max(px(0.0));
+
+            handle_offset.clamp(px(0.0), max_offset)
+        } else {
+            handle_offset.max(px(0.0))
+        };
+
+        let diff = (self.horizontal_offset - clamped_offset).abs();
+        if diff > px(1.0) {
+            self.horizontal_offset = clamped_offset;
+            cx.notify();
+            return true;
+        }
+
+        false
+    }
+
+    /// Scroll to ensure the given row is visible.
+    pub fn scroll_to_row(&self, row: usize) {
+        self.vertical_scroll_handle
+            .scroll_to_item(row, gpui::ScrollStrategy::Center);
+    }
+
+    /// Scroll to ensure the given column is visible.
+    pub fn scroll_to_column(&self, col: usize) {
+        if col >= self.column_offsets.len() {
+            return;
+        }
+
+        let col_left = px(self.column_offsets[col]);
+        let col_right = px(*self
+            .column_offsets
+            .get(col + 1)
+            .unwrap_or(&self.column_offsets[col]));
+
+        let viewport_width = self.viewport_size.width - SCROLLBAR_WIDTH;
+        if viewport_width <= px(0.0) {
+            return;
+        }
+
+        let current_offset = self.horizontal_offset;
+        let visible_left = current_offset;
+        let visible_right = current_offset + viewport_width;
+
+        let new_offset = if col_left < visible_left {
+            col_left
+        } else if col_right > visible_right {
+            col_right - viewport_width
+        } else {
+            return;
+        };
+
+        let content_width = px(self.total_content_width());
+        let max_offset = (content_width - viewport_width).max(px(0.0));
+        let clamped = new_offset.clamp(px(0.0), max_offset);
+
+        self.horizontal_scroll_handle
+            .set_offset(Point::new(-clamped, px(0.0)));
+    }
+
+    /// Scroll to ensure the given cell is visible (both row and column).
+    pub fn scroll_to_cell(&self, row: usize, col: usize) {
+        self.scroll_to_row(row);
+        self.scroll_to_column(col);
+    }
+
+    /// Apply a horizontal wheel/trackpad delta to the horizontal scroll handle.
+    ///
+    /// The body and header don't own the horizontal scroll handle (a 1px
+    /// phantom scroller does, so the scrollbar widget can drive it), so
+    /// horizontal wheel events that land on the body would otherwise be
+    /// dropped. Trackpads and Magic Mouse emit horizontal deltas that users
+    /// expect to scroll the table sideways, so we forward them here.
+    ///
+    /// `delta_x` is the raw platform delta in pixels and is added directly
+    /// to `handle.offset.x`, matching `gpui::paint_scroll_listener` and
+    /// `gpui_component::scroll::ScrollableMask`. On macOS this means the
+    /// system's "natural scrolling" preference is respected automatically
+    /// because AppKit already encodes the user's preferred sign into
+    /// `NSEvent.scrollingDeltaX`. Returns true if the offset actually changed.
+    pub fn apply_horizontal_wheel_delta(&self, delta_x: Pixels) -> bool {
+        if delta_x == px(0.0) {
+            return false;
+        }
+
+        let viewport_width = self.viewport_size.width - SCROLLBAR_WIDTH;
+        let content_width = px(self.total_content_width());
+        let min_offset_x = -(content_width - viewport_width).max(px(0.0));
+        if min_offset_x >= px(0.0) {
+            return false;
+        }
+
+        let current = self.horizontal_scroll_handle.offset();
+        let new_x = (current.x + delta_x).clamp(min_offset_x, px(0.0));
+        if new_x == current.x {
+            return false;
+        }
+
+        self.horizontal_scroll_handle
+            .set_offset(Point::new(new_x, current.y));
+        true
+    }
+
+    // --- Edit Mode ---
+
+    /// Check if the table is editable (has primary key columns).
+    pub fn is_editable(&self) -> bool {
+        self.is_editable
+    }
+
+    /// Set the primary key column indices and update editability.
+    pub fn set_pk_columns(&mut self, pk_columns: Vec<usize>) {
+        self.is_editable = !pk_columns.is_empty();
+        self.pk_columns = pk_columns;
+    }
+
+    /// Get the primary key column indices.
+    pub fn pk_columns(&self) -> &[usize] {
+        &self.pk_columns
+    }
+
+    /// Set the foreign-key source column indices.
+    pub fn set_fk_columns(&mut self, fk_columns: HashSet<usize>) {
+        self.fk_columns = fk_columns;
+    }
+
+    /// Get the foreign-key source column indices.
+    pub fn fk_columns(&self) -> &HashSet<usize> {
+        &self.fk_columns
+    }
+
+    /// Set column indices that are permanently read-only (e.g. joined columns
+    /// in a builder SELECT result). These columns block `start_editing`
+    /// regardless of the global `is_editable` flag.
+    pub fn set_readonly_columns(&mut self, cols: HashSet<usize>) {
+        self.readonly_columns = cols;
+    }
+
+    /// Get the read-only column index set.
+    pub fn readonly_columns(&self) -> &HashSet<usize> {
+        &self.readonly_columns
+    }
+
+    /// Check if the table supports INSERT operations (add/duplicate rows).
+    pub fn is_insertable(&self) -> bool {
+        self.is_insertable
+    }
+
+    /// Set whether the table supports INSERT operations.
+    pub fn set_insertable(&mut self, insertable: bool) {
+        self.is_insertable = insertable;
+    }
+
+    pub fn set_enum_options(&mut self, col: usize, options: Vec<String>) {
+        self.enum_options.insert(col, options);
+    }
+
+    #[allow(dead_code)]
+    pub fn enum_options(&self, col: usize) -> Option<&Vec<String>> {
+        self.enum_options.get(&col)
+    }
+
+    /// Check if a cell is currently being edited.
+    pub fn is_editing(&self) -> bool {
+        self.editing_cell.is_some()
+    }
+
+    pub fn is_editing_text_input(&self) -> bool {
+        self.cell_input.is_some()
+    }
+
+    /// Get the currently editing cell, if any.
+    pub fn editing_cell(&self) -> Option<CellCoord> {
+        self.editing_cell
+    }
+
+    /// Start editing a cell. Returns false if the table is not editable.
+    /// Note: `coord` uses visual row indices (accounting for pending inserts).
+    ///
+    /// Editing is allowed when:
+    /// - `is_editable` is true (can edit any row, requires PK for UPDATE)
+    /// - `is_insertable` is true AND the row is a pending insert (can edit new rows)
+    pub fn start_editing(
+        &mut self,
+        coord: CellCoord,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        use super::model::{ColumnKind, VisualRowSource};
+
+        let column_kind = self
+            .model
+            .columns
+            .get(coord.col)
+            .map(|c| c.kind)
+            .unwrap_or(ColumnKind::Unknown);
+
+        // Translate visual row to source (base or pending insert)
+        let visual_order = self.edit_buffer.compute_visual_order();
+        let null_cell = super::model::CellValue::null();
+
+        let row_source = visual_order.get(coord.row).copied();
+
+        // Check if editing is allowed for this row and column.
+        let can_edit = match row_source {
+            Some(VisualRowSource::Base(_)) => self.is_editable,
+            Some(VisualRowSource::Insert(_)) => self.is_insertable || self.is_editable,
+            None => false,
+        };
+
+        if !can_edit {
+            return false;
+        }
+
+        if self.readonly_columns.contains(&coord.col) {
+            return false;
+        }
+
+        let (initial_value, needs_modal, is_json_cell, is_unsupported_cell) = match row_source {
+            Some(VisualRowSource::Base(base_idx)) => {
+                let base_cell = self.model.cell(base_idx, coord.col);
+                let base = base_cell.unwrap_or(&null_cell);
+                let cell = self.edit_buffer.get_cell(base_idx, coord.col, base);
+
+                (
+                    cell.edit_text(),
+                    cell.needs_modal_editor(),
+                    cell.is_json(),
+                    cell.is_unsupported(),
+                )
+            }
+            Some(VisualRowSource::Insert(insert_idx)) => {
+                if let Some(insert_data) = self.edit_buffer.get_pending_insert_by_idx(insert_idx) {
+                    if coord.col < insert_data.len() {
+                        let cell = &insert_data[coord.col];
+                        (
+                            cell.edit_text(),
+                            cell.needs_modal_editor(),
+                            cell.is_json(),
+                            cell.is_unsupported(),
+                        )
+                    } else {
+                        (String::new(), false, false, false)
+                    }
+                } else {
+                    (String::new(), false, false, false)
+                }
+            }
+            None => return false,
+        };
+
+        if is_unsupported_cell {
+            return false;
+        }
+
+        let is_json = column_kind == ColumnKind::Json || is_json_cell;
+        if is_json || needs_modal {
+            cx.emit(DataTableEvent::ModalEditRequested {
+                row: coord.row,
+                col: coord.col,
+                value: initial_value,
+                is_json,
+            });
+            return true;
+        }
+
+        // Enum/set columns: use a dropdown instead of text input
+        if let Some(options) = self.enum_options.get(&coord.col).cloned() {
+            let items: Vec<DropdownItem> = options
+                .iter()
+                .map(|v| {
+                    if v == Self::NULL_SENTINEL {
+                        DropdownItem::with_value("NULL", Self::NULL_SENTINEL)
+                    } else {
+                        DropdownItem::new(v.clone())
+                    }
+                })
+                .collect();
+
+            let selected_index = if initial_value.is_empty() {
+                options.iter().position(|v| v == Self::NULL_SENTINEL)
+            } else {
+                options.iter().position(|v| v == &initial_value)
+            };
+
+            let dropdown = cx.new(|_cx| {
+                Dropdown::new(("enum-edit", coord.row * 10000 + coord.col))
+                    .items(items)
+                    .selected_index(selected_index)
+            });
+
+            dropdown.update(cx, |dd, cx| dd.open(cx));
+
+            // Capture `coord` by value so the selection handler doesn't depend
+            // on `editing_cell` being set at event-delivery time. Selecting an
+            // item auto-closes the dropdown, which emits `DropdownDismissed`;
+            // GPUI may deliver dismissal before selection, and `cancel_enum_edit`
+            // would otherwise clear `editing_cell` and cause the selection to
+            // be silently discarded.
+            self._editing_subs.clear();
+
+            self._editing_subs.push(cx.subscribe(
+                &dropdown,
+                move |this, _dropdown, event: &DropdownSelectionChanged, cx| {
+                    let value = event.item.value.to_string();
+                    this.apply_enum_selection_at(coord, &value, cx);
+                },
+            ));
+
+            self._editing_subs.push(cx.subscribe(
+                &dropdown,
+                |this, _dropdown, _event: &DropdownDismissed, cx| {
+                    this.cancel_enum_edit(cx);
+                },
+            ));
+
+            self.editing_cell = Some(coord);
+            self.enum_dropdown = Some(dropdown);
+            self.cell_input = None;
+            self.scroll_to_cell(coord.row, coord.col);
+            cx.notify();
+            return true;
+        }
+
+        let input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_value(&initial_value, window, cx);
+            state
+        });
+
+        input.update(cx, |state, cx| {
+            state.focus(window, cx);
+        });
+
+        self._editing_subs.clear();
+
+        self._editing_subs.push(
+            cx.subscribe(&input, |this, _input, event: &InputEvent, cx| match event {
+                InputEvent::PressEnter { .. } => this.stop_editing(true, cx),
+                InputEvent::Blur => this.stop_editing(false, cx),
+                _ => {}
+            }),
+        );
+
+        self.editing_cell = Some(coord);
+        self.cell_input = Some(input);
+        self.enum_dropdown = None;
+        self.scroll_to_cell(coord.row, coord.col);
+        cx.notify();
+        true
+    }
+
+    /// Get the cell input state if currently editing.
+    pub fn cell_input(&self) -> Option<&Entity<InputState>> {
+        self.cell_input.as_ref()
+    }
+
+    pub fn enum_dropdown(&self) -> Option<&Entity<Dropdown>> {
+        self.enum_dropdown.as_ref()
+    }
+
+    /// Commit an enum selection without depending on `editing_cell` being set.
+    ///
+    /// The caller passes `coord` directly because the `DropdownDismissed`
+    /// event may have already cleared `editing_cell` via `cancel_enum_edit`
+    /// by the time `DropdownSelectionChanged` is delivered (auto-close race).
+    fn apply_enum_selection_at(&mut self, coord: CellCoord, value: &str, cx: &mut Context<Self>) {
+        use super::model::VisualRowSource;
+
+        // Clear editing state first so a subsequent `cancel_enum_edit` from
+        // the dropdown's auto-close becomes a harmless no-op.
+        self.editing_cell = None;
+        self.enum_dropdown = None;
+
+        let visual_order = self.edit_buffer.compute_visual_order();
+
+        let cell_value = if value == Self::NULL_SENTINEL {
+            super::model::CellValue::null()
+        } else {
+            super::model::CellValue::text(value)
+        };
+
+        match visual_order.get(coord.row).copied() {
+            Some(VisualRowSource::Base(base_idx)) => {
+                self.edit_buffer.set_cell(base_idx, coord.col, cell_value);
+            }
+            Some(VisualRowSource::Insert(insert_idx)) => {
+                self.edit_buffer
+                    .set_insert_cell(insert_idx, coord.col, cell_value);
+            }
+            None => {}
+        }
+
+        cx.notify();
+    }
+
+    fn cancel_enum_edit(&mut self, cx: &mut Context<Self>) {
+        self.editing_cell = None;
+        self.enum_dropdown = None;
+        cx.notify();
+    }
+
+    pub fn is_editing_enum(&self) -> bool {
+        self.enum_dropdown.is_some()
+    }
+
+    pub fn enum_dropdown_next(&mut self, cx: &mut Context<Self>) {
+        if let Some(dropdown) = &self.enum_dropdown {
+            dropdown.update(cx, |dd, cx| dd.select_next_item(cx));
+        }
+    }
+
+    pub fn enum_dropdown_prev(&mut self, cx: &mut Context<Self>) {
+        if let Some(dropdown) = &self.enum_dropdown {
+            dropdown.update(cx, |dd, cx| dd.select_prev_item(cx));
+        }
+    }
+
+    pub fn enum_dropdown_accept(&mut self, cx: &mut Context<Self>) {
+        if let Some(dropdown) = &self.enum_dropdown {
+            dropdown.update(cx, |dd, cx| dd.accept_selection(cx));
+        }
+    }
+
+    pub fn enum_dropdown_cancel(&mut self, cx: &mut Context<Self>) {
+        self.cancel_enum_edit(cx);
+    }
+
+    /// Stop editing and optionally apply the change.
+    /// Note: The stored `editing_cell` uses visual row indices.
+    pub fn stop_editing(&mut self, apply: bool, cx: &mut Context<Self>) {
+        use super::model::VisualRowSource;
+
+        let coord = match self.editing_cell.take() {
+            Some(c) => c,
+            None => return,
+        };
+
+        self.enum_dropdown = None;
+
+        if apply {
+            if let Some(input) = self.cell_input.take() {
+                let value_str = input.read(cx).value().to_string();
+
+                // Translate visual row to source
+                let visual_order = self.edit_buffer.compute_visual_order();
+
+                match visual_order.get(coord.row).copied() {
+                    Some(VisualRowSource::Base(base_idx)) => {
+                        let original = self
+                            .model
+                            .cell(base_idx, coord.col)
+                            .map(|c| c.display_text().to_string())
+                            .unwrap_or_default();
+
+                        if value_str != original {
+                            let cell_value = super::model::CellValue::text(&value_str);
+                            self.edit_buffer.set_cell(base_idx, coord.col, cell_value);
+                        }
+                    }
+                    Some(VisualRowSource::Insert(insert_idx)) => {
+                        // Apply to pending insert (with undo support)
+                        let cell_value = super::model::CellValue::text(&value_str);
+                        self.edit_buffer
+                            .set_insert_cell(insert_idx, coord.col, cell_value);
+                    }
+                    None => {}
+                }
+            }
+        } else {
+            self.cell_input = None;
+        }
+
+        cx.notify();
+    }
+
+    /// Cancel editing without applying changes.
+    #[allow(dead_code)]
+    pub fn cancel_editing(&mut self, cx: &mut Context<Self>) {
+        if self.editing_cell.is_some() {
+            self.editing_cell = None;
+            cx.notify();
+        }
+    }
+
+    /// Get the edit buffer.
+    pub fn edit_buffer(&self) -> &EditBuffer {
+        &self.edit_buffer
+    }
+
+    /// Get mutable access to the edit buffer.
+    pub fn edit_buffer_mut(&mut self) -> &mut EditBuffer {
+        &mut self.edit_buffer
+    }
+
+    /// Check if there are any pending changes.
+    #[allow(dead_code)]
+    pub fn has_pending_changes(&self) -> bool {
+        self.edit_buffer.has_changes()
+    }
+
+    /// Request saving the current row's changes.
+    /// Emits SaveRowRequested for base row edits, CommitInsertRequested for pending inserts,
+    /// CommitDeleteRequested for rows marked for deletion.
+    pub fn request_save_row(&mut self, cx: &mut Context<Self>) {
+        use super::model::VisualRowSource;
+
+        if let Some(coord) = self.selection.active {
+            let visual_order = self.edit_buffer.compute_visual_order();
+            match visual_order.get(coord.row).copied() {
+                Some(VisualRowSource::Base(base_idx)) => {
+                    let row_state = self.edit_buffer.row_state(base_idx);
+                    if row_state.is_pending_delete() {
+                        cx.emit(DataTableEvent::CommitDeleteRequested(base_idx));
+                        return;
+                    }
+                    if row_state.is_dirty() {
+                        cx.emit(DataTableEvent::SaveRowRequested(base_idx));
+                        return;
+                    }
+                }
+                Some(VisualRowSource::Insert(insert_idx)) => {
+                    cx.emit(DataTableEvent::CommitInsertRequested(insert_idx));
+                    return;
+                }
+                None => {}
+            }
+        }
+
+        if let Some(row_idx) = self.edit_buffer.pending_delete_rows().into_iter().next() {
+            cx.emit(DataTableEvent::CommitDeleteRequested(row_idx));
+            return;
+        }
+
+        if let Some(row_idx) = self.edit_buffer.dirty_rows().into_iter().next() {
+            cx.emit(DataTableEvent::SaveRowRequested(row_idx));
+        }
+    }
+
+    /// Request saving all pending changes at once.
+    /// Emits a single SaveAllRequested event with all pending deletes, inserts, and dirty rows.
+    pub fn request_save_all(&mut self, cx: &mut Context<Self>) {
+        let pending_deletes = self.edit_buffer.pending_delete_rows();
+        let dirty_rows = self.edit_buffer.dirty_rows();
+        // Use array indices into `pending_inserts`, not virtual row indices.
+        // `commit_insert_*` looks up data via `get_pending_insert_by_idx`, which
+        // indexes the array directly; passing virtual indices silently misses.
+        let insert_indices: Vec<usize> = (0..self.edit_buffer.pending_inserts().len()).collect();
+
+        if pending_deletes.is_empty() && insert_indices.is_empty() && dirty_rows.is_empty() {
+            return;
+        }
+
+        cx.emit(DataTableEvent::SaveAllRequested {
+            pending_deletes,
+            pending_inserts: insert_indices,
+            dirty_rows,
+        });
+    }
+
+    /// Revert all changes for a specific row.
+    #[allow(dead_code)]
+    pub fn revert_row(&mut self, row: usize, cx: &mut Context<Self>) {
+        self.edit_buffer.clear_row(row);
+        cx.notify();
+    }
+
+    /// Revert all pending changes.
+    pub fn revert_all(&mut self, cx: &mut Context<Self>) {
+        self.edit_buffer.clear_all();
+        cx.notify();
+    }
+
+    /// Update a row with values returned from the database (e.g., after RETURNING clause).
+    ///
+    /// This applies server-side computed values (defaults, triggers) to the model.
+    pub fn apply_returning_row(&mut self, row_idx: usize, values: &[dbflux_core::Value]) {
+        self.model = Arc::new(self.model.with_row_updated(row_idx, values));
+    }
+}
+
+fn next_sort_state(current: Option<SortState>, col_ix: usize) -> Option<SortState> {
+    match current {
+        Some(SortState {
+            column_ix,
+            direction,
+        }) if column_ix == col_ix => {
+            use dbflux_core::SortDirection::*;
+            match direction {
+                Ascending => Some(SortState::descending(col_ix)),
+                Descending => None,
+            }
+        }
+        _ => Some(SortState::ascending(col_ix)),
+    }
+}
+
+impl EventEmitter<DataTableEvent> for DataTableState {}
+
+impl Focusable for DataTableState {
+    fn focus_handle(&self, _cx: &gpui::App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_sort_state;
+    use crate::components::data_table::events::SortState;
+
+    #[test]
+    fn next_sort_state_cycles_none_asc_desc_none() {
+        let column = 3;
+
+        let step1 = next_sort_state(None, column);
+        assert_eq!(step1, Some(SortState::ascending(column)));
+
+        let step2 = next_sort_state(step1, column);
+        assert_eq!(step2, Some(SortState::descending(column)));
+
+        let step3 = next_sort_state(step2, column);
+        assert_eq!(step3, None);
+    }
+
+    #[test]
+    fn next_sort_state_switches_to_new_column_ascending() {
+        let current = Some(SortState::descending(1));
+        let next = next_sort_state(current, 5);
+        assert_eq!(next, Some(SortState::ascending(5)));
+    }
+
+    // =========================================================================
+    // start_editing gate tests (Tier 1)
+    // =========================================================================
+    //
+    // These require a GPUI window because start_editing takes a &mut Window.
+    // A minimal Render harness is used — no theme or global init needed for
+    // the editing-gate logic itself.
+
+    use gpui::AppContext as _;
+
+    /// Harness that wraps a DataTableState entity so it can be placed in a window.
+    struct StateHarness {
+        // Keeps the DataTableState entity owned by the window view for the test's lifetime.
+        #[allow(dead_code)]
+        state: gpui::Entity<super::DataTableState>,
+    }
+
+    impl gpui::Render for StateHarness {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div()
+        }
+    }
+
+    fn one_row_model() -> std::sync::Arc<super::super::model::TableModel> {
+        use crate::components::data_table::model::{
+            CellValue, ColumnKind, ColumnSpec, RowData, TableModel,
+        };
+        use gpui::TextAlign;
+
+        let columns = vec![
+            ColumnSpec {
+                id: "id".into(),
+                title: "id".into(),
+                kind: ColumnKind::Integer,
+                align: TextAlign::Left,
+                type_name: "int4".into(),
+            },
+            ColumnSpec {
+                id: "name".into(),
+                title: "name".into(),
+                kind: ColumnKind::Text,
+                align: TextAlign::Left,
+                type_name: "text".into(),
+            },
+        ];
+        let rows = vec![RowData {
+            cells: vec![CellValue::int(1), CellValue::text("alice")],
+        }];
+        std::sync::Arc::new(TableModel::new(columns, rows))
+    }
+
+    fn two_row_model() -> std::sync::Arc<super::super::model::TableModel> {
+        use crate::components::data_table::model::{
+            CellValue, ColumnKind, ColumnSpec, RowData, TableModel,
+        };
+        use gpui::TextAlign;
+
+        let columns = vec![
+            ColumnSpec {
+                id: "id".into(),
+                title: "id".into(),
+                kind: ColumnKind::Integer,
+                align: TextAlign::Left,
+                type_name: "int4".into(),
+            },
+            ColumnSpec {
+                id: "name".into(),
+                title: "name".into(),
+                kind: ColumnKind::Text,
+                align: TextAlign::Left,
+                type_name: "text".into(),
+            },
+        ];
+        let rows = vec![
+            RowData {
+                cells: vec![CellValue::int(1), CellValue::text("alice")],
+            },
+            RowData {
+                cells: vec![CellValue::int(2), CellValue::text("bob")],
+            },
+        ];
+        std::sync::Arc::new(TableModel::new(columns, rows))
+    }
+
+    /// Negative: start_editing on a column in readonly_columns returns false.
+    #[gpui::test]
+    fn start_editing_blocked_by_readonly_column(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+        use std::collections::HashSet;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let model = one_row_model();
+            let state = cx.new(|cx| {
+                let mut s = super::DataTableState::new(model, cx);
+                // col 0 = PK (enables is_editable), col 1 = readonly
+                s.set_pk_columns(vec![0]);
+                s.set_readonly_columns(HashSet::from([1usize]));
+                s
+            });
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("state entity must be created");
+
+        let result = window.update(|window, app| {
+            state.update(app, |s, cx| {
+                s.start_editing(CellCoord::new(0, 1), window, cx)
+            })
+        });
+
+        assert!(
+            !result,
+            "start_editing must return false for a column in readonly_columns"
+        );
+
+        let editing_cell = window.update(|_, app| state.read(app).editing_cell());
+        assert!(
+            editing_cell.is_none(),
+            "editing_cell must remain None when start_editing is blocked"
+        );
+    }
+
+    /// Positive: start_editing on an editable, non-readonly column returns true.
+    #[gpui::test]
+    fn start_editing_allowed_on_non_readonly_editable_column(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+        use std::collections::HashSet;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let model = one_row_model();
+            let state = cx.new(|cx| {
+                let mut s = super::DataTableState::new(model, cx);
+                // col 0 = PK (enables is_editable), no readonly columns
+                s.set_pk_columns(vec![0]);
+                s.set_readonly_columns(HashSet::new());
+                s
+            });
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("state entity must be created");
+
+        let result = window.update(|window, app| {
+            state.update(app, |s, cx| {
+                s.start_editing(CellCoord::new(0, 1), window, cx)
+            })
+        });
+
+        assert!(
+            result,
+            "start_editing must return true for an editable column with no readonly guard"
+        );
+
+        let editing_cell = window.update(|_, app| state.read(app).editing_cell());
+        assert_eq!(
+            editing_cell,
+            Some(CellCoord::new(0, 1)),
+            "editing_cell must be set to the requested coord after successful start_editing"
+        );
+    }
+
+    /// Regression: switching the inline editor to another cell must drop the
+    /// previous editor's subscriptions. Otherwise a late `Blur` from the old
+    /// input is delivered to its still-live subscription and calls
+    /// `stop_editing`, which clears `editing_cell` and silently cancels the
+    /// freshly opened edit.
+    #[gpui::test]
+    fn rapid_cell_switch_ignores_stale_blur(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+        use crate::controls::InputEvent;
+        use std::collections::HashSet;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let model = two_row_model();
+            let state = cx.new(|cx| {
+                let mut s = super::DataTableState::new(model, cx);
+                s.set_pk_columns(vec![0]);
+                s.set_readonly_columns(HashSet::new());
+                s
+            });
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("state entity must be created");
+
+        // Open the editor on (0,1) and capture its input entity.
+        let input_a = window.update(|window, app| {
+            state.update(app, |s, cx| {
+                assert!(s.start_editing(CellCoord::new(0, 1), window, cx));
+                s.cell_input().cloned().expect("cell input for (0,1)")
+            })
+        });
+
+        // Switch the editor to (1,1): installs new subscriptions and drops the
+        // ones bound to input_a.
+        window.update(|window, app| {
+            state.update(app, |s, cx| {
+                assert!(s.start_editing(CellCoord::new(1, 1), window, cx));
+            })
+        });
+
+        // A late Blur from the previous input must be ignored.
+        window.update(|_window, app| {
+            input_a.update(app, |_input, cx| cx.emit(InputEvent::Blur));
+        });
+
+        let editing_cell = window.update(|_, app| state.read(app).editing_cell());
+        assert_eq!(
+            editing_cell,
+            Some(CellCoord::new(1, 1)),
+            "a stale Blur from the previous input must not cancel the new edit"
+        );
+    }
+}

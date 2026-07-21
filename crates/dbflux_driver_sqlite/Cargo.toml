@@ -13,8 +13,8 @@ license.workspace = true
 dbflux_core = { path = "../dbflux_core" }
 hex.workspace = true
 log = "0.4"
-rusqlite = { version = "0.32", features = ["bundled", "column_decltype"] }
-serde_json = "1"
+rusqlite = { workspace = true, features = ["column_decltype"] }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 dbflux_test_support.workspace = true

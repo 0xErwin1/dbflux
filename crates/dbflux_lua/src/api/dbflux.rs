@@ -34,13 +34,30 @@ pub fn register_logging_api(lua: &Lua, state: LuaRuntimeState) -> LuaResult<()> 
     dbflux.set("log", logging)
 }
 
+/// IPC auth-token env-var names that must never be returned to Lua scripts, even
+/// when env_read is enabled. These map to dbflux_ipc::{DRIVER_RPC_AUTH_TOKEN_ENV,
+/// APP_CONTROL_AUTH_TOKEN_ENV, AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV}.
+const BLOCKED_ENV_VARS: &[&str] = &[
+    "DBFLUX_DRIVER_IPC_TOKEN",
+    "DBFLUX_IPC_TOKEN",
+    "DBFLUX_AUTH_PROVIDER_IPC_TOKEN",
+];
+
 pub fn register_env_api(lua: &Lua) -> LuaResult<()> {
     let dbflux = ensure_dbflux_table(lua)?;
     let env = lua.create_table()?;
 
     env.set(
         "get",
-        lua.create_function(|_, key: String| Ok(std::env::var(key).ok()))?,
+        lua.create_function(|_, key: String| {
+            if BLOCKED_ENV_VARS
+                .iter()
+                .any(|blocked| blocked.eq_ignore_ascii_case(&key))
+            {
+                return Ok(None);
+            }
+            Ok(std::env::var(key).ok())
+        })?,
     )?;
 
     dbflux.set("env", env)
@@ -117,21 +134,44 @@ fn run_process(lua: &Lua, state: &LuaRuntimeState, options: Table) -> LuaResult<
 
     ensure_program_allowed(&program, &allowlist)?;
 
-    let mut command = Command::new(&program);
+    let resolved = resolve_program_in_path(&program);
+
+    if !detached && timeout.is_none() && state.hook_timeout.is_none() {
+        return Err(mlua::Error::RuntimeError(
+            "dbflux.process.run requires a timeout_ms when no hook-level timeout is set"
+                .to_string(),
+        ));
+    }
+
+    let exec_target = resolved
+        .as_deref()
+        .map(|p| p.as_os_str())
+        .unwrap_or_else(|| program.as_ref());
+    let mut command = Command::new(exec_target);
     command.args(&args);
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
+
+    for var in BLOCKED_ENV_VARS {
+        command.env_remove(var);
+    }
 
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
 
+    let resolved_display = resolved
+        .as_deref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "<unresolved>".to_string());
+
     append_log(
         state,
         OutputStreamKind::Log,
         format!(
-            "[PROCESS/{allowlist}] {}{}",
+            "[PROCESS/{allowlist}] {} -> {}{}",
             program,
+            resolved_display,
             if args.is_empty() {
                 String::new()
             } else {
@@ -228,21 +268,74 @@ fn format_process_description(program: &str, args: &[String]) -> String {
     }
 }
 
+/// Resolves a bare program name to an absolute executable path by walking `$PATH`.
+///
+/// First match wins. On Unix a candidate must be a file with an executable bit set;
+/// on other platforms `is_file()` is sufficient. Returns `None` when `PATH` is unset
+/// or no candidate matches. Best-effort only: the allowlist already gated the name —
+/// this exists to make the executed binary visible in the run trail, not to enforce trust.
+fn resolve_program_in_path(program: &str) -> Option<std::path::PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        let candidate = dir.join(program);
+        if is_executable_file(&candidate) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &std::path::Path) -> bool {
+    path.is_file()
+}
+
+/// Checks whether a program name is path-qualified (contains a path separator or leading `~`).
+///
+/// This is a footgun guard: it prevents accidental execution of path-qualified names like
+/// `/usr/bin/aws` or `../aws` before the allowlist is checked. It is NOT a security
+/// isolation boundary — PATH-order manipulation can still substitute a binary, and
+/// resolving that requires `which`-style resolution which is out of scope here.
+fn is_path_qualified(program: &str) -> bool {
+    program.contains('/')
+        || program.contains('\\')
+        || Path::new(program).components().count() > 1
+        || program.starts_with('~')
+}
+
+/// Validates that `program` is a bare command name on the named allowlist.
+///
+/// The allowlist is an ergonomics/footgun guard: it prevents typos and unintended
+/// execution of programs the hook author did not expect, and it forbids path-qualified
+/// names. It is NOT a security isolation boundary — a user who controls `$PATH` can
+/// still substitute a different binary under the same name. To make the substitution
+/// auditable, [`run_process`] resolves the name against `$PATH` and records the resolved
+/// absolute path (or `<unresolved>`) in the run trail.
 fn ensure_program_allowed(program: &str, allowlist: &str) -> LuaResult<()> {
+    if is_path_qualified(program) {
+        return Err(mlua::Error::RuntimeError(format!(
+            "Program '{program}' must be a bare command name (no path separators); \
+             allowlist '{allowlist}' resolves via PATH"
+        )));
+    }
+
     let Some(allowed_programs) = allowlist_programs(allowlist) else {
         return Err(mlua::Error::RuntimeError(format!(
             "dbflux.process.run allowlist '{allowlist}' is not recognized"
         )));
     };
 
-    let program_name = Path::new(program)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or(program);
-
     if allowed_programs
         .iter()
-        .any(|allowed| allowed.eq_ignore_ascii_case(program_name))
+        .any(|allowed| allowed.eq_ignore_ascii_case(program))
     {
         Ok(())
     } else {
@@ -400,38 +493,303 @@ mod tests {
         assert_eq!(event.text, "hello-log\n");
     }
 
+    // Streaming of a child's stdout/stderr is covered directly in dbflux_core by
+    // `process_executor_emits_streaming_output_events`, `execute_captures_stderr`, and
+    // `execute_streaming_process_emits_partial_line_output_before_newline`. A
+    // run_process-level variant added nothing but a real `python3` spawn, which is
+    // flaky under CI process pressure, so it is intentionally not duplicated here.
     #[test]
-    fn run_process_cancellation_streams_partial_stdout_and_stderr() {
+    fn run_process_cancellation_returns_cancelled_error() {
         let lua = Lua::new();
-        let (sender, receiver) = dbflux_core::output_channel();
-        let state = test_state(None, Instant::now(), Some(sender));
+        let state = test_state(None, Instant::now(), None);
         let options = process_options(&lua, python_program()).unwrap();
         let args = lua.create_table().unwrap();
 
         args.set(1, "-c").unwrap();
-        args.set(
-            2,
-            "import sys, time; sys.stdout.write('out'); sys.stdout.flush(); sys.stderr.write('err'); sys.stderr.flush(); time.sleep(5)",
-        )
-        .unwrap();
+        args.set(2, "import time; time.sleep(30)").unwrap();
         options.set("args", args).unwrap();
         options.set("stream", true).unwrap();
+        options.set("timeout_ms", 30000_i64).unwrap();
 
-        let cancel_token = state.cancel_token.clone();
-        thread::spawn(move || {
-            thread::sleep(Duration::from_millis(100));
-            cancel_token.cancel();
-        });
+        // An already-cancelled token must surface as a cancellation error before the
+        // child is spawned. Cancelling mid-flight instead would race process startup
+        // under load; the streaming monitor's mid-execution cancellation is covered by
+        // the hook executor's own tests.
+        state.cancel_token.cancel();
 
         let error = run_process(&lua, &state, options).unwrap_err().to_string();
-        let events: Vec<_> = receiver.try_iter().collect();
 
         assert!(error.contains("cancelled"));
-        assert!(events.iter().any(|event| {
-            event.stream == OutputStreamKind::Stdout && event.text.contains("out")
-        }));
-        assert!(events.iter().any(|event| {
-            event.stream == OutputStreamKind::Stderr && event.text.contains("err")
-        }));
+    }
+
+    // =========================================================================
+    // Path-separator rejection
+    // =========================================================================
+
+    #[test]
+    fn test_absolute_path_rejected() {
+        let err = ensure_program_allowed("/usr/bin/aws", "aws_cli").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("bare command name") || msg.contains("path separator"),
+            "expected path-separator error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_relative_path_rejected() {
+        let err = ensure_program_allowed("../aws", "aws_cli").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("bare command name") || msg.contains("path separator"),
+            "expected path-separator error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_bare_allowlisted_passes() {
+        assert!(ensure_program_allowed("aws", "aws_cli").is_ok());
+    }
+
+    #[test]
+    fn test_bare_non_allowlisted_fails_at_allowlist() {
+        let err = ensure_program_allowed("malicious_tool", "aws_cli").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("bare command name") && !msg.contains("path separator"),
+            "expected allowlist error (not path-separator), got: {msg}"
+        );
+    }
+
+    // =========================================================================
+    // Timeout required for non-detached process.run
+    // =========================================================================
+
+    #[test]
+    fn test_no_timeout_and_no_hook_deadline_rejected() {
+        let lua = Lua::new();
+        let options = lua.create_table().unwrap();
+        options.set("program", "aws").unwrap();
+        options.set("allowlist", "aws_cli").unwrap();
+
+        let state = test_state(None, Instant::now(), None);
+
+        let err = run_process(&lua, &state, options).unwrap_err().to_string();
+        assert!(
+            err.contains("requires a timeout_ms"),
+            "expected timeout-required error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_timeout_ms_set_accepted() {
+        let lua = Lua::new();
+        let options = lua.create_table().unwrap();
+        options.set("program", "aws").unwrap();
+        options.set("allowlist", "aws_cli").unwrap();
+        options.set("timeout_ms", 5000_i64).unwrap();
+
+        let state = test_state(None, Instant::now(), None);
+
+        let result = run_process(&lua, &state, options);
+        if let Err(e) = result {
+            let msg = e.to_string();
+            assert!(
+                !msg.contains("requires a timeout_ms"),
+                "unexpected timeout-required error: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_hook_deadline_present_accepted() {
+        let lua = Lua::new();
+        let options = lua.create_table().unwrap();
+        options.set("program", "aws").unwrap();
+        options.set("allowlist", "aws_cli").unwrap();
+
+        let state = test_state(Some(Duration::from_secs(60)), Instant::now(), None);
+
+        let result = run_process(&lua, &state, options);
+        if let Err(e) = result {
+            let msg = e.to_string();
+            assert!(
+                !msg.contains("requires a timeout_ms"),
+                "unexpected timeout-required error when hook timeout is set: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_detached_exempt() {
+        let lua = Lua::new();
+        let options = lua.create_table().unwrap();
+        options.set("program", "aws").unwrap();
+        options.set("allowlist", "aws_cli").unwrap();
+        options.set("detached", true).unwrap();
+
+        let state = test_state(None, Instant::now(), None);
+
+        let result = run_process(&lua, &state, options);
+        if let Err(e) = result {
+            let msg = e.to_string();
+            assert!(
+                !msg.contains("requires a timeout_ms"),
+                "detached run must not require timeout_ms, got: {msg}"
+            );
+        }
+    }
+
+    // =========================================================================
+    // IPC token blocklist
+    // =========================================================================
+
+    fn make_env_lua() -> Lua {
+        let lua = Lua::new();
+        register_env_api(&lua).expect("register_env_api failed");
+        lua
+    }
+
+    #[test]
+    fn env_get_blocks_driver_ipc_token_exact_case() {
+        // Set the var so it would be readable if not blocked.
+        unsafe { std::env::set_var("DBFLUX_DRIVER_IPC_TOKEN", "should-be-blocked") };
+        let lua = make_env_lua();
+        let value: Option<String> = lua
+            .load("return dbflux.env.get('DBFLUX_DRIVER_IPC_TOKEN')")
+            .eval()
+            .unwrap();
+        unsafe { std::env::remove_var("DBFLUX_DRIVER_IPC_TOKEN") };
+        assert!(
+            value.is_none(),
+            "DBFLUX_DRIVER_IPC_TOKEN must be blocked even when env_read is enabled"
+        );
+    }
+
+    #[test]
+    fn env_get_blocks_ipc_token_case_insensitive() {
+        unsafe { std::env::set_var("DBFLUX_IPC_TOKEN", "should-be-blocked") };
+        let lua = make_env_lua();
+        let lower: Option<String> = lua
+            .load("return dbflux.env.get('dbflux_ipc_token')")
+            .eval()
+            .unwrap();
+        let upper: Option<String> = lua
+            .load("return dbflux.env.get('DBFLUX_IPC_TOKEN')")
+            .eval()
+            .unwrap();
+        unsafe { std::env::remove_var("DBFLUX_IPC_TOKEN") };
+        assert!(lower.is_none(), "lowercase key must be blocked");
+        assert!(upper.is_none(), "uppercase key must be blocked");
+    }
+
+    #[test]
+    fn env_get_blocks_auth_provider_ipc_token() {
+        unsafe { std::env::set_var("DBFLUX_AUTH_PROVIDER_IPC_TOKEN", "should-be-blocked") };
+        let lua = make_env_lua();
+        let value: Option<String> = lua
+            .load("return dbflux.env.get('DBFLUX_AUTH_PROVIDER_IPC_TOKEN')")
+            .eval()
+            .unwrap();
+        unsafe { std::env::remove_var("DBFLUX_AUTH_PROVIDER_IPC_TOKEN") };
+        assert!(
+            value.is_none(),
+            "DBFLUX_AUTH_PROVIDER_IPC_TOKEN must be blocked"
+        );
+    }
+
+    #[test]
+    fn env_get_allows_unrelated_vars() {
+        unsafe { std::env::set_var("DBFLUX_TEST_SAFE_VAR_12345", "visible") };
+        let lua = make_env_lua();
+        let value: Option<String> = lua
+            .load("return dbflux.env.get('DBFLUX_TEST_SAFE_VAR_12345')")
+            .eval()
+            .unwrap();
+        unsafe { std::env::remove_var("DBFLUX_TEST_SAFE_VAR_12345") };
+        assert_eq!(value.as_deref(), Some("visible"));
+    }
+
+    // --- SEC2-3: PATH resolution helper ---
+    // All PATH-mutating sub-cases are in one test fn to avoid cross-test races.
+
+    #[test]
+    fn resolve_program_in_path_cases() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+        fn tmp_dir(label: &str) -> std::path::PathBuf {
+            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+            std::env::temp_dir().join(format!(
+                "dbflux_lua_path_test_{}_{}_{}",
+                std::process::id(),
+                n,
+                label
+            ))
+        }
+
+        let saved_path = std::env::var_os("PATH");
+
+        // Sub-case: returns None when program is absent
+        {
+            let empty = tmp_dir("empty");
+            std::fs::create_dir_all(&empty).unwrap();
+            unsafe { std::env::set_var("PATH", std::env::join_paths([&empty]).unwrap()) };
+
+            let result = resolve_program_in_path("definitely-not-here-xyz");
+            assert!(result.is_none(), "absent program must return None");
+
+            let _ = std::fs::remove_dir_all(&empty);
+        }
+
+        // Unix-only sub-cases: exec-bit detection
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            // Sub-case: finds a bare name when on PATH with exec bit
+            {
+                let dir = tmp_dir("exec");
+                std::fs::create_dir_all(&dir).unwrap();
+                let prog = dir.join("fakeprog");
+                std::fs::write(&prog, b"#!/bin/sh").unwrap();
+                let mut perms = std::fs::metadata(&prog).unwrap().permissions();
+                perms.set_mode(0o755);
+                std::fs::set_permissions(&prog, perms).unwrap();
+
+                unsafe { std::env::set_var("PATH", std::env::join_paths([&dir]).unwrap()) };
+                let result = resolve_program_in_path("fakeprog");
+                assert_eq!(
+                    result.as_deref(),
+                    Some(prog.as_path()),
+                    "exec binary must be found"
+                );
+
+                let _ = std::fs::remove_dir_all(&dir);
+            }
+
+            // Sub-case: skips non-executable file (no exec bit)
+            {
+                let dir = tmp_dir("noexec");
+                std::fs::create_dir_all(&dir).unwrap();
+                let prog = dir.join("fakeprog");
+                std::fs::write(&prog, b"#!/bin/sh").unwrap();
+                let mut perms = std::fs::metadata(&prog).unwrap().permissions();
+                perms.set_mode(0o644);
+                std::fs::set_permissions(&prog, perms).unwrap();
+
+                unsafe { std::env::set_var("PATH", std::env::join_paths([&dir]).unwrap()) };
+                let result = resolve_program_in_path("fakeprog");
+                assert!(result.is_none(), "non-executable file must not be returned");
+
+                let _ = std::fs::remove_dir_all(&dir);
+            }
+        }
+
+        // Restore PATH
+        match saved_path {
+            Some(p) => unsafe { std::env::set_var("PATH", p) },
+            None => unsafe { std::env::remove_var("PATH") },
+        }
     }
 }

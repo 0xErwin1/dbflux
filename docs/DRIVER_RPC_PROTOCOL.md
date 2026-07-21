@@ -85,7 +85,11 @@ Client request:
 DriverRequestBody::Hello(DriverHelloRequest {
     client_name: "dbflux_driver_ipc".to_string(),
     client_version: "<version>".to_string(),
-    supported_versions: vec![ProtocolVersion::new(1, 0), ProtocolVersion::new(1, 1)],
+    supported_versions: vec![
+        ProtocolVersion::new(1, 0),
+        ProtocolVersion::new(1, 1),
+        ProtocolVersion::new(1, 2),
+    ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
         DriverCapability::ChunkedResults,
@@ -142,9 +146,17 @@ Current validation boundary:
 - DBFlux persists per-service API family/version metadata for discovery and future runtime seams.
 - The live driver handshake currently validates negotiated protocol versions, but it does not transmit or separately re-validate the API family string on the wire because the driver RPC transport is already family-specific.
 
+### Audit emission from drivers (v1.2+)
+
+A driver that advertises `DriverCapability::AuditEmit` (driver RPC ≥ 1.2) may write to the host audit log by sending `EmitAuditEvent` intermediate frames (`done=false`) during any request/response cycle. The host sanitizes every event before persisting it to `aud_audit_events`.
+
+Allowed categories: `Connection`, `Query`, `System`. All other categories are silently dropped.
+
+The host overrides identity fields (`actor_type` → `ExternalDriver`, `actor_id`, `source_id`, `driver_id`, `correlation_id`) and the connection context from `AppState`, and truncates `details_json` to the configured limit. Rate limiting is shared with auth providers: 100 events per 60 seconds per `socket_id`; overflow events are dropped without erroring the session. Peers that negotiate below v1.2 or omit the capability remain silent. See [Audit § external audit emission](AUDIT.md) for the full sanitization contract.
+
 ## Auth-provider RPC contract
 
-The active auth-provider RPC API family is `auth_provider_rpc` at `1.2`.
+The active auth-provider RPC API family is `auth_provider_rpc` at `1.3`.
 
 DBFlux uses persisted `api_family` / `api_major` metadata as a startup preflight. Compatible rows then negotiate the highest shared minor version during `Hello`.
 
@@ -155,6 +167,7 @@ AuthProviderRequestBody::Hello(AuthProviderHelloRequest {
     client_name: "dbflux_ipc".to_string(),
     client_version: "<version>".to_string(),
     supported_versions: vec![
+        ProtocolVersion::new(1, 3),
         ProtocolVersion::new(1, 2),
         ProtocolVersion::new(1, 1),
         ProtocolVersion::new(1, 0),
@@ -172,6 +185,8 @@ Server response must include:
 
 The v1.2 `Hello` response additionally carries `secret_dependency_opt_in` (`bool`), declaring whether the provider opts in to receiving secret field values inside dependency maps for dynamic option lookups. When `false` (default), DBFlux strips secret values from dependency maps before forwarding `FetchDynamicOptions` requests.
 
+The v1.3 `Hello` response additionally carries `audit_emit_opt_in` (`bool`). Set this to `true` to enable audit event emission (see below). Default is `false`.
+
 Supported request / response flow:
 
 | Request | Response | Purpose |
@@ -181,6 +196,7 @@ Supported request / response flow:
 | `Login` | `LoginUrlProgress?` + `LoginResult` | optional verification URL + terminal login result |
 | `ResolveCredentials` | `Credentials` | resolve runtime credential fields |
 | `FetchDynamicOptions` | `DynamicOptions` | resolve dynamic dropdown options for a `DynamicSelect` form field (v1.2+) |
+| (any request) | `EmitAuditEvent` (intermediate) | audit event emission (v1.3+) |
 
 Notes:
 
@@ -189,6 +205,14 @@ Notes:
 - `FetchDynamicOptions` is available only when the negotiated version is at least `1.2`. Providers that negotiate below v1.2 receive a permanent "not supported" outcome from the host without an IPC round-trip.
 - `detect_importable_profiles`, profile write-back hooks, and provider-specific value-provider registration are intentionally out of scope for the RPC contract in this change.
 - Auth-provider runtime failures surface through existing `DbError` handling and do not abort startup.
+
+### Audit emission from auth providers (v1.3+)
+
+Auth providers that negotiate v1.3+ and set `audit_emit_opt_in: true` may send `EmitAuditEvent` intermediate frames (`done=false`) during any request/response cycle. The host sanitizes and writes them to `aud_audit_events`.
+
+Allowed category: `Connection` only. All other categories are silently dropped.
+
+The `AuditEventEmitDto` payload follows the same structure as driver emit frames. The host overrides identity fields (`actor_type`, `actor_id`, `source_id`, `driver_id`, `correlation_id`). Rate limiting is shared with drivers: 100 events per 60 seconds per `socket_id`.
 
 ## Form contract
 
@@ -235,6 +259,59 @@ The service should parse `profile_json`, expect `DbConfig::External`, and valida
 | `ListDatabases` | `Databases` | database list |
 
 The protocol also supports browse, CRUD, key-value, and code generation operations. See `crates/dbflux_ipc/src/driver_protocol.rs` for the full enum set.
+
+## Audit emission from drivers (v1.2+)
+
+Drivers that negotiate protocol version v1.2 or higher may emit audit events back to the host as intermediate response frames (`done=false`). The host sanitizes, rate-limits, and writes them to `aud_audit_events`.
+
+### Opting in
+
+Include `DriverCapability::AuditEmit` in your `Hello` response `capabilities` list. Drivers that do not advertise this capability will have any `EmitAuditEvent` frames silently discarded by the host.
+
+### Sending an audit frame
+
+Emit a `DriverResponseEnvelope` with `done = false` and `body = DriverResponseBody::EmitAuditEvent(AuditEventEmitDto { .. })` at any point during a request before the terminal response:
+
+```rust
+DriverResponseEnvelope {
+    protocol_version: negotiated_version,
+    request_id: request.request_id,
+    session_id: request.session_id,
+    done: false,
+    body: DriverResponseBody::EmitAuditEvent(AuditEventEmitDto {
+        ts_ms: chrono::Utc::now().timestamp_millis(),
+        level: EventSeverityDto::Info,
+        category: EventCategoryDto::Connection,
+        action: "session.open".to_string(),
+        outcome: EventOutcomeDto::Success,
+        summary: "Database session opened".to_string(),
+        object_type: None,
+        object_id: None,
+        duration_ms: Some(42),
+        error_code: None,
+        error_message: None,
+        details_json: None,
+    }),
+}
+```
+
+Then send the terminal response as usual.
+
+### What the host supplies
+
+The host always overrides these fields; do not include them in the DTO (they are intentionally absent from `AuditEventEmitDto`):
+
+- `actor_type`, `actor_id`, `source_id`, `driver_id` — always set to `ExternalDriver` / `rpc:<socket_id>`
+- `connection_id`, `database_name` — resolved from the active session context
+- `correlation_id` — one per session, host-generated
+
+### Allowed categories
+
+Drivers may emit `Connection`, `Query`, and `System` events. All other categories are silently dropped.
+
+### Rate limit
+
+100 events per 60 seconds per `socket_id`. Excess frames are dropped and counted in `AuditService::external_audit_dropped_count()`.
 
 ## Error handling
 

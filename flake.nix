@@ -36,12 +36,7 @@
             overlays = [ (import rust-overlay) ];
           };
 
-          rustToolchain = pkgs.pkgsBuildHost.rust-bin.stable.latest.default.override {
-            extensions = [
-              "rust-src"
-              "rust-analyzer"
-            ];
-          };
+          rustToolchain = pkgs.pkgsBuildHost.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
 
           craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
@@ -53,7 +48,7 @@
           # Import default.nix with crane support
           dbflux = import ./default.nix {
             inherit pkgs craneLib;
-            version = "0.6.0-dev.6";
+            version = "0.7.0-dev.0";
           };
 
           # Source build (current behavior, compiles locally via crane).
@@ -64,6 +59,15 @@
           dbfluxBin =
             if hasPrebuilt then
               pkgs.callPackage ./nix/binary.nix { }
+            else
+              null;
+
+          # Rolling nightly prebuilt — pinned on the `nightly` ref.
+          # On `main` the hashes in nightly-info.nix are placeholders; always
+          # consume this via `github:0xErwin1/dbflux/nightly#dbflux-nightly`.
+          dbfluxNightly =
+            if hasPrebuilt then
+              pkgs.callPackage ./nix/binary.nix { infoFile = ./nix/nightly-info.nix; }
             else
               null;
 
@@ -82,6 +86,8 @@
               # Run with `cargo nextest run` (doctests still need `cargo test --doc`).
               # mold is inherited from dbflux.nativeBuildInputs (see default.nix).
               pkgs.cargo-nextest
+              # Detects unused dependency declarations (DEP-2 regression guard).
+              pkgs.cargo-machete
             ];
 
             buildInputs = dbflux.buildInputs;
@@ -104,28 +110,39 @@
           };
 
           # Packages:
-          #   .default       -> prebuilt when available, source otherwise
-          #   .dbflux        -> alias for .default
-          #   .dbflux-bin    -> explicit prebuilt (only on supported systems)
-          #   .dbflux-source -> explicit source build
+          #   .default         -> prebuilt when available, source otherwise
+          #   .dbflux          -> alias for .default
+          #   .dbflux-bin      -> explicit prebuilt (only on supported systems)
+          #   .dbflux-source   -> explicit source build
+          #   .dbflux-nightly  -> rolling nightly prebuilt (pin to nightly ref)
           packages = {
             default = dbfluxDefault;
             dbflux = dbfluxDefault;
             dbflux-source = dbfluxSource;
-          } // (if hasPrebuilt then { dbflux-bin = dbfluxBin; } else { });
+          } // (if hasPrebuilt then {
+            dbflux-bin = dbfluxBin;
+            dbflux-nightly = dbfluxNightly;
+          } else { });
 
           formatter = pkgs.nixpkgs-fmt;
 
           # Apps
-          apps.default = flake-utils.lib.mkApp {
-            drv = dbfluxDefault;
-            exePath = "/bin/dbflux";
-          };
+          apps = {
+            default = flake-utils.lib.mkApp {
+              drv = dbfluxDefault;
+              exePath = "/bin/dbflux";
+            };
 
-          apps.dbflux = flake-utils.lib.mkApp {
-            drv = dbfluxDefault;
-            exePath = "/bin/dbflux";
-          };
+            dbflux = flake-utils.lib.mkApp {
+              drv = dbfluxDefault;
+              exePath = "/bin/dbflux";
+            };
+          } // (if hasPrebuilt then {
+            dbflux-nightly = flake-utils.lib.mkApp {
+              drv = dbfluxNightly;
+              exePath = "/bin/dbflux-nightly";
+            };
+          } else { });
         }
       );
     in
@@ -135,17 +152,26 @@
       #   nixpkgs.overlays = [ inputs.dbflux.overlays.default ];
       #   environment.systemPackages = [ pkgs.dbflux ];
       #
-      # `pkgs.dbflux`        -> prebuilt binary (fast)
-      # `pkgs.dbflux-source` -> built from source via crane
+      # `pkgs.dbflux`         -> prebuilt binary (fast)
+      # `pkgs.dbflux-source`  -> built from source via crane
+      # `pkgs.dbflux-bin`     -> explicit prebuilt (only on prebuilt systems)
+      # `pkgs.dbflux-nightly` -> rolling nightly prebuilt (only on prebuilt systems)
       overlays.default = final: prev:
         let
           system = prev.stdenv.hostPlatform.system;
           hasSystem = perSystem.packages ? ${system};
+          sysPkgs = perSystem.packages.${system};
         in
         if hasSystem then
           {
-            dbflux = perSystem.packages.${system}.dbflux;
-            dbflux-source = perSystem.packages.${system}.dbflux-source;
+            dbflux = sysPkgs.dbflux;
+            dbflux-source = sysPkgs.dbflux-source;
+          }
+          // nixpkgs.lib.optionalAttrs (sysPkgs ? dbflux-nightly) {
+            dbflux-nightly = sysPkgs.dbflux-nightly;
+          }
+          // nixpkgs.lib.optionalAttrs (sysPkgs ? dbflux-bin) {
+            dbflux-bin = sysPkgs.dbflux-bin;
           }
         else
           { };

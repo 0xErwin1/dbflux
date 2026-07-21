@@ -1,3 +1,6 @@
+mod edit;
+mod identity;
+mod refs;
 mod types;
 
 use std::collections::HashMap;
@@ -10,7 +13,11 @@ use crate::DbError;
 use crate::driver::form::DriverFormDef;
 use crate::values::CompositeValueResolver;
 
+pub use edit::{AuthEditSnapshot, AuthEditTarget, AuthSaveOutcome};
+pub use identity::{AWS_AUTH_NAMESPACE, aws_profile_uuid};
+pub use refs::{AuthProfileLookup, expand_auth_profile_refs};
 pub use types::*;
+pub use types::{AuthEditCapabilities, DanglingMessage};
 
 /// Request to fetch the available options for a `DynamicSelect` field.
 ///
@@ -142,7 +149,7 @@ pub trait DynAuthProvider: Send + Sync {
         Ok(())
     }
 
-    /// Return profiles discovered from external sources (e.g., `~/.aws/config`)
+    /// Return profiles discovered from external configuration files
     /// that have not yet been imported into DBFlux.
     ///
     /// The default returns an empty list.
@@ -152,10 +159,71 @@ pub trait DynAuthProvider: Send + Sync {
 
     /// Called after a profile using this provider is saved.
     ///
-    /// Providers can use this hook to write back data to external config files
-    /// (e.g., appending an AWS profile entry to `~/.aws/config`).
-    /// The default is a no-op.
+    /// File-backed providers can use this hook to write back data to external
+    /// configuration files. The default is a no-op.
     fn after_profile_saved(&self, _profile: &AuthProfile) {}
+
+    /// Synthesize virtual `AuthProfile` records by reading external configuration
+    /// files without storing anything.
+    ///
+    /// Returned profiles carry `read_only = true`. The default returns an empty
+    /// list; file-backed providers override this to enumerate their profile types.
+    fn reflect_profiles(&self) -> Vec<AuthProfile> {
+        vec![]
+    }
+
+    /// Write a newly created profile to an external configuration file instead
+    /// of DBFlux's SQLite store.
+    ///
+    /// Returns `Some(Ok(()))` on a successful file write. Returns `Some(Err(msg))`
+    /// when the write failed. Returns `None` for providers that store profiles
+    /// normally in DBFlux (the UI then falls back to `add_auth_profile`).
+    ///
+    /// File-backed providers override this. The Settings UI calls this before
+    /// `add_auth_profile` so it can skip SQLite storage for file-backed providers
+    /// and let reflection pick up the new profile on the next read.
+    fn write_new_profile_to_config(&self, _profile: &AuthProfile) -> Option<Result<(), String>> {
+        None
+    }
+
+    /// Abort any in-flight login for `profile` if the provider tracks one.
+    ///
+    /// Returns `true` if an in-flight login was found and signalled to stop.
+    /// The default returns `false` (no abort capability).
+    fn abort_login(&self, _profile: &AuthProfile) -> bool {
+        false
+    }
+
+    /// Capture a provider-internal snapshot at the moment the edit form opens.
+    ///
+    /// The returned `AuthEditSnapshot` wraps an opaque provider-specific token
+    /// (e.g. section hashes for file-backed providers).  The UI passes it
+    /// back to `save_edit` unchanged.
+    ///
+    /// The default returns a unit snapshot, meaning the provider does not
+    /// support file-backed editing.  Providers that write to external files
+    /// override this to capture their conflict-detection state.
+    fn open_edit_snapshot(&self, _name: &str) -> AuthEditSnapshot {
+        AuthEditSnapshot::new(())
+    }
+
+    /// Persist the user's edited fields to the provider's backing store.
+    ///
+    /// Providers that support file-backed editing compare the current on-disk
+    /// state against the `snapshot` captured at `open_edit_snapshot` time.
+    /// They return `Conflict` or `PartialSaved` when a concurrent external
+    /// change is detected.
+    ///
+    /// The default returns `AuthSaveOutcome::Saved` without writing anything —
+    /// a safe no-op for providers that store profiles in DBFlux's SQLite store.
+    fn save_edit(
+        &self,
+        _name: &str,
+        _fields: &HashMap<String, String>,
+        _snapshot: &AuthEditSnapshot,
+    ) -> AuthSaveOutcome {
+        AuthSaveOutcome::Saved
+    }
 
     /// Fetch the available options for a `DynamicSelect` field declared in this
     /// provider's `form_def()`.
@@ -290,12 +358,33 @@ impl DynAuthProvider for SharedDynAuthProvider {
         self.provider.after_profile_saved(profile);
     }
 
+    fn write_new_profile_to_config(&self, profile: &AuthProfile) -> Option<Result<(), String>> {
+        self.provider.write_new_profile_to_config(profile)
+    }
+
+    fn abort_login(&self, profile: &AuthProfile) -> bool {
+        self.provider.abort_login(profile)
+    }
+
     async fn fetch_dynamic_options(
         &self,
         profile: &AuthProfile,
         request: FetchOptionsRequest,
     ) -> Result<FetchOptionsResponse, FetchOptionsError> {
         self.provider.fetch_dynamic_options(profile, request).await
+    }
+
+    fn open_edit_snapshot(&self, name: &str) -> AuthEditSnapshot {
+        self.provider.open_edit_snapshot(name)
+    }
+
+    fn save_edit(
+        &self,
+        name: &str,
+        fields: &HashMap<String, String>,
+        snapshot: &AuthEditSnapshot,
+    ) -> AuthSaveOutcome {
+        self.provider.save_edit(name, fields, snapshot)
     }
 }
 
@@ -354,12 +443,33 @@ impl DynAuthProvider for std::sync::Arc<dyn DynAuthProvider> {
         self.as_ref().after_profile_saved(profile);
     }
 
+    fn write_new_profile_to_config(&self, profile: &AuthProfile) -> Option<Result<(), String>> {
+        self.as_ref().write_new_profile_to_config(profile)
+    }
+
+    fn abort_login(&self, profile: &AuthProfile) -> bool {
+        self.as_ref().abort_login(profile)
+    }
+
     async fn fetch_dynamic_options(
         &self,
         profile: &AuthProfile,
         request: FetchOptionsRequest,
     ) -> Result<FetchOptionsResponse, FetchOptionsError> {
         self.as_ref().fetch_dynamic_options(profile, request).await
+    }
+
+    fn open_edit_snapshot(&self, name: &str) -> AuthEditSnapshot {
+        self.as_ref().open_edit_snapshot(name)
+    }
+
+    fn save_edit(
+        &self,
+        name: &str,
+        fields: &HashMap<String, String>,
+        snapshot: &AuthEditSnapshot,
+    ) -> AuthSaveOutcome {
+        self.as_ref().save_edit(name, fields, snapshot)
     }
 }
 
@@ -420,6 +530,7 @@ mod tests {
                     supported: true,
                     verification_url_progress: true,
                 },
+                edit: None,
             };
 
             &CAPABILITIES
@@ -475,6 +586,7 @@ mod tests {
                     supported: true,
                     verification_url_progress: false,
                 },
+                edit: None,
             };
 
             &CAPABILITIES

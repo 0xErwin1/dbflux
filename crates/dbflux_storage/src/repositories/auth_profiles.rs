@@ -75,13 +75,53 @@ impl AuthProfileRepository {
         Ok(())
     }
 
+    /// Persists a profile's fields, splitting secret-kind fields from plaintext.
+    ///
+    /// Non-secret values in `fields` are written as `text` rows. For each entry
+    /// in `secret_refs` (field_key -> keyring reference) a `secret` row is
+    /// written that stores ONLY the keyring reference — the secret value itself
+    /// never touches SQLite. A key present in both maps is treated as a secret
+    /// (the text row is skipped) so the unique (profile, field_key) index can
+    /// never be violated.
+    pub fn set_fields_and_secrets(
+        &self,
+        id: &str,
+        fields: &HashMap<String, String>,
+        secret_refs: &HashMap<String, String>,
+    ) -> Result<(), StorageError> {
+        let repo = self.fields_repo();
+        repo.delete_for_profile(id)?;
+
+        for (key, value) in fields.iter() {
+            if secret_refs.contains_key(key) {
+                continue;
+            }
+
+            repo.insert(&AuthProfileFieldDto::new_text(
+                id.to_string(),
+                key.clone(),
+                value.clone(),
+            ))?;
+        }
+
+        for (key, secret_ref) in secret_refs.iter() {
+            repo.insert(&AuthProfileFieldDto::new_secret(
+                id.to_string(),
+                key.clone(),
+                secret_ref.clone(),
+            ))?;
+        }
+
+        Ok(())
+    }
+
     /// Fetches all auth profiles.
     pub fn all(&self) -> Result<Vec<AuthProfileDto>, StorageError> {
         let mut stmt = self
             .conn()
             .prepare(
                 r#"
-                SELECT id, name, provider_id, enabled, created_at, updated_at
+                SELECT id, name, provider_id, enabled, created_at, updated_at, dangling_origin
                 FROM cfg_auth_profiles
                 ORDER BY name ASC
                 "#,
@@ -100,6 +140,7 @@ impl AuthProfileRepository {
                     enabled: row.get::<_, i32>(3)? != 0,
                     created_at: row.get(4)?,
                     updated_at: row.get(5)?,
+                    dangling_origin: row.get(6)?,
                 })
             })
             .map_err(|source| StorageError::Sqlite {
@@ -132,7 +173,7 @@ impl AuthProfileRepository {
             .conn()
             .prepare(
                 r#"
-                SELECT id, name, provider_id, enabled, created_at, updated_at
+                SELECT id, name, provider_id, enabled, created_at, updated_at, dangling_origin
                 FROM cfg_auth_profiles
                 WHERE id = ?1
                 "#,
@@ -150,6 +191,7 @@ impl AuthProfileRepository {
                 enabled: row.get::<_, i32>(3)? != 0,
                 created_at: row.get(4)?,
                 updated_at: row.get(5)?,
+                dangling_origin: row.get(6)?,
             })
         });
 
@@ -221,6 +263,7 @@ impl AuthProfileRepository {
                     name = ?2,
                     provider_id = ?3,
                     enabled = ?4,
+                    dangling_origin = ?5,
                     updated_at = datetime('now')
                 WHERE id = ?1
                 "#,
@@ -229,6 +272,7 @@ impl AuthProfileRepository {
                     profile.name,
                     profile.provider_id,
                     profile.enabled as i32,
+                    profile.dangling_origin,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -251,6 +295,25 @@ impl AuthProfileRepository {
         Ok(())
     }
 
+    /// Marks a stored auth profile as dangling by setting its `dangling_origin`.
+    ///
+    /// This is a targeted update that leaves all other fields intact.
+    pub fn set_dangling_origin(&self, id: &str, origin: &str) -> Result<(), StorageError> {
+        self.conn()
+            .execute(
+                "UPDATE cfg_auth_profiles \
+                 SET dangling_origin = ?2, updated_at = datetime('now') \
+                 WHERE id = ?1",
+                rusqlite::params![id, origin],
+            )
+            .map_err(|source| StorageError::Sqlite {
+                path: "dbflux.db".into(),
+                source,
+            })?;
+
+        Ok(())
+    }
+
     /// Inserts a new auth profile from the core AuthProfile type.
     pub fn insert_auth_profile(
         &self,
@@ -263,6 +326,7 @@ impl AuthProfileRepository {
             enabled: profile.enabled,
             created_at: String::new(),
             updated_at: String::new(),
+            dangling_origin: None,
         };
 
         // Insert the profile
@@ -313,6 +377,10 @@ impl AuthProfileRepository {
 /// DTO for auth profile storage.
 /// Note: fields are stored in auth_profile_fields child table.
 /// The fields_json column was dropped in migration v10.
+///
+/// `dangling_origin` is `None` for healthy profiles. When set, the profile is
+/// dangling — the stored row exists but the backing credential source is gone.
+/// See migration 010 for the allowed values (`"keyring-only"`, `"file-gone"`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthProfileDto {
     pub id: String,
@@ -321,10 +389,12 @@ pub struct AuthProfileDto {
     pub enabled: bool,
     pub created_at: String,
     pub updated_at: String,
+    /// When present, marks the profile as dangling; see migration 010 docs.
+    pub dangling_origin: Option<String>,
 }
 
 impl AuthProfileDto {
-    /// Creates a new DTO.
+    /// Creates a new DTO without a dangling origin (healthy profile).
     pub fn new(id: Uuid, name: String, provider_id: String) -> Self {
         Self {
             id: id.to_string(),
@@ -333,6 +403,7 @@ impl AuthProfileDto {
             enabled: true,
             created_at: String::new(),
             updated_at: String::new(),
+            dangling_origin: None,
         }
     }
 }
@@ -367,6 +438,71 @@ mod tests {
         let fetched = repo.all().expect("should fetch");
         assert_eq!(fetched.len(), 1);
         assert_eq!(fetched[0].name, "AWS SSO");
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
+    }
+
+    #[test]
+    fn set_fields_and_secrets_keeps_secret_value_off_disk() {
+        let path = temp_db("auth_secret_split");
+        let _ = std::fs::remove_file(&path);
+
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        let dto = AuthProfileDto::new(Uuid::new_v4(), "Static".to_string(), "custom".to_string());
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = AuthProfileRepository::new(Arc::new(conn));
+        repo.insert(&dto).expect("should insert");
+
+        let mut fields = HashMap::new();
+        fields.insert("region".to_string(), "us-east-1".to_string());
+
+        let mut secret_refs = HashMap::new();
+        secret_refs.insert(
+            "secret_access_key".to_string(),
+            format!("dbflux:auth:{}:secret_access_key", dto.id),
+        );
+
+        repo.set_fields_and_secrets(&dto.id, &fields, &secret_refs)
+            .expect("should persist split fields");
+
+        // get_fields returns only non-secret text fields.
+        let text_fields = repo.get_fields(&dto.id).expect("should read text fields");
+        assert_eq!(
+            text_fields.get("region").map(String::as_str),
+            Some("us-east-1")
+        );
+        assert!(
+            !text_fields.contains_key("secret_access_key"),
+            "secret field must not surface as a plaintext field"
+        );
+
+        // The raw rows prove the secret value never reached SQLite.
+        let rows = repo
+            .fields_repo()
+            .get_for_profile(&dto.id)
+            .expect("should read raw rows");
+
+        let secret_row = rows
+            .iter()
+            .find(|row| row.field_key == "secret_access_key")
+            .expect("secret marker row must exist");
+
+        assert_eq!(secret_row.value_kind, "secret");
+        assert!(
+            secret_row.value_text.is_none(),
+            "secret row must not store plaintext"
+        );
+        assert_eq!(
+            secret_row.value_secret_ref.as_deref(),
+            Some(format!("dbflux:auth:{}:secret_access_key", dto.id).as_str())
+        );
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));

@@ -1,7 +1,7 @@
 use crate::app::AppStateEntity;
 use crate::ui::icons::AppIcon;
-use crate::ui::tokens::Spacing;
 use dbflux_components::primitives::{Icon, Text, surface_panel};
+use dbflux_components::tokens::Spacing;
 use gpui::*;
 use gpui_component::ActiveTheme;
 

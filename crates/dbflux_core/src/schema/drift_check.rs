@@ -7,8 +7,9 @@ use crate::schema::{
     query_parser::QueryTableRef,
 };
 
-/// Key used to address an entry in `ConnectedProfile::table_details`.
-pub type TableKey = (String, String);
+/// Key used to address an entry in `ConnectedProfile::table_details`:
+/// `(database, schema, table)`.
+pub type TableKey = (String, Option<String>, String);
 
 /// Outcome returned by [`check_schema_drift`].
 pub enum DriftOutcome {
@@ -31,8 +32,11 @@ pub enum DriftOutcome {
 /// per-table outcome. Called from inside the blocking background task so its
 /// I/O-free path is always unit-testable.
 ///
-/// Returns `None` when the two snapshots are fingerprint-identical (no drift).
-/// Returns `Some(changes)` when they differ.
+/// Returns `None` when the two snapshots are fingerprint-identical (no drift),
+/// or when the fingerprints differ but the diff yields no reportable change
+/// (orderings and other driver noise the diff intentionally ignores). A drift
+/// modal with an empty change list would tell the user nothing actionable.
+/// Returns `Some(changes)` when there is at least one reportable change.
 pub fn check_drift_sync(
     cached: &TableInfo,
     fresh: &TableInfo,
@@ -44,7 +48,56 @@ pub fn check_drift_sync(
         return None;
     }
 
-    Some(diff_table_info(cached, fresh))
+    let changes = diff_table_info(cached, fresh);
+    if changes.is_empty() {
+        return None;
+    }
+
+    Some(changes)
+}
+
+/// Locates the cached entry for a referenced table. An explicit query
+/// qualifier addresses exactly one schema slot; an unqualified reference
+/// prefers the caller's default schema, then a schema-less entry, then falls
+/// back to the (deterministically smallest) schema that has the table cached —
+/// preserving the pre-schema-keyed behavior where a lone entry was found
+/// regardless of which schema populated it.
+fn find_cached_entry<'a>(
+    table_details: &'a std::collections::HashMap<TableKey, TableInfo>,
+    database: &str,
+    explicit_schema: Option<&str>,
+    table: &str,
+    default_schema: Option<&str>,
+) -> Option<(&'a TableKey, &'a TableInfo)> {
+    if let Some(schema) = explicit_schema {
+        let key: TableKey = (
+            database.to_string(),
+            Some(schema.to_string()),
+            table.to_string(),
+        );
+        return table_details.get_key_value(&key);
+    }
+
+    if let Some(schema) = default_schema {
+        let key: TableKey = (
+            database.to_string(),
+            Some(schema.to_string()),
+            table.to_string(),
+        );
+        if let Some(entry) = table_details.get_key_value(&key) {
+            return Some(entry);
+        }
+    }
+
+    let schemaless: TableKey = (database.to_string(), None, table.to_string());
+    if let Some(entry) = table_details.get_key_value(&schemaless) {
+        return Some(entry);
+    }
+
+    table_details
+        .iter()
+        .filter(|(key, _)| key.0 == database && key.2 == table)
+        .min_by(|(a, _), (b, _)| a.1.cmp(&b.1))
 }
 
 /// Check whether any tables referenced by `query` have drifted since they were
@@ -90,7 +143,7 @@ pub fn check_drift_sync(
 ///   "Continue with stale", NOT updating the cache.
 pub fn check_schema_drift(
     connection: &Arc<dyn Connection>,
-    table_details: &std::collections::HashMap<(String, String), TableInfo>,
+    table_details: &std::collections::HashMap<TableKey, TableInfo>,
     query: &str,
     database: &str,
     default_schema: Option<&str>,
@@ -106,8 +159,15 @@ pub fn check_schema_drift(
     for table_ref in &table_refs {
         let table_name = &table_ref.table;
         let effective_db = table_ref.database.as_deref().unwrap_or(database);
-        let cache_key: TableKey = (effective_db.to_string(), table_name.clone());
-        let cached = table_details.get(&cache_key);
+
+        let cached_entry = find_cached_entry(
+            table_details,
+            effective_db,
+            table_ref.schema.as_deref(),
+            table_name,
+            default_schema,
+        );
+        let cached = cached_entry.map(|(_, info)| info);
 
         let schema = table_ref
             .schema
@@ -139,16 +199,28 @@ pub fn check_schema_drift(
             continue;
         }
 
+        // Refresh writes go back under the exact key the entry was found at,
+        // so the update lands in the same slot; a first encounter is keyed by
+        // the schema the fresh fetch actually resolved to.
+        let refresh_key: TableKey = match cached_entry {
+            Some((key, _)) => key.clone(),
+            None => (
+                effective_db.to_string(),
+                fresh.schema.clone().or_else(|| Some(schema.to_string())),
+                table_name.clone(),
+            ),
+        };
+
         match cached {
             None => {
                 // First encounter — populate cache silently, no drift to report.
-                refreshes.push((cache_key, fresh));
+                refreshes.push((refresh_key, fresh));
             }
 
             Some(cached) => match check_drift_sync(cached, &fresh) {
                 None => {
                     // No drift — schedule transparent cache refresh.
-                    refreshes.push((cache_key, fresh));
+                    refreshes.push((refresh_key, fresh));
                 }
 
                 Some(changes) => {
@@ -220,6 +292,36 @@ mod tests {
         assert!(
             check_drift_sync(&table, &table).is_none(),
             "identical tables must produce no drift"
+        );
+    }
+
+    /// A fingerprint difference without a reportable diff must not surface a
+    /// drift modal; the modal would render an empty change table. Reordering
+    /// non-PK columns is such a case: the fingerprint is position-sensitive,
+    /// while the diff matches columns by name and reports nothing.
+    #[test]
+    fn outcome_no_drift_when_diff_yields_no_changes() {
+        let cached = make_table(
+            "users",
+            vec![
+                col("id", "integer", false, true),
+                col("email", "text", false, false),
+                col("name", "text", true, false),
+            ],
+        );
+
+        let fresh = make_table(
+            "users",
+            vec![
+                col("id", "integer", false, true),
+                col("name", "text", true, false),
+                col("email", "text", false, false),
+            ],
+        );
+
+        assert!(
+            check_drift_sync(&cached, &fresh).is_none(),
+            "a column reorder has no renderable diff and must not open the modal"
         );
     }
 
@@ -296,6 +398,7 @@ mod tests {
             display_name: "Mock".to_string(),
             description: "test".to_string(),
             category: crate::DatabaseCategory::Relational,
+            transfer_family: crate::TransferFamily::Sql,
             deployment_class: None,
             query_language: QueryLanguage::Sql,
             capabilities: DriverCapabilities::empty(),
@@ -311,6 +414,9 @@ mod tests {
             ssl_modes: None,
             ssl_cert_fields: None,
             classification_override: None,
+            default_chunk_size: None,
+            supports_lock_timeout: false,
+            editor_profile: None,
         }
     }
 
@@ -441,10 +547,14 @@ mod tests {
             vec![col("id", "integer", false, true)],
         );
 
-        let mut cache: std::collections::HashMap<(String, String), TableInfo> =
+        let mut cache: std::collections::HashMap<TableKey, TableInfo> =
             std::collections::HashMap::new();
         cache.insert(
-            ("app_db".to_string(), "events".to_string()),
+            (
+                "app_db".to_string(),
+                Some("analytics".to_string()),
+                "events".to_string(),
+            ),
             table_in_analytics.clone(),
         );
 
@@ -482,7 +592,7 @@ mod tests {
     /// to the caller-supplied default schema (the editor's toolbar selection).
     #[test]
     fn default_schema_used_when_cache_is_empty_and_query_unqualified() {
-        let cache: std::collections::HashMap<(String, String), TableInfo> =
+        let cache: std::collections::HashMap<TableKey, TableInfo> =
             std::collections::HashMap::new();
 
         let table = make_table_in(
@@ -537,10 +647,10 @@ mod tests {
         );
         cached_without_schema.schema = None;
 
-        let mut cache: std::collections::HashMap<(String, String), TableInfo> =
+        let mut cache: std::collections::HashMap<TableKey, TableInfo> =
             std::collections::HashMap::new();
         cache.insert(
-            ("db".to_string(), "tbl_v".to_string()),
+            ("db".to_string(), None, "tbl_v".to_string()),
             cached_without_schema,
         );
 
@@ -572,7 +682,7 @@ mod tests {
     /// columns" and stop trying to fetch real data.
     #[test]
     fn empty_fresh_columns_skipped_on_first_encounter() {
-        let cache: std::collections::HashMap<(String, String), TableInfo> =
+        let cache: std::collections::HashMap<TableKey, TableInfo> =
             std::collections::HashMap::new();
 
         let driver: Arc<dyn Connection> = Arc::new(MockDriver::new(vec![QueryTableRef {
@@ -613,10 +723,14 @@ mod tests {
         let table_in_public =
             make_table_in("public", "tbl_v", vec![col("id", "bigint", false, true)]);
 
-        let mut cache: std::collections::HashMap<(String, String), TableInfo> =
+        let mut cache: std::collections::HashMap<TableKey, TableInfo> =
             std::collections::HashMap::new();
         cache.insert(
-            ("db".to_string(), "tbl_v".to_string()),
+            (
+                "db".to_string(),
+                Some("analytics".to_string()),
+                "tbl_v".to_string(),
+            ),
             table_in_analytics.clone(),
         );
 

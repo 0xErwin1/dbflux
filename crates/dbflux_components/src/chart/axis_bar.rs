@@ -16,11 +16,13 @@
 
 use gpui::prelude::*;
 use gpui::{
-    Anchor, AnyElement, App, ElementId, MouseButton, SharedString, Window, anchored, deferred, div,
+    AnyElement, App, Anchor, ElementId, MouseButton, SharedString, Window, anchored, deferred, div,
     point, px,
 };
 
 use crate::chart::spec::{AggKind, BindingSpec};
+use crate::semantic::ChartColors;
+use crate::tokens::{ChartGeometry, Spacing};
 use dbflux_core::{ColumnKind, ColumnMeta};
 
 /// Identifies which AxisBar pill is currently open (showing its picker).
@@ -61,6 +63,7 @@ pub fn axis_bar_element<FPill, FX, FY, FGroup, FAgg>(
     bindings: &BindingSpec,
     columns: &[ColumnMeta],
     open_pill: Option<AxisPill>,
+    colors: &ChartColors,
     on_pill_click: FPill,
     on_x_select: FX,
     on_y_toggle: FY,
@@ -122,7 +125,7 @@ where
     // X pill
     let x_pill = {
         let handler = on_pill_click.clone();
-        pill_element("axis-pill-x", "X", x_label, x_open, move |w, cx| {
+        pill_element("axis-pill-x", "X", x_label, x_open, colors, move |w, cx| {
             handler(AxisPill::X, w, cx)
         })
     };
@@ -146,6 +149,7 @@ where
                 "axis-picker-x",
                 x_candidates,
                 Some(bindings.x),
+                colors,
                 move |col_idx, w, cx| on_x_select(col_idx, w, cx),
             )
             .into_any_element(),
@@ -157,7 +161,7 @@ where
     // Y pill
     let y_pill = {
         let handler = on_pill_click.clone();
-        pill_element("axis-pill-y", "Y", y_label, y_open, move |w, cx| {
+        pill_element("axis-pill-y", "Y", y_label, y_open, colors, move |w, cx| {
             handler(AxisPill::Y, w, cx)
         })
     };
@@ -178,6 +182,7 @@ where
             y_picker_element(
                 "axis-picker-y",
                 y_candidates,
+                colors,
                 move |col_idx, checked, w, cx| {
                     on_y_toggle(col_idx, checked, w, cx);
                 },
@@ -196,6 +201,7 @@ where
             "Group",
             group_label,
             group_open,
+            colors,
             move |w, cx| handler(AxisPill::Group, w, cx),
         )
     };
@@ -220,6 +226,7 @@ where
                 "axis-picker-group",
                 group_candidates,
                 current,
+                colors,
                 move |sel, w, cx| on_group_select(sel, w, cx),
             )
             .into_any_element(),
@@ -231,9 +238,14 @@ where
     // Agg pill
     let agg_pill = {
         let handler = on_pill_click.clone();
-        pill_element("axis-pill-agg", "Agg", agg_label, agg_open, move |w, cx| {
-            handler(AxisPill::Agg, w, cx)
-        })
+        pill_element(
+            "axis-pill-agg",
+            "Agg",
+            agg_label,
+            agg_open,
+            colors,
+            move |w, cx| handler(AxisPill::Agg, w, cx),
+        )
     };
 
     // Agg picker (enum dropdown)
@@ -248,9 +260,15 @@ where
         let current = bindings.aggregation;
 
         Some(
-            agg_picker_element("axis-picker-agg", agg_kinds, current, move |kind, w, cx| {
-                on_agg_select(kind, w, cx);
-            })
+            agg_picker_element(
+                "axis-picker-agg",
+                agg_kinds,
+                current,
+                colors,
+                move |kind, w, cx| {
+                    on_agg_select(kind, w, cx);
+                },
+            )
             .into_any_element(),
         )
     } else {
@@ -262,9 +280,9 @@ where
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(4.0))
-        .px(px(8.0))
-        .py(px(2.0))
+        .gap(Spacing::XS)
+        .px(Spacing::SM)
+        .py(ChartGeometry::ACCENT_STRIPE)
         .child(pill_group("axis-x-group", x_pill, x_picker))
         .child(pill_group("axis-y-group", y_pill, y_picker))
         .child(pill_group("axis-group-group", group_pill, group_picker))
@@ -284,38 +302,54 @@ fn pill_element(
     role: &'static str,
     value: SharedString,
     active: bool,
+    colors: &ChartColors,
     on_click: impl Fn(&mut Window, &mut App) + Send + Sync + 'static,
 ) -> impl IntoElement {
-    let border_alpha = if active { 0.6_f32 } else { 0.18 };
+    // Active pills get a more opaque border; inactive use the standard pill_border.
+    // Expressed as an alpha override on the pill_border hue/sat/lum so the
+    // on-Light theme border color still follows the role.
+    let border_color = if active {
+        gpui::Hsla {
+            a: 0.6,
+            ..colors.pill_border
+        }
+    } else {
+        colors.pill_border
+    };
+    let bg_color = if active {
+        colors.pill_bg
+    } else {
+        colors.hover_bg
+    };
 
     div()
         .id(id.into())
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(3.0))
-        .px(px(6.0))
-        .py(px(2.0))
-        .rounded(px(4.0))
+        .gap(ChartGeometry::TICK_GAP)
+        .px(Spacing::XXS)
+        .py(ChartGeometry::ACCENT_STRIPE)
+        .rounded(Spacing::XS)
         .border_1()
-        .border_color(gpui::hsla(0.0, 0.0, 1.0, border_alpha))
-        .bg(gpui::hsla(0.0, 0.0, 1.0, if active { 0.08 } else { 0.04 }))
+        .border_color(border_color)
+        .bg(bg_color)
         .cursor_pointer()
-        .hover(|s| s.bg(gpui::hsla(0.0, 0.0, 1.0, 0.10)))
+        .hover(|s| s.bg(colors.hover_bg))
         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
             on_click(window, cx);
         })
         .child(
             div()
-                .text_size(px(10.0))
+                .text_size(ChartGeometry::FONT_TINY)
                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(gpui::hsla(0.0, 0.0, 0.5, 1.0))
+                .text_color(colors.label_fg)
                 .child(SharedString::from(role)),
         )
         .child(
             div()
-                .text_size(px(11.0))
-                .text_color(gpui::hsla(0.0, 0.0, 0.9, 1.0))
+                .text_size(ChartGeometry::FONT_LABEL)
+                .text_color(colors.value_fg)
                 .child(value),
         )
 }
@@ -335,7 +369,7 @@ fn pill_group(
             deferred(
                 anchored()
                     .anchor(Anchor::TopLeft)
-                    .offset(point(px(0.0), px(24.0)))
+                    .offset(point(px(0.0), Spacing::XL))
                     .snap_to_window()
                     .child(picker_el),
             )
@@ -351,6 +385,7 @@ fn column_picker_element<F>(
     id: impl Into<ElementId>,
     candidates: Vec<(usize, SharedString)>,
     selected: Option<usize>,
+    colors: &ChartColors,
     on_select: F,
 ) -> impl IntoElement
 where
@@ -361,38 +396,41 @@ where
         .map(|(col_idx, label)| {
             let is_selected = selected == Some(col_idx);
             let handler = on_select.clone();
+            let hover_bg = colors.hover_bg;
+            let value_fg = colors.value_fg;
 
             div()
                 .id(ElementId::Name(format!("col-pick-{}", col_idx).into()))
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(6.0))
-                .px(px(8.0))
-                .py(px(3.0))
+                .gap(Spacing::XXS)
+                .px(Spacing::SM)
+                .py(ChartGeometry::TICK_GAP)
                 .cursor_pointer()
-                .hover(|s| s.bg(gpui::hsla(0.0, 0.0, 1.0, 0.06)))
+                .hover(move |s| s.bg(hover_bg))
                 .when(is_selected, |d| d.font_weight(gpui::FontWeight::MEDIUM))
                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                     handler(col_idx, window, cx);
                 })
                 .child(
                     div()
-                        .text_size(px(11.0))
-                        .text_color(gpui::hsla(0.0, 0.0, 0.9, 1.0))
+                        .text_size(ChartGeometry::FONT_LABEL)
+                        .text_color(value_fg)
                         .child(label),
                 )
                 .into_any_element()
         })
         .collect();
 
-    picker_container(id, rows)
+    picker_container(id, rows, colors)
 }
 
 /// A multi-select Y-column picker with one checkbox row per candidate.
 fn y_picker_element<F>(
     id: impl Into<ElementId>,
     candidates: Vec<(usize, SharedString, bool)>,
+    colors: &ChartColors,
     on_toggle: F,
 ) -> impl IntoElement
 where
@@ -402,45 +440,49 @@ where
         .into_iter()
         .map(|(col_idx, label, checked)| {
             let handler = on_toggle.clone();
+            let hover_bg = colors.hover_bg;
+            let pill_border = colors.pill_border;
+            let checkbox_checked = colors.checkbox_checked;
+            let value_fg = colors.value_fg;
 
             div()
                 .id(ElementId::Name(format!("y-pick-{}", col_idx).into()))
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(6.0))
-                .px(px(8.0))
-                .py(px(3.0))
+                .gap(Spacing::XXS)
+                .px(Spacing::SM)
+                .py(ChartGeometry::TICK_GAP)
                 .cursor_pointer()
-                .hover(|s| s.bg(gpui::hsla(0.0, 0.0, 1.0, 0.06)))
+                .hover(move |s| s.bg(hover_bg))
                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                     handler(col_idx, !checked, window, cx);
                 })
                 .child(
                     // Checkbox indicator
                     div()
-                        .w(px(10.0))
-                        .h(px(10.0))
-                        .rounded(px(2.0))
+                        .w(ChartGeometry::SWATCH)
+                        .h(ChartGeometry::SWATCH)
+                        .rounded(ChartGeometry::ACCENT_STRIPE)
                         .border_1()
-                        .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.3))
+                        .border_color(pill_border)
                         .bg(if checked {
-                            gpui::hsla(0.55, 0.7, 0.5, 1.0)
+                            checkbox_checked
                         } else {
-                            gpui::hsla(0.0, 0.0, 0.0, 0.0)
+                            gpui::transparent_black()
                         }),
                 )
                 .child(
                     div()
-                        .text_size(px(11.0))
-                        .text_color(gpui::hsla(0.0, 0.0, 0.9, 1.0))
+                        .text_size(ChartGeometry::FONT_LABEL)
+                        .text_color(value_fg)
                         .child(label),
                 )
                 .into_any_element()
         })
         .collect();
 
-    picker_container(id, rows)
+    picker_container(id, rows, colors)
 }
 
 /// A single-select picker for group-by column (includes a "none" option).
@@ -448,6 +490,7 @@ fn group_picker_element<F>(
     id: impl Into<ElementId>,
     candidates: Vec<(Option<usize>, SharedString)>,
     selected: Option<usize>,
+    colors: &ChartColors,
     on_select: F,
 ) -> impl IntoElement
 where
@@ -458,6 +501,8 @@ where
         .map(|(col_idx_opt, label)| {
             let is_selected = col_idx_opt == selected;
             let handler = on_select.clone();
+            let hover_bg = colors.hover_bg;
+            let value_fg = colors.value_fg;
 
             div()
                 .id(ElementId::Name(
@@ -472,26 +517,26 @@ where
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(6.0))
-                .px(px(8.0))
-                .py(px(3.0))
+                .gap(Spacing::XXS)
+                .px(Spacing::SM)
+                .py(ChartGeometry::TICK_GAP)
                 .cursor_pointer()
-                .hover(|s| s.bg(gpui::hsla(0.0, 0.0, 1.0, 0.06)))
+                .hover(move |s| s.bg(hover_bg))
                 .when(is_selected, |d| d.font_weight(gpui::FontWeight::MEDIUM))
                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                     handler(col_idx_opt, window, cx);
                 })
                 .child(
                     div()
-                        .text_size(px(11.0))
-                        .text_color(gpui::hsla(0.0, 0.0, 0.9, 1.0))
+                        .text_size(ChartGeometry::FONT_LABEL)
+                        .text_color(value_fg)
                         .child(label),
                 )
                 .into_any_element()
         })
         .collect();
 
-    picker_container(id, rows)
+    picker_container(id, rows, colors)
 }
 
 /// A single-select picker for `AggKind`.
@@ -499,6 +544,7 @@ fn agg_picker_element<F>(
     id: impl Into<ElementId>,
     agg_kinds: Vec<(AggKind, SharedString)>,
     current: AggKind,
+    colors: &ChartColors,
     on_select: F,
 ) -> impl IntoElement
 where
@@ -509,47 +555,53 @@ where
         .map(|(kind, label)| {
             let is_selected = kind == current;
             let handler = on_select.clone();
+            let hover_bg = colors.hover_bg;
+            let value_fg = colors.value_fg;
 
             div()
                 .id(ElementId::Name(format!("agg-pick-{:?}", kind).into()))
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(6.0))
-                .px(px(8.0))
-                .py(px(3.0))
+                .gap(Spacing::XXS)
+                .px(Spacing::SM)
+                .py(ChartGeometry::TICK_GAP)
                 .cursor_pointer()
-                .hover(|s| s.bg(gpui::hsla(0.0, 0.0, 1.0, 0.06)))
+                .hover(move |s| s.bg(hover_bg))
                 .when(is_selected, |d| d.font_weight(gpui::FontWeight::MEDIUM))
                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                     handler(kind, window, cx);
                 })
                 .child(
                     div()
-                        .text_size(px(11.0))
-                        .text_color(gpui::hsla(0.0, 0.0, 0.9, 1.0))
+                        .text_size(ChartGeometry::FONT_LABEL)
+                        .text_color(value_fg)
                         .child(label),
                 )
                 .into_any_element()
         })
         .collect();
 
-    picker_container(id, rows)
+    picker_container(id, rows, colors)
 }
 
 /// Shared container styling for picker dropdowns.
-fn picker_container(id: impl Into<ElementId>, rows: Vec<AnyElement>) -> impl IntoElement {
+fn picker_container(
+    id: impl Into<ElementId>,
+    rows: Vec<AnyElement>,
+    colors: &ChartColors,
+) -> impl IntoElement {
     div()
         .id(id.into())
         .flex()
         .flex_col()
-        .min_w(px(140.0))
-        .bg(gpui::hsla(0.0, 0.0, 0.12, 1.0))
+        .min_w(ChartGeometry::DROPDOWN_PANEL)
+        .bg(colors.panel_bg)
         .border_1()
-        .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.12))
-        .rounded(px(4.0))
+        .border_color(colors.pill_border)
+        .rounded(Spacing::XS)
         .shadow_lg()
-        .py(px(2.0))
+        .py(ChartGeometry::ACCENT_STRIPE)
         .occlude()
         .children(rows)
 }

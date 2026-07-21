@@ -54,6 +54,7 @@ fn postgresql_metadata() -> ConnectionMetadata {
         supports_ctes: true,
         supports_explain: true,
         max_query_parameters: 32767,
+        order_by_mode: dbflux_core::OrderByMode::AnyColumns,
         max_order_by_columns: 0,
         max_group_by_columns: 0,
     };
@@ -112,6 +113,7 @@ fn mongodb_metadata() -> ConnectionMetadata {
         supports_ctes: false,
         supports_explain: false,
         max_query_parameters: 0,
+        order_by_mode: dbflux_core::OrderByMode::AnyColumns,
         max_order_by_columns: 0,
         max_group_by_columns: 0,
     };

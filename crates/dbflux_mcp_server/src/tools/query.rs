@@ -4,10 +4,7 @@ use dbflux_core::{
     Connection, ExplainRequest, SemanticRequest, TableRef, classify_query_for_governance,
 };
 use rmcp::{
-    ErrorData,
-    handler::server::wrapper::Parameters,
-    model::{CallToolResult, Content},
-    schemars::JsonSchema,
+    ErrorData, handler::server::wrapper::Parameters, model::CallToolResult, schemars::JsonSchema,
     tool, tool_router,
 };
 use serde::Deserialize;
@@ -62,11 +59,14 @@ impl DbFluxServer {
         let connection_id = params.connection_id.clone();
 
         self.governance
-            .authorize_and_execute(
+            .authorize_and_execute_audited(
                 "explain_query",
                 Some(&params.connection_id),
                 ExecutionClassification::Read,
                 move || async move {
+                    use crate::governance::AuditDetails;
+
+                    let audit_sql = sql.clone();
                     let result = Self::explain_query_impl(
                         state,
                         &connection_id,
@@ -77,9 +77,10 @@ impl DbFluxServer {
                     .await
                     .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok((
+                        CallToolResult::success(vec![to_json_content(&result)?]),
+                        AuditDetails { query: audit_sql },
+                    ))
                 },
             )
             .await
@@ -98,11 +99,14 @@ impl DbFluxServer {
         let connection_id = params.connection_id.clone();
 
         self.governance
-            .authorize_and_execute(
+            .authorize_and_execute_audited(
                 "preview_mutation",
                 Some(&params.connection_id),
                 ExecutionClassification::Read,
                 move || async move {
+                    use crate::governance::AuditDetails;
+
+                    let audit_sql = sql.clone();
                     let result = Self::preview_mutation_impl(
                         state,
                         &connection_id,
@@ -112,9 +116,12 @@ impl DbFluxServer {
                     .await
                     .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    Ok((
+                        CallToolResult::success(vec![to_json_content(&result)?]),
+                        AuditDetails {
+                            query: Some(audit_sql),
+                        },
+                    ))
                 },
             )
             .await
@@ -264,6 +271,7 @@ mod tests {
         display_name: "Test".into(),
         description: "Test driver".into(),
         category: dbflux_core::DatabaseCategory::Relational,
+        transfer_family: dbflux_core::TransferFamily::Sql,
         deployment_class: None,
         query_language: QueryLanguage::Sql,
         capabilities: DriverCapabilities::empty(),
@@ -286,6 +294,9 @@ mod tests {
         ssl_modes: None,
         ssl_cert_fields: None,
         classification_override: None,
+        default_chunk_size: None,
+        supports_lock_timeout: false,
+        editor_profile: None,
     });
 
     struct TestConnection {
