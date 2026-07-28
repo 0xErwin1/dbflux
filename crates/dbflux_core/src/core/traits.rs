@@ -886,6 +886,14 @@ pub trait ObjectStoreConnection: Send + Sync {
         bucket: &str,
         options: BucketCreateOptions,
     ) -> Result<BucketCreateOutcome, DbError>;
+
+    /// Delete an empty bucket. S3's `DeleteBucket` API already rejects
+    /// non-empty buckets (`BucketNotEmpty`), so the driver relies on that
+    /// server-side guarantee rather than re-checking emptiness itself. The UI
+    /// performs its own emptiness check (via `list_objects`) before even
+    /// offering this action, so a `BucketNotEmpty` error here should be rare
+    /// in practice — see Amendment A of the design (buckets table document).
+    fn delete_bucket(&self, bucket: &str) -> Result<(), DbError>;
 }
 
 /// Active database connection.
@@ -2198,6 +2206,10 @@ mod tests {
             _options: BucketCreateOptions,
         ) -> Result<BucketCreateOutcome, DbError> {
             Ok(BucketCreateOutcome::default())
+        }
+
+        fn delete_bucket(&self, _bucket: &str) -> Result<(), DbError> {
+            Ok(())
         }
     }
 
