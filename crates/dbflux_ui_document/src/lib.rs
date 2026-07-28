@@ -54,7 +54,7 @@ pub use governance::McpApprovalsView;
 pub use dedup::DocumentKey;
 pub use handle::DocumentEvent;
 pub use key_value::KeyValueDocument;
-pub use pane::{BoxedDocEventCallback, CodeSessionTabSnapshot, PaneHandle};
+pub use pane::{BoxedDocEventCallback, CodeSessionTabSnapshot, PaneHandle, StatusSegment};
 pub use result_view::ResultViewMode;
 pub use tab_bar::{TabBar, TabBarEvent};
 pub use tab_manager::{Tab, TabManager, TabManagerEvent};

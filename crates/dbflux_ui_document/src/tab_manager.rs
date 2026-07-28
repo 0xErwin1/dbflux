@@ -180,6 +180,14 @@ impl Tab {
             Tab::Pane(p) => p.session_tab_snapshot.as_ref().and_then(|f| f(cx)),
         }
     }
+
+    /// Returns this tab's contributed status-bar segments. Empty for
+    /// documents that do not populate `PaneHandle::status_segments`.
+    pub fn status_segments(&self, cx: &App) -> Vec<super::pane::StatusSegment> {
+        match self {
+            Tab::Pane(p) => p.status_segments(cx),
+        }
+    }
 }
 
 /// Manages open documents (tabs) in the workspace.

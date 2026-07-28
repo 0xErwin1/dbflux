@@ -1,18 +1,22 @@
 use crate::app::{AppStateChanged, AppStateEntity};
+use crate::ui::document::{TabManager, TabManagerEvent};
 use dbflux_components::primitives::{Icon, StatusDot, StatusDotVariant};
 use dbflux_components::semantic::BannerColors as SemBannerColors;
 use dbflux_components::theme::ghost_border_color;
 use dbflux_components::tokens::{Anim, ChromeColors, FontSizes, Heights};
 use dbflux_components::typography::{MonoCaption, MonoMeta};
+use dbflux_ui_document::StatusSegment;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::tooltip::Tooltip;
 use std::time::Duration;
 
 pub struct ToggleTasksPanel;
 
 pub struct StatusBar {
     app_state: Entity<AppStateEntity>,
+    tab_manager: Entity<TabManager>,
     /// Periodic notify task that drives the 100 ms busy-pulse animation.
     /// Present only while there are running tasks. Dropping it stops the loop.
     _pulse_task: Option<Task<()>>,
@@ -27,11 +31,21 @@ impl EventEmitter<ToggleTasksPanel> for StatusBar {}
 impl StatusBar {
     pub fn new(
         app_state: Entity<AppStateEntity>,
+        tab_manager: Entity<TabManager>,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
             this.on_app_state_changed(cx);
+        })
+        .detach();
+
+        // The active tab's contributed status segments (DEC-23) can change on
+        // activation or on document-internal updates; re-render generically
+        // on any tab-manager event rather than tracking each document's
+        // segment-affecting state individually.
+        cx.subscribe(&tab_manager, |_this, _, _: &TabManagerEvent, cx| {
+            cx.notify();
         })
         .detach();
 
@@ -41,6 +55,7 @@ impl StatusBar {
 
         Self {
             app_state,
+            tab_manager,
             _pulse_task: None,
             pulse_visible: true,
             _timer: Some(timer),
@@ -215,6 +230,16 @@ impl Render for StatusBar {
         let divider_color = ChromeColors::ghost_border();
         let unread = app_state.unread_error_count;
 
+        // Segments contributed by the active document (DEC-23) — e.g. engine
+        // + region, bucket path, key count, last-operation timing. Empty for
+        // every document that does not populate `PaneHandle::status_segments`.
+        let status_segments: Vec<StatusSegment> = self
+            .tab_manager
+            .read(cx)
+            .active_tab()
+            .map(|tab| tab.status_segments(cx))
+            .unwrap_or_default();
+
         div()
             .flex()
             .items_center()
@@ -277,7 +302,32 @@ impl Render for StatusBar {
                                 .h(px(22.0))
                                 .child(Self::status_text(Self::format_completed_task(&task))),
                         )
-                    }),
+                    })
+                    // Segments contributed by the active document, generically —
+                    // StatusBar never branches on document or driver type.
+                    .children(status_segments.into_iter().enumerate().flat_map(
+                        |(index, segment)| {
+                            let mut el = div()
+                                .id(ElementId::Name(format!("status-segment-{index}").into()))
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .px(px(10.0))
+                                .h(px(22.0))
+                                .child(Self::metadata_text(segment.text));
+
+                            if let Some(tooltip) = segment.tooltip {
+                                el = el.tooltip(move |window, cx| {
+                                    Tooltip::new(tooltip.clone()).build(window, cx)
+                                });
+                            }
+
+                            [
+                                Self::vertical_divider(divider_color).into_any_element(),
+                                el.into_any_element(),
+                            ]
+                        },
+                    )),
             )
             // Right section: error badge (when present) + tasks toggle
             .child(

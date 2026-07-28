@@ -19,6 +19,19 @@ use gpui::{AnyElement, App, Subscription, Window};
 /// Type-erased callback for document events, used by the `subscribe` closure.
 pub type BoxedDocEventCallback = Box<dyn Fn(&DocumentEvent, &mut App) + 'static>;
 
+/// A single document-contributed status-bar segment.
+///
+/// Modeled directly on `dbflux_components::result_panel::ToolbarSegment` —
+/// documents contribute chrome (here, status-bar text) without the host
+/// (`StatusBar`) branching on document type. `StatusBar` renders every
+/// segment returned by the active tab's `PaneHandle::status_segments()`
+/// generically, separated by dividers.
+#[derive(Clone, Debug)]
+pub struct StatusSegment {
+    pub text: gpui::SharedString,
+    pub tooltip: Option<gpui::SharedString>,
+}
+
 /// A snapshot of a code document's session state, used to reconstruct tabs
 /// on next launch and to write the session manifest.
 ///
@@ -107,6 +120,12 @@ pub struct PaneHandle {
     /// user (× button or ESC). Documents that own inspector state clear it
     /// here so the rail stays closed on subsequent tab activations.
     pub mark_inspector_closed: Option<Box<dyn Fn(&mut App)>>,
+
+    /// Returns the document's contributed status-bar segments (e.g. engine +
+    /// region, bucket path, key count, last-operation timing). `None` means
+    /// the document does not contribute any — `StatusBar` renders nothing
+    /// extra for it, unchanged from today's behavior.
+    pub status_segments: Option<Box<dyn Fn(&App) -> Vec<StatusSegment>>>,
 }
 
 impl PaneHandle {
@@ -159,6 +178,7 @@ impl PaneHandle {
             is_file_backed_empty: None,
             session_tab_snapshot: None,
             mark_inspector_closed: None,
+            status_segments: None,
         }
     }
 
@@ -254,6 +274,18 @@ impl PaneHandle {
         F: Fn(&DocumentEvent, &mut App) + 'static,
     {
         (self.subscribe)(cx, Box::new(callback))
+    }
+
+    /// Returns the document's contributed status-bar segments.
+    ///
+    /// Returns an empty `Vec` for every document that does not populate
+    /// `status_segments` — the default, unchanged behavior for existing
+    /// documents.
+    pub fn status_segments(&self, cx: &App) -> Vec<StatusSegment> {
+        self.status_segments
+            .as_ref()
+            .map(|f| f(cx))
+            .unwrap_or_default()
     }
 }
 
