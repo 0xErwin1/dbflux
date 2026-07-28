@@ -56,6 +56,15 @@ impl ObjectBrowserDocument {
         self.load_prefix_page(prefix, token, cx);
     }
 
+    /// Refresh: drops the current level's cached entries and reloads its
+    /// first page, so a stale listing is never merged with fresh results.
+    pub fn reload_current_prefix(&mut self, cx: &mut Context<Self>) {
+        let prefix = self.tree.current_prefix.clone();
+
+        self.tree.reset_level(&prefix);
+        self.expand_prefix(prefix, cx);
+    }
+
     fn load_prefix_page(
         &mut self,
         prefix: String,

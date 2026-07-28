@@ -1,5 +1,6 @@
 mod data;
 mod pane;
+mod render;
 pub mod tree;
 
 pub use tree::{
@@ -11,10 +12,27 @@ use super::handle::DocumentEvent;
 use super::types::{DocumentId, DocumentState};
 use crate::buckets_table::OperationTiming;
 use dbflux_app::keymap::{Command, ContextId};
+use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::RefreshPolicy;
 use dbflux_ui_base::AppStateEntity;
 use gpui::*;
 use uuid::Uuid;
+
+/// Which part of the document currently owns keyboard input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObjectBrowserFocusMode {
+    Listing,
+    Filter,
+}
+
+/// One rendered listing row, flattened from either the current prefix level
+/// (per-level pagination) or the tree-mode walk (`depth` drives indentation).
+#[derive(Clone, Debug, PartialEq)]
+pub struct VisibleRow {
+    pub depth: usize,
+    pub parent_prefix: String,
+    pub entry: ObjectTreeEntry,
+}
 
 /// Object browser opened for a single bucket under an object-storage
 /// connection (routed from `BucketsTableDocument`'s Enter-on-row and the
@@ -23,8 +41,8 @@ use uuid::Uuid;
 /// The tree/pagination state lives in `tree: ObjectTree` (`tree.rs`, a pure
 /// data model); this entity owns the GPUI plumbing — background loading via
 /// `object_store_api()`, `cx.spawn`, and `report_error_async` — layered on
-/// top of it in `data.rs`. Rendering (breadcrumb bar, rows, toolbar) lands in
-/// a later batch; this skeleton renders a minimal placeholder.
+/// top of it in `data.rs`, and the breadcrumb/toolbar/listing layout lives in
+/// `render.rs`.
 pub struct ObjectBrowserDocument {
     id: DocumentId,
     title: String,
@@ -38,6 +56,12 @@ pub struct ObjectBrowserDocument {
     last_error: Option<String>,
     tree: ObjectTree,
     last_operation: Option<OperationTiming>,
+    filter_input: Entity<InputState>,
+    focus_mode: ObjectBrowserFocusMode,
+    preview_key: Option<String>,
+    pending_upload: bool,
+    pending_new_folder: bool,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl EventEmitter<DocumentEvent> for ObjectBrowserDocument {}
@@ -47,10 +71,28 @@ impl ObjectBrowserDocument {
         profile_id: Uuid,
         bucket: String,
         app_state: Entity<AppStateEntity>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let tree = ObjectTree::new(bucket.clone());
+
+        let filter_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Filter this prefix…"));
+
+        let filter_subscription = cx.subscribe_in(
+            &filter_input,
+            window,
+            |this, input, event: &InputEvent, _window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let value = input.read(cx).value().to_string();
+                    let prefix = this.tree.current_prefix.clone();
+
+                    this.tree.set_filter(&prefix, value);
+                    this.clamp_selection();
+                    cx.notify();
+                }
+            },
+        );
 
         let mut doc = Self {
             id: DocumentId::new(),
@@ -65,6 +107,12 @@ impl ObjectBrowserDocument {
             last_error: None,
             tree,
             last_operation: None,
+            filter_input,
+            focus_mode: ObjectBrowserFocusMode::Listing,
+            preview_key: None,
+            pending_upload: false,
+            pending_new_folder: false,
+            _subscriptions: vec![filter_subscription],
         };
 
         doc.expand_prefix(String::new(), cx);
@@ -126,42 +174,248 @@ impl ObjectBrowserDocument {
 
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_handle.focus(window);
+        self.focus_mode = ObjectBrowserFocusMode::Listing;
         cx.notify();
     }
 
-    /// Minimal placeholder — the breadcrumb/row/toolbar layout lands in a
-    /// later batch. Shows the current prefix and a loading/error state so the
-    /// pending consumers wired in this batch (row activation, sidebar) have
-    /// something visible to land on.
-    fn render_placeholder(&self, cx: &Context<Self>) -> impl IntoElement {
-        use gpui_component::ActiveTheme;
+    /// Upload intent raised by the toolbar button, drained by the upload flow
+    /// owner using the same `pending_*` + `take()` convention the sibling
+    /// documents use for deferred modal opens.
+    pub fn take_pending_upload(&mut self) -> bool {
+        std::mem::take(&mut self.pending_upload)
+    }
 
-        let status = match &self.state {
-            DocumentState::Loading => "Loading…".to_string(),
-            DocumentState::Error => self
-                .last_error
-                .clone()
-                .unwrap_or_else(|| "Unknown error".to_string()),
-            _ => format!(
-                "s3://{}/{} — {} entries",
-                self.bucket,
-                self.tree.current_prefix,
-                self.tree
-                    .level(&self.tree.current_prefix)
-                    .map(|l| l.entries.len())
-                    .unwrap_or(0)
-            ),
+    /// Folder-creation intent raised by the toolbar button, drained by the
+    /// create-folder flow owner.
+    pub fn take_pending_new_folder(&mut self) -> bool {
+        std::mem::take(&mut self.pending_new_folder)
+    }
+
+    // -- Listing ---------------------------------------------------------
+
+    /// Rows currently rendered, in display order: the filtered entries of the
+    /// current prefix level, or the flattened tree-mode walk when tree mode
+    /// has produced rows.
+    pub(super) fn visible_rows(&self) -> Vec<VisibleRow> {
+        if self.tree.tree_mode.status == TreeModeStatus::Off {
+            return self
+                .tree
+                .filtered_entries(&self.tree.current_prefix)
+                .into_iter()
+                .map(|entry| VisibleRow {
+                    depth: 0,
+                    parent_prefix: self.tree.current_prefix.clone(),
+                    entry: entry.clone(),
+                })
+                .collect();
+        }
+
+        let filter = self
+            .tree
+            .level(&self.tree.current_prefix)
+            .map(|level| level.filter.trim().to_lowercase())
+            .unwrap_or_default();
+
+        self.tree
+            .tree_mode
+            .rows
+            .iter()
+            .filter(|row| {
+                filter.is_empty()
+                    || row
+                        .entry
+                        .display_name(&row.parent_prefix)
+                        .to_lowercase()
+                        .contains(&filter)
+            })
+            .map(|row| VisibleRow {
+                depth: row.depth,
+                parent_prefix: row.parent_prefix.clone(),
+                entry: row.entry.clone(),
+            })
+            .collect()
+    }
+
+    fn visible_node_ids(&self) -> Vec<ObjectTreeNodeId> {
+        self.visible_rows()
+            .iter()
+            .map(|row| row.entry.node_id())
+            .collect()
+    }
+
+    /// Drops the selection when the selected node is filtered out (or gone),
+    /// falling back to the first visible row so the cursor is never orphaned.
+    pub(super) fn clamp_selection(&mut self) {
+        let visible = self.visible_node_ids();
+
+        let still_visible = self
+            .tree
+            .selected
+            .as_ref()
+            .is_some_and(|selected| visible.iter().any(|candidate| candidate == selected));
+
+        if !still_visible {
+            self.tree.select(visible.first().cloned());
+        }
+    }
+
+    pub(super) fn select_node(&mut self, node_id: ObjectTreeNodeId, cx: &mut Context<Self>) {
+        self.tree.select(Some(node_id));
+        self.focus_mode = ObjectBrowserFocusMode::Listing;
+        cx.notify();
+    }
+
+    pub(super) fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let visible = self.visible_node_ids();
+
+        if visible.is_empty() {
+            return;
+        }
+
+        let current = self
+            .tree
+            .selected
+            .as_ref()
+            .and_then(|selected| visible.iter().position(|candidate| candidate == selected));
+
+        let next = match current {
+            Some(index) => (index as isize + delta).clamp(0, visible.len() as isize - 1) as usize,
+            None if delta >= 0 => 0,
+            None => visible.len() - 1,
         };
 
-        div()
-            .track_focus(&self.focus_handle)
-            .size_full()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .bg(cx.theme().background)
-            .child(status)
+        self.tree.select(visible.get(next).cloned());
+        self.focus_mode = ObjectBrowserFocusMode::Listing;
+        cx.notify();
+    }
+
+    fn select_edge(&mut self, last: bool, cx: &mut Context<Self>) {
+        let visible = self.visible_node_ids();
+
+        self.tree.select(if last {
+            visible.last().cloned()
+        } else {
+            visible.first().cloned()
+        });
+        self.focus_mode = ObjectBrowserFocusMode::Listing;
+        cx.notify();
+    }
+
+    // -- Navigation ------------------------------------------------------
+
+    /// Moves the listing to `prefix`, loading its first page when that level
+    /// has never been fetched, and syncing the filter box to the (per-level)
+    /// filter stored for the destination.
+    pub(super) fn navigate_to_prefix(
+        &mut self,
+        prefix: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.tree.navigate_into(prefix.clone());
+        self.preview_key = None;
+        self.focus_mode = ObjectBrowserFocusMode::Listing;
+
+        let filter = self
+            .tree
+            .level(&prefix)
+            .map(|level| level.filter.clone())
+            .unwrap_or_default();
+        self.filter_input
+            .update(cx, |input, cx| input.set_value(&filter, window, cx));
+
+        let needs_load = self
+            .tree
+            .level(&prefix)
+            .is_none_or(|level| level.state == PrefixLoadState::NotLoaded);
+
+        if needs_load {
+            self.expand_prefix(prefix, cx);
+        } else {
+            self.clamp_selection();
+            cx.notify();
+        }
+    }
+
+    pub(super) fn navigate_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.tree.current_prefix.is_empty() {
+            return;
+        }
+
+        self.tree.navigate_up();
+        let parent = self.tree.current_prefix.clone();
+
+        self.navigate_to_prefix(parent, window, cx);
+    }
+
+    /// Enter on a row: prefixes open as the new listing level, objects open
+    /// the preview pane.
+    pub(super) fn activate_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.tree.selected.clone() {
+            Some(ObjectTreeNodeId::Prefix(prefix)) => self.navigate_to_prefix(prefix, window, cx),
+            Some(ObjectTreeNodeId::Object(key)) => self.open_preview(key, cx),
+            None => {}
+        }
+    }
+
+    pub(super) fn open_preview(&mut self, key: String, cx: &mut Context<Self>) {
+        self.preview_key = Some(key);
+        self.focus_mode = ObjectBrowserFocusMode::Listing;
+        cx.notify();
+    }
+
+    pub(super) fn close_preview(&mut self, cx: &mut Context<Self>) {
+        self.preview_key = None;
+        cx.notify();
+    }
+
+    /// Space on a row: objects toggle the preview pane, prefixes fall back to
+    /// opening the level (there is nothing to preview for a folder).
+    fn toggle_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.tree.selected.clone() {
+            Some(ObjectTreeNodeId::Object(key)) if self.preview_key.as_deref() == Some(&key) => {
+                self.close_preview(cx)
+            }
+            Some(ObjectTreeNodeId::Object(key)) => self.open_preview(key, cx),
+            Some(ObjectTreeNodeId::Prefix(prefix)) => self.navigate_to_prefix(prefix, window, cx),
+            None => {}
+        }
+    }
+
+    pub(super) fn request_upload(&mut self, cx: &mut Context<Self>) {
+        self.pending_upload = true;
+        cx.notify();
+    }
+
+    pub(super) fn request_new_folder(&mut self, cx: &mut Context<Self>) {
+        self.pending_new_folder = true;
+        cx.notify();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn apply_page_for_test(
+        &mut self,
+        prefix: &str,
+        page: dbflux_core::ObjectListingPage,
+    ) {
+        self.tree.apply_page(prefix, page);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_last_operation_for_test(&mut self, timing: OperationTiming) {
+        self.last_operation = Some(timing);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn preview_key_for_test(&self) -> Option<&str> {
+        self.preview_key.as_deref()
+    }
+
+    fn focus_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_mode = ObjectBrowserFocusMode::Filter;
+        self.filter_input
+            .update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
     }
 
     pub fn dispatch_command(
@@ -171,11 +425,56 @@ impl ObjectBrowserDocument {
         cx: &mut Context<Self>,
     ) -> bool {
         match cmd {
+            Command::SelectNext => {
+                self.move_selection(1, cx);
+                true
+            }
+            Command::SelectPrev => {
+                self.move_selection(-1, cx);
+                true
+            }
+            Command::SelectFirst => {
+                self.select_edge(false, cx);
+                true
+            }
+            Command::SelectLast => {
+                self.select_edge(true, cx);
+                true
+            }
+            Command::Execute | Command::ColumnRight => {
+                self.activate_selected(window, cx);
+                true
+            }
+            Command::ExpandCollapse => {
+                self.toggle_preview(window, cx);
+                true
+            }
+            Command::ColumnLeft => {
+                if self.preview_key.is_some() {
+                    self.close_preview(cx);
+                } else {
+                    self.navigate_up(window, cx);
+                }
+                true
+            }
+            Command::ResultsAddRow => {
+                self.request_new_folder(cx);
+                true
+            }
             Command::RefreshSchema => {
-                self.expand_prefix(self.tree.current_prefix.clone(), cx);
+                self.reload_current_prefix(cx);
+                true
+            }
+            Command::FocusSearch | Command::FocusToolbar => {
+                self.focus_filter(window, cx);
                 true
             }
             Command::Cancel => {
+                if self.preview_key.is_some() {
+                    self.close_preview(cx);
+                }
+
+                self.focus_mode = ObjectBrowserFocusMode::Listing;
                 self.focus_handle.focus(window);
                 cx.notify();
                 true
@@ -185,8 +484,172 @@ impl ObjectBrowserDocument {
     }
 }
 
-impl Render for ObjectBrowserDocument {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.render_placeholder(cx)
+#[cfg(test)]
+mod tests {
+    // Deliberately narrow imports: `use super::*` would pull in the module's
+    // `gpui::*` glob, whose `test` attribute macro would shadow the plain
+    // `#[test]` attribute.
+    use super::{ObjectBrowserDocument, ObjectTreeNodeId};
+    use crate::buckets_table::OperationTiming;
+    use dbflux_core::{ObjectListingPage, ObjectSummary};
+
+    fn page(prefixes: &[&str], objects: &[&str]) -> ObjectListingPage {
+        ObjectListingPage {
+            objects: objects
+                .iter()
+                .map(|key| ObjectSummary {
+                    key: key.to_string(),
+                    size_bytes: 1024,
+                    storage_class: None,
+                    last_modified: None,
+                })
+                .collect(),
+            common_prefixes: prefixes.iter().map(|p| p.to_string()).collect(),
+            next_continuation_token: None,
+        }
+    }
+
+    /// T24: keyboard navigation walks the visible rows of the current level,
+    /// prefixes first, and clamps at both ends.
+    #[gpui::test]
+    fn selection_walks_the_visible_rows(cx: &mut gpui::TestAppContext) {
+        let doc = new_test_entity(cx);
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, cx| {
+                doc.apply_page_for_test("", page(&["logs/"], &["a.txt", "b.txt"]));
+                doc.move_selection(1, cx);
+            });
+        });
+
+        cx.update(|cx| {
+            assert_eq!(
+                doc.read(cx).tree.selected,
+                Some(ObjectTreeNodeId::Prefix("logs/".to_string()))
+            );
+        });
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, cx| {
+                doc.move_selection(5, cx);
+            });
+        });
+
+        cx.update(|cx| {
+            assert_eq!(
+                doc.read(cx).tree.selected,
+                Some(ObjectTreeNodeId::Object("b.txt".to_string()))
+            );
+        });
+    }
+
+    /// T24: the per-prefix filter narrows the rendered rows and drags the
+    /// cursor onto a row that is still visible.
+    #[gpui::test]
+    fn filter_narrows_the_rows_and_reclamps_the_selection(cx: &mut gpui::TestAppContext) {
+        let doc = new_test_entity(cx);
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, cx| {
+                doc.apply_page_for_test("", page(&[], &["alpha.txt", "beta.txt"]));
+                doc.select_node(ObjectTreeNodeId::Object("alpha.txt".to_string()), cx);
+                doc.tree.set_filter("", "beta".to_string());
+                doc.clamp_selection();
+            });
+        });
+
+        cx.update(|cx| {
+            let doc = doc.read(cx);
+            assert_eq!(doc.visible_rows().len(), 1);
+            assert_eq!(
+                doc.tree.selected,
+                Some(ObjectTreeNodeId::Object("beta.txt".to_string()))
+            );
+        });
+    }
+
+    /// T24: previewing an object opens the pane, and previewing the same
+    /// object again closes it.
+    #[gpui::test]
+    fn preview_opens_and_closes_for_the_selected_object(cx: &mut gpui::TestAppContext) {
+        let doc = new_test_entity(cx);
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, cx| {
+                doc.open_preview("logs/a.txt".to_string(), cx);
+            });
+        });
+
+        cx.update(|cx| {
+            assert_eq!(doc.read(cx).preview_key_for_test(), Some("logs/a.txt"));
+        });
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, cx| {
+                doc.close_preview(cx);
+            });
+        });
+
+        cx.update(|cx| {
+            assert_eq!(doc.read(cx).preview_key_for_test(), None);
+        });
+    }
+
+    /// T25: the document contributes the bucket path, the key count of the
+    /// current level, and the last object-store call's timing.
+    #[gpui::test]
+    fn status_segments_report_path_key_count_and_timing(cx: &mut gpui::TestAppContext) {
+        let doc = new_test_entity(cx);
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, _cx| {
+                doc.apply_page_for_test("", page(&["logs/"], &["a.txt"]));
+                doc.set_last_operation_for_test(OperationTiming {
+                    label: "ListObjectsV2",
+                    millis: 188,
+                });
+            });
+        });
+
+        cx.update(|cx| {
+            let texts: Vec<String> = doc
+                .read(cx)
+                .status_segments(cx)
+                .into_iter()
+                .map(|segment| segment.text.to_string())
+                .collect();
+
+            assert!(texts.contains(&"s3://my-bucket/".to_string()));
+            assert!(texts.contains(&"2 keys".to_string()));
+            assert!(texts.contains(&"ListObjectsV2 · 188 ms".to_string()));
+        });
+    }
+
+    fn new_test_entity(cx: &mut gpui::TestAppContext) -> gpui::Entity<ObjectBrowserDocument> {
+        use dbflux_storage::bootstrap::StorageRuntime;
+        use gpui::AppContext as _;
+
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_cx| dbflux_ui_base::toast::ToastHost::new());
+            cx.set_global(dbflux_ui_base::toast::ToastGlobal { host });
+        });
+
+        let app_state: gpui::Entity<dbflux_ui_base::AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = StorageRuntime::in_memory().expect("in-memory storage");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let profile_id = uuid::Uuid::new_v4();
+
+        let (doc, _window_cx) = cx.add_window_view(|window, cx| {
+            ObjectBrowserDocument::new(profile_id, "my-bucket".to_string(), app_state, window, cx)
+        });
+
+        doc
     }
 }

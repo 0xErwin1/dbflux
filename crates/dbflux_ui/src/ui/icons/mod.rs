@@ -62,7 +62,9 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::Unplug,
     AppIcon::Server,
     AppIcon::HardDrive,
+    AppIcon::File,
     AppIcon::FileCode,
+    AppIcon::Image,
     AppIcon::Folder,
     AppIcon::Box,
     AppIcon::Braces,
@@ -188,9 +190,11 @@ pub(crate) fn embedded_bytes(icon: AppIcon) -> &'static [u8] {
         AppIcon::Unplug => include_bytes!("../../../../../resources/icons/ui/unplug.svg"),
         AppIcon::Server => include_bytes!("../../../../../resources/icons/ui/server.svg"),
         AppIcon::HardDrive => include_bytes!("../../../../../resources/icons/ui/hard-drive.svg"),
+        AppIcon::File => include_bytes!("../../../../../resources/icons/ui/file.svg"),
         AppIcon::FileCode => {
             include_bytes!("../../../../../resources/icons/ui/file-code-corner.svg")
         }
+        AppIcon::Image => include_bytes!("../../../../../resources/icons/ui/image.svg"),
         AppIcon::Folder => include_bytes!("../../../../../resources/icons/ui/folder.svg"),
         AppIcon::Box => include_bytes!("../../../../../resources/icons/ui/box.svg"),
         AppIcon::Braces => include_bytes!("../../../../../resources/icons/ui/braces.svg"),

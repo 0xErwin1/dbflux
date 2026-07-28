@@ -31,9 +31,10 @@ impl ObjectBrowserDocument {
             .level(&self.tree.current_prefix)
             .map(|level| level.entries.len())
             .unwrap_or(0);
+        let key_word = if key_count == 1 { "key" } else { "keys" };
         segments.push(StatusSegment {
-            text: format!("{key_count} keys").into(),
-            tooltip: None,
+            text: format!("{key_count} {key_word}").into(),
+            tooltip: Some("Keys listed at the current prefix level".into()),
         });
 
         if let Some(timing) = self.last_operation {

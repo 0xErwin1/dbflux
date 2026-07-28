@@ -241,6 +241,17 @@ impl ObjectTree {
         level.state = PrefixLoadState::Loaded;
     }
 
+    /// Drops a level's cached entries and continuation token so the next load
+    /// starts from the first page again. The per-level filter survives — a
+    /// refresh must not silently widen what the user asked to see.
+    pub fn reset_level(&mut self, prefix: &str) {
+        let level = self.level_mut(prefix);
+
+        level.entries.clear();
+        level.next_token = None;
+        level.state = PrefixLoadState::NotLoaded;
+    }
+
     pub fn apply_error(&mut self, prefix: &str, message: String) {
         self.level_mut(prefix).state = PrefixLoadState::Error(message);
     }
@@ -440,6 +451,21 @@ mod tests {
         assert_eq!(level.entries.len(), 3);
         assert_eq!(level.state, PrefixLoadState::Loaded);
         assert_eq!(tree.continuation_token(""), None);
+    }
+
+    #[test]
+    fn reset_level_clears_entries_and_token_but_keeps_the_filter() {
+        let mut tree = ObjectTree::new("my-bucket".to_string());
+        tree.apply_page("", page(&["logs/"], &["a.txt"], Some("token-1")));
+        tree.set_filter("", "log".to_string());
+
+        tree.reset_level("");
+
+        let level = tree.level("").unwrap();
+        assert!(level.entries.is_empty());
+        assert_eq!(level.next_token, None);
+        assert_eq!(level.state, PrefixLoadState::NotLoaded);
+        assert_eq!(level.filter, "log");
     }
 
     #[test]

@@ -6,6 +6,7 @@ pub use data::{
     BUCKET_SIZE_ESTIMATE_CAP, BucketDetailsState, BucketRow, BucketSizeEstimateState,
     OperationTiming, bucket_delete_allowed,
 };
+pub(crate) use render::format_bytes;
 
 use super::handle::DocumentEvent;
 use super::types::{DocumentId, DocumentState};

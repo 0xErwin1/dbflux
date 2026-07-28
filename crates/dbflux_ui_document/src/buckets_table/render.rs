@@ -32,7 +32,7 @@ const UNKNOWN: &str = "—";
 
 /// Formats a byte count with a binary-prefix unit, one decimal place above
 /// the kibibyte boundary.
-pub(super) fn format_bytes(bytes: u64) -> String {
+pub(crate) fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
 
     if bytes < 1024 {
