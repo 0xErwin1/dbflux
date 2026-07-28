@@ -84,14 +84,16 @@ pub use connection::{
 };
 
 pub use core::{
-    CancelToken, CodeGenScope, CodeGeneratorInfo, Connection, ConnectionErrorFormatter,
-    ConnectionExt, ConnectionOverrides, DbDriver, DbError, DefaultErrorFormatter,
-    DocumentConnection, ErrorLocation, EventStreamTarget, FormattedError, KeyValueApi,
-    KeyValueConnection, LogErr, NoopCancelHandle, QueryCancelHandle, QueryErrorFormatter,
-    RelationalConnection, SchemaDropTarget, SchemaFeatures, SchemaLoadingStrategy,
-    SchemaObjectKind, ShutdownCoordinator, ShutdownPhase, SourceContextSpec, SourceQueryMode,
-    TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget, Value,
-    sanitize_uri,
+    BucketCreateOptions, BucketCreateOutcome, BucketDetails, BucketEncryption, BucketInfo,
+    BucketSizeEstimate, CancelToken, CodeGenScope, CodeGeneratorInfo, Connection,
+    ConnectionErrorFormatter, ConnectionExt, ConnectionOverrides, DbDriver, DbError,
+    DefaultErrorFormatter, DeletePrefixOutcome, DocumentConnection, ErrorLocation,
+    EventStreamTarget, FormattedError, KeyValueApi, KeyValueConnection, LogErr, NoopCancelHandle,
+    ObjectListingPage, ObjectMetadata, ObjectStoreConnection, ObjectSummary, ObjectVersionSummary,
+    PresignMethod, QueryCancelHandle, QueryErrorFormatter, RelationalConnection, SchemaDropTarget,
+    SchemaFeatures, SchemaLoadingStrategy, SchemaObjectKind, ShutdownCoordinator, ShutdownPhase,
+    SourceContextSpec, SourceQueryMode, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot,
+    TaskStatus, TaskTarget, Value, VersioningStatus, sanitize_uri,
 };
 
 pub use data::{
