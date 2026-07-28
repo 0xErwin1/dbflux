@@ -2925,6 +2925,7 @@ dependencies = [
  "dbflux_core",
  "dbflux_test_support",
  "tokio",
+ "urlencoding",
 ]
 
 [[package]]

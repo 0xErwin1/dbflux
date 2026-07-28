@@ -4,16 +4,25 @@ use std::sync::LazyLock;
 use aws_config::{BehaviorVersion, Region};
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{Builder as S3ConfigBuilder, Credentials};
+use aws_sdk_s3::presigning::PresigningConfig;
+use aws_sdk_s3::primitives::ByteStream;
+use aws_sdk_s3::types::{
+    BucketLocationConstraint, BucketVersioningStatus, CreateBucketConfiguration, Delete,
+    ObjectIdentifier, PublicAccessBlockConfiguration, ServerSideEncryption,
+    ServerSideEncryptionByDefault, ServerSideEncryptionConfiguration, ServerSideEncryptionRule,
+    VersioningConfiguration,
+};
 use chrono::{DateTime, TimeZone, Utc};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
-    BucketCreateOptions, BucketCreateOutcome, BucketDetails, BucketInfo, BucketSizeEstimate,
-    Connection, ConnectionExt, ConnectionProfile, DatabaseCategory, DbConfig, DbDriver, DbError,
-    DbKind, DeploymentClass, DocumentConnection, DriverCapabilities, DriverFormDef, DriverMetadata,
-    FormFieldKind, FormSection, FormTab, FormValues, Icon, KeyValueConnection, ObjectListingPage,
-    ObjectMetadata, ObjectStoreConnection, ObjectSummary, ObjectVersionSummary, PresignMethod,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RelationalConnection,
-    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, TransferFamily, field, field_required,
+    BucketCreateOptions, BucketCreateOutcome, BucketDetails, BucketEncryption, BucketInfo,
+    BucketSizeEstimate, Connection, ConnectionExt, ConnectionProfile, DatabaseCategory, DbConfig,
+    DbDriver, DbError, DbKind, DeploymentClass, DocumentConnection, DriverCapabilities,
+    DriverFormDef, DriverMetadata, FormFieldKind, FormSection, FormTab, FormValues, Icon,
+    KeyValueConnection, ObjectListingPage, ObjectMetadata, ObjectStoreConnection, ObjectSummary,
+    ObjectVersionSummary, PresignMethod, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    RelationalConnection, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, TransferFamily,
+    VersioningStatus, field, field_required,
 };
 
 use crate::error_formatter::{S3_ERROR_FORMATTER, classify_connection_error, classify_query_error};
@@ -421,12 +430,155 @@ impl ConnectionExt for S3Connection {
 }
 
 /// Message shared by every `ObjectStoreConnection` method that has not
-/// landed yet (object-body, copy/presign, bucket-detail, and bucket-creation
-/// operations arrive in later batches of the `s3-driver` change).
+/// landed yet. `head_object` is the only remaining stub — every other object,
+/// prefix, and bucket operation is now implemented above.
 fn not_yet_implemented(operation: &str) -> DbError {
     DbError::NotSupported(format!(
         "S3 {operation} is not implemented yet — it lands in a later batch of the S3 driver"
     ))
+}
+
+/// Maximum number of keys accepted by a single S3 `DeleteObjects` call.
+const DELETE_BATCH_SIZE: usize = 1000;
+
+/// Deletes one batch of up to [`DELETE_BATCH_SIZE`] keys via a single
+/// `DeleteObjects` call and returns the number of keys S3 actually
+/// confirmed as deleted.
+fn delete_object_batch(
+    client: &Client,
+    config: &S3ProfileConfig,
+    runtime: &tokio::runtime::Runtime,
+    bucket: &str,
+    keys: &[String],
+) -> Result<u64, DbError> {
+    if keys.is_empty() {
+        return Ok(0);
+    }
+
+    let mut objects = Vec::with_capacity(keys.len());
+    for key in keys {
+        let identifier = ObjectIdentifier::builder()
+            .key(key.clone())
+            .build()
+            .map_err(|error| {
+                DbError::query_failed(format!("Invalid S3 object key {key}: {error}"))
+            })?;
+        objects.push(identifier);
+    }
+
+    let delete = Delete::builder()
+        .set_objects(Some(objects))
+        .build()
+        .map_err(|error| {
+            DbError::query_failed(format!("Failed to build S3 delete batch: {error}"))
+        })?;
+
+    let output = runtime
+        .block_on(client.delete_objects().bucket(bucket).delete(delete).send())
+        .map_err(|error| {
+            classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, config))
+        })?;
+
+    Ok(output.deleted().len() as u64)
+}
+
+/// Builds the `x-amz-copy-source` header value (`bucket/key`). Each `/`-
+/// delimited segment of the key is percent-encoded independently so folder
+/// separators survive while special characters within a segment (spaces,
+/// `%`, non-ASCII) round-trip correctly, per S3's `CopyObject` requirements.
+fn build_copy_source(bucket: &str, key: &str) -> String {
+    let encoded_key = key
+        .split('/')
+        .map(urlencoding::encode)
+        .collect::<Vec<_>>()
+        .join("/");
+
+    format!("{bucket}/{encoded_key}")
+}
+
+/// AWS rejects an explicit `LocationConstraint` for `us-east-1` — it is the
+/// API's implicit default and has no corresponding
+/// `BucketLocationConstraint` enum value, so the constraint must be omitted
+/// entirely for that region rather than sent as an empty/invalid value.
+fn is_default_region(region: &str) -> bool {
+    region.eq_ignore_ascii_case("us-east-1")
+}
+
+/// Builds the `CreateBucket` request, including the region constraint (see
+/// `is_default_region`) and, when requested, the Object Lock flag. Object
+/// Lock can only be set at creation time — unlike versioning, public-access
+/// block, and default encryption, it has no separate post-creation API call,
+/// so `create_bucket` rides it on this initial request instead of applying
+/// it afterward.
+fn build_create_bucket_request(
+    client: &Client,
+    bucket: &str,
+    region: &str,
+    object_lock: bool,
+) -> aws_sdk_s3::operation::create_bucket::builders::CreateBucketFluentBuilder {
+    let mut request = client.create_bucket().bucket(bucket);
+
+    if !is_default_region(region) {
+        let configuration = CreateBucketConfiguration::builder()
+            .location_constraint(BucketLocationConstraint::from(region))
+            .build();
+        request = request.create_bucket_configuration(configuration);
+    }
+
+    if object_lock {
+        request = request.object_lock_enabled_for_bucket(true);
+    }
+
+    request
+}
+
+/// Builds the `PutBucketEncryption` configuration from a `BucketEncryption`
+/// choice. Callers must filter out `BucketEncryption::None` before calling
+/// this — it has no corresponding SSE algorithm.
+fn build_encryption_configuration(
+    encryption: &BucketEncryption,
+) -> Result<ServerSideEncryptionConfiguration, DbError> {
+    let sse_by_default = match encryption {
+        BucketEncryption::SseS3 => ServerSideEncryptionByDefault::builder()
+            .sse_algorithm(ServerSideEncryption::Aes256)
+            .build(),
+        BucketEncryption::SseKms { key_id } => {
+            let mut builder = ServerSideEncryptionByDefault::builder()
+                .sse_algorithm(ServerSideEncryption::AwsKms);
+            if let Some(key_id) = key_id {
+                builder = builder.kms_master_key_id(key_id.clone());
+            }
+            builder.build()
+        }
+        BucketEncryption::None => {
+            return Err(DbError::query_failed(
+                "Default encryption is not supported for BucketEncryption::None".to_string(),
+            ));
+        }
+    }
+    .map_err(|error| {
+        DbError::query_failed(format!("Failed to build S3 encryption rule: {error}"))
+    })?;
+
+    let rule = ServerSideEncryptionRule::builder()
+        .apply_server_side_encryption_by_default(sse_by_default)
+        .build();
+
+    ServerSideEncryptionConfiguration::builder()
+        .rules(rule)
+        .build()
+        .map_err(|error| {
+            DbError::query_failed(format!(
+                "Failed to build S3 encryption configuration: {error}"
+            ))
+        })
+}
+
+/// One-line, non-blocking warning surfaced when an optional bucket-creation
+/// configuration call fails on the target endpoint (Amendment F, DEC-20).
+/// The bucket itself is already created by the time this is called.
+fn degradation_warning(field: &str, formatted: &dbflux_core::FormattedError) -> String {
+    format!("{field} is not supported by this endpoint: {formatted}")
 }
 
 impl ObjectStoreConnection for S3Connection {
@@ -512,82 +664,449 @@ impl ObjectStoreConnection for S3Connection {
         Err(not_yet_implemented("head_object"))
     }
 
-    fn get_object(&self, _bucket: &str, _key: &str) -> Result<Vec<u8>, DbError> {
-        Err(not_yet_implemented("get_object"))
+    fn get_object(&self, bucket: &str, key: &str) -> Result<Vec<u8>, DbError> {
+        let runtime = runtime();
+
+        let output = runtime
+            .block_on(self.client.get_object().bucket(bucket).key(key).send())
+            .map_err(|error| {
+                classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+            })?;
+
+        let aggregated = runtime.block_on(output.body.collect()).map_err(|error| {
+            DbError::query_failed(format!("Failed to read S3 object body: {error}"))
+        })?;
+
+        Ok(aggregated.into_bytes().to_vec())
     }
 
     fn put_object(
         &self,
-        _bucket: &str,
-        _key: &str,
-        _bytes: Vec<u8>,
-        _content_type: Option<&str>,
+        bucket: &str,
+        key: &str,
+        bytes: Vec<u8>,
+        content_type: Option<&str>,
     ) -> Result<(), DbError> {
-        Err(not_yet_implemented("put_object"))
+        let runtime = runtime();
+
+        let mut request = self
+            .client
+            .put_object()
+            .bucket(bucket)
+            .key(key)
+            .body(ByteStream::from(bytes));
+
+        if let Some(content_type) = content_type {
+            request = request.content_type(content_type);
+        }
+
+        runtime.block_on(request.send()).map_err(|error| {
+            classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+        })?;
+
+        Ok(())
     }
 
     fn upload_object(
         &self,
-        _bucket: &str,
-        _key: &str,
-        _source_path: &std::path::Path,
-        _content_type: Option<&str>,
+        bucket: &str,
+        key: &str,
+        source_path: &std::path::Path,
+        content_type: Option<&str>,
     ) -> Result<(), DbError> {
-        Err(not_yet_implemented("upload_object"))
+        let runtime = runtime();
+
+        // `ByteStream::from_path` streams the file in fixed-size chunks
+        // rather than reading it fully into memory — required for large
+        // uploads (no multipart splitting yet, see `ObjectStoreConnection`
+        // trait docs on `upload_object`).
+        let body = runtime
+            .block_on(ByteStream::from_path(source_path))
+            .map_err(|error| {
+                DbError::query_failed(format!(
+                    "Failed to stream {}: {error}",
+                    source_path.display()
+                ))
+            })?;
+
+        let mut request = self.client.put_object().bucket(bucket).key(key).body(body);
+
+        if let Some(content_type) = content_type {
+            request = request.content_type(content_type);
+        }
+
+        runtime.block_on(request.send()).map_err(|error| {
+            classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+        })?;
+
+        Ok(())
     }
 
-    fn delete_object(&self, _bucket: &str, _key: &str) -> Result<(), DbError> {
-        Err(not_yet_implemented("delete_object"))
+    fn delete_object(&self, bucket: &str, key: &str) -> Result<(), DbError> {
+        let runtime = runtime();
+        runtime
+            .block_on(self.client.delete_object().bucket(bucket).key(key).send())
+            .map_err(|error| {
+                classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+            })?;
+
+        Ok(())
     }
 
     fn delete_prefix(
         &self,
-        _bucket: &str,
-        _prefix: &str,
+        bucket: &str,
+        prefix: &str,
     ) -> Result<dbflux_core::DeletePrefixOutcome, DbError> {
-        Err(not_yet_implemented("delete_prefix"))
+        let runtime = runtime();
+        let mut deleted_count: u64 = 0;
+        let mut continuation_token: Option<String> = None;
+
+        loop {
+            let mut request = self.client.list_objects_v2().bucket(bucket).prefix(prefix);
+            if let Some(token) = &continuation_token {
+                request = request.continuation_token(token);
+            }
+
+            let output = runtime.block_on(request.send()).map_err(|error| {
+                classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+            })?;
+
+            let keys: Vec<String> = output
+                .contents()
+                .iter()
+                .filter_map(|object| object.key().map(ToString::to_string))
+                .collect();
+
+            for batch in keys.chunks(DELETE_BATCH_SIZE) {
+                deleted_count +=
+                    delete_object_batch(&self.client, &self.config, runtime, bucket, batch)?;
+            }
+
+            match output.next_continuation_token() {
+                Some(token) => continuation_token = Some(token.to_string()),
+                None => break,
+            }
+        }
+
+        Ok(dbflux_core::DeletePrefixOutcome { deleted_count })
     }
 
-    fn copy_object(&self, _bucket: &str, _src_key: &str, _dest_key: &str) -> Result<(), DbError> {
-        Err(not_yet_implemented("copy_object"))
+    fn copy_object(&self, bucket: &str, src_key: &str, dest_key: &str) -> Result<(), DbError> {
+        let runtime = runtime();
+        let copy_source = build_copy_source(bucket, src_key);
+
+        runtime
+            .block_on(
+                self.client
+                    .copy_object()
+                    .bucket(bucket)
+                    .copy_source(copy_source)
+                    .key(dest_key)
+                    .send(),
+            )
+            .map_err(|error| {
+                classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+            })?;
+
+        Ok(())
     }
 
     fn presign(
         &self,
-        _bucket: &str,
-        _key: &str,
-        _method: PresignMethod,
-        _expiry: std::time::Duration,
+        bucket: &str,
+        key: &str,
+        method: PresignMethod,
+        expiry: std::time::Duration,
     ) -> Result<String, DbError> {
-        Err(not_yet_implemented("presign"))
+        let runtime = runtime();
+
+        let presigning_config = PresigningConfig::expires_in(expiry)
+            .map_err(|error| DbError::query_failed(format!("Invalid presign expiry: {error}")))?;
+
+        // The generated request URI is returned directly to the caller and
+        // must never be logged, persisted, or embedded in an error/audit
+        // record here — only the calling action (bucket, key, method,
+        // expiry) is audited by the caller.
+        let presigned_uri = match method {
+            PresignMethod::Get => runtime
+                .block_on(
+                    self.client
+                        .get_object()
+                        .bucket(bucket)
+                        .key(key)
+                        .presigned(presigning_config),
+                )
+                .map(|presigned| presigned.uri().to_string())
+                .map_err(|error| {
+                    classify_query_error(
+                        S3_ERROR_FORMATTER.format_service_error(&error, &self.config),
+                    )
+                })?,
+            PresignMethod::Put => runtime
+                .block_on(
+                    self.client
+                        .put_object()
+                        .bucket(bucket)
+                        .key(key)
+                        .presigned(presigning_config),
+                )
+                .map(|presigned| presigned.uri().to_string())
+                .map_err(|error| {
+                    classify_query_error(
+                        S3_ERROR_FORMATTER.format_service_error(&error, &self.config),
+                    )
+                })?,
+        };
+
+        Ok(presigned_uri)
     }
 
-    fn get_bucket_details(&self, _bucket: &str) -> Result<BucketDetails, DbError> {
-        Err(not_yet_implemented("get_bucket_details"))
+    fn get_bucket_details(&self, bucket: &str) -> Result<BucketDetails, DbError> {
+        let runtime = runtime();
+
+        let location_output = runtime
+            .block_on(self.client.get_bucket_location().bucket(bucket).send())
+            .map_err(|error| {
+                classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+            })?;
+
+        // An empty/absent location constraint means `us-east-1` — S3's own
+        // API quirk (see `is_default_region`/`build_create_bucket_request`).
+        let region = location_output
+            .location_constraint()
+            .map(|constraint| constraint.as_str().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "us-east-1".to_string());
+
+        let versioning_output = runtime
+            .block_on(self.client.get_bucket_versioning().bucket(bucket).send())
+            .map_err(|error| {
+                classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+            })?;
+
+        let versioning = match versioning_output.status() {
+            Some(BucketVersioningStatus::Enabled) => VersioningStatus::Enabled,
+            Some(BucketVersioningStatus::Suspended) => VersioningStatus::Suspended,
+            _ => VersioningStatus::Disabled,
+        };
+
+        Ok(BucketDetails { region, versioning })
     }
 
     fn estimate_bucket_size(
         &self,
-        _bucket: &str,
-        _object_cap: u64,
+        bucket: &str,
+        object_cap: u64,
     ) -> Result<BucketSizeEstimate, DbError> {
-        Err(not_yet_implemented("estimate_bucket_size"))
+        let runtime = runtime();
+        let mut object_count: u64 = 0;
+        let mut total_bytes: u64 = 0;
+        let mut continuation_token: Option<String> = None;
+        let mut truncated = false;
+
+        loop {
+            let mut request = self.client.list_objects_v2().bucket(bucket);
+            if let Some(token) = &continuation_token {
+                request = request.continuation_token(token);
+            }
+
+            let output = runtime.block_on(request.send()).map_err(|error| {
+                classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+            })?;
+
+            for object in output.contents() {
+                object_count += 1;
+                total_bytes += object.size().unwrap_or_default().max(0) as u64;
+
+                if object_count >= object_cap {
+                    truncated = true;
+                    break;
+                }
+            }
+
+            if truncated {
+                break;
+            }
+
+            match output.next_continuation_token() {
+                Some(token) => continuation_token = Some(token.to_string()),
+                None => break,
+            }
+        }
+
+        Ok(BucketSizeEstimate {
+            object_count,
+            total_bytes,
+            truncated,
+        })
     }
 
     fn list_object_versions(
         &self,
-        _bucket: &str,
-        _key: &str,
+        bucket: &str,
+        key: &str,
     ) -> Result<Vec<ObjectVersionSummary>, DbError> {
-        Err(not_yet_implemented("list_object_versions"))
+        let runtime = runtime();
+        let mut versions = Vec::new();
+        let mut key_marker: Option<String> = None;
+        let mut version_id_marker: Option<String> = None;
+
+        loop {
+            let mut request = self
+                .client
+                .list_object_versions()
+                .bucket(bucket)
+                .prefix(key);
+
+            if let Some(marker) = &key_marker {
+                request = request.key_marker(marker);
+            }
+            if let Some(marker) = &version_id_marker {
+                request = request.version_id_marker(marker);
+            }
+
+            let output = runtime.block_on(request.send()).map_err(|error| {
+                classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+            })?;
+
+            versions.extend(
+                output
+                    .versions()
+                    .iter()
+                    .filter(|version| version.key() == Some(key))
+                    .map(|version| ObjectVersionSummary {
+                        version_id: version.version_id().unwrap_or_default().to_string(),
+                        is_latest: version.is_latest().unwrap_or(false),
+                        size_bytes: version.size().unwrap_or_default().max(0) as u64,
+                        last_modified: version.last_modified().and_then(smithy_datetime_to_chrono),
+                    }),
+            );
+
+            if output.is_truncated().unwrap_or(false) {
+                key_marker = output.next_key_marker().map(ToString::to_string);
+                version_id_marker = output.next_version_id_marker().map(ToString::to_string);
+            } else {
+                break;
+            }
+        }
+
+        Ok(versions)
     }
 
+    /// Creates the bucket, then applies each optional configuration
+    /// (versioning, public-access block, default encryption) as its own
+    /// follow-up call so a rejection on one S3-compatible endpoint degrades
+    /// to a warning instead of aborting the whole flow (Amendment F,
+    /// DEC-20). Object Lock is the one exception: S3 only allows enabling it
+    /// at `CreateBucket` time, so it rides on the initial request — if the
+    /// endpoint rejects that flag, the bucket creation is retried without it
+    /// and a warning is recorded instead.
     fn create_bucket(
         &self,
-        _bucket: &str,
-        _options: BucketCreateOptions,
+        bucket: &str,
+        options: BucketCreateOptions,
     ) -> Result<BucketCreateOutcome, DbError> {
-        Err(not_yet_implemented("create_bucket"))
+        let runtime = runtime();
+        let mut warnings = Vec::new();
+
+        let base_creation = runtime.block_on(
+            build_create_bucket_request(&self.client, bucket, &options.region, options.object_lock)
+                .send(),
+        );
+
+        if let Err(error) = base_creation {
+            if !options.object_lock {
+                return Err(classify_query_error(
+                    S3_ERROR_FORMATTER.format_service_error(&error, &self.config),
+                ));
+            }
+
+            warnings.push(degradation_warning(
+                "Object lock",
+                &S3_ERROR_FORMATTER.format_service_error(&error, &self.config),
+            ));
+
+            runtime
+                .block_on(
+                    build_create_bucket_request(&self.client, bucket, &options.region, false)
+                        .send(),
+                )
+                .map_err(|error| {
+                    classify_query_error(
+                        S3_ERROR_FORMATTER.format_service_error(&error, &self.config),
+                    )
+                })?;
+        }
+
+        if options.versioning {
+            let result = runtime.block_on(
+                self.client
+                    .put_bucket_versioning()
+                    .bucket(bucket)
+                    .versioning_configuration(
+                        VersioningConfiguration::builder()
+                            .status(BucketVersioningStatus::Enabled)
+                            .build(),
+                    )
+                    .send(),
+            );
+
+            if let Err(error) = result {
+                warnings.push(degradation_warning(
+                    "Versioning",
+                    &S3_ERROR_FORMATTER.format_service_error(&error, &self.config),
+                ));
+            }
+        }
+
+        if options.block_public_access {
+            let result = runtime.block_on(
+                self.client
+                    .put_public_access_block()
+                    .bucket(bucket)
+                    .public_access_block_configuration(
+                        PublicAccessBlockConfiguration::builder()
+                            .block_public_acls(true)
+                            .ignore_public_acls(true)
+                            .block_public_policy(true)
+                            .restrict_public_buckets(true)
+                            .build(),
+                    )
+                    .send(),
+            );
+
+            if let Err(error) = result {
+                warnings.push(degradation_warning(
+                    "Block public access",
+                    &S3_ERROR_FORMATTER.format_service_error(&error, &self.config),
+                ));
+            }
+        }
+
+        if !matches!(options.encryption, BucketEncryption::None) {
+            match build_encryption_configuration(&options.encryption) {
+                Ok(configuration) => {
+                    let result = runtime.block_on(
+                        self.client
+                            .put_bucket_encryption()
+                            .bucket(bucket)
+                            .server_side_encryption_configuration(configuration)
+                            .send(),
+                    );
+
+                    if let Err(error) = result {
+                        warnings.push(degradation_warning(
+                            "Default encryption",
+                            &S3_ERROR_FORMATTER.format_service_error(&error, &self.config),
+                        ));
+                    }
+                }
+                Err(error) => warnings.push(error.to_string()),
+            }
+        }
+
+        Ok(BucketCreateOutcome { warnings })
     }
 
     fn delete_bucket(&self, bucket: &str) -> Result<(), DbError> {
@@ -835,5 +1354,74 @@ mod tests {
         let secret = SecretString::from("super-secret-value".to_string());
         let debug_output = format!("{secret:?}");
         assert!(!debug_output.contains("super-secret-value"));
+    }
+
+    #[test]
+    fn build_copy_source_joins_bucket_and_key() {
+        let copy_source = build_copy_source("my-bucket", "reports/2026/summary.csv");
+        assert_eq!(copy_source, "my-bucket/reports/2026/summary.csv");
+    }
+
+    #[test]
+    fn build_copy_source_encodes_special_characters_per_segment_only() {
+        let copy_source = build_copy_source("my-bucket", "folder with spaces/file name.txt");
+        assert_eq!(
+            copy_source,
+            "my-bucket/folder%20with%20spaces/file%20name.txt"
+        );
+        assert!(!copy_source.contains("%2F"));
+    }
+
+    #[test]
+    fn is_default_region_matches_us_east_1_case_insensitively() {
+        assert!(is_default_region("us-east-1"));
+        assert!(is_default_region("US-EAST-1"));
+        assert!(!is_default_region("us-west-2"));
+        assert!(!is_default_region("eu-west-1"));
+    }
+
+    #[test]
+    fn delete_batch_size_matches_s3_delete_objects_limit() {
+        assert_eq!(DELETE_BATCH_SIZE, 1000);
+    }
+
+    #[test]
+    fn key_chunking_splits_large_batches_at_the_s3_limit() {
+        let keys: Vec<String> = (0..2500).map(|index| format!("key-{index}")).collect();
+        let chunk_sizes: Vec<usize> = keys.chunks(DELETE_BATCH_SIZE).map(<[_]>::len).collect();
+
+        assert_eq!(chunk_sizes, vec![1000, 1000, 500]);
+    }
+
+    #[test]
+    fn build_encryption_configuration_rejects_none() {
+        let error = build_encryption_configuration(&BucketEncryption::None)
+            .expect_err("None should be rejected by the caller before this point");
+        assert!(matches!(error, DbError::QueryFailed(_)));
+    }
+
+    #[test]
+    fn build_encryption_configuration_accepts_sse_s3() {
+        let configuration = build_encryption_configuration(&BucketEncryption::SseS3)
+            .expect("SseS3 should build a valid configuration");
+        assert_eq!(configuration.rules().len(), 1);
+    }
+
+    #[test]
+    fn build_encryption_configuration_accepts_sse_kms_without_key_id() {
+        let configuration =
+            build_encryption_configuration(&BucketEncryption::SseKms { key_id: None })
+                .expect("SseKms without a key id should still build");
+        assert_eq!(configuration.rules().len(), 1);
+    }
+
+    #[test]
+    fn degradation_warning_names_field_and_includes_error_detail() {
+        let formatted =
+            dbflux_core::FormattedError::new("Object lock is not supported".to_string());
+        let warning = degradation_warning("Object lock", &formatted);
+
+        assert!(warning.starts_with("Object lock is not supported by this endpoint"));
+        assert!(warning.contains("Object lock is not supported"));
     }
 }
