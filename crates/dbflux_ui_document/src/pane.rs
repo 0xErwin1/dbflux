@@ -126,6 +126,14 @@ pub struct PaneHandle {
     /// the document does not contribute any — `StatusBar` renders nothing
     /// extra for it, unchanged from today's behavior.
     pub status_segments: Option<Box<dyn Fn(&App) -> Vec<StatusSegment>>>,
+
+    /// Drains a browse-this-bucket intent raised by row activation (Enter),
+    /// same `pending_*` + `take()` convention as the other optional helpers.
+    /// Only `BucketsTableDocument` populates this — the workspace polls the
+    /// active tab for it each render pass and opens `ObjectBrowserDocument`
+    /// on `Some`. `None` on the outer `Option` means the document never
+    /// raises this intent.
+    pub take_pending_open_bucket: Option<Box<dyn Fn(&mut App) -> Option<String>>>,
 }
 
 impl PaneHandle {
@@ -179,6 +187,7 @@ impl PaneHandle {
             session_tab_snapshot: None,
             mark_inspector_closed: None,
             status_segments: None,
+            take_pending_open_bucket: None,
         }
     }
 

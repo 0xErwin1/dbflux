@@ -1,16 +1,16 @@
-//! `PaneHandle` constructor for `BucketsTableDocument`.
+//! `PaneHandle` constructor for `ObjectBrowserDocument`.
 
-use super::BucketsTableDocument;
+use super::ObjectBrowserDocument;
 use crate::dedup::DocumentKey;
 use crate::handle::DocumentEvent;
 use crate::pane::{BoxedDocEventCallback, PaneHandle, StatusSegment};
 use crate::types::{DocumentIcon, DocumentKind, DocumentMetaSnapshot};
 use gpui::{App, Entity, IntoElement};
 
-impl BucketsTableDocument {
+impl ObjectBrowserDocument {
     /// Status-bar segments contributed by this document (DEC-23): the engine
-    /// behind the connection, how many buckets are listed, and the timing of
-    /// the last object-store call.
+    /// behind the connection, the current `s3://bucket/prefix/` path, the key
+    /// count of the current level, and the last object-store call's timing.
     pub fn status_segments(&self, cx: &App) -> Vec<StatusSegment> {
         let mut segments = Vec::new();
 
@@ -22,7 +22,17 @@ impl BucketsTableDocument {
         }
 
         segments.push(StatusSegment {
-            text: format!("{} buckets", self.buckets().len()).into(),
+            text: format!("s3://{}/{}", self.bucket, self.tree.current_prefix).into(),
+            tooltip: None,
+        });
+
+        let key_count = self
+            .tree
+            .level(&self.tree.current_prefix)
+            .map(|level| level.entries.len())
+            .unwrap_or(0);
+        segments.push(StatusSegment {
+            text: format!("{key_count} keys").into(),
             tooltip: None,
         });
 
@@ -36,13 +46,14 @@ impl BucketsTableDocument {
         segments
     }
 
-    /// Wrap a typed `Entity<BucketsTableDocument>` in a `PaneHandle`.
+    /// Wrap a typed `Entity<ObjectBrowserDocument>` in a `PaneHandle`.
     pub fn into_pane(entity: Entity<Self>, cx: &App) -> PaneHandle {
         let id = entity.read(cx).id();
+        let bucket = entity.read(cx).bucket().to_string();
 
         let mut pane = PaneHandle::new_chart(
             id,
-            DocumentKind::ObjectStorageBuckets,
+            DocumentKind::ObjectBrowser,
             // render
             {
                 let e = entity.clone();
@@ -65,9 +76,9 @@ impl BucketsTableDocument {
                     let d = e.read(cx);
                     DocumentMetaSnapshot {
                         id,
-                        kind: DocumentKind::ObjectStorageBuckets,
+                        kind: DocumentKind::ObjectBrowser,
                         title: d.title(),
-                        icon: DocumentIcon::Buckets,
+                        icon: DocumentIcon::ObjectBrowser,
                         state: d.state(),
                         closable: true,
                         connection_id: d.connection_id(),
@@ -94,14 +105,15 @@ impl BucketsTableDocument {
                 let e = entity.clone();
                 Box::new(move |cx| e.read(cx).active_context())
             },
-            // change_summary — BucketsTableDocument has no unsaved changes
+            // change_summary — ObjectBrowserDocument has no unsaved changes yet
+            // (the inline editor's dirty tracking lands in a later batch)
             Box::new(|_cx| None),
             // refresh_policy
             {
                 let e = entity.clone();
                 Box::new(move |cx| e.read(cx).refresh_policy())
             },
-            // flush_auto_save — BucketsTableDocument has no auto-save
+            // flush_auto_save — no auto-save yet
             Box::new(|_cx| {}),
             // set_active_tab
             {
@@ -113,20 +125,22 @@ impl BucketsTableDocument {
                 let e = entity.clone();
                 Box::new(move |policy, cx| e.update(cx, |d, cx| d.set_refresh_policy(policy, cx)))
             },
-            // matches_dedup_key — handles the ObjectStoreBucketsRoot variant
+            // matches_dedup_key — handles the ObjectBrowser variant
             {
                 let e = entity.clone();
+                let bucket = bucket.clone();
                 Box::new(move |key, cx| {
                     let d = e.read(cx);
                     match key {
-                        DocumentKey::ObjectStoreBucketsRoot { profile_id } => {
-                            d.connection_id() == Some(*profile_id)
-                        }
+                        DocumentKey::ObjectBrowser {
+                            profile_id,
+                            bucket: key_bucket,
+                        } => d.connection_id() == Some(*profile_id) && *key_bucket == bucket,
                         _ => false,
                     }
                 })
             },
-            // subscribe — BucketsTableDocument emits DocumentEvent directly
+            // subscribe — ObjectBrowserDocument emits DocumentEvent directly
             {
                 let e = entity.clone();
                 Box::new(move |cx, cb: BoxedDocEventCallback| {
@@ -138,11 +152,6 @@ impl BucketsTableDocument {
         pane.status_segments = Some({
             let e = entity.clone();
             Box::new(move |cx| e.read(cx).status_segments(cx))
-        });
-
-        pane.take_pending_open_bucket = Some({
-            let e = entity.clone();
-            Box::new(move |cx| e.update(cx, |d, _cx| d.take_pending_open_bucket()))
         });
 
         pane

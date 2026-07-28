@@ -30,6 +30,8 @@ pub enum DocumentKind {
     SchemaDiff,
     // Object-storage buckets table (connection root for DatabaseCategory::ObjectStorage)
     ObjectStorageBuckets,
+    // Object-storage bucket browser (prefix/object tree opened from the buckets table)
+    ObjectBrowser,
 }
 
 /// Source kind for DataDocument (affects icon and behavior).
@@ -58,6 +60,7 @@ pub enum DocumentIcon {
     Chart,
     Dashboard,
     Buckets,
+    ObjectBrowser,
 }
 
 impl DocumentIcon {
@@ -75,6 +78,7 @@ impl DocumentIcon {
             Self::Chart => "bar-chart-2",
             Self::Dashboard => "layout-dashboard",
             Self::Buckets => "box",
+            Self::ObjectBrowser => "folder-open",
         }
     }
 }

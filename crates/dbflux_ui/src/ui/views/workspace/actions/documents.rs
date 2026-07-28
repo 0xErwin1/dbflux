@@ -366,6 +366,70 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
+    /// Opens the prefix/object tree browser for a single bucket, or focuses
+    /// the existing one for that `(profile_id, bucket)` pair. Reached from
+    /// the buckets table's Enter-on-row action and the sidebar's
+    /// `OpenObjectStoreBucket` event.
+    pub(in crate::ui::views::workspace) fn open_object_browser(
+        &mut self,
+        profile_id: uuid::Uuid,
+        bucket: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let has_connection = self
+            .app_state
+            .read(cx)
+            .connections()
+            .contains_key(&profile_id);
+
+        let existing_id = if has_connection {
+            self.tab_manager.read(cx).find_by_key(
+                &crate::ui::document::DocumentKey::ObjectBrowser {
+                    profile_id,
+                    bucket: bucket.clone(),
+                },
+                cx,
+            )
+        } else {
+            None
+        };
+
+        match decide_open_document(has_connection, existing_id) {
+            OpenDocumentDecision::ErrorNoConnection => {
+                Toast::error("No active connection for this bucket")
+                    .meta_right(now_hms())
+                    .action(copy_action("No active connection for this bucket"))
+                    .push(cx);
+                return;
+            }
+            OpenDocumentDecision::FocusExisting(id) => {
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.activate(id, cx);
+                });
+                return;
+            }
+            OpenDocumentDecision::OpenNew => {}
+        }
+
+        let doc = cx.new(|cx| {
+            crate::ui::document::ObjectBrowserDocument::new(
+                profile_id,
+                bucket,
+                self.app_state.clone(),
+                window,
+                cx,
+            )
+        });
+        let pane = crate::ui::document::ObjectBrowserDocument::into_pane(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
     pub(in crate::ui::views::workspace) fn close_tabs_batch(
         &mut self,
         window: &mut Window,

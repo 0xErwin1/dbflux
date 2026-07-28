@@ -188,6 +188,15 @@ impl Tab {
             Tab::Pane(p) => p.status_segments(cx),
         }
     }
+
+    /// Drains a browse-this-bucket intent, if this tab is a
+    /// `BucketsTableDocument` with one pending. `None` for every other
+    /// document type and when there is nothing pending.
+    pub fn take_pending_open_bucket(&self, cx: &mut App) -> Option<String> {
+        match self {
+            Tab::Pane(p) => p.take_pending_open_bucket.as_ref().and_then(|f| f(cx)),
+        }
+    }
 }
 
 /// Manages open documents (tabs) in the workspace.

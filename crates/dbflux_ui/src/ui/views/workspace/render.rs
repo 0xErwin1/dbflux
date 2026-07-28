@@ -65,6 +65,25 @@ impl Render for Workspace {
             self.finalize_open_routine(pending, window, cx);
         }
 
+        // Drains `BucketsTableDocument::pending_open_bucket` (Enter-on-row)
+        // via the generic `Tab::take_pending_open_bucket` optional helper —
+        // the workspace never branches on document type, it just polls the
+        // active tab for the intent and opens the object browser on `Some`.
+        let pending_bucket_open = {
+            let active_id = self.tab_manager.read(cx).active_id();
+            active_id.and_then(|id| {
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.document(id).and_then(|tab| {
+                        tab.take_pending_open_bucket(cx)
+                            .map(|bucket| (tab.connection_id(cx), bucket))
+                    })
+                })
+            })
+        };
+        if let Some((Some(profile_id), bucket)) = pending_bucket_open {
+            self.open_object_browser(profile_id, bucket, window, cx);
+        }
+
         if self.needs_focus_restore {
             self.needs_focus_restore = false;
             self.set_focus(self.focus_target, window, cx);
