@@ -1,15 +1,16 @@
 //! Preview pane for `ObjectBrowserDocument`.
 //!
-//! Layout, top to bottom: header (file-type icon, object name, close), the
-//! preview body — which for now only reports why an object cannot be
-//! previewed — the object metadata section, and the action bar. Preview
-//! *content* (image, text editor, PDF fallback) lands with the preview tasks;
-//! this file owns the chrome and the metadata rows around it.
+//! Layout, top to bottom: header (file-type icon, object name, open-externally,
+//! close), the preview body — the rendered image, or the reason there is
+//! nothing to render — the object metadata section, and the action bar. The
+//! inline text editor lands with its own task; everything the pane cannot
+//! render falls back to metadata plus the download / open-externally actions.
 
 use super::metadata::{
     ObjectMetadataState, ObjectVersionsState, PreviewGate, format_size_detail, short_version_id,
     versioning_tracks_history,
 };
+use super::preview_content::{ImagePreview, PreviewContentState, PreviewKind};
 use super::render::{format_modified, object_icon};
 use super::{ObjectAction, ObjectBrowserDocument};
 use dbflux_components::icons::AppIcon;
@@ -27,7 +28,19 @@ pub(super) const PREVIEW_WIDTH: Pixels = px(320.0);
 /// inside a 320 px pane.
 const METADATA_LABEL_WIDTH: Pixels = px(92.0);
 
+/// Vertical room reserved for the image itself, so the meta strip and the
+/// metadata rows below it never jump as images of different shapes load.
+const IMAGE_VIEWPORT_HEIGHT: Pixels = px(220.0);
+
 const UNKNOWN: &str = "—";
+
+/// Severity of a body notice, which drives the icon and text treatment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NoticeTone {
+    Neutral,
+    Warning,
+    Danger,
+}
 
 impl ObjectBrowserDocument {
     pub(super) fn render_preview_pane(
@@ -60,6 +73,7 @@ impl ObjectBrowserDocument {
     fn render_preview_header(&self, key: &str, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let name = object_display_name(key);
+        let shows_image = matches!(self.preview_content(), PreviewContentState::Image(_));
 
         div()
             .flex()
@@ -89,51 +103,194 @@ impl ObjectBrowserDocument {
             )
             .child(
                 div()
-                    .id("object-browser-preview-close")
                     .flex()
                     .items_center()
-                    .justify_center()
-                    .size(Heights::CONTROL)
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .hover(|d| d.bg(theme.secondary))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.close_preview(cx);
-                    }))
-                    .child(Icon::new(AppIcon::X).small().muted()),
+                    .gap(Spacing::XXS)
+                    .when(shows_image, |this| {
+                        let key = key.to_string();
+
+                        this.child(
+                            div()
+                                .id("object-browser-open-external")
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .size(Heights::CONTROL)
+                                .rounded(Radii::SM)
+                                .cursor_pointer()
+                                .hover(|d| d.bg(theme.secondary))
+                                .tooltip(|window, cx| {
+                                    gpui_component::tooltip::Tooltip::new("Open in system viewer")
+                                        .build(window, cx)
+                                })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.open_object_externally(key.clone(), cx);
+                                }))
+                                .child(Icon::new(AppIcon::ExternalLink).small().muted()),
+                        )
+                    })
+                    .child(
+                        div()
+                            .id("object-browser-preview-close")
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(Heights::CONTROL)
+                            .rounded(Radii::SM)
+                            .cursor_pointer()
+                            .hover(|d| d.bg(theme.secondary))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.close_preview(cx);
+                            }))
+                            .child(Icon::new(AppIcon::X).small().muted()),
+                    ),
             )
     }
 
-    /// Body area above the metadata rows: the loading/error state of the
-    /// `head_object` call, or the reason the object's bytes were not fetched.
+    /// Body area above the metadata rows: the rendered image when there is
+    /// one, otherwise the reason there is nothing to render.
     fn render_preview_body(&self, cx: &Context<Self>) -> AnyElement {
+        if let PreviewContentState::Image(preview) = self.preview_content() {
+            return self.render_image_body(preview, cx);
+        }
+
+        self.render_body_notice(cx)
+    }
+
+    /// The S3-3 image block: the image itself over a neutral backdrop, its
+    /// dimensions/format/size meta strip, and the fit + transfer-timing row.
+    fn render_image_body(&self, preview: &ImagePreview, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme();
 
-        let (icon, message, is_error) = match &self.metadata {
-            None | Some(ObjectMetadataState::Loading) => {
-                (AppIcon::Loader, "Loading metadata…".to_string(), false)
-            }
+        let timing = self
+            .last_operation
+            .as_ref()
+            .filter(|timing| timing.label == "GetObject")
+            .map(|timing| format!("{} · {} ms", timing.label, timing.millis));
+
+        div()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .h(IMAGE_VIEWPORT_HEIGHT)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .overflow_hidden()
+                    .p(Spacing::SM)
+                    .bg(theme.secondary)
+                    .child(
+                        img(preview.image.clone())
+                            .max_w_full()
+                            .max_h_full()
+                            .object_fit(ObjectFit::Contain),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .py(Spacing::XS)
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .child(Text::caption(preview.meta_line()).muted_foreground()),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(Spacing::SM)
+                    .px(Spacing::SM)
+                    .py(Spacing::XS)
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::XS)
+                            .child(Icon::new(AppIcon::Maximize2).small().muted())
+                            .child(Text::caption("Fit to width").muted_foreground()),
+                    )
+                    .when_some(timing, |this, timing| {
+                        this.child(Text::caption(timing).muted_foreground())
+                    }),
+            )
+            .into_any_element()
+    }
+
+    /// Everything that is not a rendered image: still loading, refused by the
+    /// gate, undecodable, or simply not previewable in-app.
+    fn render_body_notice(&self, cx: &Context<Self>) -> AnyElement {
+        if let PreviewContentState::Loading = self.preview_content() {
+            return self.render_notice(
+                AppIcon::Loader,
+                "Loading preview…",
+                NoticeTone::Neutral,
+                cx,
+            );
+        }
+
+        if let PreviewContentState::Failed(message) = self.preview_content() {
+            return self.render_notice(AppIcon::TriangleAlert, message, NoticeTone::Warning, cx);
+        }
+
+        let (icon, message, tone) = match &self.metadata {
+            None | Some(ObjectMetadataState::Loading) => (
+                AppIcon::Loader,
+                "Loading metadata…".to_string(),
+                NoticeTone::Neutral,
+            ),
             Some(ObjectMetadataState::Error(message)) => {
-                (AppIcon::TriangleAlert, message.clone(), true)
+                (AppIcon::TriangleAlert, message.clone(), NoticeTone::Danger)
             }
             Some(ObjectMetadataState::Loaded { gate, .. }) => match gate {
-                PreviewGate::Allowed => (AppIcon::Eye, "No preview".to_string(), false),
-                PreviewGate::Archived => (AppIcon::Lock, gate.message().unwrap_or_default(), false),
+                PreviewGate::Allowed => (
+                    AppIcon::Eye,
+                    self.unpreviewable_message(),
+                    NoticeTone::Neutral,
+                ),
+                PreviewGate::Archived => (
+                    AppIcon::Lock,
+                    gate.message().unwrap_or_default(),
+                    NoticeTone::Warning,
+                ),
                 PreviewGate::TooLarge { .. } => (
                     AppIcon::TriangleAlert,
                     gate.message().unwrap_or_default(),
-                    false,
+                    NoticeTone::Warning,
                 ),
             },
         };
 
-        let archived = matches!(
-            &self.metadata,
-            Some(ObjectMetadataState::Loaded {
-                gate: PreviewGate::Archived,
-                ..
-            })
-        );
+        self.render_notice(icon, &message, tone, cx)
+    }
+
+    /// Copy for an object the gate allows but the pane cannot render itself.
+    fn unpreviewable_message(&self) -> String {
+        match self.preview_kind() {
+            Some(PreviewKind::Pdf) => {
+                "PDFs are not rendered in-app. Download this object or open it in your system \
+                 viewer."
+                    .to_string()
+            }
+            _ => "This file type has no in-app preview. Download this object or open it in your \
+                  system viewer."
+                .to_string(),
+        }
+    }
+
+    fn render_notice(
+        &self,
+        icon: AppIcon,
+        message: &str,
+        tone: NoticeTone,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme();
 
         div()
             .flex_1()
@@ -144,17 +301,14 @@ impl ObjectBrowserDocument {
             .gap(Spacing::SM)
             .p(Spacing::MD)
             .bg(theme.secondary)
-            .child(if is_error {
-                Icon::new(icon).size(Heights::ICON_LG).danger()
-            } else if archived {
-                Icon::new(icon).size(Heights::ICON_LG).warning()
-            } else {
-                Icon::new(icon).size(Heights::ICON_LG).muted()
+            .child(match tone {
+                NoticeTone::Danger => Icon::new(icon).size(Heights::ICON_LG).danger(),
+                NoticeTone::Warning => Icon::new(icon).size(Heights::ICON_LG).warning(),
+                NoticeTone::Neutral => Icon::new(icon).size(Heights::ICON_LG).muted(),
             })
-            .child(if is_error {
-                Text::caption(message).danger()
-            } else {
-                Text::caption(message).muted_foreground()
+            .child(match tone {
+                NoticeTone::Danger => Text::caption(message.to_string()).danger(),
+                _ => Text::caption(message.to_string()).muted_foreground(),
             })
             .into_any_element()
     }
@@ -332,8 +486,9 @@ impl ObjectBrowserDocument {
             .child(Text::caption(format_modified(version.last_modified)).muted_foreground())
     }
 
-    /// Action bar (S3-3 footer). Copy S3 URI acts immediately; the remaining
-    /// actions raise intents drained by their flow owners.
+    /// Action bar (S3-3 footer). Download, Open externally, and Copy S3 URI act
+    /// immediately; the remaining actions raise intents drained by their flow
+    /// owners.
     fn render_preview_actions(&self, key: &str, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
@@ -353,9 +508,18 @@ impl ObjectBrowserDocument {
                 false,
                 {
                     let key = key.to_string();
-                    move |this, cx| {
-                        this.request_object_action(ObjectAction::Download { key: key.clone() }, cx)
-                    }
+                    move |this, cx| this.download_object(key.clone(), cx)
+                },
+                cx,
+            ))
+            .child(self.preview_action_button(
+                "object-browser-open-externally",
+                AppIcon::ExternalLink,
+                "Open",
+                false,
+                {
+                    let key = key.to_string();
+                    move |this, cx| this.open_object_externally(key.clone(), cx)
                 },
                 cx,
             ))

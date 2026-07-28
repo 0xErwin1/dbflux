@@ -2,10 +2,13 @@ mod data;
 pub mod metadata;
 mod pane;
 mod preview;
+pub mod preview_content;
 mod render;
+mod transfer;
 pub mod tree;
 
 pub use metadata::{ObjectMetadataState, ObjectVersionsState, PreviewGate, evaluate_preview_gate};
+pub use preview_content::{ImagePreview, PreviewContentState, PreviewKind, detect_preview_kind};
 pub use tree::{
     ObjectTree, ObjectTreeEntry, ObjectTreeNodeId, PrefixLoadState, TREE_MODE_PAGE_CAP,
     TreeModeRow, TreeModeStatus,
@@ -29,12 +32,12 @@ pub enum ObjectBrowserFocusMode {
 }
 
 /// Footer action raised from the preview pane for an object. The flows that
-/// consume these (download, presign, delete) land with their own tasks; the
-/// pane only records the intent, following the same `pending_*` + `take()`
-/// convention as the toolbar's upload / new-folder intents.
+/// consume these (presign, delete) land with their own tasks; the pane only
+/// records the intent, following the same `pending_*` + `take()` convention as
+/// the toolbar's upload / new-folder intents. Download acts immediately and so
+/// is deliberately absent here.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ObjectAction {
-    Download { key: String },
     Presign { key: String },
     Delete { key: String },
 }
@@ -77,6 +80,11 @@ pub struct ObjectBrowserDocument {
     /// Guards against a slow `head_object` for a previously selected object
     /// overwriting the metadata of the object the user has since selected.
     metadata_generation: u64,
+    /// Body of the previewed object. Holds at most one object's bytes: it is
+    /// reset on every selection change, so the decoded image never accumulates.
+    preview_content: PreviewContentState,
+    /// Same stale-response guard as `metadata_generation`, for the body fetch.
+    preview_content_generation: u64,
     versions: ObjectVersionsState,
     bucket_details: BucketDetailsState,
     pending_upload: bool,
@@ -133,6 +141,8 @@ impl ObjectBrowserDocument {
             preview_key: None,
             metadata: None,
             metadata_generation: 0,
+            preview_content: PreviewContentState::Unavailable,
+            preview_content_generation: 0,
             versions: ObjectVersionsState::Idle,
             bucket_details: BucketDetailsState::NotLoaded,
             pending_upload: false,
@@ -387,6 +397,9 @@ impl ObjectBrowserDocument {
     pub(super) fn open_preview(&mut self, key: String, cx: &mut Context<Self>) {
         self.preview_key = Some(key.clone());
         self.versions = ObjectVersionsState::Idle;
+        // Drops the previous object's decoded bytes before the new metadata
+        // request even starts.
+        self.preview_content = PreviewContentState::Unavailable;
         self.focus_mode = ObjectBrowserFocusMode::Listing;
 
         self.ensure_bucket_details(cx);
@@ -397,8 +410,28 @@ impl ObjectBrowserDocument {
     pub(super) fn close_preview(&mut self, cx: &mut Context<Self>) {
         self.preview_key = None;
         self.metadata = None;
+        self.preview_content = PreviewContentState::Unavailable;
         self.versions = ObjectVersionsState::Idle;
         cx.notify();
+    }
+
+    /// Body state of the previewed object, for the preview pane.
+    pub(super) fn preview_content(&self) -> &PreviewContentState {
+        &self.preview_content
+    }
+
+    /// Presentation of the previewed object, derived from its metadata. `None`
+    /// until `head_object` resolves — the kind depends on the reported content
+    /// type, so it cannot be guessed from the key alone.
+    pub(super) fn preview_kind(&self) -> Option<PreviewKind> {
+        let ObjectMetadataState::Loaded { metadata, .. } = self.metadata.as_ref()? else {
+            return None;
+        };
+
+        Some(detect_preview_kind(
+            metadata.content_type.as_deref(),
+            &metadata.key,
+        ))
     }
 
     /// Copies the previewed object's canonical `s3://bucket/key` URI. Acts
@@ -469,6 +502,22 @@ impl ObjectBrowserDocument {
     #[cfg(test)]
     pub(crate) fn metadata_for_test(&self) -> Option<&ObjectMetadataState> {
         self.metadata.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn preview_content_for_test(&self) -> &PreviewContentState {
+        &self.preview_content
+    }
+
+    #[cfg(test)]
+    pub(crate) fn apply_preview_content_for_test(
+        &mut self,
+        key: &str,
+        state: PreviewContentState,
+        cx: &mut Context<Self>,
+    ) {
+        let generation = self.preview_content_generation;
+        self.apply_preview_content(generation, key.to_string(), state, cx);
     }
 
     #[cfg(test)]
@@ -560,22 +609,44 @@ mod tests {
     // `gpui::*` glob, whose `test` attribute macro would shadow the plain
     // `#[test]` attribute.
     use super::{
-        ObjectAction, ObjectBrowserDocument, ObjectMetadataState, ObjectTreeNodeId, PreviewGate,
+        ImagePreview, ObjectAction, ObjectBrowserDocument, ObjectMetadataState, ObjectTreeNodeId,
+        PreviewContentState, PreviewGate, PreviewKind,
     };
     use crate::buckets_table::OperationTiming;
     use dbflux_core::{ObjectListingPage, ObjectMetadata, ObjectSummary};
 
     fn object_metadata(key: &str, size_bytes: u64, storage_class: Option<&str>) -> ObjectMetadata {
+        typed_object_metadata(key, size_bytes, storage_class, Some("text/plain"))
+    }
+
+    fn typed_object_metadata(
+        key: &str,
+        size_bytes: u64,
+        storage_class: Option<&str>,
+        content_type: Option<&str>,
+    ) -> ObjectMetadata {
         ObjectMetadata {
             key: key.to_string(),
             size_bytes,
-            content_type: Some("text/plain".to_string()),
+            content_type: content_type.map(|value| value.to_string()),
             last_modified: None,
             etag: Some("\"etag\"".to_string()),
             storage_class: storage_class.map(|class| class.to_string()),
             encryption: Some("AES256".to_string()),
             version_count: None,
         }
+    }
+
+    fn image_preview() -> PreviewContentState {
+        PreviewContentState::Image(Box::new(ImagePreview {
+            image: std::sync::Arc::new(gpui::Image::from_bytes(
+                gpui::ImageFormat::Png,
+                vec![1, 2, 3],
+            )),
+            width: 640,
+            height: 480,
+            byte_len: 3,
+        }))
     }
 
     fn page(prefixes: &[&str], objects: &[&str]) -> ObjectListingPage {
@@ -830,6 +901,136 @@ mod tests {
                 );
                 assert_eq!(doc.take_pending_object_action(), None);
             });
+        });
+    }
+
+    /// T29: an image within the preview limit triggers a body fetch as soon as
+    /// its metadata resolves. Without a live connection the fetch fails
+    /// immediately, which is exactly the degradation path the pane must show.
+    #[gpui::test]
+    fn image_metadata_starts_a_body_fetch(cx: &mut gpui::TestAppContext) {
+        let doc = new_test_entity(cx);
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, cx| {
+                doc.open_preview("shots/hero.png".to_string(), cx);
+                doc.apply_metadata_for_test(
+                    typed_object_metadata(
+                        "shots/hero.png",
+                        2048,
+                        Some("STANDARD"),
+                        Some("image/png"),
+                    ),
+                    cx,
+                );
+            });
+        });
+
+        cx.update(|cx| {
+            let doc = doc.read(cx);
+
+            assert_eq!(
+                doc.preview_kind(),
+                Some(PreviewKind::Image(gpui::ImageFormat::Png))
+            );
+            assert!(
+                matches!(
+                    doc.preview_content_for_test(),
+                    PreviewContentState::Failed(_)
+                ),
+                "an image body fetch must be attempted and its failure surfaced"
+            );
+        });
+    }
+
+    /// T32: a PDF is never fetched — it is presented as metadata plus the
+    /// download / open-externally actions.
+    #[gpui::test]
+    fn pdf_objects_never_fetch_their_body(cx: &mut gpui::TestAppContext) {
+        let doc = new_test_entity(cx);
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, cx| {
+                doc.open_preview("reports/q1.pdf".to_string(), cx);
+                doc.apply_metadata_for_test(
+                    typed_object_metadata(
+                        "reports/q1.pdf",
+                        2048,
+                        Some("STANDARD"),
+                        Some("application/pdf"),
+                    ),
+                    cx,
+                );
+            });
+        });
+
+        cx.update(|cx| {
+            let doc = doc.read(cx);
+
+            assert_eq!(doc.preview_kind(), Some(PreviewKind::Pdf));
+            assert_eq!(
+                doc.preview_content_for_test(),
+                &PreviewContentState::Unavailable
+            );
+        });
+    }
+
+    /// T29: the decoded image belongs to one selection only — moving to another
+    /// object drops it instead of letting previews accumulate.
+    #[gpui::test]
+    fn selecting_another_object_drops_the_cached_image(cx: &mut gpui::TestAppContext) {
+        let doc = new_test_entity(cx);
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, cx| {
+                doc.open_preview("shots/hero.png".to_string(), cx);
+                doc.apply_preview_content_for_test("shots/hero.png", image_preview(), cx);
+            });
+        });
+
+        cx.update(|cx| {
+            assert!(matches!(
+                doc.read(cx).preview_content_for_test(),
+                PreviewContentState::Image(_)
+            ));
+        });
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, cx| {
+                doc.open_preview("shots/other.bin".to_string(), cx);
+            });
+        });
+
+        cx.update(|cx| {
+            assert_eq!(
+                doc.read(cx).preview_content_for_test(),
+                &PreviewContentState::Unavailable
+            );
+        });
+    }
+
+    /// T29: a body that arrives for a superseded selection never reaches the
+    /// pane, mirroring the metadata staleness guard.
+    #[gpui::test]
+    fn stale_preview_content_is_discarded(cx: &mut gpui::TestAppContext) {
+        let doc = new_test_entity(cx);
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, cx| {
+                doc.open_preview("shots/hero.png".to_string(), cx);
+                doc.open_preview("shots/second.png".to_string(), cx);
+                doc.apply_preview_content_for_test("shots/hero.png", image_preview(), cx);
+            });
+        });
+
+        cx.update(|cx| {
+            assert!(
+                !matches!(
+                    doc.read(cx).preview_content_for_test(),
+                    PreviewContentState::Image(_)
+                ),
+                "the body of a superseded selection must not reach the pane"
+            );
         });
     }
 
