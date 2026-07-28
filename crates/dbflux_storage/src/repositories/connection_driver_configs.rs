@@ -58,6 +58,10 @@ pub struct ConnectionDriverConfigDto {
     // SQL Server-specific
     pub mssql_instance: Option<String>,
     pub mssql_trust_server_certificate: bool,
+    // S3-specific (region/profile/endpoint reuse the dynamo_* columns above,
+    // the same convention CloudWatchLogs already uses)
+    pub s3_access_key_id: Option<String>,
+    pub s3_path_style: bool,
 }
 
 impl ConnectionDriverConfigDto {
@@ -99,6 +103,8 @@ impl ConnectionDriverConfigDto {
             external_values_json: None,
             mssql_instance: None,
             mssql_trust_server_certificate: true,
+            s3_access_key_id: None,
+            s3_path_style: false,
         }
     }
 
@@ -332,6 +338,19 @@ impl ConnectionDriverConfigDto {
                     fill_ssh_tunnel_fields(&mut dto, tunnel);
                 }
             }
+            DbConfig::S3 {
+                region,
+                profile,
+                access_key_id,
+                endpoint,
+                path_style,
+            } => {
+                dto.dynamo_region = Some(region.clone());
+                dto.dynamo_profile = profile.clone();
+                dto.dynamo_endpoint = endpoint.clone();
+                dto.s3_access_key_id = access_key_id.clone();
+                dto.s3_path_style = *path_style;
+            }
             DbConfig::External { kind, values } => {
                 dto.external_kind = Some(db_kind_to_str(*kind));
                 dto.external_values_json = Some(serde_json::to_string(values).unwrap_or_default());
@@ -534,6 +553,13 @@ impl ConnectionDriverConfigDto {
                     ssh_tunnel_profile_id: None,
                 })
             }
+            DbKind::S3 => Some(DbConfig::S3 {
+                region: self.dynamo_region.clone().unwrap_or_default(),
+                profile: self.dynamo_profile.clone(),
+                access_key_id: self.s3_access_key_id.clone(),
+                endpoint: self.dynamo_endpoint.clone(),
+                path_style: self.s3_path_style,
+            }),
         }
     }
 }
@@ -555,6 +581,7 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::InfluxDB => "InfluxDB",
         DbKind::SqlServer => "SqlServer",
         DbKind::Redshift => "Redshift",
+        DbKind::S3 => "S3",
     }
     .to_string()
 }
@@ -572,6 +599,7 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "InfluxDB" => Some(DbKind::InfluxDB),
         "SqlServer" => Some(DbKind::SqlServer),
         "Redshift" => Some(DbKind::Redshift),
+        "S3" => Some(DbKind::S3),
         _ => None,
     }
 }
@@ -691,7 +719,8 @@ impl ConnectionDriverConfigsRepository {
                     redis_tls, redis_database,
                     dynamo_region, dynamo_profile, dynamo_endpoint, dynamo_table,
                     external_kind, external_values_json,
-                    mssql_instance, mssql_trust_server_certificate
+                    mssql_instance, mssql_trust_server_certificate,
+                    s3_access_key_id, s3_path_style
                 FROM cfg_connection_driver_configs
                 WHERE profile_id = ?1
                 "#,
@@ -738,6 +767,8 @@ impl ConnectionDriverConfigsRepository {
                 external_values_json: row.get(32)?,
                 mssql_instance: row.get(33)?,
                 mssql_trust_server_certificate: row.get::<_, i32>(34)? != 0,
+                s3_access_key_id: row.get(35)?,
+                s3_path_style: row.get::<_, i32>(36)? != 0,
             })
         });
 
@@ -767,7 +798,8 @@ impl ConnectionDriverConfigsRepository {
                     redis_tls, redis_database,
                     dynamo_region, dynamo_profile, dynamo_endpoint, dynamo_table,
                     external_kind, external_values_json,
-                    mssql_instance, mssql_trust_server_certificate
+                    mssql_instance, mssql_trust_server_certificate,
+                    s3_access_key_id, s3_path_style
                 ) VALUES (
                     ?1, ?2, ?3,
                     ?4, ?5, ?6, ?7, ?8, ?9,
@@ -779,7 +811,8 @@ impl ConnectionDriverConfigsRepository {
                     ?26, ?27,
                     ?28, ?29, ?30, ?31,
                     ?32, ?33,
-                    ?34, ?35
+                    ?34, ?35,
+                    ?36, ?37
                 )
                 "#,
                 params![
@@ -818,6 +851,8 @@ impl ConnectionDriverConfigsRepository {
                     config.external_values_json,
                     config.mssql_instance,
                     config.mssql_trust_server_certificate as i32,
+                    config.s3_access_key_id,
+                    config.s3_path_style as i32,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -844,7 +879,8 @@ impl ConnectionDriverConfigsRepository {
                     redis_tls, redis_database,
                     dynamo_region, dynamo_profile, dynamo_endpoint, dynamo_table,
                     external_kind, external_values_json,
-                    mssql_instance, mssql_trust_server_certificate
+                    mssql_instance, mssql_trust_server_certificate,
+                    s3_access_key_id, s3_path_style
                 ) VALUES (
                     ?1, ?2, ?3,
                     ?4, ?5, ?6, ?7, ?8, ?9,
@@ -856,7 +892,8 @@ impl ConnectionDriverConfigsRepository {
                     ?26, ?27,
                     ?28, ?29, ?30, ?31,
                     ?32, ?33,
-                    ?34, ?35
+                    ?34, ?35,
+                    ?36, ?37
                 )
                 ON CONFLICT(profile_id) DO UPDATE SET
                     config_key = excluded.config_key,
@@ -891,7 +928,9 @@ impl ConnectionDriverConfigsRepository {
                     external_kind = excluded.external_kind,
                     external_values_json = excluded.external_values_json,
                     mssql_instance = excluded.mssql_instance,
-                    mssql_trust_server_certificate = excluded.mssql_trust_server_certificate
+                    mssql_trust_server_certificate = excluded.mssql_trust_server_certificate,
+                    s3_access_key_id = excluded.s3_access_key_id,
+                    s3_path_style = excluded.s3_path_style
                 "#,
                 params![
                     config.id,
@@ -929,6 +968,8 @@ impl ConnectionDriverConfigsRepository {
                     config.external_values_json,
                     config.mssql_instance,
                     config.mssql_trust_server_certificate as i32,
+                    config.s3_access_key_id,
+                    config.s3_path_style as i32,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -1011,6 +1052,106 @@ mod tests {
                 assert_eq!(region, "us-east-1");
                 assert_eq!(profile.as_deref(), Some("dev"));
                 assert_eq!(endpoint.as_deref(), Some("http://localhost:4566"));
+            }
+            other => panic!("unexpected config: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn s3_driver_config_roundtrips_through_repository_with_profile_auth() {
+        let (_temp_dir, repo) = temp_repo();
+        let profile_id = uuid::Uuid::new_v4().to_string();
+
+        repo.conn()
+            .execute(
+                r#"
+                INSERT INTO cfg_connection_profiles (
+                    id, name, driver_id, kind, created_at, updated_at
+                ) VALUES (?1, 'S3', 's3', 's3', datetime('now'), datetime('now'))
+                "#,
+                params![profile_id],
+            )
+            .expect("insert profile");
+
+        let config = DbConfig::S3 {
+            region: "us-east-1".to_string(),
+            profile: Some("dev-sso".to_string()),
+            access_key_id: None,
+            endpoint: None,
+            path_style: false,
+        };
+
+        let dto = ConnectionDriverConfigDto::from_db_config(profile_id.clone(), &config);
+        repo.insert(&dto).expect("insert config");
+
+        let restored = repo
+            .get_for_profile(&profile_id)
+            .expect("load config")
+            .expect("stored config");
+
+        match restored.to_db_config().expect("db config") {
+            DbConfig::S3 {
+                region,
+                profile,
+                access_key_id,
+                endpoint,
+                path_style,
+            } => {
+                assert_eq!(region, "us-east-1");
+                assert_eq!(profile.as_deref(), Some("dev-sso"));
+                assert_eq!(access_key_id, None);
+                assert_eq!(endpoint, None);
+                assert!(!path_style);
+            }
+            other => panic!("unexpected config: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn s3_driver_config_roundtrips_through_repository_with_static_credentials() {
+        let (_temp_dir, repo) = temp_repo();
+        let profile_id = uuid::Uuid::new_v4().to_string();
+
+        repo.conn()
+            .execute(
+                r#"
+                INSERT INTO cfg_connection_profiles (
+                    id, name, driver_id, kind, created_at, updated_at
+                ) VALUES (?1, 'MinIO', 's3', 's3', datetime('now'), datetime('now'))
+                "#,
+                params![profile_id],
+            )
+            .expect("insert profile");
+
+        let config = DbConfig::S3 {
+            region: "us-east-1".to_string(),
+            profile: None,
+            access_key_id: Some("AKIAEXAMPLE".to_string()),
+            endpoint: Some("http://localhost:9000".to_string()),
+            path_style: true,
+        };
+
+        let dto = ConnectionDriverConfigDto::from_db_config(profile_id.clone(), &config);
+        repo.upsert(&dto).expect("upsert config");
+
+        let restored = repo
+            .get_for_profile(&profile_id)
+            .expect("load config")
+            .expect("stored config");
+
+        match restored.to_db_config().expect("db config") {
+            DbConfig::S3 {
+                region,
+                profile,
+                access_key_id,
+                endpoint,
+                path_style,
+            } => {
+                assert_eq!(region, "us-east-1");
+                assert_eq!(profile, None);
+                assert_eq!(access_key_id.as_deref(), Some("AKIAEXAMPLE"));
+                assert_eq!(endpoint.as_deref(), Some("http://localhost:9000"));
+                assert!(path_style);
             }
             other => panic!("unexpected config: {other:?}"),
         }

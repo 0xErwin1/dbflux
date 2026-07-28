@@ -527,6 +527,13 @@ fn profile_config_context(config: &DbConfig) -> (Option<String>, Option<u16>, Op
             database,
             ..
         } => (Some(host.clone()), Some(*port), Some(database.clone())),
+        DbConfig::S3 {
+            region, endpoint, ..
+        } => (
+            endpoint.clone().or_else(|| Some(region.clone())),
+            None,
+            None,
+        ),
         DbConfig::External { values, .. } => {
             let host = values.get("host").cloned();
             let port = values

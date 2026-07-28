@@ -52,8 +52,8 @@ impl TransactionVocab {
     /// Returns the transaction vocabulary for a given SQL database kind.
     ///
     /// Returns `None` for driver kinds that do not speak SQL (MongoDB, Redis,
-    /// DynamoDB, CloudWatchLogs, InfluxDB). The mutation gate upstream already
-    /// blocks non-SQL drivers; this provides typed defense-in-depth.
+    /// DynamoDB, CloudWatchLogs, InfluxDB, S3). The mutation gate upstream
+    /// already blocks non-SQL drivers; this provides typed defense-in-depth.
     ///
     /// Callers should retrieve this once per execution run and cache it.
     pub fn for_kind(kind: DbKind) -> Option<Self> {
@@ -118,7 +118,8 @@ impl TransactionVocab {
             | DbKind::DynamoDB
             | DbKind::CloudWatchLogs
             | DbKind::InfluxDB
-            | DbKind::Redshift => None,
+            | DbKind::Redshift
+            | DbKind::S3 => None,
         }
     }
 

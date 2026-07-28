@@ -136,6 +136,7 @@ pub enum Icon {
     Redis,
     Dynamodb,
     Redshift,
+    S3,
 
     // Time-series brands
     Influxdb,

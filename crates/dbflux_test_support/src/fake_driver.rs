@@ -2,10 +2,10 @@ use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     Connection, ConnectionProfile, CrudResult, DatabaseCategory, DbConfig, DbDriver, DbError,
     DbKind, DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
-    FormValues, Icon, MutationCapabilities, QueryCapabilities, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch, SchemaLoadingStrategy,
-    SchemaSnapshot, SqlDialect, SqlLanguageService, SyntaxInfo, TransactionCapabilities,
-    TransferFamily,
+    FormFieldKind, FormSection, FormTab, FormValues, Icon, MutationCapabilities, QueryCapabilities,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch,
+    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlLanguageService, SyntaxInfo,
+    TransactionCapabilities, TransferFamily, field, field_required,
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
 use dbflux_driver_cloudwatch::CLOUDWATCH_FORM;
@@ -298,6 +298,13 @@ impl DbDriver for FakeDriver {
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
             },
+            DbKind::S3 => DbConfig::S3 {
+                region: get_string(values, "region", "us-east-1"),
+                profile: get_optional_string(values, "profile"),
+                access_key_id: get_optional_string(values, "access_key_id"),
+                endpoint: get_optional_string(values, "endpoint"),
+                path_style: false,
+            },
         };
 
         Ok(config)
@@ -429,6 +436,21 @@ impl DbDriver for FakeDriver {
                 values.insert("port".to_string(), port.to_string());
                 values.insert("user".to_string(), user.clone());
                 values.insert("database".to_string(), database.clone());
+            }
+            DbConfig::S3 {
+                region,
+                profile,
+                access_key_id,
+                endpoint,
+                ..
+            } => {
+                values.insert("region".to_string(), region.clone());
+                values.insert("profile".to_string(), profile.clone().unwrap_or_default());
+                values.insert(
+                    "access_key_id".to_string(),
+                    access_key_id.clone().unwrap_or_default(),
+                );
+                values.insert("endpoint".to_string(), endpoint.clone().unwrap_or_default());
             }
             DbConfig::External { values: vals, .. } => {
                 values.extend(vals.clone());
@@ -574,7 +596,7 @@ impl Connection for FakeConnection {
             DbKind::SQLite | DbKind::MongoDB | DbKind::Redis => {
                 SchemaLoadingStrategy::SingleDatabase
             }
-            DbKind::DynamoDB | DbKind::CloudWatchLogs | DbKind::InfluxDB => {
+            DbKind::DynamoDB | DbKind::CloudWatchLogs | DbKind::InfluxDB | DbKind::S3 => {
                 SchemaLoadingStrategy::SingleDatabase
             }
         }
@@ -619,6 +641,7 @@ fn active_database_from_profile(profile: &ConnectionProfile) -> Option<String> {
         DbConfig::InfluxDB { default_bucket, .. } => default_bucket.clone(),
         DbConfig::SqlServer { database, .. } => database.clone(),
         DbConfig::Redshift { database, .. } => Some(database.clone()),
+        DbConfig::S3 { .. } => None,
         DbConfig::External { values, .. } => values.get("database").cloned(),
     }
 }
@@ -640,6 +663,7 @@ fn metadata_for_kind(kind: DbKind) -> &'static DriverMetadata {
         // postgres (no write/DDL flags), so tests exercise the real driver
         // metadata instead of a hand-rolled fake.
         DbKind::Redshift => &REDSHIFT_METADATA,
+        DbKind::S3 => &FAKE_S3_METADATA,
     }
 }
 
@@ -655,6 +679,7 @@ fn form_for_kind(kind: DbKind) -> &'static DriverFormDef {
         DbKind::InfluxDB => &INFLUXDB_FORM,
         DbKind::SqlServer => &SQLSERVER_FORM,
         DbKind::Redshift => &REDSHIFT_FORM,
+        DbKind::S3 => &S3_FORM,
     }
 }
 
@@ -1051,6 +1076,74 @@ static FAKE_DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Drive
     editor_profile: None,
 });
 
+static FAKE_S3_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "fake-s3".into(),
+    display_name: "Fake S3".into(),
+    description: "Deterministic fake driver for tests".into(),
+    category: DatabaseCategory::ObjectStorage,
+    transfer_family: TransferFamily::Incompatible,
+    deployment_class: None,
+    query_language: QueryLanguage::Custom("S3".into()),
+    capabilities: DriverCapabilities::OBJECT_STORAGE | DriverCapabilities::OBJECT_PREFIX_DELETE,
+    default_port: None,
+    uri_scheme: "s3".into(),
+    icon: Icon::S3,
+    syntax: None,
+    query: None,
+    mutation: None,
+    ddl: None,
+    transactions: Some(TransactionCapabilities {
+        supports_transactions: false,
+        supported_isolation_levels: vec![],
+        default_isolation_level: None,
+        supports_savepoints: false,
+        supports_nested_transactions: false,
+        supports_read_only: false,
+        supports_deferrable: false,
+    }),
+    limits: None,
+    ssl_modes: None,
+    ssl_cert_fields: None,
+    classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
+    editor_profile: None,
+});
+
+/// Minimal placeholder form for tests — the real `S3_FORM` (with the full
+/// static-credentials/endpoint/path-style field set) is defined in
+/// `dbflux_driver_s3` once the driver itself is implemented.
+static S3_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![FormTab {
+        id: "main".into(),
+        label: "Main".into(),
+        sections: vec![FormSection {
+            title: "AWS".into(),
+            fields: vec![
+                field_required("region", "Region", FormFieldKind::Text, "us-east-1"),
+                field(
+                    "profile",
+                    "Profile",
+                    FormFieldKind::AuthProfileRef { provider_id: None },
+                    "",
+                ),
+                field(
+                    "access_key_id",
+                    "Access Key ID",
+                    FormFieldKind::Text,
+                    "optional",
+                ),
+                field(
+                    "endpoint",
+                    "Endpoint Override",
+                    FormFieldKind::Text,
+                    "optional",
+                ),
+            ],
+        }],
+    }],
+});
+
 static FAKE_CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
     id: "fake-cloudwatch".into(),
     display_name: "Fake CloudWatch Logs".into(),
@@ -1299,6 +1392,7 @@ mod tests {
                 DbKind::InfluxDB => DbConfig::default_influxdb(),
                 DbKind::SqlServer => DbConfig::default_sqlserver(),
                 DbKind::Redshift => DbConfig::default_redshift(),
+                DbKind::S3 => DbConfig::default_s3(),
             };
 
             let profile = ConnectionProfile::new("fake", config);

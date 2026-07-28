@@ -465,6 +465,7 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::InfluxDB => "InfluxDB",
         DbKind::SqlServer => "SqlServer",
         DbKind::Redshift => "Redshift",
+        DbKind::S3 => "S3",
     }
     .to_string()
 }
@@ -482,6 +483,7 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "InfluxDB" => Some(DbKind::InfluxDB),
         "SqlServer" => Some(DbKind::SqlServer),
         "Redshift" => Some(DbKind::Redshift),
+        "S3" => Some(DbKind::S3),
         _ => None,
     }
 }
@@ -498,6 +500,7 @@ fn default_db_config_for_kind(kind: DbKind) -> dbflux_core::DbConfig {
         DbKind::InfluxDB => dbflux_core::DbConfig::default_influxdb(),
         DbKind::SqlServer => dbflux_core::DbConfig::default_sqlserver(),
         DbKind::Redshift => dbflux_core::DbConfig::default_redshift(),
+        DbKind::S3 => dbflux_core::DbConfig::default_s3(),
     }
 }
 

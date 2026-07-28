@@ -444,6 +444,7 @@ impl ConnectionManagerWindow {
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
+            | DbConfig::S3 { .. }
             | DbConfig::External { .. } => {}
         }
 

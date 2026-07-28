@@ -279,6 +279,9 @@ impl AppIcon {
             // does not ship AWS service icons), so this follows the same fallback
             // convention as Icon::Dynamodb.
             Icon::Redshift => Self::Database,
+            // Same fallback convention as Icon::Dynamodb/Icon::Redshift: no
+            // redistributable AWS S3 brand asset is available.
+            Icon::S3 => Self::Database,
             Icon::Influxdb => Self::BrandInfluxDb,
             Icon::Logs => Self::Logs,
             Icon::Database => Self::Database,
