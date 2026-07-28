@@ -75,6 +75,13 @@ fn collection_document_presentation_for_connection(
         dbflux_core::CollectionPresentation::EventStream => {
             CollectionDocumentPresentation::AuditLike
         }
+        // Object-storage buckets never populate `CollectionInfo.presentation` —
+        // they route to `BucketsTableDocument`/`ObjectBrowserDocument` through a
+        // separate connection-root/sidebar path, not through this per-collection
+        // decision. Fall back to `DataGrid` so the match stays exhaustive.
+        dbflux_core::CollectionPresentation::ObjectBrowser => {
+            CollectionDocumentPresentation::DataGrid
+        }
     }
 }
 
