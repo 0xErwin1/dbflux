@@ -89,6 +89,9 @@ pub enum EventCategory {
     Mcp,
     /// Governance policy evaluation events.
     Governance,
+    /// Object-storage CRUD/mutation events (upload, delete, presign, rename,
+    /// create bucket/folder, save-back edit).
+    ObjectStorage,
 }
 
 impl EventCategory {
@@ -103,6 +106,7 @@ impl EventCategory {
             EventCategory::System => "system",
             EventCategory::Mcp => "mcp",
             EventCategory::Governance => "governance",
+            EventCategory::ObjectStorage => "object_storage",
         }
     }
 
@@ -117,6 +121,7 @@ impl EventCategory {
             "system" => Some(EventCategory::System),
             "mcp" => Some(EventCategory::Mcp),
             "governance" => Some(EventCategory::Governance),
+            "object_storage" => Some(EventCategory::ObjectStorage),
             _ => None,
         }
     }
@@ -671,6 +676,41 @@ mod tests {
             Some(EventCategory::Hook)
         );
         assert_eq!(EventCategory::from_str_repr("unknown"), None);
+    }
+
+    #[test]
+    fn test_event_category_roundtrip_all_variants() {
+        for category in [
+            EventCategory::Config,
+            EventCategory::Connection,
+            EventCategory::Query,
+            EventCategory::Hook,
+            EventCategory::Script,
+            EventCategory::System,
+            EventCategory::Mcp,
+            EventCategory::Governance,
+            EventCategory::ObjectStorage,
+        ] {
+            let parsed = EventCategory::from_str_repr(category.as_str());
+            assert_eq!(
+                parsed,
+                Some(category),
+                "as_str/from_str_repr round-trip failed for {category:?}"
+            );
+
+            let json = serde_json::to_string(&category).expect("serialize");
+            let decoded: EventCategory = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(decoded, category, "serde round-trip failed for {category:?}");
+        }
+    }
+
+    #[test]
+    fn test_object_storage_category_string_repr() {
+        assert_eq!(EventCategory::ObjectStorage.as_str(), "object_storage");
+        assert_eq!(
+            EventCategory::from_str_repr("object_storage"),
+            Some(EventCategory::ObjectStorage)
+        );
     }
 
     #[test]

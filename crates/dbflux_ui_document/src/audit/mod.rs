@@ -1373,6 +1373,7 @@ impl AuditDocument {
             DropdownItem::with_value("System", "system"),
             DropdownItem::with_value("MCP", "mcp"),
             DropdownItem::with_value("Governance", "governance"),
+            DropdownItem::with_value("Object Storage", "object_storage"),
         ]
     }
 
@@ -1387,6 +1388,7 @@ impl AuditDocument {
             Some(EventCategory::System) => 6,
             Some(EventCategory::Mcp) => 7,
             Some(EventCategory::Governance) => 8,
+            Some(EventCategory::ObjectStorage) => 9,
             None => 0,
         }
     }
@@ -1402,6 +1404,7 @@ impl AuditDocument {
             6 => Some(EventCategory::System),
             7 => Some(EventCategory::Mcp),
             8 => Some(EventCategory::Governance),
+            9 => Some(EventCategory::ObjectStorage),
             _ => None,
         }
     }
