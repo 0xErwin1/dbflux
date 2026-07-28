@@ -357,6 +357,14 @@ pub enum SchemaNodeId {
     InstanceOverviewLeaf {
         profile_id: Uuid,
     },
+
+    /// Clickable leaf for a single container of an object-storage connection
+    /// (`DatabaseCategory::ObjectStorage`). Listed flat under the connection —
+    /// the prefix hierarchy stays inside the object browser document.
+    Bucket {
+        profile_id: Uuid,
+        name: String,
+    },
 }
 
 /// Simple kind enum for cheap matching without data.
@@ -424,6 +432,7 @@ pub enum SchemaNodeKind {
     InstanceInspectorsFolder,
     InstanceInspectorLeaf,
     InstanceOverviewLeaf,
+    Bucket,
 }
 
 impl SchemaNodeId {
@@ -493,6 +502,7 @@ impl SchemaNodeId {
             Self::InstanceInspectorsFolder { .. } => SchemaNodeKind::InstanceInspectorsFolder,
             Self::InstanceInspectorLeaf { .. } => SchemaNodeKind::InstanceInspectorLeaf,
             Self::InstanceOverviewLeaf { .. } => SchemaNodeKind::InstanceOverviewLeaf,
+            Self::Bucket { .. } => SchemaNodeKind::Bucket,
         }
     }
 
@@ -559,7 +569,8 @@ impl SchemaNodeId {
             | Self::InstanceMetricLeaf { profile_id, .. }
             | Self::InstanceInspectorsFolder { profile_id, .. }
             | Self::InstanceInspectorLeaf { profile_id, .. }
-            | Self::InstanceOverviewLeaf { profile_id, .. } => Some(*profile_id),
+            | Self::InstanceOverviewLeaf { profile_id, .. }
+            | Self::Bucket { profile_id, .. } => Some(*profile_id),
         }
     }
 }
@@ -624,6 +635,8 @@ const P_INST_METRIC_LEAF: &str = "IML";
 const P_INST_INSPECTORS_FOLDER: &str = "IIF";
 const P_INST_INSPECTOR_LEAF: &str = "IIL";
 const P_INST_OVERVIEW_LEAF: &str = "IOL";
+// Object-storage bucket leaf.
+const P_BUCKET: &str = "BKT";
 // Dashboard and saved-chart sidebar node prefixes.
 // Note: P_SCRIPTS_FOLDER already uses "SCF", so we use distinct tags here.
 const P_DASHBOARDS_FOLDER: &str = "DBF";
@@ -1205,6 +1218,22 @@ mod tests {
             metric_id: "pg.activity".into(),
         });
         roundtrip(SchemaNodeId::InstanceOverviewLeaf { profile_id: uuid });
+    }
+
+    /// T21: bucket leaves round-trip so the sidebar can parse the node ID it
+    /// rendered, including names containing dots and hyphens.
+    #[test]
+    fn bucket_nodes_round_trip_via_display_and_from_str() {
+        let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+
+        roundtrip(SchemaNodeId::Bucket {
+            profile_id: uuid,
+            name: "prod-logs".into(),
+        });
+        roundtrip(SchemaNodeId::Bucket {
+            profile_id: uuid,
+            name: "media.assets.example".into(),
+        });
     }
 
     #[test]

@@ -395,6 +395,12 @@ impl Sidebar {
             self.spawn_fetch_instance_catalog(*profile_id, cx);
         }
 
+        if let Some(SchemaNodeId::Profile { profile_id }) = &parsed
+            && self.profile_category(*profile_id, cx) == Some(DatabaseCategory::ObjectStorage)
+        {
+            self.spawn_fetch_buckets(*profile_id, cx);
+        }
+
         if matches!(parsed, Some(SchemaNodeId::Database { .. })) {
             self.handle_database_click(item_id, cx);
         }
@@ -746,6 +752,66 @@ impl Sidebar {
         self.pending_instance_catalog_fetches.remove(&profile_id);
     }
 
+    /// List the buckets of an object-storage connection for the sidebar tree.
+    ///
+    /// Buckets are the only level the sidebar shows — prefixes and objects
+    /// stay inside the object browser document. Deduplicated per profile so an
+    /// expand/collapse burst issues at most one `list_buckets` call.
+    pub(super) fn spawn_fetch_buckets(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
+        if self.bucket_cache.contains_key(&profile_id)
+            || self.pending_bucket_fetches.contains_key(&profile_id)
+        {
+            return;
+        }
+
+        let Some(connection) = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|connected| connected.connection.clone())
+        else {
+            return;
+        };
+
+        let sidebar = cx.entity().clone();
+
+        let background_task = cx.background_executor().spawn(async move {
+            match connection.object_store_api() {
+                Some(api) => api.list_buckets().map_err(|err| err.to_string()),
+                None => Err("connection does not expose an object store".to_string()),
+            }
+        });
+
+        let task = cx.spawn(async move |_this, cx| {
+            let result = background_task.await;
+
+            cx.update(|cx| {
+                sidebar.update(cx, |sidebar, cx| {
+                    sidebar.pending_bucket_fetches.remove(&profile_id);
+                    match result {
+                        Ok(buckets) => {
+                            sidebar.bucket_cache.insert(profile_id, buckets);
+                        }
+                        Err(message) => {
+                            log::warn!("Failed to list buckets for {}: {}", profile_id, message);
+                        }
+                    }
+                    sidebar.rebuild_tree_with_overrides(cx);
+                });
+            })
+            .log_if_dropped();
+        });
+
+        self.pending_bucket_fetches.insert(profile_id, task);
+    }
+
+    /// Drop the cached bucket listing so the next expansion re-lists.
+    pub(super) fn clear_bucket_cache(&mut self, profile_id: Uuid) {
+        self.bucket_cache.remove(&profile_id);
+        self.pending_bucket_fetches.remove(&profile_id);
+    }
+
     fn collection_node_is_event_stream(
         &self,
         profile_id: Uuid,
@@ -812,6 +878,16 @@ impl Sidebar {
             .collect();
         for profile_id in stale_metric_ids {
             self.clear_instance_catalog_cache(profile_id);
+        }
+
+        let stale_bucket_ids: Vec<Uuid> = self
+            .bucket_cache
+            .keys()
+            .filter(|id| !connected_profile_ids.contains(id))
+            .copied()
+            .collect();
+        for profile_id in stale_bucket_ids {
+            self.clear_bucket_cache(profile_id);
         }
 
         self.cleanup_stale_overrides(cx);

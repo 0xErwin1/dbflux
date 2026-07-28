@@ -46,6 +46,7 @@ impl SchemaNodeKind {
                 | Self::InstanceInspectorsFolder
                 | Self::InstanceInspectorLeaf
                 | Self::InstanceOverviewLeaf
+                | Self::Bucket
         )
     }
 
@@ -99,6 +100,7 @@ impl SchemaNodeKind {
                 | Self::InstanceMetricLeaf
                 | Self::InstanceInspectorLeaf
                 | Self::InstanceOverviewLeaf
+                | Self::Bucket
         )
     }
 }

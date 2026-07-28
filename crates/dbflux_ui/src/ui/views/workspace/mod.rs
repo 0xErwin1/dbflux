@@ -841,6 +841,12 @@ impl Workspace {
                 SidebarEvent::OpenObjectStoreBuckets { profile_id } => {
                     this.open_object_store_buckets_document(*profile_id, window, cx);
                 }
+                // Activating a bucket routes to the connection's buckets table
+                // until the object browser document exists; the event already
+                // carries the bucket so that routing is a one-line change.
+                SidebarEvent::OpenObjectStoreBucket { profile_id, .. } => {
+                    this.open_object_store_buckets_document(*profile_id, window, cx);
+                }
                 SidebarEvent::RequestSqlPreview {
                     profile_id,
                     table_info,
