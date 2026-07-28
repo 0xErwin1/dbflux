@@ -5,6 +5,7 @@ Thanks for considering a contribution. This guide explains how to file issues, o
 ## Quick Links
 
 - [Architecture overview](ARCHITECTURE.md)
+- [Driver authoring guide](docs/DRIVER_AUTHORING.md)
 - [Release process and branching model](docs/RELEASE.md)
 - [Audit event schema](docs/AUDIT.md)
 - [Driver RPC protocol](docs/DRIVER_RPC_PROTOCOL.md)
