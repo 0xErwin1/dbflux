@@ -4,7 +4,8 @@ This document is a comparative overview of the database drivers shipped with
 DBFlux. For per-driver details, follow the link to each driver crate's
 `README.md`. For the internal driver architecture (traits, registration, the
 `DbDriver`/`Connection` seam), see the **Driver System** section of
-[`ARCHITECTURE.md`](../ARCHITECTURE.md).
+[`ARCHITECTURE.md`](../ARCHITECTURE.md). Contributors implementing a driver
+should start with the [Driver Authoring Guide](DRIVER_AUTHORING.md).
 
 ## How drivers are abstracted
 
@@ -32,6 +33,7 @@ The capability flags listed below are exactly the ones each driver's
 | Driver | Category | Query language | Key capabilities | Notes / limitations |
 | --- | --- | --- | --- | --- |
 | PostgreSQL | Relational | SQL | Relational base + schemas, SSH tunnel, SSL, auth, foreign keys, check/unique constraints, custom types, `RETURNING`, transactional DDL, routines, multi-statement | Full SQL driver; routine viewer is read-only; transactional DDL except `CREATE INDEX CONCURRENTLY`. |
+| Amazon Redshift | Relational | SQL | Multiple databases, schemas, views, SSH tunnel, SSL/client certificates, auth, query cancellation, prepared statements, pagination, sorting, filtering, CSV/JSON export | Read-only over the PostgreSQL wire protocol; single-statement; exposes Redshift storage hints; no writes/DDL, IAM/SSO, or indexes. |
 | MySQL | Relational | SQL | Relational base + SSH tunnel, SSL, auth, foreign keys, check/unique constraints, routines, multi-statement | DDL is non-transactional; multi-statement scripts split text-based and run sequentially; routine listing covers FUNCTION/PROCEDURE only. |
 | MariaDB | Relational | SQL | Same crate and capabilities as MySQL | Registered as a separate `mariadb` metadata sharing the MySQL implementation. |
 | SQLite | Relational | SQL | Views, indexes, foreign keys, check/unique constraints, prepared statements, insert/update/delete, pagination, sorting, filtering, CSV/JSON export, query cancellation, transactional DDL, multi-statement | Embedded file driver: no network, SSH tunnel, or TLS; no multi-schema namespace. |
@@ -51,6 +53,15 @@ SSH tunneling, query cancellation via cancel tokens, transactional DDL, and
 PostgreSQL-specific code generation. Multi-statement scripts run as a batch via
 the simple query protocol. See
 [`crates/dbflux_driver_postgres/README.md`](../crates/dbflux_driver_postgres/README.md).
+
+### Amazon Redshift
+
+Read-only relational SQL driver using the PostgreSQL wire protocol. It supports
+schema, table, view, and column introspection; SSH tunneling; TLS and client
+certificates; query cancellation; and Redshift distribution/sort-key storage
+hints. It does not support writes or DDL, IAM/SSO authentication,
+multi-statement queries, or indexes. See
+[`crates/dbflux_driver_redshift/README.md`](../crates/dbflux_driver_redshift/README.md).
 
 ### MySQL / MariaDB
 

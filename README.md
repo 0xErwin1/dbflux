@@ -1,38 +1,50 @@
 # DBFlux
 
-A fast, keyboard-first database client built with Rust and GPUI.
+An extensible, keyboard-first data platform delivered as a Rust + GPUI desktop client.
 
 ## Overview
 
-DBFlux is an open-source database client written in Rust, built with GPUI (Zed's UI framework). It focuses on performance, a clean UX, and keyboard-first workflows.
+DBFlux is an open-source desktop client with built-in drivers for relational and non-relational databases. Its core contracts are driver-neutral, and external drivers can integrate over RPC.
 
-The long-term goal is to provide a fully open-source alternative to DBeaver, supporting both relational and non-relational databases.
+The client focuses on performance, a clean UX, and keyboard-first workflows. The long-term goal is to provide a fully open-source alternative to DBeaver.
 
 ![DBFlux](resources/dbflux.png)
 
 ## Documentation
 
-### User guides
+Choose the path that matches what you want to do.
 
-- [Usage Guide](docs/USAGE.md) — getting started: connect, query, chart, export
-- [Connecting — Advanced Setup](docs/CONNECTIONS.md) — SSH tunnels, proxies, AWS SSO auth profiles, value sources
-- [Settings & Hooks](docs/SETTINGS.md) — every Settings section and connection hooks
-- [Data & Privacy](docs/DATA_AND_PRIVACY.md) — where your data and secrets live, backup and reset
-- [Dashboards & Audit — User Guide](docs/DASHBOARDS_AND_AUDIT.md) — charts, dashboards, instance metrics, audit viewer
-- [Drivers Overview](docs/DRIVERS.md) — supported databases, capabilities, limitations
+### Start here
+
+| Goal | Guide |
+|------|-------|
+| Create a connection | Start with the [Usage Guide](docs/USAGE.md#1-first-launch-and-creating-a-connection). For SSH tunnels, proxies, AWS SSO, and value sources, use [Connecting — Advanced Setup](docs/CONNECTIONS.md). |
+| Run queries and follow common workflows | Follow the [Usage Guide](docs/USAGE.md) for querying, browsing results, charting, exporting, and keyboard navigation. |
+| View audit events | Open the audit viewer with the [Dashboards & Audit User Guide](docs/DASHBOARDS_AND_AUDIT.md#audit-viewer). |
+| Use MCP | Follow the [AI + MCP Integration Guide](docs/MCP_AI_INTEGRATION.md). |
+| Check driver support and limitations | Use [Drivers Overview](docs/DRIVERS.md), the canonical capability and limitations overview. |
+
+### More user guides
+
+- [Settings & Hooks](docs/SETTINGS.md) — settings, connection hooks, and access profiles
+- [Data & Privacy](docs/DATA_AND_PRIVACY.md) — data and secret storage, backup, and reset
 - [Lua Scripting](docs/LUA.md) — the embedded Lua runtime for hooks
 
-### Reference & internals
+### Contributors
 
-- [Architecture](ARCHITECTURE.md) — layered diagrams, query/connection flow, crate map
-- [Charts](docs/CHARTS.md) — chart types, column kinds, axis auto-detection
-- [Dashboards](docs/DASHBOARDS.md) — dashboards, saved charts, instance metrics and inspectors
+- [Contributing](CONTRIBUTING.md) — setup, checks, and contribution workflow
+- [Key Concepts](docs/CONCEPTS.md) — the short mental model for contracts and subsystem boundaries
+- [Driver Authoring](docs/DRIVER_AUTHORING.md) — choose and implement a built-in Rust or external RPC driver
+- [Architecture](ARCHITECTURE.md) — the canonical architecture and crate map, including crate boundaries and cross-crate flows
+
+### Reference
+
+- [Charts](docs/CHARTS.md) — chart types, column kinds, and axis auto-detection
+- [Dashboards](docs/DASHBOARDS.md) — dashboards, saved charts, instance metrics, and inspectors
 - [Audit](docs/AUDIT.md) — audit event schema and redaction
-- [AI + MCP Integration Guide](docs/MCP_AI_INTEGRATION.md)
 - [Driver RPC Protocol](docs/DRIVER_RPC_PROTOCOL.md)
 - [RPC Services Config](docs/RPC_SERVICES_CONFIG.md)
 - [Release Process](docs/RELEASE.md)
-- [Contributing](CONTRIBUTING.md)
 - [Code Style](CODE_STYLE.md)
 - [Agent Instructions](AGENTS.md)
 - [Claude Instructions](CLAUDE.md)
@@ -228,6 +240,7 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/uninst
 ### Database Support
 
 - **PostgreSQL** with SSL/TLS modes (Disable, Prefer, Require)
+- **Amazon Redshift** with read-only SQL over the PostgreSQL wire protocol, SSH tunneling, and TLS/client certificates
 - **MySQL** / MariaDB
 - **SQLite** for local database files
 - **Microsoft SQL Server** (TDS) with TLS, SQL Browser named-instance routing, and multi-schema introspection

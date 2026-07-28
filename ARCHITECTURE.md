@@ -1,5 +1,7 @@
 # Architecture
 
+For the conceptual model and contract boundaries, begin with [Key Concepts](docs/CONCEPTS.md). This document remains canonical for crate boundaries and key files.
+
 ## Overview
 
 - DBFlux is a keyboard-first database client built with Rust and GPUI, focused on fast workflows and a clean desktop UI (README.md).

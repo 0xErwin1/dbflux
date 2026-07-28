@@ -63,7 +63,6 @@ Notes:
 
 - `socket_id` is required.
 - `kind` supports `driver` and `auth_provider`.
-- `kind` supports `driver` and `auth_provider`.
 - `command` is optional.
   - If `command` is omitted and `args` is empty, DBFlux expects the service to already be running.
   - For `driver`, if `command` is omitted and `args` is non-empty, DBFlux launches `dbflux-driver-host`.
