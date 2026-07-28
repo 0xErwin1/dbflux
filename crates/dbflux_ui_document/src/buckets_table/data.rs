@@ -7,9 +7,10 @@
 //! only ever triggered by an explicit user action — never automatically.
 
 use super::BucketsTableDocument;
-use dbflux_core::{BucketDetails, BucketInfo, BucketSizeEstimate, DbError};
-use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
+use dbflux_core::{BucketDetails, BucketInfo, BucketSizeEstimate, DbError, ObjectListingPage};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, report_error_async};
 use gpui::Context;
+use std::time::Instant;
 
 /// Cap passed to `estimate_bucket_size` — S3 `ListObjectsV2` calls are billed
 /// and can be slow on large buckets, so the estimate walks at most this many
@@ -61,6 +62,28 @@ pub fn bucket_delete_allowed(page: &dbflux_core::ObjectListingPage) -> bool {
     page.objects.is_empty() && page.common_prefixes.is_empty()
 }
 
+/// Message shown when the user tries to delete a bucket that still holds
+/// objects. Points at the recursive prefix delete instead of silently failing.
+pub(super) fn bucket_not_empty_message(bucket: &str) -> String {
+    format!(
+        "Bucket \"{bucket}\" is not empty. Delete its objects with a recursive prefix delete before removing the bucket."
+    )
+}
+
+/// Client-side timing of the last object-store call this document made,
+/// surfaced as a status-bar segment (e.g. `ListBuckets · 188 ms`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OperationTiming {
+    pub label: &'static str,
+    pub millis: u128,
+}
+
+impl OperationTiming {
+    pub fn display(&self) -> String {
+        format!("{} · {} ms", self.label, self.millis)
+    }
+}
+
 impl BucketsTableDocument {
     pub(super) fn get_connection(
         &self,
@@ -91,21 +114,33 @@ impl BucketsTableDocument {
         let entity = cx.entity().clone();
 
         let task = cx.background_executor().spawn(async move {
-            let api = connection
-                .object_store_api()
-                .ok_or_else(|| DbError::NotSupported("Object-store API unavailable".to_string()))?;
-            api.list_buckets()
+            let started = Instant::now();
+
+            let result = match connection.object_store_api() {
+                Some(api) => api.list_buckets(),
+                None => Err(DbError::NotSupported(
+                    "Object-store API unavailable".to_string(),
+                )),
+            };
+
+            (result, started.elapsed().as_millis())
         });
 
         cx.spawn(async move |_this, cx| {
-            let result = task.await;
+            let (result, elapsed_millis) = task.await;
 
             if let Err(ref err) = result {
                 report_error_async(db_error_to_user_facing(err), cx);
             }
 
             cx.update(|cx| {
-                entity.update(cx, |doc, cx| doc.apply_bucket_list(result, cx));
+                entity.update(cx, |doc, cx| {
+                    doc.last_operation = Some(OperationTiming {
+                        label: "ListBuckets",
+                        millis: elapsed_millis,
+                    });
+                    doc.apply_bucket_list(result, cx);
+                });
             })
             .ok();
         })
@@ -131,6 +166,7 @@ impl BucketsTableDocument {
                     .collect();
                 self.state = DocumentState::Clean;
                 self.last_error = None;
+                self.clamp_selection();
                 cx.notify();
 
                 self.load_all_bucket_details(cx);
@@ -324,6 +360,145 @@ impl BucketsTableDocument {
         }
     }
 
+    // -- Delete (empty buckets only) -------------------------------------
+
+    /// Probes the selected bucket for content before offering deletion.
+    ///
+    /// Amendment A: a non-empty bucket never reaches the confirmation dialog.
+    /// The probe is a single `list_objects` page at the bucket root; anything
+    /// in `objects` or `common_prefixes` blocks the delete.
+    pub(super) fn request_delete_selected_bucket(&mut self, cx: &mut Context<Self>) {
+        let Some(bucket_name) = self.selected_bucket().map(str::to_string) else {
+            return;
+        };
+
+        if self.delete_probe.is_some() || self.pending_delete.is_some() {
+            return;
+        }
+
+        self.delete_probe = Some(bucket_name.clone());
+        cx.notify();
+
+        let Some(connection) = self.get_connection(cx) else {
+            self.delete_probe = None;
+            report_error(
+                UserFacingError::new(ErrorKind::User, "Connection is no longer active"),
+                cx,
+            );
+            cx.notify();
+            return;
+        };
+
+        let entity = cx.entity().clone();
+        let bucket_for_task = bucket_name.clone();
+
+        let task = cx.background_executor().spawn(async move {
+            let api = connection
+                .object_store_api()
+                .ok_or_else(|| DbError::NotSupported("Object-store API unavailable".to_string()))?;
+            api.list_objects(&bucket_for_task, "", None)
+        });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| {
+                entity.update(cx, |doc, cx| {
+                    doc.apply_delete_probe(&bucket_name, result, cx);
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(super) fn apply_delete_probe(
+        &mut self,
+        bucket_name: &str,
+        result: Result<ObjectListingPage, DbError>,
+        cx: &mut Context<Self>,
+    ) {
+        self.delete_probe = None;
+
+        match result {
+            Ok(page) if bucket_delete_allowed(&page) => {
+                self.pending_delete = Some(bucket_name.to_string());
+            }
+            Ok(_) => {
+                report_error(
+                    UserFacingError::new(ErrorKind::User, bucket_not_empty_message(bucket_name)),
+                    cx,
+                );
+            }
+            Err(err) => {
+                report_error(db_error_to_user_facing(&err), cx);
+            }
+        }
+
+        cx.notify();
+    }
+
+    pub(super) fn cancel_delete_bucket(&mut self, cx: &mut Context<Self>) {
+        self.pending_delete = None;
+        cx.notify();
+    }
+
+    pub(super) fn confirm_delete_bucket(&mut self, cx: &mut Context<Self>) {
+        let Some(bucket_name) = self.pending_delete.take() else {
+            return;
+        };
+        cx.notify();
+
+        let Some(connection) = self.get_connection(cx) else {
+            report_error(
+                UserFacingError::new(ErrorKind::User, "Connection is no longer active"),
+                cx,
+            );
+            return;
+        };
+
+        let entity = cx.entity().clone();
+        let bucket_for_task = bucket_name.clone();
+
+        let task = cx.background_executor().spawn(async move {
+            let api = connection
+                .object_store_api()
+                .ok_or_else(|| DbError::NotSupported("Object-store API unavailable".to_string()))?;
+            api.delete_bucket(&bucket_for_task)
+        });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            if let Err(ref err) = result {
+                report_error_async(db_error_to_user_facing(err), cx);
+            }
+
+            cx.update(|cx| {
+                entity.update(cx, |doc, cx| {
+                    doc.apply_bucket_deleted(&bucket_name, result, cx);
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(super) fn apply_bucket_deleted(
+        &mut self,
+        bucket_name: &str,
+        result: Result<(), DbError>,
+        cx: &mut Context<Self>,
+    ) {
+        if result.is_err() {
+            return;
+        }
+
+        self.buckets.retain(|row| row.info.name != bucket_name);
+        self.clamp_selection();
+        cx.notify();
+    }
+
     /// Buckets matching `query` (case-insensitive substring on the bucket
     /// name). An empty query returns every bucket. This is the filtering
     /// logic the search box (table-UI batch) will drive.
@@ -339,6 +514,21 @@ impl BucketsTableDocument {
     #[cfg(test)]
     pub(crate) fn set_buckets_for_test(&mut self, buckets: Vec<BucketRow>) {
         self.buckets = buckets;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_delete_for_test(&self) -> Option<&str> {
+        self.pending_delete.as_deref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_search_query_for_test(&mut self, query: String) {
+        self.search_query = query;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_last_operation_for_test(&mut self, timing: OperationTiming) {
+        self.last_operation = Some(timing);
     }
 }
 
@@ -589,7 +779,7 @@ mod tests {
 
         cx.update(|cx| {
             doc.update(cx, |doc, cx| {
-                doc.apply_bucket_size_estimate("a", Ok(estimate.clone()), cx);
+                doc.apply_bucket_size_estimate("a", Ok(estimate), cx);
             });
         });
 
@@ -599,6 +789,158 @@ mod tests {
                 doc.buckets_for_test()[0].size_estimate,
                 BucketSizeEstimateState::Loaded(estimate)
             );
+        });
+    }
+
+    /// T20: an empty probe page opens the confirmation dialog — this is the
+    /// only path that can arm a bucket delete.
+    #[gpui::test]
+    fn delete_probe_on_empty_bucket_arms_confirmation(cx: &mut gpui::TestAppContext) {
+        let doc = new_test_entity(cx);
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, cx| {
+                doc.set_buckets_for_test(vec![bucket_row("empty-bucket")]);
+                doc.apply_delete_probe(
+                    "empty-bucket",
+                    Ok(ObjectListingPage {
+                        objects: Vec::new(),
+                        common_prefixes: Vec::new(),
+                        next_continuation_token: None,
+                    }),
+                    cx,
+                );
+            });
+        });
+
+        cx.update(|cx| {
+            assert_eq!(doc.read(cx).pending_delete_for_test(), Some("empty-bucket"));
+        });
+    }
+
+    /// T20: a bucket that still holds objects never reaches the confirmation
+    /// dialog (Amendment A) — the user is redirected to recursive delete.
+    #[gpui::test]
+    fn delete_probe_on_non_empty_bucket_blocks_confirmation(cx: &mut gpui::TestAppContext) {
+        let doc = new_test_entity(cx);
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, cx| {
+                doc.set_buckets_for_test(vec![bucket_row("full-bucket")]);
+                doc.apply_delete_probe(
+                    "full-bucket",
+                    Ok(ObjectListingPage {
+                        objects: vec![ObjectSummary {
+                            key: "a.txt".to_string(),
+                            size_bytes: 1,
+                            storage_class: None,
+                            last_modified: None,
+                        }],
+                        common_prefixes: Vec::new(),
+                        next_continuation_token: None,
+                    }),
+                    cx,
+                );
+            });
+        });
+
+        cx.update(|cx| {
+            assert_eq!(doc.read(cx).pending_delete_for_test(), None);
+        });
+    }
+
+    /// T20: the blocked-delete message names the bucket and points at the
+    /// recursive prefix delete instead of dead-ending.
+    #[test]
+    fn bucket_not_empty_message_points_at_recursive_delete() {
+        let message = bucket_not_empty_message("logs");
+
+        assert!(message.contains("logs"));
+        assert!(message.contains("recursive prefix delete"));
+    }
+
+    /// T20: a successful delete drops the row and moves the cursor to a row
+    /// that still exists.
+    #[gpui::test]
+    fn deleted_bucket_leaves_the_table_and_reselects(cx: &mut gpui::TestAppContext) {
+        let doc = new_test_entity(cx);
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, cx| {
+                doc.set_buckets_for_test(vec![bucket_row("a"), bucket_row("b")]);
+                doc.select_bucket("a".to_string(), cx);
+                doc.apply_bucket_deleted("a", Ok(()), cx);
+            });
+        });
+
+        cx.update(|cx| {
+            let doc = doc.read(cx);
+            assert_eq!(doc.buckets_for_test().len(), 1);
+            assert_eq!(doc.selected_bucket(), Some("b"));
+        });
+    }
+
+    /// T20: keyboard navigation walks the filtered list, and the cursor never
+    /// points at a row hidden by the search box.
+    #[gpui::test]
+    fn selection_follows_the_filtered_rows(cx: &mut gpui::TestAppContext) {
+        let doc = new_test_entity(cx);
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, cx| {
+                doc.set_buckets_for_test(vec![
+                    bucket_row("prod-logs"),
+                    bucket_row("staging-logs"),
+                    bucket_row("prod-assets"),
+                ]);
+                doc.set_search_query_for_test("prod".to_string());
+                doc.select_bucket("prod-logs".to_string(), cx);
+                doc.move_selection(1, cx);
+            });
+        });
+
+        cx.update(|cx| {
+            assert_eq!(doc.read(cx).selected_bucket(), Some("prod-assets"));
+        });
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, _cx| {
+                doc.set_search_query_for_test("staging".to_string());
+                doc.clamp_selection();
+            });
+        });
+
+        cx.update(|cx| {
+            assert_eq!(doc.read(cx).selected_bucket(), Some("staging-logs"));
+        });
+    }
+
+    /// T20: the document contributes a bucket-count status segment and, once
+    /// a call has been timed, its duration.
+    #[gpui::test]
+    fn status_segments_report_bucket_count_and_last_operation(cx: &mut gpui::TestAppContext) {
+        let doc = new_test_entity(cx);
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, _cx| {
+                doc.set_buckets_for_test(vec![bucket_row("a"), bucket_row("b")]);
+                doc.set_last_operation_for_test(OperationTiming {
+                    label: "ListBuckets",
+                    millis: 188,
+                });
+            });
+        });
+
+        cx.update(|cx| {
+            let texts: Vec<String> = doc
+                .read(cx)
+                .status_segments(cx)
+                .into_iter()
+                .map(|segment| segment.text.to_string())
+                .collect();
+
+            assert!(texts.contains(&"2 buckets".to_string()));
+            assert!(texts.contains(&"ListBuckets · 188 ms".to_string()));
         });
     }
 

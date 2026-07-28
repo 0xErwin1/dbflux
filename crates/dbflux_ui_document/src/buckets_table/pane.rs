@@ -3,16 +3,44 @@
 use super::BucketsTableDocument;
 use crate::dedup::DocumentKey;
 use crate::handle::DocumentEvent;
-use crate::pane::{BoxedDocEventCallback, PaneHandle};
+use crate::pane::{BoxedDocEventCallback, PaneHandle, StatusSegment};
 use crate::types::{DocumentIcon, DocumentKind, DocumentMetaSnapshot};
 use gpui::{App, Entity, IntoElement};
 
 impl BucketsTableDocument {
+    /// Status-bar segments contributed by this document (DEC-23): the engine
+    /// behind the connection, how many buckets are listed, and the timing of
+    /// the last object-store call.
+    pub fn status_segments(&self, cx: &App) -> Vec<StatusSegment> {
+        let mut segments = Vec::new();
+
+        if let Some(connected) = self.app_state.read(cx).connections().get(&self.profile_id) {
+            segments.push(StatusSegment {
+                text: connected.connection.metadata().display_name.clone().into(),
+                tooltip: None,
+            });
+        }
+
+        segments.push(StatusSegment {
+            text: format!("{} buckets", self.buckets().len()).into(),
+            tooltip: None,
+        });
+
+        if let Some(timing) = self.last_operation {
+            segments.push(StatusSegment {
+                text: timing.display().into(),
+                tooltip: Some("Client-side duration of the last object-store call".into()),
+            });
+        }
+
+        segments
+    }
+
     /// Wrap a typed `Entity<BucketsTableDocument>` in a `PaneHandle`.
     pub fn into_pane(entity: Entity<Self>, cx: &App) -> PaneHandle {
         let id = entity.read(cx).id();
 
-        PaneHandle::new_chart(
+        let mut pane = PaneHandle::new_chart(
             id,
             DocumentKind::ObjectStorageBuckets,
             // render
@@ -105,6 +133,13 @@ impl BucketsTableDocument {
                     cx.subscribe(&e, move |_, ev: &DocumentEvent, cx| cb(ev, cx))
                 })
             },
-        )
+        );
+
+        pane.status_segments = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.read(cx).status_segments(cx))
+        });
+
+        pane
     }
 }
