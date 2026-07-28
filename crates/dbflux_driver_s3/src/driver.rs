@@ -221,12 +221,7 @@ impl DbDriver for S3Driver {
         password: Option<&SecretString>,
         _ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError> {
-        let config = profile_config(&profile.config)?;
-        let client = build_client(&config, password)?;
-
-        probe_connection(&client, &config)?;
-
-        Ok(Box::new(S3Connection { client, config }))
+        Ok(Box::new(connect_internal(profile, password)?))
     }
 
     fn test_connection(&self, profile: &ConnectionProfile) -> Result<(), DbError> {
@@ -235,6 +230,37 @@ impl DbDriver for S3Driver {
 
         probe_connection(&client, &config)
     }
+}
+
+impl S3Driver {
+    /// Connect and return the `ObjectStoreConnection` capability directly,
+    /// bypassing the `Connection` trait boxing.
+    ///
+    /// `ConnectionExt::as_object_store()` is the app-facing capability-cast
+    /// seam that the object-browser/buckets-table UI batches will use once
+    /// they land; no call site downcasts a boxed `dyn Connection` to it yet.
+    /// This inherent method lets callers that only need
+    /// `ObjectStoreConnection` (the driver's own live-integration suite,
+    /// today) reach it without waiting on that seam.
+    pub fn connect_object_store(
+        &self,
+        profile: &ConnectionProfile,
+        password: Option<&SecretString>,
+    ) -> Result<Box<dyn ObjectStoreConnection>, DbError> {
+        Ok(Box::new(connect_internal(profile, password)?))
+    }
+}
+
+fn connect_internal(
+    profile: &ConnectionProfile,
+    password: Option<&SecretString>,
+) -> Result<S3Connection, DbError> {
+    let config = profile_config(&profile.config)?;
+    let client = build_client(&config, password)?;
+
+    probe_connection(&client, &config)?;
+
+    Ok(S3Connection { client, config })
 }
 
 fn trimmed_optional(values: &FormValues, id: &str) -> Option<String> {
