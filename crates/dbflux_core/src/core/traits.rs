@@ -1436,6 +1436,18 @@ pub trait Connection: Send + Sync {
         None
     }
 
+    /// Returns the object-storage API implementation when available.
+    ///
+    /// Non-object-storage drivers return `None`. Mirrors `key_value_api`:
+    /// `ObjectStoreConnection` is not a supertrait of `Connection` (S3-style
+    /// drivers have no query language, browsable tables, or key-value scan
+    /// semantics), so this default method is the app-facing seam that lets
+    /// callers reach `&dyn ObjectStoreConnection` from a generically stored
+    /// `Arc<dyn Connection>` without downcasting.
+    fn object_store_api(&self) -> Option<&dyn ObjectStoreConnection> {
+        None
+    }
+
     /// Returns the language service for this connection.
     ///
     /// Provides validation and dangerous-query detection for the connection's

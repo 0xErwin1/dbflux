@@ -435,6 +435,10 @@ impl Connection for S3Connection {
     fn dialect(&self) -> &dyn SqlDialect {
         &dbflux_core::DefaultSqlDialect
     }
+
+    fn object_store_api(&self) -> Option<&dyn ObjectStoreConnection> {
+        Some(self)
+    }
 }
 
 impl ConnectionExt for S3Connection {

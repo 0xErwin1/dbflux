@@ -307,6 +307,65 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
+    /// Opens the searchable buckets table for an object-storage connection
+    /// root, or focuses the existing one.
+    pub(in crate::ui::views::workspace) fn open_object_store_buckets_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let has_connection = self
+            .app_state
+            .read(cx)
+            .connections()
+            .contains_key(&profile_id);
+
+        let existing_id = if has_connection {
+            self.tab_manager.read(cx).find_by_key(
+                &crate::ui::document::DocumentKey::ObjectStoreBucketsRoot { profile_id },
+                cx,
+            )
+        } else {
+            None
+        };
+
+        match decide_open_document(has_connection, existing_id) {
+            OpenDocumentDecision::ErrorNoConnection => {
+                Toast::error("No active connection for this object-storage account")
+                    .meta_right(now_hms())
+                    .action(copy_action(
+                        "No active connection for this object-storage account",
+                    ))
+                    .push(cx);
+                return;
+            }
+            OpenDocumentDecision::FocusExisting(id) => {
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.activate(id, cx);
+                });
+                return;
+            }
+            OpenDocumentDecision::OpenNew => {}
+        }
+
+        let doc = cx.new(|cx| {
+            crate::ui::document::BucketsTableDocument::new(
+                profile_id,
+                self.app_state.clone(),
+                window,
+                cx,
+            )
+        });
+        let pane = crate::ui::document::BucketsTableDocument::into_pane(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
     pub(in crate::ui::views::workspace) fn close_tabs_batch(
         &mut self,
         window: &mut Window,

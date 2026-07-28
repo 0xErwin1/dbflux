@@ -67,6 +67,11 @@ pub enum SidebarEvent {
         profile_id: Uuid,
         database: String,
     },
+    /// Connection root activated (double-click/Enter) for an object-storage
+    /// driver — opens the searchable buckets table for the connection.
+    OpenObjectStoreBuckets {
+        profile_id: Uuid,
+    },
     /// Request to show SQL preview modal
     RequestSqlPreview {
         profile_id: Uuid,
@@ -1372,6 +1377,12 @@ impl Sidebar {
                         cx.emit(AppStateChanged);
                         cx.notify();
                     });
+
+                    if self.profile_category(profile_id, cx)
+                        == Some(DatabaseCategory::ObjectStorage)
+                    {
+                        cx.emit(SidebarEvent::OpenObjectStoreBuckets { profile_id });
+                    }
                 } else {
                     self.connect_to_profile(profile_id, cx);
                 }
@@ -1550,7 +1561,13 @@ impl Sidebar {
                     if self.profile_category(profile_id, cx) == Some(DatabaseCategory::KeyValue)
             );
 
-            if is_key_value_db {
+            let is_object_storage_root = matches!(
+                parse_node_id(item_id),
+                Some(SchemaNodeId::Profile { profile_id })
+                    if self.profile_category(profile_id, cx) == Some(DatabaseCategory::ObjectStorage)
+            );
+
+            if is_key_value_db || is_object_storage_root {
                 self.toggle_item_expansion(item_id, cx);
                 self.execute_item(item_id, cx);
             } else if node_kind.is_expandable_folder() {

@@ -28,6 +28,8 @@ pub enum DocumentKind {
     Dashboard,
     // Schema diff & apply document
     SchemaDiff,
+    // Object-storage buckets table (connection root for DatabaseCategory::ObjectStorage)
+    ObjectStorageBuckets,
 }
 
 /// Source kind for DataDocument (affects icon and behavior).
@@ -55,6 +57,7 @@ pub enum DocumentIcon {
     Audit,
     Chart,
     Dashboard,
+    Buckets,
 }
 
 impl DocumentIcon {
@@ -71,6 +74,7 @@ impl DocumentIcon {
             Self::Audit => "shield",
             Self::Chart => "bar-chart-2",
             Self::Dashboard => "layout-dashboard",
+            Self::Buckets => "box",
         }
     }
 }

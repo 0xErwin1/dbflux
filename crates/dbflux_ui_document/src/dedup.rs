@@ -88,6 +88,10 @@ pub enum DocumentKey {
         profile_id: Uuid,
         database: Option<String>,
     },
+
+    /// The searchable buckets table opened for an object-storage connection
+    /// root. Deduplicated by `profile_id` — one per connection.
+    ObjectStoreBucketsRoot { profile_id: Uuid },
 }
 
 #[cfg(test)]
@@ -227,6 +231,20 @@ mod tests {
         assert!(matches!(
             key,
             DocumentKey::InstanceOverview { profile_id: pid } if pid == profile_id
+        ));
+    }
+
+    /// `DocumentKey::ObjectStoreBucketsRoot` must construct and round-trip
+    /// through clone and debug without panic.
+    #[test]
+    fn object_store_buckets_root_key_constructs_and_clones() {
+        let profile_id = Uuid::new_v4();
+        let key = DocumentKey::ObjectStoreBucketsRoot { profile_id };
+        let cloned = key.clone();
+        let _ = format!("{:?}", cloned);
+        assert!(matches!(
+            key,
+            DocumentKey::ObjectStoreBucketsRoot { profile_id: pid } if pid == profile_id
         ));
     }
 }

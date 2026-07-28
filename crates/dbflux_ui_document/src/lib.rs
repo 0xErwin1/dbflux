@@ -3,6 +3,7 @@
 
 mod add_member_modal;
 mod audit;
+pub mod buckets_table;
 pub mod chart;
 pub mod chart_document;
 mod chrome;
@@ -40,6 +41,7 @@ mod types;
 pub use instance_inspector::InspectorPanel;
 
 pub use audit::AuditDocument;
+pub use buckets_table::BucketsTableDocument;
 pub use chart_document::ChartDocument;
 pub use code::CodeDocument;
 pub use dashboard::{DashboardDocument, DashboardPanelSlot, PanelGridPos};
