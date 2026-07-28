@@ -1,8 +1,11 @@
 mod data;
+pub mod metadata;
 mod pane;
+mod preview;
 mod render;
 pub mod tree;
 
+pub use metadata::{ObjectMetadataState, ObjectVersionsState, PreviewGate, evaluate_preview_gate};
 pub use tree::{
     ObjectTree, ObjectTreeEntry, ObjectTreeNodeId, PrefixLoadState, TREE_MODE_PAGE_CAP,
     TreeModeRow, TreeModeStatus,
@@ -10,7 +13,7 @@ pub use tree::{
 
 use super::handle::DocumentEvent;
 use super::types::{DocumentId, DocumentState};
-use crate::buckets_table::OperationTiming;
+use crate::buckets_table::{BucketDetailsState, OperationTiming};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::RefreshPolicy;
@@ -23,6 +26,17 @@ use uuid::Uuid;
 pub enum ObjectBrowserFocusMode {
     Listing,
     Filter,
+}
+
+/// Footer action raised from the preview pane for an object. The flows that
+/// consume these (download, presign, delete) land with their own tasks; the
+/// pane only records the intent, following the same `pending_*` + `take()`
+/// convention as the toolbar's upload / new-folder intents.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ObjectAction {
+    Download { key: String },
+    Presign { key: String },
+    Delete { key: String },
 }
 
 /// One rendered listing row, flattened from either the current prefix level
@@ -59,8 +73,15 @@ pub struct ObjectBrowserDocument {
     filter_input: Entity<InputState>,
     focus_mode: ObjectBrowserFocusMode,
     preview_key: Option<String>,
+    metadata: Option<ObjectMetadataState>,
+    /// Guards against a slow `head_object` for a previously selected object
+    /// overwriting the metadata of the object the user has since selected.
+    metadata_generation: u64,
+    versions: ObjectVersionsState,
+    bucket_details: BucketDetailsState,
     pending_upload: bool,
     pending_new_folder: bool,
+    pending_object_action: Option<ObjectAction>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -110,8 +131,13 @@ impl ObjectBrowserDocument {
             filter_input,
             focus_mode: ObjectBrowserFocusMode::Listing,
             preview_key: None,
+            metadata: None,
+            metadata_generation: 0,
+            versions: ObjectVersionsState::Idle,
+            bucket_details: BucketDetailsState::NotLoaded,
             pending_upload: false,
             pending_new_folder: false,
+            pending_object_action: None,
             _subscriptions: vec![filter_subscription],
         };
 
@@ -359,14 +385,43 @@ impl ObjectBrowserDocument {
     }
 
     pub(super) fn open_preview(&mut self, key: String, cx: &mut Context<Self>) {
-        self.preview_key = Some(key);
+        self.preview_key = Some(key.clone());
+        self.versions = ObjectVersionsState::Idle;
         self.focus_mode = ObjectBrowserFocusMode::Listing;
+
+        self.ensure_bucket_details(cx);
+        self.load_object_metadata(key, cx);
         cx.notify();
     }
 
     pub(super) fn close_preview(&mut self, cx: &mut Context<Self>) {
         self.preview_key = None;
+        self.metadata = None;
+        self.versions = ObjectVersionsState::Idle;
         cx.notify();
+    }
+
+    /// Copies the previewed object's canonical `s3://bucket/key` URI. Acts
+    /// immediately — unlike the other preview actions, nothing downstream is
+    /// needed to make it useful.
+    pub(super) fn copy_object_uri(&mut self, key: &str, cx: &mut Context<Self>) {
+        let uri = format!("s3://{}/{key}", self.bucket);
+
+        cx.write_to_clipboard(ClipboardItem::new_string(uri.clone()));
+        dbflux_ui_base::toast::Toast::success(format!("Copied {uri}"))
+            .meta_right(dbflux_ui_base::toast::now_hms())
+            .push(cx);
+    }
+
+    pub(super) fn request_object_action(&mut self, action: ObjectAction, cx: &mut Context<Self>) {
+        self.pending_object_action = Some(action);
+        cx.notify();
+    }
+
+    /// Object-level intent raised by the preview action bar, drained by the
+    /// download / presign / delete flow owners.
+    pub fn take_pending_object_action(&mut self) -> Option<ObjectAction> {
+        self.pending_object_action.take()
     }
 
     /// Space on a row: objects toggle the preview pane, prefixes fall back to
@@ -409,6 +464,21 @@ impl ObjectBrowserDocument {
     #[cfg(test)]
     pub(crate) fn preview_key_for_test(&self) -> Option<&str> {
         self.preview_key.as_deref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn metadata_for_test(&self) -> Option<&ObjectMetadataState> {
+        self.metadata.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn apply_metadata_for_test(
+        &mut self,
+        metadata: dbflux_core::ObjectMetadata,
+        cx: &mut Context<Self>,
+    ) {
+        let generation = self.metadata_generation;
+        self.apply_object_metadata(generation, metadata.key.clone(), Ok(metadata), cx);
     }
 
     fn focus_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -489,9 +559,24 @@ mod tests {
     // Deliberately narrow imports: `use super::*` would pull in the module's
     // `gpui::*` glob, whose `test` attribute macro would shadow the plain
     // `#[test]` attribute.
-    use super::{ObjectBrowserDocument, ObjectTreeNodeId};
+    use super::{
+        ObjectAction, ObjectBrowserDocument, ObjectMetadataState, ObjectTreeNodeId, PreviewGate,
+    };
     use crate::buckets_table::OperationTiming;
-    use dbflux_core::{ObjectListingPage, ObjectSummary};
+    use dbflux_core::{ObjectListingPage, ObjectMetadata, ObjectSummary};
+
+    fn object_metadata(key: &str, size_bytes: u64, storage_class: Option<&str>) -> ObjectMetadata {
+        ObjectMetadata {
+            key: key.to_string(),
+            size_bytes,
+            content_type: Some("text/plain".to_string()),
+            last_modified: None,
+            etag: Some("\"etag\"".to_string()),
+            storage_class: storage_class.map(|class| class.to_string()),
+            encryption: Some("AES256".to_string()),
+            version_count: None,
+        }
+    }
 
     fn page(prefixes: &[&str], objects: &[&str]) -> ObjectListingPage {
         ObjectListingPage {
@@ -622,6 +707,129 @@ mod tests {
             assert!(texts.contains(&"s3://my-bucket/".to_string()));
             assert!(texts.contains(&"2 keys".to_string()));
             assert!(texts.contains(&"ListObjectsV2 · 188 ms".to_string()));
+        });
+    }
+
+    /// T26/T28: metadata that resolves for the previewed object lands in the
+    /// panel with the gate derived from the configured preview limit.
+    #[gpui::test]
+    fn metadata_lands_with_a_preview_gate(cx: &mut gpui::TestAppContext) {
+        let doc = new_test_entity(cx);
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, cx| {
+                doc.open_preview("logs/a.txt".to_string(), cx);
+                doc.apply_metadata_for_test(
+                    object_metadata("logs/a.txt", 1024, Some("STANDARD")),
+                    cx,
+                );
+            });
+        });
+
+        cx.update(|cx| {
+            let state = doc
+                .read(cx)
+                .metadata_for_test()
+                .cloned()
+                .expect("metadata state");
+
+            match state {
+                ObjectMetadataState::Loaded { metadata, gate } => {
+                    assert_eq!(metadata.key, "logs/a.txt");
+                    assert_eq!(gate, PreviewGate::Allowed);
+                }
+                other => panic!("expected loaded metadata, got {other:?}"),
+            }
+        });
+    }
+
+    /// T26: an archived object never becomes previewable, whatever its size.
+    #[gpui::test]
+    fn archived_objects_are_gated_out_of_preview(cx: &mut gpui::TestAppContext) {
+        let doc = new_test_entity(cx);
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, cx| {
+                doc.open_preview("cold/backup.tar".to_string(), cx);
+                doc.apply_metadata_for_test(
+                    object_metadata("cold/backup.tar", 8, Some("GLACIER")),
+                    cx,
+                );
+            });
+        });
+
+        cx.update(|cx| {
+            let state = doc
+                .read(cx)
+                .metadata_for_test()
+                .cloned()
+                .expect("metadata state");
+
+            assert!(matches!(
+                state,
+                ObjectMetadataState::Loaded {
+                    gate: PreviewGate::Archived,
+                    ..
+                }
+            ));
+        });
+    }
+
+    /// T26: metadata for a superseded selection never overwrites the panel of
+    /// the object the user has since moved to.
+    #[gpui::test]
+    fn stale_metadata_is_discarded(cx: &mut gpui::TestAppContext) {
+        let doc = new_test_entity(cx);
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, cx| {
+                doc.open_preview("logs/a.txt".to_string(), cx);
+                doc.open_preview("logs/b.txt".to_string(), cx);
+                doc.apply_metadata_for_test(
+                    object_metadata("logs/a.txt", 1024, Some("STANDARD")),
+                    cx,
+                );
+            });
+        });
+
+        cx.update(|cx| {
+            assert!(
+                !matches!(
+                    doc.read(cx).metadata_for_test(),
+                    Some(ObjectMetadataState::Loaded { .. })
+                ),
+                "metadata of a superseded selection must not reach the panel"
+            );
+        });
+    }
+
+    /// T27: the delete action only records the intent; its flow owner drains
+    /// it exactly once.
+    #[gpui::test]
+    fn preview_actions_are_recorded_as_drainable_intents(cx: &mut gpui::TestAppContext) {
+        let doc = new_test_entity(cx);
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, cx| {
+                doc.request_object_action(
+                    ObjectAction::Delete {
+                        key: "logs/a.txt".to_string(),
+                    },
+                    cx,
+                );
+            });
+        });
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, _cx| {
+                assert_eq!(
+                    doc.take_pending_object_action(),
+                    Some(ObjectAction::Delete {
+                        key: "logs/a.txt".to_string()
+                    })
+                );
+                assert_eq!(doc.take_pending_object_action(), None);
+            });
         });
     }
 

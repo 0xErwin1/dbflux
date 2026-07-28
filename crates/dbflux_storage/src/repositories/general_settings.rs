@@ -37,7 +37,8 @@ impl GeneralSettingsRepository {
                        max_concurrent_background_tasks, auto_refresh_pause_on_error,
                        auto_refresh_only_if_visible, confirm_dangerous_queries,
                        dangerous_requires_where, dangerous_requires_preview,
-                       style, schema_snapshot_retention, updated_at
+                       style, schema_snapshot_retention,
+                       object_preview_size_limit_mib, updated_at
                 FROM cfg_general_settings WHERE id = 1
                 "#,
             )
@@ -65,7 +66,8 @@ impl GeneralSettingsRepository {
                 dangerous_requires_preview: row.get(14)?,
                 style: row.get(15)?,
                 schema_snapshot_retention: row.get(16)?,
-                updated_at: row.get(17)?,
+                object_preview_size_limit_mib: row.get(17)?,
+                updated_at: row.get(18)?,
             })
         });
 
@@ -91,8 +93,9 @@ impl GeneralSettingsRepository {
                     max_concurrent_background_tasks, auto_refresh_pause_on_error,
                     auto_refresh_only_if_visible, confirm_dangerous_queries,
                     dangerous_requires_where, dangerous_requires_preview,
-                    style, schema_snapshot_retention, updated_at
-                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, datetime('now'))
+                    style, schema_snapshot_retention,
+                    object_preview_size_limit_mib, updated_at
+                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, datetime('now'))
                 ON CONFLICT(id) DO UPDATE SET
                     theme = excluded.theme,
                     restore_session_on_startup = excluded.restore_session_on_startup,
@@ -110,6 +113,7 @@ impl GeneralSettingsRepository {
                     dangerous_requires_preview = excluded.dangerous_requires_preview,
                     style = excluded.style,
                     schema_snapshot_retention = excluded.schema_snapshot_retention,
+                    object_preview_size_limit_mib = excluded.object_preview_size_limit_mib,
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -129,6 +133,7 @@ impl GeneralSettingsRepository {
                     settings.dangerous_requires_preview,
                     settings.style,
                     settings.schema_snapshot_retention,
+                    settings.object_preview_size_limit_mib,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -165,6 +170,9 @@ pub struct GeneralSettingsDto {
     /// Maximum number of auto-captured schema snapshots retained per
     /// profile/database before older ones are pruned.
     pub schema_snapshot_retention: i64,
+    /// Largest object size (in MiB) whose bytes may be fetched for an in-app
+    /// object-storage preview.
+    pub object_preview_size_limit_mib: i64,
     pub updated_at: String,
 }
 
@@ -216,6 +224,7 @@ mod tests {
             dangerous_requires_preview: 1,
             style: "compact".to_string(),
             schema_snapshot_retention: 15,
+            object_preview_size_limit_mib: 25,
             updated_at: String::new(),
         };
 
@@ -227,6 +236,7 @@ mod tests {
         assert_eq!(fetched.max_history_entries, 500);
         assert_eq!(fetched.style, "compact");
         assert_eq!(fetched.schema_snapshot_retention, 15);
+        assert_eq!(fetched.object_preview_size_limit_mib, 25);
 
         let _ = std::fs::remove_file(&path);
     }
@@ -261,6 +271,7 @@ mod tests {
                 dangerous_requires_preview: 0,
                 style: style_str.to_string(),
                 schema_snapshot_retention: 10,
+                object_preview_size_limit_mib: 10,
                 updated_at: String::new(),
             };
 
@@ -298,6 +309,10 @@ mod tests {
         assert_eq!(
             fetched.schema_snapshot_retention, 10,
             "schema_snapshot_retention column default should be 10"
+        );
+        assert_eq!(
+            fetched.object_preview_size_limit_mib, 10,
+            "object_preview_size_limit_mib column default should be 10"
         );
 
         let _ = std::fs::remove_file(&path);

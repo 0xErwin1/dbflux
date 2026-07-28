@@ -6,6 +6,7 @@
 //! splits off to the right of the listing. Every row carries a single
 //! row-level mouse handler; cells are pure presentation.
 
+use super::metadata::is_archived_storage_class;
 use super::tree::{ObjectTreeEntry, ObjectTreeNodeId, PrefixLoadState, TreeModeStatus};
 use super::{ObjectBrowserDocument, ObjectBrowserFocusMode, VisibleRow};
 use crate::buckets_table::format_bytes;
@@ -26,9 +27,6 @@ const SIZE_WIDTH: Pixels = px(96.0);
 const CLASS_WIDTH: Pixels = px(132.0);
 const MODIFIED_WIDTH: Pixels = px(150.0);
 
-/// Width of the preview pane when a selection is being previewed.
-const PREVIEW_WIDTH: Pixels = px(320.0);
-
 /// Indentation applied per tree-mode depth level.
 const TREE_INDENT: Pixels = px(14.0);
 
@@ -47,8 +45,11 @@ pub(super) enum StorageClassStyle {
 /// vendor-specific classes fall back to the plain presentation rather than
 /// implying a tier the UI does not understand.
 pub(super) fn storage_class_style(storage_class: Option<&str>) -> StorageClassStyle {
+    if is_archived_storage_class(storage_class) {
+        return StorageClassStyle::Archived;
+    }
+
     match storage_class.unwrap_or("STANDARD").to_uppercase().as_str() {
-        "GLACIER" | "DEEP_ARCHIVE" => StorageClassStyle::Archived,
         "STANDARD_IA" | "ONEZONE_IA" | "INTELLIGENT_TIERING" | "GLACIER_IR" => {
             StorageClassStyle::Infrequent
         }
@@ -363,7 +364,11 @@ impl ObjectBrowserDocument {
             )
     }
 
-    fn render_storage_class(&self, storage_class: Option<&str>, cx: &Context<Self>) -> AnyElement {
+    pub(super) fn render_storage_class(
+        &self,
+        storage_class: Option<&str>,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let theme = cx.theme();
         let label = storage_class_label(storage_class);
 
@@ -611,78 +616,6 @@ impl ObjectBrowserDocument {
             .child(Icon::new(AppIcon::Folder).size(Heights::ICON_LG).muted())
             .child(Text::muted(message))
             .into_any_element()
-    }
-
-    /// Preview pane. The pane itself (placement, header, close affordance) is
-    /// wired here; its contents — metadata, image/text previews — land with
-    /// the preview tasks.
-    fn render_preview_pane(&self, key: &str, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let name = key.rsplit_once('/').map(|(_, n)| n).unwrap_or(key);
-
-        div()
-            .w(PREVIEW_WIDTH)
-            .flex()
-            .flex_col()
-            .border_l_1()
-            .border_color(theme.border)
-            .bg(theme.background)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(Spacing::SM)
-                    .h(Heights::TOOLBAR)
-                    .px(Spacing::SM)
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .bg(theme.tab_bar)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_1()
-                            .items_center()
-                            .gap(Spacing::XS)
-                            .overflow_hidden()
-                            .child(Icon::new(object_icon(name)).small().muted())
-                            .child(
-                                div()
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .whitespace_nowrap()
-                                    .child(Text::code(name.to_string())),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .id("object-browser-preview-close")
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .size(Heights::CONTROL)
-                            .rounded(Radii::SM)
-                            .cursor_pointer()
-                            .hover(|d| d.bg(theme.secondary))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.close_preview(cx);
-                            }))
-                            .child(Icon::new(AppIcon::X).small().muted()),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .justify_center()
-                    .gap(Spacing::SM)
-                    .p(Spacing::MD)
-                    .child(Icon::new(AppIcon::Eye).size(Heights::ICON_LG).muted())
-                    .child(Text::muted("No preview"))
-                    .child(Text::key_hint(key.to_string())),
-            )
     }
 
     fn render_footer(&self, rows: &[VisibleRow], cx: &Context<Self>) -> impl IntoElement {

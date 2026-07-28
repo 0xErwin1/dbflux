@@ -7,10 +7,11 @@
 //! once via `report_error_async`.
 
 use super::ObjectBrowserDocument;
+use super::metadata::{ObjectMetadataState, ObjectVersionsState, evaluate_preview_gate};
 use super::tree::TreeModeStepOutcome;
-use crate::buckets_table::OperationTiming;
+use crate::buckets_table::{BucketDetailsState, OperationTiming};
 use crate::types::DocumentState;
-use dbflux_core::{DbError, ObjectListingPage};
+use dbflux_core::{DbError, ObjectListingPage, ObjectMetadata};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
 use gpui::Context;
 use std::collections::VecDeque;
@@ -144,6 +145,195 @@ impl ObjectBrowserDocument {
         }
 
         cx.notify();
+    }
+
+    // -- Object metadata -----------------------------------------------------
+
+    /// Fetches the selected object's metadata (`HeadObject`) and derives its
+    /// preview gate. No object bytes are ever requested here — the gate
+    /// decides whether a body fetch is allowed at all.
+    pub(super) fn load_object_metadata(&mut self, key: String, cx: &mut Context<Self>) {
+        self.metadata_generation = self.metadata_generation.wrapping_add(1);
+        let generation = self.metadata_generation;
+
+        self.metadata = Some(ObjectMetadataState::Loading);
+
+        let Some(connection) = self.get_connection(cx) else {
+            self.metadata = Some(ObjectMetadataState::Error(
+                "Connection is no longer active".to_string(),
+            ));
+            cx.notify();
+            return;
+        };
+
+        let entity = cx.entity().clone();
+        let bucket = self.bucket.clone();
+        let key_for_task = key.clone();
+
+        let task = cx.background_executor().spawn(async move {
+            let started = Instant::now();
+
+            let result = match connection.object_store_api() {
+                Some(api) => api.head_object(&bucket, &key_for_task),
+                None => Err(DbError::NotSupported(
+                    "Object-store API unavailable".to_string(),
+                )),
+            };
+
+            (result, started.elapsed().as_millis())
+        });
+
+        cx.spawn(async move |_this, cx| {
+            let (result, elapsed_millis) = task.await;
+
+            if let Err(ref err) = result {
+                report_error_async(db_error_to_user_facing(err), cx);
+            }
+
+            cx.update(|cx| {
+                entity.update(cx, |doc, cx| {
+                    doc.last_operation = Some(OperationTiming {
+                        label: "HeadObject",
+                        millis: elapsed_millis,
+                    });
+                    doc.apply_object_metadata(generation, key, result, cx);
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(super) fn apply_object_metadata(
+        &mut self,
+        generation: u64,
+        key: String,
+        result: Result<ObjectMetadata, DbError>,
+        cx: &mut Context<Self>,
+    ) {
+        let is_current =
+            generation == self.metadata_generation && self.preview_key.as_deref() == Some(&key);
+
+        if !is_current {
+            return;
+        }
+
+        self.metadata = Some(match result {
+            Ok(metadata) => {
+                let limit_bytes = self
+                    .app_state
+                    .read(cx)
+                    .general_settings()
+                    .object_preview_size_limit_bytes();
+
+                ObjectMetadataState::Loaded {
+                    gate: evaluate_preview_gate(&metadata, limit_bytes),
+                    metadata: Box::new(metadata),
+                }
+            }
+            Err(err) => ObjectMetadataState::Error(err.to_string()),
+        });
+
+        cx.notify();
+    }
+
+    /// Fetches the bucket's region/versioning once per document session. The
+    /// versions row needs the versioning status to know whether an object can
+    /// have history at all.
+    pub(super) fn ensure_bucket_details(&mut self, cx: &mut Context<Self>) {
+        if self.bucket_details != BucketDetailsState::NotLoaded {
+            return;
+        }
+
+        self.bucket_details = BucketDetailsState::Loading;
+
+        let Some(connection) = self.get_connection(cx) else {
+            self.bucket_details =
+                BucketDetailsState::Error("Connection is no longer active".to_string());
+            return;
+        };
+
+        let entity = cx.entity().clone();
+        let bucket = self.bucket.clone();
+
+        let task = cx.background_executor().spawn(async move {
+            match connection.object_store_api() {
+                Some(api) => api.get_bucket_details(&bucket),
+                None => Err(DbError::NotSupported(
+                    "Object-store API unavailable".to_string(),
+                )),
+            }
+        });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| {
+                entity.update(cx, |doc, cx| {
+                    // A failed capability probe only costs the versions row;
+                    // it is not the operation the user asked for, so it stays
+                    // inside the panel instead of raising a toast.
+                    doc.bucket_details = match result {
+                        Ok(details) => BucketDetailsState::Loaded(details),
+                        Err(err) => BucketDetailsState::Error(err.to_string()),
+                    };
+                    cx.notify();
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Lists an object's versions. Only ever called from the metadata panel's
+    /// explicit "View versions" action — never as part of selecting an object.
+    pub(super) fn load_object_versions(&mut self, key: String, cx: &mut Context<Self>) {
+        self.versions = ObjectVersionsState::Loading;
+        cx.notify();
+
+        let Some(connection) = self.get_connection(cx) else {
+            self.versions =
+                ObjectVersionsState::Error("Connection is no longer active".to_string());
+            cx.notify();
+            return;
+        };
+
+        let entity = cx.entity().clone();
+        let bucket = self.bucket.clone();
+        let key_for_task = key.clone();
+
+        let task = cx.background_executor().spawn(async move {
+            match connection.object_store_api() {
+                Some(api) => api.list_object_versions(&bucket, &key_for_task),
+                None => Err(DbError::NotSupported(
+                    "Object-store API unavailable".to_string(),
+                )),
+            }
+        });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            if let Err(ref err) = result {
+                report_error_async(db_error_to_user_facing(err), cx);
+            }
+
+            cx.update(|cx| {
+                entity.update(cx, |doc, cx| {
+                    if doc.preview_key.as_deref() != Some(&key) {
+                        return;
+                    }
+
+                    doc.versions = match result {
+                        Ok(versions) => ObjectVersionsState::Loaded(versions),
+                        Err(err) => ObjectVersionsState::Error(err.to_string()),
+                    };
+                    cx.notify();
+                });
+            })
+            .ok();
+        })
+        .detach();
     }
 
     // -- Tree mode -----------------------------------------------------------
