@@ -2920,6 +2920,8 @@ version = "0.7.0-dev.0"
 dependencies = [
  "aws-config",
  "aws-sdk-s3",
+ "aws-smithy-types",
+ "chrono",
  "dbflux_core",
  "dbflux_test_support",
  "tokio",

@@ -16,6 +16,8 @@ path = "src/lib.rs"
 dbflux_core.workspace = true
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-sdk-s3 = "1"
+aws-smithy-types = "1"
+chrono = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]

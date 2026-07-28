@@ -13,3 +13,8 @@
         clippy::indexing_slicing,
     )
 )]
+
+mod driver;
+mod error_formatter;
+
+pub use driver::{S3_FORM, S3_METADATA, S3Driver};
