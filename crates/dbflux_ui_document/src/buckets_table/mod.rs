@@ -1,4 +1,10 @@
+mod data;
 mod pane;
+
+pub use data::{
+    BUCKET_SIZE_ESTIMATE_CAP, BucketDetailsState, BucketRow, BucketSizeEstimateState,
+    bucket_delete_allowed,
+};
 
 use super::handle::DocumentEvent;
 use super::types::{DocumentId, DocumentState};
@@ -14,22 +20,22 @@ use uuid::Uuid;
 /// Searchable buckets table opened for an object-storage connection root
 /// (`DatabaseCategory::ObjectStorage`).
 ///
-/// This is the plumbing skeleton (entity + `into_pane` + workspace routing).
-/// Data loading (`list_buckets`, lazy `get_bucket_details`) and the
-/// `data_table`-backed UI (search, refresh, new-bucket, footer) land in the
-/// batch that builds on top of this seam.
+/// This is the plumbing + data-loading layer (entity + `into_pane` +
+/// workspace routing + `list_buckets`/`get_bucket_details`/
+/// `estimate_bucket_size`). The `data_table`-backed UI (search, refresh,
+/// new-bucket, footer) lands in the batch that builds on top of this seam —
+/// `render` stays a minimal placeholder until then.
 pub struct BucketsTableDocument {
     id: DocumentId,
     title: String,
     profile_id: Uuid,
-    // Retained for the bucket-listing data-loading batch built on top of this
-    // plumbing seam; unused until that batch calls `object_store_api()` on
-    // the resolved connection.
-    #[allow(dead_code)]
     app_state: Entity<AppStateEntity>,
     focus_handle: FocusHandle,
     is_active_tab: bool,
     refresh_policy: RefreshPolicy,
+    state: DocumentState,
+    last_error: Option<String>,
+    buckets: Vec<BucketRow>,
 }
 
 impl EventEmitter<DocumentEvent> for BucketsTableDocument {}
@@ -48,7 +54,7 @@ impl BucketsTableDocument {
             .map(|connected| connected.profile.name.clone())
             .unwrap_or_default();
 
-        Self {
+        let mut doc = Self {
             id: DocumentId::new(),
             title: format!("Buckets — {connection_name}"),
             profile_id,
@@ -56,7 +62,13 @@ impl BucketsTableDocument {
             focus_handle: cx.focus_handle(),
             is_active_tab: true,
             refresh_policy: RefreshPolicy::Manual,
-        }
+            state: DocumentState::Loading,
+            last_error: None,
+            buckets: Vec::new(),
+        };
+
+        doc.load_buckets(cx);
+        doc
     }
 
     pub fn id(&self) -> DocumentId {
@@ -68,7 +80,15 @@ impl BucketsTableDocument {
     }
 
     pub fn state(&self) -> DocumentState {
-        DocumentState::Clean
+        self.state
+    }
+
+    pub fn last_error(&self) -> Option<&str> {
+        self.last_error.as_deref()
+    }
+
+    pub fn buckets(&self) -> &[BucketRow] {
+        &self.buckets
     }
 
     pub fn can_close(&self) -> bool {
@@ -106,7 +126,7 @@ impl BucketsTableDocument {
     }
 
     /// No commands are handled yet — the toolbar (search/refresh/new-bucket)
-    /// and row navigation land with the data-loading and table-UI batches.
+    /// and row navigation land with the table-UI batch.
     pub fn dispatch_command(
         &mut self,
         _cmd: Command,
@@ -119,6 +139,16 @@ impl BucketsTableDocument {
 
 impl Render for BucketsTableDocument {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let status = match (self.state, &self.last_error) {
+            (DocumentState::Loading, _) => "Loading buckets…".to_string(),
+            (DocumentState::Error, Some(err)) => format!("Failed to list buckets: {err}"),
+            (DocumentState::Error, None) => "Failed to list buckets".to_string(),
+            _ => format!(
+                "{} bucket(s) loaded — table UI loads in a later batch",
+                self.buckets.len()
+            ),
+        };
+
         div()
             .track_focus(&self.focus_handle)
             .size_full()
@@ -134,7 +164,7 @@ impl Render for BucketsTableDocument {
                     .gap_2()
                     .child(Icon::new(AppIcon::Box).size(px(32.0)))
                     .child(Text::body(self.title.clone()))
-                    .child(Text::muted("Bucket listing loads in a later batch")),
+                    .child(Text::muted(status)),
             )
     }
 }
