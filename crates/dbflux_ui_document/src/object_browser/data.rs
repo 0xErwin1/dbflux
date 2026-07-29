@@ -13,6 +13,7 @@ use super::metadata::{
 };
 use super::preview_content::{
     ImagePreview, PreviewContentState, PreviewKind, decode_image_dimensions, detect_preview_kind,
+    validate_svg_body,
 };
 use super::tree::PrefixLoadState;
 use crate::buckets_table::{BucketDetailsState, OperationTiming};
@@ -317,11 +318,16 @@ impl ObjectBrowserDocument {
             let elapsed_millis = started.elapsed().as_millis();
 
             let decoded = bytes.map(|bytes| {
-                decode_image_dimensions(&bytes).map(|(width, height)| ImagePreview {
+                let dimensions = if format == ImageFormat::Svg {
+                    validate_svg_body(&bytes).map(|_| None)
+                } else {
+                    decode_image_dimensions(&bytes).map(Some)
+                };
+
+                dimensions.map(|dimensions| ImagePreview {
                     byte_len: bytes.len() as u64,
                     image: Arc::new(Image::from_bytes(format, bytes)),
-                    width,
-                    height,
+                    dimensions,
                 })
             });
 

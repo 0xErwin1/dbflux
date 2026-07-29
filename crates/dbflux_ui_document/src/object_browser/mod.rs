@@ -1090,8 +1090,7 @@ mod tests {
                 gpui::ImageFormat::Png,
                 vec![1, 2, 3],
             )),
-            width: 640,
-            height: 480,
+            dimensions: Some((640, 480)),
             byte_len: 3,
         }))
     }

@@ -11,9 +11,8 @@ use std::sync::Arc;
 
 /// How a previewable object is presented.
 ///
-/// SVG is deliberately absent from `Image`: it is a vector document, not a
-/// raster payload, and the decoder used to validate raster bytes cannot read
-/// it — it falls through to the download/open-externally path instead.
+/// SVG rides the `Image` path too: gpui renders it natively, but it skips the
+/// raster validation decode — `dimensions` stays `None` for it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PreviewKind {
     Image(ImageFormat),
@@ -84,6 +83,7 @@ fn raster_format_from_mime(content_type: &str) -> Option<ImageFormat> {
         "image/webp" => Some(ImageFormat::Webp),
         "image/gif" => Some(ImageFormat::Gif),
         "image/bmp" | "image/x-ms-bmp" => Some(ImageFormat::Bmp),
+        "image/svg+xml" => Some(ImageFormat::Svg),
         _ => None,
     }
 }
@@ -93,6 +93,7 @@ fn kind_from_extension(key: &str) -> Option<PreviewKind> {
     let extension = name.rsplit_once('.')?.1.to_lowercase();
 
     let kind = match extension.as_str() {
+        "svg" => PreviewKind::Image(ImageFormat::Svg),
         "png" => PreviewKind::Image(ImageFormat::Png),
         "jpg" | "jpeg" => PreviewKind::Image(ImageFormat::Jpeg),
         "webp" => PreviewKind::Image(ImageFormat::Webp),
@@ -114,21 +115,22 @@ fn kind_from_extension(key: &str) -> Option<PreviewKind> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImagePreview {
     pub image: Arc<Image>,
-    pub width: u32,
-    pub height: u32,
+    /// Pixel dimensions from the validation decode; `None` for vector formats.
+    pub dimensions: Option<(u32, u32)>,
     pub byte_len: u64,
 }
 
 impl ImagePreview {
-    /// Meta strip under the image: pixel dimensions, format, transferred size.
+    /// Meta strip under the image: pixel dimensions (when known), format,
+    /// transferred size.
     pub fn meta_line(&self) -> String {
-        format!(
-            "{} × {} · {} · {}",
-            self.width,
-            self.height,
-            format_label(self.image.format),
-            format_bytes(self.byte_len)
-        )
+        let format = format_label(self.image.format);
+        let size = format_bytes(self.byte_len);
+
+        match self.dimensions {
+            Some((width, height)) => format!("{width} × {height} · {format} · {size}"),
+            None => format!("{format} · {size}"),
+        }
     }
 }
 
@@ -232,10 +234,28 @@ mod tests {
             PreviewKind::Binary
         );
         assert_eq!(detect_preview_kind(None, "dataset"), PreviewKind::Binary);
+    }
+
+    #[test]
+    fn svg_objects_route_to_the_image_path() {
         assert_eq!(
             detect_preview_kind(Some("image/svg+xml"), "icon.svg"),
-            PreviewKind::Binary
+            PreviewKind::Image(ImageFormat::Svg)
         );
+        assert_eq!(
+            detect_preview_kind(None, "logo.SVG"),
+            PreviewKind::Image(ImageFormat::Svg)
+        );
+    }
+
+    #[test]
+    fn svg_body_validation_requires_an_svg_root() {
+        assert_eq!(
+            super::validate_svg_body(b"<svg viewBox=\"0 0 1 1\"/>"),
+            Ok(())
+        );
+        assert!(super::validate_svg_body(b"<html></html>").is_err());
+        assert!(super::validate_svg_body(&[0xFF, 0xFE, 0x00]).is_err());
     }
 
     /// T29: garbage bytes are rejected by the decode probe instead of reaching
@@ -256,8 +276,7 @@ mod tests {
         let preview = ImagePreview {
             byte_len: png.len() as u64,
             image: Arc::new(Image::from_bytes(ImageFormat::Png, png)),
-            width: 1,
-            height: 1,
+            dimensions: Some((1, 1)),
         };
 
         assert!(preview.meta_line().starts_with("1 × 1 · PNG · "));
@@ -284,5 +303,19 @@ mod tests {
         ];
 
         PIXEL.to_vec()
+    }
+}
+
+/// Sanity check for an SVG body: it must be UTF-8 and actually contain an
+/// `<svg` root. gpui's renderer fails silently at paint time, so an obviously
+/// broken body has to be caught here to reach the decode-failure fallback.
+pub fn validate_svg_body(bytes: &[u8]) -> Result<(), String> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| "This object is not valid UTF-8, so it cannot be an SVG.".to_string())?;
+
+    if text.to_ascii_lowercase().contains("<svg") {
+        Ok(())
+    } else {
+        Err("This object does not contain an <svg> root element.".to_string())
     }
 }
