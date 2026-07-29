@@ -700,7 +700,10 @@ mod tests {
 
             let json = serde_json::to_string(&category).expect("serialize");
             let decoded: EventCategory = serde_json::from_str(&json).expect("deserialize");
-            assert_eq!(decoded, category, "serde round-trip failed for {category:?}");
+            assert_eq!(
+                decoded, category,
+                "serde round-trip failed for {category:?}"
+            );
         }
     }
 
