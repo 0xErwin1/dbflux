@@ -117,6 +117,28 @@ pub fn editor_language(key: &str) -> String {
         .unwrap_or_else(|| "text".to_string())
 }
 
+const MAX_HIGHLIGHT_BYTES: usize = 1024 * 1024;
+const MAX_HIGHLIGHT_LINE_CHARS: usize = 10_000;
+
+/// Language for the syntax-highlighting editor, or `None` to open a plain
+/// buffer. Tree-sitter parsing and per-line layout run on the UI thread, so a
+/// large body or a minified single-line file (typical for html/js/css assets)
+/// must skip highlighting entirely or the app freezes on open.
+pub fn highlight_language(key: &str, body: &str) -> Option<String> {
+    if body.len() > MAX_HIGHLIGHT_BYTES {
+        return None;
+    }
+
+    if body
+        .lines()
+        .any(|line| line.len() > MAX_HIGHLIGHT_LINE_CHARS)
+    {
+        return None;
+    }
+
+    Some(editor_language(key))
+}
+
 /// A decoded text body ready to be installed into an editor, handed from the
 /// background fetch to the next render — building the `InputState` and seeding
 /// its value both need a `Window`, which the fetch continuation does not have.
@@ -216,13 +238,17 @@ impl ObjectBrowserDocument {
             return;
         }
 
-        let language = editor_language(&pending.key);
+        let language = highlight_language(&pending.key, &pending.body.text);
 
         let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor(language)
-                .line_number(true)
-                .soft_wrap(false)
+            let state = InputState::new(window, cx);
+
+            let state = match language {
+                Some(language) => state.code_editor(language),
+                None => state.multi_line(true),
+            };
+
+            state.line_number(true).soft_wrap(false)
         });
 
         let subscription = cx.subscribe_in(
@@ -912,5 +938,31 @@ mod tests {
             GuardedNavigation::ClosePreview.description(),
             "close this preview"
         );
+    }
+}
+
+#[cfg(test)]
+mod highlight_gate_tests {
+    use super::highlight_language;
+
+    #[test]
+    fn small_multi_line_files_keep_their_language() {
+        let body = "<html>\n<body>hello</body>\n</html>\n";
+        assert_eq!(
+            highlight_language("site/index.html", body),
+            Some("html".to_string())
+        );
+    }
+
+    #[test]
+    fn oversized_bodies_open_plain() {
+        let body = "a\n".repeat(600_000);
+        assert_eq!(highlight_language("big.html", &body), None);
+    }
+
+    #[test]
+    fn minified_single_line_files_open_plain() {
+        let body = "x".repeat(20_000);
+        assert_eq!(highlight_language("app.min.html", &body), None);
     }
 }
