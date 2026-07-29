@@ -1249,6 +1249,26 @@ mod tests {
         });
     }
 
+    /// UX remediation: a single click on a tree-mode folder row (and on its
+    /// chevron) flips the node, expanding it first and collapsing it next,
+    /// without ever moving the listing to another level.
+    #[gpui::test]
+    fn toggling_a_tree_node_expands_then_collapses_in_place(cx: &mut gpui::TestAppContext) {
+        let doc = new_test_entity(cx);
+
+        doc.update(cx, |doc, cx| {
+            doc.apply_page_for_test("", page(&["logs/"], &[]));
+            doc.toggle_tree_mode(cx);
+
+            doc.toggle_tree_node("logs/".to_string(), cx);
+            assert!(doc.tree.is_expanded("logs/"));
+
+            doc.toggle_tree_node("logs/".to_string(), cx);
+            assert!(!doc.tree.is_expanded("logs/"));
+            assert_eq!(doc.tree.current_prefix, "", "toggling never navigates");
+        });
+    }
+
     /// T25: the document contributes the bucket path, the key count of the
     /// current level, and the last object-store call's timing.
     #[gpui::test]

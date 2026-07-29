@@ -617,6 +617,16 @@ impl ObjectBrowserDocument {
         }
     }
 
+    /// Flips a prefix node's expansion in tree mode, the way a single click on
+    /// a folder row (or its chevron) does.
+    pub fn toggle_tree_node(&mut self, prefix: String, cx: &mut Context<Self>) {
+        if self.tree.is_expanded(&prefix) {
+            self.collapse_tree_node(&prefix, cx);
+        } else {
+            self.expand_tree_node(prefix, cx);
+        }
+    }
+
     /// Collapses a prefix node in tree mode. Its children stay cached, so
     /// re-expanding it is instant.
     pub fn collapse_tree_node(&mut self, prefix: &str, cx: &mut Context<Self>) {

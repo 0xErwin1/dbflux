@@ -28,8 +28,14 @@ const SIZE_WIDTH: Pixels = px(96.0);
 const CLASS_WIDTH: Pixels = px(132.0);
 const MODIFIED_WIDTH: Pixels = px(150.0);
 
-/// Indentation applied per tree-mode depth level.
+/// Indentation applied per tree-mode depth level. Matches the connections
+/// sidebar so both trees read at the same rhythm.
 const TREE_INDENT: Pixels = px(14.0);
+
+/// Width of the disclosure-chevron slot, reserved on every tree-mode row —
+/// including object rows, which have nothing to disclose — so names stay
+/// aligned within a level. Same slot the sidebar reserves.
+const CHEVRON_SLOT: Pixels = px(14.0);
 
 const UNKNOWN: &str = "—";
 
@@ -385,7 +391,50 @@ impl ObjectBrowserDocument {
         }
     }
 
+    /// Disclosure chevron for a tree-mode row. Prefix rows get a clickable
+    /// chevron-right / chevron-down, exactly like the connections sidebar;
+    /// object rows get the empty slot so names stay aligned within a level.
+    fn render_tree_chevron(&self, row: &VisibleRow, cx: &mut Context<Self>) -> AnyElement {
+        let slot = div()
+            .id(SharedString::from(format!(
+                "object-row-chevron-{}",
+                row.entry.full_key()
+            )))
+            .w(CHEVRON_SLOT)
+            .flex()
+            .justify_center();
+
+        let ObjectTreeEntry::Prefix(prefix) = &row.entry else {
+            return slot.into_any_element();
+        };
+
+        let icon = if self.tree.is_expanded(prefix) {
+            AppIcon::ChevronDown
+        } else {
+            AppIcon::ChevronRight
+        };
+        let prefix = prefix.clone();
+
+        slot.cursor_pointer()
+            // The row-level mouse-down would select the row underneath;
+            // the chevron only ever discloses, same as in the sidebar.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            })
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                this.toggle_tree_node(prefix.clone(), cx);
+            }))
+            .child(Icon::new(icon).size(CHEVRON_SLOT).muted())
+            .into_any_element()
+    }
+
     fn render_row(&self, row: &VisibleRow, selected: bool, cx: &mut Context<Self>) -> AnyElement {
+        // Built before the theme borrow: the chevron installs a listener and
+        // so needs `cx` mutably.
+        let tree_mode = self.tree.is_tree_mode();
+        let chevron = tree_mode.then(|| self.render_tree_chevron(row, cx));
+
         let theme = cx.theme();
 
         let display_name = row.entry.display_name(&row.parent_prefix);
@@ -449,20 +498,28 @@ impl ObjectBrowserDocument {
                     cx.emit(DocumentEvent::RequestFocus);
                 }),
             )
+            // In tree mode a folder row behaves like a sidebar folder: one
+            // click discloses it. Everywhere else activation stays on the
+            // double click, so a single click only ever selects.
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                if event.click_count() < 2 {
-                    return;
-                }
+                let single_click = event.click_count() == 1;
 
                 match &activate_id {
-                    ObjectTreeNodeId::Prefix(prefix) => {
-                        if this.tree().is_tree_mode() {
-                            this.expand_tree_node(prefix.clone(), cx);
-                        } else {
-                            this.navigate_to_prefix(prefix.clone(), window, cx)
+                    ObjectTreeNodeId::Prefix(prefix) if tree_mode => {
+                        if single_click {
+                            this.toggle_tree_node(prefix.clone(), cx);
                         }
                     }
-                    ObjectTreeNodeId::Object(key) => this.open_preview(key.clone(), cx),
+                    ObjectTreeNodeId::Prefix(prefix) => {
+                        if !single_click {
+                            this.navigate_to_prefix(prefix.clone(), window, cx);
+                        }
+                    }
+                    ObjectTreeNodeId::Object(key) => {
+                        if !single_click {
+                            this.open_preview(key.clone(), cx);
+                        }
+                    }
                 }
             }))
             .child(
@@ -473,6 +530,7 @@ impl ObjectBrowserDocument {
                     .gap(Spacing::SM)
                     .overflow_hidden()
                     .pl(TREE_INDENT * row.depth as f32)
+                    .when_some(chevron, |d, chevron| d.child(chevron))
                     .child(if row.entry.is_prefix() {
                         Icon::new(icon).small().primary()
                     } else {
