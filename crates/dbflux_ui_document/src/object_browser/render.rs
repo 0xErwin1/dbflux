@@ -226,14 +226,18 @@ impl ObjectBrowserDocument {
                 .px(Spacing::SM)
                 .rounded(Radii::SM)
                 .cursor_pointer()
-                .when(active, |d| d.bg(theme.accent.opacity(0.15)))
+                .when(active, |d| d.bg(theme.primary))
                 .when(!active, |d| d.hover(|d| d.bg(theme.secondary)))
                 .child(if active {
-                    Icon::new(icon).small()
+                    Icon::new(icon).small().color(theme.primary_foreground)
                 } else {
                     Icon::new(icon).small().muted()
                 })
-                .child(Text::caption(label))
+                .child(if active {
+                    Text::caption(label).color(theme.primary_foreground)
+                } else {
+                    Text::caption(label)
+                })
         };
 
         div()
@@ -754,7 +758,7 @@ impl Render for ObjectBrowserDocument {
         // `pending_* + take()` convention as the two continuations above.
         self.drain_pending_upload(cx);
         self.drain_pending_new_folder(window, cx);
-        self.drain_pending_object_action(cx);
+        self.drain_pending_object_action(window, cx);
 
         // The recursive-delete modal's type-to-confirm widget owns an
         // `InputState`, which is another thing only a render pass can build.

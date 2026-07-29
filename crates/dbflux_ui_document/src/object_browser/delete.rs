@@ -40,8 +40,21 @@ impl ObjectBrowserDocument {
     /// Drains `pending_object_action`, raised by the preview action bar, into
     /// the flow that owns it: `Delete` opens the confirmation below, `Presign`
     /// opens the presigned-URL modal.
-    pub(super) fn drain_pending_object_action(&mut self, cx: &mut Context<Self>) {
-        match self.take_pending_object_action() {
+    /// Also moves window focus back to the document: these modals have no
+    /// input of their own, and a focused editor would otherwise keep eating
+    /// the keystrokes (Escape included) meant for them.
+    pub(super) fn drain_pending_object_action(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let action = self.take_pending_object_action();
+
+        if action.is_some() {
+            self.focus_handle.focus(window);
+        }
+
+        match action {
             Some(ObjectAction::Delete { key }) => self.request_delete_object(key, cx),
             Some(ObjectAction::Presign { key }) => self.open_presign(key, cx),
             None => {}

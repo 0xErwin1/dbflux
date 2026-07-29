@@ -464,12 +464,14 @@ impl ObjectBrowserDocument {
                     .gap(Spacing::SM)
                     .child(Icon::new(AppIcon::TriangleAlert).small().warning())
                     .child(
-                        Text::caption(presign_warning(
-                            presign.method,
-                            presign.expires_at,
-                            &self.presign_signing_identity(cx),
-                        ))
-                        .warning(),
+                        div().flex_1().min_w_0().child(
+                            Text::caption(presign_warning(
+                                presign.method,
+                                presign.expires_at,
+                                &self.presign_signing_identity(cx),
+                            ))
+                            .warning(),
+                        ),
                     ),
             )
             .child(
@@ -491,7 +493,7 @@ impl ObjectBrowserDocument {
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.close_presign(cx);
                             }))
-                            .child(Text::caption("Close")),
+                            .child(Text::caption("Close").color(theme.foreground)),
                     )
                     .child(
                         div()
