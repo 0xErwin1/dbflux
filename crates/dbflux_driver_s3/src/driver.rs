@@ -459,15 +459,6 @@ impl ConnectionExt for S3Connection {
     }
 }
 
-/// Message shared by every `ObjectStoreConnection` method that has not
-/// landed yet. `head_object` is the only remaining stub — every other object,
-/// prefix, and bucket operation is now implemented above.
-fn not_yet_implemented(operation: &str) -> DbError {
-    DbError::NotSupported(format!(
-        "S3 {operation} is not implemented yet — it lands in a later batch of the S3 driver"
-    ))
-}
-
 /// Maximum number of keys accepted by a single S3 `DeleteObjects` call.
 const DELETE_BATCH_SIZE: usize = 1000;
 
@@ -690,8 +681,29 @@ impl ObjectStoreConnection for S3Connection {
         })
     }
 
-    fn head_object(&self, _bucket: &str, _key: &str) -> Result<ObjectMetadata, DbError> {
-        Err(not_yet_implemented("head_object"))
+    fn head_object(&self, bucket: &str, key: &str) -> Result<ObjectMetadata, DbError> {
+        let runtime = runtime();
+
+        let output = runtime
+            .block_on(self.client.head_object().bucket(bucket).key(key).send())
+            .map_err(|error| {
+                classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+            })?;
+
+        Ok(ObjectMetadata {
+            key: key.to_string(),
+            size_bytes: output.content_length().unwrap_or_default().max(0) as u64,
+            content_type: output.content_type().map(ToString::to_string),
+            last_modified: output.last_modified().and_then(smithy_datetime_to_chrono),
+            etag: output.e_tag().map(ToString::to_string),
+            storage_class: output
+                .storage_class()
+                .map(|class| class.as_str().to_string()),
+            encryption: output
+                .server_side_encryption()
+                .map(|sse| sse.as_str().to_string()),
+            version_count: None,
+        })
     }
 
     fn get_object(&self, bucket: &str, key: &str) -> Result<Vec<u8>, DbError> {
