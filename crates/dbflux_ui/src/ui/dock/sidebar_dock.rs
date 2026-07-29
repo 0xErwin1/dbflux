@@ -17,12 +17,12 @@ pub enum SidebarDockEvent {
 const COLLAPSED_WIDTH: Pixels = px(48.0);
 const DEFAULT_EXPANDED_WIDTH: Pixels = px(280.0);
 const MIN_WIDTH: Pixels = px(200.0);
-const MAX_WIDTH: Pixels = px(500.0);
+const MAX_WIDTH: Pixels = px(800.0);
 const HEADER_HEIGHT: Pixels = px(36.0);
 const HEADER_PADDING: Pixels = px(8.0);
 const BUTTON_SIZE: Pixels = px(32.0);
 const ICON_SIZE: Pixels = px(18.0);
-const GRIP_WIDTH: Pixels = px(4.0);
+const GRIP_WIDTH: Pixels = px(7.0);
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum SidebarState {

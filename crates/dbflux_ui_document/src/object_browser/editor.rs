@@ -240,15 +240,19 @@ impl ObjectBrowserDocument {
 
         let language = highlight_language(&pending.key, &pending.body.text);
 
+        // Plain buffers exist because the body tripped the highlight gate —
+        // usually one enormous minified line. Without wrapping, that line
+        // makes click positioning and horizontal navigation unusable.
         let input = cx.new(|cx| {
             let state = InputState::new(window, cx);
 
-            let state = match language {
-                Some(language) => state.code_editor(language),
-                None => state.multi_line(true),
-            };
-
-            state.line_number(true).soft_wrap(false)
+            match language {
+                Some(language) => state
+                    .code_editor(language)
+                    .line_number(true)
+                    .soft_wrap(false),
+                None => state.multi_line(true).line_number(true).soft_wrap(true),
+            }
         });
 
         let subscription = cx.subscribe_in(
