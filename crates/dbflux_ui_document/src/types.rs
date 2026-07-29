@@ -32,6 +32,8 @@ pub enum DocumentKind {
     ObjectStorageBuckets,
     // Object-storage bucket browser (prefix/object tree opened from the buckets table)
     ObjectBrowser,
+    // A single object-storage text object opened in its own editor tab
+    ObjectEditor,
 }
 
 /// Source kind for DataDocument (affects icon and behavior).

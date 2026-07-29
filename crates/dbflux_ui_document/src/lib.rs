@@ -31,6 +31,8 @@ mod key_value;
 pub mod migrate_wizard;
 mod new_key_modal;
 pub mod object_browser;
+pub mod object_editor;
+pub mod object_text;
 pub mod pane;
 pub mod refresh;
 mod result_view;
@@ -58,7 +60,11 @@ pub use dedup::DocumentKey;
 pub use handle::DocumentEvent;
 pub use key_value::KeyValueDocument;
 pub use object_browser::ObjectBrowserDocument;
-pub use pane::{BoxedDocEventCallback, CodeSessionTabSnapshot, PaneHandle, StatusSegment};
+pub use object_editor::ObjectEditorDocument;
+pub use pane::{
+    BoxedDocEventCallback, CodeSessionTabSnapshot, ObjectEditorRequest, ObjectSavedCallback,
+    PaneHandle, StatusSegment,
+};
 pub use result_view::ResultViewMode;
 pub use tab_bar::{TabBar, TabBarEvent};
 pub use tab_manager::{Tab, TabManager, TabManagerEvent};

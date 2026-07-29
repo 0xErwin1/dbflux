@@ -197,6 +197,20 @@ impl Tab {
             Tab::Pane(p) => p.take_pending_open_bucket.as_ref().and_then(|f| f(cx)),
         }
     }
+
+    /// Drains an open-this-object-in-an-editor-tab intent, if this tab has one
+    /// pending. `None` for every other document type.
+    pub fn take_pending_open_object_editor(
+        &self,
+        cx: &mut App,
+    ) -> Option<super::pane::ObjectEditorRequest> {
+        match self {
+            Tab::Pane(p) => p
+                .take_pending_open_object_editor
+                .as_ref()
+                .and_then(|f| f(cx)),
+        }
+    }
 }
 
 /// Manages open documents (tabs) in the workspace.

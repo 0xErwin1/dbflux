@@ -232,6 +232,10 @@ impl ObjectBrowserDocument {
         let name = object_display_name(key);
         let shows_image = matches!(self.preview_content(), PreviewContentState::Image(_));
         let is_dirty = self.editor_for(key).is_some_and(|editor| editor.dirty);
+        // The pinned pane is narrow by design; the same buffer can be taken to
+        // a full-size tab. Offered only once the object has actually decoded
+        // into a buffer here, which is exactly the gate the tab would apply.
+        let is_editable_text = self.editor_for(key).is_some();
 
         div()
             .flex()
@@ -265,6 +269,29 @@ impl ObjectBrowserDocument {
                     .flex()
                     .items_center()
                     .gap(Spacing::XXS)
+                    .when(is_editable_text, |this| {
+                        let key = key.to_string();
+
+                        this.child(
+                            div()
+                                .id("object-browser-open-in-editor")
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .size(Heights::CONTROL)
+                                .rounded(Radii::SM)
+                                .cursor_pointer()
+                                .hover(|d| d.bg(theme.secondary))
+                                .tooltip(|window, cx| {
+                                    gpui_component::tooltip::Tooltip::new("Open in editor")
+                                        .build(window, cx)
+                                })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.request_open_object_editor(key.clone(), cx);
+                                }))
+                                .child(Icon::new(AppIcon::Maximize2).small().muted()),
+                        )
+                    })
                     .when(shows_image, |this| {
                         let key = key.to_string();
 

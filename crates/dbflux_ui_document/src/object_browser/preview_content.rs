@@ -180,6 +180,20 @@ pub fn decode_image_dimensions(bytes: &[u8]) -> Result<(u32, u32), String> {
     Ok((decoded.width(), decoded.height()))
 }
 
+/// Sanity check for an SVG body: it must be UTF-8 and actually contain an
+/// `<svg` root. gpui's renderer fails silently at paint time, so an obviously
+/// broken body has to be caught here to reach the decode-failure fallback.
+pub fn validate_svg_body(bytes: &[u8]) -> Result<(), String> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| "This object is not valid UTF-8, so it cannot be an SVG.".to_string())?;
+
+    if text.to_ascii_lowercase().contains("<svg") {
+        Ok(())
+    } else {
+        Err("This object does not contain an <svg> root element.".to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -303,19 +317,5 @@ mod tests {
         ];
 
         PIXEL.to_vec()
-    }
-}
-
-/// Sanity check for an SVG body: it must be UTF-8 and actually contain an
-/// `<svg` root. gpui's renderer fails silently at paint time, so an obviously
-/// broken body has to be caught here to reach the decode-failure fallback.
-pub fn validate_svg_body(bytes: &[u8]) -> Result<(), String> {
-    let text = std::str::from_utf8(bytes)
-        .map_err(|_| "This object is not valid UTF-8, so it cannot be an SVG.".to_string())?;
-
-    if text.to_ascii_lowercase().contains("<svg") {
-        Ok(())
-    } else {
-        Err("This object does not contain an <svg> root element.".to_string())
     }
 }

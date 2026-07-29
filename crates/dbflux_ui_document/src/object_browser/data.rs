@@ -7,7 +7,7 @@
 //! once via `report_error_async`.
 
 use super::ObjectBrowserDocument;
-use super::editor::{PendingTextBody, decode_text_body};
+use super::editor::PendingTextBody;
 use super::metadata::{
     ObjectMetadataState, ObjectVersionsState, PreviewGate, evaluate_preview_gate,
 };
@@ -17,19 +17,15 @@ use super::preview_content::{
 };
 use super::tree::PrefixLoadState;
 use crate::buckets_table::{BucketDetailsState, OperationTiming};
+use crate::object_text::decode_text_body;
 use crate::types::DocumentState;
 use dbflux_core::{DbError, ObjectListingPage, ObjectMetadata};
-use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
+use dbflux_ui_base::user_error::report_error_async;
 use gpui::{Context, Image, ImageFormat};
 use std::sync::Arc;
 use std::time::Instant;
 
-pub(super) fn db_error_to_user_facing(err: &DbError) -> UserFacingError {
-    match err.formatted() {
-        Some(fe) => UserFacingError::from_formatted(ErrorKind::Driver, fe.clone()),
-        None => UserFacingError::new(ErrorKind::Driver, err.to_string()),
-    }
-}
+pub(super) use crate::object_text::db_error_to_user_facing;
 
 impl ObjectBrowserDocument {
     pub(super) fn get_connection(
@@ -464,7 +460,7 @@ impl ObjectBrowserDocument {
         generation: u64,
         key: String,
         content_type: Option<String>,
-        body: super::editor::TextBody,
+        body: crate::object_text::TextBody,
         cx: &mut Context<Self>,
     ) {
         let is_current = generation == self.preview_content_generation

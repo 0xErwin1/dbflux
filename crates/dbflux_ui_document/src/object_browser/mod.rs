@@ -23,7 +23,7 @@ pub use delete_prefix::{
 pub use presign::{PresignExpiry, PresignMethodChoice, PresignState, PresignUrlState};
 pub use rename::RenameObjectState;
 
-pub use editor::{LineEnding, TextBody, decode_text_body};
+pub use crate::object_text::{LineEnding, TextBody, decode_text_body};
 pub use metadata::{ObjectMetadataState, ObjectVersionsState, PreviewGate, evaluate_preview_gate};
 pub use preview_content::{ImagePreview, PreviewContentState, PreviewKind, detect_preview_kind};
 pub use tree::{ObjectTree, ObjectTreeEntry, ObjectTreeNodeId, PrefixLoadState};
@@ -161,6 +161,8 @@ pub struct ObjectBrowserDocument {
     presign: Option<PresignState>,
     /// Row context menu raised by a right click, with the row it targets.
     context_menu: Option<ObjectContextMenu>,
+    /// Key staged to open in its own editor tab, drained by the workspace.
+    pending_open_object_editor: Option<String>,
     /// Document origin in window coordinates, captured by a canvas on every
     /// render so a click position can be placed inside the document.
     panel_origin: Point<Pixels>,
@@ -236,6 +238,7 @@ impl ObjectBrowserDocument {
             delete_prefix_input: None,
             presign: None,
             context_menu: None,
+            pending_open_object_editor: None,
             panel_origin: Point::default(),
             _subscriptions: vec![filter_subscription],
         };
@@ -359,6 +362,31 @@ impl ObjectBrowserDocument {
     /// create-folder flow owner.
     pub fn take_pending_new_folder(&mut self) -> bool {
         std::mem::take(&mut self.pending_new_folder)
+    }
+
+    /// Stages `key` to open in its own editor tab. The workspace drains this
+    /// through the generic `take_pending_open_object_editor` pane helper, so
+    /// the browser never opens tabs itself.
+    pub(super) fn request_open_object_editor(&mut self, key: String, cx: &mut Context<Self>) {
+        self.pending_open_object_editor = Some(key);
+        cx.notify();
+    }
+
+    /// Open-in-editor intent raised by the preview header or the row context
+    /// menu, drained by the workspace.
+    pub fn take_pending_open_object_editor(&mut self) -> Option<String> {
+        self.pending_open_object_editor.take()
+    }
+
+    /// Refreshes the metadata panel for `key` when it is the object being
+    /// previewed. Called after a standalone editor tab saves that object, so
+    /// the size, last-modified and ETag rows stop showing pre-save values.
+    pub fn refresh_previewed_object(&mut self, key: &str, cx: &mut Context<Self>) {
+        if self.preview_key.as_deref() != Some(key) {
+            return;
+        }
+
+        self.load_object_metadata(key.to_string(), cx);
     }
 
     /// Prefix the pending folder creation targets, when it is not the level
@@ -787,9 +815,9 @@ impl ObjectBrowserDocument {
         self.install_text_editor(
             PendingTextBody {
                 key: key.to_string(),
-                body: editor::TextBody {
+                body: crate::object_text::TextBody {
                     text: text.to_string(),
-                    line_ending: editor::LineEnding::Lf,
+                    line_ending: crate::object_text::LineEnding::Lf,
                     byte_len: text.len() as u64,
                 },
                 content_type: Some("text/plain".to_string()),
@@ -1337,8 +1365,8 @@ mod tests {
                     .as_ref()
                     .map(|menu| menu.items.len())
                     .unwrap_or_default(),
-                6,
-                "Preview, Download, Rename, Presign, Copy S3 URI, Delete"
+                7,
+                "Preview, Open in editor, Download, Rename, Presign, Copy S3 URI, Delete"
             );
         });
 

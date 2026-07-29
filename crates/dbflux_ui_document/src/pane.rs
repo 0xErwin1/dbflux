@@ -32,6 +32,25 @@ pub struct StatusSegment {
     pub tooltip: Option<gpui::SharedString>,
 }
 
+/// Callback a document supplies when it asks for an object editor tab, invoked
+/// with the object's key after every successful save.
+pub type ObjectSavedCallback = std::rc::Rc<dyn Fn(&str, &mut App)>;
+
+/// A request to open one object-store text object in its own editor tab.
+///
+/// Raised by a document that browses an object store and drained generically
+/// by the workspace, the same way `take_pending_open_bucket` is. The callback
+/// keeps the requesting document in sync without the workspace (or this shell)
+/// knowing which concrete document type asked.
+#[derive(Clone)]
+pub struct ObjectEditorRequest {
+    pub bucket: String,
+    pub key: String,
+    /// Invoked with the key after a successful save, so the requesting
+    /// document can refresh its own view of that object.
+    pub on_saved: ObjectSavedCallback,
+}
+
 /// A snapshot of a code document's session state, used to reconstruct tabs
 /// on next launch and to write the session manifest.
 ///
@@ -134,6 +153,11 @@ pub struct PaneHandle {
     /// on `Some`. `None` on the outer `Option` means the document never
     /// raises this intent.
     pub take_pending_open_bucket: Option<Box<dyn Fn(&mut App) -> Option<String>>>,
+
+    /// Drains an open-this-object-in-an-editor-tab intent, same convention as
+    /// `take_pending_open_bucket`. Only object-browsing documents populate it.
+    pub take_pending_open_object_editor:
+        Option<Box<dyn Fn(&mut App) -> Option<ObjectEditorRequest>>>,
 }
 
 impl PaneHandle {
@@ -188,6 +212,7 @@ impl PaneHandle {
             mark_inspector_closed: None,
             status_segments: None,
             take_pending_open_bucket: None,
+            take_pending_open_object_editor: None,
         }
     }
 

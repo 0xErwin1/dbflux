@@ -430,6 +430,72 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
+    /// Opens one object-store text object in its own editor tab, or focuses
+    /// the existing tab for that `(profile_id, bucket, key)` triple. Reached
+    /// from the object browser's "Open in editor" header button and its row
+    /// context menu, both drained generically in `render.rs`.
+    pub(in crate::ui::views::workspace) fn open_object_editor(
+        &mut self,
+        profile_id: uuid::Uuid,
+        request: crate::ui::document::ObjectEditorRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let has_connection = self
+            .app_state
+            .read(cx)
+            .connections()
+            .contains_key(&profile_id);
+
+        let existing_id = if has_connection {
+            self.tab_manager.read(cx).find_by_key(
+                &crate::ui::document::DocumentKey::ObjectEditor {
+                    profile_id,
+                    bucket: request.bucket.clone(),
+                    key: request.key.clone(),
+                },
+                cx,
+            )
+        } else {
+            None
+        };
+
+        match decide_open_document(has_connection, existing_id) {
+            OpenDocumentDecision::ErrorNoConnection => {
+                Toast::error("No active connection for this object")
+                    .meta_right(now_hms())
+                    .action(copy_action("No active connection for this object"))
+                    .push(cx);
+                return;
+            }
+            OpenDocumentDecision::FocusExisting(id) => {
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.activate(id, cx);
+                });
+                return;
+            }
+            OpenDocumentDecision::OpenNew => {}
+        }
+
+        let doc = cx.new(|cx| {
+            crate::ui::document::ObjectEditorDocument::new(
+                profile_id,
+                request.bucket,
+                request.key,
+                request.on_saved,
+                self.app_state.clone(),
+                cx,
+            )
+        });
+        let pane = crate::ui::document::ObjectEditorDocument::into_pane(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
     pub(in crate::ui::views::workspace) fn close_tabs_batch(
         &mut self,
         window: &mut Window,

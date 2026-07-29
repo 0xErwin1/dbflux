@@ -6,6 +6,11 @@
 //! component `CodeDocument` uses — with the loaded content kept as a baseline
 //! so "modified" is a plain comparison rather than a change counter.
 //!
+//! Decoding, the highlighter gate, buffer construction and the save audit
+//! record live in `crate::object_text`, shared with the standalone editor tab
+//! (`crate::object_editor`) so the two surfaces read and write an object the
+//! same way.
+//!
 //! Saving writes the buffer back with `put_object`, preserving the object's
 //! content type and its original line-ending convention. Anything that would
 //! move away from a dirty buffer — selecting another object, navigating to
@@ -15,6 +20,10 @@
 
 use super::preview_content::PreviewContentState;
 use super::{ObjectBrowserDocument, ObjectBrowserFocusMode};
+use crate::object_text::{
+    FIND_SHORTCUT_HINT, LineEnding, SAVE_SHORTCUT_HINT, TextBody, body_meta_line, build_text_input,
+    cursor_label, db_error_to_user_facing, open_find_panel, record_save_audit,
+};
 // The raw `GpuiInput` (not the app's single-line `Input` wrapper) is what
 // `CodeDocument` renders its editor with: only it supports the full-height,
 // line-numbered code-editor layout.
@@ -30,114 +39,9 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, repor
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use uuid::Uuid;
-
-/// Save shortcut label, matching the `SaveQuery` binding (Cmd+S on macOS,
-/// Ctrl+S elsewhere) that the editor also answers to.
-#[cfg(target_os = "macos")]
-pub(super) const SAVE_SHORTCUT_HINT: &str = "Cmd+S";
-#[cfg(not(target_os = "macos"))]
-pub(super) const SAVE_SHORTCUT_HINT: &str = "Ctrl+S";
 
 /// Diameter of the dirty indicator inside the "modified" pill.
 const DIRTY_DOT: Pixels = px(7.0);
-
-/// Line-ending convention of a loaded object.
-///
-/// The buffer always holds LF internally — the editor component normalises
-/// input — so the original convention is recorded on load and restored on
-/// save, otherwise editing a CRLF object would silently rewrite every line.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LineEnding {
-    Lf,
-    Crlf,
-}
-
-impl LineEnding {
-    /// CRLF only when the body actually uses it; a body with no line break at
-    /// all is LF, which is what a new line typed into it will produce.
-    pub fn detect(text: &str) -> Self {
-        if text.contains("\r\n") {
-            LineEnding::Crlf
-        } else {
-            LineEnding::Lf
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            LineEnding::Lf => "LF",
-            LineEnding::Crlf => "CRLF",
-        }
-    }
-
-    /// Rewrites `text` (held with LF) in this convention.
-    pub fn apply(self, text: &str) -> String {
-        match self {
-            LineEnding::Lf => text.to_string(),
-            LineEnding::Crlf => text.replace('\n', "\r\n"),
-        }
-    }
-}
-
-/// A text object's body, decoded and normalised for editing.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TextBody {
-    pub text: String,
-    pub line_ending: LineEnding,
-    pub byte_len: u64,
-}
-
-/// Decodes an object body for the editor. Only UTF-8 is accepted: a lossy
-/// decode would let the user save back a file whose undecodable bytes had been
-/// replaced by placeholders.
-pub fn decode_text_body(bytes: Vec<u8>) -> Result<TextBody, String> {
-    let byte_len = bytes.len() as u64;
-
-    let text = String::from_utf8(bytes)
-        .map_err(|_| "This object is not valid UTF-8 text and cannot be edited in-app.")?;
-
-    let line_ending = LineEnding::detect(&text);
-    let normalised = text.replace("\r\n", "\n");
-
-    Ok(TextBody {
-        text: normalised,
-        line_ending,
-        byte_len,
-    })
-}
-
-/// Highlighter language for the buffer, from the key's extension. Unknown
-/// extensions resolve to the plain highlighter inside the editor component.
-pub fn editor_language(key: &str) -> String {
-    let name = key.rsplit_once('/').map(|(_, name)| name).unwrap_or(key);
-
-    name.rsplit_once('.')
-        .map(|(_, extension)| extension.to_lowercase())
-        .unwrap_or_else(|| "text".to_string())
-}
-
-const MAX_HIGHLIGHT_BYTES: usize = 1024 * 1024;
-const MAX_HIGHLIGHT_LINE_CHARS: usize = 10_000;
-
-/// Language for the syntax-highlighting editor, or `None` to open a plain
-/// buffer. Tree-sitter parsing and per-line layout run on the UI thread, so a
-/// large body or a minified single-line file (typical for html/js/css assets)
-/// must skip highlighting entirely or the app freezes on open.
-pub fn highlight_language(key: &str, body: &str) -> Option<String> {
-    if body.len() > MAX_HIGHLIGHT_BYTES {
-        return None;
-    }
-
-    if body
-        .lines()
-        .any(|line| line.len() > MAX_HIGHLIGHT_LINE_CHARS)
-    {
-        return None;
-    }
-
-    Some(editor_language(key))
-}
 
 /// A decoded text body ready to be installed into an editor, handed from the
 /// background fetch to the next render — building the `InputState` and seeding
@@ -166,11 +70,10 @@ impl ObjectEditor {
     /// Meta line under the header: what the object is, how big it is, and how
     /// its text is encoded.
     pub(super) fn meta_line(&self) -> String {
-        format!(
-            "{} · {} · UTF-8 · {}",
-            self.content_type.as_deref().unwrap_or("text/plain"),
-            crate::buckets_table::format_bytes(self.byte_len),
-            self.line_ending.label()
+        body_meta_line(
+            self.content_type.as_deref(),
+            self.byte_len,
+            self.line_ending,
         )
     }
 }
@@ -238,22 +141,7 @@ impl ObjectBrowserDocument {
             return;
         }
 
-        let language = highlight_language(&pending.key, &pending.body.text);
-
-        // Plain buffers exist because the body tripped the highlight gate —
-        // usually one enormous minified line. Without wrapping, that line
-        // makes click positioning and horizontal navigation unusable.
-        let input = cx.new(|cx| {
-            let state = InputState::new(window, cx);
-
-            match language {
-                Some(language) => state
-                    .code_editor(language)
-                    .line_number(true)
-                    .soft_wrap(false),
-                None => state.multi_line(true).line_number(true).soft_wrap(true),
-            }
-        });
+        let input = build_text_input(&pending.key, &pending.body.text, window, cx);
 
         let subscription = cx.subscribe_in(
             &input,
@@ -672,9 +560,38 @@ impl ObjectBrowserDocument {
                             })
                             .child(Icon::new(AppIcon::RotateCcw).small().muted())
                             .child(Text::caption("Discard")),
+                    )
+                    .child(
+                        div()
+                            .id("object-browser-editor-find")
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::XS)
+                            .h(Heights::CONTROL)
+                            .px(Spacing::SM)
+                            .rounded(Radii::SM)
+                            .cursor_pointer()
+                            .hover(|d| d.bg(theme.secondary))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_editor_find(window, cx);
+                            }))
+                            .child(Icon::new(AppIcon::Search).small().muted())
+                            .child(Text::caption("Find"))
+                            .child(Text::key_hint(FIND_SHORTCUT_HINT)),
                     ),
             )
             .child(Text::caption(cursor_label(position)).muted_foreground())
+    }
+
+    /// Opens the editor component's find panel over the open buffer.
+    pub(super) fn open_editor_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(input) = self.editor.as_ref().map(|editor| editor.input.clone()) else {
+            return;
+        };
+
+        self.focus_mode = ObjectBrowserFocusMode::Editor;
+        open_find_panel(&input, window, cx);
+        cx.notify();
     }
 
     /// The "modified" pill shown in the preview header while the buffer differs
@@ -810,122 +727,12 @@ impl ObjectBrowserDocument {
     }
 }
 
-/// `Ln n, Col n` from the editor's 0-based cursor position.
-fn cursor_label(position: dbflux_components::controls::InputPosition) -> String {
-    format!("Ln {}, Col {}", position.line + 1, position.character + 1)
-}
-
-fn db_error_to_user_facing(err: &DbError) -> UserFacingError {
-    match err.formatted() {
-        Some(formatted) => UserFacingError::from_formatted(ErrorKind::Driver, formatted.clone()),
-        None => UserFacingError::new(ErrorKind::Driver, err.to_string()),
-    }
-}
-
-/// Audits a save-back. Only the bucket, key, and outcome are recorded — never
-/// the object's content.
-fn record_save_audit(
-    audit_service: &dbflux_audit::AuditService,
-    profile_id: Uuid,
-    bucket: &str,
-    key: &str,
-    error: Option<&str>,
-) {
-    use dbflux_core::chrono::Utc;
-    use dbflux_core::observability::{
-        EventCategory, EventOutcome, EventRecord, EventSeverity, EventSink,
-    };
-
-    let (severity, outcome, action) = match error {
-        Some(_) => (
-            EventSeverity::Error,
-            EventOutcome::Failure,
-            "object_edit_save_failed",
-        ),
-        None => (
-            EventSeverity::Info,
-            EventOutcome::Success,
-            "object_edit_save",
-        ),
-    };
-
-    let mut summary = format!("Saved edits to s3://{bucket}/{key}");
-    if let Some(error) = error {
-        summary.push_str(&format!(": {error}"));
-    }
-
-    let event = EventRecord::new(
-        Utc::now().timestamp_millis(),
-        severity,
-        EventCategory::ObjectStorage,
-        outcome,
-    )
-    .with_action(action.to_string())
-    .with_summary(summary)
-    .with_actor_id("ui:user")
-    .with_object_ref("object", format!("{bucket}/{key}"))
-    .with_connection_context(profile_id.to_string(), bucket.to_string(), String::new());
-
-    if let Err(e) = audit_service.record(event) {
-        log::warn!("[object browser] failed to record object-edit audit event: {e}");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     // Deliberately narrow imports: `use super::*` would pull in the module's
     // `gpui::*` glob, whose `test` attribute macro would shadow the standard
     // `#[test]` attribute below.
-    use super::{GuardedNavigation, LineEnding, cursor_label, decode_text_body, editor_language};
-
-    /// T30: a CRLF body is recognised so the convention survives a round-trip.
-    #[test]
-    fn line_endings_round_trip() {
-        assert_eq!(LineEnding::detect("a\r\nb"), LineEnding::Crlf);
-        assert_eq!(LineEnding::detect("a\nb"), LineEnding::Lf);
-        assert_eq!(LineEnding::detect("single line"), LineEnding::Lf);
-
-        assert_eq!(LineEnding::Crlf.apply("a\nb"), "a\r\nb");
-        assert_eq!(LineEnding::Lf.apply("a\nb"), "a\nb");
-    }
-
-    /// T30: the buffer always holds LF, and the original byte length is kept
-    /// for the meta line.
-    #[test]
-    fn decoding_normalises_to_lf() {
-        let body = decode_text_body(b"first\r\nsecond".to_vec()).expect("valid UTF-8");
-
-        assert_eq!(body.text, "first\nsecond");
-        assert_eq!(body.line_ending, LineEnding::Crlf);
-        assert_eq!(body.byte_len, 13);
-    }
-
-    /// T30: a body that is not UTF-8 is refused rather than lossily decoded —
-    /// saving a placeholder-mangled buffer would corrupt the object.
-    #[test]
-    fn decoding_refuses_non_utf8_bodies() {
-        assert!(decode_text_body(vec![0xff, 0xfe, 0x00]).is_err());
-    }
-
-    /// T30: the highlighter language comes from the extension, with a plain
-    /// fallback for keys that have none.
-    #[test]
-    fn editor_language_follows_the_extension() {
-        assert_eq!(editor_language("logs/app.JSON"), "json");
-        assert_eq!(editor_language("notes.md"), "md");
-        assert_eq!(editor_language("data/dump"), "text");
-    }
-
-    /// T30: the cursor readout is 1-based, like every other editor.
-    #[test]
-    fn cursor_label_is_one_based() {
-        let position = dbflux_components::controls::InputPosition {
-            line: 0,
-            character: 0,
-        };
-
-        assert_eq!(cursor_label(position), "Ln 1, Col 1");
-    }
+    use super::GuardedNavigation;
 
     /// T31: the confirmation names what the user was about to do.
     #[test]
@@ -942,31 +749,5 @@ mod tests {
             GuardedNavigation::ClosePreview.description(),
             "close this preview"
         );
-    }
-}
-
-#[cfg(test)]
-mod highlight_gate_tests {
-    use super::highlight_language;
-
-    #[test]
-    fn small_multi_line_files_keep_their_language() {
-        let body = "<html>\n<body>hello</body>\n</html>\n";
-        assert_eq!(
-            highlight_language("site/index.html", body),
-            Some("html".to_string())
-        );
-    }
-
-    #[test]
-    fn oversized_bodies_open_plain() {
-        let body = "a\n".repeat(600_000);
-        assert_eq!(highlight_language("big.html", &body), None);
-    }
-
-    #[test]
-    fn minified_single_line_files_open_plain() {
-        let body = "x".repeat(20_000);
-        assert_eq!(highlight_language("app.min.html", &body), None);
     }
 }

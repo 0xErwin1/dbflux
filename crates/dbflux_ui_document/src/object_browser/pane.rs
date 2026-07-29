@@ -3,9 +3,10 @@
 use super::ObjectBrowserDocument;
 use crate::dedup::DocumentKey;
 use crate::handle::DocumentEvent;
-use crate::pane::{BoxedDocEventCallback, PaneHandle, StatusSegment};
+use crate::pane::{BoxedDocEventCallback, ObjectEditorRequest, PaneHandle, StatusSegment};
 use crate::types::{DocumentIcon, DocumentKind, DocumentMetaSnapshot};
 use gpui::{App, Entity, IntoElement};
+use std::rc::Rc;
 
 impl ObjectBrowserDocument {
     /// Status-bar segments contributed by this document (DEC-23): the engine
@@ -156,6 +157,34 @@ impl ObjectBrowserDocument {
         pane.status_segments = Some({
             let e = entity.clone();
             Box::new(move |cx| e.read(cx).status_segments(cx))
+        });
+
+        // Open-in-editor intent. `on_saved` points back at this browser so a
+        // save in the standalone tab refreshes the metadata panel here when
+        // the same object is still being previewed.
+        pane.take_pending_open_object_editor = Some({
+            let e = entity.clone();
+            let bucket = bucket.clone();
+
+            Box::new(move |cx| {
+                let key = e.update(cx, |d, _cx| d.take_pending_open_object_editor())?;
+
+                let refresh_target = e.downgrade();
+
+                Some(ObjectEditorRequest {
+                    bucket: bucket.clone(),
+                    key,
+                    on_saved: Rc::new(move |key: &str, cx: &mut App| {
+                        let key = key.to_string();
+
+                        refresh_target
+                            .update(cx, |browser, cx| {
+                                browser.refresh_previewed_object(&key, cx);
+                            })
+                            .ok();
+                    }),
+                })
+            })
         });
 
         pane

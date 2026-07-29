@@ -44,6 +44,7 @@ pub(super) struct ObjectMenuItem {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ObjectMenuAction {
     Preview,
+    OpenInEditor,
     Download,
     Rename,
     Presign,
@@ -64,6 +65,12 @@ impl ObjectBrowserDocument {
                 label: "Preview".into(),
                 action: ObjectMenuAction::Preview,
                 icon: AppIcon::Eye,
+                is_danger: false,
+            },
+            ObjectMenuItem {
+                label: "Open in editor".into(),
+                action: ObjectMenuAction::OpenInEditor,
+                icon: AppIcon::Maximize2,
                 is_danger: false,
             },
             ObjectMenuItem {
@@ -237,6 +244,9 @@ impl ObjectBrowserDocument {
         match (action, target) {
             (ObjectMenuAction::Preview, ObjectTreeNodeId::Object(key)) => {
                 self.open_preview(key, cx)
+            }
+            (ObjectMenuAction::OpenInEditor, ObjectTreeNodeId::Object(key)) => {
+                self.request_open_object_editor(key, cx)
             }
             (ObjectMenuAction::Download, ObjectTreeNodeId::Object(key)) => {
                 self.download_object(key, cx)
