@@ -1,3 +1,4 @@
+mod context_menu;
 mod create_folder;
 mod data;
 mod delete;
@@ -26,6 +27,8 @@ pub use editor::{LineEnding, TextBody, decode_text_body};
 pub use metadata::{ObjectMetadataState, ObjectVersionsState, PreviewGate, evaluate_preview_gate};
 pub use preview_content::{ImagePreview, PreviewContentState, PreviewKind, detect_preview_kind};
 pub use tree::{ObjectTree, ObjectTreeEntry, ObjectTreeNodeId, PrefixLoadState};
+
+use context_menu::ObjectContextMenu;
 
 use super::handle::DocumentEvent;
 use super::types::{DocumentId, DocumentState};
@@ -132,6 +135,9 @@ pub struct ObjectBrowserDocument {
     bucket_details: BucketDetailsState,
     pending_upload: bool,
     pending_new_folder: bool,
+    /// Prefix the pending folder creation targets, when the intent came from
+    /// a folder row rather than the toolbar.
+    pending_new_folder_parent: Option<String>,
     /// New Folder overlay state (name input + submission), built on the
     /// render pass that drains `pending_new_folder`.
     new_folder: Option<NewFolderState>,
@@ -150,6 +156,11 @@ pub struct ObjectBrowserDocument {
     delete_prefix_input: Option<Entity<TypeToConfirm>>,
     /// Presigned-URL modal state (method / expiry / generated URL).
     presign: Option<PresignState>,
+    /// Row context menu raised by a right click, with the row it targets.
+    context_menu: Option<ObjectContextMenu>,
+    /// Document origin in window coordinates, captured by a canvas on every
+    /// render so a click position can be placed inside the document.
+    panel_origin: Point<Pixels>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -211,6 +222,7 @@ impl ObjectBrowserDocument {
             bucket_details: BucketDetailsState::NotLoaded,
             pending_upload: false,
             pending_new_folder: false,
+            pending_new_folder_parent: None,
             new_folder: None,
             rename_object: None,
             pending_object_action: None,
@@ -218,6 +230,8 @@ impl ObjectBrowserDocument {
             delete_prefix_confirm: None,
             delete_prefix_input: None,
             presign: None,
+            context_menu: None,
+            panel_origin: Point::default(),
             _subscriptions: vec![filter_subscription],
         };
 
@@ -291,6 +305,12 @@ impl ObjectBrowserDocument {
             return ContextId::ConfirmModal;
         }
 
+        // The row context menu owns the keyboard while it is open, so the
+        // listing does not move under the row the user right-clicked.
+        if self.context_menu.is_some() {
+            return ContextId::ContextMenu;
+        }
+
         // The recursive-delete modal is typed into, so its input must keep
         // every letter the listing would otherwise read as a command.
         if self.delete_prefix_confirm.is_some() {
@@ -334,6 +354,12 @@ impl ObjectBrowserDocument {
     /// create-folder flow owner.
     pub fn take_pending_new_folder(&mut self) -> bool {
         std::mem::take(&mut self.pending_new_folder)
+    }
+
+    /// Prefix the pending folder creation targets, when it is not the level
+    /// being listed (the listing's context menu targets a specific folder).
+    pub(super) fn take_pending_new_folder_parent(&mut self) -> Option<String> {
+        self.pending_new_folder_parent.take()
     }
 
     // -- Listing ---------------------------------------------------------
@@ -689,6 +715,12 @@ impl ObjectBrowserDocument {
         cx.notify();
     }
 
+    /// Same intent, for a folder that is not the level being listed.
+    pub(super) fn request_new_folder_in(&mut self, prefix: String, cx: &mut Context<Self>) {
+        self.pending_new_folder_parent = Some(prefix);
+        self.request_new_folder(cx);
+    }
+
     #[cfg(test)]
     pub(crate) fn apply_page_for_test(
         &mut self,
@@ -827,6 +859,12 @@ impl ObjectBrowserDocument {
             }
 
             return true;
+        }
+
+        // Same for the row context menu, which navigates and executes with
+        // its own command set.
+        if self.context_menu.is_some() {
+            return self.dispatch_menu_command(cmd, window, cx);
         }
 
         // The recursive-delete modal owns the keyboard while it is up: Execute
@@ -1018,7 +1056,7 @@ mod tests {
     // `#[test]` attribute.
     use super::{
         ImagePreview, ObjectAction, ObjectBrowserDocument, ObjectMetadataState, ObjectTreeNodeId,
-        PreviewContentState, PreviewGate, PreviewKind,
+        PreviewContentState, PreviewGate, PreviewKind, context_menu,
     };
     use crate::buckets_table::OperationTiming;
     use crate::types::DocumentState;
@@ -1266,6 +1304,109 @@ mod tests {
             doc.toggle_tree_node("logs/".to_string(), cx);
             assert!(!doc.tree.is_expanded("logs/"));
             assert_eq!(doc.tree.current_prefix, "", "toggling never navigates");
+        });
+    }
+
+    /// UX remediation: right-clicking an object row targets that row and its
+    /// entries dispatch through the existing intents — Presign lands in the
+    /// same pending action the preview action bar raises.
+    #[gpui::test]
+    fn object_context_menu_acts_on_the_right_clicked_row(cx: &mut gpui::TestAppContext) {
+        let (doc, window) = new_test_entity_with_window(cx);
+
+        doc.update(window, |doc, cx| {
+            doc.apply_page_for_test("", page(&[], &["a.txt", "b.txt"]));
+            doc.select_node(ObjectTreeNodeId::Object("a.txt".to_string()), cx);
+            doc.open_context_menu(
+                ObjectTreeNodeId::Object("b.txt".to_string()),
+                gpui::Point::default(),
+                cx,
+            );
+
+            assert_eq!(
+                doc.tree.selected,
+                Some(ObjectTreeNodeId::Object("b.txt".to_string())),
+                "the menu retargets the selection to the right-clicked row"
+            );
+            assert_eq!(
+                doc.context_menu
+                    .as_ref()
+                    .map(|menu| menu.items.len())
+                    .unwrap_or_default(),
+                6,
+                "Preview, Download, Rename, Presign, Copy S3 URI, Delete"
+            );
+        });
+
+        doc.update_in(window, |doc, window, cx| {
+            doc.execute_menu_action(
+                context_menu::ObjectMenuAction::Presign,
+                ObjectTreeNodeId::Object("b.txt".to_string()),
+                window,
+                cx,
+            );
+        });
+
+        doc.update(window, |doc, _cx| {
+            assert!(doc.context_menu.is_none(), "executing closes the menu");
+            // The intent flows through the same drain the preview action bar
+            // uses, so by now it has landed in the presign modal.
+            assert_eq!(
+                doc.presign().map(|presign| presign.key.as_str()),
+                Some("b.txt")
+            );
+        });
+    }
+
+    /// UX remediation: the folder menu's first entry follows the mode, and
+    /// "New folder inside" targets the right-clicked folder rather than the
+    /// level being listed.
+    #[gpui::test]
+    fn folder_context_menu_follows_the_mode_and_the_clicked_folder(cx: &mut gpui::TestAppContext) {
+        let (doc, window) = new_test_entity_with_window(cx);
+
+        doc.update(window, |doc, cx| {
+            doc.apply_page_for_test("", page(&["logs/"], &[]));
+            doc.open_context_menu(
+                ObjectTreeNodeId::Prefix("logs/".to_string()),
+                gpui::Point::default(),
+                cx,
+            );
+
+            let label = doc
+                .context_menu
+                .as_ref()
+                .map(|menu| menu.items[0].label.to_string());
+            assert_eq!(label.as_deref(), Some("Open"), "per-level mode opens");
+
+            doc.toggle_tree_mode(cx);
+            doc.open_context_menu(
+                ObjectTreeNodeId::Prefix("logs/".to_string()),
+                gpui::Point::default(),
+                cx,
+            );
+
+            let label = doc
+                .context_menu
+                .as_ref()
+                .map(|menu| menu.items[0].label.to_string());
+            assert_eq!(label.as_deref(), Some("Expand"), "tree mode discloses");
+        });
+
+        doc.update_in(window, |doc, window, cx| {
+            doc.execute_menu_action(
+                context_menu::ObjectMenuAction::NewFolderInside,
+                ObjectTreeNodeId::Prefix("logs/".to_string()),
+                window,
+                cx,
+            );
+
+            assert!(doc.take_pending_new_folder());
+            assert_eq!(
+                doc.take_pending_new_folder_parent().as_deref(),
+                Some("logs/"),
+                "the new folder lands under the right-clicked folder"
+            );
         });
     }
 

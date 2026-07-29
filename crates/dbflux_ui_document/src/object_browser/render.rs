@@ -477,6 +477,7 @@ impl ObjectBrowserDocument {
 
         let activate_id = node_id.clone();
         let select_id = node_id.clone();
+        let menu_id = node_id.clone();
 
         div()
             .id(row_id)
@@ -496,6 +497,14 @@ impl ObjectBrowserDocument {
                 cx.listener(move |this, _, _, cx| {
                     this.select_node(select_id.clone(), cx);
                     cx.emit(DocumentEvent::RequestFocus);
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    cx.emit(DocumentEvent::RequestFocus);
+                    this.open_context_menu(menu_id.clone(), event.position, cx);
                 }),
             )
             // In tree mode a folder row behaves like a sidebar folder: one
@@ -801,6 +810,21 @@ impl Render for ObjectBrowserDocument {
                 .into_any_element()
         };
 
+        // The context menu positions itself at the click, which arrives in
+        // window coordinates; this canvas keeps the document's own origin so
+        // the popup can be placed inside it.
+        let origin_probe = cx.entity().clone();
+        let origin_canvas = canvas(
+            move |bounds, _, cx| {
+                origin_probe.update(cx, |this, _| {
+                    this.panel_origin = bounds.origin;
+                });
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full();
+
         let preview_key = self.preview_key.clone();
         let pending_navigation = self.pending_navigation.clone();
         let pending_object_delete = self.pending_object_delete.clone();
@@ -823,6 +847,7 @@ impl Render for ObjectBrowserDocument {
                     cx.notify();
                 }),
             )
+            .child(origin_canvas)
             .child(self.render_breadcrumb(cx))
             .child(self.render_toolbar(cx))
             .when_some(level_error, |this, message| {
@@ -871,6 +896,9 @@ impl Render for ObjectBrowserDocument {
             })
             .when(has_rename, |this| {
                 this.child(self.render_rename_overlay(cx))
+            })
+            .when_some(self.context_menu.as_ref(), |this, menu| {
+                this.child(self.render_context_menu(menu, cx))
             })
     }
 }

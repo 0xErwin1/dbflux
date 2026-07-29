@@ -46,6 +46,10 @@ pub fn folder_name_error(name: &str) -> Option<String> {
 /// consumes the toolbar's intent, because the input needs a `Window`.
 pub struct NewFolderState {
     pub name_input: Entity<InputState>,
+    /// Prefix the folder is created under. The toolbar's intent targets the
+    /// level being listed; the listing's context menu targets the folder that
+    /// was right-clicked, which is not necessarily that level.
+    pub parent: String,
     pub submitting: bool,
     pub error: Option<String>,
     _subscription: Subscription,
@@ -75,8 +79,13 @@ impl ObjectBrowserDocument {
                 },
             );
 
+        let parent = self
+            .take_pending_new_folder_parent()
+            .unwrap_or_else(|| self.tree.current_prefix.clone());
+
         self.new_folder = Some(NewFolderState {
             name_input,
+            parent,
             submitting: false,
             error: None,
             _subscription: subscription,
@@ -113,11 +122,11 @@ impl ObjectBrowserDocument {
         }
 
         let name = self.new_folder_name(cx);
-        let key = format!("{}{name}/", self.tree.current_prefix);
 
         let Some(state) = self.new_folder.as_mut() else {
             return;
         };
+        let key = format!("{}{name}/", state.parent);
         state.submitting = true;
         state.error = None;
         cx.notify();
@@ -185,11 +194,20 @@ impl ObjectBrowserDocument {
     ) {
         match result {
             Ok(()) => {
+                // The level to refresh is the one the folder was created
+                // under, which the context menu can point somewhere other
+                // than the level being listed.
+                let parent = self
+                    .new_folder
+                    .as_ref()
+                    .map(|state| state.parent.clone())
+                    .unwrap_or_else(|| self.tree.current_prefix.clone());
+
                 self.new_folder = None;
                 Toast::success(format!("Created folder s3://{}/{key}", self.bucket))
                     .meta_right(now_hms())
                     .push(cx);
-                self.reload_current_prefix(cx);
+                self.reload_prefix(parent, cx);
             }
             Err(message) => {
                 if let Some(state) = self.new_folder.as_mut() {
@@ -227,6 +245,10 @@ impl ObjectBrowserDocument {
                     .gap(Spacing::SM)
                     .child(Icon::new(AppIcon::Folder).size(Heights::ICON_MD).muted())
                     .child(Text::heading("New folder")),
+            )
+            .child(
+                Text::caption(format!("in s3://{}/{}", self.bucket, state.parent))
+                    .muted_foreground(),
             )
             .child(
                 div()

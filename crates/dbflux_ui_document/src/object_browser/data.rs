@@ -68,6 +68,12 @@ impl ObjectBrowserDocument {
     pub fn reload_current_prefix(&mut self, cx: &mut Context<Self>) {
         let prefix = self.tree.current_prefix.clone();
 
+        self.reload_prefix(prefix, cx);
+    }
+
+    /// Same refresh, for a level that is not the one being listed — a
+    /// tree-mode node, or the folder a context-menu action targeted.
+    pub fn reload_prefix(&mut self, prefix: String, cx: &mut Context<Self>) {
         self.tree.reset_level(&prefix);
         self.expand_prefix(prefix, cx);
     }
