@@ -444,6 +444,13 @@ fn results_layer() -> KeymapLayer {
     // Execute (Enter to edit input in toolbar mode)
     layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
 
+    // Expand/collapse — object browser preview/properties, per-document meaning
+    // otherwise (matches the Sidebar layer's `space` binding).
+    layer.bind(
+        KeyChord::new("space", Modifiers::none()),
+        Command::ExpandCollapse,
+    );
+
     // Toolbar / filter focus
     layer.bind(KeyChord::new("f", Modifiers::none()), Command::FocusToolbar);
     layer.bind(KeyChord::new("/", Modifiers::none()), Command::FocusSearch);
@@ -976,5 +983,18 @@ mod tests {
                  typing-vs-grid focus invariant in CodeDocument stays meaningful",
             );
         }
+    }
+
+    /// `space` in the Results layer must resolve to `ExpandCollapse`, matching
+    /// the Sidebar layer's binding, so the object browser's "Space
+    /// preview"/"Space properties" footer hints are actually live.
+    #[test]
+    fn results_layer_binds_space_to_expand_collapse() {
+        let keymap = default_keymap();
+        let chord = KeyChord::new("space", Modifiers::none());
+        assert_eq!(
+            keymap.resolve(ContextId::Results, &chord),
+            Some(Command::ExpandCollapse),
+        );
     }
 }

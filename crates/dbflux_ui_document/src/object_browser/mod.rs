@@ -297,8 +297,12 @@ impl ObjectBrowserDocument {
         }
 
         match self.focus_mode {
-            ObjectBrowserFocusMode::Editor => ContextId::TextInput,
-            _ => ContextId::Results,
+            // Filter is a text input, same as Editor — routing it to Results
+            // would let single-letter listing commands (Delete, Rename,
+            // ExpandCollapse, ...) fire while the user is typing a prefix
+            // filter instead of reaching the input.
+            ObjectBrowserFocusMode::Editor | ObjectBrowserFocusMode::Filter => ContextId::TextInput,
+            ObjectBrowserFocusMode::Listing => ContextId::Results,
         }
     }
 
@@ -618,6 +622,16 @@ impl ObjectBrowserDocument {
     #[cfg(test)]
     pub(crate) fn set_last_operation_for_test(&mut self, timing: OperationTiming) {
         self.last_operation = Some(timing);
+    }
+
+    /// Sets `focus_mode` directly, bypassing `focus_filter`'s
+    /// `InputState::focus` call — that call panics under `TestAppContext`
+    /// (see the `Root::read` gotcha documented across this change's other
+    /// overlay tests), so this is the only way to exercise
+    /// `active_context()`'s `Filter` branch in a unit test.
+    #[cfg(test)]
+    pub(crate) fn set_focus_mode_for_test(&mut self, mode: ObjectBrowserFocusMode) {
+        self.focus_mode = mode;
     }
 
     #[cfg(test)]
@@ -1512,6 +1526,28 @@ mod tests {
                         "logs/".to_string()
                     )
                 )
+            );
+        });
+    }
+
+    /// Known fix: while the filter input owns keyboard focus (`Filter` mode,
+    /// entered via `Command::FocusSearch`), listing commands (Delete,
+    /// Rename, ExpandCollapse, ...) must not fire — the context must route
+    /// to the text-input layer, same as the inline editor.
+    #[gpui::test]
+    fn filter_focus_mode_routes_to_text_input_context(cx: &mut gpui::TestAppContext) {
+        let doc = new_test_entity(cx);
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, _cx| {
+                doc.set_focus_mode_for_test(super::ObjectBrowserFocusMode::Filter);
+            });
+        });
+
+        cx.update(|cx| {
+            assert_eq!(
+                doc.read(cx).active_context(),
+                dbflux_app::keymap::ContextId::TextInput
             );
         });
     }

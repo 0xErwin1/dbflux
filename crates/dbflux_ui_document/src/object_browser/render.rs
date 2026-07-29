@@ -660,7 +660,9 @@ impl ObjectBrowserDocument {
                     .child(Text::key_hint("Enter open"))
                     .child(Text::key_hint("Space preview"))
                     .child(Text::key_hint("← up a level"))
-                    .child(Text::key_hint("/ filter")),
+                    .child(Text::key_hint("/ filter"))
+                    .child(Text::key_hint("x delete"))
+                    .child(Text::key_hint("r rename")),
             )
     }
 }
