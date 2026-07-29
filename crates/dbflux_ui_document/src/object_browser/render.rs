@@ -666,7 +666,18 @@ impl ObjectBrowserDocument {
 }
 
 impl Render for ObjectBrowserDocument {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Both of these need a `Window` that the background continuations that
+        // queued them never had: building the editor's buffer, and resuming a
+        // navigation the user chose to save before.
+        if let Some(pending) = self.pending_text_body.take() {
+            self.install_text_editor(pending, window, cx);
+        }
+
+        if let Some(navigation) = self.resume_navigation.take() {
+            self.run_navigation(navigation, window, cx);
+        }
+
         let rows = self.visible_rows();
         let selected = self.tree.selected.clone();
 
@@ -705,6 +716,7 @@ impl Render for ObjectBrowserDocument {
         };
 
         let preview_key = self.preview_key.clone();
+        let pending_navigation = self.pending_navigation.clone();
 
         div()
             .track_focus(&self.focus_handle)
@@ -745,6 +757,9 @@ impl Render for ObjectBrowserDocument {
                     }),
             )
             .child(self.render_footer(&rows, cx))
+            .when_some(pending_navigation, |this, navigation| {
+                this.child(self.render_unsaved_edits_confirm(&navigation, cx))
+            })
     }
 }
 

@@ -1,4 +1,5 @@
 mod data;
+pub mod editor;
 pub mod metadata;
 mod pane;
 mod preview;
@@ -7,6 +8,7 @@ mod render;
 mod transfer;
 pub mod tree;
 
+pub use editor::{LineEnding, TextBody, decode_text_body};
 pub use metadata::{ObjectMetadataState, ObjectVersionsState, PreviewGate, evaluate_preview_gate};
 pub use preview_content::{ImagePreview, PreviewContentState, PreviewKind, detect_preview_kind};
 pub use tree::{
@@ -21,6 +23,7 @@ use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::RefreshPolicy;
 use dbflux_ui_base::AppStateEntity;
+use editor::{GuardedNavigation, ObjectEditor, PendingTextBody};
 use gpui::*;
 use uuid::Uuid;
 
@@ -29,6 +32,8 @@ use uuid::Uuid;
 pub enum ObjectBrowserFocusMode {
     Listing,
     Filter,
+    /// The preview pane's inline text editor owns the keyboard.
+    Editor,
 }
 
 /// Footer action raised from the preview pane for an object. The flows that
@@ -85,6 +90,16 @@ pub struct ObjectBrowserDocument {
     preview_content: PreviewContentState,
     /// Same stale-response guard as `metadata_generation`, for the body fetch.
     preview_content_generation: u64,
+    /// Editable buffer for the previewed text object, when there is one.
+    editor: Option<ObjectEditor>,
+    /// Body decoded by the fetch and waiting for a render pass to turn it into
+    /// an editor — building the `InputState` needs a `Window`.
+    pending_text_body: Option<PendingTextBody>,
+    /// Navigation parked behind the unsaved-edits confirmation.
+    pending_navigation: Option<GuardedNavigation>,
+    /// Navigation cleared by a successful save, waiting for a render pass to
+    /// run it (navigating between prefixes needs a `Window`).
+    resume_navigation: Option<GuardedNavigation>,
     versions: ObjectVersionsState,
     bucket_details: BucketDetailsState,
     pending_upload: bool,
@@ -143,6 +158,10 @@ impl ObjectBrowserDocument {
             metadata_generation: 0,
             preview_content: PreviewContentState::Unavailable,
             preview_content_generation: 0,
+            editor: None,
+            pending_text_body: None,
+            pending_navigation: None,
+            resume_navigation: None,
             versions: ObjectVersionsState::Idle,
             bucket_details: BucketDetailsState::NotLoaded,
             pending_upload: false,
@@ -163,7 +182,14 @@ impl ObjectBrowserDocument {
         self.title.clone()
     }
 
+    /// State reported to the tab bar. Unsaved editor edits win over every
+    /// other state: a failed listing is visible in the document itself, while
+    /// the dirty dot is the only place the pending edit is advertised.
     pub fn state(&self) -> DocumentState {
+        if self.editor_is_dirty() {
+            return DocumentState::Modified;
+        }
+
         self.state
     }
 
@@ -179,6 +205,9 @@ impl ObjectBrowserDocument {
         &self.tree
     }
 
+    /// Always closable: unsaved edits do not block the close, they route it
+    /// through the workspace's unsaved-changes modal (fed by
+    /// `change_summary`).
     pub fn can_close(&self) -> bool {
         true
     }
@@ -204,8 +233,17 @@ impl ObjectBrowserDocument {
         cx.notify();
     }
 
+    /// The inline editor owns the keymap while it is focused, so typing does
+    /// not reach the listing's single-letter navigation commands.
     pub fn active_context(&self) -> ContextId {
-        ContextId::Results
+        if self.pending_navigation.is_some() {
+            return ContextId::ConfirmModal;
+        }
+
+        match self.focus_mode {
+            ObjectBrowserFocusMode::Editor => ContextId::TextInput,
+            _ => ContextId::Results,
+        }
     }
 
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -348,6 +386,20 @@ impl ObjectBrowserDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.guard_navigation(GuardedNavigation::NavigateToPrefix(prefix.clone()), cx) {
+            return;
+        }
+
+        self.navigate_to_prefix_now(prefix, window, cx);
+    }
+
+    pub(super) fn navigate_to_prefix_now(
+        &mut self,
+        prefix: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.drop_editor();
         self.tree.navigate_into(prefix.clone());
         self.preview_key = None;
         self.focus_mode = ObjectBrowserFocusMode::Listing;
@@ -374,12 +426,12 @@ impl ObjectBrowserDocument {
     }
 
     pub(super) fn navigate_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.tree.current_prefix.is_empty() {
+        // Resolved without moving the tree first: the unsaved-edits guard can
+        // still refuse the navigation, and the listing must not have shifted
+        // level in the meantime.
+        let Some(parent) = self.tree.parent_prefix() else {
             return;
-        }
-
-        self.tree.navigate_up();
-        let parent = self.tree.current_prefix.clone();
+        };
 
         self.navigate_to_prefix(parent, window, cx);
     }
@@ -395,6 +447,15 @@ impl ObjectBrowserDocument {
     }
 
     pub(super) fn open_preview(&mut self, key: String, cx: &mut Context<Self>) {
+        if self.guard_navigation(GuardedNavigation::OpenPreview(key.clone()), cx) {
+            return;
+        }
+
+        self.open_preview_now(key, cx);
+    }
+
+    pub(super) fn open_preview_now(&mut self, key: String, cx: &mut Context<Self>) {
+        self.drop_editor();
         self.preview_key = Some(key.clone());
         self.versions = ObjectVersionsState::Idle;
         // Drops the previous object's decoded bytes before the new metadata
@@ -408,6 +469,15 @@ impl ObjectBrowserDocument {
     }
 
     pub(super) fn close_preview(&mut self, cx: &mut Context<Self>) {
+        if self.guard_navigation(GuardedNavigation::ClosePreview, cx) {
+            return;
+        }
+
+        self.close_preview_now(cx);
+    }
+
+    pub(super) fn close_preview_now(&mut self, cx: &mut Context<Self>) {
+        self.drop_editor();
         self.preview_key = None;
         self.metadata = None;
         self.preview_content = PreviewContentState::Unavailable;
@@ -521,6 +591,63 @@ impl ObjectBrowserDocument {
     }
 
     #[cfg(test)]
+    pub(crate) fn install_editor_for_test(
+        &mut self,
+        key: &str,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.install_text_editor(
+            PendingTextBody {
+                key: key.to_string(),
+                body: editor::TextBody {
+                    text: text.to_string(),
+                    line_ending: editor::LineEnding::Lf,
+                    byte_len: text.len() as u64,
+                },
+                content_type: Some("text/plain".to_string()),
+            },
+            window,
+            cx,
+        );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn type_into_editor_for_test(
+        &mut self,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(input) = self.editor.as_ref().map(|editor| editor.input.clone()) else {
+            return;
+        };
+
+        // A real edit, not `set_value`: the component replaces text silently
+        // in `set_value`, so only this path emits the `Change` the dirty
+        // tracking listens for.
+        let text = text.to_string();
+        input.update(cx, |state, cx| {
+            state.replace_text_in_range(None, &text, window, cx)
+        });
+    }
+
+    #[cfg(test)]
+    pub(in crate::object_browser) fn pending_navigation_for_test(
+        &self,
+    ) -> Option<&GuardedNavigation> {
+        self.pending_navigation.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn editor_text_for_test(&self, cx: &App) -> Option<String> {
+        self.editor
+            .as_ref()
+            .map(|editor| editor.input.read(cx).value().to_string())
+    }
+
+    #[cfg(test)]
     pub(crate) fn apply_metadata_for_test(
         &mut self,
         metadata: dbflux_core::ObjectMetadata,
@@ -543,6 +670,40 @@ impl ObjectBrowserDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // While the unsaved-edits confirmation is up it owns every key: the
+        // listing must not move under a decision the user has not made yet.
+        if self.pending_navigation.is_some() {
+            if cmd == Command::Cancel {
+                self.cancel_guarded_navigation(cx);
+            }
+
+            return true;
+        }
+
+        // Save works from anywhere in the document while a buffer is dirty:
+        // Ctrl/Cmd+S in the editor, and the unsaved-changes modal's save path
+        // on tab close (`SaveFileAs`).
+        if matches!(cmd, Command::SaveQuery | Command::SaveFileAs) {
+            if self.editor.is_none() {
+                return false;
+            }
+
+            self.save_object_edits(cx);
+            return true;
+        }
+
+        // Everything below drives the listing; the editor must keep its keys.
+        if self.focus_mode == ObjectBrowserFocusMode::Editor {
+            if cmd == Command::Cancel {
+                self.focus_mode = ObjectBrowserFocusMode::Listing;
+                self.focus_handle.focus(window);
+                cx.notify();
+                return true;
+            }
+
+            return false;
+        }
+
         match cmd {
             Command::SelectNext => {
                 self.move_selection(1, cx);
@@ -613,6 +774,7 @@ mod tests {
         PreviewContentState, PreviewGate, PreviewKind,
     };
     use crate::buckets_table::OperationTiming;
+    use crate::types::DocumentState;
     use dbflux_core::{ObjectListingPage, ObjectMetadata, ObjectSummary};
 
     fn object_metadata(key: &str, size_bytes: u64, storage_class: Option<&str>) -> ObjectMetadata {
@@ -1032,6 +1194,176 @@ mod tests {
                 "the body of a superseded selection must not reach the pane"
             );
         });
+    }
+
+    /// T30: editing the buffer marks the document modified and gives the tab
+    /// bar a summary of what is pending.
+    #[gpui::test]
+    fn editing_the_buffer_marks_the_document_modified(cx: &mut gpui::TestAppContext) {
+        let (doc, window) = new_test_entity_with_window(cx);
+
+        doc.update_in(window, |doc, window, cx| {
+            doc.open_preview("logs/app.log".to_string(), cx);
+            doc.install_editor_for_test("logs/app.log", "first line\n", window, cx);
+        });
+
+        doc.update(window, |doc, _cx| {
+            assert_ne!(doc.state(), DocumentState::Modified);
+            assert_eq!(doc.change_summary(), None);
+        });
+
+        doc.update_in(window, |doc, window, cx| {
+            doc.type_into_editor_for_test("second line\n", window, cx);
+        });
+
+        doc.update(window, |doc, _cx| {
+            assert_eq!(doc.state(), DocumentState::Modified);
+            assert_eq!(
+                doc.change_summary(),
+                Some("Unsaved edits to logs/app.log".to_string())
+            );
+        });
+    }
+
+    /// T31: selecting another object with unsaved edits parks the request
+    /// behind the confirmation instead of switching and losing the buffer.
+    #[gpui::test]
+    fn navigating_away_while_dirty_is_parked(cx: &mut gpui::TestAppContext) {
+        let (doc, window) = new_test_entity_with_window(cx);
+
+        doc.update_in(window, |doc, window, cx| {
+            doc.open_preview("logs/app.log".to_string(), cx);
+            doc.install_editor_for_test("logs/app.log", "before", window, cx);
+            doc.type_into_editor_for_test("edited ", window, cx);
+        });
+
+        // The buffer's change event is delivered on flush, exactly as it is
+        // between two real user interactions.
+        window.run_until_parked();
+
+        doc.update(window, |doc, cx| {
+            doc.open_preview("logs/other.log".to_string(), cx);
+        });
+
+        doc.update(window, |doc, _cx| {
+            assert_eq!(doc.preview_key_for_test(), Some("logs/app.log"));
+            assert!(doc.pending_navigation_for_test().is_some());
+        });
+
+        // Cancelling leaves the user exactly where they were.
+        doc.update(window, |doc, cx| doc.cancel_guarded_navigation(cx));
+
+        doc.update(window, |doc, _cx| {
+            assert_eq!(doc.preview_key_for_test(), Some("logs/app.log"));
+            assert!(doc.pending_navigation_for_test().is_none());
+            assert_eq!(doc.state(), DocumentState::Modified);
+        });
+    }
+
+    /// T31: discarding restores the loaded content and then lets the parked
+    /// navigation through.
+    #[gpui::test]
+    fn discarding_reverts_the_buffer_and_navigates(cx: &mut gpui::TestAppContext) {
+        let (doc, window) = new_test_entity_with_window(cx);
+
+        doc.update_in(window, |doc, window, cx| {
+            doc.open_preview("logs/app.log".to_string(), cx);
+            doc.install_editor_for_test("logs/app.log", "before", window, cx);
+            doc.type_into_editor_for_test("edited ", window, cx);
+        });
+
+        window.run_until_parked();
+
+        // Discard on its own only reverts the buffer.
+        doc.update_in(window, |doc, window, cx| {
+            doc.discard_object_edits(window, cx);
+        });
+
+        doc.update(window, |doc, cx| {
+            assert_eq!(doc.editor_text_for_test(cx).as_deref(), Some("before"));
+            assert_eq!(doc.change_summary(), None);
+        });
+
+        // With a parked navigation, discarding also releases it.
+        doc.update_in(window, |doc, window, _cx| {
+            doc.type_into_editor_for_test("edited ", window, _cx);
+        });
+
+        window.run_until_parked();
+
+        doc.update_in(window, |doc, window, cx| {
+            doc.close_preview(cx);
+            doc.discard_and_navigate(window, cx);
+        });
+
+        doc.update(window, |doc, _cx| {
+            assert_eq!(doc.preview_key_for_test(), None);
+            assert!(doc.pending_navigation_for_test().is_none());
+            assert_eq!(doc.change_summary(), None);
+        });
+    }
+
+    /// T31: moving to another prefix is guarded too, and the listing does not
+    /// shift level while the confirmation is up.
+    #[gpui::test]
+    fn prefix_navigation_while_dirty_is_parked(cx: &mut gpui::TestAppContext) {
+        let (doc, window) = new_test_entity_with_window(cx);
+
+        doc.update_in(window, |doc, window, cx| {
+            doc.apply_page_for_test("", page(&["logs/"], &["app.log"]));
+            doc.open_preview("app.log".to_string(), cx);
+            doc.install_editor_for_test("app.log", "before", window, cx);
+            doc.type_into_editor_for_test("edited ", window, cx);
+        });
+
+        window.run_until_parked();
+
+        doc.update_in(window, |doc, window, cx| {
+            doc.navigate_to_prefix("logs/".to_string(), window, cx);
+        });
+
+        doc.update(window, |doc, _cx| {
+            assert_eq!(doc.tree.current_prefix, "");
+            assert_eq!(
+                doc.pending_navigation_for_test(),
+                Some(
+                    &crate::object_browser::editor::GuardedNavigation::NavigateToPrefix(
+                        "logs/".to_string()
+                    )
+                )
+            );
+        });
+    }
+
+    fn new_test_entity_with_window(
+        cx: &mut gpui::TestAppContext,
+    ) -> (
+        gpui::Entity<ObjectBrowserDocument>,
+        &mut gpui::VisualTestContext,
+    ) {
+        use dbflux_storage::bootstrap::StorageRuntime;
+        use gpui::AppContext as _;
+
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_cx| dbflux_ui_base::toast::ToastHost::new());
+            cx.set_global(dbflux_ui_base::toast::ToastGlobal { host });
+        });
+
+        let app_state: gpui::Entity<dbflux_ui_base::AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = StorageRuntime::in_memory().expect("in-memory storage");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let profile_id = uuid::Uuid::new_v4();
+
+        cx.add_window_view(|window, cx| {
+            ObjectBrowserDocument::new(profile_id, "my-bucket".to_string(), app_state, window, cx)
+        })
     }
 
     fn new_test_entity(cx: &mut gpui::TestAppContext) -> gpui::Entity<ObjectBrowserDocument> {

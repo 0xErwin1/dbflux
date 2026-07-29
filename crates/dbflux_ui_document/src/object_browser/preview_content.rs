@@ -100,7 +100,9 @@ fn kind_from_extension(key: &str) -> Option<PreviewKind> {
         "bmp" => PreviewKind::Image(ImageFormat::Bmp),
         "pdf" => PreviewKind::Pdf,
         "txt" | "text" | "md" | "log" | "json" | "ndjson" | "csv" | "tsv" | "xml" | "yaml"
-        | "yml" | "toml" | "ini" | "sql" | "sh" | "conf" => PreviewKind::Text,
+        | "yml" | "toml" | "ini" | "sql" | "sh" | "conf" | "env" | "properties" => {
+            PreviewKind::Text
+        }
         _ => return None,
     };
 
@@ -139,6 +141,11 @@ pub enum PreviewContentState {
     Unavailable,
     Loading,
     Image(Box<ImagePreview>),
+    /// The body is presented as an editable text buffer. The buffer, its
+    /// baseline, and its dirty state live in `editor.rs`'s `ObjectEditor`,
+    /// which owns the `InputState` entity; this variant only records that the
+    /// pane is showing it.
+    Text,
     /// The bytes arrived but could not be turned into an image. The preview
     /// degrades to the same metadata + actions view as a binary object.
     Failed(String),

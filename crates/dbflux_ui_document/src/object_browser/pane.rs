@@ -106,9 +106,12 @@ impl ObjectBrowserDocument {
                 let e = entity.clone();
                 Box::new(move |cx| e.read(cx).active_context())
             },
-            // change_summary — ObjectBrowserDocument has no unsaved changes yet
-            // (the inline editor's dirty tracking lands in a later batch)
-            Box::new(|_cx| None),
+            // change_summary — unsaved inline-editor edits, which also route a
+            // tab close through the workspace's unsaved-changes modal
+            {
+                let e = entity.clone();
+                Box::new(move |cx| e.read(cx).change_summary())
+            },
             // refresh_policy
             {
                 let e = entity.clone();

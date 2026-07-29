@@ -24,6 +24,10 @@ use gpui_component::ActiveTheme;
 /// Width of the preview pane when a selection is being previewed.
 pub(super) const PREVIEW_WIDTH: Pixels = px(320.0);
 
+/// Width while the inline editor is open: 320 px leaves too little room to
+/// read, let alone edit, a line of text next to its line numbers.
+pub(super) const PREVIEW_EDITOR_WIDTH: Pixels = px(520.0);
+
 /// Label column of the metadata rows. Narrow enough to leave the values room
 /// inside a 320 px pane.
 const METADATA_LABEL_WIDTH: Pixels = px(92.0);
@@ -49,31 +53,59 @@ impl ObjectBrowserDocument {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
+        let editing = self.editor_for(key).is_some();
 
         div()
-            .w(PREVIEW_WIDTH)
+            .w(if editing {
+                PREVIEW_EDITOR_WIDTH
+            } else {
+                PREVIEW_WIDTH
+            })
             .flex()
             .flex_col()
             .border_l_1()
             .border_color(theme.border)
             .bg(theme.background)
             .child(self.render_preview_header(key, cx))
+            .when(editing, |this| this.child(self.render_editor_meta(key, cx)))
             .child(
                 div()
                     .flex_1()
                     .flex()
                     .flex_col()
+                    .min_h_0()
                     .overflow_hidden()
-                    .child(self.render_preview_body(cx))
+                    .child(self.render_preview_body(key, cx))
                     .child(self.render_metadata_section(key, cx)),
             )
             .child(self.render_preview_actions(key, cx))
+    }
+
+    /// Meta line under the header while editing: what the object is, how big
+    /// it is, and how its text is encoded.
+    fn render_editor_meta(&self, key: &str, cx: &Context<Self>) -> AnyElement {
+        let Some(editor) = self.editor_for(key) else {
+            return div().into_any_element();
+        };
+
+        let theme = cx.theme();
+
+        div()
+            .flex()
+            .items_center()
+            .px(Spacing::SM)
+            .py(Spacing::XS)
+            .border_b_1()
+            .border_color(theme.border)
+            .child(Text::caption(editor.meta_line()).muted_foreground())
+            .into_any_element()
     }
 
     fn render_preview_header(&self, key: &str, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let name = object_display_name(key);
         let shows_image = matches!(self.preview_content(), PreviewContentState::Image(_));
+        let is_dirty = self.editor_for(key).is_some_and(|editor| editor.dirty);
 
         div()
             .flex()
@@ -99,7 +131,8 @@ impl ObjectBrowserDocument {
                             .text_ellipsis()
                             .whitespace_nowrap()
                             .child(Text::code(name.to_string())),
-                    ),
+                    )
+                    .when(is_dirty, |this| this.child(self.render_dirty_badge(cx))),
             )
             .child(
                 div()
@@ -147,14 +180,14 @@ impl ObjectBrowserDocument {
             )
     }
 
-    /// Body area above the metadata rows: the rendered image when there is
-    /// one, otherwise the reason there is nothing to render.
-    fn render_preview_body(&self, cx: &Context<Self>) -> AnyElement {
-        if let PreviewContentState::Image(preview) = self.preview_content() {
-            return self.render_image_body(preview, cx);
+    /// Body area above the metadata rows: the rendered image, the inline text
+    /// editor, or the reason there is nothing to render.
+    fn render_preview_body(&self, key: &str, cx: &mut Context<Self>) -> AnyElement {
+        match self.preview_content() {
+            PreviewContentState::Image(preview) => self.render_image_body(preview, cx),
+            PreviewContentState::Text => self.render_text_editor(key, cx),
+            _ => self.render_body_notice(cx),
         }
-
-        self.render_body_notice(cx)
     }
 
     /// The S3-3 image block: the image itself over a neutral backdrop, its

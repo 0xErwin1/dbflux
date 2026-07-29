@@ -7,11 +7,12 @@
 //! once via `report_error_async`.
 
 use super::ObjectBrowserDocument;
+use super::editor::{PendingTextBody, decode_text_body};
 use super::metadata::{
     ObjectMetadataState, ObjectVersionsState, PreviewGate, evaluate_preview_gate,
 };
 use super::preview_content::{
-    ImagePreview, PreviewContentState, decode_image_dimensions, detect_preview_kind,
+    ImagePreview, PreviewContentState, PreviewKind, decode_image_dimensions, detect_preview_kind,
 };
 use super::tree::TreeModeStepOutcome;
 use crate::buckets_table::{BucketDetailsState, OperationTiming};
@@ -225,6 +226,7 @@ impl ObjectBrowserDocument {
         }
 
         let mut image_request = None;
+        let mut text_request = None;
 
         self.metadata = Some(match result {
             Ok(metadata) => {
@@ -236,12 +238,19 @@ impl ObjectBrowserDocument {
 
                 let gate = evaluate_preview_gate(&metadata, limit_bytes);
 
-                if gate == PreviewGate::Allowed
-                    && let Some(format) =
-                        detect_preview_kind(metadata.content_type.as_deref(), &metadata.key)
-                            .image_format()
-                {
-                    image_request = Some((metadata.key.clone(), format));
+                if gate == PreviewGate::Allowed {
+                    match detect_preview_kind(metadata.content_type.as_deref(), &metadata.key) {
+                        PreviewKind::Image(format) => {
+                            image_request = Some((metadata.key.clone(), format));
+                        }
+                        // A metadata refresh after a save-back must not reload
+                        // the buffer the user is still working in.
+                        PreviewKind::Text if !self.has_editor_for(&metadata.key) => {
+                            text_request =
+                                Some((metadata.key.clone(), metadata.content_type.clone()));
+                        }
+                        _ => {}
+                    }
                 }
 
                 ObjectMetadataState::Loaded {
@@ -254,6 +263,10 @@ impl ObjectBrowserDocument {
 
         if let Some((key, format)) = image_request {
             self.load_preview_image(key, format, cx);
+        }
+
+        if let Some((key, content_type)) = text_request {
+            self.load_preview_text(key, content_type, cx);
         }
 
         cx.notify();
@@ -337,6 +350,125 @@ impl ObjectBrowserDocument {
             .ok();
         })
         .detach();
+    }
+
+    /// Whether an editor is already open on `key` — used to keep a metadata
+    /// refresh from pulling the buffer out from under the user.
+    pub(super) fn has_editor_for(&self, key: &str) -> bool {
+        self.editor_for(key).is_some()
+    }
+
+    /// Fetches a text object's bytes for the inline editor. Like the image
+    /// path, only ever reached for objects the gate allowed, so the transfer is
+    /// bounded by the configured preview size limit.
+    ///
+    /// The decoded body is parked in `pending_text_body` instead of being
+    /// installed here: building the buffer's `InputState` needs a `Window`,
+    /// which only the render pass has.
+    pub(super) fn load_preview_text(
+        &mut self,
+        key: String,
+        content_type: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.preview_content_generation = self.preview_content_generation.wrapping_add(1);
+        let generation = self.preview_content_generation;
+
+        self.preview_content = PreviewContentState::Loading;
+
+        let Some(connection) = self.get_connection(cx) else {
+            self.preview_content =
+                PreviewContentState::Failed("Connection is no longer active".to_string());
+            cx.notify();
+            return;
+        };
+
+        let entity = cx.entity().clone();
+        let bucket = self.bucket.clone();
+        let key_for_task = key.clone();
+
+        let task = cx.background_executor().spawn(async move {
+            let started = Instant::now();
+
+            let bytes = match connection.object_store_api() {
+                Some(api) => api.get_object(&bucket, &key_for_task),
+                None => Err(DbError::NotSupported(
+                    "Object-store API unavailable".to_string(),
+                )),
+            };
+
+            let elapsed_millis = started.elapsed().as_millis();
+
+            (bytes.map(decode_text_body), elapsed_millis)
+        });
+
+        cx.spawn(async move |_this, cx| {
+            let (decoded, elapsed_millis) = task.await;
+
+            // A transfer failure is the user's problem to see; a body that is
+            // not text degrades inside the pane to the download/open actions.
+            if let Err(ref err) = decoded {
+                report_error_async(db_error_to_user_facing(err), cx);
+            }
+
+            cx.update(|cx| {
+                entity.update(cx, |doc, cx| {
+                    doc.last_operation = Some(OperationTiming {
+                        label: "GetObject",
+                        millis: elapsed_millis,
+                    });
+
+                    match decoded {
+                        Ok(Ok(body)) => {
+                            doc.accept_text_body(generation, key, content_type, body, cx)
+                        }
+                        Ok(Err(message)) => {
+                            doc.apply_preview_content(
+                                generation,
+                                key,
+                                PreviewContentState::Failed(message),
+                                cx,
+                            );
+                        }
+                        Err(err) => {
+                            doc.apply_preview_content(
+                                generation,
+                                key,
+                                PreviewContentState::Failed(err.to_string()),
+                                cx,
+                            );
+                        }
+                    }
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Hands a decoded body to the next render pass, subject to the same
+    /// staleness guard as every other preview response.
+    pub(super) fn accept_text_body(
+        &mut self,
+        generation: u64,
+        key: String,
+        content_type: Option<String>,
+        body: super::editor::TextBody,
+        cx: &mut Context<Self>,
+    ) {
+        let is_current = generation == self.preview_content_generation
+            && self.preview_key.as_deref() == Some(&key);
+
+        if !is_current {
+            return;
+        }
+
+        self.pending_text_body = Some(PendingTextBody {
+            key,
+            body,
+            content_type,
+        });
+        cx.notify();
     }
 
     pub(super) fn apply_preview_content(

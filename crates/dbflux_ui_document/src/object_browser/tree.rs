@@ -281,16 +281,26 @@ impl ObjectTree {
 
     /// Navigates one level up. No-op at the bucket root.
     pub fn navigate_up(&mut self) {
-        if self.current_prefix.is_empty() {
+        let Some(parent) = self.parent_prefix() else {
             return;
+        };
+
+        self.current_prefix = parent;
+        self.selected = None;
+    }
+
+    /// The level above `current_prefix`, or `None` at the bucket root.
+    pub fn parent_prefix(&self) -> Option<String> {
+        if self.current_prefix.is_empty() {
+            return None;
         }
 
         let trimmed = self.current_prefix.trim_end_matches('/');
-        self.current_prefix = match trimmed.rfind('/') {
+
+        Some(match trimmed.rfind('/') {
             Some(index) => trimmed[..=index].to_string(),
             None => String::new(),
-        };
-        self.selected = None;
+        })
     }
 
     /// Breadcrumb segments from the bucket root down to `current_prefix`,
