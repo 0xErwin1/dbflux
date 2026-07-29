@@ -997,4 +997,24 @@ mod tests {
             Some(Command::ExpandCollapse),
         );
     }
+
+    /// The find shortcut must stay unbound in the text-input context (and in
+    /// every context it inherits from).
+    ///
+    /// `gpui-component` owns `cmd-f` / `ctrl-f` inside its own `Input` key
+    /// context, where it opens the code editor's find panel. The workspace
+    /// only calls `stop_propagation` for chords this stack resolves, so
+    /// binding the chord here would silently take find away from every code
+    /// editor in the app.
+    #[test]
+    fn find_shortcut_stays_available_to_the_editor_component() {
+        let keymap = default_keymap();
+
+        for modifiers in [Modifiers::primary(), Modifiers::ctrl()] {
+            let chord = KeyChord::new("f", modifiers);
+
+            assert_eq!(keymap.resolve(ContextId::TextInput, &chord), None);
+            assert_eq!(keymap.resolve(ContextId::Editor, &chord), None);
+        }
+    }
 }

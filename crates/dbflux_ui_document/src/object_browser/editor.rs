@@ -583,6 +583,14 @@ impl ObjectBrowserDocument {
             .child(Text::caption(cursor_label(position)).muted_foreground())
     }
 
+    /// Whether the buffer itself — rather than one of the editor component's
+    /// child inputs, such as the find panel — currently holds focus.
+    pub(super) fn editor_input_is_focused(&self, window: &Window, cx: &App) -> bool {
+        self.editor
+            .as_ref()
+            .is_some_and(|editor| editor.input.read(cx).focus_handle(cx).is_focused(window))
+    }
+
     /// Opens the editor component's find panel over the open buffer.
     pub(super) fn open_editor_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(input) = self.editor.as_ref().map(|editor| editor.input.clone()) else {

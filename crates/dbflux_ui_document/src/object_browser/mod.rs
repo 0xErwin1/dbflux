@@ -994,7 +994,11 @@ impl ObjectBrowserDocument {
 
         // Everything below drives the listing; the editor must keep its keys.
         if self.focus_mode == ObjectBrowserFocusMode::Editor {
-            if cmd == Command::Cancel {
+            // Escape returns to the listing, but only while the buffer itself
+            // holds focus. The editor component's find panel is a child input
+            // that takes focus and closes on its own Escape, so swallowing the
+            // key here would leave the panel open and unreachable.
+            if cmd == Command::Cancel && self.editor_input_is_focused(window, cx) {
                 self.focus_mode = ObjectBrowserFocusMode::Listing;
                 self.focus_handle.focus(window);
                 cx.notify();
