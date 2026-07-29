@@ -97,6 +97,9 @@ jobs:
       - name: DynamoDB live integration
         run: cargo test -p dbflux_driver_dynamodb --locked --test live_integration -- --ignored
 
+      - name: Run S3 live integration tests
+        run: cargo test -p dbflux_driver_s3 --locked --test live_integration -- --ignored
+
       - name: Run SQLite live integration tests
         run: cargo test -p dbflux_driver_sqlite --locked --test live_integration
 
