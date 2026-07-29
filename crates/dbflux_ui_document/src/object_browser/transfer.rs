@@ -97,12 +97,8 @@ impl ObjectBrowserDocument {
         self.run_object_transfer(key, TransferPurpose::OpenExternally, cx);
     }
 
-    /// Resolves a destination, fetches the object on the background executor,
-    /// writes it, audits the outcome, and reports it to the user.
-    ///
-    /// The whole body is buffered in memory before it is written: the trait
-    /// exposes `get_object`, not a streaming download, so a very large object
-    /// costs its own size in RAM for the duration of the transfer.
+    /// Resolves a destination, streams the object straight to disk on the
+    /// background executor, audits the outcome, and reports it to the user.
     fn run_object_transfer(
         &mut self,
         key: String,
@@ -265,15 +261,8 @@ fn fetch_and_write(
         )))
     })?;
 
-    let bytes = api
-        .get_object(bucket, key)
-        .map_err(|err| TransferError::Driver(Box::new(err)))?;
-
-    std::fs::write(destination, &bytes).map_err(|e| {
-        TransferError::Local(format!("Failed to write {}: {e}", destination.display()))
-    })?;
-
-    Ok(bytes.len() as u64)
+    api.download_object(bucket, key, destination)
+        .map_err(|err| TransferError::Driver(Box::new(err)))
 }
 
 /// Audits an object transfer. Only the bucket, key, and outcome are recorded —

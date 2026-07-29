@@ -159,6 +159,9 @@ pub(super) enum GuardedNavigation {
     OpenPreview(String),
     NavigateToPrefix(String),
     ClosePreview,
+    /// Deleting `key` while its editor is open and dirty — always a
+    /// navigate-away, even when it is the same object being edited.
+    DeleteObject(String),
 }
 
 impl GuardedNavigation {
@@ -170,6 +173,7 @@ impl GuardedNavigation {
             }
             GuardedNavigation::NavigateToPrefix(prefix) => format!("leave for {prefix}"),
             GuardedNavigation::ClosePreview => "close this preview".to_string(),
+            GuardedNavigation::DeleteObject(key) => format!("delete {key}"),
         }
     }
 }
@@ -499,6 +503,7 @@ impl ObjectBrowserDocument {
                 self.navigate_to_prefix_now(prefix, window, cx)
             }
             GuardedNavigation::ClosePreview => self.close_preview_now(cx),
+            GuardedNavigation::DeleteObject(key) => self.open_delete_confirm_now(key, cx),
         }
     }
 

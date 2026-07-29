@@ -678,6 +678,12 @@ impl Render for ObjectBrowserDocument {
             self.run_navigation(navigation, window, cx);
         }
 
+        // Neither needs a `Window`, but draining them here keeps every
+        // toolbar/action-bar intent flowing through the same
+        // `pending_* + take()` convention as the two continuations above.
+        self.drain_pending_upload(cx);
+        self.drain_pending_object_action(cx);
+
         let rows = self.visible_rows();
         let selected = self.tree.selected.clone();
 
@@ -717,6 +723,7 @@ impl Render for ObjectBrowserDocument {
 
         let preview_key = self.preview_key.clone();
         let pending_navigation = self.pending_navigation.clone();
+        let pending_object_delete = self.pending_object_delete.clone();
 
         div()
             .track_focus(&self.focus_handle)
@@ -759,6 +766,9 @@ impl Render for ObjectBrowserDocument {
             .child(self.render_footer(&rows, cx))
             .when_some(pending_navigation, |this, navigation| {
                 this.child(self.render_unsaved_edits_confirm(&navigation, cx))
+            })
+            .when_some(pending_object_delete, |this, pending| {
+                this.child(self.render_object_delete_confirm(&pending, cx))
             })
     }
 }

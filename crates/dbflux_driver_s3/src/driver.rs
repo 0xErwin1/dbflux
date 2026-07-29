@@ -710,6 +710,44 @@ impl ObjectStoreConnection for S3Connection {
         Ok(aggregated.into_bytes().to_vec())
     }
 
+    fn download_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        dest: &std::path::Path,
+    ) -> Result<u64, DbError> {
+        let runtime = runtime();
+
+        let output = runtime
+            .block_on(self.client.get_object().bucket(bucket).key(key).send())
+            .map_err(|error| {
+                classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+            })?;
+
+        let mut file = std::fs::File::create(dest).map_err(|error| {
+            DbError::query_failed(format!("Failed to create {}: {error}", dest.display()))
+        })?;
+
+        let mut body = output.body;
+        let mut written: u64 = 0;
+
+        loop {
+            let chunk = runtime.block_on(body.try_next()).map_err(|error| {
+                DbError::query_failed(format!("Failed to read S3 object body: {error}"))
+            })?;
+
+            let Some(chunk) = chunk else { break };
+
+            std::io::Write::write_all(&mut file, &chunk).map_err(|error| {
+                DbError::query_failed(format!("Failed to write {}: {error}", dest.display()))
+            })?;
+
+            written += chunk.len() as u64;
+        }
+
+        Ok(written)
+    }
+
     fn put_object(
         &self,
         bucket: &str,

@@ -813,6 +813,18 @@ pub trait ObjectStoreConnection: Send + Sync {
     /// this trait does not enforce a size limit itself.
     fn get_object(&self, bucket: &str, key: &str) -> Result<Vec<u8>, DbError>;
 
+    /// Stream an object's body straight to `dest` on disk, never buffering
+    /// the whole object in memory. Used for Download and Open-externally —
+    /// the only two transfers that move an object's bytes off the network,
+    /// where a large object should cost disk space, not RAM. Returns the
+    /// number of bytes written.
+    fn download_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        dest: &std::path::Path,
+    ) -> Result<u64, DbError>;
+
     /// Overwrite (or create) an object with the given bytes, e.g. from the
     /// inline text editor's save-back action.
     fn put_object(
@@ -2132,6 +2144,18 @@ mod tests {
 
         fn get_object(&self, _bucket: &str, _key: &str) -> Result<Vec<u8>, DbError> {
             Ok(Vec::new())
+        }
+
+        fn download_object(
+            &self,
+            _bucket: &str,
+            _key: &str,
+            dest: &std::path::Path,
+        ) -> Result<u64, DbError> {
+            std::fs::write(dest, []).map_err(|error| {
+                DbError::query_failed(format!("Failed to write {}: {error}", dest.display()))
+            })?;
+            Ok(0)
         }
 
         fn put_object(

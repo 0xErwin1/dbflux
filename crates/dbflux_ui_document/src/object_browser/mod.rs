@@ -1,4 +1,6 @@
 mod data;
+mod delete;
+pub mod delete_prefix;
 pub mod editor;
 pub mod metadata;
 mod pane;
@@ -7,6 +9,11 @@ pub mod preview_content;
 mod render;
 mod transfer;
 pub mod tree;
+mod upload;
+
+pub use delete_prefix::{
+    DeletePrefixConfirmState, DeletePrefixProbeState, PrefixDeleteProbe, PrefixDeleteProbeOutcome,
+};
 
 pub use editor::{LineEnding, TextBody, decode_text_body};
 pub use metadata::{ObjectMetadataState, ObjectVersionsState, PreviewGate, evaluate_preview_gate};
@@ -26,6 +33,8 @@ use dbflux_ui_base::AppStateEntity;
 use editor::{GuardedNavigation, ObjectEditor, PendingTextBody};
 use gpui::*;
 use uuid::Uuid;
+
+pub use delete::PendingObjectDelete;
 
 /// Which part of the document currently owns keyboard input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,6 +114,11 @@ pub struct ObjectBrowserDocument {
     pending_upload: bool,
     pending_new_folder: bool,
     pending_object_action: Option<ObjectAction>,
+    /// Object staged for the single-delete confirmation overlay.
+    pending_object_delete: Option<PendingObjectDelete>,
+    /// Recursive-delete confirmation state (probe + type-to-confirm phrase).
+    /// `render.rs` has no wiring for it yet — the modal itself is T36.
+    delete_prefix_confirm: Option<DeletePrefixConfirmState>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -167,6 +181,8 @@ impl ObjectBrowserDocument {
             pending_upload: false,
             pending_new_folder: false,
             pending_object_action: None,
+            pending_object_delete: None,
+            delete_prefix_confirm: None,
             _subscriptions: vec![filter_subscription],
         };
 
@@ -680,6 +696,22 @@ impl ObjectBrowserDocument {
             return true;
         }
 
+        // Same for the single-delete confirmation: Execute confirms, Cancel
+        // dismisses, everything else is swallowed.
+        if self.pending_object_delete.is_some() {
+            return match cmd {
+                Command::Execute => {
+                    self.confirm_delete_object(cx);
+                    true
+                }
+                Command::Cancel => {
+                    self.cancel_delete_object(cx);
+                    true
+                }
+                _ => true,
+            };
+        }
+
         // Save works from anywhere in the document while a buffer is dirty:
         // Ctrl/Cmd+S in the editor, and the unsaved-changes modal's save path
         // on tab close (`SaveFileAs`).
@@ -739,6 +771,12 @@ impl ObjectBrowserDocument {
             }
             Command::ResultsAddRow => {
                 self.request_new_folder(cx);
+                true
+            }
+            Command::Delete => {
+                if let Some(ObjectTreeNodeId::Object(key)) = self.tree.selected.clone() {
+                    self.request_delete_object(key, cx);
+                }
                 true
             }
             Command::RefreshSchema => {
@@ -1036,10 +1074,40 @@ mod tests {
         });
     }
 
-    /// T27: the delete action only records the intent; its flow owner drains
-    /// it exactly once.
+    /// T27: an action with no flow owner yet (Presign) only records the
+    /// intent — it stays parked until something drains it.
     #[gpui::test]
-    fn preview_actions_are_recorded_as_drainable_intents(cx: &mut gpui::TestAppContext) {
+    fn preview_actions_with_no_owner_yet_stay_recorded(cx: &mut gpui::TestAppContext) {
+        let doc = new_test_entity(cx);
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, cx| {
+                doc.request_object_action(
+                    ObjectAction::Presign {
+                        key: "logs/a.txt".to_string(),
+                    },
+                    cx,
+                );
+            });
+        });
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, _cx| {
+                assert_eq!(
+                    doc.take_pending_object_action(),
+                    Some(ObjectAction::Presign {
+                        key: "logs/a.txt".to_string()
+                    })
+                );
+                assert_eq!(doc.take_pending_object_action(), None);
+            });
+        });
+    }
+
+    /// T34: the preview action bar's Delete intent is drained on the next
+    /// render pass, which turns it into the single-delete confirmation.
+    #[gpui::test]
+    fn delete_action_is_drained_into_the_confirmation(cx: &mut gpui::TestAppContext) {
         let doc = new_test_entity(cx);
 
         cx.update(|cx| {
@@ -1055,13 +1123,12 @@ mod tests {
 
         cx.update(|cx| {
             doc.update(cx, |doc, _cx| {
-                assert_eq!(
-                    doc.take_pending_object_action(),
-                    Some(ObjectAction::Delete {
-                        key: "logs/a.txt".to_string()
-                    })
-                );
                 assert_eq!(doc.take_pending_object_action(), None);
+                assert_eq!(
+                    doc.pending_object_delete()
+                        .map(|pending| pending.key.as_str()),
+                    Some("logs/a.txt")
+                );
             });
         });
     }

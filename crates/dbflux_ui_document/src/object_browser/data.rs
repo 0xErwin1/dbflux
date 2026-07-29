@@ -24,7 +24,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
-fn db_error_to_user_facing(err: &DbError) -> UserFacingError {
+pub(super) fn db_error_to_user_facing(err: &DbError) -> UserFacingError {
     match err.formatted() {
         Some(fe) => UserFacingError::from_formatted(ErrorKind::Driver, fe.clone()),
         None => UserFacingError::new(ErrorKind::Driver, err.to_string()),
