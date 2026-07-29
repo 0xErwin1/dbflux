@@ -207,21 +207,34 @@ impl ObjectBrowserDocument {
         let is_loading = self.state == DocumentState::Loading;
         let tree_mode_on = self.tree.is_tree_mode();
 
-        let action_button =
-            |id: &'static str, icon: AppIcon, label: &'static str, cx: &Context<Self>| {
-                div()
-                    .id(id)
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .h(Heights::CONTROL)
-                    .px(Spacing::SM)
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .hover(|d| d.bg(cx.theme().secondary))
-                    .child(Icon::new(icon).small().muted())
-                    .child(Text::caption(label))
-            };
+        // Ghost buttons: no border, background only on hover — and, for the
+        // toggles among them, a tinted background while active, the same way
+        // the result-view switcher marks its current mode.
+        let action_button = |id: &'static str,
+                             icon: AppIcon,
+                             label: &'static str,
+                             active: bool,
+                             cx: &Context<Self>| {
+            let theme = cx.theme();
+
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .gap(Spacing::XS)
+                .h(Heights::CONTROL)
+                .px(Spacing::SM)
+                .rounded(Radii::SM)
+                .cursor_pointer()
+                .when(active, |d| d.bg(theme.accent.opacity(0.15)))
+                .when(!active, |d| d.hover(|d| d.bg(theme.secondary)))
+                .child(if active {
+                    Icon::new(icon).small()
+                } else {
+                    Icon::new(icon).small().muted()
+                })
+                .child(Text::caption(label))
+        };
 
         div()
             .flex()
@@ -266,47 +279,35 @@ impl ObjectBrowserDocument {
                     .items_center()
                     .gap(Spacing::SM)
                     .child(
-                        div()
-                            .id("object-browser-tree-mode")
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::XS)
-                            .h(Heights::CONTROL)
-                            .px(Spacing::SM)
-                            .rounded(Radii::SM)
-                            .cursor_pointer()
-                            .border_1()
-                            .border_color(if tree_mode_on {
-                                theme.primary
-                            } else {
-                                theme.border
-                            })
-                            .hover(|d| d.bg(theme.secondary))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.toggle_tree_mode(cx);
-                            }))
-                            .child(if tree_mode_on {
-                                Icon::new(AppIcon::Layers).small().primary()
-                            } else {
-                                Icon::new(AppIcon::Layers).small().muted()
-                            })
-                            .child(if tree_mode_on {
-                                Text::caption("Tree").primary()
-                            } else {
-                                Text::caption("Tree")
-                            }),
+                        action_button(
+                            "object-browser-tree-mode",
+                            AppIcon::Layers,
+                            "Tree",
+                            tree_mode_on,
+                            cx,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.toggle_tree_mode(cx);
+                        })),
                     )
                     .child(
-                        action_button("object-browser-upload", AppIcon::ArrowUp, "Upload", cx)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.request_upload(cx);
-                            })),
+                        action_button(
+                            "object-browser-upload",
+                            AppIcon::ArrowUp,
+                            "Upload",
+                            false,
+                            cx,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.request_upload(cx);
+                        })),
                     )
                     .child(
                         action_button(
                             "object-browser-new-folder",
                             AppIcon::Folder,
                             "New folder",
+                            false,
                             cx,
                         )
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -322,6 +323,7 @@ impl ObjectBrowserDocument {
                                 AppIcon::RefreshCcw
                             },
                             "Refresh",
+                            false,
                             cx,
                         )
                         .on_click(cx.listener(|this, _, _, cx| {
