@@ -65,11 +65,15 @@ impl ObjectBrowserDocument {
 
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("folder-name"));
 
-        let subscription = cx.subscribe(&name_input, |_this, _input, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::Change) {
-                cx.notify();
-            }
-        });
+        let subscription =
+            cx.subscribe(
+                &name_input,
+                |this, _input, event: &InputEvent, cx| match event {
+                    InputEvent::Change => cx.notify(),
+                    InputEvent::PressEnter { secondary: false } => this.submit_new_folder(cx),
+                    _ => {}
+                },
+            );
 
         self.new_folder = Some(NewFolderState {
             name_input,

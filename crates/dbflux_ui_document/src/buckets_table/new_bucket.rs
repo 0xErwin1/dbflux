@@ -128,16 +128,22 @@ impl BucketsTableDocument {
         // Both inputs feed validation and the submitted options, so every
         // keystroke has to reach the next render.
         let subscriptions = vec![
-            cx.subscribe(&name_input, |_this, _input, event: &InputEvent, cx| {
-                if matches!(event, InputEvent::Change) {
-                    cx.notify();
-                }
-            }),
-            cx.subscribe(&region_input, |_this, _input, event: &InputEvent, cx| {
-                if matches!(event, InputEvent::Change) {
-                    cx.notify();
-                }
-            }),
+            cx.subscribe(
+                &name_input,
+                |this, _input, event: &InputEvent, cx| match event {
+                    InputEvent::Change => cx.notify(),
+                    InputEvent::PressEnter { secondary: false } => this.submit_new_bucket(cx),
+                    _ => {}
+                },
+            ),
+            cx.subscribe(
+                &region_input,
+                |this, _input, event: &InputEvent, cx| match event {
+                    InputEvent::Change => cx.notify(),
+                    InputEvent::PressEnter { secondary: false } => this.submit_new_bucket(cx),
+                    _ => {}
+                },
+            ),
         ];
 
         self.new_bucket = Some(NewBucketState {

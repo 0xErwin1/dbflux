@@ -102,11 +102,15 @@ impl ObjectBrowserDocument {
             state
         });
 
-        let subscription = cx.subscribe(&name_input, |_this, _input, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::Change) {
-                cx.notify();
-            }
-        });
+        let subscription =
+            cx.subscribe(
+                &name_input,
+                |this, _input, event: &InputEvent, cx| match event {
+                    InputEvent::Change => cx.notify(),
+                    InputEvent::PressEnter { secondary: false } => this.submit_rename_object(cx),
+                    _ => {}
+                },
+            );
 
         self.rename_object = Some(RenameObjectState {
             key,
