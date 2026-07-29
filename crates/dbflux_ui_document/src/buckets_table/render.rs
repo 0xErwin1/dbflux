@@ -17,6 +17,7 @@ use dbflux_core::VersioningStatus;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::scroll::ScrollableElement;
 
 /// Column widths. `Name` takes the remaining space; the rest are fixed so the
 /// numeric columns stay right-aligned against a stable edge.
@@ -583,8 +584,10 @@ impl Render for BucketsTableDocument {
             self.render_empty_state()
         } else {
             div()
+                .id("buckets-table-rows")
                 .flex_1()
-                .overflow_hidden()
+                .min_h_0()
+                .overflow_y_scrollbar()
                 .children(rows.iter().map(|row| {
                     let is_selected = selected.as_deref() == Some(row.info.name.as_str());
                     self.render_row(row, is_selected, cx)
