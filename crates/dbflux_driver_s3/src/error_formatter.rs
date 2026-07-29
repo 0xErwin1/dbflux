@@ -13,12 +13,40 @@ use crate::driver::S3ProfileConfig;
 /// instead of duplicating the code/message extraction per operation.
 pub(crate) struct S3ErrorFormatter;
 
+/// The bucket/object an S3 operation was scoped to, so a permission or
+/// not-found error can name what was denied or missing instead of only
+/// carrying AWS's own message, which for `AccessDenied` in particular is
+/// typically just "Access Denied" with no target information at all.
+pub(crate) enum ErrorTarget<'a> {
+    /// Connection/account-level operations (e.g. `ListBuckets`) with no
+    /// single bucket or object in scope.
+    None,
+    Bucket(&'a str),
+    Object {
+        bucket: &'a str,
+        key: &'a str,
+    },
+}
+
+impl ErrorTarget<'_> {
+    fn detail_fragment(&self) -> Option<String> {
+        match self {
+            ErrorTarget::None => None,
+            ErrorTarget::Bucket(bucket) => Some(format!("bucket=\"{bucket}\"")),
+            ErrorTarget::Object { bucket, key } => {
+                Some(format!("bucket=\"{bucket}\", key=\"{key}\""))
+            }
+        }
+    }
+}
+
 impl S3ErrorFormatter {
     fn format_from_code(
         &self,
         code: Option<&str>,
         message: &str,
         config: &S3ProfileConfig,
+        target: &ErrorTarget,
     ) -> FormattedError {
         let mut formatted = FormattedError::new(message.to_string());
 
@@ -75,10 +103,15 @@ impl S3ErrorFormatter {
             formatted = formatted.with_retriable(true);
         }
 
-        formatted.with_detail(config.diagnostic_detail())
+        formatted.with_detail(with_target_prefix(target, config.diagnostic_detail()))
     }
 
-    fn format_sdk_message(&self, message: &str, config: &S3ProfileConfig) -> FormattedError {
+    fn format_sdk_message(
+        &self,
+        message: &str,
+        config: &S3ProfileConfig,
+        target: &ErrorTarget,
+    ) -> FormattedError {
         let lower = message.to_lowercase();
 
         let formatted = if lower.contains("credential") || lower.contains("token") {
@@ -105,16 +138,20 @@ impl S3ErrorFormatter {
             FormattedError::new(message.to_string())
         };
 
-        formatted.with_detail(config.diagnostic_detail())
+        formatted.with_detail(with_target_prefix(target, config.diagnostic_detail()))
     }
 
     /// Format any S3 SDK error into a `FormattedError`, extracting the
     /// service-reported code and message when available and falling back to
-    /// the SDK's own transport/dispatch message otherwise.
+    /// the SDK's own transport/dispatch message otherwise. `target` names the
+    /// bucket/object the failing operation was scoped to, when known, so
+    /// `AccessDenied`/`NoSuchBucket`/`NoSuchKey` errors identify what was
+    /// denied or missing instead of only carrying AWS's generic message.
     pub(crate) fn format_service_error<E>(
         &self,
         error: &SdkError<E>,
         config: &S3ProfileConfig,
+        target: ErrorTarget,
     ) -> FormattedError
     where
         E: ProvideErrorMetadata,
@@ -122,10 +159,20 @@ impl S3ErrorFormatter {
         if let Some(service_error) = error.as_service_error() {
             let code = service_error.code();
             let message = service_error.message().unwrap_or("S3 service error");
-            return self.format_from_code(code, message, config);
+            return self.format_from_code(code, message, config, &target);
         }
 
-        self.format_sdk_message(&error.to_string(), config)
+        self.format_sdk_message(&error.to_string(), config, &target)
+    }
+}
+
+/// Prepends the target fragment (when any) to the region/endpoint diagnostic
+/// detail, so the UI's error message identifies which bucket/object the
+/// operation was scoped to.
+fn with_target_prefix(target: &ErrorTarget, diagnostic_detail: String) -> String {
+    match target.detail_fragment() {
+        Some(fragment) => format!("{fragment}, {diagnostic_detail}"),
+        None => diagnostic_detail,
     }
 }
 
@@ -192,6 +239,7 @@ mod tests {
             Some("NoSuchBucket"),
             "The bucket does not exist",
             &config(),
+            &ErrorTarget::None,
         );
 
         match classify_query_error(formatted) {
@@ -215,6 +263,7 @@ mod tests {
             Some("NoSuchKey"),
             "The specified key does not exist",
             &config(),
+            &ErrorTarget::None,
         );
 
         assert!(matches!(
@@ -226,8 +275,12 @@ mod tests {
     #[test]
     fn access_denied_maps_to_permission_denied() {
         let formatter = S3ErrorFormatter;
-        let formatted =
-            formatter.format_from_code(Some("AccessDenied"), "Access Denied", &config());
+        let formatted = formatter.format_from_code(
+            Some("AccessDenied"),
+            "Access Denied",
+            &config(),
+            &ErrorTarget::None,
+        );
 
         match classify_query_error(formatted) {
             DbError::PermissionDenied(details) => {
@@ -243,6 +296,42 @@ mod tests {
         }
     }
 
+    /// T45: an `AccessDenied` on a specific object names the bucket and key
+    /// in the detail, not just AWS's generic "Access Denied" message.
+    #[test]
+    fn access_denied_on_an_object_names_bucket_and_key() {
+        let formatter = S3ErrorFormatter;
+        let formatted = formatter.format_from_code(
+            Some("AccessDenied"),
+            "Access Denied",
+            &config(),
+            &ErrorTarget::Object {
+                bucket: "prod-bucket",
+                key: "reports/q3.csv",
+            },
+        );
+
+        let detail = formatted.detail.unwrap_or_default();
+        assert!(detail.contains("prod-bucket"));
+        assert!(detail.contains("reports/q3.csv"));
+    }
+
+    /// T45: an `AccessDenied` scoped only to a bucket (no object) names the
+    /// bucket without inventing a key.
+    #[test]
+    fn access_denied_on_a_bucket_names_the_bucket_only() {
+        let formatter = S3ErrorFormatter;
+        let formatted = formatter.format_from_code(
+            Some("AccessDenied"),
+            "Access Denied",
+            &config(),
+            &ErrorTarget::Bucket("prod-bucket"),
+        );
+
+        let detail = formatted.detail.unwrap_or_default();
+        assert!(detail.contains("prod-bucket"));
+    }
+
     #[test]
     fn invalid_access_key_maps_to_auth_failed() {
         let formatter = S3ErrorFormatter;
@@ -250,6 +339,7 @@ mod tests {
             Some("InvalidAccessKeyId"),
             "The AWS Access Key Id you provided does not exist",
             &config(),
+            &ErrorTarget::None,
         );
 
         assert!(matches!(
@@ -265,6 +355,7 @@ mod tests {
             Some("BucketNotEmpty"),
             "The bucket is not empty",
             &config(),
+            &ErrorTarget::None,
         );
 
         match classify_query_error(formatted) {
@@ -288,6 +379,7 @@ mod tests {
             Some("SlowDown"),
             "Please reduce your request rate",
             &config(),
+            &ErrorTarget::None,
         );
 
         assert!(formatted.retriable);
@@ -296,8 +388,12 @@ mod tests {
     #[test]
     fn unknown_code_falls_back_to_query_failed() {
         let formatter = S3ErrorFormatter;
-        let formatted =
-            formatter.format_from_code(Some("SomeNewException"), "Unhandled", &config());
+        let formatted = formatter.format_from_code(
+            Some("SomeNewException"),
+            "Unhandled",
+            &config(),
+            &ErrorTarget::None,
+        );
 
         assert!(matches!(
             classify_query_error(formatted),
@@ -308,8 +404,11 @@ mod tests {
     #[test]
     fn missing_credentials_dispatch_message_is_actionable() {
         let formatter = S3ErrorFormatter;
-        let formatted =
-            formatter.format_sdk_message("No credentials found in credential chain", &config());
+        let formatted = formatter.format_sdk_message(
+            "No credentials found in credential chain",
+            &config(),
+            &ErrorTarget::None,
+        );
 
         assert!(
             formatted
@@ -331,7 +430,12 @@ mod tests {
             path_style: true,
         };
 
-        let formatted = formatter.format_from_code(Some("NoSuchBucket"), "not found", &config);
+        let formatted = formatter.format_from_code(
+            Some("NoSuchBucket"),
+            "not found",
+            &config,
+            &ErrorTarget::None,
+        );
         assert!(
             formatted
                 .detail

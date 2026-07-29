@@ -25,7 +25,9 @@ use dbflux_core::{
     VersioningStatus, field, field_required,
 };
 
-use crate::error_formatter::{S3_ERROR_FORMATTER, classify_connection_error, classify_query_error};
+use crate::error_formatter::{
+    ErrorTarget, S3_ERROR_FORMATTER, classify_connection_error, classify_query_error,
+};
 
 pub static S3_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
     id: "s3".into(),
@@ -362,7 +364,11 @@ fn probe_connection(client: &Client, config: &S3ProfileConfig) -> Result<(), DbE
     runtime
         .block_on(client.list_buckets().send())
         .map_err(|error| {
-            classify_connection_error(S3_ERROR_FORMATTER.format_service_error(&error, config))
+            classify_connection_error(S3_ERROR_FORMATTER.format_service_error(
+                &error,
+                config,
+                ErrorTarget::None,
+            ))
         })?;
 
     Ok(())
@@ -497,7 +503,11 @@ fn delete_object_batch(
     let output = runtime
         .block_on(client.delete_objects().bucket(bucket).delete(delete).send())
         .map_err(|error| {
-            classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, config))
+            classify_query_error(S3_ERROR_FORMATTER.format_service_error(
+                &error,
+                config,
+                ErrorTarget::Bucket(bucket),
+            ))
         })?;
 
     Ok(output.deleted().len() as u64)
@@ -615,7 +625,11 @@ impl ObjectStoreConnection for S3Connection {
             }
 
             let output = runtime.block_on(request.send()).map_err(|error| {
-                classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+                classify_query_error(S3_ERROR_FORMATTER.format_service_error(
+                    &error,
+                    &self.config,
+                    ErrorTarget::None,
+                ))
             })?;
 
             buckets.extend(output.buckets().iter().map(|bucket| BucketInfo {
@@ -652,7 +666,11 @@ impl ObjectStoreConnection for S3Connection {
         }
 
         let output = runtime.block_on(request.send()).map_err(|error| {
-            classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+            classify_query_error(S3_ERROR_FORMATTER.format_service_error(
+                &error,
+                &self.config,
+                ErrorTarget::Bucket(bucket),
+            ))
         })?;
 
         let objects = output
@@ -687,7 +705,11 @@ impl ObjectStoreConnection for S3Connection {
         let output = runtime
             .block_on(self.client.head_object().bucket(bucket).key(key).send())
             .map_err(|error| {
-                classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+                classify_query_error(S3_ERROR_FORMATTER.format_service_error(
+                    &error,
+                    &self.config,
+                    ErrorTarget::Object { bucket, key },
+                ))
             })?;
 
         Ok(ObjectMetadata {
@@ -712,7 +734,11 @@ impl ObjectStoreConnection for S3Connection {
         let output = runtime
             .block_on(self.client.get_object().bucket(bucket).key(key).send())
             .map_err(|error| {
-                classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+                classify_query_error(S3_ERROR_FORMATTER.format_service_error(
+                    &error,
+                    &self.config,
+                    ErrorTarget::Object { bucket, key },
+                ))
             })?;
 
         let aggregated = runtime.block_on(output.body.collect()).map_err(|error| {
@@ -733,7 +759,11 @@ impl ObjectStoreConnection for S3Connection {
         let output = runtime
             .block_on(self.client.get_object().bucket(bucket).key(key).send())
             .map_err(|error| {
-                classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+                classify_query_error(S3_ERROR_FORMATTER.format_service_error(
+                    &error,
+                    &self.config,
+                    ErrorTarget::Object { bucket, key },
+                ))
             })?;
 
         let mut file = std::fs::File::create(dest).map_err(|error| {
@@ -781,7 +811,11 @@ impl ObjectStoreConnection for S3Connection {
         }
 
         runtime.block_on(request.send()).map_err(|error| {
-            classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+            classify_query_error(S3_ERROR_FORMATTER.format_service_error(
+                &error,
+                &self.config,
+                ErrorTarget::Object { bucket, key },
+            ))
         })?;
 
         Ok(())
@@ -816,7 +850,11 @@ impl ObjectStoreConnection for S3Connection {
         }
 
         runtime.block_on(request.send()).map_err(|error| {
-            classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+            classify_query_error(S3_ERROR_FORMATTER.format_service_error(
+                &error,
+                &self.config,
+                ErrorTarget::Object { bucket, key },
+            ))
         })?;
 
         Ok(())
@@ -827,7 +865,11 @@ impl ObjectStoreConnection for S3Connection {
         runtime
             .block_on(self.client.delete_object().bucket(bucket).key(key).send())
             .map_err(|error| {
-                classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+                classify_query_error(S3_ERROR_FORMATTER.format_service_error(
+                    &error,
+                    &self.config,
+                    ErrorTarget::Object { bucket, key },
+                ))
             })?;
 
         Ok(())
@@ -849,7 +891,11 @@ impl ObjectStoreConnection for S3Connection {
             }
 
             let output = runtime.block_on(request.send()).map_err(|error| {
-                classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+                classify_query_error(S3_ERROR_FORMATTER.format_service_error(
+                    &error,
+                    &self.config,
+                    ErrorTarget::Bucket(bucket),
+                ))
             })?;
 
             let keys: Vec<String> = output
@@ -875,6 +921,7 @@ impl ObjectStoreConnection for S3Connection {
     fn copy_object(&self, bucket: &str, src_key: &str, dest_key: &str) -> Result<(), DbError> {
         let runtime = runtime();
         let copy_source = build_copy_source(bucket, src_key);
+        let rename_target = format!("{src_key} -> {dest_key}");
 
         runtime
             .block_on(
@@ -886,7 +933,14 @@ impl ObjectStoreConnection for S3Connection {
                     .send(),
             )
             .map_err(|error| {
-                classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+                classify_query_error(S3_ERROR_FORMATTER.format_service_error(
+                    &error,
+                    &self.config,
+                    ErrorTarget::Object {
+                        bucket,
+                        key: &rename_target,
+                    },
+                ))
             })?;
 
         Ok(())
@@ -919,9 +973,11 @@ impl ObjectStoreConnection for S3Connection {
                 )
                 .map(|presigned| presigned.uri().to_string())
                 .map_err(|error| {
-                    classify_query_error(
-                        S3_ERROR_FORMATTER.format_service_error(&error, &self.config),
-                    )
+                    classify_query_error(S3_ERROR_FORMATTER.format_service_error(
+                        &error,
+                        &self.config,
+                        ErrorTarget::Object { bucket, key },
+                    ))
                 })?,
             PresignMethod::Put => runtime
                 .block_on(
@@ -933,9 +989,11 @@ impl ObjectStoreConnection for S3Connection {
                 )
                 .map(|presigned| presigned.uri().to_string())
                 .map_err(|error| {
-                    classify_query_error(
-                        S3_ERROR_FORMATTER.format_service_error(&error, &self.config),
-                    )
+                    classify_query_error(S3_ERROR_FORMATTER.format_service_error(
+                        &error,
+                        &self.config,
+                        ErrorTarget::Object { bucket, key },
+                    ))
                 })?,
         };
 
@@ -948,7 +1006,11 @@ impl ObjectStoreConnection for S3Connection {
         let location_output = runtime
             .block_on(self.client.get_bucket_location().bucket(bucket).send())
             .map_err(|error| {
-                classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+                classify_query_error(S3_ERROR_FORMATTER.format_service_error(
+                    &error,
+                    &self.config,
+                    ErrorTarget::Bucket(bucket),
+                ))
             })?;
 
         // An empty/absent location constraint means `us-east-1` — S3's own
@@ -962,7 +1024,11 @@ impl ObjectStoreConnection for S3Connection {
         let versioning_output = runtime
             .block_on(self.client.get_bucket_versioning().bucket(bucket).send())
             .map_err(|error| {
-                classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+                classify_query_error(S3_ERROR_FORMATTER.format_service_error(
+                    &error,
+                    &self.config,
+                    ErrorTarget::Bucket(bucket),
+                ))
             })?;
 
         let versioning = match versioning_output.status() {
@@ -992,7 +1058,11 @@ impl ObjectStoreConnection for S3Connection {
             }
 
             let output = runtime.block_on(request.send()).map_err(|error| {
-                classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+                classify_query_error(S3_ERROR_FORMATTER.format_service_error(
+                    &error,
+                    &self.config,
+                    ErrorTarget::Bucket(bucket),
+                ))
             })?;
 
             for object in output.contents() {
@@ -1047,7 +1117,11 @@ impl ObjectStoreConnection for S3Connection {
             }
 
             let output = runtime.block_on(request.send()).map_err(|error| {
-                classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+                classify_query_error(S3_ERROR_FORMATTER.format_service_error(
+                    &error,
+                    &self.config,
+                    ErrorTarget::Object { bucket, key },
+                ))
             })?;
 
             versions.extend(
@@ -1098,13 +1172,21 @@ impl ObjectStoreConnection for S3Connection {
         if let Err(error) = base_creation {
             if !options.object_lock {
                 return Err(classify_query_error(
-                    S3_ERROR_FORMATTER.format_service_error(&error, &self.config),
+                    S3_ERROR_FORMATTER.format_service_error(
+                        &error,
+                        &self.config,
+                        ErrorTarget::Bucket(bucket),
+                    ),
                 ));
             }
 
             warnings.push(degradation_warning(
                 "Object lock",
-                &S3_ERROR_FORMATTER.format_service_error(&error, &self.config),
+                &S3_ERROR_FORMATTER.format_service_error(
+                    &error,
+                    &self.config,
+                    ErrorTarget::Bucket(bucket),
+                ),
             ));
 
             runtime
@@ -1113,9 +1195,11 @@ impl ObjectStoreConnection for S3Connection {
                         .send(),
                 )
                 .map_err(|error| {
-                    classify_query_error(
-                        S3_ERROR_FORMATTER.format_service_error(&error, &self.config),
-                    )
+                    classify_query_error(S3_ERROR_FORMATTER.format_service_error(
+                        &error,
+                        &self.config,
+                        ErrorTarget::Bucket(bucket),
+                    ))
                 })?;
         }
 
@@ -1135,7 +1219,11 @@ impl ObjectStoreConnection for S3Connection {
             if let Err(error) = result {
                 warnings.push(degradation_warning(
                     "Versioning",
-                    &S3_ERROR_FORMATTER.format_service_error(&error, &self.config),
+                    &S3_ERROR_FORMATTER.format_service_error(
+                        &error,
+                        &self.config,
+                        ErrorTarget::Bucket(bucket),
+                    ),
                 ));
             }
         }
@@ -1159,7 +1247,11 @@ impl ObjectStoreConnection for S3Connection {
             if let Err(error) = result {
                 warnings.push(degradation_warning(
                     "Block public access",
-                    &S3_ERROR_FORMATTER.format_service_error(&error, &self.config),
+                    &S3_ERROR_FORMATTER.format_service_error(
+                        &error,
+                        &self.config,
+                        ErrorTarget::Bucket(bucket),
+                    ),
                 ));
             }
         }
@@ -1178,7 +1270,11 @@ impl ObjectStoreConnection for S3Connection {
                     if let Err(error) = result {
                         warnings.push(degradation_warning(
                             "Default encryption",
-                            &S3_ERROR_FORMATTER.format_service_error(&error, &self.config),
+                            &S3_ERROR_FORMATTER.format_service_error(
+                                &error,
+                                &self.config,
+                                ErrorTarget::Bucket(bucket),
+                            ),
                         ));
                     }
                 }
@@ -1194,7 +1290,11 @@ impl ObjectStoreConnection for S3Connection {
         runtime
             .block_on(self.client.delete_bucket().bucket(bucket).send())
             .map_err(|error| {
-                classify_query_error(S3_ERROR_FORMATTER.format_service_error(&error, &self.config))
+                classify_query_error(S3_ERROR_FORMATTER.format_service_error(
+                    &error,
+                    &self.config,
+                    ErrorTarget::Bucket(bucket),
+                ))
             })?;
 
         Ok(())
