@@ -121,6 +121,9 @@ pub struct ObjectBrowserDocument {
     preview_content: PreviewContentState,
     /// Same stale-response guard as `metadata_generation`, for the body fetch.
     preview_content_generation: u64,
+    /// User-chosen preview-pane width; `None` uses the mode's preferred width.
+    preview_custom_width: Option<Pixels>,
+    preview_resize_start: Option<(Pixels, Pixels)>,
     /// Editable buffer for the previewed text object, when there is one.
     editor: Option<ObjectEditor>,
     /// Body decoded by the fetch and waiting for a render pass to turn it into
@@ -214,6 +217,8 @@ impl ObjectBrowserDocument {
             metadata_generation: 0,
             preview_content: PreviewContentState::Unavailable,
             preview_content_generation: 0,
+            preview_custom_width: None,
+            preview_resize_start: None,
             editor: None,
             pending_text_body: None,
             pending_navigation: None,

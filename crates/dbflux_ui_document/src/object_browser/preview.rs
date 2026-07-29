@@ -39,6 +39,13 @@ const PREVIEW_MIN_WIDTH: Pixels = px(240.0);
 /// the listing usable at every window size.
 const PREVIEW_MAX_WIDTH_FRACTION: f32 = 0.55;
 
+/// Ceiling for a user-dragged pane width; the relative cap above still
+/// applies, so the listing keeps room even below this.
+const PREVIEW_DRAG_MAX_WIDTH: Pixels = px(1200.0);
+
+/// Hit target of the resize grip on the pane's left edge.
+const PREVIEW_GRIP_WIDTH: Pixels = px(7.0);
+
 /// Label column of the metadata rows. Narrow enough to leave the values room
 /// inside a 320 px pane.
 const METADATA_LABEL_WIDTH: Pixels = px(92.0);
@@ -58,6 +65,51 @@ enum NoticeTone {
 }
 
 impl ObjectBrowserDocument {
+    pub(super) fn begin_preview_resize(&mut self, start_x: Pixels, cx: &mut Context<Self>) {
+        let current = self.current_preview_width();
+        self.preview_resize_start = Some((start_x, current));
+        cx.notify();
+    }
+
+    /// Dragging the left-edge grip leftwards grows the pane, so the delta is
+    /// inverted relative to the sidebar dock's right-edge grip.
+    pub(super) fn handle_preview_resize_move(
+        &mut self,
+        position_x: Pixels,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((start_x, start_width)) = self.preview_resize_start else {
+            return;
+        };
+
+        let new_width =
+            (start_width + (start_x - position_x)).clamp(PREVIEW_MIN_WIDTH, PREVIEW_DRAG_MAX_WIDTH);
+        self.preview_custom_width = Some(new_width);
+        cx.notify();
+    }
+
+    pub(super) fn finish_preview_resize(&mut self, cx: &mut Context<Self>) {
+        if self.preview_resize_start.is_some() {
+            self.preview_resize_start = None;
+            cx.notify();
+        }
+    }
+
+    fn current_preview_width(&self) -> Pixels {
+        self.preview_custom_width.unwrap_or(
+            if self
+                .preview_key
+                .as_deref()
+                .and_then(|key| self.editor_for(key))
+                .is_some()
+            {
+                PREVIEW_EDITOR_WIDTH
+            } else {
+                PREVIEW_WIDTH
+            },
+        )
+    }
+
     pub(super) fn render_preview_pane(
         &self,
         key: &str,
@@ -65,33 +117,94 @@ impl ObjectBrowserDocument {
     ) -> impl IntoElement {
         let theme = cx.theme();
         let editing = self.editor_for(key).is_some();
+        let resizing = self.preview_resize_start.is_some();
+
+        let width = self.preview_custom_width.unwrap_or(if editing {
+            PREVIEW_EDITOR_WIDTH
+        } else {
+            PREVIEW_WIDTH
+        });
+
+        let resize_listeners = resizing.then(|| {
+            let entity = cx.entity().clone();
+
+            // Same pattern as the sidebar dock: element listeners lose the
+            // drag once the cursor leaves the grip, so the drag is tracked
+            // with window-level listeners registered during paint.
+            canvas(
+                |_, _, _| {},
+                move |_, _, window, _| {
+                    window.on_mouse_event({
+                        let entity = entity.clone();
+                        move |event: &MouseMoveEvent, phase, _, cx| {
+                            if phase.bubble() {
+                                entity.update(cx, |doc, cx| {
+                                    doc.handle_preview_resize_move(event.position.x, cx);
+                                });
+                            }
+                        }
+                    });
+
+                    window.on_mouse_event({
+                        let entity = entity.clone();
+                        move |_: &MouseUpEvent, phase, _, cx| {
+                            if phase.bubble() {
+                                entity.update(cx, |doc, cx| doc.finish_preview_resize(cx));
+                            }
+                        }
+                    });
+                },
+            )
+            .absolute()
+            .size_full()
+        });
 
         div()
-            .w(if editing {
-                PREVIEW_EDITOR_WIDTH
-            } else {
-                PREVIEW_WIDTH
-            })
+            .w(width)
             .min_w(PREVIEW_MIN_WIDTH)
             .max_w(relative(PREVIEW_MAX_WIDTH_FRACTION))
             .flex()
-            .flex_col()
-            .border_l_1()
-            .border_color(theme.border)
-            .bg(theme.background)
-            .child(self.render_preview_header(key, cx))
-            .when(editing, |this| this.child(self.render_editor_meta(key, cx)))
+            .flex_row()
+            .child(
+                div()
+                    .id("object-preview-grip")
+                    .h_full()
+                    .w(PREVIEW_GRIP_WIDTH)
+                    .flex_shrink_0()
+                    .cursor_col_resize()
+                    .border_l_1()
+                    .border_color(theme.border)
+                    .hover(|el| el.bg(theme.accent.opacity(0.3)))
+                    .when(resizing, |el| el.bg(theme.primary))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                            this.begin_preview_resize(event.position.x, cx);
+                        }),
+                    ),
+            )
             .child(
                 div()
                     .flex_1()
+                    .min_w_0()
                     .flex()
                     .flex_col()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .child(self.render_preview_body(key, cx))
-                    .child(self.render_metadata_section(key, cx)),
+                    .bg(theme.background)
+                    .when_some(resize_listeners, |el, listeners| el.child(listeners))
+                    .child(self.render_preview_header(key, cx))
+                    .when(editing, |this| this.child(self.render_editor_meta(key, cx)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .min_h_0()
+                            .overflow_hidden()
+                            .child(self.render_preview_body(key, cx))
+                            .child(self.render_metadata_section(key, cx)),
+                    )
+                    .child(self.render_preview_actions(key, cx)),
             )
-            .child(self.render_preview_actions(key, cx))
     }
 
     /// Meta line under the header while editing: what the object is, how big
