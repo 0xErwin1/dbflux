@@ -37,22 +37,15 @@ impl ObjectBrowserDocument {
         self.pending_object_delete.as_ref()
     }
 
-    /// Drains `pending_object_action`, raised by the preview action bar,
-    /// consuming a `Delete` intent into this flow. `Presign` is left in
-    /// place — that flow owner lands separately.
+    /// Drains `pending_object_action`, raised by the preview action bar, into
+    /// the flow that owns it: `Delete` opens the confirmation below, `Presign`
+    /// opens the presigned-URL modal.
     pub(super) fn drain_pending_object_action(&mut self, cx: &mut Context<Self>) {
-        if !matches!(
-            self.pending_object_action,
-            Some(ObjectAction::Delete { .. })
-        ) {
-            return;
+        match self.take_pending_object_action() {
+            Some(ObjectAction::Delete { key }) => self.request_delete_object(key, cx),
+            Some(ObjectAction::Presign { key }) => self.open_presign(key, cx),
+            None => {}
         }
-
-        let Some(ObjectAction::Delete { key }) = self.take_pending_object_action() else {
-            return;
-        };
-
-        self.request_delete_object(key, cx);
     }
 
     /// `Del` key / context-menu / preview action-bar intent to delete a

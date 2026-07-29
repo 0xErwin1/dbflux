@@ -345,6 +345,7 @@ impl ObjectBrowserDocument {
     pub fn close_delete_prefix_confirm(&mut self, cx: &mut Context<Self>) {
         self.cancel_delete_prefix_probe(cx);
         self.delete_prefix_confirm = None;
+        self.delete_prefix_input = None;
         cx.notify();
     }
 

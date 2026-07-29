@@ -1,9 +1,11 @@
 mod data;
 mod delete;
 pub mod delete_prefix;
+mod delete_prefix_modal;
 pub mod editor;
 pub mod metadata;
 mod pane;
+pub mod presign;
 mod preview;
 pub mod preview_content;
 mod render;
@@ -14,6 +16,7 @@ mod upload;
 pub use delete_prefix::{
     DeletePrefixConfirmState, DeletePrefixProbeState, PrefixDeleteProbe, PrefixDeleteProbeOutcome,
 };
+pub use presign::{PresignExpiry, PresignMethodChoice, PresignState, PresignUrlState};
 
 pub use editor::{LineEnding, TextBody, decode_text_body};
 pub use metadata::{ObjectMetadataState, ObjectVersionsState, PreviewGate, evaluate_preview_gate};
@@ -28,6 +31,7 @@ use super::types::{DocumentId, DocumentState};
 use crate::buckets_table::{BucketDetailsState, OperationTiming};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::controls::{InputEvent, InputState};
+use dbflux_components::primitives::TypeToConfirm;
 use dbflux_core::RefreshPolicy;
 use dbflux_ui_base::AppStateEntity;
 use editor::{GuardedNavigation, ObjectEditor, PendingTextBody};
@@ -117,8 +121,14 @@ pub struct ObjectBrowserDocument {
     /// Object staged for the single-delete confirmation overlay.
     pending_object_delete: Option<PendingObjectDelete>,
     /// Recursive-delete confirmation state (probe + type-to-confirm phrase).
-    /// `render.rs` has no wiring for it yet — the modal itself is T36.
     delete_prefix_confirm: Option<DeletePrefixConfirmState>,
+    /// Type-to-confirm widget backing the recursive-delete modal. Built on the
+    /// first render after the modal opens (`InputState` needs a `Window`) and
+    /// dropped with the modal, because the expected phrase is fixed at
+    /// construction and changes with every target.
+    delete_prefix_input: Option<Entity<TypeToConfirm>>,
+    /// Presigned-URL modal state (method / expiry / generated URL).
+    presign: Option<PresignState>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -183,6 +193,8 @@ impl ObjectBrowserDocument {
             pending_object_action: None,
             pending_object_delete: None,
             delete_prefix_confirm: None,
+            delete_prefix_input: None,
+            presign: None,
             _subscriptions: vec![filter_subscription],
         };
 
@@ -253,6 +265,16 @@ impl ObjectBrowserDocument {
     /// not reach the listing's single-letter navigation commands.
     pub fn active_context(&self) -> ContextId {
         if self.pending_navigation.is_some() {
+            return ContextId::ConfirmModal;
+        }
+
+        // The recursive-delete modal is typed into, so its input must keep
+        // every letter the listing would otherwise read as a command.
+        if self.delete_prefix_confirm.is_some() {
+            return ContextId::TextInput;
+        }
+
+        if self.presign.is_some() {
             return ContextId::ConfirmModal;
         }
 
@@ -696,6 +718,39 @@ impl ObjectBrowserDocument {
             return true;
         }
 
+        // The recursive-delete modal owns the keyboard while it is up: Execute
+        // deletes (only once the typed phrase matches), Cancel dismisses, and
+        // everything else belongs to the type-to-confirm input.
+        if self.delete_prefix_confirm.is_some() {
+            return match cmd {
+                Command::Execute => {
+                    self.confirm_delete_prefix(cx);
+                    true
+                }
+                Command::Cancel => {
+                    self.close_delete_prefix_confirm(cx);
+                    true
+                }
+                _ => false,
+            };
+        }
+
+        // The presign modal has no text input: Execute copies the generated
+        // URL, Cancel dismisses.
+        if self.presign.is_some() {
+            return match cmd {
+                Command::Execute => {
+                    self.copy_presigned_url(cx);
+                    true
+                }
+                Command::Cancel => {
+                    self.close_presign(cx);
+                    true
+                }
+                _ => true,
+            };
+        }
+
         // Same for the single-delete confirmation: Execute confirms, Cancel
         // dismisses, everything else is swallowed.
         if self.pending_object_delete.is_some() {
@@ -774,8 +829,12 @@ impl ObjectBrowserDocument {
                 true
             }
             Command::Delete => {
-                if let Some(ObjectTreeNodeId::Object(key)) = self.tree.selected.clone() {
-                    self.request_delete_object(key, cx);
+                match self.tree.selected.clone() {
+                    Some(ObjectTreeNodeId::Object(key)) => self.request_delete_object(key, cx),
+                    Some(ObjectTreeNodeId::Prefix(prefix)) => {
+                        self.request_delete_prefix(prefix, cx)
+                    }
+                    None => {}
                 }
                 true
             }
@@ -1074,10 +1133,10 @@ mod tests {
         });
     }
 
-    /// T27: an action with no flow owner yet (Presign) only records the
-    /// intent — it stays parked until something drains it.
+    /// T41: the preview action bar's Presign intent is drained on the next
+    /// render pass into the presigned-URL modal, for the object it named.
     #[gpui::test]
-    fn preview_actions_with_no_owner_yet_stay_recorded(cx: &mut gpui::TestAppContext) {
+    fn presign_action_is_drained_into_the_presign_modal(cx: &mut gpui::TestAppContext) {
         let doc = new_test_entity(cx);
 
         cx.update(|cx| {
@@ -1093,13 +1152,11 @@ mod tests {
 
         cx.update(|cx| {
             doc.update(cx, |doc, _cx| {
-                assert_eq!(
-                    doc.take_pending_object_action(),
-                    Some(ObjectAction::Presign {
-                        key: "logs/a.txt".to_string()
-                    })
-                );
                 assert_eq!(doc.take_pending_object_action(), None);
+                assert_eq!(
+                    doc.presign().map(|presign| presign.key.as_str()),
+                    Some("logs/a.txt")
+                );
             });
         });
     }

@@ -684,6 +684,10 @@ impl Render for ObjectBrowserDocument {
         self.drain_pending_upload(cx);
         self.drain_pending_object_action(cx);
 
+        // The recursive-delete modal's type-to-confirm widget owns an
+        // `InputState`, which is another thing only a render pass can build.
+        self.ensure_delete_prefix_input(window, cx);
+
         let rows = self.visible_rows();
         let selected = self.tree.selected.clone();
 
@@ -724,6 +728,8 @@ impl Render for ObjectBrowserDocument {
         let preview_key = self.preview_key.clone();
         let pending_navigation = self.pending_navigation.clone();
         let pending_object_delete = self.pending_object_delete.clone();
+        let delete_prefix_confirm = self.delete_prefix_confirm().cloned();
+        let presign = self.presign().cloned();
 
         div()
             .track_focus(&self.focus_handle)
@@ -769,6 +775,12 @@ impl Render for ObjectBrowserDocument {
             })
             .when_some(pending_object_delete, |this, pending| {
                 this.child(self.render_object_delete_confirm(&pending, cx))
+            })
+            .when_some(delete_prefix_confirm, |this, confirm| {
+                this.child(self.render_delete_prefix_confirm(&confirm, cx))
+            })
+            .when_some(presign, |this, presign| {
+                this.child(self.render_presign_modal(&presign, cx))
             })
     }
 }
