@@ -528,21 +528,21 @@ impl ObjectBrowserDocument {
     }
 }
 
-/// Audits a presigned-URL generation. The URL itself is never part of the
-/// event — only the object it points at and the terms it was signed under.
-fn record_presign_audit(
-    audit_service: &dbflux_audit::AuditService,
+/// Builds the presigned-URL generation event. Pure and independently
+/// testable so a no-leak test can prove — by construction, not just by
+/// inspecting the resulting summary — that the generated URL never reaches
+/// this function's parameters in the first place: only the bucket, key,
+/// method, expiry, and optional driver error string are accepted.
+fn build_presign_audit_event(
     profile_id: Uuid,
     bucket: &str,
     key: &str,
     method: PresignMethod,
     expiry: PresignExpiry,
     error: Option<&str>,
-) {
+) -> dbflux_core::observability::EventRecord {
     use dbflux_core::chrono::Utc;
-    use dbflux_core::observability::{
-        EventCategory, EventOutcome, EventRecord, EventSeverity, EventSink,
-    };
+    use dbflux_core::observability::{EventCategory, EventOutcome, EventRecord, EventSeverity};
 
     let (severity, outcome, action) = match error {
         Some(_) => (
@@ -563,7 +563,7 @@ fn record_presign_audit(
         summary.push_str(&format!(": {error}"));
     }
 
-    let event = EventRecord::new(
+    EventRecord::new(
         Utc::now().timestamp_millis(),
         severity,
         EventCategory::ObjectStorage,
@@ -573,7 +573,23 @@ fn record_presign_audit(
     .with_summary(summary)
     .with_actor_id("ui:user")
     .with_object_ref("object", format!("{bucket}/{key}"))
-    .with_connection_context(profile_id.to_string(), bucket.to_string(), String::new());
+    .with_connection_context(profile_id.to_string(), bucket.to_string(), String::new())
+}
+
+/// Audits a presigned-URL generation. The URL itself is never part of the
+/// event — only the object it points at and the terms it was signed under.
+fn record_presign_audit(
+    audit_service: &dbflux_audit::AuditService,
+    profile_id: Uuid,
+    bucket: &str,
+    key: &str,
+    method: PresignMethod,
+    expiry: PresignExpiry,
+    error: Option<&str>,
+) {
+    use dbflux_core::observability::EventSink;
+
+    let event = build_presign_audit_event(profile_id, bucket, key, method, expiry, error);
 
     if let Err(e) = audit_service.record(event) {
         log::warn!("[object browser] failed to record presign audit event: {e}");
@@ -582,9 +598,10 @@ fn record_presign_audit(
 
 #[cfg(test)]
 mod tests {
-    use super::{PresignExpiry, presign_warning};
+    use super::{PresignExpiry, build_presign_audit_event, presign_warning};
     use dbflux_core::PresignMethod;
     use dbflux_core::chrono::{TimeZone, Utc};
+    use uuid::Uuid;
 
     /// T41: every expiry choice round-trips through its stable segment id.
     #[test]
@@ -628,5 +645,43 @@ mod tests {
 
         assert!(warning.contains("until it expires"));
         assert!(!warning.contains("UTC"));
+    }
+
+    /// T44 no-leak: the audit event never contains a URL, for either a
+    /// success or a failure outcome. `build_presign_audit_event` structurally
+    /// cannot leak the signed URL — its signature has no parameter for it —
+    /// but this also guards the summary/object-ref text against regressions.
+    #[test]
+    fn presign_audit_event_never_contains_a_url() {
+        let success = build_presign_audit_event(
+            Uuid::nil(),
+            "prod-bucket",
+            "reports/q3.csv",
+            PresignMethod::Get,
+            PresignExpiry::OneHour,
+            None,
+        );
+
+        assert!(!success.summary.to_lowercase().contains("http"));
+        assert!(
+            !success
+                .object_id
+                .as_deref()
+                .unwrap_or_default()
+                .to_lowercase()
+                .contains("http")
+        );
+
+        let failure = build_presign_audit_event(
+            Uuid::nil(),
+            "prod-bucket",
+            "reports/q3.csv",
+            PresignMethod::Put,
+            PresignExpiry::SevenDays,
+            Some("AccessDenied: insufficient permissions"),
+        );
+
+        assert!(!failure.summary.to_lowercase().contains("http"));
+        assert!(failure.summary.contains("AccessDenied"));
     }
 }

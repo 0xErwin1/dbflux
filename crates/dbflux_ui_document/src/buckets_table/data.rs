@@ -11,6 +11,7 @@ use dbflux_core::{BucketDetails, BucketInfo, BucketSizeEstimate, DbError, Object
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, report_error_async};
 use gpui::Context;
 use std::time::Instant;
+use uuid::Uuid;
 
 /// Cap passed to `estimate_bucket_size` — S3 `ListObjectsV2` calls are billed
 /// and can be slow on large buckets, so the estimate walks at most this many
@@ -457,6 +458,8 @@ impl BucketsTableDocument {
             return;
         };
 
+        let audit_service = self.app_state.read(cx).audit_service().clone();
+        let profile_id = self.profile_id;
         let entity = cx.entity().clone();
         let bucket_for_task = bucket_name.clone();
 
@@ -469,6 +472,13 @@ impl BucketsTableDocument {
 
         cx.spawn(async move |_this, cx| {
             let result = task.await;
+
+            record_bucket_delete_audit(
+                &audit_service,
+                profile_id,
+                &bucket_name,
+                result.as_ref().err().map(ToString::to_string).as_deref(),
+            );
 
             if let Err(ref err) = result {
                 report_error_async(db_error_to_user_facing(err), cx);
@@ -529,6 +539,51 @@ impl BucketsTableDocument {
     #[cfg(test)]
     pub(crate) fn set_last_operation_for_test(&mut self, timing: OperationTiming) {
         self.last_operation = Some(timing);
+    }
+}
+
+/// Audits a bucket deletion (empty-bucket only — non-empty deletes are
+/// rejected client-side before this is ever called, so both outcomes here
+/// are genuine driver results).
+fn record_bucket_delete_audit(
+    audit_service: &dbflux_audit::AuditService,
+    profile_id: Uuid,
+    bucket: &str,
+    error: Option<&str>,
+) {
+    use dbflux_core::chrono::Utc;
+    use dbflux_core::observability::{
+        EventCategory, EventOutcome, EventRecord, EventSeverity, EventSink,
+    };
+
+    let (severity, outcome, action) = match error {
+        Some(_) => (
+            EventSeverity::Error,
+            EventOutcome::Failure,
+            "bucket_delete_failed",
+        ),
+        None => (EventSeverity::Info, EventOutcome::Success, "bucket_delete"),
+    };
+
+    let mut summary = format!("Deleted bucket {bucket}");
+    if let Some(error) = error {
+        summary.push_str(&format!(": {error}"));
+    }
+
+    let event = EventRecord::new(
+        Utc::now().timestamp_millis(),
+        severity,
+        EventCategory::ObjectStorage,
+        outcome,
+    )
+    .with_action(action.to_string())
+    .with_summary(summary)
+    .with_actor_id("ui:user")
+    .with_object_ref("bucket", bucket.to_string())
+    .with_connection_context(profile_id.to_string(), bucket.to_string(), String::new());
+
+    if let Err(e) = audit_service.record(event) {
+        log::warn!("[buckets table] failed to record bucket-delete audit event: {e}");
     }
 }
 
