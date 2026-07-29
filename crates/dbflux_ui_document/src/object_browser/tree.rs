@@ -6,24 +6,21 @@
 //! caller (`super::data`) owns the `cx.spawn` plumbing and simply reports
 //! results back here.
 //!
-//! Two navigation modes are modeled:
+//! Two navigation modes are modeled, both backed by the SAME per-prefix
+//! pagination cache (`levels`):
 //!
-//! - **Per-level pagination** (the default, AWS-console-style): expanding a
-//!   prefix loads ONE page; `has_more`/`continuation_token` drive an explicit
-//!   "load more" for the next page of the same level.
-//! - **Tree mode**: a bounded, cancelable walk that recursively lists every
-//!   level and flattens the result into a single indented listing. Driven by
-//!   a monotonically increasing `generation` counter so that toggling tree
-//!   mode off invalidates any in-flight page applied after the toggle.
+//! - **Per-level pagination** (the default, AWS-console-style): only the
+//!   current prefix's children are shown; expanding a prefix navigates into
+//!   it, loading its first page if it has never been fetched.
+//! - **Tree mode**: a nested presentation of the same cache. A prefix node
+//!   is either collapsed or expanded (`tree_mode.expanded`); expanding a node
+//!   loads ONLY that node's first page of children, exactly like navigating
+//!   into it in per-level mode — there is no recursive walk and no eager
+//!   fetch of the whole bucket. Collapsing a node only removes it from the
+//!   expanded set; its already-loaded children stay cached in `levels` so
+//!   re-expanding it is instant.
 
 use dbflux_core::{ObjectListingPage, ObjectSummary};
-
-/// Safety cap on how many `ListObjectsV2` pages a single tree-mode walk may
-/// consume before it stops itself and reports `Capped`. Tree mode is a
-/// non-paginated full expansion — without a cap, a bucket with a very deep or
-/// wide prefix structure could turn one toggle into thousands of billed
-/// S3 calls.
-pub const TREE_MODE_PAGE_CAP: u32 = 500;
 
 /// Identity of a single row in the tree — either a "folder" (common prefix)
 /// or a leaf object, addressed by its full key/prefix path.
@@ -123,52 +120,14 @@ impl PrefixLevel {
     }
 }
 
-/// Status of a tree-mode walk.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub enum TreeModeStatus {
-    #[default]
-    Off,
-    Running,
-    Done,
-    Cancelled,
-    Capped,
-    Error(String),
-}
-
-/// One flattened row produced by a tree-mode walk, carrying its depth for
-/// indentation.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TreeModeRow {
-    pub depth: usize,
-    pub parent_prefix: String,
-    pub entry: ObjectTreeEntry,
-}
-
-/// State of the current (or last) tree-mode walk.
+/// Nested-presentation state: whether tree mode is on, and which prefix
+/// nodes are currently expanded. Toggling tree mode is instant — it never
+/// touches `expanded` or `levels` — and expanding/collapsing a node never
+/// discards cached entries, only whether they are currently displayed.
 #[derive(Clone, Debug, Default)]
 pub struct TreeModeState {
-    pub status: TreeModeStatus,
-    pub generation: u64,
-    pub pages_walked: u32,
-    pub rows: Vec<TreeModeRow>,
-}
-
-/// Outcome of feeding a single page into an in-progress tree-mode walk. The
-/// walker (`super::data`) uses `discovered_prefixes` and `continuation_token`
-/// to decide what to list next.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TreeModeStepOutcome {
-    /// `false` when the page was ignored because `generation` no longer
-    /// matches the tree's current walk (the walk was cancelled or restarted).
-    pub applied: bool,
-    /// `true` when this step tripped the safety cap; the walker must stop.
-    pub capped: bool,
-    /// Sub-prefixes discovered on this page, for the walker to enqueue at
-    /// `depth + 1`.
-    pub discovered_prefixes: Vec<String>,
-    /// `Some(token)` when this level has another page to fetch before moving
-    /// on to sub-prefixes.
-    pub continuation_token: Option<String>,
+    pub enabled: bool,
+    pub expanded: std::collections::HashSet<String>,
 }
 
 /// Breadcrumb + per-level pagination + tree-mode state for one bucket.
@@ -322,94 +281,31 @@ impl ObjectTree {
 
     // -- Tree mode ---------------------------------------------------------
 
-    /// Starts a new tree-mode walk, bumping the generation so any page
-    /// applied under a stale (previous) generation is ignored. Returns the
-    /// new generation for the walker to carry through its calls.
-    pub fn start_tree_mode(&mut self) -> u64 {
-        self.tree_mode.generation += 1;
-        self.tree_mode.status = TreeModeStatus::Running;
-        self.tree_mode.pages_walked = 0;
-        self.tree_mode.rows.clear();
-        self.tree_mode.generation
+    pub fn is_tree_mode(&self) -> bool {
+        self.tree_mode.enabled
     }
 
-    /// Cancels the current tree-mode walk (toggle-off). Bumps the generation
-    /// so any page still in flight from the cancelled walk is ignored when it
-    /// lands.
-    pub fn cancel_tree_mode(&mut self) {
-        self.tree_mode.generation += 1;
-        self.tree_mode.status = TreeModeStatus::Cancelled;
+    /// Flips tree mode on/off. Purely a presentation switch: it never fetches
+    /// anything and never touches `expanded` or the per-prefix cache, so the
+    /// toggle itself is instant.
+    pub fn toggle_tree_mode(&mut self) {
+        self.tree_mode.enabled = !self.tree_mode.enabled;
     }
 
-    pub fn is_tree_mode_current(&self, generation: u64) -> bool {
-        self.tree_mode.status == TreeModeStatus::Running && self.tree_mode.generation == generation
+    pub fn is_expanded(&self, prefix: &str) -> bool {
+        self.tree_mode.expanded.contains(prefix)
     }
 
-    pub fn mark_tree_mode_done(&mut self, generation: u64) {
-        if self.is_tree_mode_current(generation) {
-            self.tree_mode.status = TreeModeStatus::Done;
-        }
+    /// Marks a prefix node expanded. Loading its first page (if it has never
+    /// been fetched) is the caller's (`super::data`) responsibility.
+    pub fn expand_node(&mut self, prefix: &str) {
+        self.tree_mode.expanded.insert(prefix.to_string());
     }
 
-    pub fn mark_tree_mode_error(&mut self, generation: u64, message: String) {
-        if self.tree_mode.generation == generation {
-            self.tree_mode.status = TreeModeStatus::Error(message);
-        }
-    }
-
-    /// Feeds one page of a tree-mode walk at `depth`/`prefix` into the
-    /// accumulated flattened listing.
-    ///
-    /// Ignored (returns `applied: false`) if `generation` is stale. Trips
-    /// `TREE_MODE_PAGE_CAP` and reports `capped: true` once reached — the
-    /// walker must stop enqueueing further work in that case.
-    pub fn apply_tree_mode_page(
-        &mut self,
-        generation: u64,
-        depth: usize,
-        prefix: &str,
-        page: ObjectListingPage,
-    ) -> TreeModeStepOutcome {
-        if !self.is_tree_mode_current(generation) {
-            return TreeModeStepOutcome {
-                applied: false,
-                capped: false,
-                discovered_prefixes: Vec::new(),
-                continuation_token: None,
-            };
-        }
-
-        self.tree_mode.pages_walked += 1;
-        let capped = self.tree_mode.pages_walked >= TREE_MODE_PAGE_CAP;
-
-        let discovered_prefixes = page.common_prefixes.clone();
-
-        self.tree_mode.rows.extend(
-            page.common_prefixes
-                .into_iter()
-                .map(ObjectTreeEntry::Prefix)
-                .chain(page.objects.into_iter().map(ObjectTreeEntry::Object))
-                .map(|entry| TreeModeRow {
-                    depth,
-                    parent_prefix: prefix.to_string(),
-                    entry,
-                }),
-        );
-
-        if capped {
-            self.tree_mode.status = TreeModeStatus::Capped;
-        }
-
-        TreeModeStepOutcome {
-            applied: true,
-            capped,
-            discovered_prefixes,
-            continuation_token: if capped {
-                None
-            } else {
-                page.next_continuation_token
-            },
-        }
+    /// Collapses a prefix node. Its children stay cached in `levels` — only
+    /// whether they are currently displayed changes.
+    pub fn collapse_node(&mut self, prefix: &str) {
+        self.tree_mode.expanded.remove(prefix);
     }
 }
 
@@ -574,117 +470,92 @@ mod tests {
 
     // -- Tree mode -----------------------------------------------------------
 
+    /// Toggling tree mode is a pure presentation flip: it never touches the
+    /// per-prefix cache or the expanded set, and it never fetches anything.
     #[test]
-    fn start_tree_mode_bumps_generation_and_clears_prior_rows() {
+    fn toggle_tree_mode_only_flips_the_flag() {
         let mut tree = ObjectTree::new("my-bucket".to_string());
+        tree.apply_page("", page(&["logs/"], &["a.txt"], None));
 
-        let gen1 = tree.start_tree_mode();
-        tree.apply_tree_mode_page(gen1, 0, "", page(&[], &["a.txt"], None));
-        assert_eq!(tree.tree_mode.rows.len(), 1);
+        tree.toggle_tree_mode();
+        assert!(tree.is_tree_mode());
+        assert!(tree.tree_mode.expanded.is_empty());
+        assert_eq!(tree.level("").unwrap().entries.len(), 2);
 
-        let gen2 = tree.start_tree_mode();
-        assert_ne!(gen1, gen2);
-        assert!(tree.tree_mode.rows.is_empty());
-        assert_eq!(tree.tree_mode.status, TreeModeStatus::Running);
+        tree.toggle_tree_mode();
+        assert!(!tree.is_tree_mode());
+        // Turning tree mode off must not drop anything already loaded.
+        assert_eq!(tree.level("").unwrap().entries.len(), 2);
     }
 
+    /// Expanding a node only marks it expanded — loading its children is the
+    /// caller's job (`super::data::expand_tree_node`), never `ObjectTree`'s.
     #[test]
-    fn cancel_tree_mode_invalidates_the_current_generation() {
+    fn expand_node_only_marks_the_node_expanded() {
         let mut tree = ObjectTree::new("my-bucket".to_string());
-        let generation = tree.start_tree_mode();
+        tree.toggle_tree_mode();
 
-        tree.cancel_tree_mode();
+        assert!(!tree.is_expanded("logs/"));
+        tree.expand_node("logs/");
+        assert!(tree.is_expanded("logs/"));
 
-        assert!(!tree.is_tree_mode_current(generation));
-        assert_eq!(tree.tree_mode.status, TreeModeStatus::Cancelled);
+        // No page was applied — the node has no entries yet, matching a
+        // caller that has not fetched anything for it.
+        assert!(tree.level("logs/").is_none());
     }
 
+    /// Collapsing a node removes it from the expanded set but keeps its
+    /// already-loaded children cached, so re-expanding it is instant (no
+    /// re-fetch).
     #[test]
-    fn stale_page_after_cancel_is_ignored() {
+    fn collapse_node_keeps_cached_children() {
         let mut tree = ObjectTree::new("my-bucket".to_string());
-        let generation = tree.start_tree_mode();
-        tree.cancel_tree_mode();
+        tree.toggle_tree_mode();
+        tree.expand_node("logs/");
+        tree.apply_page("logs/", page(&[], &["logs/2026-01-01.log"], None));
 
-        let outcome = tree.apply_tree_mode_page(generation, 0, "", page(&[], &["a.txt"], None));
+        tree.collapse_node("logs/");
 
-        assert!(!outcome.applied);
-        assert!(tree.tree_mode.rows.is_empty());
+        assert!(!tree.is_expanded("logs/"));
+        assert_eq!(tree.level("logs/").unwrap().entries.len(), 1);
+
+        tree.expand_node("logs/");
+        assert!(tree.is_expanded("logs/"));
+        assert_eq!(tree.level("logs/").unwrap().entries.len(), 1);
     }
 
+    /// Expanding one node never touches a sibling's cache or expanded state —
+    /// there is no recursive walk that would eagerly reach into it.
     #[test]
-    fn tree_mode_accumulates_rows_across_multiple_levels() {
+    fn expanding_one_node_never_loads_a_sibling() {
         let mut tree = ObjectTree::new("my-bucket".to_string());
-        let generation = tree.start_tree_mode();
+        tree.toggle_tree_mode();
+        tree.apply_page("", page(&["logs/", "assets/"], &[], None));
 
-        let outcome =
-            tree.apply_tree_mode_page(generation, 0, "", page(&["logs/"], &["readme.txt"], None));
-        assert_eq!(outcome.discovered_prefixes, vec!["logs/".to_string()]);
-        assert_eq!(outcome.continuation_token, None);
+        tree.expand_node("logs/");
+        tree.apply_page("logs/", page(&[], &["logs/a.log"], None));
 
-        tree.apply_tree_mode_page(generation, 1, "logs/", page(&[], &["2026-01-01.log"], None));
-
-        assert_eq!(tree.tree_mode.rows.len(), 3);
-        assert_eq!(tree.tree_mode.rows[0].depth, 0);
-        assert_eq!(tree.tree_mode.rows[2].depth, 1);
-        assert_eq!(tree.tree_mode.rows[2].parent_prefix, "logs/");
+        assert!(tree.is_expanded("logs/"));
+        assert!(!tree.is_expanded("assets/"));
+        assert!(tree.level("assets/").is_none());
     }
 
+    /// A node's own continuation token survives expand/collapse/expand,
+    /// exactly like `PrefixLevel::has_more` for per-level pagination — each
+    /// node paginates independently.
     #[test]
-    fn tree_mode_reports_a_continuation_token_when_a_level_has_more() {
+    fn expanded_node_keeps_its_own_continuation_token() {
         let mut tree = ObjectTree::new("my-bucket".to_string());
-        let generation = tree.start_tree_mode();
+        tree.toggle_tree_mode();
+        tree.expand_node("logs/");
+        tree.apply_page("logs/", page(&[], &["logs/a.log"], Some("tok-1")));
 
-        let outcome =
-            tree.apply_tree_mode_page(generation, 0, "", page(&[], &["a.txt"], Some("tok")));
+        assert_eq!(tree.continuation_token("logs/"), Some("tok-1".to_string()));
 
-        assert_eq!(outcome.continuation_token, Some("tok".to_string()));
-        assert!(!outcome.capped);
-    }
+        tree.collapse_node("logs/");
+        tree.expand_node("logs/");
 
-    #[test]
-    fn tree_mode_trips_the_safety_cap() {
-        let mut tree = ObjectTree::new("my-bucket".to_string());
-        let generation = tree.start_tree_mode();
-
-        let mut last_outcome = None;
-        for _ in 0..TREE_MODE_PAGE_CAP {
-            last_outcome = Some(tree.apply_tree_mode_page(
-                generation,
-                0,
-                "",
-                page(&[], &["a.txt"], Some("tok")),
-            ));
-        }
-
-        let outcome = last_outcome.unwrap();
-        assert!(outcome.capped);
-        assert_eq!(outcome.continuation_token, None);
-        assert_eq!(tree.tree_mode.status, TreeModeStatus::Capped);
-    }
-
-    #[test]
-    fn mark_tree_mode_done_only_applies_to_the_current_generation() {
-        let mut tree = ObjectTree::new("my-bucket".to_string());
-        let generation = tree.start_tree_mode();
-
-        tree.mark_tree_mode_done(generation + 1);
-        assert_eq!(tree.tree_mode.status, TreeModeStatus::Running);
-
-        tree.mark_tree_mode_done(generation);
-        assert_eq!(tree.tree_mode.status, TreeModeStatus::Done);
-    }
-
-    #[test]
-    fn mark_tree_mode_error_records_the_message() {
-        let mut tree = ObjectTree::new("my-bucket".to_string());
-        let generation = tree.start_tree_mode();
-
-        tree.mark_tree_mode_error(generation, "boom".to_string());
-
-        match &tree.tree_mode.status {
-            TreeModeStatus::Error(message) => assert_eq!(message, "boom"),
-            other => panic!("expected Error status, got {other:?}"),
-        }
+        assert_eq!(tree.continuation_token("logs/"), Some("tok-1".to_string()));
     }
 
     #[test]

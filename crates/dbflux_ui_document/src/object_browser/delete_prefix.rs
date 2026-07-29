@@ -6,10 +6,11 @@
 //!
 //! `PrefixDeleteProbe` counts objects and total size under a prefix (or the
 //! whole bucket, when the target is empty) via bounded, cancellable
-//! `list_objects` pagination — the same recursive-walk shape as `tree.rs`'s
-//! tree mode (`ObjectTree::start_tree_mode`/`apply_tree_mode_page`), because
-//! `list_objects` only ever returns one delimiter level at a time. The first
-//! few affected keys are kept for the modal's preview list.
+//! `list_objects` pagination — a self-contained recursive walk, unlike
+//! `tree.rs`'s lazy per-node expansion, because a delete confirmation needs
+//! the true recursive total up front rather than only what the user has
+//! chosen to expand. `list_objects` only ever returns one delimiter level at
+//! a time. The first few affected keys are kept for the modal's preview list.
 
 use super::ObjectBrowserDocument;
 use super::data::db_error_to_user_facing;
@@ -21,8 +22,8 @@ use std::collections::VecDeque;
 use uuid::Uuid;
 
 /// Bound on how many `ListObjectsV2` pages a probe walks before stopping
-/// early and reporting `Capped` — mirrors `tree.rs`'s `TREE_MODE_PAGE_CAP`; a
-/// probe over a huge prefix must not run unbounded.
+/// early and reporting `Capped`; a probe over a huge prefix must not run
+/// unbounded.
 pub const DELETE_PREFIX_PROBE_PAGE_CAP: u32 = 200;
 
 /// How many of the affected keys the modal shows as a preview (Amendment E).
@@ -41,8 +42,7 @@ pub enum DeletePrefixProbeState {
 }
 
 /// Pure accumulator for a recursive-delete probe, applied one
-/// `ObjectListingPage` at a time — testable without a connection, same shape
-/// as `ObjectTree`'s tree-mode walk.
+/// `ObjectListingPage` at a time — testable without a connection.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PrefixDeleteProbe {
     pub target: String,
@@ -56,7 +56,7 @@ pub struct PrefixDeleteProbe {
 
 /// Result of applying one page to a probe. The walker uses
 /// `discovered_prefixes` and `continuation_token` to decide what to list
-/// next, exactly like `TreeModeStepOutcome`.
+/// next.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrefixDeleteProbeOutcome {
     /// `false` when the page belonged to a superseded generation (the probe
@@ -552,7 +552,7 @@ mod tests {
     }
 
     /// Restarting a probe clears whatever the previous run had accumulated
-    /// and bumps the generation, mirroring `ObjectTree::start_tree_mode`.
+    /// and bumps the generation.
     #[test]
     fn restarting_clears_prior_totals_and_bumps_generation() {
         let mut probe = PrefixDeleteProbe::default();

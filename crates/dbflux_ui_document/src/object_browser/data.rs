@@ -14,13 +14,12 @@ use super::metadata::{
 use super::preview_content::{
     ImagePreview, PreviewContentState, PreviewKind, decode_image_dimensions, detect_preview_kind,
 };
-use super::tree::TreeModeStepOutcome;
+use super::tree::PrefixLoadState;
 use crate::buckets_table::{BucketDetailsState, OperationTiming};
 use crate::types::DocumentState;
 use dbflux_core::{DbError, ObjectListingPage, ObjectMetadata};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
 use gpui::{Context, Image, ImageFormat};
-use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -590,115 +589,39 @@ impl ObjectBrowserDocument {
 
     // -- Tree mode -----------------------------------------------------------
 
-    /// Toggles tree mode: cancels an in-flight walk when running, otherwise
-    /// starts a new bounded, cancelable walk that recursively lists every
-    /// level under the bucket root and flattens the result (`tree.rs`'s
-    /// `TREE_MODE_PAGE_CAP`).
+    /// Toggles tree mode: a pure presentation switch, never a fetch. Nodes
+    /// stay collapsed until the user expands them, so flipping the toggle
+    /// costs nothing beyond what the current level already has loaded.
     pub fn toggle_tree_mode(&mut self, cx: &mut Context<Self>) {
-        use super::tree::TreeModeStatus;
-
-        if self.tree.tree_mode.status == TreeModeStatus::Running {
-            self.tree.cancel_tree_mode();
-            cx.notify();
-            return;
-        }
-
-        let generation = self.tree.start_tree_mode();
+        self.tree.toggle_tree_mode();
         cx.notify();
+    }
 
-        let Some(connection) = self.get_connection(cx) else {
-            self.tree
-                .mark_tree_mode_error(generation, "Connection is no longer active".to_string());
+    /// Expands a prefix node in tree mode, loading its first page of children
+    /// when it has never been fetched — exactly one `ListObjectsV2` call for
+    /// that node, mirroring `expand_prefix`'s per-level pagination. Never
+    /// touches any other node.
+    pub fn expand_tree_node(&mut self, prefix: String, cx: &mut Context<Self>) {
+        let needs_load = self
+            .tree
+            .level(&prefix)
+            .is_none_or(|level| level.state == PrefixLoadState::NotLoaded);
+
+        self.tree.expand_node(&prefix);
+
+        if needs_load {
+            self.expand_prefix(prefix, cx);
+        } else {
+            self.clamp_selection();
             cx.notify();
-            return;
-        };
+        }
+    }
 
-        let bucket = self.bucket.clone();
-        let entity = cx.entity().clone();
-
-        cx.spawn(async move |_this, cx| {
-            let mut queue: VecDeque<(usize, String, Option<String>)> = VecDeque::new();
-            queue.push_back((0, String::new(), None));
-
-            while let Some((depth, prefix, token)) = queue.pop_front() {
-                let still_current = cx
-                    .update(|cx| entity.read(cx).tree.is_tree_mode_current(generation))
-                    .unwrap_or(false);
-
-                if !still_current {
-                    return;
-                }
-
-                let connection = connection.clone();
-                let bucket_for_call = bucket.clone();
-                let prefix_for_call = prefix.clone();
-
-                let page_result = cx
-                    .background_executor()
-                    .spawn(async move {
-                        match connection.object_store_api() {
-                            Some(api) => api.list_objects(
-                                &bucket_for_call,
-                                &prefix_for_call,
-                                token.as_deref(),
-                            ),
-                            None => Err(DbError::NotSupported(
-                                "Object-store API unavailable".to_string(),
-                            )),
-                        }
-                    })
-                    .await;
-
-                let page = match page_result {
-                    Ok(page) => page,
-                    Err(err) => {
-                        report_error_async(db_error_to_user_facing(&err), cx);
-                        cx.update(|cx| {
-                            entity.update(cx, |doc, cx| {
-                                doc.tree.mark_tree_mode_error(generation, err.to_string());
-                                cx.notify();
-                            });
-                        })
-                        .ok();
-                        return;
-                    }
-                };
-
-                let outcome: Option<TreeModeStepOutcome> = cx
-                    .update(|cx| {
-                        entity.update(cx, |doc, cx| {
-                            let outcome = doc
-                                .tree
-                                .apply_tree_mode_page(generation, depth, &prefix, page);
-                            cx.notify();
-                            outcome
-                        })
-                    })
-                    .ok();
-
-                let Some(outcome) = outcome else { return };
-
-                if !outcome.applied || outcome.capped {
-                    break;
-                }
-
-                if let Some(next_token) = outcome.continuation_token {
-                    queue.push_back((depth, prefix.clone(), Some(next_token)));
-                }
-
-                for sub_prefix in outcome.discovered_prefixes {
-                    queue.push_back((depth + 1, sub_prefix, None));
-                }
-            }
-
-            cx.update(|cx| {
-                entity.update(cx, |doc, cx| {
-                    doc.tree.mark_tree_mode_done(generation);
-                    cx.notify();
-                });
-            })
-            .ok();
-        })
-        .detach();
+    /// Collapses a prefix node in tree mode. Its children stay cached, so
+    /// re-expanding it is instant.
+    pub fn collapse_tree_node(&mut self, prefix: &str, cx: &mut Context<Self>) {
+        self.tree.collapse_node(prefix);
+        self.clamp_selection();
+        cx.notify();
     }
 }

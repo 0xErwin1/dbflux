@@ -7,8 +7,8 @@
 //! row-level mouse handler; cells are pure presentation.
 
 use super::metadata::is_archived_storage_class;
-use super::tree::{ObjectTreeEntry, ObjectTreeNodeId, PrefixLoadState, TreeModeStatus};
-use super::{ObjectBrowserDocument, ObjectBrowserFocusMode, VisibleRow};
+use super::tree::{ObjectTreeEntry, ObjectTreeNodeId, PrefixLoadState};
+use super::{ListingRow, ObjectBrowserDocument, ObjectBrowserFocusMode, VisibleRow};
 use crate::buckets_table::format_bytes;
 use crate::handle::DocumentEvent;
 use crate::types::DocumentState;
@@ -20,6 +20,7 @@ use dbflux_core::chrono::{DateTime, Utc};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::scroll::ScrollableElement;
 
 /// Column widths. `Key` takes the remaining space; the rest are fixed so the
 /// size column stays right-aligned against a stable edge.
@@ -110,18 +111,6 @@ pub(super) fn summary_line(rows: &[VisibleRow]) -> String {
     )
 }
 
-/// Status line for a tree-mode walk, or `None` when tree mode is off.
-pub(super) fn tree_mode_status_line(status: &TreeModeStatus, pages_walked: u32) -> Option<String> {
-    match status {
-        TreeModeStatus::Off => None,
-        TreeModeStatus::Running => Some(format!("tree mode · walking ({pages_walked} pages)")),
-        TreeModeStatus::Done => Some(format!("tree mode · {pages_walked} pages")),
-        TreeModeStatus::Cancelled => Some("tree mode · cancelled".to_string()),
-        TreeModeStatus::Capped => Some(format!("tree mode · stopped at {pages_walked} pages")),
-        TreeModeStatus::Error(message) => Some(format!("tree mode · {message}")),
-    }
-}
-
 impl ObjectBrowserDocument {
     /// Breadcrumb path bar: `s3:/` root, the bucket, then one clickable
     /// segment per prefix level. Clicking a segment navigates to that level.
@@ -210,7 +199,7 @@ impl ObjectBrowserDocument {
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let is_loading = self.state == DocumentState::Loading;
-        let tree_mode_on = self.tree.tree_mode.status == TreeModeStatus::Running;
+        let tree_mode_on = self.tree.is_tree_mode();
 
         let action_button =
             |id: &'static str, icon: AppIcon, label: &'static str, cx: &Context<Self>| {
@@ -467,7 +456,11 @@ impl ObjectBrowserDocument {
 
                 match &activate_id {
                     ObjectTreeNodeId::Prefix(prefix) => {
-                        this.navigate_to_prefix(prefix.clone(), window, cx)
+                        if this.tree().is_tree_mode() {
+                            this.expand_tree_node(prefix.clone(), cx);
+                        } else {
+                            this.navigate_to_prefix(prefix.clone(), window, cx)
+                        }
                     }
                     ObjectTreeNodeId::Object(key) => this.open_preview(key.clone(), cx),
                 }
@@ -509,19 +502,29 @@ impl ObjectBrowserDocument {
             .into_any_element()
     }
 
-    /// Continuation row for the current level, shown while `ListObjectsV2`
-    /// still reports a continuation token.
-    fn render_load_more(&self, loading: bool, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Continuation row for one prefix node, shown while `ListObjectsV2`
+    /// still reports a continuation token for it. Each node paginates
+    /// independently — in tree mode every expanded node can show its own
+    /// "load more" row, not just the current listing level.
+    fn render_load_more(
+        &self,
+        depth: usize,
+        prefix: &str,
+        loading: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = cx.theme();
-        let prefix = self.tree.current_prefix.clone();
+        let row_id = SharedString::from(format!("object-browser-load-more-{prefix}"));
+        let prefix = prefix.to_string();
 
         div()
-            .id("object-browser-load-more")
+            .id(row_id)
             .flex()
             .items_center()
             .justify_center()
             .gap(Spacing::XS)
             .h(Heights::ROW)
+            .pl(TREE_INDENT * depth as f32)
             .border_b_1()
             .border_color(theme.border)
             .when(loading, |d| d.opacity(0.6))
@@ -620,10 +623,7 @@ impl ObjectBrowserDocument {
 
     fn render_footer(&self, rows: &[VisibleRow], cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let tree_mode_line = tree_mode_status_line(
-            &self.tree.tree_mode.status,
-            self.tree.tree_mode.pages_walked,
-        );
+        let tree_mode_on = self.tree.is_tree_mode();
 
         div()
             .flex()
@@ -648,8 +648,8 @@ impl ObjectBrowserDocument {
                             .child(Icon::new(AppIcon::Folder).small().muted())
                             .child(Text::caption(summary_line(rows))),
                     )
-                    .when_some(tree_mode_line, |this, line| {
-                        this.child(Text::caption(line).muted_foreground())
+                    .when(tree_mode_on, |this| {
+                        this.child(Text::caption("tree mode").muted_foreground())
                     }),
             )
             .child(
@@ -692,6 +692,13 @@ impl Render for ObjectBrowserDocument {
         self.ensure_delete_prefix_input(window, cx);
 
         let rows = self.visible_rows();
+        let entry_rows: Vec<VisibleRow> = rows
+            .iter()
+            .filter_map(|row| match row {
+                ListingRow::Entry(visible) => Some(visible.clone()),
+                ListingRow::LoadMore { .. } => None,
+            })
+            .collect();
         let selected = self.tree.selected.clone();
 
         let level_state = self
@@ -699,10 +706,6 @@ impl Render for ObjectBrowserDocument {
             .level(&self.tree.current_prefix)
             .map(|level| level.state.clone())
             .unwrap_or_default();
-        let has_more = self
-            .tree
-            .level(&self.tree.current_prefix)
-            .is_some_and(|level| level.has_more());
 
         let is_loading = matches!(level_state, PrefixLoadState::Loading);
         let level_error = match &level_state {
@@ -710,21 +713,33 @@ impl Render for ObjectBrowserDocument {
             _ => None,
         };
 
-        let listing = if rows.is_empty() {
+        // The scrollable ancestor needs its own `id`, `min_h_0`, and
+        // `overflow_y_scrollbar` — without `min_h_0` a flex child never
+        // shrinks below its content size, so a long listing pushed the
+        // footer off-screen instead of scrolling.
+        let listing = if entry_rows.is_empty() {
             self.render_empty_state(is_loading)
         } else {
             div()
+                .id("object-browser-listing")
                 .flex_1()
-                .overflow_hidden()
+                .min_h_0()
+                .overflow_y_scrollbar()
                 .children(rows.iter().map(|row| {
-                    let is_selected = selected.as_ref() == Some(&row.entry.node_id());
-                    self.render_row(row, is_selected, cx)
+                    match row {
+                        ListingRow::Entry(visible) => {
+                            let is_selected = selected.as_ref() == Some(&visible.entry.node_id());
+                            self.render_row(visible, is_selected, cx)
+                        }
+                        ListingRow::LoadMore {
+                            depth,
+                            prefix,
+                            loading,
+                        } => self
+                            .render_load_more(*depth, prefix, *loading, cx)
+                            .into_any_element(),
+                    }
                 }))
-                .when(has_more, |this| {
-                    this.child(
-                        self.render_load_more(level_state == PrefixLoadState::LoadingMore, cx),
-                    )
-                })
                 .into_any_element()
         };
 
@@ -758,12 +773,14 @@ impl Render for ObjectBrowserDocument {
             .child(
                 div()
                     .flex_1()
+                    .min_h_0()
                     .flex()
                     .flex_row()
                     .overflow_hidden()
                     .child(
                         div()
                             .flex_1()
+                            .min_h_0()
                             .flex()
                             .flex_col()
                             .overflow_hidden()
@@ -774,7 +791,7 @@ impl Render for ObjectBrowserDocument {
                         this.child(self.render_preview_pane(&key, cx))
                     }),
             )
-            .child(self.render_footer(&rows, cx))
+            .child(self.render_footer(&entry_rows, cx))
             .when_some(pending_navigation, |this, navigation| {
                 this.child(self.render_unsaved_edits_confirm(&navigation, cx))
             })
@@ -803,10 +820,10 @@ mod tests {
     // `#[test]` attribute below.
     use super::{
         StorageClassStyle, format_modified, object_icon, storage_class_label, storage_class_style,
-        summary_line, tree_mode_status_line,
+        summary_line,
     };
     use crate::object_browser::VisibleRow;
-    use crate::object_browser::tree::{ObjectTreeEntry, TreeModeStatus};
+    use crate::object_browser::tree::ObjectTreeEntry;
     use dbflux_components::icons::AppIcon;
     use dbflux_core::ObjectSummary;
 
@@ -897,20 +914,5 @@ mod tests {
     #[test]
     fn format_modified_falls_back_to_the_placeholder() {
         assert_eq!(format_modified(None), "—");
-    }
-
-    /// T24: the footer only carries a tree-mode line while tree mode is in
-    /// use, and reports the cap explicitly when the walk stopped short.
-    #[test]
-    fn tree_mode_status_line_reports_only_active_walks() {
-        assert_eq!(tree_mode_status_line(&TreeModeStatus::Off, 0), None);
-        assert_eq!(
-            tree_mode_status_line(&TreeModeStatus::Running, 3),
-            Some("tree mode · walking (3 pages)".to_string())
-        );
-        assert_eq!(
-            tree_mode_status_line(&TreeModeStatus::Capped, 500),
-            Some("tree mode · stopped at 500 pages".to_string())
-        );
     }
 }

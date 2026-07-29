@@ -25,10 +25,7 @@ pub use rename::RenameObjectState;
 pub use editor::{LineEnding, TextBody, decode_text_body};
 pub use metadata::{ObjectMetadataState, ObjectVersionsState, PreviewGate, evaluate_preview_gate};
 pub use preview_content::{ImagePreview, PreviewContentState, PreviewKind, detect_preview_kind};
-pub use tree::{
-    ObjectTree, ObjectTreeEntry, ObjectTreeNodeId, PrefixLoadState, TREE_MODE_PAGE_CAP,
-    TreeModeRow, TreeModeStatus,
-};
+pub use tree::{ObjectTree, ObjectTreeEntry, ObjectTreeNodeId, PrefixLoadState};
 
 use super::handle::DocumentEvent;
 use super::types::{DocumentId, DocumentState};
@@ -64,13 +61,27 @@ pub enum ObjectAction {
     Delete { key: String },
 }
 
-/// One rendered listing row, flattened from either the current prefix level
-/// (per-level pagination) or the tree-mode walk (`depth` drives indentation).
+/// One rendered entry row, carrying the prefix depth (0 outside tree mode,
+/// the nesting level of the node otherwise) that drives indentation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VisibleRow {
     pub depth: usize,
     pub parent_prefix: String,
     pub entry: ObjectTreeEntry,
+}
+
+/// One rendered listing row: either an entry, or a per-node "load more"
+/// continuation control. In tree mode every expanded node paginates
+/// independently, so its "load more" row is interleaved right after that
+/// node's own children instead of only ever appearing once at the bottom.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ListingRow {
+    Entry(VisibleRow),
+    LoadMore {
+        depth: usize,
+        prefix: String,
+        loading: bool,
+    },
 }
 
 /// Object browser opened for a single bucket under an object-storage
@@ -327,53 +338,96 @@ impl ObjectBrowserDocument {
 
     // -- Listing ---------------------------------------------------------
 
-    /// Rows currently rendered, in display order: the filtered entries of the
-    /// current prefix level, or the flattened tree-mode walk when tree mode
-    /// has produced rows.
-    pub(super) fn visible_rows(&self) -> Vec<VisibleRow> {
-        if self.tree.tree_mode.status == TreeModeStatus::Off {
-            return self
+    /// Rows currently rendered, in display order.
+    ///
+    /// Outside tree mode: the filtered entries of the current prefix level,
+    /// plus that level's own "load more" row when it has a continuation
+    /// token.
+    ///
+    /// In tree mode: the current prefix's entries, with each expanded
+    /// prefix's already-loaded children recursively spliced in right after
+    /// it (never fetched here — only nodes the user has actually expanded
+    /// contribute rows). Every expanded node gets its own "load more" row
+    /// immediately after its children when it has more to page in.
+    pub(super) fn visible_rows(&self) -> Vec<ListingRow> {
+        if !self.tree.is_tree_mode() {
+            let prefix = self.tree.current_prefix.clone();
+            let mut rows: Vec<ListingRow> = self
                 .tree
-                .filtered_entries(&self.tree.current_prefix)
+                .filtered_entries(&prefix)
                 .into_iter()
-                .map(|entry| VisibleRow {
-                    depth: 0,
-                    parent_prefix: self.tree.current_prefix.clone(),
-                    entry: entry.clone(),
+                .map(|entry| {
+                    ListingRow::Entry(VisibleRow {
+                        depth: 0,
+                        parent_prefix: prefix.clone(),
+                        entry: entry.clone(),
+                    })
                 })
                 .collect();
+
+            if let Some(level) = self.tree.level(&prefix)
+                && level.has_more()
+            {
+                rows.push(ListingRow::LoadMore {
+                    depth: 0,
+                    prefix: prefix.clone(),
+                    loading: level.state == PrefixLoadState::LoadingMore,
+                });
+            }
+
+            return rows;
         }
 
-        let filter = self
-            .tree
-            .level(&self.tree.current_prefix)
-            .map(|level| level.filter.trim().to_lowercase())
-            .unwrap_or_default();
+        self.flatten_tree_rows(&self.tree.current_prefix, 0)
+    }
 
-        self.tree
-            .tree_mode
-            .rows
-            .iter()
-            .filter(|row| {
-                filter.is_empty()
-                    || row
-                        .entry
-                        .display_name(&row.parent_prefix)
-                        .to_lowercase()
-                        .contains(&filter)
-            })
-            .map(|row| VisibleRow {
-                depth: row.depth,
-                parent_prefix: row.parent_prefix.clone(),
-                entry: row.entry.clone(),
-            })
-            .collect()
+    /// Recursively splices an expanded node's cached children into the
+    /// flattened tree-mode listing. Never touches the network — a node with
+    /// no cached level (never expanded, or expanded but still loading)
+    /// simply contributes nothing beyond its own row.
+    fn flatten_tree_rows(&self, prefix: &str, depth: usize) -> Vec<ListingRow> {
+        let mut rows = Vec::new();
+
+        for entry in self.tree.filtered_entries(prefix) {
+            let entry = entry.clone();
+            let expand_child = match &entry {
+                ObjectTreeEntry::Prefix(child_prefix) if self.tree.is_expanded(child_prefix) => {
+                    Some(child_prefix.clone())
+                }
+                _ => None,
+            };
+
+            rows.push(ListingRow::Entry(VisibleRow {
+                depth,
+                parent_prefix: prefix.to_string(),
+                entry,
+            }));
+
+            if let Some(child_prefix) = expand_child {
+                rows.extend(self.flatten_tree_rows(&child_prefix, depth + 1));
+            }
+        }
+
+        if let Some(level) = self.tree.level(prefix)
+            && level.has_more()
+        {
+            rows.push(ListingRow::LoadMore {
+                depth,
+                prefix: prefix.to_string(),
+                loading: level.state == PrefixLoadState::LoadingMore,
+            });
+        }
+
+        rows
     }
 
     fn visible_node_ids(&self) -> Vec<ObjectTreeNodeId> {
         self.visible_rows()
-            .iter()
-            .map(|row| row.entry.node_id())
+            .into_iter()
+            .filter_map(|row| match row {
+                ListingRow::Entry(row) => Some(row.entry.node_id()),
+                ListingRow::LoadMore { .. } => None,
+            })
             .collect()
     }
 
@@ -496,14 +550,39 @@ impl ObjectBrowserDocument {
         self.navigate_to_prefix(parent, window, cx);
     }
 
-    /// Enter on a row: prefixes open as the new listing level, objects open
-    /// the preview pane.
+    /// Enter (or right arrow) on a row: in tree mode a prefix expands in
+    /// place (loading its first page of children if it never has); outside
+    /// tree mode a prefix instead navigates the listing into it. Objects
+    /// always open the preview pane either way.
     pub(super) fn activate_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.tree.selected.clone() {
-            Some(ObjectTreeNodeId::Prefix(prefix)) => self.navigate_to_prefix(prefix, window, cx),
+            Some(ObjectTreeNodeId::Prefix(prefix)) => {
+                if self.tree.is_tree_mode() {
+                    self.expand_tree_node(prefix, cx);
+                } else {
+                    self.navigate_to_prefix(prefix, window, cx);
+                }
+            }
             Some(ObjectTreeNodeId::Object(key)) => self.open_preview(key, cx),
             None => {}
         }
+    }
+
+    /// Left arrow in tree mode: collapses the selected node if it is an
+    /// expanded prefix. Returns `false` when there was nothing to collapse,
+    /// so the caller falls back to the existing close-preview/navigate-up
+    /// behavior.
+    pub(super) fn collapse_selected_tree_node(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(ObjectTreeNodeId::Prefix(prefix)) = self.tree.selected.clone() else {
+            return false;
+        };
+
+        if !self.tree.is_expanded(&prefix) {
+            return false;
+        }
+
+        self.collapse_tree_node(&prefix, cx);
+        true
     }
 
     pub(super) fn open_preview(&mut self, key: String, cx: &mut Context<Self>) {
@@ -882,7 +961,7 @@ impl ObjectBrowserDocument {
             Command::ColumnLeft => {
                 if self.preview_key.is_some() {
                     self.close_preview(cx);
-                } else {
+                } else if !self.collapse_selected_tree_node(cx) {
                     self.navigate_up(window, cx);
                 }
                 true
@@ -1078,6 +1157,95 @@ mod tests {
 
         cx.update(|cx| {
             assert_eq!(doc.read(cx).preview_key_for_test(), None);
+        });
+    }
+
+    /// Remediation: toggling tree mode never fetches anything — it is a pure
+    /// presentation flip over whatever the current level already has loaded.
+    #[gpui::test]
+    fn toggling_tree_mode_is_instant_and_keeps_the_cache(cx: &mut gpui::TestAppContext) {
+        let doc = new_test_entity(cx);
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, cx| {
+                doc.apply_page_for_test("", page(&["logs/"], &["a.txt"]));
+                doc.toggle_tree_mode(cx);
+            });
+        });
+
+        cx.update(|cx| {
+            let doc = doc.read(cx);
+            assert!(doc.tree().is_tree_mode());
+            assert_eq!(doc.visible_rows().len(), 2);
+        });
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, cx| {
+                doc.toggle_tree_mode(cx);
+            });
+        });
+
+        cx.update(|cx| {
+            let doc = doc.read(cx);
+            assert!(!doc.tree().is_tree_mode());
+            assert_eq!(doc.visible_rows().len(), 2);
+        });
+    }
+
+    /// Remediation: in tree mode, `Command::ColumnRight`/`Execute` on a
+    /// selected prefix expands it in place — it never navigates the listing
+    /// into it, and it never loads any other node.
+    #[gpui::test]
+    fn tree_mode_expand_never_touches_a_sibling(cx: &mut gpui::TestAppContext) {
+        let (doc, window) = new_test_entity_with_window(cx);
+
+        doc.update_in(window, |doc, window, cx| {
+            doc.apply_page_for_test("", page(&["logs/", "assets/"], &[]));
+            doc.toggle_tree_mode(cx);
+            doc.select_node(ObjectTreeNodeId::Prefix("logs/".to_string()), cx);
+            doc.dispatch_command(dbflux_app::keymap::Command::ColumnRight, window, cx);
+        });
+
+        doc.update(window, |doc, _cx| {
+            assert_eq!(doc.tree.current_prefix, "", "expand must not navigate");
+            assert!(doc.tree.is_expanded("logs/"));
+            assert!(!doc.tree.is_expanded("assets/"));
+        });
+    }
+
+    /// Remediation: collapsing an expanded node hides its children from the
+    /// flattened listing but keeps them cached — re-expanding shows the same
+    /// rows without another fetch.
+    #[gpui::test]
+    fn tree_mode_collapse_hides_but_keeps_cached_children(cx: &mut gpui::TestAppContext) {
+        let (doc, window) = new_test_entity_with_window(cx);
+
+        doc.update_in(window, |doc, window, cx| {
+            doc.apply_page_for_test("", page(&["logs/"], &[]));
+            doc.toggle_tree_mode(cx);
+            doc.select_node(ObjectTreeNodeId::Prefix("logs/".to_string()), cx);
+            doc.dispatch_command(dbflux_app::keymap::Command::ColumnRight, window, cx);
+            doc.apply_page_for_test("logs/", page(&[], &["logs/a.log", "logs/b.log"]));
+        });
+
+        doc.update(window, |doc, _cx| {
+            // Root row + two nested children.
+            assert_eq!(doc.visible_rows().len(), 3);
+        });
+
+        doc.update_in(window, |doc, window, cx| {
+            doc.select_node(ObjectTreeNodeId::Prefix("logs/".to_string()), cx);
+            doc.dispatch_command(dbflux_app::keymap::Command::ColumnLeft, window, cx);
+        });
+
+        doc.update(window, |doc, _cx| {
+            assert!(!doc.tree.is_expanded("logs/"));
+            assert_eq!(doc.visible_rows().len(), 1, "children hidden, not fetched");
+            assert_eq!(
+                doc.tree.level("logs/").map(|level| level.entries.len()),
+                Some(2),
+                "children stay cached across a collapse"
+            );
         });
     }
 
