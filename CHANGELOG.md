@@ -6,6 +6,28 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Amazon S3 driver (DBF-26)** — A first-party object-storage driver for AWS
+  S3 and S3-compatible endpoints. The connection root shows a buckets table
+  (name, region, object count, size, versioning, created); the sidebar lists
+  buckets flat, one level deep. The object browser follows AWS-console-style
+  per-level pagination by default, with an optional lazy tree mode for full
+  expansion. The preview pane renders images and SVGs natively, opens
+  text-like objects (txt, md, json, csv, log, ...) in an inline editor with
+  dirty tracking and Ctrl+S save-back, and falls back to metadata plus
+  download/open-externally for PDF and other binary objects; preview size is
+  capped at a configurable 10 MiB, and archived storage classes (GLACIER,
+  DEEP_ARCHIVE) never fetch a body. Full object CRUD covers upload, delete,
+  type-to-confirm recursive prefix/bucket delete batched in groups of 1000,
+  folder and bucket creation with per-endpoint option degradation, rename via
+  copy-then-delete, and presigned URLs. A full editor tab with an in-editor
+  find panel, a resizable object-details pane, and a row context menu round
+  out the browsing experience. Authentication supports AWS profiles/SSO or
+  static credentials, with custom endpoints for Cloudflare R2, MinIO, and
+  path-style addressing. Every mutation is audited under a new object-storage
+  event category, and a MinIO-backed live integration suite runs in CI.
+  Deferred: multipart upload with a transfers panel, and an embedded PDF
+  viewer.
+
 * **Amazon Redshift driver (read-only) (DBF-23)** — A first-party Redshift
   connection for browsing and querying analytical warehouses. Connect over the
   PostgreSQL wire protocol (host, port `5439`, database, user, password; TLS

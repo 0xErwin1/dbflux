@@ -249,6 +249,7 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/uninst
 - **DynamoDB** with table browsing, item CRUD, and AWS authentication
 - **InfluxDB** v1 and v2 (InfluxQL on v1, InfluxQL + Flux on v2)
 - **CloudWatch Logs** with log group/stream browsing and event streaming
+- **Amazon S3** with bucket browsing, object preview/editing, full CRUD, and presigned URLs, including S3-compatible endpoints (Cloudflare R2, MinIO)
 - **External drivers over RPC** (register out-of-process drivers via the [Driver RPC Protocol](docs/DRIVER_RPC_PROTOCOL.md))
 
 See [docs/DRIVERS.md](docs/DRIVERS.md) for a full capability matrix and per-driver limitations.

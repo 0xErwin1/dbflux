@@ -43,6 +43,7 @@ The capability flags listed below are exactly the ones each driver's
 | DynamoDB | Document | Custom("DynamoDB") | Auth, pagination, filtering, insert/update/delete, nested documents, arrays | AWS-managed; native command envelope (`scan`/`query`/`put`/`update`/`delete`); no PartiQL/transactions; no query cancellation; `update many+upsert` unsupported. |
 | CloudWatch Logs | Log Stream | Sql (metadata default) | Auth | AWS-managed; executes Logs Insights QL, OpenSearch PPL, and OpenSearch SQL via editor-managed source context; no query cancellation yet. |
 | InfluxDB | Time Series | InfluxQuery | Auth, multiple databases, pagination, CSV/JSON export | v1 and v2 in one crate; InfluxQL on both, Flux on v2 only; read-only (no INSERT/UPDATE/DELETE); no transactions. |
+| Amazon S3 | Object Storage | Custom("S3") | Auth (profile/SSO or static credentials, custom endpoint), bucket browsing, paginated object navigation, preview, full CRUD, presigned URLs | S3-compatible (Cloudflare R2, MinIO); no multipart upload/transfers panel, no embedded PDF viewer, no lifecycle/ACL management or S3 Select. |
 
 ## Per-driver summary
 
@@ -125,6 +126,22 @@ on both versions; Flux runs on v2 only. The query API is read-only (no
 INSERT/UPDATE/DELETE, no transactions), with optional default bucket/database and
 per-query bucket routing. See
 [`crates/dbflux_driver_influxdb/README.md`](../crates/dbflux_driver_influxdb/README.md).
+
+### Amazon S3
+
+Object-storage driver for AWS S3 and S3-compatible endpoints (Cloudflare R2,
+MinIO), authenticating via AWS profile/SSO or static credentials with endpoint
+override and path-style addressing. The connection root opens a buckets table;
+bucket browsing paginates per level (AWS-console style) with an optional
+non-paginated tree mode. Object preview covers images natively, text-like
+objects in an inline editable buffer with save-back, and metadata plus
+download/open-externally for PDF and other binary objects; archived storage
+classes (GLACIER, DEEP_ARCHIVE) skip body preview entirely. Supports upload,
+delete, type-to-confirm recursive prefix/bucket delete, folder/bucket
+creation, rename (copy-then-delete), and presigned URLs. It does not support
+multipart upload, a transfers panel, an embedded PDF viewer, lifecycle/ACL
+management, or S3 Select. See
+[`crates/dbflux_driver_s3/README.md`](../crates/dbflux_driver_s3/README.md).
 
 ## External RPC drivers
 
