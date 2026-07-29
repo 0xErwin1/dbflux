@@ -1,3 +1,4 @@
+mod create_folder;
 mod data;
 mod delete;
 pub mod delete_prefix;
@@ -8,15 +9,18 @@ mod pane;
 pub mod presign;
 mod preview;
 pub mod preview_content;
+mod rename;
 mod render;
 mod transfer;
 pub mod tree;
 mod upload;
 
+pub use create_folder::NewFolderState;
 pub use delete_prefix::{
     DeletePrefixConfirmState, DeletePrefixProbeState, PrefixDeleteProbe, PrefixDeleteProbeOutcome,
 };
 pub use presign::{PresignExpiry, PresignMethodChoice, PresignState, PresignUrlState};
+pub use rename::RenameObjectState;
 
 pub use editor::{LineEnding, TextBody, decode_text_body};
 pub use metadata::{ObjectMetadataState, ObjectVersionsState, PreviewGate, evaluate_preview_gate};
@@ -117,6 +121,12 @@ pub struct ObjectBrowserDocument {
     bucket_details: BucketDetailsState,
     pending_upload: bool,
     pending_new_folder: bool,
+    /// New Folder overlay state (name input + submission), built on the
+    /// render pass that drains `pending_new_folder`.
+    new_folder: Option<NewFolderState>,
+    /// Rename overlay state (name input + submission), built when a rename is
+    /// requested for a selected object row.
+    rename_object: Option<RenameObjectState>,
     pending_object_action: Option<ObjectAction>,
     /// Object staged for the single-delete confirmation overlay.
     pending_object_delete: Option<PendingObjectDelete>,
@@ -190,6 +200,8 @@ impl ObjectBrowserDocument {
             bucket_details: BucketDetailsState::NotLoaded,
             pending_upload: false,
             pending_new_folder: false,
+            new_folder: None,
+            rename_object: None,
             pending_object_action: None,
             pending_object_delete: None,
             delete_prefix_confirm: None,
@@ -276,6 +288,12 @@ impl ObjectBrowserDocument {
 
         if self.presign.is_some() {
             return ContextId::ConfirmModal;
+        }
+
+        // The New Folder and rename overlays are typed into, same as the
+        // recursive-delete modal's type-to-confirm input.
+        if self.new_folder.is_some() || self.rename_object.is_some() {
+            return ContextId::TextInput;
         }
 
         match self.focus_mode {
@@ -767,6 +785,37 @@ impl ObjectBrowserDocument {
             };
         }
 
+        // Same for the New Folder and rename overlays: Execute submits (only
+        // once the name validates), Cancel dismisses, and everything else
+        // belongs to the name input.
+        if self.new_folder.is_some() {
+            return match cmd {
+                Command::Execute => {
+                    self.submit_new_folder(cx);
+                    true
+                }
+                Command::Cancel => {
+                    self.close_new_folder(cx);
+                    true
+                }
+                _ => false,
+            };
+        }
+
+        if self.rename_object.is_some() {
+            return match cmd {
+                Command::Execute => {
+                    self.submit_rename_object(cx);
+                    true
+                }
+                Command::Cancel => {
+                    self.close_rename_object(cx);
+                    true
+                }
+                _ => false,
+            };
+        }
+
         // Save works from anywhere in the document while a buffer is dirty:
         // Ctrl/Cmd+S in the editor, and the unsaved-changes modal's save path
         // on tab close (`SaveFileAs`).
@@ -835,6 +884,14 @@ impl ObjectBrowserDocument {
                         self.request_delete_prefix(prefix, cx)
                     }
                     None => {}
+                }
+                true
+            }
+            // Rename is object-only — renaming a prefix would mean recursively
+            // re-keying every object under it, which is out of scope.
+            Command::Rename => {
+                if let Some(ObjectTreeNodeId::Object(key)) = self.tree.selected.clone() {
+                    self.request_rename_object(key, window, cx);
                 }
                 true
             }
@@ -1456,6 +1513,70 @@ mod tests {
                     )
                 )
             );
+        });
+    }
+
+    /// T38: the toolbar's New Folder intent turns into an open overlay on the
+    /// next render pass, pre-empty and ready to type into.
+    #[gpui::test]
+    fn new_folder_intent_opens_the_overlay(cx: &mut gpui::TestAppContext) {
+        let (doc, window) = new_test_entity_with_window(cx);
+
+        doc.update(window, |doc, cx| doc.request_new_folder(cx));
+
+        doc.update_in(window, |doc, window, cx| {
+            doc.drain_pending_new_folder(window, cx);
+        });
+
+        doc.update(window, |doc, cx| {
+            let state = doc.new_folder().expect("the overlay must be open");
+            assert_eq!(state.name_input.read(cx).value(), "");
+            assert!(!state.submitting);
+        });
+    }
+
+    /// T43: `Command::Rename` on a selected object row opens the rename
+    /// overlay pre-filled with the object's leaf name.
+    #[gpui::test]
+    fn rename_command_opens_the_overlay_prefilled_with_the_leaf_name(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (doc, window) = new_test_entity_with_window(cx);
+
+        doc.update_in(window, |doc, window, cx| {
+            doc.apply_page_for_test("", page(&[], &["logs/app.log"]));
+            doc.select_node(ObjectTreeNodeId::Object("logs/app.log".to_string()), cx);
+            doc.dispatch_command(dbflux_app::keymap::Command::Rename, window, cx);
+        });
+
+        doc.update(window, |doc, cx| {
+            let state = doc.rename_object().expect("the overlay must be open");
+            assert_eq!(state.key, "logs/app.log");
+            assert_eq!(state.name_input.read(cx).value(), "app.log");
+        });
+    }
+
+    /// T43: renaming an object whose editor is open and dirty parks the
+    /// request behind the unsaved-edits guard, same as delete does.
+    #[gpui::test]
+    fn renaming_a_dirty_object_is_parked_behind_the_guard(cx: &mut gpui::TestAppContext) {
+        let (doc, window) = new_test_entity_with_window(cx);
+
+        doc.update_in(window, |doc, window, cx| {
+            doc.open_preview("logs/app.log".to_string(), cx);
+            doc.install_editor_for_test("logs/app.log", "before", window, cx);
+            doc.type_into_editor_for_test("edited ", window, cx);
+        });
+
+        window.run_until_parked();
+
+        doc.update_in(window, |doc, window, cx| {
+            doc.request_rename_object("logs/app.log".to_string(), window, cx);
+        });
+
+        doc.update(window, |doc, _cx| {
+            assert!(doc.rename_object().is_none());
+            assert!(doc.pending_navigation_for_test().is_some());
         });
     }
 

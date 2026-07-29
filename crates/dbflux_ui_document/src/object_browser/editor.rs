@@ -162,6 +162,9 @@ pub(super) enum GuardedNavigation {
     /// Deleting `key` while its editor is open and dirty — always a
     /// navigate-away, even when it is the same object being edited.
     DeleteObject(String),
+    /// Renaming `key` while its editor is open and dirty — same rationale as
+    /// `DeleteObject`: the key is about to change under the open buffer.
+    RenameObject(String),
 }
 
 impl GuardedNavigation {
@@ -174,6 +177,7 @@ impl GuardedNavigation {
             GuardedNavigation::NavigateToPrefix(prefix) => format!("leave for {prefix}"),
             GuardedNavigation::ClosePreview => "close this preview".to_string(),
             GuardedNavigation::DeleteObject(key) => format!("delete {key}"),
+            GuardedNavigation::RenameObject(key) => format!("rename {key}"),
         }
     }
 }
@@ -504,6 +508,7 @@ impl ObjectBrowserDocument {
             }
             GuardedNavigation::ClosePreview => self.close_preview_now(cx),
             GuardedNavigation::DeleteObject(key) => self.open_delete_confirm_now(key, cx),
+            GuardedNavigation::RenameObject(key) => self.open_rename_confirm_now(key, window, cx),
         }
     }
 

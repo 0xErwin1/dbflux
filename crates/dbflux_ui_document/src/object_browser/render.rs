@@ -682,6 +682,7 @@ impl Render for ObjectBrowserDocument {
         // toolbar/action-bar intent flowing through the same
         // `pending_* + take()` convention as the two continuations above.
         self.drain_pending_upload(cx);
+        self.drain_pending_new_folder(window, cx);
         self.drain_pending_object_action(cx);
 
         // The recursive-delete modal's type-to-confirm widget owns an
@@ -730,6 +731,8 @@ impl Render for ObjectBrowserDocument {
         let pending_object_delete = self.pending_object_delete.clone();
         let delete_prefix_confirm = self.delete_prefix_confirm().cloned();
         let presign = self.presign().cloned();
+        let has_new_folder = self.new_folder().is_some();
+        let has_rename = self.rename_object().is_some();
 
         div()
             .track_focus(&self.focus_handle)
@@ -781,6 +784,12 @@ impl Render for ObjectBrowserDocument {
             })
             .when_some(presign, |this, presign| {
                 this.child(self.render_presign_modal(&presign, cx))
+            })
+            .when(has_new_folder, |this| {
+                this.child(self.render_new_folder_overlay(cx))
+            })
+            .when(has_rename, |this| {
+                this.child(self.render_rename_overlay(cx))
             })
     }
 }
