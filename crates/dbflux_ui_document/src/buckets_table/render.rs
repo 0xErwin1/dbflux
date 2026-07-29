@@ -554,7 +554,11 @@ impl BucketsTableDocument {
 }
 
 impl Render for BucketsTableDocument {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The New Bucket modal's inputs need a `Window`, which the toolbar
+        // click that raised the intent never had.
+        self.drain_pending_new_bucket(window, cx);
+
         let rows: Vec<BucketRow> = self
             .filtered_buckets(&self.search_query)
             .into_iter()
@@ -611,6 +615,9 @@ impl Render for BucketsTableDocument {
             .child(self.render_footer(&row_refs, cx))
             .when_some(pending_delete, |this, bucket| {
                 this.child(self.render_delete_confirm(&bucket, cx))
+            })
+            .when(self.new_bucket().is_some(), |this| {
+                this.child(self.render_new_bucket_modal(cx))
             })
     }
 }

@@ -1,4 +1,5 @@
 mod data;
+pub mod new_bucket;
 mod pane;
 mod render;
 
@@ -6,6 +7,7 @@ pub use data::{
     BUCKET_SIZE_ESTIMATE_CAP, BucketDetailsState, BucketRow, BucketSizeEstimateState,
     OperationTiming, bucket_delete_allowed,
 };
+pub use new_bucket::{BucketEncryptionChoice, NewBucketState, bucket_name_error};
 pub(crate) use render::format_bytes;
 
 use super::handle::DocumentEvent;
@@ -50,6 +52,9 @@ pub struct BucketsTableDocument {
     delete_probe: Option<String>,
     pending_delete: Option<String>,
     pending_new_bucket: bool,
+    /// New Bucket modal, built on the render pass that drains
+    /// `pending_new_bucket` (its inputs need a `Window`).
+    new_bucket: Option<NewBucketState>,
     pending_open_bucket: Option<String>,
     last_operation: Option<OperationTiming>,
     _subscriptions: Vec<Subscription>,
@@ -105,6 +110,7 @@ impl BucketsTableDocument {
             delete_probe: None,
             pending_delete: None,
             pending_new_bucket: false,
+            new_bucket: None,
             pending_open_bucket: None,
             last_operation: None,
             _subscriptions: vec![search_subscription],
@@ -160,6 +166,12 @@ impl BucketsTableDocument {
     }
 
     pub fn active_context(&self) -> ContextId {
+        // The New Bucket modal is typed into, so its inputs must keep every
+        // letter the table would otherwise read as a command.
+        if self.new_bucket.is_some() {
+            return ContextId::TextInput;
+        }
+
         ContextId::Results
     }
 
@@ -297,6 +309,23 @@ impl BucketsTableDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // The New Bucket modal owns the keyboard while it is up: Execute
+        // submits (only when the form is valid), Cancel dismisses, and
+        // everything else belongs to its inputs.
+        if self.new_bucket.is_some() {
+            return match cmd {
+                Command::Execute => {
+                    self.submit_new_bucket(cx);
+                    true
+                }
+                Command::Cancel => {
+                    self.close_new_bucket(cx);
+                    true
+                }
+                _ => false,
+            };
+        }
+
         if self.pending_delete.is_some() {
             return match cmd {
                 Command::Execute => {

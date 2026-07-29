@@ -548,7 +548,7 @@ fn filter_buckets<'a>(buckets: &'a [BucketRow], query: &str) -> Vec<&'a BucketRo
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::buckets_table) mod tests {
     use super::*;
     use crate::types::DocumentState;
     use dbflux_core::{ObjectListingPage, ObjectSummary, VersioningStatus};
@@ -944,7 +944,9 @@ mod tests {
         });
     }
 
-    fn new_test_entity(cx: &mut gpui::TestAppContext) -> gpui::Entity<BucketsTableDocument> {
+    pub(in crate::buckets_table) fn new_test_entity(
+        cx: &mut gpui::TestAppContext,
+    ) -> gpui::Entity<BucketsTableDocument> {
         use dbflux_storage::bootstrap::StorageRuntime;
         use gpui::AppContext as _;
 

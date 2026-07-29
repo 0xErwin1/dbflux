@@ -979,6 +979,18 @@ impl DbConfig {
         }
     }
 
+    /// Returns the cloud region this connection is configured against, for the
+    /// configs that carry one. Generic UI code uses it to pre-fill
+    /// region-scoped forms without knowing which driver it is talking to.
+    pub fn region(&self) -> Option<&str> {
+        match self {
+            DbConfig::DynamoDB { region, .. }
+            | DbConfig::CloudWatchLogs { region, .. }
+            | DbConfig::S3 { region, .. } => Some(region.as_str()),
+            _ => None,
+        }
+    }
+
     /// Returns a new DbConfig with the database field updated.
     /// Returns `Err` if the database type doesn't support changing the database.
     pub fn with_database(self, database: &str) -> Result<Self, String> {
