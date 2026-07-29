@@ -1,4 +1,5 @@
 use super::*;
+use dbflux_core::TaskKind;
 use dbflux_core::{DbSchemaInfo, SchemaDropTarget, SchemaObjectKind};
 use dbflux_ui_base::AsyncUpdateResultExt;
 
@@ -764,15 +765,25 @@ impl Sidebar {
             return;
         }
 
-        let Some(connection) = self
+        let Some((connection, profile_name)) = self
             .app_state
             .read(cx)
             .connections()
             .get(&profile_id)
-            .map(|connected| connected.connection.clone())
+            .map(|connected| (connected.connection.clone(), connected.profile.name.clone()))
         else {
             return;
         };
+
+        let app_state = self.app_state.clone();
+        let load_task_id = app_state.update(cx, |state, _| {
+            let (task_id, _) = state.start_task_for_profile(
+                TaskKind::LoadSchema,
+                format!("Listing buckets: {profile_name}"),
+                Some(profile_id),
+            );
+            task_id
+        });
 
         let sidebar = cx.entity().clone();
 
@@ -787,6 +798,20 @@ impl Sidebar {
             let result = background_task.await;
 
             cx.update(|cx| {
+                match &result {
+                    Ok(_) => {
+                        app_state.update(cx, |state, _| {
+                            state.complete_task(load_task_id);
+                        });
+                    }
+                    Err(message) => {
+                        let details = format!("Failed to list buckets: {message}");
+                        app_state.update(cx, |state, _| {
+                            state.fail_task_with_details(load_task_id, message.clone(), details);
+                        });
+                    }
+                }
+
                 sidebar.update(cx, |sidebar, cx| {
                     sidebar.pending_bucket_fetches.remove(&profile_id);
                     match result {

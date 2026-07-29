@@ -673,9 +673,12 @@ impl ObjectStoreConnection for S3Connection {
             ))
         })?;
 
+        // A zero-byte folder-marker key (`prefix/`) lists itself inside its
+        // own prefix as a nameless object; every S3 client hides it.
         let objects = output
             .contents()
             .iter()
+            .filter(|object| object.key() != Some(prefix))
             .map(|object| ObjectSummary {
                 key: object.key().unwrap_or_default().to_string(),
                 size_bytes: object.size().unwrap_or_default().max(0) as u64,
