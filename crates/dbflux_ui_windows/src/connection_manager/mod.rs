@@ -588,7 +588,7 @@ impl ConnectionManagerWindow {
                         this.focus_down(cx);
                     }
                     InputEvent::Blur => {
-                        this.exit_edit_mode_on_blur(cx);
+                        this.exit_edit_mode_on_blur(window, cx);
                     }
                     _ => {}
                 },
@@ -604,7 +604,7 @@ impl ConnectionManagerWindow {
                     this.focus_down(cx);
                 }
                 InputEvent::Blur => {
-                    this.exit_edit_mode_on_blur(cx);
+                    this.exit_edit_mode_on_blur(window, cx);
                 }
                 InputEvent::Change => {
                     this.handle_field_change("password", window, cx);
@@ -1145,7 +1145,7 @@ impl ConnectionManagerWindow {
                         this.focus_down(cx);
                     }
                     InputEvent::Blur => {
-                        this.exit_edit_mode_on_blur(cx);
+                        this.exit_edit_mode_on_blur(window, cx);
                     }
                     InputEvent::Change => {
                         this.handle_field_change(&field_id, window, cx);

@@ -67,6 +67,18 @@ pub enum SidebarEvent {
         profile_id: Uuid,
         database: String,
     },
+    /// Connection root activated (double-click/Enter) for an object-storage
+    /// driver — opens the searchable buckets table for the connection.
+    OpenObjectStoreBuckets {
+        profile_id: Uuid,
+    },
+    /// A bucket row was activated (double-click/Enter) under an object-storage
+    /// connection. The workspace focuses the connection's buckets table on that
+    /// bucket until the object browser document exists.
+    OpenObjectStoreBucket {
+        profile_id: Uuid,
+        bucket: String,
+    },
     /// Request to show SQL preview modal
     RequestSqlPreview {
         profile_id: Uuid,
@@ -941,6 +953,12 @@ pub struct Sidebar {
     /// A single fetch populates both `instance_metrics_cache` and
     /// `instance_inspectors_cache` because the catalog returns both in one round-trip.
     pending_instance_catalog_fetches: HashMap<Uuid, Task<()>>,
+    /// Session-scoped cache of the buckets listed for an object-storage
+    /// connection, keyed by profile_id. Populated on first expansion of the
+    /// connection node; buckets are listed flat, with no prefix recursion.
+    bucket_cache: HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
+    /// In-flight `list_buckets` fetches, keyed by profile_id.
+    pending_bucket_fetches: HashMap<Uuid, Task<()>>,
 }
 
 use dbflux_ui_base::toast::PendingToast;
@@ -1163,6 +1181,8 @@ impl Sidebar {
             instance_metrics_cache: HashMap::new(),
             instance_inspectors_cache: HashMap::new(),
             pending_instance_catalog_fetches: HashMap::new(),
+            bucket_cache: HashMap::new(),
+            pending_bucket_fetches: HashMap::new(),
         }
     }
 
@@ -1372,9 +1392,21 @@ impl Sidebar {
                         cx.emit(AppStateChanged);
                         cx.notify();
                     });
+
+                    if self.profile_category(profile_id, cx)
+                        == Some(DatabaseCategory::ObjectStorage)
+                    {
+                        cx.emit(SidebarEvent::OpenObjectStoreBuckets { profile_id });
+                    }
                 } else {
                     self.connect_to_profile(profile_id, cx);
                 }
+            }
+            SchemaNodeId::Bucket { profile_id, name } => {
+                cx.emit(SidebarEvent::OpenObjectStoreBucket {
+                    profile_id,
+                    bucket: name,
+                });
             }
             SchemaNodeId::ScriptFile { path } => {
                 cx.emit(SidebarEvent::OpenScript {
@@ -1550,7 +1582,13 @@ impl Sidebar {
                     if self.profile_category(profile_id, cx) == Some(DatabaseCategory::KeyValue)
             );
 
-            if is_key_value_db {
+            let is_object_storage_root = matches!(
+                parse_node_id(item_id),
+                Some(SchemaNodeId::Profile { profile_id })
+                    if self.profile_category(profile_id, cx) == Some(DatabaseCategory::ObjectStorage)
+            );
+
+            if is_key_value_db || is_object_storage_root {
                 self.toggle_item_expansion(item_id, cx);
                 self.execute_item(item_id, cx);
             } else if node_kind.is_expandable_folder() {

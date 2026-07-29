@@ -88,6 +88,22 @@ pub enum DocumentKey {
         profile_id: Uuid,
         database: Option<String>,
     },
+
+    /// The searchable buckets table opened for an object-storage connection
+    /// root. Deduplicated by `profile_id` — one per connection.
+    ObjectStoreBucketsRoot { profile_id: Uuid },
+
+    /// The prefix/object tree browser opened for a single bucket.
+    /// Deduplicated by `(profile_id, bucket)` — one per bucket per connection.
+    ObjectBrowser { profile_id: Uuid, bucket: String },
+
+    /// A single text object opened in its own full-size editor tab.
+    /// Deduplicated by `(profile_id, bucket, key)`.
+    ObjectEditor {
+        profile_id: Uuid,
+        bucket: String,
+        key: String,
+    },
 }
 
 #[cfg(test)]
@@ -227,6 +243,56 @@ mod tests {
         assert!(matches!(
             key,
             DocumentKey::InstanceOverview { profile_id: pid } if pid == profile_id
+        ));
+    }
+
+    /// `DocumentKey::ObjectStoreBucketsRoot` must construct and round-trip
+    /// through clone and debug without panic.
+    #[test]
+    fn object_store_buckets_root_key_constructs_and_clones() {
+        let profile_id = Uuid::new_v4();
+        let key = DocumentKey::ObjectStoreBucketsRoot { profile_id };
+        let cloned = key.clone();
+        let _ = format!("{:?}", cloned);
+        assert!(matches!(
+            key,
+            DocumentKey::ObjectStoreBucketsRoot { profile_id: pid } if pid == profile_id
+        ));
+    }
+
+    /// `DocumentKey::ObjectEditor` must construct and round-trip through clone
+    /// and debug, and is distinct by `(profile_id, bucket, key)`.
+    #[test]
+    fn object_editor_key_constructs_and_clones() {
+        let profile_id = Uuid::new_v4();
+        let key = DocumentKey::ObjectEditor {
+            profile_id,
+            bucket: "my-bucket".to_string(),
+            key: "logs/app.log".to_string(),
+        };
+        let cloned = key.clone();
+        let _ = format!("{:?}", cloned);
+        assert!(matches!(
+            key,
+            DocumentKey::ObjectEditor { profile_id: pid, bucket, key }
+                if pid == profile_id && bucket == "my-bucket" && key == "logs/app.log"
+        ));
+    }
+
+    /// `DocumentKey::ObjectBrowser` must construct and round-trip through
+    /// clone and debug without panic, and is distinct by `(profile_id, bucket)`.
+    #[test]
+    fn object_browser_key_constructs_and_clones() {
+        let profile_id = Uuid::new_v4();
+        let key = DocumentKey::ObjectBrowser {
+            profile_id,
+            bucket: "my-bucket".to_string(),
+        };
+        let cloned = key.clone();
+        let _ = format!("{:?}", cloned);
+        assert!(matches!(
+            key,
+            DocumentKey::ObjectBrowser { profile_id: pid, bucket } if pid == profile_id && bucket == "my-bucket"
         ));
     }
 }

@@ -444,6 +444,13 @@ fn results_layer() -> KeymapLayer {
     // Execute (Enter to edit input in toolbar mode)
     layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
 
+    // Expand/collapse — object browser preview/properties, per-document meaning
+    // otherwise (matches the Sidebar layer's `space` binding).
+    layer.bind(
+        KeyChord::new("space", Modifiers::none()),
+        Command::ExpandCollapse,
+    );
+
     // Toolbar / filter focus
     layer.bind(KeyChord::new("f", Modifiers::none()), Command::FocusToolbar);
     layer.bind(KeyChord::new("/", Modifiers::none()), Command::FocusSearch);
@@ -975,6 +982,39 @@ mod tests {
                 "Results layer must keep `{letter}` → {expected:?} so the \
                  typing-vs-grid focus invariant in CodeDocument stays meaningful",
             );
+        }
+    }
+
+    /// `space` in the Results layer must resolve to `ExpandCollapse`, matching
+    /// the Sidebar layer's binding, so the object browser's "Space
+    /// preview"/"Space properties" footer hints are actually live.
+    #[test]
+    fn results_layer_binds_space_to_expand_collapse() {
+        let keymap = default_keymap();
+        let chord = KeyChord::new("space", Modifiers::none());
+        assert_eq!(
+            keymap.resolve(ContextId::Results, &chord),
+            Some(Command::ExpandCollapse),
+        );
+    }
+
+    /// The find shortcut must stay unbound in the text-input context (and in
+    /// every context it inherits from).
+    ///
+    /// `gpui-component` owns `cmd-f` / `ctrl-f` inside its own `Input` key
+    /// context, where it opens the code editor's find panel. The workspace
+    /// only calls `stop_propagation` for chords this stack resolves, so
+    /// binding the chord here would silently take find away from every code
+    /// editor in the app.
+    #[test]
+    fn find_shortcut_stays_available_to_the_editor_component() {
+        let keymap = default_keymap();
+
+        for modifiers in [Modifiers::primary(), Modifiers::ctrl()] {
+            let chord = KeyChord::new("f", modifiers);
+
+            assert_eq!(keymap.resolve(ContextId::TextInput, &chord), None);
+            assert_eq!(keymap.resolve(ContextId::Editor, &chord), None);
         }
     }
 }

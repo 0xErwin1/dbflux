@@ -313,6 +313,7 @@ impl SecretManager {
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
+            | DbConfig::S3 { .. }
             | DbConfig::External { .. } => {
                 return None;
             }

@@ -136,6 +136,7 @@ pub enum Icon {
     Redis,
     Dynamodb,
     Redshift,
+    S3,
 
     // Time-series brands
     Influxdb,
@@ -180,6 +181,10 @@ pub enum DatabaseCategory {
     /// Log streaming services with log groups and queryable log events.
     /// Examples: AWS CloudWatch Logs
     LogStream,
+
+    /// Object storage services with buckets and key-addressed binary objects.
+    /// Examples: AWS S3, Cloudflare R2, MinIO
+    ObjectStorage,
 }
 
 impl DatabaseCategory {
@@ -192,6 +197,7 @@ impl DatabaseCategory {
             DatabaseCategory::TimeSeries => "Time Series",
             DatabaseCategory::WideColumn => "Wide Column",
             DatabaseCategory::LogStream => "Log Stream",
+            DatabaseCategory::ObjectStorage => "Object Storage",
         }
     }
 
@@ -206,6 +212,7 @@ impl DatabaseCategory {
             DatabaseCategory::TimeSeries => "Measurements",
             DatabaseCategory::WideColumn => "Tables",
             DatabaseCategory::LogStream => "Log Groups",
+            DatabaseCategory::ObjectStorage => "Buckets",
         }
     }
 
@@ -219,6 +226,7 @@ impl DatabaseCategory {
             DatabaseCategory::TimeSeries => "Measurement",
             DatabaseCategory::WideColumn => "Table",
             DatabaseCategory::LogStream => "Log Group",
+            DatabaseCategory::ObjectStorage => "Bucket",
         }
     }
 
@@ -232,6 +240,7 @@ impl DatabaseCategory {
             DatabaseCategory::TimeSeries => "Points",
             DatabaseCategory::WideColumn => "Rows",
             DatabaseCategory::LogStream => "Log events",
+            DatabaseCategory::ObjectStorage => "Objects",
         }
     }
 
@@ -245,6 +254,7 @@ impl DatabaseCategory {
             DatabaseCategory::TimeSeries => "Point",
             DatabaseCategory::WideColumn => "Row",
             DatabaseCategory::LogStream => "Log event",
+            DatabaseCategory::ObjectStorage => "Object",
         }
     }
 
@@ -330,6 +340,11 @@ impl DatabaseCategory {
             DatabaseCategory::Graph => DriverCapabilities::from_bits_truncate(
                 DriverCapabilities::GRAPH_TRAVERSAL.bits()
                     | DriverCapabilities::EDGE_PROPERTIES.bits(),
+            ),
+
+            DatabaseCategory::ObjectStorage => DriverCapabilities::from_bits_truncate(
+                DriverCapabilities::OBJECT_STORAGE.bits()
+                    | DriverCapabilities::OBJECT_PREFIX_DELETE.bits(),
             ),
         };
 
@@ -614,6 +629,17 @@ bitflags! {
         /// Driver can temporarily disable referential-integrity (FK) checking
         /// for the duration of a bulk load, via `Connection::set_referential_integrity`.
         const DISABLE_FK_CHECKS = 1 << 58;
+
+        /// Driver implements `ObjectStoreConnection` — bucket/object storage
+        /// with `list_buckets`/`list_objects`/`get_object`/`put_object`.
+        /// Gates the buckets table document, the object browser document, and
+        /// `ConnectionExt::as_object_store()`.
+        const OBJECT_STORAGE = 1 << 59;
+
+        /// Driver can delete all objects under a prefix (or an entire bucket)
+        /// via a batched delete API, rather than one `delete_object` call per
+        /// key. Gates the recursive prefix/bucket delete flow.
+        const OBJECT_PREFIX_DELETE = 1 << 60;
     }
 }
 
@@ -644,6 +670,16 @@ mod capability_bits_tests {
     #[test]
     fn disable_fk_checks_bit_value() {
         assert_eq!(DriverCapabilities::DISABLE_FK_CHECKS.bits(), 1u64 << 58);
+    }
+
+    #[test]
+    fn object_storage_bit_value() {
+        assert_eq!(DriverCapabilities::OBJECT_STORAGE.bits(), 1u64 << 59);
+    }
+
+    #[test]
+    fn object_prefix_delete_bit_value() {
+        assert_eq!(DriverCapabilities::OBJECT_PREFIX_DELETE.bits(), 1u64 << 60);
     }
 
     #[test]
@@ -708,6 +744,8 @@ mod capability_bits_tests {
             DriverCapabilities::BULK_INSERT,
             DriverCapabilities::TRUNCATE_TABLE,
             DriverCapabilities::DISABLE_FK_CHECKS,
+            DriverCapabilities::OBJECT_STORAGE,
+            DriverCapabilities::OBJECT_PREFIX_DELETE,
         ];
 
         let mut seen_bits: u64 = 0;
@@ -2934,6 +2972,10 @@ mod tests {
         assert_eq!(DatabaseCategory::Graph.display_name(), "Graph");
         assert_eq!(DatabaseCategory::TimeSeries.display_name(), "Time Series");
         assert_eq!(DatabaseCategory::WideColumn.display_name(), "Wide Column");
+        assert_eq!(
+            DatabaseCategory::ObjectStorage.display_name(),
+            "Object Storage"
+        );
     }
 
     #[test]
@@ -2947,6 +2989,7 @@ mod tests {
             "Measurements"
         );
         assert_eq!(DatabaseCategory::WideColumn.container_name(), "Tables");
+        assert_eq!(DatabaseCategory::ObjectStorage.container_name(), "Buckets");
     }
 
     #[test]
@@ -2957,6 +3000,16 @@ mod tests {
         assert_eq!(DatabaseCategory::Graph.record_name(), "Nodes");
         assert_eq!(DatabaseCategory::TimeSeries.record_name(), "Points");
         assert_eq!(DatabaseCategory::WideColumn.record_name(), "Rows");
+        assert_eq!(DatabaseCategory::ObjectStorage.record_name(), "Objects");
+    }
+
+    #[test]
+    fn test_object_storage_relevant_capabilities() {
+        let relevant = DatabaseCategory::ObjectStorage.relevant_capabilities();
+        assert!(relevant.contains(DriverCapabilities::OBJECT_STORAGE));
+        assert!(relevant.contains(DriverCapabilities::OBJECT_PREFIX_DELETE));
+        assert!(!relevant.contains(DriverCapabilities::SCHEMAS));
+        assert!(!relevant.contains(DriverCapabilities::KV_SCAN));
     }
 
     // --- QueryLanguage Tests ---

@@ -352,6 +352,12 @@ pub struct GeneralSettings {
     /// profile/database; older snapshots beyond this bound are pruned.
     #[serde(default = "default_schema_snapshot_retention")]
     pub schema_snapshot_retention: usize,
+
+    // -- Object storage --
+    /// Largest object (in MiB) whose bytes may be fetched for an in-app
+    /// preview. Objects above this bound show metadata only.
+    #[serde(default = "default_object_preview_size_limit_mib")]
+    pub object_preview_size_limit_mib: u64,
 }
 
 impl Default for GeneralSettings {
@@ -376,6 +382,7 @@ impl Default for GeneralSettings {
             dangerous_requires_preview: false,
             workspace_inspector_width_px: None,
             schema_snapshot_retention: default_schema_snapshot_retention(),
+            object_preview_size_limit_mib: default_object_preview_size_limit_mib(),
         }
     }
 }
@@ -457,7 +464,18 @@ fn default_schema_snapshot_retention() -> usize {
     10
 }
 
+fn default_object_preview_size_limit_mib() -> u64 {
+    10
+}
+
 impl GeneralSettings {
+    /// Preview size limit expressed in bytes, for comparison against an
+    /// object's `size_bytes` before any body fetch.
+    pub fn object_preview_size_limit_bytes(&self) -> u64 {
+        self.object_preview_size_limit_mib
+            .saturating_mul(1024 * 1024)
+    }
+
     pub fn resolve_refresh_policy(&self) -> crate::RefreshPolicy {
         match self.default_refresh_policy {
             RefreshPolicySetting::Manual => crate::RefreshPolicy::Manual,

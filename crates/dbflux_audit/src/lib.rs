@@ -440,6 +440,23 @@ impl AuditService {
                     )));
                 }
             }
+            EventCategory::ObjectStorage => {
+                if !Self::has_required_text(event.connection_id.as_deref()) {
+                    return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
+                        "connection_id",
+                    )));
+                }
+                if !Self::has_required_text(event.object_type.as_deref()) {
+                    return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
+                        "object_type",
+                    )));
+                }
+                if !Self::has_required_text(event.object_id.as_deref()) {
+                    return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
+                        "object_id",
+                    )));
+                }
+            }
             EventCategory::Governance | EventCategory::System => {
                 // No additional required fields beyond universal
             }
@@ -1200,6 +1217,93 @@ mod tests {
 
         AuditService::validate_event(&event)
             .expect("ExternalAuthProvider Connection events must pass validation");
+    }
+
+    fn base_object_storage_event() -> dbflux_core::observability::EventRecord {
+        use dbflux_core::observability::{
+            EventActorType, EventCategory, EventOutcome, EventRecord, EventSeverity, EventSourceId,
+        };
+
+        EventRecord {
+            id: None,
+            ts_ms: 1700000000000,
+            level: EventSeverity::Info,
+            category: EventCategory::ObjectStorage,
+            action: "object_upload".to_string(),
+            outcome: EventOutcome::Success,
+            actor_type: EventActorType::User,
+            actor_id: Some("user-1".to_string()),
+            source_id: EventSourceId::Local,
+            summary: "uploaded object".to_string(),
+            connection_id: Some("conn-1".to_string()),
+            database_name: None,
+            driver_id: Some("s3".to_string()),
+            object_type: Some("object".to_string()),
+            object_id: Some("s3://my-bucket/reports/2026.csv".to_string()),
+            details_json: None,
+            error_code: None,
+            error_message: None,
+            duration_ms: None,
+            session_id: None,
+            correlation_id: None,
+        }
+    }
+
+    #[test]
+    fn test_validate_event_accepts_object_storage_with_required_fields() {
+        AuditService::validate_event(&base_object_storage_event())
+            .expect("ObjectStorage events with connection_id/object_type/object_id must pass");
+    }
+
+    #[test]
+    fn test_validate_event_rejects_object_storage_missing_connection_id() {
+        let mut event = base_object_storage_event();
+        event.connection_id = None;
+
+        let result = AuditService::validate_event(&event);
+        assert!(
+            matches!(
+                result,
+                Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
+                    "connection_id"
+                )))
+            ),
+            "expected MissingRequiredField(connection_id), got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_validate_event_rejects_object_storage_missing_object_type() {
+        let mut event = base_object_storage_event();
+        event.object_type = None;
+
+        let result = AuditService::validate_event(&event);
+        assert!(
+            matches!(
+                result,
+                Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
+                    "object_type"
+                )))
+            ),
+            "expected MissingRequiredField(object_type), got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_validate_event_rejects_object_storage_missing_object_id() {
+        let mut event = base_object_storage_event();
+        event.object_id = None;
+
+        let result = AuditService::validate_event(&event);
+        assert!(
+            matches!(
+                result,
+                Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
+                    "object_id"
+                )))
+            ),
+            "expected MissingRequiredField(object_id), got {result:?}"
+        );
     }
 
     // W1: build_truncated_envelope must never return a string longer than max_bytes.

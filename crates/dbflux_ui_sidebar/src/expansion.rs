@@ -1,4 +1,5 @@
 use super::*;
+use dbflux_core::TaskKind;
 use dbflux_core::{DbSchemaInfo, SchemaDropTarget, SchemaObjectKind};
 use dbflux_ui_base::AsyncUpdateResultExt;
 
@@ -395,6 +396,12 @@ impl Sidebar {
             self.spawn_fetch_instance_catalog(*profile_id, cx);
         }
 
+        if let Some(SchemaNodeId::Profile { profile_id }) = &parsed
+            && self.profile_category(*profile_id, cx) == Some(DatabaseCategory::ObjectStorage)
+        {
+            self.spawn_fetch_buckets(*profile_id, cx);
+        }
+
         if matches!(parsed, Some(SchemaNodeId::Database { .. })) {
             self.handle_database_click(item_id, cx);
         }
@@ -746,6 +753,90 @@ impl Sidebar {
         self.pending_instance_catalog_fetches.remove(&profile_id);
     }
 
+    /// List the buckets of an object-storage connection for the sidebar tree.
+    ///
+    /// Buckets are the only level the sidebar shows — prefixes and objects
+    /// stay inside the object browser document. Deduplicated per profile so an
+    /// expand/collapse burst issues at most one `list_buckets` call.
+    pub(super) fn spawn_fetch_buckets(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
+        if self.bucket_cache.contains_key(&profile_id)
+            || self.pending_bucket_fetches.contains_key(&profile_id)
+        {
+            return;
+        }
+
+        let Some((connection, profile_name)) = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|connected| (connected.connection.clone(), connected.profile.name.clone()))
+        else {
+            return;
+        };
+
+        let app_state = self.app_state.clone();
+        let load_task_id = app_state.update(cx, |state, _| {
+            let (task_id, _) = state.start_task_for_profile(
+                TaskKind::LoadSchema,
+                format!("Listing buckets: {profile_name}"),
+                Some(profile_id),
+            );
+            task_id
+        });
+
+        let sidebar = cx.entity().clone();
+
+        let background_task = cx.background_executor().spawn(async move {
+            match connection.object_store_api() {
+                Some(api) => api.list_buckets().map_err(|err| err.to_string()),
+                None => Err("connection does not expose an object store".to_string()),
+            }
+        });
+
+        let task = cx.spawn(async move |_this, cx| {
+            let result = background_task.await;
+
+            cx.update(|cx| {
+                match &result {
+                    Ok(_) => {
+                        app_state.update(cx, |state, _| {
+                            state.complete_task(load_task_id);
+                        });
+                    }
+                    Err(message) => {
+                        let details = format!("Failed to list buckets: {message}");
+                        app_state.update(cx, |state, _| {
+                            state.fail_task_with_details(load_task_id, message.clone(), details);
+                        });
+                    }
+                }
+
+                sidebar.update(cx, |sidebar, cx| {
+                    sidebar.pending_bucket_fetches.remove(&profile_id);
+                    match result {
+                        Ok(buckets) => {
+                            sidebar.bucket_cache.insert(profile_id, buckets);
+                        }
+                        Err(message) => {
+                            log::warn!("Failed to list buckets for {}: {}", profile_id, message);
+                        }
+                    }
+                    sidebar.rebuild_tree_with_overrides(cx);
+                });
+            })
+            .log_if_dropped();
+        });
+
+        self.pending_bucket_fetches.insert(profile_id, task);
+    }
+
+    /// Drop the cached bucket listing so the next expansion re-lists.
+    pub(super) fn clear_bucket_cache(&mut self, profile_id: Uuid) {
+        self.bucket_cache.remove(&profile_id);
+        self.pending_bucket_fetches.remove(&profile_id);
+    }
+
     fn collection_node_is_event_stream(
         &self,
         profile_id: Uuid,
@@ -812,6 +903,16 @@ impl Sidebar {
             .collect();
         for profile_id in stale_metric_ids {
             self.clear_instance_catalog_cache(profile_id);
+        }
+
+        let stale_bucket_ids: Vec<Uuid> = self
+            .bucket_cache
+            .keys()
+            .filter(|id| !connected_profile_ids.contains(id))
+            .copied()
+            .collect();
+        for profile_id in stale_bucket_ids {
+            self.clear_bucket_cache(profile_id);
         }
 
         self.cleanup_stale_overrides(cx);

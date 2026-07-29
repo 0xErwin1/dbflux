@@ -852,6 +852,7 @@ pub enum CollectionPresentation {
     #[default]
     DataGrid,
     EventStream,
+    ObjectBrowser,
 }
 
 /// Driver-provided child source metadata for a collection/container.
@@ -1128,6 +1129,33 @@ mod tests {
                 kind
             );
         }
+    }
+
+    #[test]
+    fn collection_presentation_serde_roundtrip_all_variants() {
+        for (variant, expected_json) in [
+            (CollectionPresentation::DataGrid, "\"DataGrid\""),
+            (CollectionPresentation::EventStream, "\"EventStream\""),
+            (CollectionPresentation::ObjectBrowser, "\"ObjectBrowser\""),
+        ] {
+            let json = serde_json::to_string(&variant).expect("serialize");
+            assert_eq!(json, expected_json);
+
+            let decoded: CollectionPresentation = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(
+                decoded, variant,
+                "CollectionPresentation round-trip failed for {:?}",
+                variant
+            );
+        }
+    }
+
+    #[test]
+    fn collection_presentation_default_is_data_grid() {
+        assert_eq!(
+            CollectionPresentation::default(),
+            CollectionPresentation::DataGrid
+        );
     }
 
     fn minimal_table_info_json() -> serde_json::Value {

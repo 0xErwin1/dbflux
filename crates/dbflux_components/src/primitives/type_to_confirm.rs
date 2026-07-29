@@ -98,6 +98,12 @@ impl TypeToConfirm {
     pub fn typed_text(&self, cx: &App) -> String {
         self.input.read(cx).value().to_string()
     }
+
+    /// Move keyboard focus into the confirmation input, so a modal that opens
+    /// with this widget can be typed into without a click first.
+    pub fn focus(&self, window: &mut Window, cx: &mut App) {
+        self.input.update(cx, |state, cx| state.focus(window, cx));
+    }
 }
 
 impl EventEmitter<TypeToConfirmEvent> for TypeToConfirm {}

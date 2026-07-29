@@ -19,6 +19,7 @@ const CATEGORY_ORDER: &[DatabaseCategory] = &[
     DatabaseCategory::TimeSeries,
     DatabaseCategory::Graph,
     DatabaseCategory::LogStream,
+    DatabaseCategory::ObjectStorage,
 ];
 
 /// Target column count for the card grid. Cards visually wrap, but the
@@ -413,5 +414,50 @@ pub(super) fn move_grid_focus(visible_count: usize, current: usize, dir: GridDir
                 cur % GRID_COLUMNS
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod category_order_tests {
+    use dbflux_core::{DatabaseCategory, Icon};
+
+    use super::DriverInfo;
+    use super::visible_drivers;
+
+    fn driver_of(category: DatabaseCategory) -> DriverInfo {
+        DriverInfo {
+            id: "test".to_string(),
+            icon: Icon::Database,
+            name: "Test".to_string(),
+            description: String::new(),
+            category,
+            default_port: None,
+            uri_scheme: "test".to_string(),
+        }
+    }
+
+    /// A driver whose category is missing from `CATEGORY_ORDER` silently
+    /// disappears from the picker, so every `DatabaseCategory` variant must
+    /// be listed there.
+    #[test]
+    fn visible_drivers_never_drops_a_category() {
+        let categories = [
+            DatabaseCategory::Relational,
+            DatabaseCategory::Document,
+            DatabaseCategory::KeyValue,
+            DatabaseCategory::Graph,
+            DatabaseCategory::TimeSeries,
+            DatabaseCategory::WideColumn,
+            DatabaseCategory::LogStream,
+            DatabaseCategory::ObjectStorage,
+        ];
+
+        let drivers: Vec<DriverInfo> = categories.iter().map(|c| driver_of(*c)).collect();
+
+        assert_eq!(
+            visible_drivers(&drivers, "").len(),
+            drivers.len(),
+            "a DatabaseCategory variant is missing from CATEGORY_ORDER"
+        );
     }
 }

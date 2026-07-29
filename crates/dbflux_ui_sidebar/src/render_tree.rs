@@ -1032,6 +1032,7 @@ pub(crate) fn icon_for_node_kind(
         SchemaNodeKind::InstanceInspectorsFolder => Some(AppIcon::Server),
         SchemaNodeKind::InstanceInspectorLeaf => Some(AppIcon::Server),
         SchemaNodeKind::InstanceOverviewLeaf => Some(AppIcon::Layers),
+        SchemaNodeKind::Bucket => Some(AppIcon::Box),
         _ => None,
     }
 }
@@ -1151,6 +1152,7 @@ fn resolve_node_icon(
         }
         SchemaNodeKind::InstanceInspectorLeaf => (Some(AppIcon::Server), "", params.color_teal),
         SchemaNodeKind::InstanceOverviewLeaf => (Some(AppIcon::Layers), "", params.color_orange),
+        SchemaNodeKind::Bucket => (Some(AppIcon::Box), "", params.color_teal),
         _ => (None, "", theme.muted_foreground),
     }
 }

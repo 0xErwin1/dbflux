@@ -365,11 +365,12 @@ impl Workspace {
 
         let sidebar = cx.new(|cx| Sidebar::new(app_state.clone(), window, cx));
         let sidebar_dock = cx.new(|cx| SidebarDock::new(sidebar.clone(), cx));
-        let status_bar = cx.new(|cx| StatusBar::new(app_state.clone(), window, cx));
         let tasks_panel = cx.new(|cx| TasksPanel::new(app_state.clone(), window, cx));
 
         let tab_manager = cx.new(|_cx| TabManager::new());
         let tab_bar = cx.new(|cx| TabBar::new(tab_manager.clone(), cx));
+        let status_bar =
+            cx.new(|cx| StatusBar::new(app_state.clone(), tab_manager.clone(), window, cx));
 
         #[cfg(feature = "mcp")]
         let mcp_approvals_view = cx.new(|_cx| McpApprovalsView::new(app_state.clone()));
@@ -836,6 +837,12 @@ impl Workspace {
                     database,
                 } => {
                     this.open_key_value_document(*profile_id, database.clone(), window, cx);
+                }
+                SidebarEvent::OpenObjectStoreBuckets { profile_id } => {
+                    this.open_object_store_buckets_document(*profile_id, window, cx);
+                }
+                SidebarEvent::OpenObjectStoreBucket { profile_id, bucket } => {
+                    this.open_object_browser(*profile_id, bucket.clone(), window, cx);
                 }
                 SidebarEvent::RequestSqlPreview {
                     profile_id,

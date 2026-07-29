@@ -258,6 +258,76 @@ where
     run(InfluxV1Config { endpoint })
 }
 
+/// Static credentials and connection parameters for a MinIO test container.
+///
+/// `region` is a fixed placeholder (MinIO ignores it, but the AWS SDK
+/// requires a non-empty region string to build a client).
+pub struct MinioConfig {
+    pub endpoint: String,
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub region: String,
+}
+
+/// Spin up a MinIO container and pass its endpoint + static credentials to `run`.
+///
+/// Readiness relies solely on polling the `/minio/health/live` endpoint:
+/// MinIO has moved its startup banner between stdout and stderr across
+/// releases, so a log-line wait times out depending on the image version.
+/// The image tag is pinned for the same reason.
+pub fn with_minio_endpoint<T, E, F>(run: F) -> Result<T, E>
+where
+    E: From<dbflux_core::DbError>,
+    F: FnOnce(MinioConfig) -> Result<T, E>,
+{
+    let access_key_id = "minioadmin";
+    let secret_access_key = "minioadmin";
+
+    let image = GenericImage::new("minio/minio", "RELEASE.2025-09-07T16-13-09Z")
+        .with_exposed_port(ContainerPort::Tcp(9000))
+        .with_wait_for(WaitFor::seconds(1))
+        .with_env_var("MINIO_ROOT_USER", access_key_id)
+        .with_env_var("MINIO_ROOT_PASSWORD", secret_access_key)
+        .with_cmd(vec!["server".to_string(), "/data".to_string()]);
+
+    let container = image.start().expect("failed to start minio container");
+    let port = container
+        .get_host_port_ipv4(9000)
+        .expect("failed to get minio host port");
+    let endpoint = format!("http://127.0.0.1:{port}");
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|e| dbflux_core::DbError::connection_failed(e.to_string()))
+        .map_err(E::from)?;
+
+    retry_db_operation(Duration::from_secs(30), || {
+        client
+            .get(format!("{endpoint}/minio/health/live"))
+            .send()
+            .map_err(|e| dbflux_core::DbError::connection_failed(e.to_string()))
+            .map_err(E::from)
+            .and_then(|resp| {
+                if resp.status().is_success() {
+                    Ok(())
+                } else {
+                    Err(E::from(dbflux_core::DbError::connection_failed(format!(
+                        "health check returned {}",
+                        resp.status()
+                    ))))
+                }
+            })
+    })?;
+
+    run(MinioConfig {
+        endpoint,
+        access_key_id: access_key_id.to_string(),
+        secret_access_key: secret_access_key.to_string(),
+        region: "us-east-1".to_string(),
+    })
+}
+
 pub fn retry_db_operation<T, E, F>(timeout: Duration, mut operation: F) -> Result<T, E>
 where
     F: FnMut() -> Result<T, E>,

@@ -50,8 +50,14 @@ impl GeneralSection {
             return true;
         }
 
-        self.input_max_bg_tasks.read(cx).value().trim()
+        if self.input_max_bg_tasks.read(cx).value().trim()
             != saved.max_concurrent_background_tasks.to_string()
+        {
+            return true;
+        }
+
+        self.input_object_preview_limit.read(cx).value().trim()
+            != saved.object_preview_size_limit_mib.to_string()
     }
 
     pub(super) fn gen_form_rows(&self) -> Vec<GeneralFormRow> {
@@ -71,6 +77,7 @@ impl GeneralSection {
             GeneralFormRow::ConfirmDangerous,
             GeneralFormRow::RequiresWhere,
             GeneralFormRow::RequiresPreview,
+            GeneralFormRow::ObjectPreviewLimit,
         ];
 
         // The shared-database toggle only makes sense on nightly, which is the
@@ -200,7 +207,8 @@ impl GeneralSection {
             Some(GeneralFormRow::MaxHistory)
             | Some(GeneralFormRow::AutoSaveInterval)
             | Some(GeneralFormRow::DefaultRefreshInterval)
-            | Some(GeneralFormRow::MaxBackgroundTasks) => {
+            | Some(GeneralFormRow::MaxBackgroundTasks)
+            | Some(GeneralFormRow::ObjectPreviewLimit) => {
                 self.gen_focus_current_input(window, cx);
             }
             Some(GeneralFormRow::SaveButton) => {
@@ -228,6 +236,10 @@ impl GeneralSection {
             }
             Some(GeneralFormRow::MaxBackgroundTasks) => {
                 self.input_max_bg_tasks
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            Some(GeneralFormRow::ObjectPreviewLimit) => {
+                self.input_object_preview_limit
                     .update(cx, |state, cx| state.focus(window, cx));
             }
             _ => {
@@ -430,10 +442,28 @@ impl GeneralSection {
             }
         };
 
+        let preview_limit_str = self
+            .input_object_preview_limit
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        let object_preview_limit = match preview_limit_str.parse::<u64>() {
+            Ok(value) if value >= 1 => value,
+            _ => {
+                Toast::error("Object preview size limit must be >= 1 MiB")
+                    .meta_right(now_hms())
+                    .action(copy_action("Object preview size limit must be >= 1 MiB"))
+                    .push(cx);
+                return;
+            }
+        };
+
         self.gen_settings.max_history_entries = max_history;
         self.gen_settings.auto_save_interval_ms = auto_save_ms;
         self.gen_settings.default_refresh_interval_secs = refresh_interval;
         self.gen_settings.max_concurrent_background_tasks = max_bg_tasks;
+        self.gen_settings.object_preview_size_limit_mib = object_preview_limit;
 
         let runtime = self.app_state.read(cx).storage_runtime();
         if let Err(e) =
@@ -621,6 +651,24 @@ impl GeneralSection {
                     |this, value, _cx| this.gen_settings.dangerous_requires_preview = value,
                     cx,
                 ))
+                .child(self.render_gen_group_header("Object Storage", border, muted_fg))
+                .child(self.render_gen_input_field(
+                    "Object preview size limit (MiB)",
+                    &self.input_object_preview_limit,
+                    is_at(GeneralFormRow::ObjectPreviewLimit),
+                    primary,
+                    GeneralFormRow::ObjectPreviewLimit,
+                    cx,
+                ))
+                .child(
+                    div().px_2().child(
+                        Body::new(
+                            "Objects larger than this are never downloaded for preview; \
+                             the browser shows their metadata only.",
+                        )
+                        .color(muted_fg),
+                    ),
+                )
                 .when(Self::is_nightly(), |column| {
                     column
                         .child(self.render_gen_group_header("Storage", border, muted_fg))

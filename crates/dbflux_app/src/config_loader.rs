@@ -88,6 +88,7 @@ pub fn save_general_settings(
             dbflux_core::AppStyle::Compact => "compact".to_string(),
         },
         schema_snapshot_retention: settings.schema_snapshot_retention as i64,
+        object_preview_size_limit_mib: settings.object_preview_size_limit_mib as i64,
         updated_at: String::new(),
     };
     repo.upsert(&dto)?;
@@ -465,6 +466,7 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::InfluxDB => "InfluxDB",
         DbKind::SqlServer => "SqlServer",
         DbKind::Redshift => "Redshift",
+        DbKind::S3 => "S3",
     }
     .to_string()
 }
@@ -482,6 +484,7 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "InfluxDB" => Some(DbKind::InfluxDB),
         "SqlServer" => Some(DbKind::SqlServer),
         "Redshift" => Some(DbKind::Redshift),
+        "S3" => Some(DbKind::S3),
         _ => None,
     }
 }
@@ -498,6 +501,7 @@ fn default_db_config_for_kind(kind: DbKind) -> dbflux_core::DbConfig {
         DbKind::InfluxDB => dbflux_core::DbConfig::default_influxdb(),
         DbKind::SqlServer => dbflux_core::DbConfig::default_sqlserver(),
         DbKind::Redshift => dbflux_core::DbConfig::default_redshift(),
+        DbKind::S3 => dbflux_core::DbConfig::default_s3(),
     }
 }
 
@@ -1055,6 +1059,7 @@ fn load_general_settings(
         dangerous_requires_preview: dto.dangerous_requires_preview != 0,
         workspace_inspector_width_px: None,
         schema_snapshot_retention: dto.schema_snapshot_retention as usize,
+        object_preview_size_limit_mib: dto.object_preview_size_limit_mib as u64,
     }
 }
 
@@ -2366,6 +2371,7 @@ mod tests {
             dangerous_requires_preview: 1,
             style: "default".to_string(),
             schema_snapshot_retention: 10,
+            object_preview_size_limit_mib: 10,
             updated_at: String::new(),
         };
 
@@ -2480,6 +2486,7 @@ mod tests {
             dangerous_requires_preview: 0,
             style: "ultracompact".to_string(), // unknown value
             schema_snapshot_retention: 10,
+            object_preview_size_limit_mib: 10,
             updated_at: String::new(),
         };
         runtime

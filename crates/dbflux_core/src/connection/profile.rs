@@ -24,6 +24,7 @@ pub enum DbKind {
     InfluxDB,
     SqlServer,
     Redshift,
+    S3,
 }
 
 impl DbKind {
@@ -40,6 +41,7 @@ impl DbKind {
             DbKind::InfluxDB => "InfluxDB",
             DbKind::SqlServer => "SQL Server",
             DbKind::Redshift => "Amazon Redshift",
+            DbKind::S3 => "Amazon S3",
         }
     }
 }
@@ -547,6 +549,36 @@ pub enum DbConfig {
         #[serde(default)]
         ssh_tunnel_profile_id: Option<Uuid>,
     },
+    /// AWS S3 or an S3-compatible object-storage endpoint (Cloudflare R2, MinIO).
+    ///
+    /// Auth is either an AWS profile/SSO `AuthProfileRef` (`profile`) or static
+    /// credentials (`access_key_id` + the connection's existing keyring-backed
+    /// secret, resolved the same way a Postgres/MySQL password is — no new
+    /// secret-storage mechanism). When both are set, `profile` takes
+    /// precedence, mirroring the AWS SDK's own credential-provider ordering.
+    S3 {
+        /// AWS region, required by the SDK even against S3-compatible
+        /// endpoints that otherwise ignore it.
+        region: String,
+        /// Profile/SSO auth-profile reference (a profile UUID as a string),
+        /// bound to the `profile` `DRIVER_FORM` field declared as
+        /// `FormFieldKind::AuthProfileRef`.
+        #[serde(default)]
+        profile: Option<String>,
+        /// Static AWS access key id. Not sensitive on its own — stored in
+        /// cleartext like `user` on other drivers.
+        #[serde(default)]
+        access_key_id: Option<String>,
+        /// Custom endpoint URL for S3-compatible services. `None` uses the
+        /// AWS SDK's default S3 endpoint resolution.
+        #[serde(default)]
+        endpoint: Option<String>,
+        /// Force path-style addressing (`endpoint/bucket/key`) instead of
+        /// virtual-hosted-style (`bucket.endpoint/key`). Required by most
+        /// S3-compatible endpoints (MinIO) and some Cloudflare R2 setups.
+        #[serde(default)]
+        path_style: bool,
+    },
     /// Generic config for external RPC drivers.
     External {
         kind: DbKind,
@@ -572,6 +604,7 @@ impl DbConfig {
             DbConfig::InfluxDB { .. } => DbKind::InfluxDB,
             DbConfig::SqlServer { .. } => DbKind::SqlServer,
             DbConfig::Redshift { .. } => DbKind::Redshift,
+            DbConfig::S3 { .. } => DbKind::S3,
             DbConfig::External { kind, .. } => *kind,
         }
     }
@@ -716,6 +749,16 @@ impl DbConfig {
         }
     }
 
+    pub fn default_s3() -> Self {
+        DbConfig::S3 {
+            region: "us-east-1".to_string(),
+            profile: None,
+            access_key_id: None,
+            endpoint: None,
+            path_style: false,
+        }
+    }
+
     pub fn ssh_tunnel(&self) -> Option<&SshTunnelConfig> {
         match self {
             DbConfig::Postgres { ssh_tunnel, .. }
@@ -728,6 +771,7 @@ impl DbConfig {
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
+            | DbConfig::S3 { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -763,6 +807,7 @@ impl DbConfig {
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
+            | DbConfig::S3 { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -804,6 +849,7 @@ impl DbConfig {
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
+            | DbConfig::S3 { .. }
             | DbConfig::External { .. } => false,
         }
     }
@@ -821,6 +867,7 @@ impl DbConfig {
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
+            | DbConfig::S3 { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -872,6 +919,7 @@ impl DbConfig {
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
+            | DbConfig::S3 { .. }
             | DbConfig::External { .. } => {}
         }
     }
@@ -892,6 +940,7 @@ impl DbConfig {
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
+            | DbConfig::S3 { .. }
             | DbConfig::External { .. } => {
                 return None;
             }
@@ -925,7 +974,20 @@ impl DbConfig {
             DbConfig::SQLite { .. } => Some("main".to_string()),
             DbConfig::DynamoDB { .. } | DbConfig::CloudWatchLogs { .. } => None,
             DbConfig::InfluxDB { default_bucket, .. } => default_bucket.clone(),
+            DbConfig::S3 { .. } => None,
             DbConfig::External { .. } => None,
+        }
+    }
+
+    /// Returns the cloud region this connection is configured against, for the
+    /// configs that carry one. Generic UI code uses it to pre-fill
+    /// region-scoped forms without knowing which driver it is talking to.
+    pub fn region(&self) -> Option<&str> {
+        match self {
+            DbConfig::DynamoDB { region, .. }
+            | DbConfig::CloudWatchLogs { region, .. }
+            | DbConfig::S3 { region, .. } => Some(region.as_str()),
+            _ => None,
         }
     }
 
@@ -1402,6 +1464,7 @@ impl ConnectionProfile {
             DbKind::InfluxDB => "influxdb",
             DbKind::SqlServer => "mssql",
             DbKind::Redshift => "redshift",
+            DbKind::S3 => "s3",
         }
     }
 

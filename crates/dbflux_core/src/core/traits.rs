@@ -1,4 +1,5 @@
 use bitflags::bitflags;
+use chrono::{DateTime, Utc};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
@@ -640,6 +641,273 @@ pub trait KeyValueApi: Send + Sync {
     }
 }
 
+/// A single bucket returned by `ObjectStoreConnection::list_buckets`.
+///
+/// AWS's `ListBuckets` API returns only name and creation date — no region,
+/// object count, or size. See `get_bucket_details` (region/versioning) and
+/// `estimate_bucket_size` (object count/total bytes) for those; each costs
+/// its own request and is therefore fetched lazily by the UI, never eagerly
+/// here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BucketInfo {
+    pub name: String,
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+/// A single object row returned within an `ObjectStoreConnection::list_objects`
+/// page. Carries just enough to render a tree/table row; the richer per-object
+/// detail (content type, ETag, storage class, encryption, version count) is
+/// fetched separately via `head_object` once an object is selected.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObjectSummary {
+    pub key: String,
+    pub size_bytes: u64,
+    pub storage_class: Option<String>,
+    pub last_modified: Option<DateTime<Utc>>,
+}
+
+/// One page of `ObjectStoreConnection::list_objects` results for a given
+/// bucket/prefix, following S3 `ListObjectsV2` delimiter semantics: `objects`
+/// are keys directly under `prefix`, `common_prefixes` are the "folder" keys
+/// one level down. `next_continuation_token` drives the next paginated call.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObjectListingPage {
+    pub objects: Vec<ObjectSummary>,
+    pub common_prefixes: Vec<String>,
+    pub next_continuation_token: Option<String>,
+}
+
+/// Detailed metadata for a single object, fetched via `head_object` before
+/// any preview-byte fetch (`get_object`) is attempted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObjectMetadata {
+    pub key: String,
+    pub size_bytes: u64,
+    pub content_type: Option<String>,
+    pub last_modified: Option<DateTime<Utc>>,
+    pub etag: Option<String>,
+    pub storage_class: Option<String>,
+
+    /// Raw SSE header value (`"AES256"` / `"aws:kms"` / vendor-specific) —
+    /// pass-through, not an enum, because S3-compatible vendors vary.
+    pub encryption: Option<String>,
+
+    /// `Some(n)` only when the bucket's cached versioning status is
+    /// `Enabled`/`Suspended`; `None` when versioning was never checked or the
+    /// bucket has no versioning.
+    pub version_count: Option<u64>,
+}
+
+/// Outcome of a batched `ObjectStoreConnection::delete_prefix` call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeletePrefixOutcome {
+    pub deleted_count: u64,
+}
+
+/// HTTP method a presigned URL is valid for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PresignMethod {
+    Get,
+    Put,
+}
+
+/// Bucket-level versioning state, as reported by `get_bucket_details`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VersioningStatus {
+    Enabled,
+    Suspended,
+    Disabled,
+}
+
+/// Cheap, lazily-fetched bucket detail (one `GetBucketLocation` + one
+/// `GetBucketVersioning` call). Never includes object count or total size —
+/// those require walking the bucket and are exposed separately through
+/// `estimate_bucket_size`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BucketDetails {
+    pub region: String,
+    pub versioning: VersioningStatus,
+}
+
+/// Paginated, capped estimate of a bucket's (or prefix's) object count and
+/// total size. Never computed automatically — `ListObjectsV2` calls are
+/// billed and can be slow on large buckets — only on explicit user action
+/// (buckets table "Calculate size", recursive-delete confirmation modal).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BucketSizeEstimate {
+    pub object_count: u64,
+    pub total_bytes: u64,
+
+    /// `true` when `object_cap` was reached before the full scope was walked.
+    pub truncated: bool,
+}
+
+/// A single historical version of an object, returned by
+/// `list_object_versions`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObjectVersionSummary {
+    pub version_id: String,
+    pub is_latest: bool,
+    pub size_bytes: u64,
+    pub last_modified: Option<DateTime<Utc>>,
+}
+
+/// Default-encryption choice offered by the New Bucket modal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BucketEncryption {
+    None,
+    SseS3,
+    SseKms { key_id: Option<String> },
+}
+
+/// Options collected from the New Bucket modal. Every option is attempted
+/// against the target endpoint; unsupported options degrade gracefully (see
+/// `BucketCreateOutcome::warnings`) rather than failing bucket creation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BucketCreateOptions {
+    pub region: String,
+    pub versioning: bool,
+    pub block_public_access: bool,
+    pub object_lock: bool,
+    pub encryption: BucketEncryption,
+}
+
+/// Result of `create_bucket`. The bucket is created even when some optional
+/// configuration calls fail on the target endpoint; those failures surface as
+/// non-blocking `warnings` instead of aborting the whole operation.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BucketCreateOutcome {
+    pub warnings: Vec<String>,
+}
+
+/// Object-storage capability exposed by drivers in
+/// `DatabaseCategory::ObjectStorage` (e.g. AWS S3, Cloudflare R2, MinIO).
+///
+/// The UI relies on this contract plus `DriverCapabilities::OBJECT_STORAGE`
+/// rather than any driver-specific conditional. `rename_object` is
+/// deliberately absent: it is composed by callers as `copy_object` followed
+/// by `delete_object`, because S3 has no atomic rename primitive and a
+/// trait-level `rename` would either hide that two-step failure mode or force
+/// every driver to fake atomicity it doesn't have.
+pub trait ObjectStoreConnection: Send + Sync {
+    /// List every bucket accessible to this connection. Region, versioning,
+    /// object count, and size are intentionally absent — see
+    /// `get_bucket_details` and `estimate_bucket_size`.
+    fn list_buckets(&self) -> Result<Vec<BucketInfo>, DbError>;
+
+    /// List one page of objects and common prefixes directly under `prefix`
+    /// in `bucket`, following `ListObjectsV2` delimiter semantics. Pass the
+    /// previous page's `next_continuation_token` to advance.
+    fn list_objects(
+        &self,
+        bucket: &str,
+        prefix: &str,
+        continuation_token: Option<&str>,
+    ) -> Result<ObjectListingPage, DbError>;
+
+    /// Fetch an object's metadata without its body (S3 `HeadObject`). Called
+    /// before any preview-byte fetch to check size limits and storage class.
+    fn head_object(&self, bucket: &str, key: &str) -> Result<ObjectMetadata, DbError>;
+
+    /// Fetch an object's full body. Callers must check `head_object` first —
+    /// this trait does not enforce a size limit itself.
+    fn get_object(&self, bucket: &str, key: &str) -> Result<Vec<u8>, DbError>;
+
+    /// Stream an object's body straight to `dest` on disk, never buffering
+    /// the whole object in memory. Used for Download and Open-externally —
+    /// the only two transfers that move an object's bytes off the network,
+    /// where a large object should cost disk space, not RAM. Returns the
+    /// number of bytes written.
+    fn download_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        dest: &std::path::Path,
+    ) -> Result<u64, DbError>;
+
+    /// Overwrite (or create) an object with the given bytes, e.g. from the
+    /// inline text editor's save-back action.
+    fn put_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        bytes: Vec<u8>,
+        content_type: Option<&str>,
+    ) -> Result<(), DbError>;
+
+    /// Stream a local file to `bucket`/`key` via a single `PutObject`/
+    /// `ByteStream` call — no multipart splitting (deferred scope).
+    fn upload_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        source_path: &std::path::Path,
+        content_type: Option<&str>,
+    ) -> Result<(), DbError>;
+
+    /// Delete a single object.
+    fn delete_object(&self, bucket: &str, key: &str) -> Result<(), DbError>;
+
+    /// Recursively delete every object under `prefix` (or the whole bucket
+    /// when `prefix` is empty) using batched `DeleteObjects` calls of up to
+    /// 1000 keys each.
+    fn delete_prefix(&self, bucket: &str, prefix: &str) -> Result<DeletePrefixOutcome, DbError>;
+
+    /// Copy an object to a new key within the same bucket. The real S3
+    /// primitive (`CopyObject`) — avoids a full download+upload round-trip
+    /// through app memory. Used to compose rename (copy then delete).
+    fn copy_object(&self, bucket: &str, src_key: &str, dest_key: &str) -> Result<(), DbError>;
+
+    /// Generate a presigned URL for `key`. The URL itself must never be
+    /// logged, persisted, or included in audit `details_json` by callers.
+    fn presign(
+        &self,
+        bucket: &str,
+        key: &str,
+        method: PresignMethod,
+        expiry: std::time::Duration,
+    ) -> Result<String, DbError>;
+
+    /// Fetch a bucket's region and versioning status (one `GetBucketLocation`
+    /// + one `GetBucketVersioning` call).
+    fn get_bucket_details(&self, bucket: &str) -> Result<BucketDetails, DbError>;
+
+    /// Paginated, capped estimate of object count and total size for a
+    /// bucket. Never called automatically — only on explicit user action.
+    fn estimate_bucket_size(
+        &self,
+        bucket: &str,
+        object_cap: u64,
+    ) -> Result<BucketSizeEstimate, DbError>;
+
+    /// List all historical versions of a single object. Only meaningful (and
+    /// only called by the UI) when the containing bucket's versioning status
+    /// is `Enabled` or `Suspended`.
+    fn list_object_versions(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<Vec<ObjectVersionSummary>, DbError>;
+
+    /// Create a bucket with the given options. The bucket is created even
+    /// when some optional configuration calls are unsupported by the target
+    /// endpoint; those surface as `BucketCreateOutcome::warnings` instead of
+    /// failing the whole operation.
+    fn create_bucket(
+        &self,
+        bucket: &str,
+        options: BucketCreateOptions,
+    ) -> Result<BucketCreateOutcome, DbError>;
+
+    /// Delete an empty bucket. S3's `DeleteBucket` API already rejects
+    /// non-empty buckets (`BucketNotEmpty`), so the driver relies on that
+    /// server-side guarantee rather than re-checking emptiness itself. The UI
+    /// performs its own emptiness check (via `list_objects`) before even
+    /// offering this action, so a `BucketNotEmpty` error here should be rare
+    /// in practice — see Amendment A of the design (buckets table document).
+    fn delete_bucket(&self, bucket: &str) -> Result<(), DbError>;
+}
+
 /// Active database connection.
 ///
 /// The UI interacts exclusively through this trait, never accessing driver internals.
@@ -1180,6 +1448,18 @@ pub trait Connection: Send + Sync {
         None
     }
 
+    /// Returns the object-storage API implementation when available.
+    ///
+    /// Non-object-storage drivers return `None`. Mirrors `key_value_api`:
+    /// `ObjectStoreConnection` is not a supertrait of `Connection` (S3-style
+    /// drivers have no query language, browsable tables, or key-value scan
+    /// semantics), so this default method is the app-facing seam that lets
+    /// callers reach `&dyn ObjectStoreConnection` from a generically stored
+    /// `Arc<dyn Connection>` without downcasting.
+    fn object_store_api(&self) -> Option<&dyn ObjectStoreConnection> {
+        None
+    }
+
     /// Returns the language service for this connection.
     ///
     /// Provides validation and dangerous-query detection for the connection's
@@ -1532,6 +1812,14 @@ pub trait ConnectionExt {
 
     /// Attempt to cast this connection as a key-value connection.
     fn as_keyvalue(&self) -> Option<&dyn KeyValueConnection>;
+
+    /// Attempt to cast this connection as an object-storage connection.
+    ///
+    /// Defaults to `None` so existing `ConnectionExt` implementors compile
+    /// unchanged; only `DatabaseCategory::ObjectStorage` drivers override it.
+    fn as_object_store(&self) -> Option<&dyn ObjectStoreConnection> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1814,5 +2102,222 @@ mod tests {
             driver.export_field_transform("text_field", &values),
             crate::FieldExportTransform::None
         ));
+    }
+
+    // -------------------------------------------------------------------------
+    // ObjectStoreConnection / ConnectionExt::as_object_store
+    // -------------------------------------------------------------------------
+
+    /// Minimal `ObjectStoreConnection` stub exercising object-safety (usable
+    /// as `&dyn ObjectStoreConnection`) rather than any real S3 behavior.
+    struct StubObjectStore;
+
+    impl ObjectStoreConnection for StubObjectStore {
+        fn list_buckets(&self) -> Result<Vec<BucketInfo>, DbError> {
+            Ok(vec![BucketInfo {
+                name: "my-bucket".to_string(),
+                created_at: None,
+            }])
+        }
+
+        fn list_objects(
+            &self,
+            _bucket: &str,
+            _prefix: &str,
+            _continuation_token: Option<&str>,
+        ) -> Result<ObjectListingPage, DbError> {
+            Ok(ObjectListingPage::default())
+        }
+
+        fn head_object(&self, _bucket: &str, key: &str) -> Result<ObjectMetadata, DbError> {
+            Ok(ObjectMetadata {
+                key: key.to_string(),
+                size_bytes: 0,
+                content_type: None,
+                last_modified: None,
+                etag: None,
+                storage_class: None,
+                encryption: None,
+                version_count: None,
+            })
+        }
+
+        fn get_object(&self, _bucket: &str, _key: &str) -> Result<Vec<u8>, DbError> {
+            Ok(Vec::new())
+        }
+
+        fn download_object(
+            &self,
+            _bucket: &str,
+            _key: &str,
+            dest: &std::path::Path,
+        ) -> Result<u64, DbError> {
+            std::fs::write(dest, []).map_err(|error| {
+                DbError::query_failed(format!("Failed to write {}: {error}", dest.display()))
+            })?;
+            Ok(0)
+        }
+
+        fn put_object(
+            &self,
+            _bucket: &str,
+            _key: &str,
+            _bytes: Vec<u8>,
+            _content_type: Option<&str>,
+        ) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn upload_object(
+            &self,
+            _bucket: &str,
+            _key: &str,
+            _source_path: &std::path::Path,
+            _content_type: Option<&str>,
+        ) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn delete_object(&self, _bucket: &str, _key: &str) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn delete_prefix(
+            &self,
+            _bucket: &str,
+            _prefix: &str,
+        ) -> Result<DeletePrefixOutcome, DbError> {
+            Ok(DeletePrefixOutcome { deleted_count: 0 })
+        }
+
+        fn copy_object(
+            &self,
+            _bucket: &str,
+            _src_key: &str,
+            _dest_key: &str,
+        ) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn presign(
+            &self,
+            _bucket: &str,
+            _key: &str,
+            _method: PresignMethod,
+            _expiry: std::time::Duration,
+        ) -> Result<String, DbError> {
+            Ok("https://example.invalid/presigned".to_string())
+        }
+
+        fn get_bucket_details(&self, _bucket: &str) -> Result<BucketDetails, DbError> {
+            Ok(BucketDetails {
+                region: "us-east-1".to_string(),
+                versioning: VersioningStatus::Disabled,
+            })
+        }
+
+        fn estimate_bucket_size(
+            &self,
+            _bucket: &str,
+            _object_cap: u64,
+        ) -> Result<BucketSizeEstimate, DbError> {
+            Ok(BucketSizeEstimate {
+                object_count: 0,
+                total_bytes: 0,
+                truncated: false,
+            })
+        }
+
+        fn list_object_versions(
+            &self,
+            _bucket: &str,
+            _key: &str,
+        ) -> Result<Vec<ObjectVersionSummary>, DbError> {
+            Ok(Vec::new())
+        }
+
+        fn create_bucket(
+            &self,
+            _bucket: &str,
+            _options: BucketCreateOptions,
+        ) -> Result<BucketCreateOutcome, DbError> {
+            Ok(BucketCreateOutcome::default())
+        }
+
+        fn delete_bucket(&self, _bucket: &str) -> Result<(), DbError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn object_store_connection_is_object_safe_and_callable() {
+        let store: &dyn ObjectStoreConnection = &StubObjectStore;
+        let buckets = store.list_buckets().expect("list_buckets");
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets[0].name, "my-bucket");
+    }
+
+    /// Connection stub whose `ConnectionExt` impl relies entirely on defaults,
+    /// mirroring how a non-object-storage driver's `ConnectionExt` impl looks
+    /// after `as_object_store` was added.
+    struct StubExtConnection;
+
+    impl ConnectionExt for StubExtConnection {
+        fn as_relational(&self) -> Option<&dyn RelationalConnection> {
+            None
+        }
+
+        fn as_document(&self) -> Option<&dyn DocumentConnection> {
+            None
+        }
+
+        fn as_keyvalue(&self) -> Option<&dyn KeyValueConnection> {
+            None
+        }
+    }
+
+    #[test]
+    fn connection_ext_as_object_store_defaults_to_none() {
+        let conn = StubExtConnection;
+        assert!(conn.as_object_store().is_none());
+    }
+
+    #[test]
+    fn bucket_create_options_serde_roundtrip() {
+        let original = BucketCreateOptions {
+            region: "eu-west-1".to_string(),
+            versioning: true,
+            block_public_access: true,
+            object_lock: false,
+            encryption: BucketEncryption::SseKms {
+                key_id: Some("arn:aws:kms:example".to_string()),
+            },
+        };
+
+        let json = serde_json::to_string(&original).expect("serialize");
+        let decoded: BucketCreateOptions = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn presign_method_serde_roundtrip_all_variants() {
+        for method in [PresignMethod::Get, PresignMethod::Put] {
+            let json = serde_json::to_string(&method).expect("serialize");
+            let decoded: PresignMethod = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(decoded, method);
+        }
+    }
+
+    #[test]
+    fn versioning_status_serde_roundtrip_all_variants() {
+        for status in [
+            VersioningStatus::Enabled,
+            VersioningStatus::Suspended,
+            VersioningStatus::Disabled,
+        ] {
+            let json = serde_json::to_string(&status).expect("serialize");
+            let decoded: VersioningStatus = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(decoded, status);
+        }
     }
 }

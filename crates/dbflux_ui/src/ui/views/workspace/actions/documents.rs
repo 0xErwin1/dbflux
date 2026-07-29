@@ -307,6 +307,195 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
+    /// Opens the searchable buckets table for an object-storage connection
+    /// root, or focuses the existing one.
+    pub(in crate::ui::views::workspace) fn open_object_store_buckets_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let has_connection = self
+            .app_state
+            .read(cx)
+            .connections()
+            .contains_key(&profile_id);
+
+        let existing_id = if has_connection {
+            self.tab_manager.read(cx).find_by_key(
+                &crate::ui::document::DocumentKey::ObjectStoreBucketsRoot { profile_id },
+                cx,
+            )
+        } else {
+            None
+        };
+
+        match decide_open_document(has_connection, existing_id) {
+            OpenDocumentDecision::ErrorNoConnection => {
+                Toast::error("No active connection for this object-storage account")
+                    .meta_right(now_hms())
+                    .action(copy_action(
+                        "No active connection for this object-storage account",
+                    ))
+                    .push(cx);
+                return;
+            }
+            OpenDocumentDecision::FocusExisting(id) => {
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.activate(id, cx);
+                });
+                return;
+            }
+            OpenDocumentDecision::OpenNew => {}
+        }
+
+        let doc = cx.new(|cx| {
+            crate::ui::document::BucketsTableDocument::new(
+                profile_id,
+                self.app_state.clone(),
+                window,
+                cx,
+            )
+        });
+        let pane = crate::ui::document::BucketsTableDocument::into_pane(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
+    /// Opens the prefix/object tree browser for a single bucket, or focuses
+    /// the existing one for that `(profile_id, bucket)` pair. Reached from
+    /// the buckets table's Enter-on-row action and the sidebar's
+    /// `OpenObjectStoreBucket` event.
+    pub(in crate::ui::views::workspace) fn open_object_browser(
+        &mut self,
+        profile_id: uuid::Uuid,
+        bucket: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let has_connection = self
+            .app_state
+            .read(cx)
+            .connections()
+            .contains_key(&profile_id);
+
+        let existing_id = if has_connection {
+            self.tab_manager.read(cx).find_by_key(
+                &crate::ui::document::DocumentKey::ObjectBrowser {
+                    profile_id,
+                    bucket: bucket.clone(),
+                },
+                cx,
+            )
+        } else {
+            None
+        };
+
+        match decide_open_document(has_connection, existing_id) {
+            OpenDocumentDecision::ErrorNoConnection => {
+                Toast::error("No active connection for this bucket")
+                    .meta_right(now_hms())
+                    .action(copy_action("No active connection for this bucket"))
+                    .push(cx);
+                return;
+            }
+            OpenDocumentDecision::FocusExisting(id) => {
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.activate(id, cx);
+                });
+                return;
+            }
+            OpenDocumentDecision::OpenNew => {}
+        }
+
+        let doc = cx.new(|cx| {
+            crate::ui::document::ObjectBrowserDocument::new(
+                profile_id,
+                bucket,
+                self.app_state.clone(),
+                window,
+                cx,
+            )
+        });
+        let pane = crate::ui::document::ObjectBrowserDocument::into_pane(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
+    /// Opens one object-store text object in its own editor tab, or focuses
+    /// the existing tab for that `(profile_id, bucket, key)` triple. Reached
+    /// from the object browser's "Open in editor" header button and its row
+    /// context menu, both drained generically in `render.rs`.
+    pub(in crate::ui::views::workspace) fn open_object_editor(
+        &mut self,
+        profile_id: uuid::Uuid,
+        request: crate::ui::document::ObjectEditorRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let has_connection = self
+            .app_state
+            .read(cx)
+            .connections()
+            .contains_key(&profile_id);
+
+        let existing_id = if has_connection {
+            self.tab_manager.read(cx).find_by_key(
+                &crate::ui::document::DocumentKey::ObjectEditor {
+                    profile_id,
+                    bucket: request.bucket.clone(),
+                    key: request.key.clone(),
+                },
+                cx,
+            )
+        } else {
+            None
+        };
+
+        match decide_open_document(has_connection, existing_id) {
+            OpenDocumentDecision::ErrorNoConnection => {
+                Toast::error("No active connection for this object")
+                    .meta_right(now_hms())
+                    .action(copy_action("No active connection for this object"))
+                    .push(cx);
+                return;
+            }
+            OpenDocumentDecision::FocusExisting(id) => {
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.activate(id, cx);
+                });
+                return;
+            }
+            OpenDocumentDecision::OpenNew => {}
+        }
+
+        let doc = cx.new(|cx| {
+            crate::ui::document::ObjectEditorDocument::new(
+                profile_id,
+                request.bucket,
+                request.key,
+                request.on_saved,
+                self.app_state.clone(),
+                cx,
+            )
+        });
+        let pane = crate::ui::document::ObjectEditorDocument::into_pane(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
     pub(in crate::ui::views::workspace) fn close_tabs_batch(
         &mut self,
         window: &mut Window,

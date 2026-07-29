@@ -2,8 +2,8 @@ use std::fmt;
 
 use super::SchemaNodeId;
 use super::{
-    P_BASE_TYPE, P_COLL_FIELD, P_COLL_FIELDS_FOLDER, P_COLL_IDX_FOLDER, P_COLL_INDEX, P_COLLECTION,
-    P_COLLECTION_CHILD, P_COLLECTION_CHILDREN_MORE, P_COLLECTIONS_FOLDER, P_COLUMN,
+    P_BASE_TYPE, P_BUCKET, P_COLL_FIELD, P_COLL_FIELDS_FOLDER, P_COLL_IDX_FOLDER, P_COLL_INDEX,
+    P_COLLECTION, P_COLLECTION_CHILD, P_COLLECTION_CHILDREN_MORE, P_COLLECTIONS_FOLDER, P_COLUMN,
     P_COLUMNS_FOLDER, P_CONN_FOLDER, P_CONSTRAINT, P_CONSTRAINTS_FOLDER, P_CUSTOM_TYPE,
     P_DASHBOARD_ITEM, P_DASHBOARDS_FOLDER, P_DATABASE, P_DATABASES_FOLDER, P_DB_IDX_FOLDER,
     P_DEPENDENT_ITEM, P_DEPENDENTS_FOLDER, P_ENUM_VALUE, P_FK, P_FK_FOLDER, P_INDEX,
@@ -92,6 +92,8 @@ impl fmt::Display for SchemaNodeId {
             | Self::InstanceInspectorsFolder { .. }
             | Self::InstanceInspectorLeaf { .. }
             | Self::InstanceOverviewLeaf { .. } => fmt_instance_variants(self, f),
+
+            Self::Bucket { profile_id, name } => write!(f, "{}|{}|{}", P_BUCKET, profile_id, name),
         }
     }
 }

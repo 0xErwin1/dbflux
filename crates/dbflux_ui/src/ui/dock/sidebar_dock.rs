@@ -17,12 +17,12 @@ pub enum SidebarDockEvent {
 const COLLAPSED_WIDTH: Pixels = px(48.0);
 const DEFAULT_EXPANDED_WIDTH: Pixels = px(280.0);
 const MIN_WIDTH: Pixels = px(200.0);
-const MAX_WIDTH: Pixels = px(500.0);
+const MAX_WIDTH: Pixels = px(800.0);
 const HEADER_HEIGHT: Pixels = px(36.0);
 const HEADER_PADDING: Pixels = px(8.0);
 const BUTTON_SIZE: Pixels = px(32.0);
 const ICON_SIZE: Pixels = px(18.0);
-const GRIP_WIDTH: Pixels = px(4.0);
+const GRIP_WIDTH: Pixels = px(7.0);
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum SidebarState {
@@ -135,6 +135,41 @@ impl Render for SidebarDock {
             self.width - GRIP_WIDTH
         };
 
+        let resize_listeners = self.is_resizing.then(|| {
+            let entity = cx.entity().clone();
+
+            // Element-level mouse listeners stop seeing the drag as soon as
+            // the cursor leaves the grip, and children that swallow mouse
+            // moves break the workspace-level fallback. Window-level
+            // listeners must be registered during paint, hence the canvas.
+            canvas(
+                |_, _, _| {},
+                move |_, _, window, _| {
+                    window.on_mouse_event({
+                        let entity = entity.clone();
+                        move |event: &MouseMoveEvent, phase, _, cx| {
+                            if phase.bubble() {
+                                entity.update(cx, |dock, cx| {
+                                    dock.handle_resize_move(event.position.x, cx);
+                                });
+                            }
+                        }
+                    });
+
+                    window.on_mouse_event({
+                        let entity = entity.clone();
+                        move |_: &MouseUpEvent, phase, _, cx| {
+                            if phase.bubble() {
+                                entity.update(cx, |dock, cx| dock.finish_resize(cx));
+                            }
+                        }
+                    });
+                },
+            )
+            .absolute()
+            .size_full()
+        });
+
         div()
             .id("sidebar-dock")
             .h_full()
@@ -144,6 +179,7 @@ impl Render for SidebarDock {
             .bg(cx.theme().tab_bar)
             .border_r_1()
             .border_color(cx.theme().border)
+            .when_some(resize_listeners, |el, listeners| el.child(listeners))
             .child(
                 div()
                     .h_full()

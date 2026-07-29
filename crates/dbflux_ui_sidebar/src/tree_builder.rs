@@ -7,6 +7,7 @@ impl Sidebar {
             &self.metric_fetch_errors,
             &self.instance_metrics_cache,
             &self.instance_inspectors_cache,
+            &self.bucket_cache,
         );
         let items = self.apply_expansion_overrides(items);
 
@@ -113,7 +114,13 @@ impl Sidebar {
     }
 
     pub(super) fn build_tree_items(state: &AppStateEntity) -> Vec<TreeItem> {
-        Self::build_tree_items_with_errors(state, &HashMap::new(), &HashMap::new(), &HashMap::new())
+        Self::build_tree_items_with_errors(
+            state,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        )
     }
 
     pub(super) fn build_tree_items_with_errors(
@@ -121,6 +128,7 @@ impl Sidebar {
         metric_fetch_errors: &HashMap<String, String>,
         instance_metrics_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>>,
         instance_inspectors_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>>,
+        bucket_cache: &HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
     ) -> Vec<TreeItem> {
         let root_nodes = state.connection_tree().root_nodes();
         Self::build_tree_nodes_recursive_with_errors(
@@ -129,6 +137,7 @@ impl Sidebar {
             metric_fetch_errors,
             instance_metrics_cache,
             instance_inspectors_cache,
+            bucket_cache,
         )
     }
 
@@ -178,6 +187,7 @@ impl Sidebar {
         metric_fetch_errors: &HashMap<String, String>,
         instance_metrics_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>>,
         instance_inspectors_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>>,
+        bucket_cache: &HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
     ) -> Vec<TreeItem> {
         let mut items = Vec::new();
 
@@ -193,6 +203,7 @@ impl Sidebar {
                         metric_fetch_errors,
                         instance_metrics_cache,
                         instance_inspectors_cache,
+                        bucket_cache,
                     );
 
                     let folder_item = TreeItem::new(
@@ -215,6 +226,7 @@ impl Sidebar {
                             metric_fetch_errors,
                             instance_metrics_cache,
                             instance_inspectors_cache,
+                            bucket_cache,
                         );
                         items.push(profile_item);
                     }
@@ -231,6 +243,7 @@ impl Sidebar {
         metric_fetch_errors: &HashMap<String, String>,
         instance_metrics_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>>,
         instance_inspectors_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>>,
+        bucket_cache: &HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
     ) -> TreeItem {
         let profile_id = profile.id;
         let is_connected = state.connections().contains_key(&profile_id);
@@ -285,7 +298,12 @@ impl Sidebar {
             let supports_routines = conn_capabilities.contains(DriverCapabilities::ROUTINES);
             let metric_cache = state.metric_catalog_cache().clone();
 
-            if schema.is_key_value() {
+            if conn_category == DatabaseCategory::ObjectStorage {
+                // Object storage lists its containers flat under the
+                // connection: the prefix hierarchy lives in the object browser
+                // document, never in the global tree.
+                profile_children.extend(build_bucket_children(profile_id, bucket_cache));
+            } else if schema.is_key_value() {
                 let kv_items = build_kv_database_children(profile_id, connected, state);
                 profile_children.push(Self::build_databases_folder_item(profile_id, kv_items));
             } else if !schema.databases().is_empty() {
@@ -1815,6 +1833,46 @@ fn build_instance_section(
     items
 }
 
+/// Build the flat bucket rows shown under an object-storage connection.
+///
+/// The listing is session-cached and fetched on first expansion of the
+/// connection node; until it resolves a single non-clickable placeholder keeps
+/// the node from looking empty. Buckets have no children here by design — the
+/// prefix hierarchy belongs to the object browser document.
+fn build_bucket_children(
+    profile_id: Uuid,
+    bucket_cache: &HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
+) -> Vec<TreeItem> {
+    let Some(buckets) = bucket_cache.get(&profile_id) else {
+        return vec![Sidebar::loading_placeholder(
+            profile_id,
+            "buckets",
+            "buckets-loading",
+        )];
+    };
+
+    if buckets.is_empty() {
+        return vec![TreeItem::new(
+            format!("buckets-empty|{profile_id}"),
+            "No buckets".to_string(),
+        )];
+    }
+
+    buckets
+        .iter()
+        .map(|bucket| {
+            TreeItem::new(
+                SchemaNodeId::Bucket {
+                    profile_id,
+                    name: bucket.name.clone(),
+                }
+                .to_string(),
+                bucket.name.clone(),
+            )
+        })
+        .collect()
+}
+
 fn build_collections_folder(
     profile_id: Uuid,
     database_name: &str,
@@ -2927,6 +2985,96 @@ mod tests {
             !has_metrics_folder,
             "Metrics folder must not appear when METRIC_CATALOG capability is absent"
         );
+    }
+
+    /// T21: before the listing resolves the connection shows a single
+    /// non-clickable loading placeholder, never an empty node.
+    #[test]
+    fn bucket_children_show_a_loading_placeholder_on_cache_miss() {
+        use super::build_bucket_children;
+        use dbflux_core::SchemaNodeId;
+
+        let profile_id = Uuid::new_v4();
+
+        let children = build_bucket_children(profile_id, &HashMap::new());
+
+        assert_eq!(children.len(), 1);
+        assert!(children[0].label.as_ref().contains("Loading"));
+        assert!(
+            children[0]
+                .id
+                .as_ref()
+                .parse::<SchemaNodeId>()
+                .is_err_and(|_| true)
+                || !matches!(
+                    children[0].id.as_ref().parse::<SchemaNodeId>(),
+                    Ok(SchemaNodeId::Bucket { .. })
+                ),
+            "the placeholder must not parse as a bucket node"
+        );
+    }
+
+    /// T21: buckets render flat, one clickable row each, with no children —
+    /// the prefix hierarchy stays inside the object browser document.
+    #[test]
+    fn bucket_children_render_one_flat_row_per_bucket() {
+        use super::build_bucket_children;
+        use dbflux_core::SchemaNodeId;
+
+        let profile_id = Uuid::new_v4();
+        let mut cache: HashMap<Uuid, Vec<dbflux_core::BucketInfo>> = HashMap::new();
+        cache.insert(
+            profile_id,
+            vec![
+                dbflux_core::BucketInfo {
+                    name: "prod-logs".to_string(),
+                    created_at: None,
+                },
+                dbflux_core::BucketInfo {
+                    name: "media.assets".to_string(),
+                    created_at: None,
+                },
+            ],
+        );
+
+        let children = build_bucket_children(profile_id, &cache);
+
+        assert_eq!(children.len(), 2);
+        assert!(children.iter().all(|item| item.children.is_empty()));
+
+        let parsed: Vec<SchemaNodeId> = children
+            .iter()
+            .filter_map(|item| item.id.as_ref().parse::<SchemaNodeId>().ok())
+            .collect();
+
+        assert_eq!(
+            parsed,
+            vec![
+                SchemaNodeId::Bucket {
+                    profile_id,
+                    name: "prod-logs".to_string()
+                },
+                SchemaNodeId::Bucket {
+                    profile_id,
+                    name: "media.assets".to_string()
+                },
+            ]
+        );
+    }
+
+    /// T21: a connection with no buckets says so instead of rendering nothing.
+    #[test]
+    fn bucket_children_report_an_empty_connection() {
+        use super::build_bucket_children;
+
+        let profile_id = Uuid::new_v4();
+        let mut cache: HashMap<Uuid, Vec<dbflux_core::BucketInfo>> = HashMap::new();
+        cache.insert(profile_id, Vec::new());
+
+        let children = build_bucket_children(profile_id, &cache);
+
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].label.as_ref(), "No buckets");
     }
 
     #[test]

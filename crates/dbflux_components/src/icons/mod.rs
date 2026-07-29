@@ -85,7 +85,9 @@ pub enum AppIcon {
     HardDrive,
 
     // Files / Folders
+    File,
     FileCode,
+    Image,
     Folder,
     Box,
     Braces,
@@ -191,7 +193,9 @@ impl AppIcon {
             Self::Unplug => "icons/ui/unplug.svg",
             Self::Server => "icons/ui/server.svg",
             Self::HardDrive => "icons/ui/hard-drive.svg",
+            Self::File => "icons/ui/file.svg",
             Self::FileCode => "icons/ui/file-code-corner.svg",
+            Self::Image => "icons/ui/image.svg",
             Self::Folder => "icons/ui/folder.svg",
             Self::Box => "icons/ui/box.svg",
             Self::Braces => "icons/ui/braces.svg",
@@ -279,6 +283,9 @@ impl AppIcon {
             // does not ship AWS service icons), so this follows the same fallback
             // convention as Icon::Dynamodb.
             Icon::Redshift => Self::Database,
+            // Same fallback convention as Icon::Dynamodb/Icon::Redshift: no
+            // redistributable AWS S3 brand asset is available.
+            Icon::S3 => Self::Database,
             Icon::Influxdb => Self::BrandInfluxDb,
             Icon::Logs => Self::Logs,
             Icon::Database => Self::Database,

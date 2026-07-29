@@ -237,6 +237,21 @@ fn patch_config_field(config: &mut DbConfig, field: &str, value: &ResolvedValue)
             _ => {}
         },
 
+        DbConfig::S3 {
+            region,
+            profile,
+            access_key_id,
+            endpoint,
+            path_style,
+        } => match field {
+            "region" => *region = val.to_string(),
+            "profile" => *profile = Some(val.to_string()),
+            "access_key_id" => *access_key_id = Some(val.to_string()),
+            "endpoint" => *endpoint = Some(val.to_string()),
+            "path_style" => *path_style = val == "true",
+            _ => {}
+        },
+
         DbConfig::External { values, .. } => {
             values.insert(field.to_string(), val.to_string());
         }

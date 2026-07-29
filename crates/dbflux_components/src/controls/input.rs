@@ -11,7 +11,7 @@ pub use gpui_component::input::{
     CompletionProvider, Enter as InputEnter, Escape as InputEscape,
     IndentInline as InputIndentInline, Input as GpuiInput, InputEvent, InputState,
     MoveDown as InputMoveDown, MoveUp as InputMoveUp, OutdentInline as InputOutdentInline,
-    Position as InputPosition, Rope,
+    Position as InputPosition, Rope, Search as InputSearch,
 };
 
 actions!(

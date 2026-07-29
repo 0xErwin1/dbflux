@@ -12,7 +12,7 @@ pub use checkbox::Checkbox;
 pub use dropdown::{Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged};
 pub use input::{
     CompletionProvider, GpuiInput, Input, InputEnter, InputEscape, InputEvent, InputIndentInline,
-    InputMoveDown, InputMoveUp, InputOutdentInline, InputPosition, InputState, Rope,
+    InputMoveDown, InputMoveUp, InputOutdentInline, InputPosition, InputSearch, InputState, Rope,
     TriggerCompletion, completion_input_keys_wrapper, register_input_overrides,
 };
 pub use readonly_text_view::ReadonlyTextView;
