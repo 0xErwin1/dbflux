@@ -21,12 +21,23 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 
-/// Width of the preview pane when a selection is being previewed.
+/// Preferred width of the preview pane when a selection is being previewed.
 pub(super) const PREVIEW_WIDTH: Pixels = px(320.0);
 
-/// Width while the inline editor is open: 320 px leaves too little room to
-/// read, let alone edit, a line of text next to its line numbers.
+/// Preferred width while the inline editor is open: 320 px leaves too little
+/// room to read, let alone edit, a line of text next to its line numbers.
 pub(super) const PREVIEW_EDITOR_WIDTH: Pixels = px(520.0);
+
+/// Floor for the preview pane. Below this the metadata rows and the action
+/// bar stop being readable, so the pane keeps this much even on a narrow
+/// window.
+const PREVIEW_MIN_WIDTH: Pixels = px(240.0);
+
+/// Share of the document width the preview pane may claim. The preferred
+/// widths above are absolute, so on a narrow window they would leave the
+/// listing a sliver; capping the pane relative to the available width keeps
+/// the listing usable at every window size.
+const PREVIEW_MAX_WIDTH_FRACTION: f32 = 0.55;
 
 /// Label column of the metadata rows. Narrow enough to leave the values room
 /// inside a 320 px pane.
@@ -61,6 +72,8 @@ impl ObjectBrowserDocument {
             } else {
                 PREVIEW_WIDTH
             })
+            .min_w(PREVIEW_MIN_WIDTH)
+            .max_w(relative(PREVIEW_MAX_WIDTH_FRACTION))
             .flex()
             .flex_col()
             .border_l_1()
@@ -522,14 +535,22 @@ impl ObjectBrowserDocument {
     /// Action bar (S3-3 footer). Download, Open externally, and Copy S3 URI act
     /// immediately; the remaining actions raise intents drained by their flow
     /// owners.
+    ///
+    /// The row wraps instead of clipping: at the pane's minimum width five
+    /// labelled buttons do not fit on one line, and a clipped Delete is worse
+    /// than a two-line bar. `w_full` is required for the wrap to trigger at
+    /// all — see `dbflux_components::result_panel`'s chrome row.
     fn render_preview_actions(&self, key: &str, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
         div()
             .flex()
+            .flex_wrap()
             .items_center()
+            .w_full()
             .gap(Spacing::XS)
-            .h(Heights::TOOLBAR)
+            .min_h(Heights::TOOLBAR)
+            .py(Spacing::XS)
             .px(Spacing::SM)
             .border_t_1()
             .border_color(theme.border)
@@ -609,7 +630,7 @@ impl ObjectBrowserDocument {
         div()
             .id(id)
             .flex()
-            .flex_1()
+            .flex_shrink_0()
             .items_center()
             .justify_center()
             .gap(Spacing::XS)

@@ -781,6 +781,10 @@ impl Render for ObjectBrowserDocument {
                         div()
                             .flex_1()
                             .min_h_0()
+                            // Without `min_w_0` the listing's own content sets
+                            // the column's floor, so a long key would push the
+                            // preview pane instead of ellipsizing.
+                            .min_w_0()
                             .flex()
                             .flex_col()
                             .overflow_hidden()
