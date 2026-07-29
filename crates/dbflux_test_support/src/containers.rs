@@ -271,10 +271,10 @@ pub struct MinioConfig {
 
 /// Spin up a MinIO container and pass its endpoint + static credentials to `run`.
 ///
-/// Waits for MinIO's own startup log line, then polls the `/minio/health/live`
-/// endpoint until it responds successfully — mirrors the InfluxDB helpers'
-/// two-stage readiness pattern, since a MinIO container that has logged its
-/// startup banner is not always immediately ready to accept S3 API requests.
+/// Readiness relies solely on polling the `/minio/health/live` endpoint:
+/// MinIO has moved its startup banner between stdout and stderr across
+/// releases, so a log-line wait times out depending on the image version.
+/// The image tag is pinned for the same reason.
 pub fn with_minio_endpoint<T, E, F>(run: F) -> Result<T, E>
 where
     E: From<dbflux_core::DbError>,
@@ -283,9 +283,9 @@ where
     let access_key_id = "minioadmin";
     let secret_access_key = "minioadmin";
 
-    let image = GenericImage::new("minio/minio", "latest")
+    let image = GenericImage::new("minio/minio", "RELEASE.2025-09-07T16-13-09Z")
         .with_exposed_port(ContainerPort::Tcp(9000))
-        .with_wait_for(WaitFor::message_on_stdout("API:"))
+        .with_wait_for(WaitFor::seconds(1))
         .with_env_var("MINIO_ROOT_USER", access_key_id)
         .with_env_var("MINIO_ROOT_PASSWORD", secret_access_key)
         .with_cmd(vec!["server".to_string(), "/data".to_string()]);
