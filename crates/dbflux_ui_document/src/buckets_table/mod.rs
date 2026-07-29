@@ -172,6 +172,10 @@ impl BucketsTableDocument {
             return ContextId::TextInput;
         }
 
+        if self.focus_mode == BucketsFocusMode::Search {
+            return ContextId::TextInput;
+        }
+
         ContextId::Results
     }
 
