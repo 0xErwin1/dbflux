@@ -2,7 +2,7 @@
 
 All notable changes to DBFlux will be documented in this file.
 
-## [Unreleased]
+## [0.7.0] - 2026-07-31
 
 ### Added
 
@@ -87,6 +87,47 @@ All notable changes to DBFlux will be documented in this file.
   material travels only inside the encrypted secrets section, passphrase
   encryption is on by default, and the bundle format is unchanged.
 
+* **Export / import connection profiles as a portable bundle (#212)** —
+  Connection profiles can be exported to a single passphrase-encrypted TOML
+  bundle and imported on another machine, with a wizard that resolves name
+  conflicts and required references. A driver seam (`ExportFieldHint`) decides
+  per field what travels: regular values are included, passwords and
+  write-only fields go into the encrypted secrets section, local file paths are
+  flagged as machine-local, and environment-local references (AWS named
+  profiles, auth-profile references) are marked required-on-import so the user
+  supplies them on the target machine.
+
+* **Schema diff & apply (DBF-24)** — A schema-drift comparison now works at the
+  table-set level, not just per table: added, removed, and modified tables are
+  detected by `(schema, name)` identity, and each individual change (column
+  added/removed/renamed, type or default changed, index added/removed,
+  constraint added/removed, primary-key changed) is annotated with its
+  governance risk through the same classifier the MCP layer uses, so risky
+  operations are labelled consistently everywhere. The drift modal renders the
+  new change kinds and the resulting migration can be applied from the UI.
+
+* **Cross-driver query tooling — PartiQL editor and Document-driver builder** —
+  The query editor and visual builder are no longer SQL-only. A new
+  `EditorLanguageProfile` seam on `DriverMetadata` drives highlighting,
+  placeholder, comment prefix, connection-context controls, and live
+  diagnostics from driver metadata instead of the query language enum, and the
+  builder now opens for any driver whose capabilities support it, sourcing its
+  sections and operators from `QueryCapabilities`. In practice this gives
+  DynamoDB a full PartiQL surface — SQL-style highlighting, context-aware
+  autocomplete over the table and its sampled attributes, `SELECT` reads and
+  governed writes through `ExecuteStatement`, and sort-key-only ordering — and
+  gives MongoDB read generation from the visual builder. No-`WHERE` PartiQL
+  `DELETE`/`UPDATE` is flagged as dangerous through the shared classifier.
+  Relational drivers are unchanged.
+
+* **Per-channel app icon and identity (#183)** — Nightly builds now ship their
+  own brand mark, application id (`dbflux-nightly`), window title, desktop and
+  MIME entries, and database file, so a nightly install coexists with a stable
+  one instead of sharing its taskbar entry and data. The channel is derived
+  once from the compiled version, and nightly can opt into sharing the stable
+  database from Settings. macOS and Windows move onto the same design-system
+  mark as Linux; stable packaging output is byte-identical to before.
+
 ### Fixed
 
 * **Standalone MCP server failed to start and listed no tools** — The
@@ -104,27 +145,56 @@ All notable changes to DBFlux will be documented in this file.
   `flex_shrink_0` and the text column `min_w_0`, so the icon always renders and
   the subtitle truncates instead.
 
-* **Chart auto-detection across four drivers (#204)** — Drivers now assign
-  `ColumnKind` honestly so the chart engine includes genuine numeric columns
-  and excludes non-plottable ones. CloudWatch CWL Insights `@timestamp` and
-  `@ingestionTime` values are normalised from CWLI format (`YYYY-MM-DD
-  HH:MM:SS.mmm`, UTC) to RFC3339 so the time axis can parse them; the kind
-  scanner now skips `Text` samples and keeps scanning for a numeric value,
-  so mixed-type columns resolve correctly. DynamoDB infers column kind from
-  `AttributeValue` (`N` → `Integer` when the string parses as `i64`, else
-  `Float`; `S` → `Text`; `Bool` → `Integer`; anything else → `Unknown`).
-  MongoDB document and query results infer column kinds from BSON value types
-  (Int32/Int64 → Integer, Double/Decimal128 → Float, Boolean → Integer,
-  String → Text, DateTime → Timestamp); BSON `Timestamp` (oplog logical
-  clock) stays `Unknown` because it carries no wall-clock meaning. InfluxDB
-  Flux and InfluxQL kind mappers classify `boolean` as `Integer`. Across all
-  drivers, `Value::Bool` now plots as 0/1, matching MSSQL BIT behaviour. The
-  chart engine now extracts `Value::DateTime` and `Value::Date` as
-  epoch-milliseconds on a time axis (Date as midnight UTC), so datetime/date
-  columns from any driver can drive a time axis. `Value::Time` has no absolute
-  epoch and remains unplottable, so SQL Server `TIME` columns are now
-  classified `Unknown` instead of `Timestamp` (they would otherwise be offered
-  as an empty time axis).
+* **Shutdown left connections and background work dangling** — `SIGINT` and
+  `SIGTERM` now run the same graceful shutdown path as closing the window, so
+  connections, hooks, and background tasks are torn down instead of being
+  killed mid-flight.
+
+* **Connection hooks were dropped when a profile was saved** — Editing a
+  profile could discard its hook bindings, and the hook "test" run did not
+  execute the configured phases. Both are fixed, and hook phases run as
+  configured.
+
+* **Duplicate Settings windows** — Closing and reopening Settings could leave a
+  second window behind; only one Settings window can now exist at a time.
+
+* **Sidebar context menus escaped the window and drifted** — Context menus and
+  their submenus are now anchored to the owning row instead of trailing the
+  cursor, and are repositioned to stay on-screen near window edges.
+
+* **Single-database connections lost their lazy nodes** — Sidebar refresh could
+  collapse a lazily loaded single-database node and drop its children.
+
+* **MySQL / MariaDB panicked when connecting over TLS (#291)** — SSL
+  connections aborted the process instead of returning an error.
+
+* **Main window did not come to the front on a second launch** — An IPC focus
+  request now activates and raises the existing window.
+
+* **Inline table editing discarded typed text** — Text typed into an inline
+  cell editor could be reset before commit.
+
+* **Audit CSV export was not RFC 4180-safe** — Text columns are now escaped
+  correctly, so exports containing quotes, commas, or newlines round-trip
+  losslessly.
+
+* **Settings number inputs collapsed on first layout** — General settings
+  number fields are laid out in a flex row with a definite width, so they no
+  longer render zero-width until the first resize.
+
+* **MCP governance, audit, and DDL integrity hardening (MCP-1..6)** — Fixes
+  across policy evaluation, audit persistence, and DDL classification in the
+  MCP governance stack.
+
+* **Security and reliability hardening (SEC2-3..5, MISC-1..15)** — MySQL hex
+  literal handling, storage file permissions, `process.run` PATH visibility,
+  atomic migration bootstrap, non-panicking `SystemTime` use, and bounded IPC
+  reads, plus assorted reliability fixes.
+
+* **Packaging and CI** — The nightly binary build resolves brand-mark
+  locations correctly, `dbflux-nightly` is exposed through the Nix overlay with
+  a stamped build version, nightly release notes are scoped to commits since
+  the previous nightly, and stale nightly assets are pruned.
 
 ## [0.6.0] - 2026-06-04
 
@@ -297,6 +367,7 @@ All notable changes to DBFlux will be documented in this file.
 - **NULL rendered as an empty field in CSV export** — CSV export emitted the PostgreSQL `\COPY` sentinel `\N` for NULL, which most CSV consumers (Excel, Sheets, generic parsers) read as the literal string. NULL now exports as an empty field, the de facto CSV convention.
 - **Inactive tab background no longer mismatches the tab bar.**
 - **Multiline UPDATE/DELETE no longer falsely flagged as missing a `WHERE`** — The dangerous-query check matched only the literal substring `" where "`, so a `WHERE` placed on its own line (preceded by a newline rather than a space) was never found and the statement was wrongly reported as affecting all rows. Detection now strips single-quoted string literals (honoring `''` escapes) and matches `where` as a whitespace/paren-delimited token, fixing the false positive for both UPDATE and DELETE while still catching `where` text that only appears inside a value.
+- **Chart auto-detection across four drivers (#204)** — Drivers now assign `ColumnKind` honestly so the chart engine includes genuine numeric columns and excludes non-plottable ones. CloudWatch CWL Insights `@timestamp` / `@ingestionTime` values are normalised from CWLI format to RFC3339, and the kind scanner skips `Text` samples so mixed-type columns resolve correctly. DynamoDB infers kind from `AttributeValue`, MongoDB from BSON value types (BSON `Timestamp` stays `Unknown` — it carries no wall-clock meaning), and InfluxDB Flux/InfluxQL classify `boolean` as `Integer`. `Value::Bool` plots as 0/1 across all drivers, and `Value::DateTime` / `Value::Date` are extracted as epoch-milliseconds on a time axis. `Value::Time` has no absolute epoch, so SQL Server `TIME` columns are classified `Unknown` instead of being offered as an empty time axis.
 
 ## [0.6.0-dev.10] - 2026-05-29
 
