@@ -33,6 +33,7 @@ use interprocess::local_socket::{
 use log::info;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
