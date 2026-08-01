@@ -163,11 +163,47 @@ jobs:
           # (e.g. a cliff.toml regression). Surface it as a warning and fall back
           # to a placeholder below, but never swallow it entirely.
           if [ "$CHANNEL" = "stable" ]; then
-            # Stable: notes for exactly this tag (range since previous stable tag).
-            git-cliff --config cliff.toml --current --tag "$VERSION" \
-              --strip header \
-              -o cliff_notes.md \
-              || echo "::warning::git-cliff failed to generate release notes; the release body may be incomplete."
+            # Stable notes must cover exactly "what is new since the previous
+            # stable release". --current cannot express that here: a stable tag
+            # lives only on its own release branch, so it is not an ancestor of
+            # the next release branch, and --current would walk back to the last
+            # *reachable* tag (a -dev.N or the branch point) and re-announce
+            # everything that already shipped.
+            #
+            # Take the range from the previous stable tag explicitly, then drop
+            # the commits that reached it via cherry-pick: those have different
+            # SHAs on this branch but the same patch, and --cherry-pick matches
+            # them by patch id.
+            PREV_STABLE="$(git tag --list 'v*' --sort=-v:refname \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+              | grep -vFx "$VERSION" \
+              | head -n1)"
+
+            if [ -n "$PREV_STABLE" ]; then
+              SKIP_ARGS=()
+              while read -r sha; do
+                [ -n "$sha" ] && SKIP_ARGS+=(--skip-commit "$sha")
+              done < <(comm -23 \
+                <(git log --format=%H "${PREV_STABLE}..HEAD" | sort) \
+                <(git log --cherry-pick --right-only --format=%H "${PREV_STABLE}...HEAD" | sort))
+
+              echo "prev_stable=${PREV_STABLE}" >> "$GITHUB_OUTPUT"
+              echo "Generating notes for ${PREV_STABLE}..${VERSION}, skipping ${#SKIP_ARGS[@]} already-released commits."
+
+              # The range must precede --skip-commit: it takes multiple values
+              # and would otherwise swallow the positional argument.
+              git-cliff --config cliff.toml "${PREV_STABLE}..HEAD" --tag "$VERSION" \
+                --strip header \
+                "${SKIP_ARGS[@]}" \
+                -o cliff_notes.md \
+                || echo "::warning::git-cliff failed to generate release notes; the release body may be incomplete."
+            else
+              # First stable release: there is no previous stable tag to bound the range.
+              git-cliff --config cliff.toml --current --tag "$VERSION" \
+                --strip header \
+                -o cliff_notes.md \
+                || echo "::warning::git-cliff failed to generate release notes; the release body may be incomplete."
+            fi
           else
             # RC / pre-release: unreleased range since last stable tag.
             git-cliff --config cliff.toml --unreleased --tag "$VERSION" \
@@ -204,8 +240,12 @@ jobs:
           sed -e "s|__VERSION__|${VERSION}|g" -e "s|__REPO__|${REPO}|g" \
             .github/release-template.md >> release_body.md
 
-          # Full changelog link
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          # Full changelog link. On stable, compare against the previous stable
+          # tag rather than the last reachable one, matching the notes range.
+          PREV_TAG="${{ steps.cliff.outputs.prev_stable }}"
+          if [ -z "$PREV_TAG" ]; then
+            PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          fi
           if [ -n "$PREV_TAG" ]; then
             echo "" >> release_body.md
             echo "**Full Changelog**: https://github.com/${REPO}/compare/${PREV_TAG}...${VERSION}" >> release_body.md
