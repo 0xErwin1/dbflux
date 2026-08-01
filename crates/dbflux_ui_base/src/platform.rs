@@ -4,16 +4,22 @@
 /// This module provides helpers to detect the current platform and
 /// adjust window creation accordingly.
 use dbflux_components::icons::AppIcon;
+#[cfg(target_os = "linux")]
 use dbflux_components::primitives::{Icon, Text};
 #[cfg(target_os = "linux")]
 use dbflux_components::tokens::ChromeColors;
 #[cfg(target_os = "linux")]
 use dbflux_components::tokens::{Heights, Spacing};
 use gpui::{
-    App, ClickEvent, Decorations, InteractiveElement, IntoElement, ParentElement, SharedString,
-    Stateful, Styled, Window, WindowDecorations, WindowKind, WindowOptions, div, px,
+    App, IntoElement, SharedString, Stateful, Window, WindowDecorations, WindowKind, WindowOptions,
+    div, px,
 };
+// Only the CSD title bar uses these, and it is compiled on Linux alone.
+#[cfg(target_os = "linux")]
+use gpui::{ClickEvent, Decorations, InteractiveElement, ParentElement, Styled};
+#[cfg(target_os = "linux")]
 use gpui_component::ActiveTheme;
+#[cfg(target_os = "linux")]
 use gpui_component::InteractiveElementExt;
 
 /// A single breadcrumb entry for the CSD title bar.
@@ -115,8 +121,10 @@ pub fn render_csd_title_bar_with_crumbs(
     title: &str,
     crumbs: &[TitleCrumb],
 ) -> Option<Stateful<gpui::Div>> {
+    // Only the Linux CSD branch reads these; the signature stays uniform so
+    // callers do not need their own cfg.
     #[cfg(not(target_os = "linux"))]
-    let _ = crumbs;
+    let _ = (cx, title, crumbs);
 
     if !should_render_csd(window) {
         #[cfg(target_os = "linux")]

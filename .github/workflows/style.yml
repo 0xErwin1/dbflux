@@ -20,6 +20,9 @@ concurrency:
 jobs:
   fmt:
     name: Formatting
+    # Deliberately not matrixed, unlike clippy below: rustfmt parses whole
+    # files, so it already formats cfg-gated code that never compiles here, and
+    # a Windows checkout would only add line-ending noise.
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -36,9 +39,27 @@ jobs:
         run: cargo fmt --all -- --check
 
   clippy:
-    name: Clippy
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    name: Clippy ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+
+    # GPUI and the platform seams (keyring, IPC, windowing, process spawning)
+    # carry a large amount of cfg-gated code that a Linux-only clippy run never
+    # compiles, so lint debt could accumulate there unseen until a release
+    # build. Lint every platform we ship instead.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            extra_features: ""
+          # Native arm64; vendored-openssl matches build.yml (the runner has no
+          # pkg-config-discoverable OpenSSL, so openssl-sys must build it).
+          - os: macos-14
+            extra_features: ",vendored-openssl"
+          # Native x86_64-msvc; OpenSSL is resolved on the runner as in build.yml.
+          - os: windows-latest
+            extra_features: ""
 
     steps:
       - name: Checkout repository
@@ -50,6 +71,7 @@ jobs:
           components: clippy
 
       - name: Install system dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -63,12 +85,32 @@ jobs:
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
-          shared-key: ci-clippy
+          shared-key: ci-clippy-${{ matrix.os }}
           cache-targets: true
           cache-on-failure: true
 
       - name: Run clippy
-        run: cargo clippy --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,aws" -- -D warnings
+        run: cargo clippy --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,aws${{ matrix.extra_features }}" -- -D warnings
+
+  # Aggregate gate. `Clippy` is a required status check in the repository
+  # ruleset, and a matrixed job reports one context per platform instead, so
+  # this job keeps the required name alive and fails if any platform did.
+  clippy-result:
+    name: Clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: clippy
+    if: always()
+
+    steps:
+      - name: Check matrix result
+        env:
+          RESULT: ${{ needs.clippy.result }}
+        run: |
+          if [ "$RESULT" != "success" ]; then
+            echo "::error::Clippy did not pass on every platform (result: $RESULT)."
+            exit 1
+          fi
 
   machete:
     name: Unused dependencies
