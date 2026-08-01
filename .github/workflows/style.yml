@@ -3,8 +3,6 @@ name: Style
 on:
   push:
     branches: [main, dev]
-    tags:
-      - 'v*.*.*'
   pull_request:
     branches: [main, dev]
   workflow_call:
@@ -13,8 +11,10 @@ on:
 permissions:
   contents: read
 
+# See the note in tests.yml: the group name must be a literal so a Release run
+# and the reusable workflows it calls never share a concurrency group.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: style-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
