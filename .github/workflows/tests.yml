@@ -3,8 +3,6 @@ name: Tests
 on:
   push:
     branches: [main, dev]
-    tags:
-      - 'v*.*.*'
   pull_request:
     branches: [main, dev]
   workflow_call:
@@ -13,8 +11,12 @@ on:
 permissions:
   contents: read
 
+# The group name must be a literal, not ${{ github.workflow }}: under
+# workflow_call that expression resolves to the *calling* workflow, so Release
+# invoking tests.yml and style.yml would put both — and the Release run itself,
+# whose group differs only by case — in one group and cancel them all.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: tests-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
