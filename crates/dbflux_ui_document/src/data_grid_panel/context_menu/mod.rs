@@ -2160,7 +2160,11 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         match result {
-                            Ok(_) => {
+                            Ok(mut crud_result) => {
+                                crate::result_warnings::handoff_crud_returning_result(
+                                    &mut crud_result,
+                                    |warning| dbflux_ui_base::user_error::report_error(warning, cx),
+                                );
                                 panel.pending.toast = Some(PendingToast {
                                     message: "Document inserted".to_string(),
                                     is_error: false,
@@ -2275,7 +2279,11 @@ impl DataGridPanel {
             cx.update(|cx| {
                 entity.update(cx, |panel, cx| {
                     match result {
-                        Ok(_) => {
+                        Ok(mut crud_result) => {
+                            crate::result_warnings::handoff_crud_returning_result(
+                                &mut crud_result,
+                                |warning| dbflux_ui_base::user_error::report_error(warning, cx),
+                            );
                             panel.pending.toast = Some(PendingToast {
                                 message: "Document updated".to_string(),
                                 is_error: false,

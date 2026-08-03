@@ -3758,7 +3758,11 @@ impl DataGridPanel {
 
         // Fetch sample rows synchronously on background thread (2s deadline).
         let (sample_columns, sample_rows) =
-            crate::data_grid_panel::mutation_confirm::fetch_sample_rows(connection, &spec);
+            crate::data_grid_panel::mutation_confirm::fetch_sample_rows(
+                connection,
+                &spec,
+                |warning| dbflux_ui_base::user_error::report_error(warning, cx),
+            );
 
         let sample_rows_opt = if sample_rows.is_empty() {
             None

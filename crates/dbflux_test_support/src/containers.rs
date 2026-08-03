@@ -25,6 +25,30 @@ where
     run(url)
 }
 
+pub fn with_pgvector_postgres_16_url<T, E, F>(run: F) -> Result<T, E>
+where
+    F: FnOnce(String) -> Result<T, E>,
+{
+    let image = GenericImage::new("pgvector/pgvector", "0.8.0-pg16")
+        .with_exposed_port(ContainerPort::Tcp(5432))
+        .with_wait_for(WaitFor::message_on_stdout(
+            "database system is ready to accept connections",
+        ))
+        .with_env_var("POSTGRES_USER", "postgres")
+        .with_env_var("POSTGRES_PASSWORD", "postgres")
+        .with_env_var("POSTGRES_DB", "postgres");
+
+    let container = image
+        .start()
+        .expect("failed to start pgvector postgres container");
+    let port = container
+        .get_host_port_ipv4(5432)
+        .expect("failed to get pgvector postgres host port");
+    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+
+    run(url)
+}
+
 pub fn with_mysql_url<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,

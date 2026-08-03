@@ -637,7 +637,13 @@ impl CodeDocument {
         });
 
         cx.spawn(async move |this, cx| {
-            let result = task.await;
+            let mut result = task.await;
+
+            if let Ok(query_result) = result.as_mut() {
+                crate::result_warnings::handoff_sql_editor_result(query_result, |warning| {
+                    dbflux_ui_base::user_error::report_error_async(warning, cx)
+                });
+            }
 
             if cancel_token.is_cancelled() {
                 log::info!("Query was cancelled, discarding result");

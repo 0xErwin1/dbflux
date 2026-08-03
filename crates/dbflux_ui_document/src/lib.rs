@@ -36,6 +36,7 @@ pub mod object_text;
 pub mod pane;
 pub mod refresh;
 mod result_view;
+mod result_warnings;
 pub mod tab_bar;
 mod tab_manager;
 mod task_runner;
