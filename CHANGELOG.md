@@ -1,6 +1,13 @@
 # Changelog
 
 All notable changes to DBFlux will be documented in this file.
+## [0.7.1] - 2026-08-03
+
+
+### Fixed
+
+* Display pgvector values and report unsupported types (#320)
+
 
 ## [0.7.0] - 2026-07-31
 
