@@ -235,7 +235,13 @@ impl DataGridPanel {
             .spawn(async move { conn.browse_table(&browse_request) });
 
         cx.spawn(async move |_this, cx| {
-            let result = task.await;
+            let mut result = task.await;
+
+            if let Ok(query_result) = result.as_mut() {
+                crate::result_warnings::handoff_table_browse_result(query_result, |warning| {
+                    dbflux_ui_base::user_error::report_error_async(warning, cx)
+                });
+            }
 
             if let Err(error) = cx.update(|cx| {
                 if cancel_token.is_cancelled() {
@@ -246,7 +252,7 @@ impl DataGridPanel {
                     return;
                 }
 
-                match &result {
+                match result {
                     Ok(query_result) => {
                         info!(
                             "Query returned {} rows in {:?}",
@@ -262,7 +268,7 @@ impl DataGridPanel {
                                 pagination_for_spawn,
                                 order_by_for_spawn,
                                 total_rows,
-                                query_result.clone(),
+                                query_result,
                                 cx,
                             );
                         });
@@ -372,7 +378,13 @@ impl DataGridPanel {
             .spawn(async move { conn.execute(&request) });
 
         cx.spawn(async move |_this, cx| {
-            let result = task.await;
+            let mut result = task.await;
+
+            if let Ok(query_result) = result.as_mut() {
+                crate::result_warnings::handoff_visual_query_result(query_result, |warning| {
+                    dbflux_ui_base::user_error::report_error_async(warning, cx)
+                });
+            }
 
             if let Err(error) = cx.update(|cx| {
                 if cancel_token.is_cancelled() {
@@ -549,7 +561,13 @@ impl DataGridPanel {
             .spawn(async move { conn.browse_collection(&browse_request) });
 
         cx.spawn(async move |_this, cx| {
-            let result = task.await;
+            let mut result = task.await;
+
+            if let Ok(query_result) = result.as_mut() {
+                crate::result_warnings::handoff_collection_browse_result(query_result, |warning| {
+                    dbflux_ui_base::user_error::report_error_async(warning, cx)
+                });
+            }
 
             if let Err(error) = cx.update(|cx| {
                 if cancel_token.is_cancelled() {
@@ -560,7 +578,7 @@ impl DataGridPanel {
                     return;
                 }
 
-                match &result {
+                match result {
                     Ok(query_result) => {
                         info!(
                             "Collection query returned {} documents in {:?}",
@@ -575,7 +593,7 @@ impl DataGridPanel {
                                 collection_for_spawn,
                                 pagination_for_spawn,
                                 total_docs,
-                                query_result.clone(),
+                                query_result,
                                 cx,
                             );
                         });
