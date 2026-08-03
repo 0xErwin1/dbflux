@@ -644,13 +644,7 @@ impl DbFluxServer {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for DbFluxServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
-            ServerCapabilities::builder()
-                .enable_tools()
-                .enable_logging()
-                .build(),
-        )
-        .with_instructions(
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
             "DBFlux MCP Server - AI-powered database client with governance controls.\n\
              \n\
              Supports multiple database types:\n\
