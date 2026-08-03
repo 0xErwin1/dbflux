@@ -3467,7 +3467,7 @@ fn decode_pgvector_sparsevec(
     let dimension = usize::try_from(dimension)
         .map_err(|_| pgvector_decode_error("invalid pgvector sparse dimension"))?;
     let values_offset = 12 + non_zero_count * 4;
-    let mut previous_index = 0usize;
+    let mut previous_index = None;
     let mut entries = Vec::with_capacity(non_zero_count);
 
     for position in 0..non_zero_count {
@@ -3475,15 +3475,25 @@ fn decode_pgvector_sparsevec(
         let index = usize::try_from(index)
             .map_err(|_| pgvector_decode_error("invalid pgvector sparse index"))?;
 
-        if index == 0 || index > dimension || index <= previous_index {
+        if index >= dimension {
+            return Err(pgvector_decode_error("invalid pgvector sparse index"));
+        }
+
+        if previous_index.is_some_and(|previous_index| index <= previous_index) {
             return Err(pgvector_decode_error(
                 "invalid pgvector sparse index ordering",
             ));
         }
 
         let value = read_pgvector_f32(raw, values_offset + position * 4)?;
-        entries.push((index, value));
-        previous_index = index;
+        if value == 0.0 {
+            return Err(pgvector_decode_error(
+                "pgvector sparse values must be non-zero",
+            ));
+        }
+
+        entries.push((index + 1, value));
+        previous_index = Some(index);
     }
 
     Ok(PgVectorText(format_pgvector_sparse(&entries, dimension)))
@@ -4668,6 +4678,25 @@ mod tests {
         TableRef, TransferFamily, TypeAttributeDefinition, TypeDefinition, Value, WhereOperator,
     };
 
+    fn sparsevec_payload(dimension: i32, indices: &[i32], values: &[f32]) -> Vec<u8> {
+        assert_eq!(indices.len(), values.len());
+
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&dimension.to_be_bytes());
+        payload.extend_from_slice(&(indices.len() as i32).to_be_bytes());
+        payload.extend_from_slice(&0i32.to_be_bytes());
+
+        for index in indices {
+            payload.extend_from_slice(&index.to_be_bytes());
+        }
+
+        for value in values {
+            payload.extend_from_slice(&value.to_be_bytes());
+        }
+
+        payload
+    }
+
     #[test]
     fn pgvector_scalar_decoders_render_canonical_text() {
         let mut vector = Vec::new();
@@ -4682,14 +4711,7 @@ mod tests {
         halfvec.extend_from_slice(&half::f16::from_f32(1.5).to_bits().to_be_bytes());
         halfvec.extend_from_slice(&half::f16::from_f32(-2.25).to_bits().to_be_bytes());
 
-        let mut sparsevec = Vec::new();
-        sparsevec.extend_from_slice(&4i32.to_be_bytes());
-        sparsevec.extend_from_slice(&2i32.to_be_bytes());
-        sparsevec.extend_from_slice(&0i32.to_be_bytes());
-        sparsevec.extend_from_slice(&1i32.to_be_bytes());
-        sparsevec.extend_from_slice(&4i32.to_be_bytes());
-        sparsevec.extend_from_slice(&1.5f32.to_be_bytes());
-        sparsevec.extend_from_slice(&(-2.25f32).to_be_bytes());
+        let sparsevec = sparsevec_payload(4, &[0, 3], &[1.5, -2.25]);
 
         assert_eq!(
             decode_pgvector_vector(&vector).expect("valid vector").0,
@@ -4720,9 +4742,20 @@ mod tests {
     }
 
     #[test]
+    fn pgvector_sparsevec_rejects_invalid_indices_and_zero_values() {
+        assert!(decode_pgvector_sparsevec(&sparsevec_payload(4, &[4], &[1.5])).is_err());
+        assert!(decode_pgvector_sparsevec(&sparsevec_payload(4, &[1, 1], &[1.5, -2.25])).is_err());
+        assert!(decode_pgvector_sparsevec(&sparsevec_payload(4, &[2, 1], &[1.5, -2.25])).is_err());
+        assert!(decode_pgvector_sparsevec(&sparsevec_payload(4, &[0], &[0.0])).is_err());
+        assert!(decode_pgvector_sparsevec(&sparsevec_payload(4, &[3], &[-0.0])).is_err());
+    }
+
+    #[test]
     fn pgvector_array_values_preserve_element_nulls() {
+        let sparsevec = decode_pgvector_sparsevec(&sparsevec_payload(4, &[0, 3], &[1.5, -2.25]))
+            .expect("valid sparsevec");
         let value = pgvector_array_values_to_value(Some(vec![
-            Some(PgVectorText("[1,2]".to_string())),
+            Some(sparsevec),
             None,
             Some(PgVectorText("[3,4]".to_string())),
         ]));
@@ -4730,7 +4763,7 @@ mod tests {
         assert_eq!(
             value,
             Value::Array(vec![
-                Value::Text("[1,2]".to_string()),
+                Value::Text("{1:1.5,4:-2.25}/4".to_string()),
                 Value::Null,
                 Value::Text("[3,4]".to_string()),
             ])
