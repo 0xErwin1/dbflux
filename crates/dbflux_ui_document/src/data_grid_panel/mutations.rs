@@ -310,10 +310,9 @@ impl DataGridPanel {
                 entity.update(cx, |panel, cx| {
                     match result {
                         Ok(mut crud_result) => {
-                            crate::result_warnings::consume_crud_result_warnings(
+                            crate::result_warnings::handoff_crud_returning_result(
                                 &mut crud_result,
-                                crate::result_warnings::ResultWarningContext::CrudReturning,
-                                cx,
+                                |warning| report_error(warning, cx),
                             );
                             panel.runner.complete_mutation(task_id, cx);
                             panel.apply_inline_value_to_result(&node_id, &inline_value);
@@ -718,10 +717,9 @@ impl DataGridPanel {
 
         match result {
             Ok(mut crud_result) => {
-                crate::result_warnings::consume_crud_result_warnings(
+                crate::result_warnings::handoff_crud_returning_result(
                     &mut crud_result,
-                    crate::result_warnings::ResultWarningContext::CrudReturning,
-                    cx,
+                    |warning| report_error(warning, cx),
                 );
 
                 table_state.update(cx, |state, cx| {
@@ -860,10 +858,9 @@ impl DataGridPanel {
                 entity.update(cx, |panel, cx| {
                     match result {
                         Ok(mut crud_result) => {
-                            crate::result_warnings::consume_crud_result_warnings(
+                            crate::result_warnings::handoff_crud_returning_result(
                                 &mut crud_result,
-                                crate::result_warnings::ResultWarningContext::CrudReturning,
-                                cx,
+                                |warning| report_error(warning, cx),
                             );
                             panel.runner.complete_mutation(task_id, cx);
 
@@ -1004,10 +1001,9 @@ impl DataGridPanel {
                 entity.update(cx, |panel, cx| {
                     match result {
                         Ok(mut crud_result) => {
-                            crate::result_warnings::consume_crud_result_warnings(
+                            crate::result_warnings::handoff_crud_returning_result(
                                 &mut crud_result,
-                                crate::result_warnings::ResultWarningContext::CrudReturning,
-                                cx,
+                                |warning| report_error(warning, cx),
                             );
                             panel.runner.complete_mutation(task_id, cx);
 
@@ -1218,10 +1214,9 @@ impl DataGridPanel {
                 entity.update(cx, |panel, cx| {
                     match result {
                         Ok(mut crud_result) => {
-                            crate::result_warnings::consume_crud_result_warnings(
+                            crate::result_warnings::handoff_crud_returning_result(
                                 &mut crud_result,
-                                crate::result_warnings::ResultWarningContext::CrudReturning,
-                                cx,
+                                |warning| report_error(warning, cx),
                             );
                             panel.runner.complete_mutation(task_id, cx);
 
@@ -1357,10 +1352,9 @@ impl DataGridPanel {
                 entity.update(cx, |panel, cx| {
                     match result {
                         Ok(mut crud_result) => {
-                            crate::result_warnings::consume_crud_result_warnings(
+                            crate::result_warnings::handoff_crud_returning_result(
                                 &mut crud_result,
-                                crate::result_warnings::ResultWarningContext::CrudReturning,
-                                cx,
+                                |warning| report_error(warning, cx),
                             );
                             panel.runner.complete_mutation(task_id, cx);
 
@@ -1629,13 +1623,10 @@ impl DataGridPanel {
 
             cx.update(|cx| {
                 entity.update(cx, |panel, cx| {
-                    for crud_result in &mut successful_results {
-                        crate::result_warnings::consume_crud_result_warnings(
-                            crud_result,
-                            crate::result_warnings::ResultWarningContext::CrudReturning,
-                            cx,
-                        );
-                    }
+                    crate::result_warnings::handoff_bulk_crud_returning_results(
+                        &mut successful_results,
+                        |warning| report_error(warning, cx),
+                    );
 
                     let success_count = successful_results.len();
                     if let Some(e) = last_error {
@@ -1817,13 +1808,10 @@ impl DataGridPanel {
 
             cx.update(|cx| {
                 entity.update(cx, |panel, cx| {
-                    for crud_result in &mut successful_results {
-                        crate::result_warnings::consume_crud_result_warnings(
-                            crud_result,
-                            crate::result_warnings::ResultWarningContext::CrudReturning,
-                            cx,
-                        );
-                    }
+                    crate::result_warnings::handoff_bulk_crud_returning_results(
+                        &mut successful_results,
+                        |warning| report_error(warning, cx),
+                    );
 
                     let success_count = successful_results.len();
                     if let Some(e) = last_error {

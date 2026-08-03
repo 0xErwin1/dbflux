@@ -1,7 +1,6 @@
 use dbflux_core::observability::EventSeverity;
 use dbflux_core::{CrudResult, QueryResult};
-use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
-use gpui::App;
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Copy)]
@@ -11,6 +10,7 @@ pub(crate) enum ResultWarningContext {
     VisualQuery,
     CollectionBrowse,
     CrudReturning,
+    MutationPreview,
 }
 
 impl ResultWarningContext {
@@ -21,35 +21,61 @@ impl ResultWarningContext {
             Self::VisualQuery => "visual query result",
             Self::CollectionBrowse => "collection browse result",
             Self::CrudReturning => "mutation RETURNING result",
+            Self::MutationPreview => "mutation preview result",
         }
     }
 }
 
-pub(crate) fn consume_sql_editor_result_warnings(result: &mut QueryResult, cx: &mut App) {
-    consume_sql_editor_result_warnings_with(result, |warning| report_error(warning, cx));
-}
-
-pub(crate) fn consume_table_browse_result_warnings(result: &mut QueryResult, cx: &mut App) {
-    consume_table_browse_result_warnings_with(result, |warning| report_error(warning, cx));
-}
-
-pub(crate) fn consume_visual_query_result_warnings(result: &mut QueryResult, cx: &mut App) {
-    consume_visual_query_result_warnings_with(result, |warning| report_error(warning, cx));
-}
-
-pub(crate) fn consume_collection_browse_result_warnings(result: &mut QueryResult, cx: &mut App) {
-    consume_collection_browse_result_warnings_with(result, |warning| report_error(warning, cx));
-}
-
-pub(crate) fn consume_crud_result_warnings(
+pub(crate) fn handoff_crud_returning_result(
     result: &mut CrudResult,
-    context: ResultWarningContext,
-    cx: &mut App,
+    report: impl FnMut(UserFacingError),
 ) {
-    consume_crud_result_warnings_with(result, context, |warning| report_error(warning, cx));
+    consume_crud_result_warnings(result, ResultWarningContext::CrudReturning, report);
 }
 
-fn consume_query_result_warnings_with(
+pub(crate) fn handoff_bulk_crud_returning_results(
+    results: &mut [CrudResult],
+    report: impl FnMut(UserFacingError),
+) {
+    consume_bulk_crud_result_warnings(results, report);
+}
+
+pub(crate) fn handoff_sql_editor_result(
+    result: &mut QueryResult,
+    report: impl FnMut(UserFacingError),
+) {
+    consume_query_result_warnings(result, ResultWarningContext::Query, report);
+}
+
+pub(crate) fn handoff_table_browse_result(
+    result: &mut QueryResult,
+    report: impl FnMut(UserFacingError),
+) {
+    consume_query_result_warnings(result, ResultWarningContext::TableBrowse, report);
+}
+
+pub(crate) fn handoff_visual_query_result(
+    result: &mut QueryResult,
+    report: impl FnMut(UserFacingError),
+) {
+    consume_query_result_warnings(result, ResultWarningContext::VisualQuery, report);
+}
+
+pub(crate) fn handoff_collection_browse_result(
+    result: &mut QueryResult,
+    report: impl FnMut(UserFacingError),
+) {
+    consume_query_result_warnings(result, ResultWarningContext::CollectionBrowse, report);
+}
+
+pub(crate) fn handoff_mutation_preview_result(
+    result: &mut QueryResult,
+    report: impl FnMut(UserFacingError),
+) {
+    consume_query_result_warnings(result, ResultWarningContext::MutationPreview, report);
+}
+
+fn consume_query_result_warnings(
     result: &mut QueryResult,
     context: ResultWarningContext,
     report: impl FnMut(UserFacingError),
@@ -57,40 +83,24 @@ fn consume_query_result_warnings_with(
     consume_warning_types_with(take_query_result_warning_types(result), context, report);
 }
 
-fn consume_sql_editor_result_warnings_with(
-    result: &mut QueryResult,
-    report: impl FnMut(UserFacingError),
-) {
-    consume_query_result_warnings_with(result, ResultWarningContext::Query, report);
-}
-
-fn consume_table_browse_result_warnings_with(
-    result: &mut QueryResult,
-    report: impl FnMut(UserFacingError),
-) {
-    consume_query_result_warnings_with(result, ResultWarningContext::TableBrowse, report);
-}
-
-fn consume_visual_query_result_warnings_with(
-    result: &mut QueryResult,
-    report: impl FnMut(UserFacingError),
-) {
-    consume_query_result_warnings_with(result, ResultWarningContext::VisualQuery, report);
-}
-
-fn consume_collection_browse_result_warnings_with(
-    result: &mut QueryResult,
-    report: impl FnMut(UserFacingError),
-) {
-    consume_query_result_warnings_with(result, ResultWarningContext::CollectionBrowse, report);
-}
-
-fn consume_crud_result_warnings_with(
+fn consume_crud_result_warnings(
     result: &mut CrudResult,
     context: ResultWarningContext,
     report: impl FnMut(UserFacingError),
 ) {
     consume_warning_types_with(take_crud_result_warning_types(result), context, report);
+}
+
+fn consume_bulk_crud_result_warnings(
+    results: &mut [CrudResult],
+    report: impl FnMut(UserFacingError),
+) {
+    let type_names = results
+        .iter_mut()
+        .flat_map(take_crud_result_warning_types)
+        .collect();
+
+    consume_warning_types_with(type_names, ResultWarningContext::CrudReturning, report);
 }
 
 fn take_query_result_warning_types(result: &mut QueryResult) -> Vec<String> {
@@ -146,10 +156,10 @@ fn unsupported_type_warnings(
 #[cfg(test)]
 mod tests {
     use super::{
-        ResultWarningContext, consume_collection_browse_result_warnings_with,
-        consume_crud_result_warnings_with, consume_sql_editor_result_warnings_with,
-        consume_table_browse_result_warnings_with, consume_visual_query_result_warnings_with,
-        take_crud_result_warning_types, take_query_result_warning_types, unsupported_type_warnings,
+        ResultWarningContext, handoff_bulk_crud_returning_results,
+        handoff_collection_browse_result, handoff_crud_returning_result, handoff_sql_editor_result,
+        handoff_table_browse_result, handoff_visual_query_result, take_crud_result_warning_types,
+        take_query_result_warning_types, unsupported_type_warnings,
     };
     use dbflux_core::observability::EventSeverity;
     use dbflux_core::{CrudResult, QueryResult};
@@ -235,10 +245,10 @@ mod tests {
         result.additional_results.push(additional_result);
 
         let mut summaries = Vec::new();
-        consume_sql_editor_result_warnings_with(&mut result, |warning| {
+        handoff_sql_editor_result(&mut result, |warning| {
             summaries.push(warning.summary);
         });
-        consume_sql_editor_result_warnings_with(&mut result, |warning| {
+        handoff_sql_editor_result(&mut result, |warning| {
             summaries.push(warning.summary);
         });
 
@@ -254,21 +264,21 @@ mod tests {
     #[test]
     fn table_browse_refresh_handoff_reports_once_before_replay() {
         assert_query_handoff_reports_once("table browse result", |result, report| {
-            consume_table_browse_result_warnings_with(result, report)
+            handoff_table_browse_result(result, report)
         });
     }
 
     #[test]
     fn visual_query_handoff_reports_once_before_replay() {
         assert_query_handoff_reports_once("visual query result", |result, report| {
-            consume_visual_query_result_warnings_with(result, report)
+            handoff_visual_query_result(result, report)
         });
     }
 
     #[test]
     fn collection_browse_handoff_reports_once_before_replay() {
         assert_query_handoff_reports_once("collection browse result", |result, report| {
-            consume_collection_browse_result_warnings_with(result, report)
+            handoff_collection_browse_result(result, report)
         });
     }
 
@@ -278,16 +288,8 @@ mod tests {
         result.set_unsupported_types(["bit".to_string(), "varbit".to_string()]);
 
         let mut summaries = Vec::new();
-        consume_crud_result_warnings_with(
-            &mut result,
-            ResultWarningContext::CrudReturning,
-            |warning| summaries.push(warning.summary),
-        );
-        consume_crud_result_warnings_with(
-            &mut result,
-            ResultWarningContext::CrudReturning,
-            |warning| summaries.push(warning.summary),
-        );
+        handoff_crud_returning_result(&mut result, |warning| summaries.push(warning.summary));
+        handoff_crud_returning_result(&mut result, |warning| summaries.push(warning.summary));
 
         assert_eq!(
             summaries,
@@ -299,42 +301,29 @@ mod tests {
     }
 
     #[test]
-    fn production_handoffs_invoke_the_destructive_consumers_once() {
-        let execution = include_str!("code/execution.rs");
-        let query = include_str!("data_grid_panel/query.rs");
-        let mutations = include_str!("data_grid_panel/mutations.rs");
-        let context_menu = include_str!("data_grid_panel/context_menu/mod.rs");
+    fn bulk_crud_handoff_deduplicates_partial_successes_before_reporting() {
+        let mut first = CrudResult::empty();
+        first.set_unsupported_types(["bit".to_string(), "varbit".to_string()]);
+        let mut second = CrudResult::empty();
+        second.set_unsupported_types(["bit".to_string()]);
+        let mut results = vec![first, second];
+
+        let mut summaries = Vec::new();
+        handoff_bulk_crud_returning_results(&mut results, |warning| {
+            summaries.push(warning.summary);
+        });
 
         assert_eq!(
-            execution
-                .matches("consume_sql_editor_result_warnings(")
-                .count(),
-            1
+            summaries,
+            [
+                "Unsupported database type 'bit' in mutation RETURNING result",
+                "Unsupported database type 'varbit' in mutation RETURNING result",
+            ]
         );
-        assert_eq!(
-            query
-                .matches("consume_table_browse_result_warnings(")
-                .count(),
-            1
-        );
-        assert_eq!(
-            query
-                .matches("consume_visual_query_result_warnings(")
-                .count(),
-            1
-        );
-        assert_eq!(
-            query
-                .matches("consume_collection_browse_result_warnings(")
-                .count(),
-            1
-        );
-        assert_eq!(
-            mutations.matches("consume_crud_result_warnings(").count()
-                + context_menu
-                    .matches("consume_crud_result_warnings(")
-                    .count(),
-            10
+        assert!(
+            results
+                .iter_mut()
+                .all(|result| take_crud_result_warning_types(result).is_empty())
         );
     }
 

@@ -5,6 +5,7 @@ use dbflux_components::modals::{MutationConfirmHardRequest, MutationConfirmReque
 use dbflux_core::{
     Connection, FilterNode, QueryRequest, Value, VisualMutationSpec, render_filter_node_sql,
 };
+use dbflux_ui_base::user_error::UserFacingError;
 
 /// Controls which mutation confirmation modal opens, and carries its request payload.
 ///
@@ -29,6 +30,7 @@ pub enum PendingMutationModal {
 pub fn fetch_sample_rows(
     connection: Arc<dyn Connection>,
     spec: &VisualMutationSpec,
+    report: impl FnMut(UserFacingError),
 ) -> (Vec<String>, Vec<Vec<String>>) {
     let dialect = connection.dialect();
     let qualified_table = dialect.qualified_table(spec.from.schema.as_deref(), &spec.from.name);
@@ -49,28 +51,40 @@ pub fn fetch_sample_rows(
         _ => format!("SELECT * FROM {} ORDER BY 1 {}", qualified_table, limit),
     };
 
-    let (tx, rx) = std::sync::mpsc::channel::<Option<(Vec<String>, Vec<Vec<String>>)>>();
+    let (tx, rx) = std::sync::mpsc::channel();
 
     std::thread::spawn(move || {
         let mut request = QueryRequest::new(sql);
         request.params = params;
-        let result = connection.execute(&request).ok().map(|qr| {
-            let col_names: Vec<String> = qr.columns.iter().map(|c| c.name.clone()).collect();
-            let rows: Vec<Vec<String>> = qr
-                .rows
-                .iter()
-                .map(|row| row.iter().map(|v| format!("{}", v)).collect())
-                .collect();
-            (col_names, rows)
-        });
+        let result = connection.execute(&request).ok();
         // The receiver may have already timed out and been dropped; drop the send error.
         let _drop_send = tx.send(result);
     });
 
     match rx.recv_timeout(Duration::from_secs(2)) {
-        Ok(Some(data)) => data,
+        Ok(Some(mut result)) => sample_rows_from_result(&mut result, report),
         _ => (Vec::new(), Vec::new()),
     }
+}
+
+fn sample_rows_from_result(
+    result: &mut dbflux_core::QueryResult,
+    report: impl FnMut(UserFacingError),
+) -> (Vec<String>, Vec<Vec<String>>) {
+    crate::result_warnings::handoff_mutation_preview_result(result, report);
+
+    let columns = result
+        .columns
+        .iter()
+        .map(|column| column.name.clone())
+        .collect();
+    let rows = result
+        .rows
+        .iter()
+        .map(|row| row.iter().map(|value| format!("{value}")).collect())
+        .collect();
+
+    (columns, rows)
 }
 
 /// Returns `true` when the filter uniquely identifies a single row by primary key.
@@ -214,9 +228,11 @@ pub fn format_value(value: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use dbflux_core::{BoolOp, Comparator, FilterNode, LiteralValue, Predicate, PredicateValue};
+    use dbflux_core::{
+        BoolOp, Comparator, FilterNode, LiteralValue, Predicate, PredicateValue, QueryResult,
+    };
 
-    use super::filter_is_pk_unique;
+    use super::{filter_is_pk_unique, sample_rows_from_result};
 
     fn pred_eq(col: &str) -> FilterNode {
         FilterNode::Predicate(Predicate {
@@ -310,6 +326,21 @@ mod tests {
     fn empty_pk_cols_is_not_pk_unique() {
         let filter = Some(pred_eq("id"));
         assert!(!filter_is_pk_unique(&filter, &[]));
+    }
+
+    #[test]
+    fn mutation_preview_handoff_reports_and_drains_warning_metadata() {
+        let mut result = QueryResult::empty();
+        result.set_unsupported_types(["bit".to_string(), "bit".to_string()]);
+
+        let mut summaries = Vec::new();
+        let _ = sample_rows_from_result(&mut result, |warning| summaries.push(warning.summary));
+
+        assert_eq!(
+            summaries,
+            ["Unsupported database type 'bit' in mutation preview result"]
+        );
+        assert!(result.take_unsupported_types().is_empty());
     }
 
     // AND group where one child is a non-Eq predicate → false (mixed group rejected).
@@ -600,7 +631,7 @@ mod tests {
             let conn_ref = Arc::clone(&conn);
             let spec = delete_spec("orders");
 
-            fetch_sample_rows(conn as Arc<dyn dbflux_core::Connection>, &spec);
+            fetch_sample_rows(conn as Arc<dyn dbflux_core::Connection>, &spec, |_| {});
 
             let calls = conn_ref.recorded_calls();
             assert_eq!(calls.len(), 1, "expected exactly one SELECT call");
@@ -633,7 +664,7 @@ mod tests {
             let conn_ref = Arc::clone(&conn);
             let spec = delete_spec("orders");
 
-            fetch_sample_rows(conn as Arc<dyn dbflux_core::Connection>, &spec);
+            fetch_sample_rows(conn as Arc<dyn dbflux_core::Connection>, &spec, |_| {});
 
             let calls = conn_ref.recorded_calls();
             assert_eq!(calls.len(), 1, "expected exactly one SELECT call");

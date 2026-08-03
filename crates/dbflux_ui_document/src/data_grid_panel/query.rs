@@ -235,7 +235,13 @@ impl DataGridPanel {
             .spawn(async move { conn.browse_table(&browse_request) });
 
         cx.spawn(async move |_this, cx| {
-            let result = task.await;
+            let mut result = task.await;
+
+            if let Ok(query_result) = result.as_mut() {
+                crate::result_warnings::handoff_table_browse_result(query_result, |warning| {
+                    dbflux_ui_base::user_error::report_error_async(warning, cx)
+                });
+            }
 
             if let Err(error) = cx.update(|cx| {
                 if cancel_token.is_cancelled() {
@@ -247,7 +253,7 @@ impl DataGridPanel {
                 }
 
                 match result {
-                    Ok(mut query_result) => {
+                    Ok(query_result) => {
                         info!(
                             "Query returned {} rows in {:?}",
                             query_result.row_count(),
@@ -256,10 +262,6 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.complete_primary(task_id, cx);
-                            crate::result_warnings::consume_table_browse_result_warnings(
-                                &mut query_result,
-                                cx,
-                            );
                             panel.apply_table_result(
                                 profile_id,
                                 table_for_spawn,
@@ -376,7 +378,13 @@ impl DataGridPanel {
             .spawn(async move { conn.execute(&request) });
 
         cx.spawn(async move |_this, cx| {
-            let result = task.await;
+            let mut result = task.await;
+
+            if let Ok(query_result) = result.as_mut() {
+                crate::result_warnings::handoff_visual_query_result(query_result, |warning| {
+                    dbflux_ui_base::user_error::report_error_async(warning, cx)
+                });
+            }
 
             if let Err(error) = cx.update(|cx| {
                 if cancel_token.is_cancelled() {
@@ -401,10 +409,6 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.complete_primary(task_id, cx);
-                            crate::result_warnings::consume_visual_query_result_warnings(
-                                &mut query_result,
-                                cx,
-                            );
                             panel.builder.current_visual_spec = committed_spec.clone();
                             panel.result = query_result;
                             panel.refresh.state = GridState::Ready;
@@ -557,7 +561,13 @@ impl DataGridPanel {
             .spawn(async move { conn.browse_collection(&browse_request) });
 
         cx.spawn(async move |_this, cx| {
-            let result = task.await;
+            let mut result = task.await;
+
+            if let Ok(query_result) = result.as_mut() {
+                crate::result_warnings::handoff_collection_browse_result(query_result, |warning| {
+                    dbflux_ui_base::user_error::report_error_async(warning, cx)
+                });
+            }
 
             if let Err(error) = cx.update(|cx| {
                 if cancel_token.is_cancelled() {
@@ -569,7 +579,7 @@ impl DataGridPanel {
                 }
 
                 match result {
-                    Ok(mut query_result) => {
+                    Ok(query_result) => {
                         info!(
                             "Collection query returned {} documents in {:?}",
                             query_result.row_count(),
@@ -578,10 +588,6 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.complete_primary(task_id, cx);
-                            crate::result_warnings::consume_collection_browse_result_warnings(
-                                &mut query_result,
-                                cx,
-                            );
                             panel.apply_collection_result(
                                 profile_id,
                                 collection_for_spawn,
