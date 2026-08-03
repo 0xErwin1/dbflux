@@ -256,9 +256,8 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.complete_primary(task_id, cx);
-                            crate::result_warnings::consume_query_result_warnings(
+                            crate::result_warnings::consume_table_browse_result_warnings(
                                 &mut query_result,
-                                crate::result_warnings::ResultWarningContext::TableBrowse,
                                 cx,
                             );
                             panel.apply_table_result(
@@ -402,9 +401,8 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.complete_primary(task_id, cx);
-                            crate::result_warnings::consume_query_result_warnings(
+                            crate::result_warnings::consume_visual_query_result_warnings(
                                 &mut query_result,
-                                crate::result_warnings::ResultWarningContext::VisualQuery,
                                 cx,
                             );
                             panel.builder.current_visual_spec = committed_spec.clone();
@@ -580,9 +578,8 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.complete_primary(task_id, cx);
-                            crate::result_warnings::consume_query_result_warnings(
+                            crate::result_warnings::consume_collection_browse_result_warnings(
                                 &mut query_result,
-                                crate::result_warnings::ResultWarningContext::CollectionBrowse,
                                 cx,
                             );
                             panel.apply_collection_result(

@@ -998,11 +998,7 @@ impl CodeDocument {
             Ok(mut qr) => {
                 self.runner.complete_primary(pending.task_id, cx);
 
-                crate::result_warnings::consume_query_result_warnings(
-                    &mut qr,
-                    crate::result_warnings::ResultWarningContext::Query,
-                    cx,
-                );
+                crate::result_warnings::consume_sql_editor_result_warnings(&mut qr, cx);
 
                 // Use affected_rows when available (INSERT/UPDATE/DELETE), otherwise rows.len() (SELECT)
                 let affected_rows = qr.affected_rows;
