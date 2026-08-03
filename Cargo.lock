@@ -2873,6 +2873,7 @@ dependencies = [
  "dbflux_core",
  "dbflux_ssh",
  "dbflux_test_support",
+ "half",
  "hex",
  "log",
  "native-tls",
