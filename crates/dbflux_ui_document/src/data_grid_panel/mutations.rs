@@ -309,7 +309,12 @@ impl DataGridPanel {
             cx.update(|cx| {
                 entity.update(cx, |panel, cx| {
                     match result {
-                        Ok(_) => {
+                        Ok(mut crud_result) => {
+                            crate::result_warnings::consume_crud_result_warnings(
+                                &mut crud_result,
+                                crate::result_warnings::ResultWarningContext::CrudReturning,
+                                cx,
+                            );
                             panel.runner.complete_mutation(task_id, cx);
                             panel.apply_inline_value_to_result(&node_id, &inline_value);
 
@@ -854,7 +859,12 @@ impl DataGridPanel {
             cx.update(|cx| {
                 entity.update(cx, |panel, cx| {
                     match result {
-                        Ok(_) => {
+                        Ok(mut crud_result) => {
+                            crate::result_warnings::consume_crud_result_warnings(
+                                &mut crud_result,
+                                crate::result_warnings::ResultWarningContext::CrudReturning,
+                                cx,
+                            );
                             panel.runner.complete_mutation(task_id, cx);
 
                             table_state_clone.update(cx, |state, cx| {
@@ -993,7 +1003,12 @@ impl DataGridPanel {
             cx.update(|cx| {
                 entity.update(cx, |panel, cx| {
                     match result {
-                        Ok(_) => {
+                        Ok(mut crud_result) => {
+                            crate::result_warnings::consume_crud_result_warnings(
+                                &mut crud_result,
+                                crate::result_warnings::ResultWarningContext::CrudReturning,
+                                cx,
+                            );
                             panel.runner.complete_mutation(task_id, cx);
 
                             table_state_clone.update(cx, |state, cx| {
@@ -1202,7 +1217,12 @@ impl DataGridPanel {
             cx.update(|cx| {
                 entity.update(cx, |panel, cx| {
                     match result {
-                        Ok(_) => {
+                        Ok(mut crud_result) => {
+                            crate::result_warnings::consume_crud_result_warnings(
+                                &mut crud_result,
+                                crate::result_warnings::ResultWarningContext::CrudReturning,
+                                cx,
+                            );
                             panel.runner.complete_mutation(task_id, cx);
 
                             table_state_clone.update(cx, |state, cx| {
@@ -1336,7 +1356,12 @@ impl DataGridPanel {
             cx.update(|cx| {
                 entity.update(cx, |panel, cx| {
                     match result {
-                        Ok(_) => {
+                        Ok(mut crud_result) => {
+                            crate::result_warnings::consume_crud_result_warnings(
+                                &mut crud_result,
+                                crate::result_warnings::ResultWarningContext::CrudReturning,
+                                cx,
+                            );
                             panel.runner.complete_mutation(task_id, cx);
 
                             table_state_clone.update(cx, |state, cx| {
@@ -1577,7 +1602,7 @@ impl DataGridPanel {
                 return;
             };
 
-            let mut success_count = 0usize;
+            let mut successful_results = Vec::new();
             let mut last_error: Option<dbflux_core::DbError> = None;
 
             for (_row_idx, identity) in &identities {
@@ -1591,8 +1616,8 @@ impl DataGridPanel {
                     .await;
 
                 match result {
-                    Ok(_) => {
-                        success_count += 1;
+                    Ok(crud_result) => {
+                        successful_results.push(crud_result);
                     }
                     Err(e) => {
                         last_error = Some(e);
@@ -1604,6 +1629,15 @@ impl DataGridPanel {
 
             cx.update(|cx| {
                 entity.update(cx, |panel, cx| {
+                    for crud_result in &mut successful_results {
+                        crate::result_warnings::consume_crud_result_warnings(
+                            crud_result,
+                            crate::result_warnings::ResultWarningContext::CrudReturning,
+                            cx,
+                        );
+                    }
+
+                    let success_count = successful_results.len();
                     if let Some(e) = last_error {
                         panel.runner.fail_mutation(task_id, e.to_string(), cx);
                         report_error(
@@ -1756,7 +1790,7 @@ impl DataGridPanel {
                 return;
             };
 
-            let mut success_count = 0usize;
+            let mut successful_results = Vec::new();
             let mut last_error: Option<dbflux_core::DbError> = None;
 
             for (_row_idx, filter) in &filters {
@@ -1771,8 +1805,8 @@ impl DataGridPanel {
                     .await;
 
                 match result {
-                    Ok(_) => {
-                        success_count += 1;
+                    Ok(crud_result) => {
+                        successful_results.push(crud_result);
                     }
                     Err(e) => {
                         last_error = Some(e);
@@ -1783,6 +1817,15 @@ impl DataGridPanel {
 
             cx.update(|cx| {
                 entity.update(cx, |panel, cx| {
+                    for crud_result in &mut successful_results {
+                        crate::result_warnings::consume_crud_result_warnings(
+                            crud_result,
+                            crate::result_warnings::ResultWarningContext::CrudReturning,
+                            cx,
+                        );
+                    }
+
+                    let success_count = successful_results.len();
                     if let Some(e) = last_error {
                         panel.runner.fail_mutation(task_id, e.to_string(), cx);
                         report_error(

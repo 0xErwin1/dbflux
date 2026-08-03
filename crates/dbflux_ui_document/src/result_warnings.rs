@@ -30,7 +30,7 @@ pub(crate) fn consume_query_result_warnings(
     context: ResultWarningContext,
     cx: &mut App,
 ) {
-    report_unsupported_type_warnings(take_query_result_warning_types(result), context, cx);
+    consume_query_result_warnings_with(result, context, |warning| report_error(warning, cx));
 }
 
 pub(crate) fn consume_crud_result_warnings(
@@ -38,7 +38,23 @@ pub(crate) fn consume_crud_result_warnings(
     context: ResultWarningContext,
     cx: &mut App,
 ) {
-    report_unsupported_type_warnings(take_crud_result_warning_types(result), context, cx);
+    consume_crud_result_warnings_with(result, context, |warning| report_error(warning, cx));
+}
+
+fn consume_query_result_warnings_with(
+    result: &mut QueryResult,
+    context: ResultWarningContext,
+    report: impl FnMut(UserFacingError),
+) {
+    consume_warning_types_with(take_query_result_warning_types(result), context, report);
+}
+
+fn consume_crud_result_warnings_with(
+    result: &mut CrudResult,
+    context: ResultWarningContext,
+    report: impl FnMut(UserFacingError),
+) {
+    consume_warning_types_with(take_crud_result_warning_types(result), context, report);
 }
 
 fn take_query_result_warning_types(result: &mut QueryResult) -> Vec<String> {
@@ -55,14 +71,14 @@ fn take_crud_result_warning_types(result: &mut CrudResult) -> Vec<String> {
     result.take_unsupported_types()
 }
 
-fn report_unsupported_type_warnings(
+fn consume_warning_types_with(
     type_names: Vec<String>,
     context: ResultWarningContext,
-    cx: &mut App,
+    report: impl FnMut(UserFacingError),
 ) {
-    for warning in unsupported_type_warnings(type_names, context) {
-        report_error(warning, cx);
-    }
+    unsupported_type_warnings(type_names, context)
+        .into_iter()
+        .for_each(report);
 }
 
 fn unsupported_type_warnings(
@@ -94,8 +110,9 @@ fn unsupported_type_warnings(
 #[cfg(test)]
 mod tests {
     use super::{
-        ResultWarningContext, take_crud_result_warning_types, take_query_result_warning_types,
-        unsupported_type_warnings,
+        ResultWarningContext, consume_crud_result_warnings_with,
+        consume_query_result_warnings_with, take_crud_result_warning_types,
+        take_query_result_warning_types, unsupported_type_warnings,
     };
     use dbflux_core::observability::EventSeverity;
     use dbflux_core::{CrudResult, QueryResult};
@@ -168,5 +185,92 @@ mod tests {
 
         assert_eq!(take_crud_result_warning_types(&mut result), vec!["halfvec"]);
         assert!(take_crud_result_warning_types(&mut result).is_empty());
+    }
+
+    #[test]
+    fn sql_editor_history_handoff_reports_once_before_replay() {
+        let mut result = QueryResult::empty();
+        result.set_unsupported_types(["bit".to_string(), "bit".to_string()]);
+
+        let mut additional_result = QueryResult::empty();
+        additional_result.set_unsupported_types(["varbit".to_string()]);
+        result.additional_results.push(additional_result);
+
+        let mut summaries = Vec::new();
+        consume_query_result_warnings_with(&mut result, ResultWarningContext::Query, |warning| {
+            summaries.push(warning.summary);
+        });
+        consume_query_result_warnings_with(&mut result, ResultWarningContext::Query, |warning| {
+            summaries.push(warning.summary);
+        });
+
+        assert_eq!(
+            summaries,
+            [
+                "Unsupported database type 'bit' in query result",
+                "Unsupported database type 'varbit' in query result",
+            ]
+        );
+    }
+
+    #[test]
+    fn browse_refresh_and_visual_query_handoffs_report_once_per_result() {
+        let cases = [
+            (ResultWarningContext::TableBrowse, "table browse result"),
+            (ResultWarningContext::VisualQuery, "visual query result"),
+            (
+                ResultWarningContext::CollectionBrowse,
+                "collection browse result",
+            ),
+        ];
+
+        for (context, label) in cases {
+            let mut result = QueryResult::empty();
+            result.set_unsupported_types(["bit".to_string(), "varbit".to_string()]);
+
+            let mut summaries = Vec::new();
+            consume_query_result_warnings_with(&mut result, context, |warning| {
+                summaries.push(warning.summary);
+            });
+            consume_query_result_warnings_with(&mut result, context, |warning| {
+                summaries.push(warning.summary);
+            });
+
+            assert_eq!(
+                summaries,
+                [
+                    format!("Unsupported database type 'bit' in {label}"),
+                    format!("Unsupported database type 'varbit' in {label}"),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn crud_handoffs_report_once_before_returning_application_or_discard() {
+        for _operation in ["insert", "update", "delete", "bulk delete"] {
+            let mut result = CrudResult::empty();
+            result.set_unsupported_types(["bit".to_string(), "varbit".to_string()]);
+
+            let mut summaries = Vec::new();
+            consume_crud_result_warnings_with(
+                &mut result,
+                ResultWarningContext::CrudReturning,
+                |warning| summaries.push(warning.summary),
+            );
+            consume_crud_result_warnings_with(
+                &mut result,
+                ResultWarningContext::CrudReturning,
+                |warning| summaries.push(warning.summary),
+            );
+
+            assert_eq!(
+                summaries,
+                [
+                    "Unsupported database type 'bit' in mutation RETURNING result",
+                    "Unsupported database type 'varbit' in mutation RETURNING result",
+                ]
+            );
+        }
     }
 }
