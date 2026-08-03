@@ -3420,7 +3420,7 @@ fn decode_pgvector_dense(
 fn decode_pgvector_vector(
     raw: &[u8],
 ) -> Result<PgVectorText, Box<dyn std::error::Error + Sync + Send>> {
-    decode_pgvector_dense(raw, 4, |raw, offset| read_pgvector_f32(raw, offset))
+    decode_pgvector_dense(raw, 4, read_pgvector_f32)
 }
 
 fn decode_pgvector_halfvec(
@@ -3511,12 +3511,94 @@ fn decode_pgvector(
     }
 }
 
+fn format_pgvector_float4(value: f32) -> String {
+    let mut buffer = ryu::Buffer::new();
+    let shortest = buffer.format_finite(value);
+
+    let (sign, number) = shortest
+        .strip_prefix('-')
+        .map_or_else(|| ("", shortest), |number| ("-", number));
+    let (coefficient, exponent) =
+        number
+            .split_once('e')
+            .map_or((number, 0), |(coefficient, exponent)| {
+                (
+                    coefficient,
+                    parse_pgvector_exponent(exponent).unwrap_or_default(),
+                )
+            });
+    let integer_digits = coefficient.find('.').unwrap_or(coefficient.len());
+    let digits: String = coefficient.chars().filter(char::is_ascii_digit).collect();
+    let Some(first_digit) = digits.find(|digit| digit != '0') else {
+        return format!("{sign}0");
+    };
+
+    let exponent = exponent + integer_digits as i32 - first_digit as i32 - 1;
+    let digits = digits[first_digit..].trim_end_matches('0');
+
+    if (-4..6).contains(&exponent) {
+        format_pgvector_fixed(sign, digits, exponent)
+    } else {
+        format_pgvector_scientific(sign, digits, exponent)
+    }
+}
+
+fn parse_pgvector_exponent(exponent: &str) -> Option<i32> {
+    let (sign, digits) = exponent.strip_prefix('-').map_or_else(
+        || (1, exponent.strip_prefix('+').unwrap_or(exponent)),
+        |digits| (-1, digits),
+    );
+
+    if digits.is_empty() {
+        return None;
+    }
+
+    let value = digits.chars().try_fold(0_i32, |value, digit| {
+        let digit = i32::try_from(digit.to_digit(10)?).ok()?;
+        value.checked_mul(10)?.checked_add(digit)
+    })?;
+
+    value.checked_mul(sign)
+}
+
+fn format_pgvector_fixed(sign: &str, digits: &str, exponent: i32) -> String {
+    let integer_digits = usize::try_from(exponent + 1).unwrap_or_default();
+
+    if integer_digits >= digits.len() {
+        format!(
+            "{sign}{digits}{}",
+            "0".repeat(integer_digits - digits.len())
+        )
+    } else if integer_digits == 0 {
+        format!("{sign}0.{}{digits}", "0".repeat((-exponent - 1) as usize))
+    } else {
+        format!(
+            "{sign}{}.{}",
+            &digits[..integer_digits],
+            &digits[integer_digits..]
+        )
+    }
+}
+
+fn format_pgvector_scientific(sign: &str, digits: &str, exponent: i32) -> String {
+    let digits = digits.trim_end_matches('0');
+    let mantissa = if digits.len() == 1 {
+        digits.to_string()
+    } else {
+        format!("{}.{}", &digits[..1], &digits[1..])
+    };
+    let exponent_sign = if exponent < 0 { '-' } else { '+' };
+    let exponent = exponent.unsigned_abs();
+
+    format!("{sign}{mantissa}e{exponent_sign}{exponent:02}")
+}
+
 fn format_pgvector_dense(values: &[f32]) -> String {
     format!(
         "[{}]",
         values
             .iter()
-            .map(ToString::to_string)
+            .map(|value| format_pgvector_float4(*value))
             .collect::<Vec<_>>()
             .join(",")
     )
@@ -3525,7 +3607,7 @@ fn format_pgvector_dense(values: &[f32]) -> String {
 fn format_pgvector_sparse(entries: &[(usize, f32)], dimension: usize) -> String {
     let entries = entries
         .iter()
-        .map(|(index, value)| format!("{index}:{value}"))
+        .map(|(index, value)| format!("{index}:{}", format_pgvector_float4(*value)))
         .collect::<Vec<_>>()
         .join(",");
 
@@ -3561,6 +3643,15 @@ fn pgvector_array_values_to_value(values: Option<Vec<Option<PgVectorText>>>) -> 
     }
 }
 
+fn pgvector_array_decode_to_value<E>(
+    type_name: &str,
+    decoded: Result<Option<Vec<Option<PgVectorText>>>, E>,
+) -> Value {
+    decoded
+        .map(pgvector_array_values_to_value)
+        .unwrap_or_else(|_| Value::Unsupported(type_name.to_string()))
+}
+
 fn postgres_pgvector_array_to_value(
     row: &postgres::Row,
     idx: usize,
@@ -3570,9 +3661,10 @@ fn postgres_pgvector_array_to_value(
         return None;
     }
 
-    row.try_get::<_, Option<Vec<Option<PgVectorText>>>>(idx)
-        .ok()
-        .map(pgvector_array_values_to_value)
+    Some(pgvector_array_decode_to_value(
+        type_name,
+        row.try_get::<_, Option<Vec<Option<PgVectorText>>>>(idx),
+    ))
 }
 
 fn postgres_array_to_value(row: &postgres::Row, idx: usize, type_name: &str) -> Option<Value> {
@@ -4667,8 +4759,10 @@ mod tests {
     use super::{
         POSTGRES_DIALECT, PgUriSslMode, PgVectorText, PostgresCodeGenerator, PostgresDialect,
         PostgresDriver, decode_pgvector_halfvec, decode_pgvector_sparsevec, decode_pgvector_vector,
-        inject_password_into_pg_uri, parse_pg_uri_sslmode, pgvector_array_values_to_value,
-        plan_postgres_semantic_request, prokind_to_routine_kind, unsupported_type_names,
+        format_pgvector_dense, format_pgvector_float4, format_pgvector_sparse,
+        inject_password_into_pg_uri, parse_pg_uri_sslmode, pgvector_array_decode_to_value,
+        pgvector_array_values_to_value, plan_postgres_semantic_request, prokind_to_routine_kind,
+        unsupported_type_names,
     };
     use dbflux_core::{
         AddColumnRequest, AlterColumnRequest, CodeGenerator, ColumnAssignment, CreateTableSpec,
@@ -4677,6 +4771,7 @@ mod tests {
         SemanticRequest, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, TableBrowseRequest,
         TableRef, TransferFamily, TypeAttributeDefinition, TypeDefinition, Value, WhereOperator,
     };
+    use postgres::types::{FromSql, Kind, Type};
 
     fn sparsevec_payload(dimension: i32, indices: &[i32], values: &[f32]) -> Vec<u8> {
         assert_eq!(indices.len(), values.len());
@@ -4730,6 +4825,41 @@ mod tests {
     }
 
     #[test]
+    fn pgvector_float4_formatter_matches_postgres_shortest_decimal_boundaries() {
+        let cases = [
+            (1e-6_f32, "1e-06"),
+            (1e-5_f32, "1e-05"),
+            (1e-4_f32, "0.0001"),
+            (999_999_f32, "999999"),
+            (1e6_f32, "1e+06"),
+            (1e20_f32, "1e+20"),
+            (-1e-6_f32, "-1e-06"),
+            (-1e5_f32, "-100000"),
+            (-1e20_f32, "-1e+20"),
+            (f32::MIN_POSITIVE, "1.1754944e-38"),
+            (f32::MAX, "3.4028235e+38"),
+            (0.0_f32, "0"),
+            (-0.0_f32, "-0"),
+        ];
+
+        for (value, expected) in cases {
+            assert_eq!(format_pgvector_float4(value), expected, "value: {value:?}");
+        }
+    }
+
+    #[test]
+    fn pgvector_dense_and_sparse_formatters_share_float4_formatting() {
+        assert_eq!(
+            format_pgvector_dense(&[1e-6, 1e20, -0.0]),
+            "[1e-06,1e+20,-0]"
+        );
+        assert_eq!(
+            format_pgvector_sparse(&[(1, 1e-6), (4, -1e20)], 4),
+            "{1:1e-06,4:-1e+20}/4"
+        );
+    }
+
+    #[test]
     fn pgvector_decoders_reject_malformed_and_non_finite_payloads() {
         let malformed = [0, 1, 0, 0];
         assert!(decode_pgvector_vector(&malformed).is_err());
@@ -4769,6 +4899,36 @@ mod tests {
             ])
         );
         assert_eq!(pgvector_array_values_to_value(None), Value::Null);
+    }
+
+    #[test]
+    fn malformed_pgvector_array_element_is_unsupported_and_warning_eligible() {
+        let vector_type = Type::new("vector".to_string(), 0, Kind::Simple, "public".to_string());
+        let vector_array_type = Type::new(
+            "_vector".to_string(),
+            0,
+            Kind::Array(vector_type),
+            "public".to_string(),
+        );
+        let malformed_element = [0, 1, 0, 0];
+        let mut array = Vec::new();
+        array.extend_from_slice(&1i32.to_be_bytes());
+        array.extend_from_slice(&0i32.to_be_bytes());
+        array.extend_from_slice(&0i32.to_be_bytes());
+        array.extend_from_slice(&1i32.to_be_bytes());
+        array.extend_from_slice(&1i32.to_be_bytes());
+        array.extend_from_slice(&(malformed_element.len() as i32).to_be_bytes());
+        array.extend_from_slice(&malformed_element);
+
+        let decoded = Vec::<Option<PgVectorText>>::from_sql(&vector_array_type, &array).map(Some);
+
+        let value = pgvector_array_decode_to_value("_vector", decoded);
+
+        assert_eq!(value, Value::Unsupported("_vector".to_string()));
+        assert_eq!(
+            unsupported_type_names(&[vec![value]]),
+            ["_vector".to_string()].into()
+        );
     }
 
     #[test]

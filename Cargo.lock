@@ -2879,6 +2879,7 @@ dependencies = [
  "native-tls",
  "postgres",
  "postgres-native-tls",
+ "ryu",
  "serde_json",
  "urlencoding",
  "uuid",
