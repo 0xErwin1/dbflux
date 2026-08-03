@@ -712,7 +712,13 @@ impl DataGridPanel {
         };
 
         match result {
-            Ok(crud_result) => {
+            Ok(mut crud_result) => {
+                crate::result_warnings::consume_crud_result_warnings(
+                    &mut crud_result,
+                    crate::result_warnings::ResultWarningContext::CrudReturning,
+                    cx,
+                );
+
                 table_state.update(cx, |state, cx| {
                     if let Some(returning_row) = crud_result.returning_row {
                         state.apply_returning_row(row_idx, &returning_row);

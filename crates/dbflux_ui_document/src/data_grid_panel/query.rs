@@ -246,8 +246,8 @@ impl DataGridPanel {
                     return;
                 }
 
-                match &result {
-                    Ok(query_result) => {
+                match result {
+                    Ok(mut query_result) => {
                         info!(
                             "Query returned {} rows in {:?}",
                             query_result.row_count(),
@@ -256,13 +256,18 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.complete_primary(task_id, cx);
+                            crate::result_warnings::consume_query_result_warnings(
+                                &mut query_result,
+                                crate::result_warnings::ResultWarningContext::TableBrowse,
+                                cx,
+                            );
                             panel.apply_table_result(
                                 profile_id,
                                 table_for_spawn,
                                 pagination_for_spawn,
                                 order_by_for_spawn,
                                 total_rows,
-                                query_result.clone(),
+                                query_result,
                                 cx,
                             );
                         });
@@ -397,6 +402,11 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.complete_primary(task_id, cx);
+                            crate::result_warnings::consume_query_result_warnings(
+                                &mut query_result,
+                                crate::result_warnings::ResultWarningContext::VisualQuery,
+                                cx,
+                            );
                             panel.builder.current_visual_spec = committed_spec.clone();
                             panel.result = query_result;
                             panel.refresh.state = GridState::Ready;
@@ -560,8 +570,8 @@ impl DataGridPanel {
                     return;
                 }
 
-                match &result {
-                    Ok(query_result) => {
+                match result {
+                    Ok(mut query_result) => {
                         info!(
                             "Collection query returned {} documents in {:?}",
                             query_result.row_count(),
@@ -570,12 +580,17 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.complete_primary(task_id, cx);
+                            crate::result_warnings::consume_query_result_warnings(
+                                &mut query_result,
+                                crate::result_warnings::ResultWarningContext::CollectionBrowse,
+                                cx,
+                            );
                             panel.apply_collection_result(
                                 profile_id,
                                 collection_for_spawn,
                                 pagination_for_spawn,
                                 total_docs,
-                                query_result.clone(),
+                                query_result,
                                 cx,
                             );
                         });
