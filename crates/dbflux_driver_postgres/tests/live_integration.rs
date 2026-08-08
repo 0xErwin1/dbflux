@@ -49,9 +49,9 @@ fn connect_postgres(
     Ok((connection, driver))
 }
 
-fn assert_pgvector_array_matches_server_text(decoded: &Value, server_text: &Value) {
+fn assert_text_array_matches_server_text(decoded: &Value, server_text: &Value) {
     let Value::Array(values) = decoded else {
-        panic!("expected decoded pgvector array, got {decoded:?}");
+        panic!("expected decoded text array, got {decoded:?}");
     };
     let Value::Text(server_text) = server_text else {
         panic!("expected server canonical array text, got {server_text:?}");
@@ -62,11 +62,11 @@ fn assert_pgvector_array_matches_server_text(decoded: &Value, server_text: &Valu
         .map(|value| match value {
             Value::Text(text) => Some(text.clone()),
             Value::Null => None,
-            other => panic!("expected pgvector array text or NULL, got {other:?}"),
+            other => panic!("expected array text or NULL, got {other:?}"),
         })
         .collect();
     let canonical_text: Vec<Option<String>> =
-        serde_json::from_str(server_text).expect("server pgvector array text must be JSON");
+        serde_json::from_str(server_text).expect("server array text must be JSON");
 
     assert_eq!(decoded_text, canonical_text);
 }
@@ -321,9 +321,9 @@ fn postgres_pgvector_text_matches_server_output_and_crud_returning() -> Result<(
         for (value_index, text_index) in [(0, 1), (2, 3), (4, 5)] {
             assert_eq!(row[value_index], row[text_index]);
         }
-        assert_pgvector_array_matches_server_text(&row[6], &row[7]);
-        assert_pgvector_array_matches_server_text(&row[8], &row[9]);
-        assert_pgvector_array_matches_server_text(&row[10], &row[11]);
+        assert_text_array_matches_server_text(&row[6], &row[7]);
+        assert_text_array_matches_server_text(&row[8], &row[9]);
+        assert_text_array_matches_server_text(&row[10], &row[11]);
         assert_eq!(row[12], Value::Null);
         assert_eq!(row[13], Value::Null);
 
@@ -376,6 +376,52 @@ fn postgres_pgvector_text_matches_server_output_and_crud_returning() -> Result<(
             deleted.returning_row.as_ref().and_then(|row| row.get(1)),
             Some(&server_value)
         );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_text_search_text_matches_server_output() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE text_search_display (
+                id INTEGER PRIMARY KEY,
+                vector_value tsvector,
+                query_value tsquery,
+                vector_values tsvector[]
+            )",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO text_search_display VALUES (
+                1,
+                setweight(to_tsvector('english', 'The quick brown fox'), 'A')
+                    || to_tsvector('english', 'jumps over it''s lazy dog'),
+                to_tsquery('english', '(fat | cat):AB <3> !(rat <-> dog) & bird:*'),
+                ARRAY[to_tsvector('english', 'first row'), NULL]
+            )",
+        ))?;
+
+        let result = connection.execute(&QueryRequest::new(
+            "SELECT
+                vector_value, vector_value::text,
+                query_value, query_value::text,
+                vector_values, array_to_json(vector_values)::text,
+                ''::tsvector, ''::tsvector::text,
+                NULL::tsvector, NULL::tsquery
+             FROM text_search_display",
+        ))?;
+        let row = &result.rows[0];
+
+        for (value_index, text_index) in [(0, 1), (2, 3), (6, 7)] {
+            assert_eq!(row[value_index], row[text_index]);
+        }
+        assert_text_array_matches_server_text(&row[4], &row[5]);
+        assert_eq!(row[8], Value::Null);
+        assert_eq!(row[9], Value::Null);
 
         Ok(())
     })
