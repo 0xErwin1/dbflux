@@ -3310,7 +3310,7 @@ struct PgText(String);
 
 fn is_textual_pg_type(ty: &Type) -> bool {
     match ty.name() {
-        "text" | "varchar" | "bpchar" | "name" | "citext" | "tsvector" | "tsquery" => true,
+        "text" | "varchar" | "bpchar" | "name" | "citext" => true,
         _ => match ty.kind() {
             Kind::Enum(_) => true,
             Kind::Domain(inner) => is_textual_pg_type(inner),
@@ -3627,6 +3627,410 @@ impl<'a> FromSql<'a> for PgVectorText {
     }
 }
 
+/// Wrapper that renders full-text search values in their canonical text form.
+///
+/// `tsvector` and `tsquery` travel in a binary wire format that is not valid
+/// UTF-8, so reading the raw bytes as text fails and the value silently
+/// degrades to NULL. This decoder reproduces the server-side output of
+/// `tsvectorout` / `tsqueryout`.
+struct PgTextSearchText(String);
+
+fn text_search_decode_error(message: &'static str) -> Box<dyn std::error::Error + Sync + Send> {
+    Box::new(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        message,
+    ))
+}
+
+fn read_text_search_u16(
+    raw: &[u8],
+    offset: usize,
+) -> Result<u16, Box<dyn std::error::Error + Sync + Send>> {
+    let bytes: [u8; 2] = raw
+        .get(offset..offset + 2)
+        .ok_or_else(|| text_search_decode_error("text search payload ended unexpectedly"))?
+        .try_into()
+        .map_err(|_| text_search_decode_error("invalid text search u16 payload"))?;
+
+    Ok(u16::from_be_bytes(bytes))
+}
+
+fn read_text_search_i32(
+    raw: &[u8],
+    offset: usize,
+) -> Result<i32, Box<dyn std::error::Error + Sync + Send>> {
+    let bytes: [u8; 4] = raw
+        .get(offset..offset + 4)
+        .ok_or_else(|| text_search_decode_error("text search payload ended unexpectedly"))?
+        .try_into()
+        .map_err(|_| text_search_decode_error("invalid text search i32 payload"))?;
+
+    Ok(i32::from_be_bytes(bytes))
+}
+
+fn read_text_search_byte(
+    raw: &[u8],
+    offset: usize,
+) -> Result<u8, Box<dyn std::error::Error + Sync + Send>> {
+    raw.get(offset)
+        .copied()
+        .ok_or_else(|| text_search_decode_error("text search payload ended unexpectedly"))
+}
+
+/// Read a NUL-terminated UTF-8 string, advancing `offset` past the terminator.
+fn read_text_search_cstring<'a>(
+    raw: &'a [u8],
+    offset: &mut usize,
+) -> Result<&'a str, Box<dyn std::error::Error + Sync + Send>> {
+    let remaining = raw
+        .get(*offset..)
+        .ok_or_else(|| text_search_decode_error("text search payload ended unexpectedly"))?;
+    let terminator = remaining
+        .iter()
+        .position(|byte| *byte == 0)
+        .ok_or_else(|| text_search_decode_error("unterminated text search lexeme"))?;
+
+    let lexeme = remaining
+        .get(..terminator)
+        .ok_or_else(|| text_search_decode_error("text search payload ended unexpectedly"))?;
+
+    let text = std::str::from_utf8(lexeme)?;
+    *offset += terminator + 1;
+
+    Ok(text)
+}
+
+/// Append a lexeme quoted the way PostgreSQL renders it: wrapped in single
+/// quotes, with embedded quotes and backslashes doubled.
+fn push_text_search_lexeme(output: &mut String, lexeme: &str) {
+    output.push('\'');
+
+    for character in lexeme.chars() {
+        if character == '\'' || character == '\\' {
+            output.push(character);
+        }
+
+        output.push(character);
+    }
+
+    output.push('\'');
+}
+
+fn decode_tsvector(
+    raw: &[u8],
+) -> Result<PgTextSearchText, Box<dyn std::error::Error + Sync + Send>> {
+    let lexeme_count = read_text_search_i32(raw, 0)?;
+    if lexeme_count < 0 {
+        return Err(text_search_decode_error("invalid tsvector lexeme count"));
+    }
+
+    let mut offset = 4;
+    let mut output = String::new();
+
+    for index in 0..lexeme_count {
+        let lexeme = read_text_search_cstring(raw, &mut offset)?;
+
+        if index > 0 {
+            output.push(' ');
+        }
+        push_text_search_lexeme(&mut output, lexeme);
+
+        let position_count = read_text_search_u16(raw, offset)?;
+        offset += 2;
+
+        if position_count == 0 {
+            continue;
+        }
+
+        output.push(':');
+
+        for position_index in 0..position_count {
+            let entry = read_text_search_u16(raw, offset)?;
+            offset += 2;
+
+            if position_index > 0 {
+                output.push(',');
+            }
+
+            output.push_str(&(entry & 0x3fff).to_string());
+
+            match entry >> 14 {
+                3 => output.push('A'),
+                2 => output.push('B'),
+                1 => output.push('C'),
+                _ => {}
+            }
+        }
+    }
+
+    if offset != raw.len() {
+        return Err(text_search_decode_error("trailing tsvector payload"));
+    }
+
+    Ok(PgTextSearchText(output))
+}
+
+const TSQUERY_OP_NOT: u8 = 1;
+const TSQUERY_OP_AND: u8 = 2;
+const TSQUERY_OP_OR: u8 = 3;
+const TSQUERY_OP_PHRASE: u8 = 4;
+
+enum TsQueryNode {
+    Operand {
+        lexeme: String,
+        weight: u8,
+        prefix: bool,
+    },
+    Not(Box<TsQueryNode>),
+    Binary {
+        operator: u8,
+        distance: u16,
+        left: Box<TsQueryNode>,
+        right: Box<TsQueryNode>,
+    },
+}
+
+fn tsquery_operator_priority(operator: u8) -> u8 {
+    match operator {
+        TSQUERY_OP_NOT => 4,
+        TSQUERY_OP_PHRASE => 3,
+        TSQUERY_OP_AND => 2,
+        _ => 1,
+    }
+}
+
+/// Parse one node of the prefix-ordered item stream.
+///
+/// PostgreSQL serializes a tsquery in polish notation and stores the *right*
+/// operand of a binary operator before the left one, so the recursion order
+/// here is not the display order.
+fn parse_tsquery_node(
+    raw: &[u8],
+    offset: &mut usize,
+    remaining_items: &mut i32,
+) -> Result<TsQueryNode, Box<dyn std::error::Error + Sync + Send>> {
+    if *remaining_items <= 0 {
+        return Err(text_search_decode_error(
+            "malformed tsquery: operand not found",
+        ));
+    }
+    *remaining_items -= 1;
+
+    let item_type = read_text_search_byte(raw, *offset)?;
+    *offset += 1;
+
+    match item_type {
+        1 => {
+            let weight = read_text_search_byte(raw, *offset)?;
+            let prefix = read_text_search_byte(raw, *offset + 1)?;
+            *offset += 2;
+
+            if weight > 0xF {
+                return Err(text_search_decode_error("invalid tsquery weight bitmap"));
+            }
+
+            let lexeme = read_text_search_cstring(raw, offset)?.to_string();
+
+            Ok(TsQueryNode::Operand {
+                lexeme,
+                weight,
+                prefix: prefix != 0,
+            })
+        }
+
+        2 => {
+            let operator = read_text_search_byte(raw, *offset)?;
+            *offset += 1;
+
+            if operator == TSQUERY_OP_NOT {
+                let operand = parse_tsquery_node(raw, offset, remaining_items)?;
+                return Ok(TsQueryNode::Not(Box::new(operand)));
+            }
+
+            if !matches!(operator, TSQUERY_OP_AND | TSQUERY_OP_OR | TSQUERY_OP_PHRASE) {
+                return Err(text_search_decode_error("unrecognized tsquery operator"));
+            }
+
+            let distance = if operator == TSQUERY_OP_PHRASE {
+                let distance = read_text_search_u16(raw, *offset)?;
+                *offset += 2;
+                distance
+            } else {
+                0
+            };
+
+            let right = parse_tsquery_node(raw, offset, remaining_items)?;
+            let left = parse_tsquery_node(raw, offset, remaining_items)?;
+
+            Ok(TsQueryNode::Binary {
+                operator,
+                distance,
+                left: Box::new(left),
+                right: Box::new(right),
+            })
+        }
+
+        _ => Err(text_search_decode_error("unrecognized tsquery node type")),
+    }
+}
+
+/// Render a parsed node as infix text, mirroring PostgreSQL's `infix()`:
+/// parentheses appear only when the child binds looser than its parent, or
+/// when a phrase operator sits on the right-hand side of another phrase.
+fn render_tsquery_node(
+    node: &TsQueryNode,
+    parent_priority: u8,
+    right_phrase_operand: bool,
+    output: &mut String,
+) {
+    match node {
+        TsQueryNode::Operand {
+            lexeme,
+            weight,
+            prefix,
+        } => {
+            push_text_search_lexeme(output, lexeme);
+
+            if *weight != 0 || *prefix {
+                output.push(':');
+
+                if *prefix {
+                    output.push('*');
+                }
+                for (mask, label) in [(1 << 3, 'A'), (1 << 2, 'B'), (1 << 1, 'C'), (1, 'D')] {
+                    if weight & mask != 0 {
+                        output.push(label);
+                    }
+                }
+            }
+        }
+
+        TsQueryNode::Not(operand) => {
+            let priority = tsquery_operator_priority(TSQUERY_OP_NOT);
+            let needs_parenthesis = priority < parent_priority;
+
+            if needs_parenthesis {
+                output.push_str("( ");
+            }
+
+            output.push('!');
+            render_tsquery_node(operand, priority, false, output);
+
+            if needs_parenthesis {
+                output.push_str(" )");
+            }
+        }
+
+        TsQueryNode::Binary {
+            operator,
+            distance,
+            left,
+            right,
+        } => {
+            let priority = tsquery_operator_priority(*operator);
+            let needs_parenthesis = priority < parent_priority
+                || (*operator == TSQUERY_OP_PHRASE && right_phrase_operand);
+
+            if needs_parenthesis {
+                output.push_str("( ");
+            }
+
+            render_tsquery_node(left, priority, false, output);
+
+            match *operator {
+                TSQUERY_OP_OR => output.push_str(" | "),
+                TSQUERY_OP_AND => output.push_str(" & "),
+                _ if *distance == 1 => output.push_str(" <-> "),
+                _ => output.push_str(&format!(" <{distance}> ")),
+            }
+
+            render_tsquery_node(right, priority, *operator == TSQUERY_OP_PHRASE, output);
+
+            if needs_parenthesis {
+                output.push_str(" )");
+            }
+        }
+    }
+}
+
+fn decode_tsquery(
+    raw: &[u8],
+) -> Result<PgTextSearchText, Box<dyn std::error::Error + Sync + Send>> {
+    let item_count = read_text_search_i32(raw, 0)?;
+    if item_count < 0 {
+        return Err(text_search_decode_error("invalid tsquery item count"));
+    }
+
+    if item_count == 0 {
+        return Ok(PgTextSearchText(String::new()));
+    }
+
+    let mut offset = 4;
+    let mut remaining_items = item_count;
+    let root = parse_tsquery_node(raw, &mut offset, &mut remaining_items)?;
+
+    if remaining_items != 0 {
+        return Err(text_search_decode_error("malformed tsquery: extra nodes"));
+    }
+    if offset != raw.len() {
+        return Err(text_search_decode_error("trailing tsquery payload"));
+    }
+
+    let mut output = String::new();
+    render_tsquery_node(&root, 0, false, &mut output);
+
+    Ok(PgTextSearchText(output))
+}
+
+impl<'a> FromSql<'a> for PgTextSearchText {
+    fn from_sql(
+        ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        match ty.name() {
+            "tsvector" => decode_tsvector(raw),
+            "tsquery" => decode_tsquery(raw),
+            _ => Err(text_search_decode_error("unsupported text search type")),
+        }
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(ty.name(), "tsvector" | "tsquery")
+    }
+}
+
+fn text_search_array_values_to_value(values: Option<Vec<Option<PgTextSearchText>>>) -> Value {
+    match values {
+        Some(values) => Value::Array(
+            values
+                .into_iter()
+                .map(|value| {
+                    value
+                        .map(|PgTextSearchText(text)| Value::Text(text))
+                        .unwrap_or(Value::Null)
+                })
+                .collect(),
+        ),
+        None => Value::Null,
+    }
+}
+
+fn postgres_text_search_array_to_value(
+    row: &postgres::Row,
+    idx: usize,
+    type_name: &str,
+) -> Option<Value> {
+    if !matches!(type_name, "_tsvector" | "_tsquery") {
+        return None;
+    }
+
+    Some(
+        row.try_get::<_, Option<Vec<Option<PgTextSearchText>>>>(idx)
+            .map(text_search_array_values_to_value)
+            .unwrap_or_else(|_| Value::Unsupported(type_name.to_string())),
+    )
+}
+
 fn pgvector_array_values_to_value(values: Option<Vec<Option<PgVectorText>>>) -> Value {
     match values {
         Some(values) => Value::Array(
@@ -3795,6 +4199,10 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
         return array_value;
     }
 
+    if let Some(array_value) = postgres_text_search_array_to_value(row, idx, type_name) {
+        return array_value;
+    }
+
     match type_name {
         "bool" => row
             .try_get::<_, Option<bool>>(idx)
@@ -3836,13 +4244,13 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
             .unwrap_or(Value::Null),
 
         "tsvector" | "tsquery" => row
-            .try_get::<_, Option<PgText>>(idx)
+            .try_get::<_, Option<PgTextSearchText>>(idx)
             .map(|value| {
                 value
-                    .map(|PgText(text)| Value::Text(text))
+                    .map(|PgTextSearchText(text)| Value::Text(text))
                     .unwrap_or(Value::Null)
             })
-            .unwrap_or(Value::Null),
+            .unwrap_or_else(|_| Value::Unsupported(type_name.to_string())),
 
         "vector" | "halfvec" | "sparsevec" => row
             .try_get::<_, Option<PgVectorText>>(idx)
@@ -4757,11 +5165,13 @@ fn get_schema_routines(
 #[cfg(test)]
 mod tests {
     use super::{
-        POSTGRES_DIALECT, PgUriSslMode, PgVectorText, PostgresCodeGenerator, PostgresDialect,
-        PostgresDriver, decode_pgvector_halfvec, decode_pgvector_sparsevec, decode_pgvector_vector,
-        format_pgvector_dense, format_pgvector_float4, format_pgvector_sparse,
-        inject_password_into_pg_uri, parse_pg_uri_sslmode, pgvector_array_decode_to_value,
-        pgvector_array_values_to_value, plan_postgres_semantic_request, prokind_to_routine_kind,
+        POSTGRES_DIALECT, PgTextSearchText, PgUriSslMode, PgVectorText, PostgresCodeGenerator,
+        PostgresDialect, PostgresDriver, TSQUERY_OP_AND, TSQUERY_OP_NOT, TSQUERY_OP_OR,
+        TSQUERY_OP_PHRASE, decode_pgvector_halfvec, decode_pgvector_sparsevec,
+        decode_pgvector_vector, decode_tsquery, decode_tsvector, format_pgvector_dense,
+        format_pgvector_float4, format_pgvector_sparse, inject_password_into_pg_uri,
+        parse_pg_uri_sslmode, pgvector_array_decode_to_value, pgvector_array_values_to_value,
+        plan_postgres_semantic_request, prokind_to_routine_kind, text_search_array_values_to_value,
         unsupported_type_names,
     };
     use dbflux_core::{
@@ -4899,6 +5309,163 @@ mod tests {
             ])
         );
         assert_eq!(pgvector_array_values_to_value(None), Value::Null);
+    }
+
+    fn tsvector_lexeme(lexeme: &str, positions: &[u16]) -> Vec<u8> {
+        let mut payload = lexeme.as_bytes().to_vec();
+        payload.push(0);
+        payload.extend_from_slice(&(positions.len() as u16).to_be_bytes());
+
+        for position in positions {
+            payload.extend_from_slice(&position.to_be_bytes());
+        }
+
+        payload
+    }
+
+    fn tsvector_payload(lexemes: &[Vec<u8>]) -> Vec<u8> {
+        let mut payload = (lexemes.len() as i32).to_be_bytes().to_vec();
+
+        for lexeme in lexemes {
+            payload.extend_from_slice(lexeme);
+        }
+
+        payload
+    }
+
+    fn wep(position: u16, weight: u16) -> u16 {
+        (weight << 14) | position
+    }
+
+    #[test]
+    fn tsvector_binary_payload_renders_postgres_text_output() {
+        let payload = tsvector_payload(&[
+            tsvector_lexeme("fat", &[wep(2, 0), wep(4, 3)]),
+            tsvector_lexeme("rat", &[]),
+            tsvector_lexeme("it's", &[wep(1, 1)]),
+        ]);
+
+        let PgTextSearchText(text) = decode_tsvector(&payload).expect("valid tsvector payload");
+
+        assert_eq!(text, "'fat':2,4A 'rat' 'it''s':1C");
+    }
+
+    #[test]
+    fn empty_tsvector_renders_as_empty_text() {
+        let PgTextSearchText(text) =
+            decode_tsvector(&tsvector_payload(&[])).expect("empty payload");
+
+        assert_eq!(text, "");
+    }
+
+    #[test]
+    fn truncated_tsvector_payload_is_rejected() {
+        let mut payload = tsvector_payload(&[tsvector_lexeme("fat", &[wep(2, 0)])]);
+        payload.pop();
+
+        assert!(decode_tsvector(&payload).is_err());
+    }
+
+    fn tsquery_operand(lexeme: &str, weight: u8, prefix: bool) -> Vec<u8> {
+        let mut payload = vec![1, weight, u8::from(prefix)];
+        payload.extend_from_slice(lexeme.as_bytes());
+        payload.push(0);
+
+        payload
+    }
+
+    fn tsquery_operator(operator: u8, distance: Option<u16>) -> Vec<u8> {
+        let mut payload = vec![2, operator];
+
+        if let Some(distance) = distance {
+            payload.extend_from_slice(&distance.to_be_bytes());
+        }
+
+        payload
+    }
+
+    fn tsquery_payload(items: &[Vec<u8>]) -> Vec<u8> {
+        let mut payload = (items.len() as i32).to_be_bytes().to_vec();
+
+        for item in items {
+            payload.extend_from_slice(item);
+        }
+
+        payload
+    }
+
+    #[test]
+    fn tsquery_binary_payload_preserves_operand_order() {
+        let payload = tsquery_payload(&[
+            tsquery_operator(TSQUERY_OP_AND, None),
+            tsquery_operand("rat", 0, false),
+            tsquery_operand("fat", 0, false),
+        ]);
+
+        let PgTextSearchText(text) = decode_tsquery(&payload).expect("valid tsquery payload");
+
+        assert_eq!(text, "'fat' & 'rat'");
+    }
+
+    #[test]
+    fn tsquery_lower_priority_operand_is_parenthesized() {
+        let payload = tsquery_payload(&[
+            tsquery_operator(TSQUERY_OP_AND, None),
+            tsquery_operator(TSQUERY_OP_OR, None),
+            tsquery_operand("rat", 0, false),
+            tsquery_operand("cat", 0, false),
+            tsquery_operand("fat", 0, false),
+        ]);
+
+        let PgTextSearchText(text) = decode_tsquery(&payload).expect("valid tsquery payload");
+
+        assert_eq!(text, "'fat' & ( 'cat' | 'rat' )");
+    }
+
+    #[test]
+    fn tsquery_renders_negation_weights_prefix_and_phrase_distance() {
+        let payload = tsquery_payload(&[
+            tsquery_operator(TSQUERY_OP_PHRASE, Some(3)),
+            tsquery_operator(TSQUERY_OP_NOT, None),
+            tsquery_operand("rat", 0, false),
+            tsquery_operand("fat", 0b1010, true),
+        ]);
+
+        let PgTextSearchText(text) = decode_tsquery(&payload).expect("valid tsquery payload");
+
+        assert_eq!(text, "'fat':*AC <3> !'rat'");
+    }
+
+    #[test]
+    fn tsquery_with_extra_nodes_is_rejected() {
+        let payload = tsquery_payload(&[
+            tsquery_operand("fat", 0, false),
+            tsquery_operand("rat", 0, false),
+        ]);
+
+        assert!(decode_tsquery(&payload).is_err());
+    }
+
+    #[test]
+    fn malformed_tsvector_column_is_unsupported_and_warning_eligible() {
+        let value = Value::Unsupported("tsvector".to_string());
+
+        assert_eq!(
+            unsupported_type_names(&[vec![value]]),
+            ["tsvector".to_string()].into()
+        );
+    }
+
+    #[test]
+    fn text_search_array_values_map_nulls_to_null_cells() {
+        assert_eq!(
+            text_search_array_values_to_value(Some(vec![
+                Some(PgTextSearchText("'fat':1".to_string())),
+                None,
+            ])),
+            Value::Array(vec![Value::Text("'fat':1".to_string()), Value::Null])
+        );
+        assert_eq!(text_search_array_values_to_value(None), Value::Null);
     }
 
     #[test]
