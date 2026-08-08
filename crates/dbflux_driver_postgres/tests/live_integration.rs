@@ -400,7 +400,14 @@ fn postgres_text_search_text_matches_server_output() -> Result<(), DbError> {
                 1,
                 setweight(to_tsvector('english', 'The quick brown fox'), 'A')
                     || to_tsvector('english', 'jumps over it''s lazy dog'),
-                to_tsquery('english', '(fat | cat):AB <3> !(rat <-> dog) & bird:*'),
+                tsquery_phrase(
+                    to_tsquery('simple', 'fat:AB') || to_tsquery('simple', 'cat'),
+                    !! tsquery_phrase(
+                        to_tsquery('simple', 'rat'),
+                        to_tsquery('simple', 'dog')
+                    ),
+                    3
+                ) && to_tsquery('simple', 'bird:*'),
                 ARRAY[to_tsvector('english', 'first row'), NULL]
             )",
         ))?;
