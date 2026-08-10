@@ -641,6 +641,15 @@ fn text_input_layer() -> KeymapLayer {
         Command::NewQueryTab,
     );
 
+    // Save must keep working while a text buffer owns the keyboard: the S3
+    // object editors report `ContextId::TextInput`, which has no parent
+    // layer, so without these bindings Ctrl/Cmd+S is silently dropped.
+    layer.bind(KeyChord::new("s", Modifiers::primary()), Command::SaveQuery);
+    layer.bind(
+        KeyChord::new("s", Modifiers::primary_shift()),
+        Command::SaveFileAs,
+    );
+
     // Escape exits text input mode
     layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
 
@@ -1016,5 +1025,28 @@ mod tests {
             assert_eq!(keymap.resolve(ContextId::TextInput, &chord), None);
             assert_eq!(keymap.resolve(ContextId::Editor, &chord), None);
         }
+    }
+
+    /// Save must resolve while a text buffer owns the keyboard — the S3
+    /// object editors report `ContextId::TextInput`, which inherits from no
+    /// parent layer.
+    #[test]
+    fn text_input_layer_binds_save() {
+        let keymap = default_keymap();
+
+        assert_eq!(
+            keymap.resolve(
+                ContextId::TextInput,
+                &KeyChord::new("s", Modifiers::primary())
+            ),
+            Some(Command::SaveQuery),
+        );
+        assert_eq!(
+            keymap.resolve(
+                ContextId::TextInput,
+                &KeyChord::new("s", Modifiers::primary_shift())
+            ),
+            Some(Command::SaveFileAs),
+        );
     }
 }

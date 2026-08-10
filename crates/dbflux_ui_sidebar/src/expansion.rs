@@ -837,6 +837,19 @@ impl Sidebar {
         self.pending_bucket_fetches.remove(&profile_id);
     }
 
+    /// Whether `profile_id`'s tree node is currently expanded: the user's
+    /// explicit collapse/expand override when there is one, otherwise the
+    /// builder's default (the active connection expands, the rest stay
+    /// collapsed).
+    fn profile_node_is_expanded(&self, profile_id: Uuid, cx: &App) -> bool {
+        let node_id = SchemaNodeId::Profile { profile_id }.to_string();
+
+        self.expansion_overrides
+            .get(&node_id)
+            .copied()
+            .unwrap_or_else(|| self.app_state.read(cx).active_connection_id() == Some(profile_id))
+    }
+
     fn collection_node_is_event_stream(
         &self,
         profile_id: Uuid,
@@ -913,6 +926,24 @@ impl Sidebar {
             .collect();
         for profile_id in stale_bucket_ids {
             self.clear_bucket_cache(profile_id);
+        }
+
+        // An object-storage connection that finishes while its profile node is
+        // already expanded (the active profile expands by default) never
+        // re-fires the expand handler, so the listing would sit on the
+        // "Loading..." placeholder until a manual collapse/expand. Kick the
+        // bucket fetch here instead; `spawn_fetch_buckets` deduplicates
+        // against the cache and in-flight fetches.
+        let expanded_object_store_ids: Vec<Uuid> = connected_profile_ids
+            .iter()
+            .filter(|id| {
+                self.profile_category(**id, cx) == Some(DatabaseCategory::ObjectStorage)
+                    && self.profile_node_is_expanded(**id, cx)
+            })
+            .copied()
+            .collect();
+        for profile_id in expanded_object_store_ids {
+            self.spawn_fetch_buckets(profile_id, cx);
         }
 
         self.cleanup_stale_overrides(cx);

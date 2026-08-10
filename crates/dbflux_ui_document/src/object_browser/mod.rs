@@ -166,6 +166,9 @@ pub struct ObjectBrowserDocument {
     /// Document origin in window coordinates, captured by a canvas on every
     /// render so a click position can be placed inside the document.
     panel_origin: Point<Pixels>,
+    /// Scroll state of the virtualized listing, shared with keyboard
+    /// navigation so the selected row is scrolled into view.
+    pub(super) listing_scroll: UniformListScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -240,6 +243,7 @@ impl ObjectBrowserDocument {
             context_menu: None,
             pending_open_object_editor: None,
             panel_origin: Point::default(),
+            listing_scroll: UniformListScrollHandle::new(),
             _subscriptions: vec![filter_subscription],
         };
 
@@ -533,6 +537,7 @@ impl ObjectBrowserDocument {
 
         self.tree.select(visible.get(next).cloned());
         self.focus_mode = ObjectBrowserFocusMode::Listing;
+        self.scroll_selected_into_view();
         cx.notify();
     }
 
@@ -545,7 +550,26 @@ impl ObjectBrowserDocument {
             visible.first().cloned()
         });
         self.focus_mode = ObjectBrowserFocusMode::Listing;
+        self.scroll_selected_into_view();
         cx.notify();
+    }
+
+    /// Scrolls the virtualized listing the minimum amount needed to bring the
+    /// selected row into view (a no-op when it is already fully visible).
+    fn scroll_selected_into_view(&self) {
+        let Some(selected) = self.tree.selected.as_ref() else {
+            return;
+        };
+
+        let index = self.visible_rows().iter().position(|row| match row {
+            ListingRow::Entry(visible) => &visible.entry.node_id() == selected,
+            ListingRow::LoadMore { .. } => false,
+        });
+
+        if let Some(index) = index {
+            self.listing_scroll
+                .scroll_to_item(index, ScrollStrategy::Top);
+        }
     }
 
     // -- Navigation ------------------------------------------------------

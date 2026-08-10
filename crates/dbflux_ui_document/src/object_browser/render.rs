@@ -20,7 +20,6 @@ use dbflux_core::chrono::{DateTime, Utc};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::scroll::ScrollableElement;
 
 /// Column widths. `Key` takes the remaining space; the rest are fixed so the
 /// size column stays right-aligned against a stable edge.
@@ -786,33 +785,52 @@ impl Render for ObjectBrowserDocument {
             _ => None,
         };
 
-        // The scrollable ancestor needs its own `id`, `min_h_0`, and
-        // `overflow_y_scrollbar` — without `min_h_0` a flex child never
-        // shrinks below its content size, so a long listing pushed the
-        // footer off-screen instead of scrolling.
+        // The listing is virtualized: a large bucket page (up to 1000 keys per
+        // ListObjectsV2 call, more with expanded tree nodes) built as plain
+        // `.children(...)` lays out every row on every frame and makes the
+        // document lag. `uniform_list` only builds the rows in the viewport;
+        // `min_h_0` is still required so the flex child shrinks instead of
+        // pushing the footer off-screen.
         let listing = if entry_rows.is_empty() {
             self.render_empty_state(is_loading)
         } else {
+            let entity = cx.entity().clone();
+            let list_rows = rows.clone();
+            let list_selected = selected.clone();
+
             div()
-                .id("object-browser-listing")
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scrollbar()
-                .children(rows.iter().map(|row| {
-                    match row {
-                        ListingRow::Entry(visible) => {
-                            let is_selected = selected.as_ref() == Some(&visible.entry.node_id());
-                            self.render_row(visible, is_selected, cx)
-                        }
-                        ListingRow::LoadMore {
-                            depth,
-                            prefix,
-                            loading,
-                        } => self
-                            .render_load_more(*depth, prefix, *loading, cx)
-                            .into_any_element(),
-                    }
-                }))
+                .overflow_hidden()
+                .child(
+                    uniform_list(
+                        "object-browser-listing",
+                        list_rows.len(),
+                        move |range, _window, cx| {
+                            entity.update(cx, |this, cx| {
+                                range
+                                    .filter_map(|index| list_rows.get(index))
+                                    .map(|row| match row {
+                                        ListingRow::Entry(visible) => {
+                                            let is_selected = list_selected.as_ref()
+                                                == Some(&visible.entry.node_id());
+                                            this.render_row(visible, is_selected, cx)
+                                        }
+                                        ListingRow::LoadMore {
+                                            depth,
+                                            prefix,
+                                            loading,
+                                        } => this
+                                            .render_load_more(*depth, prefix, *loading, cx)
+                                            .into_any_element(),
+                                    })
+                                    .collect()
+                            })
+                        },
+                    )
+                    .size_full()
+                    .track_scroll(self.listing_scroll.clone()),
+                )
                 .into_any_element()
         };
 
