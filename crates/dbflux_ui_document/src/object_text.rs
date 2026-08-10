@@ -94,8 +94,20 @@ pub fn decode_text_body(bytes: Vec<u8>) -> Result<TextBody, String> {
 
 /// Highlighter language for the buffer, from the key's extension. Unknown
 /// extensions resolve to the plain highlighter inside the editor component.
+///
+/// Dotenv files (`.env`, `.env.local`, `production.env`, ...) have no
+/// registered grammar of their own, but their `KEY=value` + `#` comment shape
+/// is shell syntax, so they open with the bash highlighter.
 pub fn editor_language(key: &str) -> String {
     let name = key.rsplit_once('/').map(|(_, name)| name).unwrap_or(key);
+    let lowercase_name = name.to_lowercase();
+
+    if lowercase_name == ".env"
+        || lowercase_name.starts_with(".env.")
+        || lowercase_name.ends_with(".env")
+    {
+        return "bash".to_string();
+    }
 
     name.rsplit_once('.')
         .map(|(_, extension)| extension.to_lowercase())
@@ -313,6 +325,16 @@ mod tests {
         assert_eq!(editor_language("logs/app.JSON"), "json");
         assert_eq!(editor_language("notes.md"), "md");
         assert_eq!(editor_language("data/dump"), "text");
+    }
+
+    /// Dotenv files open with the bash highlighter in every naming shape:
+    /// bare `.env`, suffixed `.env.<stage>`, and prefixed `<stage>.env`.
+    #[test]
+    fn dotenv_files_highlight_as_bash() {
+        assert_eq!(editor_language("config/.env"), "bash");
+        assert_eq!(editor_language("config/.env.production"), "bash");
+        assert_eq!(editor_language("config/staging.env"), "bash");
+        assert_eq!(editor_language(".ENV"), "bash");
     }
 
     /// T30: the cursor readout is 1-based, like every other editor.
