@@ -1,6 +1,13 @@
 # Changelog
 
 All notable changes to DBFlux will be documented in this file.
+## [0.7.2] - 2026-08-10
+
+
+### Fixed
+
+* Decode tsvector and tsquery binary values (#323)
+
 ## [0.7.1] - 2026-08-03
 
 
