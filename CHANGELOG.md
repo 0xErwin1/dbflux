@@ -1,6 +1,13 @@
 # Changelog
 
 All notable changes to DBFlux will be documented in this file.
+## [0.7.3] - 2026-08-11
+
+
+### Fixed
+
+* S3 browsing and editor UX fixes (#325)
+
 ## [0.7.2] - 2026-08-10
 
 
