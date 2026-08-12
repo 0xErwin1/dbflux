@@ -1,6 +1,13 @@
 # Changelog
 
 All notable changes to DBFlux will be documented in this file.
+## [0.7.4] - 2026-08-12
+
+
+### Fixed
+
+* Stretch listing rows to the full listing width (#327)
+
 ## [0.7.3] - 2026-08-11
 
 
