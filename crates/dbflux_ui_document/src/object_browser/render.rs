@@ -486,6 +486,10 @@ impl ObjectBrowserDocument {
 
         div()
             .id(row_id)
+            // `uniform_list` sizes each item from its own content instead of
+            // stretching it like a flex column child, so the row needs an
+            // explicit full width to line up with the header columns.
+            .w_full()
             .flex()
             .items_center()
             .gap(Spacing::MD)
@@ -591,6 +595,7 @@ impl ObjectBrowserDocument {
 
         div()
             .id(row_id)
+            .w_full()
             .flex()
             .items_center()
             .justify_center()
