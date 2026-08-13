@@ -35,7 +35,7 @@ fn sidebar_tree_label(
 pub(super) struct TreeRenderParams {
     pub connections: Vec<Uuid>,
     pub active_id: Option<Uuid>,
-    pub profile_icons: HashMap<Uuid, dbflux_core::Icon>,
+    pub profile_icons: HashMap<Uuid, AppIcon>,
     pub active_databases: HashMap<Uuid, String>,
     pub sidebar_entity: Entity<Sidebar>,
     pub multi_selection: HashSet<String>,
@@ -1040,7 +1040,7 @@ pub(crate) fn icon_for_node_kind(
 fn resolve_node_icon(
     node_kind: SchemaNodeKind,
     parsed_id: &Option<SchemaNodeId>,
-    profile_icons: &HashMap<Uuid, dbflux_core::Icon>,
+    profile_icons: &HashMap<Uuid, AppIcon>,
     is_connected: bool,
     theme: &gpui_component::Theme,
     params: &TreeRenderParams,
@@ -1053,8 +1053,7 @@ fn resolve_node_icon(
             let icon = parsed_id
                 .as_ref()
                 .and_then(|n| n.profile_id())
-                .and_then(|id| profile_icons.get(&id).copied())
-                .map(AppIcon::from_icon);
+                .and_then(|id| profile_icons.get(&id).copied());
 
             let color = if is_connected {
                 params.color_green

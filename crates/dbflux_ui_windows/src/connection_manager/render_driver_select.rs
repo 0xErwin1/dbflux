@@ -203,7 +203,7 @@ impl ConnectionManagerWindow {
                 this.select_driver(&driver_id_click, window, cx);
             }))
             .child(
-                Icon::new(AppIcon::from_icon(driver.icon))
+                Icon::new(AppIcon::for_driver(driver.icon, driver.category))
                     .size(px(32.0))
                     .color(theme.foreground),
             )
