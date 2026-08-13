@@ -353,14 +353,14 @@ impl Render for Sidebar {
         let active_id = state.active_connection_id();
         let connections = state.connections().keys().copied().collect::<Vec<_>>();
 
-        let profile_icons: HashMap<Uuid, dbflux_core::Icon> = state
+        let profile_icons: HashMap<Uuid, AppIcon> = state
             .profiles()
             .iter()
             .filter_map(|p| {
-                state
-                    .drivers()
-                    .get(&p.driver_id())
-                    .map(|driver| (p.id, driver.metadata().icon))
+                state.drivers().get(&p.driver_id()).map(|driver| {
+                    let metadata = driver.metadata();
+                    (p.id, AppIcon::for_driver(metadata.icon, metadata.category))
+                })
             })
             .collect();
 

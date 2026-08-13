@@ -757,9 +757,12 @@ impl DriversSection {
                                     .gap_2()
                                     .child(
                                         div().mt(px(2.0)).child(
-                                            Icon::new(AppIcon::from_icon(entry.metadata.icon))
-                                                .size(Heights::ICON_SM)
-                                                .muted(),
+                                            Icon::new(AppIcon::for_driver(
+                                                entry.metadata.icon,
+                                                entry.metadata.category,
+                                            ))
+                                            .size(Heights::ICON_SM)
+                                            .muted(),
                                         ),
                                     )
                                     .child(
@@ -812,9 +815,12 @@ impl DriversSection {
                     .items_start()
                     .gap_3()
                     .child(
-                        Icon::new(AppIcon::from_icon(entry.metadata.icon))
-                            .size(px(32.0))
-                            .color(theme.foreground),
+                        Icon::new(AppIcon::for_driver(
+                            entry.metadata.icon,
+                            entry.metadata.category,
+                        ))
+                        .size(px(32.0))
+                        .color(theme.foreground),
                     )
                     .child(
                         div()
