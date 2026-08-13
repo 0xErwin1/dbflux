@@ -67,6 +67,7 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::Image,
     AppIcon::Folder,
     AppIcon::Box,
+    AppIcon::Boxes,
     AppIcon::Braces,
     AppIcon::SquareTerminal,
     AppIcon::Parentheses,
@@ -76,6 +77,7 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::ChartSpline,
     AppIcon::ChartArea,
     AppIcon::ChartColumnBig,
+    AppIcon::ChartNoAxesColumn,
     AppIcon::ChartBar,
     AppIcon::ChartPie,
     AppIcon::ChartNetwork,
@@ -197,6 +199,7 @@ pub(crate) fn embedded_bytes(icon: AppIcon) -> &'static [u8] {
         AppIcon::Image => include_bytes!("../../../../../resources/icons/ui/image.svg"),
         AppIcon::Folder => include_bytes!("../../../../../resources/icons/ui/folder.svg"),
         AppIcon::Box => include_bytes!("../../../../../resources/icons/ui/box.svg"),
+        AppIcon::Boxes => include_bytes!("../../../../../resources/icons/ui/boxes.svg"),
         AppIcon::Braces => include_bytes!("../../../../../resources/icons/ui/braces.svg"),
         AppIcon::SquareTerminal => {
             include_bytes!("../../../../../resources/icons/ui/square-terminal.svg")
@@ -213,6 +216,9 @@ pub(crate) fn embedded_bytes(icon: AppIcon) -> &'static [u8] {
         AppIcon::ChartArea => include_bytes!("../../../../../resources/icons/ui/chart-area.svg"),
         AppIcon::ChartColumnBig => {
             include_bytes!("../../../../../resources/icons/ui/chart-column-big.svg")
+        }
+        AppIcon::ChartNoAxesColumn => {
+            include_bytes!("../../../../../resources/icons/ui/chart-no-axes-column.svg")
         }
         AppIcon::ChartBar => include_bytes!("../../../../../resources/icons/ui/chart-bar.svg"),
         AppIcon::ChartPie => include_bytes!("../../../../../resources/icons/ui/chart-pie.svg"),
@@ -245,5 +251,18 @@ pub(crate) fn embedded_bytes(icon: AppIcon) -> &'static [u8] {
             include_bytes!("../../../../../resources/icons/ui/brain-circuit.svg")
         }
         AppIcon::Bot => include_bytes!("../../../../../resources/icons/ui/bot.svg"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ALL_ICONS, AppIcon, embedded_bytes};
+
+    #[test]
+    fn semantic_driver_fallback_assets_are_registered() {
+        for icon in [AppIcon::ChartNoAxesColumn, AppIcon::Boxes] {
+            assert!(ALL_ICONS.contains(&icon));
+            assert!(embedded_bytes(icon).starts_with(b"<svg"));
+        }
     }
 }

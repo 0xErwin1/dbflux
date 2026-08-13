@@ -310,11 +310,10 @@ impl ConnectionManagerWindow {
                         )
                     })
                     .child({
-                        let brand_icon = self
-                            .form
-                            .selected_driver
-                            .as_ref()
-                            .map(|driver| AppIcon::from_icon(driver.metadata().icon));
+                        let brand_icon = self.form.selected_driver.as_ref().map(|driver| {
+                            let metadata = driver.metadata();
+                            AppIcon::for_driver(metadata.icon, metadata.category)
+                        });
 
                         div()
                             .flex()
