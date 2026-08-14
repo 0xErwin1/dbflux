@@ -2056,11 +2056,7 @@ impl Connection for MysqlConnection {
 
         let start = Instant::now();
 
-        let sql_preview = if req.sql.len() > 80 {
-            format!("{}...", &req.sql[..80])
-        } else {
-            req.sql.clone()
-        };
+        let sql_preview = dbflux_core::truncate_string_safe(&req.sql, 80);
         log::debug!("[QUERY] Executing: {}", sql_preview.replace('\n', " "));
 
         let mut state = match self.query_conn.lock() {
