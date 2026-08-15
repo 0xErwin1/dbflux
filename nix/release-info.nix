@@ -1,5 +1,5 @@
 {
-  version = "0.7.4";
+  version = "0.7.5";
 
   # SHA256 SRI hashes of each prebuilt artifact published in the matching
   # GitHub Release. This file is a per-branch channel pointer: on `main` it
@@ -21,12 +21,12 @@
   # Then update `version`, the two `url`s, and the two `hash`es below.
   artifacts = {
     "x86_64-linux" = {
-      url = "https://github.com/0xErwin1/dbflux/releases/download/v0.7.4/dbflux-linux-amd64.tar.gz";
-      hash = "sha256-xv0pdPZIwivTSFJVh15wWHSASDOmzDZY2xx9tnZCGbc=";
+      url = "https://github.com/0xErwin1/dbflux/releases/download/v0.7.5/dbflux-linux-amd64.tar.gz";
+      hash = "sha256-QltB3Euk50ZaxzBSHVDAsyEkCtKEloDEBzABJ5VwE0c=";
     };
     "aarch64-linux" = {
-      url = "https://github.com/0xErwin1/dbflux/releases/download/v0.7.4/dbflux-linux-arm64.tar.gz";
-      hash = "sha256-SP4WCQGHD3W/2im19l9MbcrKq5IqwcLCy0C6TJlKoWs=";
+      url = "https://github.com/0xErwin1/dbflux/releases/download/v0.7.5/dbflux-linux-arm64.tar.gz";
+      hash = "sha256-/RjHalMeMJVtCD75zcMyg/eQSSavEq6eFoMZh3UCEiA=";
     };
   };
 }
