@@ -1,6 +1,18 @@
 # Changelog
 
 All notable changes to DBFlux will be documented in this file.
+## [0.7.5] - 2026-08-14
+
+
+### Added
+
+* Add semantic driver icon fallbacks (#330)
+
+
+### Fixed
+
+* Restore key-authenticated tunnels on Windows (#329)
+
 ## [0.7.4] - 2026-08-12
 
 
