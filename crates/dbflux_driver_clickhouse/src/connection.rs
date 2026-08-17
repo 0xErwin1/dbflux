@@ -4,10 +4,9 @@ use std::time::{Duration, Instant};
 
 use dbflux_core::{
     ColumnMeta, Connection, ConnectionExt, DatabaseInfo, DbError, DbKind, DbSchemaInfo,
-    DocumentConnection, DriverMetadata, ExecutionClassification, KeyValueConnection,
-    QueryCancelHandle, QueryGenerator, QueryHandle, QueryRequest, QueryResult,
-    RelationalConnection, RelationalSchema, Row, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    TableInfo, Value, classify_sql_execution,
+    DocumentConnection, DriverMetadata, KeyValueConnection, QueryCancelHandle, QueryGenerator,
+    QueryHandle, QueryRequest, QueryResult, RelationalConnection, RelationalSchema, Row,
+    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, TableInfo, Value,
 };
 use serde::Deserialize;
 
@@ -36,7 +35,7 @@ impl ClickHouseConnection {
 
     pub(crate) fn validate_connection(&self) -> Result<(), DbError> {
         self.client
-            .execute("SELECT 1", None, None)
+            .execute("SELECT 1", None, None, None, None)
             .map(|_| ())
             .map_err(|error| ClickHouseErrorFormatter::into_connection_error(&error))
     }
@@ -49,11 +48,10 @@ impl ClickHouseConnection {
         row_limit: Option<u32>,
         row_offset: Option<u32>,
     ) -> Result<QueryResult, DbError> {
-        let sql = paginate_sql(sql, row_limit, row_offset)?;
         let started = Instant::now();
         let response = self
             .client
-            .execute(&sql, database, timeout)
+            .execute(sql, database, timeout, row_limit, row_offset)
             .map_err(|error| {
                 ClickHouseErrorFormatter::format_http_error(&error).into_query_error()
             })?;
@@ -279,27 +277,9 @@ fn parse_response(
     Ok(QueryResult::table(columns, rows, None, execution_time))
 }
 
-fn paginate_sql(sql: &str, limit: Option<u32>, offset: Option<u32>) -> Result<String, DbError> {
-    if limit.is_none() && offset.is_none() {
-        return Ok(sql.to_string());
-    }
-    if classify_sql_execution(sql) != ExecutionClassification::Read {
-        return Err(DbError::NotSupported(
-            "ClickHouse LIMIT/OFFSET request fields require a single read query".to_string(),
-        ));
-    }
-
-    let inner = sql.trim().trim_end_matches(';').trim_end();
-    let limit = limit.unwrap_or(u32::MAX);
-    let offset = offset.unwrap_or(0);
-    Ok(format!(
-        "SELECT * FROM ({inner}) AS `dbflux_page` LIMIT {limit} OFFSET {offset}"
-    ))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{paginate_sql, parse_response};
+    use super::parse_response;
     use crate::http::HttpResponse;
     use dbflux_core::{ColumnKind, Value};
     use reqwest::header::HeaderMap;
@@ -319,14 +299,5 @@ mod tests {
             Value::Decimal("18446744073709551615".to_string())
         );
         assert_eq!(result.affected_rows, None);
-    }
-
-    #[test]
-    fn pagination_wraps_read_queries_for_server_side_execution() {
-        assert_eq!(
-            paginate_sql("SELECT number FROM numbers(10);", Some(2), Some(3)).expect("read query"),
-            "SELECT * FROM (SELECT number FROM numbers(10)) AS `dbflux_page` LIMIT 2 OFFSET 3"
-        );
-        assert!(paginate_sql("DROP TABLE events", Some(2), None).is_err());
     }
 }

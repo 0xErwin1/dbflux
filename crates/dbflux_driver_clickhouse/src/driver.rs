@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use dbflux_core::secrecy::{ExposeSecret, SecretString};
+use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, DeploymentClass, DriverCapabilities,
     DriverFormDef, DriverKey, DriverMetadata, FormFieldKind, FormSection, FormTab, FormValues,
@@ -261,10 +261,7 @@ impl DbDriver for ClickHouseDriver {
         let client = ClickHouseHttpClient::new(
             url,
             user.clone(),
-            password
-                .map(ExposeSecret::expose_secret)
-                .unwrap_or_default()
-                .to_string(),
+            password.cloned(),
             database.clone(),
             Duration::from_secs(timeout),
         )

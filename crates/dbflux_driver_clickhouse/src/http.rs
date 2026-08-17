@@ -1,6 +1,7 @@
 use std::io::Read;
 use std::time::Duration;
 
+use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use reqwest::blocking::{Client, Response};
 use reqwest::header::{CONTENT_LENGTH, HeaderMap};
 use reqwest::{Url, redirect::Policy};
@@ -36,7 +37,7 @@ pub(crate) struct ClickHouseHttpClient {
     client: Client,
     endpoint: Url,
     user: String,
-    password: String,
+    password: Option<SecretString>,
     default_database: String,
     default_timeout: Duration,
 }
@@ -49,12 +50,15 @@ impl ClickHouseHttpClient {
     pub(crate) fn new(
         endpoint: &str,
         user: String,
-        password: String,
+        password: Option<SecretString>,
         default_database: String,
         timeout: Duration,
     ) -> Result<Self, ClickHouseHttpError> {
         let mut endpoint = parse_endpoint(endpoint)?;
-        if endpoint.scheme() == "http" && !password.is_empty() && !is_loopback_endpoint(&endpoint) {
+        let has_password = password
+            .as_ref()
+            .is_some_and(|password| !password.expose_secret().is_empty());
+        if endpoint.scheme() == "http" && has_password && !is_loopback_endpoint(&endpoint) {
             return Err(ClickHouseHttpError::InvalidEndpoint(
                 "non-empty passwords require HTTPS for non-loopback endpoints".to_string(),
             ));
@@ -85,6 +89,8 @@ impl ClickHouseHttpClient {
         sql: &str,
         database: Option<&str>,
         timeout: Option<Duration>,
+        limit: Option<u32>,
+        offset: Option<u32>,
     ) -> Result<HttpResponse, ClickHouseHttpError> {
         let effective_timeout = timeout.unwrap_or(self.default_timeout);
         let max_execution_time = effective_timeout
@@ -97,7 +103,10 @@ impl ClickHouseHttpClient {
         let mut request = self
             .client
             .post(self.endpoint.clone())
-            .basic_auth(&self.user, Some(&self.password))
+            .basic_auth(
+                &self.user,
+                self.password.as_ref().map(ExposeSecret::expose_secret),
+            )
             .header("X-ClickHouse-Format", "JSONCompact")
             .query(&[
                 ("database", database),
@@ -114,6 +123,13 @@ impl ClickHouseHttpClient {
                 ("max_execution_time", max_execution_time.as_str()),
             ])
             .body(sql.to_string());
+
+        if let Some(limit) = limit {
+            request = request.query(&[("limit", limit)]);
+        }
+        if let Some(offset) = offset {
+            request = request.query(&[("offset", offset)]);
+        }
 
         request = request.timeout(effective_timeout);
 
@@ -246,6 +262,7 @@ fn content_length(headers: &HeaderMap) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::{ClickHouseHttpClient, ClickHouseHttpError, success_exception};
+    use dbflux_core::secrecy::SecretString;
     use reqwest::header::{HeaderMap, HeaderValue};
     use std::time::Duration;
 
@@ -253,7 +270,7 @@ mod tests {
         ClickHouseHttpClient::new(
             url,
             "default".to_string(),
-            "secret".to_string(),
+            Some(SecretString::from("secret".to_string())),
             "default".to_string(),
             Duration::from_secs(1),
         )
@@ -294,6 +311,18 @@ mod tests {
         ));
         assert!(client("http://127.0.0.1:8123").is_ok());
         assert!(client("http://[::1]:8123").is_ok());
+    }
+
+    #[test]
+    fn accepts_empty_password_over_remote_http() {
+        let result = ClickHouseHttpClient::new(
+            "http://clickhouse.example.com",
+            "default".to_string(),
+            Some(SecretString::from(String::new())),
+            "default".to_string(),
+            Duration::from_secs(1),
+        );
+        assert!(result.is_ok());
     }
 
     #[test]

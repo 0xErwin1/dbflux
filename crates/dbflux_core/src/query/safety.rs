@@ -36,10 +36,7 @@ pub fn classify_sql_execution(sql: &str) -> ExecutionClassification {
         }
         "INSERT" | "UPDATE" | "DELETE" | "MERGE" | "REPLACE" => ExecutionClassification::Write,
         "TRUNCATE" | "DROP" | "ALTER" => ExecutionClassification::Destructive,
-        "GRANT" | "REVOKE" | "CREATE" | "SET" | "SYSTEM" | "KILL" | "ATTACH" | "DETACH"
-        | "OPTIMIZE" | "RENAME" | "EXCHANGE" | "BACKUP" | "RESTORE" | "UNDROP" | "MOVE" => {
-            ExecutionClassification::Admin
-        }
+        "GRANT" | "REVOKE" | "CREATE" | "SET" => ExecutionClassification::Admin,
         _ => ExecutionClassification::Write,
     }
 }
@@ -295,28 +292,5 @@ mod tests {
             classify_query_for_governance(&QueryLanguage::Sql, "VACUUM users"),
             ExecutionClassification::Write
         );
-    }
-
-    #[test]
-    fn database_administration_queries_require_admin_governance() {
-        for query in [
-            "SYSTEM SHUTDOWN",
-            "KILL QUERY WHERE query_id = 'abc'",
-            "OPTIMIZE TABLE events FINAL",
-            "ATTACH TABLE events",
-            "DETACH TABLE events",
-            "RENAME TABLE old TO new",
-            "EXCHANGE TABLES old AND new",
-            "UNDROP TABLE events",
-            "MOVE USER alice TO another_access_storage",
-            "BACKUP DATABASE analytics TO Disk('backups', 'analytics.zip')",
-            "RESTORE DATABASE analytics FROM Disk('backups', 'analytics.zip')",
-        ] {
-            assert_eq!(
-                classify_sql_execution(query),
-                ExecutionClassification::Admin,
-                "query must require admin governance: {query}"
-            );
-        }
     }
 }

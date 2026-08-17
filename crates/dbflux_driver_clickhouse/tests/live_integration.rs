@@ -103,6 +103,36 @@ fn clickhouse_connects_and_decodes_types() -> Result<(), DbError> {
 
 #[test]
 #[ignore = "requires Docker daemon"]
+fn clickhouse_paginates_ordered_views() -> Result<(), DbError> {
+    containers::with_clickhouse(|config| {
+        let connection = connect(&config)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE VIEW dbflux_live_pagination_view AS SELECT intDiv(number, 10) AS tens, max(number) AS maximum FROM numbers(500) GROUP BY tens",
+        ))?;
+
+        let page = connection.execute(
+            &QueryRequest::new(
+                "SELECT * FROM dbflux_live_pagination_view ORDER BY tens ASC LIMIT 100",
+            )
+            .with_limit(6)
+            .with_offset(5),
+        )?;
+
+        assert_eq!(page.rows.len(), 6);
+        assert_eq!(
+            page.rows
+                .iter()
+                .map(|row| row[0].clone())
+                .collect::<Vec<_>>(),
+            (5..=10).map(Value::Int).collect::<Vec<_>>()
+        );
+        connection.execute(&QueryRequest::new("DROP VIEW dbflux_live_pagination_view"))?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
 fn clickhouse_introspects_table_details_and_storage_hints() -> Result<(), DbError> {
     containers::with_clickhouse(|config| {
         let connection = connect(&config)?;
