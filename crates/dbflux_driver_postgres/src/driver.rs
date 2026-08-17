@@ -1625,11 +1625,7 @@ impl Connection for PostgresConnection {
         let query_id = Uuid::new_v4();
         let _active_query_guard = ActiveQueryGuard::activate(&self.active_query, query_id)?;
 
-        let sql_preview = if req.sql.len() > 80 {
-            format!("{}...", &req.sql[..80])
-        } else {
-            req.sql.clone()
-        };
+        let sql_preview = dbflux_core::truncate_string_safe(&req.sql, 80);
         log::debug!(
             "[QUERY] Executing (id={}): {}",
             query_id,

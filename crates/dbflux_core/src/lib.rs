@@ -262,3 +262,56 @@ pub fn truncate_string_safe(s: &str, max_len: usize) -> String {
 
     format!("{}...", &s[..safe_end])
 }
+
+#[cfg(test)]
+mod truncate_tests {
+    use super::truncate_string_safe;
+
+    #[test]
+    fn keeps_short_strings_verbatim() {
+        assert_eq!(truncate_string_safe("SELECT 1;", 80), "SELECT 1;");
+    }
+
+    #[test]
+    fn truncates_ascii_with_ellipsis() {
+        let long = "a".repeat(200);
+        let truncated = truncate_string_safe(&long, 80);
+        assert_eq!(truncated, format!("{}...", "a".repeat(77)));
+    }
+
+    #[test]
+    fn truncates_inside_multibyte_codepoint_without_panicking() {
+        let digits: String = "1234567890".chars().cycle().take(76).collect();
+        let sql = format!("-- {digits}中\nSELECT 1;");
+        assert!(!sql.is_char_boundary(80), "byte 80 must split 中");
+
+        assert_eq!(
+            truncate_string_safe(&sql, 80),
+            format!("-- {}...", &digits[..74])
+        );
+    }
+
+    #[test]
+    fn truncates_between_every_byte_of_a_multibyte_run() {
+        // 4-byte emoji, 3-byte CJK and 2-byte latin-1 mixed, so every possible
+        // cut index lands somewhere inside a codepoint for some `max_len`.
+        let text = "🚀中ä".repeat(40);
+        for max_len in 0..text.len() {
+            let truncated = truncate_string_safe(&text, max_len);
+            assert!(
+                text.starts_with(truncated.trim_end_matches('.')),
+                "max_len {max_len} produced a non-prefix truncation"
+            );
+        }
+    }
+
+    #[test]
+    fn never_splits_a_codepoint_at_the_exact_limit() {
+        // "中" occupies bytes 77..80, so max_len 80 cuts at byte 77.
+        let sql = format!("{}中tail", "x".repeat(77));
+        assert_eq!(
+            truncate_string_safe(&sql, 80),
+            format!("{}...", "x".repeat(77))
+        );
+    }
+}
