@@ -1,6 +1,13 @@
 # Changelog
 
 All notable changes to DBFlux will be documented in this file.
+## [0.7.6] - 2026-08-17
+
+
+### Fixed
+
+* Truncate query previews at UTF-8 char boundaries (#332)
+
 ## [0.7.5] - 2026-08-14
 
 
