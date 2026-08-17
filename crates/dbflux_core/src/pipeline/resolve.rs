@@ -201,6 +201,23 @@ fn patch_config_field(config: &mut DbConfig, field: &str, value: &ResolvedValue)
             _ => {}
         },
 
+        DbConfig::ClickHouse {
+            url,
+            user,
+            database,
+            request_timeout_seconds,
+        } => match field {
+            "url" => *url = val.to_string(),
+            "user" => *user = val.to_string(),
+            "database" => *database = val.to_string(),
+            "request_timeout_seconds" => {
+                if let Ok(timeout) = val.parse() {
+                    *request_timeout_seconds = Some(timeout);
+                }
+            }
+            _ => {}
+        },
+
         DbConfig::SqlServer {
             host,
             port,
@@ -363,6 +380,52 @@ mod tests {
             DbConfig::Postgres { port, .. } => assert_eq!(*port, 5433),
             _ => panic!("expected Postgres"),
         }
+    }
+
+    #[tokio::test]
+    async fn resolve_clickhouse_fields_and_password() {
+        let mut refs = HashMap::new();
+        refs.insert(
+            "url".to_string(),
+            ValueRef::literal("https://ch.example.com"),
+        );
+        refs.insert("user".to_string(), ValueRef::literal("analytics"));
+        refs.insert("database".to_string(), ValueRef::literal("events"));
+        refs.insert(
+            "request_timeout_seconds".to_string(),
+            ValueRef::literal("45"),
+        );
+        refs.insert(
+            "password".to_string(),
+            ValueRef::secret("stub", "clickhouse-pass", None),
+        );
+
+        let mut profile = ConnectionProfile::new("clickhouse", DbConfig::default_clickhouse());
+        profile.value_refs = refs;
+        let resolver = test_resolver();
+        let ctx = ResolveContext::default();
+
+        let (patched, password) = resolve_profile_values(&profile, &resolver, &ctx)
+            .await
+            .unwrap();
+
+        let DbConfig::ClickHouse {
+            url,
+            user,
+            database,
+            request_timeout_seconds,
+        } = patched.config
+        else {
+            panic!("expected ClickHouse");
+        };
+        assert_eq!(url, "https://ch.example.com");
+        assert_eq!(user, "analytics");
+        assert_eq!(database, "events");
+        assert_eq!(request_timeout_seconds, Some(45));
+        assert_eq!(
+            password.unwrap().expose_secret(),
+            "resolved-clickhouse-pass"
+        );
     }
 
     #[tokio::test]

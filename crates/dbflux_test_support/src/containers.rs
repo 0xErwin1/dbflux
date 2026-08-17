@@ -102,6 +102,69 @@ where
     run(url)
 }
 
+/// Connection parameters for a ClickHouse test container.
+pub struct ClickHouseConfig {
+    pub endpoint: String,
+    pub user: String,
+    pub password: String,
+    pub database: String,
+}
+
+/// Spin up a ClickHouse 25.8 LTS container and wait for its HTTP API.
+pub fn with_clickhouse<T, E, F>(run: F) -> Result<T, E>
+where
+    E: From<dbflux_core::DbError>,
+    F: FnOnce(ClickHouseConfig) -> Result<T, E>,
+{
+    let user = "dbflux";
+    let password = "dbflux";
+    let database = "dbflux_test";
+    let image = GenericImage::new("clickhouse/clickhouse-server", "25.8.30.16")
+        .with_exposed_port(ContainerPort::Tcp(8123))
+        .with_wait_for(WaitFor::seconds(1))
+        .with_env_var("CLICKHOUSE_USER", user)
+        .with_env_var("CLICKHOUSE_PASSWORD", password)
+        .with_env_var("CLICKHOUSE_DB", database)
+        .with_env_var("CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT", "1");
+
+    let container = image.start().expect("failed to start clickhouse container");
+    let port = container
+        .get_host_port_ipv4(8123)
+        .expect("failed to get clickhouse HTTP host port");
+    let endpoint = format!("http://127.0.0.1:{port}");
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|error| dbflux_core::DbError::connection_failed(error.to_string()))
+        .map_err(E::from)?;
+
+    retry_db_operation(Duration::from_secs(60), || {
+        client
+            .get(format!("{endpoint}/ping"))
+            .basic_auth(user, Some(password))
+            .send()
+            .map_err(|error| dbflux_core::DbError::connection_failed(error.to_string()))
+            .map_err(E::from)
+            .and_then(|response| {
+                if response.status().is_success() {
+                    Ok(())
+                } else {
+                    Err(E::from(dbflux_core::DbError::connection_failed(format!(
+                        "ClickHouse ping returned {}",
+                        response.status()
+                    ))))
+                }
+            })
+    })?;
+
+    run(ClickHouseConfig {
+        endpoint,
+        user: user.to_string(),
+        password: password.to_string(),
+        database: database.to_string(),
+    })
+}
+
 /// Password used when launching the SQL Server test container.
 ///
 /// SQL Server requires a "strong" SA password: at least 8 characters with

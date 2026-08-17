@@ -215,7 +215,7 @@ git clone https://github.com/0xErwin1/dbflux.git
 cd dbflux
 
 # Recommended: build with the full default feature set
-cargo build --release --features sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,lua,aws,mcp
+cargo build --release --features sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,lua,aws,mcp
 
 # Minimal build (relational drivers only, no AI/MCP, no Lua)
 cargo build --release --no-default-features --features sqlite,postgres,mysql
@@ -248,6 +248,7 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/uninst
 - **Redis** with key browsing for all types (String, Hash, List, Set, Sorted Set, Stream)
 - **DynamoDB** with table browsing, item CRUD, and AWS authentication
 - **InfluxDB** v1 and v2 (InfluxQL on v1, InfluxQL + Flux on v2)
+- **ClickHouse** and ClickHouse Cloud over HTTP(S), with database/table discovery, visual SELECTs, and explicit raw SQL execution
 - **CloudWatch Logs** with log group/stream browsing and event streaming
 - **Amazon S3** with bucket browsing, object preview/editing, full CRUD, and presigned URLs, including S3-compatible endpoints (Cloudflare R2, MinIO)
 - **External drivers over RPC** (register out-of-process drivers via the [Driver RPC Protocol](docs/DRIVER_RPC_PROTOCOL.md))

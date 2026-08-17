@@ -25,6 +25,7 @@ pub enum DbKind {
     SqlServer,
     Redshift,
     S3,
+    ClickHouse,
 }
 
 impl DbKind {
@@ -42,6 +43,7 @@ impl DbKind {
             DbKind::SqlServer => "SQL Server",
             DbKind::Redshift => "Amazon Redshift",
             DbKind::S3 => "Amazon S3",
+            DbKind::ClickHouse => "ClickHouse",
         }
     }
 }
@@ -579,6 +581,13 @@ pub enum DbConfig {
         #[serde(default)]
         path_style: bool,
     },
+    ClickHouse {
+        url: String,
+        user: String,
+        database: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_timeout_seconds: Option<u64>,
+    },
     /// Generic config for external RPC drivers.
     External {
         kind: DbKind,
@@ -605,6 +614,7 @@ impl DbConfig {
             DbConfig::SqlServer { .. } => DbKind::SqlServer,
             DbConfig::Redshift { .. } => DbKind::Redshift,
             DbConfig::S3 { .. } => DbKind::S3,
+            DbConfig::ClickHouse { .. } => DbKind::ClickHouse,
             DbConfig::External { kind, .. } => *kind,
         }
     }
@@ -759,6 +769,15 @@ impl DbConfig {
         }
     }
 
+    pub fn default_clickhouse() -> Self {
+        DbConfig::ClickHouse {
+            url: "http://localhost:8123".to_string(),
+            user: "default".to_string(),
+            database: "default".to_string(),
+            request_timeout_seconds: None,
+        }
+    }
+
     pub fn ssh_tunnel(&self) -> Option<&SshTunnelConfig> {
         match self {
             DbConfig::Postgres { ssh_tunnel, .. }
@@ -772,6 +791,7 @@ impl DbConfig {
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
+            | DbConfig::ClickHouse { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -808,6 +828,7 @@ impl DbConfig {
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
+            | DbConfig::ClickHouse { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -850,6 +871,7 @@ impl DbConfig {
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
+            | DbConfig::ClickHouse { .. }
             | DbConfig::External { .. } => false,
         }
     }
@@ -868,6 +890,7 @@ impl DbConfig {
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
+            | DbConfig::ClickHouse { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -920,6 +943,7 @@ impl DbConfig {
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
+            | DbConfig::ClickHouse { .. }
             | DbConfig::External { .. } => {}
         }
     }
@@ -929,6 +953,17 @@ impl DbConfig {
     /// Returns the extracted password when one was present and updates the
     /// stored URI in-place to a sanitized form without the password.
     pub fn strip_uri_password(&mut self) -> Option<String> {
+        if let DbConfig::ClickHouse { url, user, .. } = self {
+            let (sanitized_uri, extracted_password) = strip_password_from_uri(url);
+            if extracted_password.is_some() {
+                if let Some(username) = uri_username(url) {
+                    *user = username;
+                }
+                *url = strip_uri_userinfo(&sanitized_uri);
+            }
+            return extracted_password;
+        }
+
         let (use_uri, uri) = match self {
             DbConfig::Postgres { use_uri, uri, .. }
             | DbConfig::MySQL { use_uri, uri, .. }
@@ -941,6 +976,7 @@ impl DbConfig {
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
+            | DbConfig::ClickHouse { .. }
             | DbConfig::External { .. } => {
                 return None;
             }
@@ -974,6 +1010,7 @@ impl DbConfig {
             DbConfig::SQLite { .. } => Some("main".to_string()),
             DbConfig::DynamoDB { .. } | DbConfig::CloudWatchLogs { .. } => None,
             DbConfig::InfluxDB { default_bucket, .. } => default_bucket.clone(),
+            DbConfig::ClickHouse { database, .. } => Some(database.clone()),
             DbConfig::S3 { .. } => None,
             DbConfig::External { .. } => None,
         }
@@ -1166,9 +1203,42 @@ impl DbConfig {
                 ssh_tunnel,
                 ssh_tunnel_profile_id,
             }),
+            DbConfig::ClickHouse {
+                url,
+                user,
+                request_timeout_seconds,
+                ..
+            } => Ok(DbConfig::ClickHouse {
+                url,
+                user,
+                database: database.to_string(),
+                request_timeout_seconds,
+            }),
             _ => Err("Changing database is not supported for this database type".to_string()),
         }
     }
+}
+
+fn uri_username(uri: &str) -> Option<String> {
+    let authority = uri.split_once("://")?.1.split(['/', '?', '#']).next()?;
+    let userinfo = authority.rsplit_once('@')?.0;
+    let username = userinfo.split_once(':')?.0;
+    urlencoding::decode(username)
+        .map(|username| username.into_owned())
+        .ok()
+}
+
+fn strip_uri_userinfo(uri: &str) -> String {
+    let Some((scheme, remainder)) = uri.split_once("://") else {
+        return uri.to_string();
+    };
+    let authority_end = remainder.find(['/', '?', '#']).unwrap_or(remainder.len());
+    let authority = &remainder[..authority_end];
+    let suffix = &remainder[authority_end..];
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    format!("{scheme}://{host}{suffix}")
 }
 
 /// Removes an embedded password from a connection URI.
@@ -1465,6 +1535,7 @@ impl ConnectionProfile {
             DbKind::SqlServer => "mssql",
             DbKind::Redshift => "redshift",
             DbKind::S3 => "s3",
+            DbKind::ClickHouse => "clickhouse",
         }
     }
 
@@ -1626,6 +1697,34 @@ mod tests {
         assert_eq!(
             ConnectionProfile::builtin_driver_id_for_kind(DbKind::Redshift),
             "redshift"
+        );
+    }
+
+    #[test]
+    fn default_clickhouse_uses_http_defaults_without_ssh() {
+        let config = DbConfig::default_clickhouse();
+
+        let DbConfig::ClickHouse {
+            url,
+            user,
+            database,
+            request_timeout_seconds,
+        } = &config
+        else {
+            panic!("expected DbConfig::ClickHouse");
+        };
+
+        assert_eq!(url, "http://localhost:8123");
+        assert_eq!(user, "default");
+        assert_eq!(database, "default");
+        assert_eq!(*request_timeout_seconds, None);
+        assert_eq!(config.kind(), DbKind::ClickHouse);
+        assert!(!config.has_ssh_tunnel());
+        assert_eq!(config.host_port(), None);
+        assert_eq!(config.database().as_deref(), Some("default"));
+        assert_eq!(
+            ConnectionProfile::builtin_driver_id_for_kind(DbKind::ClickHouse),
+            "clickhouse"
         );
     }
 
@@ -2009,6 +2108,25 @@ mod tests {
             DbConfig::Redis {
                 uri: Some(ref uri), ..
             } if uri == "redis://localhost:6379/0"
+        ));
+    }
+
+    #[test]
+    fn strip_uri_password_moves_clickhouse_credentials_out_of_url() {
+        let mut config = DbConfig::ClickHouse {
+            url: "https://alice:p%40ss@clickhouse.example.com:8443".to_string(),
+            user: "default".to_string(),
+            database: "default".to_string(),
+            request_timeout_seconds: None,
+        };
+
+        let extracted = config.strip_uri_password();
+
+        assert_eq!(extracted.as_deref(), Some("p@ss"));
+        assert!(matches!(
+            config,
+            DbConfig::ClickHouse { ref url, ref user, .. }
+                if url == "https://clickhouse.example.com:8443" && user == "alice"
         ));
     }
 

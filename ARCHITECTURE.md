@@ -42,7 +42,7 @@ flowchart TB
     end
 
     subgraph Drivers["Driver implementations"]
-        drv["postgres · mysql · sqlite · mssql<br/>mongodb · redis · dynamodb<br/>influxdb · cloudwatch · ipc (RPC)"]
+        drv["postgres · mysql · sqlite · mssql · clickhouse<br/>mongodb · redis · dynamodb<br/>influxdb · cloudwatch · ipc (RPC)"]
     end
 
     subgraph Support["Supporting libraries"]
@@ -108,7 +108,7 @@ flowchart TB
 
 - Language: Rust 2024 edition (crates/dbflux/Cargo.toml).
 - UI: `gpui`, `gpui-component` (Cargo.toml).
-- Databases: `tokio-postgres` (PostgreSQL), `rusqlite` (SQLite), `mysql` (MySQL/MariaDB), `mongodb` (MongoDB), `redis` (Redis), `aws-sdk-dynamodb` (DynamoDB) (Cargo.toml).
+- Databases: `tokio-postgres` (PostgreSQL), `rusqlite` (SQLite), `mysql` (MySQL/MariaDB), `mongodb` (MongoDB), `redis` (Redis), `aws-sdk-dynamodb` (DynamoDB), and HTTP via `reqwest` (ClickHouse) (Cargo.toml).
 - AWS auth/integration: `aws-config`, `aws-sdk-sso`, `aws-sdk-ssooidc`, `aws-sdk-sts`, `aws-sdk-secretsmanager`, `aws-sdk-ssm` (`dbflux_aws`).
 - IPC/RPC: `interprocess` local sockets + `bincode` message framing (`dbflux_ipc`, `dbflux_driver_ipc`, `dbflux_driver_host`).
 - SSH: `ssh2` via `dbflux_ssh` (crates/dbflux_ssh/src/lib.rs).
@@ -458,6 +458,11 @@ crates/
   dbflux_driver_influxdb/   # InfluxDB driver (v1 + v2)
     src/driver.rs           # Connection, bucket/measurement discovery, query execution
     src/query_generator.rs  # InfluxQL (v1) and Flux (v2) query/template generation
+  dbflux_driver_clickhouse/ # ClickHouse HTTP(S) relational driver
+    src/driver.rs           # Metadata, connection form, and connection construction
+    src/connection.rs       # Query execution and system-catalog discovery
+    src/types.rs            # ClickHouse type parsing and value decoding
+    src/dialect.rs          # SQL generation dialect
   dbflux_driver_cloudwatch/ # AWS CloudWatch Logs driver (DatabaseCategory::LogStream)
     src/driver.rs           # Log group/stream discovery, EventStreamTarget, CollectionPresentation::EventStream
   dbflux_driver_s3/         # AWS S3 object-storage driver (DatabaseCategory::ObjectStorage)
@@ -817,6 +822,10 @@ The channel/branding model is a runtime seam: UI and app code read `ReleaseChann
   - v1 speaks InfluxQL; v2 exposes Flux in addition to InfluxQL (`QueryGenerator` emits Flux only when `version == V2`)
   - Bucket/database and measurement discovery mapped to the schema model, with pagination and CSV/JSON export
   - Read-oriented: no transactions; mutation generation is limited compared with the relational drivers
+- **ClickHouse**: `crates/dbflux_driver_clickhouse/` — `DatabaseCategory::Relational` and `QueryLanguage::Sql` driver for self-hosted ClickHouse and ClickHouse Cloud:
+  - Uses ClickHouse's HTTP(S) interface and dynamic JSON result decoding for arbitrary schemas
+  - Discovers databases, tables, views, columns, and engine metadata without representing databases as schemas
+  - Supports read-oriented SQL and visual SELECT generation; structured mutations, DDL, transactions, SSH tunneling, and generic query parameters are not exposed
 - **CloudWatch Logs**: `crates/dbflux_driver_cloudwatch/` — `DatabaseCategory::LogStream` driver for AWS CloudWatch Logs:
   - Log group/stream discovery exposed as collections; log groups open as event streams via `CollectionPresentation::EventStream` and a generic `EventStreamTarget`, consumed by the `AuditDocument`/log-stream viewer without any driver-specific UI branch
   - Query modes (Logs Insights QL, OpenSearch PPL/SQL) are surfaced through `SourceContextSpec`; `DriverMetadata.query_language` defaults to `Sql` for editor behavior
@@ -930,6 +939,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - MongoDB: `mongodb` async driver with BSON handling, query parser for `db.collection.method()` syntax, collection/index discovery, document CRUD, shell query generation, and collection description support for MCP/UI metadata workflows (crates/dbflux_driver_mongodb/src/driver.rs).
 - Redis: `redis` driver with key-value API for all Redis types, variadic commands, keyspace support, key scanning, and command generation (crates/dbflux_driver_redis/src/driver.rs).
 - DynamoDB: `aws-sdk-dynamodb` driver with AWS profile/region support for remote DynamoDB, plus optional endpoint override for local emulators and tests (crates/dbflux_driver_dynamodb/src/driver.rs).
+- ClickHouse: HTTP(S) driver using `reqwest` with dynamic JSON decoding, database/table discovery, and read-oriented SQL support for self-hosted ClickHouse and ClickHouse Cloud (crates/dbflux_driver_clickhouse/src/driver.rs).
 - Amazon S3: `aws-sdk-s3` driver with AWS profile/SSO or static credentials, endpoint override and path-style addressing for S3-compatible endpoints (Cloudflare R2, MinIO), bucket/object CRUD, presigned URLs, and copy/versions support (crates/dbflux_driver_s3/src/driver.rs).
 - AWS auth stack: `dbflux_aws` provides AWS SSO/shared/static auth providers, SSO login orchestration, account/role discovery, and `~/.aws/config` profile write-back for newly saved auth profiles.
 - Local IPC/RPC: `interprocess` sockets + versioned envelopes for app control and RPC service communication (`crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`). `dbflux_app::rpc_services` discovers persisted service descriptors, adapts `RpcServiceKind::Driver` into runtime `DbDriver`s, and wires `RpcServiceKind::AuthProvider` into `RpcAuthProvider` (which implements `DynAuthProvider`). Preserves `rpc:<socket_id>` compatibility. Auth-provider IPC protocol is at v1.2: adds `FetchDynamicOptions` / `DynamicOptions` variants and the `secret_dependency_opt_in` manifest flag. Auth tokens are managed by `dbflux_ipc/src/auth.rs`.
@@ -941,7 +951,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 ## Configuration
 
 - Workspace settings: `Cargo.toml` defines workspace members and shared dependencies.
-- App features: `crates/dbflux/Cargo.toml` gates `sqlite`, `postgres`, `mysql`, `mongodb`, `redis`, `dynamodb`, `cloudwatch`, `influxdb`, `mssql`, `lua`, `aws`, and `mcp` (enabled by default in this branch).
+- App features: `crates/dbflux/Cargo.toml` gates `sqlite`, `postgres`, `mysql`, `mongodb`, `redis`, `dynamodb`, `cloudwatch`, `influxdb`, `mssql`, `redshift`, `clickhouse`, `s3`, `lua`, `aws`, and `mcp` (enabled by default in this branch).
 - Runtime data: All runtime configuration is stored in `~/.local/share/dbflux/dbflux.db` (single SQLite file).
   - `cfg_connection_profiles` + child tables (auth, proxy, SSH bindings)
   - `cfg_auth_profiles` (provider-agnostic auth profile storage)
@@ -969,8 +979,8 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 
 ## Build & Deploy
 
-- Build: `cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,aws` or `--release` (AGENTS.md).
-- Run: `cargo run -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,aws` (AGENTS.md).
+- Build: `cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,clickhouse,aws` or `--release` (AGENTS.md).
+- Run: `cargo run -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,clickhouse,aws` (AGENTS.md).
 - Test: `cargo test --workspace` (AGENTS.md).
 - Lint/format: `cargo clippy --workspace -- -D warnings`, `cargo fmt --all` (AGENTS.md).
 - Nix: `nix build` or `nix run` using flake.nix; `nix develop` for dev shell.

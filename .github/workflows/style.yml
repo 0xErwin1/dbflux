@@ -90,7 +90,7 @@ jobs:
           cache-on-failure: true
 
       - name: Run clippy
-        run: cargo clippy --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,aws${{ matrix.extra_features }}" -- -D warnings
+        run: cargo clippy --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,aws${{ matrix.extra_features }}" -- -D warnings
 
   # Aggregate gate. `Clippy` is a required status check in the repository
   # ruleset, and a matrixed job reports one context per platform instead, so

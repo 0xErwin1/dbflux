@@ -43,6 +43,7 @@ The capability flags listed below are exactly the ones each driver's
 | DynamoDB | Document | Custom("DynamoDB") | Auth, pagination, filtering, insert/update/delete, nested documents, arrays | AWS-managed; native command envelope (`scan`/`query`/`put`/`update`/`delete`); no PartiQL/transactions; no query cancellation; `update many+upsert` unsupported. |
 | CloudWatch Logs | Log Stream | Sql (metadata default) | Auth | AWS-managed; executes Logs Insights QL, OpenSearch PPL, and OpenSearch SQL via editor-managed source context; no query cancellation yet. |
 | InfluxDB | Time Series | InfluxQuery | Auth, multiple databases, pagination, CSV/JSON export | v1 and v2 in one crate; InfluxQL on both, Flux on v2 only; read-only (no INSERT/UPDATE/DELETE); no transactions. |
+| ClickHouse | Relational | SQL | Multiple databases, views, auth, pagination, sorting, filtering, grouping, joins, CTEs, windows, CSV/JSON export | HTTP(S), including ClickHouse Cloud; read-oriented DBFlux integration with no structured mutations, DDL, transactions, SSH tunneling, or query parameters. |
 | Amazon S3 | Object Storage | Custom("S3") | Auth (profile/SSO or static credentials, custom endpoint), bucket browsing, paginated object navigation, preview, full CRUD, presigned URLs | S3-compatible (Cloudflare R2, MinIO); no multipart upload/transfers panel, no embedded PDF viewer, no lifecycle/ACL management or S3 Select. |
 
 ## Per-driver summary
@@ -126,6 +127,15 @@ on both versions; Flux runs on v2 only. The query API is read-only (no
 INSERT/UPDATE/DELETE, no transactions), with optional default bucket/database and
 per-query bucket routing. See
 [`crates/dbflux_driver_influxdb/README.md`](../crates/dbflux_driver_influxdb/README.md).
+
+### ClickHouse
+
+Relational SQL driver for self-hosted ClickHouse and ClickHouse Cloud over
+HTTP(S). It discovers databases, tables, views, columns, and engine metadata,
+and supports read-oriented SQL workflows with pagination and visual SELECT
+generation. Structured mutations, DDL, transactions, SSH tunneling, and generic
+query parameters are not supported in this initial scope. See
+[`crates/dbflux_driver_clickhouse/README.md`](../crates/dbflux_driver_clickhouse/README.md).
 
 ### Amazon S3
 

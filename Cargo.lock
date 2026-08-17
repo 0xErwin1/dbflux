@@ -2632,6 +2632,7 @@ dependencies = [
  "dbflux_audit",
  "dbflux_aws",
  "dbflux_core",
+ "dbflux_driver_clickhouse",
  "dbflux_driver_cloudwatch",
  "dbflux_driver_dynamodb",
  "dbflux_driver_influxdb",
@@ -2759,6 +2760,21 @@ dependencies = [
  "tree-sitter-sequel",
  "urlencoding",
  "uuid",
+]
+
+[[package]]
+name = "dbflux_driver_clickhouse"
+version = "0.8.0-dev.0"
+dependencies = [
+ "chrono",
+ "dbflux_core",
+ "dbflux_test_support",
+ "hex",
+ "log",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -3035,6 +3051,7 @@ dependencies = [
  "dbflux_audit",
  "dbflux_aws",
  "dbflux_core",
+ "dbflux_driver_clickhouse",
  "dbflux_driver_dynamodb",
  "dbflux_driver_mongodb",
  "dbflux_driver_mysql",
