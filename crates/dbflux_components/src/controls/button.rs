@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{App, ClickEvent, ElementId, SharedString, Window, px};
+use gpui::{App, ClickEvent, ElementId, Hsla, SharedString, Window, px};
 use gpui_component::button::{
     Button as GpuiButton, ButtonVariant as GpuiButtonVariant, ButtonVariants,
 };
@@ -35,6 +35,7 @@ pub struct Button {
     variant: ButtonVariant,
     size: ButtonSize,
     icon: Option<Icon>,
+    text_color: Option<Hsla>,
     disabled: bool,
     w_full: bool,
     on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + Send + Sync>>,
@@ -48,6 +49,7 @@ impl Button {
             variant: ButtonVariant::Default,
             size: ButtonSize::Default,
             icon: None,
+            text_color: None,
             disabled: false,
             w_full: false,
             on_click: None,
@@ -82,6 +84,11 @@ impl Button {
 
     pub fn icon(mut self, icon: impl Into<Icon>) -> Self {
         self.icon = Some(icon.into());
+        self
+    }
+
+    pub fn text_color(mut self, color: Hsla) -> Self {
+        self.text_color = Some(color);
         self
     }
 
@@ -135,6 +142,10 @@ impl RenderOnce for Button {
 
         if let Some(icon) = self.icon {
             btn = btn.icon(icon);
+        }
+
+        if let Some(text_color) = self.text_color {
+            btn = btn.text_color(text_color);
         }
 
         if self.size == ButtonSize::Small {
