@@ -1,6 +1,13 @@
 # Changelog
 
 All notable changes to DBFlux will be documented in this file.
+## [0.7.7] - 2026-08-18
+
+
+### Fixed
+
+* Classify SQL administration operations (#336)
+
 ## [0.7.6] - 2026-08-17
 
 

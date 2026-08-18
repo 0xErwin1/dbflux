@@ -20,7 +20,7 @@
 #define MyAppVersion GetEnv("DBFLUX_APP_VERSION")
 #if MyAppVersion == ""
 #undef MyAppVersion
-#define MyAppVersion "0.7.6"
+#define MyAppVersion "0.7.7"
 #endif
 #endif
 #define MyAppPublisher "Ignacio Perez"
