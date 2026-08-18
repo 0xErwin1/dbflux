@@ -351,6 +351,17 @@ impl ConnectionDriverConfigDto {
                 dto.s3_access_key_id = access_key_id.clone();
                 dto.s3_path_style = *path_style;
             }
+            DbConfig::ClickHouse {
+                url,
+                user,
+                database,
+                request_timeout_seconds,
+            } => {
+                dto.uri = Some(url.clone());
+                dto.user = Some(user.clone());
+                dto.database_name = Some(database.clone());
+                dto.connect_timeout_secs = persist_timeout_seconds(*request_timeout_seconds);
+            }
             DbConfig::External { kind, values } => {
                 dto.external_kind = Some(db_kind_to_str(*kind));
                 dto.external_values_json = Some(serde_json::to_string(values).unwrap_or_default());
@@ -560,6 +571,20 @@ impl ConnectionDriverConfigDto {
                 endpoint: self.dynamo_endpoint.clone(),
                 path_style: self.s3_path_style,
             }),
+            DbKind::ClickHouse => Some(DbConfig::ClickHouse {
+                url: self
+                    .uri
+                    .clone()
+                    .unwrap_or_else(|| "http://localhost:8123".to_string()),
+                user: self.user.clone().unwrap_or_else(|| "default".to_string()),
+                database: self
+                    .database_name
+                    .clone()
+                    .unwrap_or_else(|| "default".to_string()),
+                request_timeout_seconds: self
+                    .connect_timeout_secs
+                    .and_then(|timeout| u64::try_from(timeout).ok()),
+            }),
         }
     }
 }
@@ -582,6 +607,7 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::SqlServer => "SqlServer",
         DbKind::Redshift => "Redshift",
         DbKind::S3 => "S3",
+        DbKind::ClickHouse => "ClickHouse",
     }
     .to_string()
 }
@@ -600,8 +626,15 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "SqlServer" => Some(DbKind::SqlServer),
         "Redshift" => Some(DbKind::Redshift),
         "S3" => Some(DbKind::S3),
+        "ClickHouse" => Some(DbKind::ClickHouse),
         _ => None,
     }
+}
+
+/// The persistence column is a signed 32-bit integer; larger timeouts retain
+/// the maximum representable value instead of being silently stored as absent.
+fn persist_timeout_seconds(timeout: Option<u64>) -> Option<i32> {
+    timeout.map(|timeout| timeout.min(i32::MAX as u64) as i32)
 }
 
 /// Converts an `Option<String>` ssl_mode to the string stored in the DTO column.
@@ -1053,6 +1086,83 @@ mod tests {
                 assert_eq!(profile.as_deref(), Some("dev"));
                 assert_eq!(endpoint.as_deref(), Some("http://localhost:4566"));
             }
+            other => panic!("unexpected config: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clickhouse_driver_config_roundtrips_through_repository() {
+        let (_temp_dir, repo) = temp_repo();
+        let profile_id = uuid::Uuid::new_v4().to_string();
+
+        repo.conn()
+            .execute(
+                r#"
+                INSERT INTO cfg_connection_profiles (
+                    id, name, driver_id, kind, created_at, updated_at
+                ) VALUES (?1, 'ClickHouse', 'clickhouse', 'ClickHouse', datetime('now'), datetime('now'))
+                "#,
+                params![profile_id],
+            )
+            .expect("insert profile");
+
+        let config = DbConfig::ClickHouse {
+            url: "https://clickhouse.example.com:8443".to_string(),
+            user: "analytics".to_string(),
+            database: "events".to_string(),
+            request_timeout_seconds: Some(45),
+        };
+
+        let dto = ConnectionDriverConfigDto::from_db_config(profile_id.clone(), &config);
+        repo.insert(&dto).expect("insert config");
+
+        let restored = repo
+            .get_for_profile(&profile_id)
+            .expect("load config")
+            .expect("stored config");
+
+        match restored.to_db_config().expect("db config") {
+            DbConfig::ClickHouse {
+                url,
+                user,
+                database,
+                request_timeout_seconds,
+            } => {
+                assert_eq!(url, "https://clickhouse.example.com:8443");
+                assert_eq!(user, "analytics");
+                assert_eq!(database, "events");
+                assert_eq!(request_timeout_seconds, Some(45));
+            }
+            other => panic!("unexpected config: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clickhouse_timeout_clamps_to_persistence_limit() {
+        assert_eq!(
+            persist_timeout_seconds(Some(i32::MAX as u64)),
+            Some(i32::MAX)
+        );
+        assert_eq!(
+            persist_timeout_seconds(Some(i32::MAX as u64 + 1)),
+            Some(i32::MAX)
+        );
+
+        let config = DbConfig::ClickHouse {
+            url: "http://localhost:8123".to_string(),
+            user: "default".to_string(),
+            database: "default".to_string(),
+            request_timeout_seconds: Some(i32::MAX as u64 + 1),
+        };
+
+        let dto = ConnectionDriverConfigDto::from_db_config("profile".to_string(), &config);
+
+        assert_eq!(dto.connect_timeout_secs, Some(i32::MAX));
+        match dto.to_db_config().expect("db config") {
+            DbConfig::ClickHouse {
+                request_timeout_seconds,
+                ..
+            } => assert_eq!(request_timeout_seconds, Some(i32::MAX as u64)),
             other => panic!("unexpected config: {other:?}"),
         }
     }

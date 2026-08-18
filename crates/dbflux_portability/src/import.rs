@@ -2028,6 +2028,9 @@ encryption = "none"
             (DbKind::CloudWatchLogs, "CloudWatchLogs", "cloudwatch"),
             (DbKind::InfluxDB, "InfluxDB", "influxdb"),
             (DbKind::SqlServer, "SqlServer", "mssql"),
+            (DbKind::Redshift, "Redshift", "redshift"),
+            (DbKind::S3, "S3", "s3"),
+            (DbKind::ClickHouse, "ClickHouse", "clickhouse"),
         ];
 
         for (expected, kind_str, driver_id) in variants {

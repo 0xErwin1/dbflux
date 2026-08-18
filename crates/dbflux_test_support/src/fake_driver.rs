@@ -305,6 +305,14 @@ impl DbDriver for FakeDriver {
                 endpoint: get_optional_string(values, "endpoint"),
                 path_style: false,
             },
+            DbKind::ClickHouse => DbConfig::ClickHouse {
+                url: get_string(values, "url", "http://localhost:8123"),
+                user: get_string(values, "user", "default"),
+                database: get_string(values, "database", "default"),
+                request_timeout_seconds: values
+                    .get("request_timeout_seconds")
+                    .and_then(|value| value.parse().ok()),
+            },
         };
 
         Ok(config)
@@ -451,6 +459,22 @@ impl DbDriver for FakeDriver {
                     access_key_id.clone().unwrap_or_default(),
                 );
                 values.insert("endpoint".to_string(), endpoint.clone().unwrap_or_default());
+            }
+            DbConfig::ClickHouse {
+                url,
+                user,
+                database,
+                request_timeout_seconds,
+            } => {
+                values.insert("url".to_string(), url.clone());
+                values.insert("user".to_string(), user.clone());
+                values.insert("database".to_string(), database.clone());
+                values.insert(
+                    "request_timeout_seconds".to_string(),
+                    request_timeout_seconds
+                        .map(|timeout| timeout.to_string())
+                        .unwrap_or_default(),
+                );
             }
             DbConfig::External { values: vals, .. } => {
                 values.extend(vals.clone());
@@ -599,6 +623,7 @@ impl Connection for FakeConnection {
             DbKind::DynamoDB | DbKind::CloudWatchLogs | DbKind::InfluxDB | DbKind::S3 => {
                 SchemaLoadingStrategy::SingleDatabase
             }
+            DbKind::ClickHouse => SchemaLoadingStrategy::LazyPerDatabase,
         }
     }
 
@@ -642,6 +667,7 @@ fn active_database_from_profile(profile: &ConnectionProfile) -> Option<String> {
         DbConfig::SqlServer { database, .. } => database.clone(),
         DbConfig::Redshift { database, .. } => Some(database.clone()),
         DbConfig::S3 { .. } => None,
+        DbConfig::ClickHouse { database, .. } => Some(database.clone()),
         DbConfig::External { values, .. } => values.get("database").cloned(),
     }
 }
@@ -664,6 +690,7 @@ fn metadata_for_kind(kind: DbKind) -> &'static DriverMetadata {
         // metadata instead of a hand-rolled fake.
         DbKind::Redshift => &REDSHIFT_METADATA,
         DbKind::S3 => &FAKE_S3_METADATA,
+        DbKind::ClickHouse => &FAKE_CLICKHOUSE_METADATA,
     }
 }
 
@@ -680,6 +707,7 @@ fn form_for_kind(kind: DbKind) -> &'static DriverFormDef {
         DbKind::SqlServer => &SQLSERVER_FORM,
         DbKind::Redshift => &REDSHIFT_FORM,
         DbKind::S3 => &S3_FORM,
+        DbKind::ClickHouse => &CLICKHOUSE_FORM,
     }
 }
 
@@ -781,6 +809,108 @@ static FAKE_POSTGRES_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Drive
     default_chunk_size: None,
     supports_lock_timeout: false,
     editor_profile: None,
+});
+
+static FAKE_CLICKHOUSE_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "fake-clickhouse".into(),
+    display_name: "Fake ClickHouse".into(),
+    description: "Deterministic fake driver for tests".into(),
+    category: DatabaseCategory::Relational,
+    transfer_family: TransferFamily::Incompatible,
+    deployment_class: None,
+    query_language: QueryLanguage::Sql,
+    capabilities: DriverCapabilities::from_bits_truncate(
+        DriverCapabilities::MULTIPLE_DATABASES.bits()
+            | DriverCapabilities::SSL.bits()
+            | DriverCapabilities::AUTHENTICATION.bits()
+            | DriverCapabilities::VIEWS.bits()
+            | DriverCapabilities::PAGINATION.bits()
+            | DriverCapabilities::SORTING.bits()
+            | DriverCapabilities::FILTERING.bits()
+            | DriverCapabilities::EXPORT_CSV.bits()
+            | DriverCapabilities::EXPORT_JSON.bits()
+            | DriverCapabilities::CHART_AUTHORING.bits(),
+    ),
+    default_port: Some(8123),
+    uri_scheme: "http".into(),
+    icon: Icon::Database,
+    syntax: Some(SyntaxInfo {
+        identifier_quote: '`',
+        string_quote: '\'',
+        placeholder_style: dbflux_core::PlaceholderStyle::QuestionMark,
+        supports_schemas: false,
+        default_schema: None,
+        case_sensitive_identifiers: true,
+    }),
+    query: Some(QueryCapabilities {
+        pagination: vec![dbflux_core::PaginationStyle::Offset],
+        where_operators: vec![
+            dbflux_core::WhereOperator::Eq,
+            dbflux_core::WhereOperator::Ne,
+            dbflux_core::WhereOperator::Gt,
+            dbflux_core::WhereOperator::Gte,
+            dbflux_core::WhereOperator::Lt,
+            dbflux_core::WhereOperator::Lte,
+            dbflux_core::WhereOperator::Like,
+            dbflux_core::WhereOperator::Null,
+            dbflux_core::WhereOperator::In,
+            dbflux_core::WhereOperator::NotIn,
+            dbflux_core::WhereOperator::And,
+            dbflux_core::WhereOperator::Or,
+            dbflux_core::WhereOperator::Not,
+        ],
+        supports_order_by: true,
+        order_by_mode: dbflux_core::OrderByMode::AnyColumns,
+        supports_group_by: true,
+        supports_having: true,
+        supports_distinct: true,
+        supports_limit: true,
+        supports_offset: true,
+        supports_joins: true,
+        supports_subqueries: true,
+        supports_union: true,
+        supports_intersect: true,
+        supports_except: true,
+        supports_case_expressions: true,
+        supports_window_functions: true,
+        supports_ctes: true,
+        supports_explain: true,
+        max_query_parameters: 0,
+        max_order_by_columns: 0,
+        max_group_by_columns: 0,
+    }),
+    mutation: None,
+    ddl: None,
+    transactions: None,
+    limits: None,
+    ssl_modes: None,
+    ssl_cert_fields: None,
+    classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
+    editor_profile: None,
+});
+
+static CLICKHOUSE_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![FormTab {
+        id: "main".into(),
+        label: "Main".into(),
+        sections: vec![FormSection {
+            title: "Connection".into(),
+            fields: vec![
+                field_required("url", "URL", FormFieldKind::Text, "http://localhost:8123"),
+                field_required("user", "User", FormFieldKind::Text, "default"),
+                field("password", "Password", FormFieldKind::Password, ""),
+                field_required("database", "Database", FormFieldKind::Text, "default"),
+                field(
+                    "request_timeout_seconds",
+                    "Request timeout (seconds)",
+                    FormFieldKind::Number,
+                    "optional",
+                ),
+            ],
+        }],
+    }],
 });
 
 static FAKE_SQLITE_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -1217,7 +1347,8 @@ mod tests {
     use super::{FakeDriver, FakeQueryOutcome};
     use crate::fixtures;
     use dbflux_core::{
-        ConnectionProfile, DbConfig, DbDriver, DbError, DbKind, QueryRequest, SchemaLoadingStrategy,
+        ConnectionProfile, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
+        DriverCapabilities, QueryRequest, SchemaLoadingStrategy, TransferFamily,
     };
 
     #[test]
@@ -1226,6 +1357,30 @@ mod tests {
         let result = driver.build_config(&dbflux_core::FormValues::new());
 
         assert!(matches!(result, Err(DbError::InvalidProfile(_))));
+    }
+
+    #[test]
+    fn clickhouse_metadata_matches_read_only_contract() {
+        let driver = FakeDriver::new(DbKind::ClickHouse);
+        let metadata = driver.metadata();
+        let expected = DriverCapabilities::MULTIPLE_DATABASES
+            | DriverCapabilities::SSL
+            | DriverCapabilities::AUTHENTICATION
+            | DriverCapabilities::VIEWS
+            | DriverCapabilities::PAGINATION
+            | DriverCapabilities::SORTING
+            | DriverCapabilities::FILTERING
+            | DriverCapabilities::EXPORT_CSV
+            | DriverCapabilities::EXPORT_JSON
+            | DriverCapabilities::CHART_AUTHORING;
+
+        assert_eq!(metadata.category, DatabaseCategory::Relational);
+        assert_eq!(metadata.transfer_family, TransferFamily::Incompatible);
+        assert_eq!(metadata.capabilities, expected);
+        assert!(!metadata.syntax.as_ref().expect("syntax").supports_schemas);
+        assert!(metadata.query.is_some());
+        assert!(metadata.mutation.is_none());
+        assert!(metadata.transactions.is_none());
     }
 
     #[test]
@@ -1350,6 +1505,7 @@ mod tests {
             (DbKind::SQLite, SchemaLoadingStrategy::SingleDatabase),
             (DbKind::MongoDB, SchemaLoadingStrategy::SingleDatabase),
             (DbKind::Redis, SchemaLoadingStrategy::SingleDatabase),
+            (DbKind::ClickHouse, SchemaLoadingStrategy::LazyPerDatabase),
             (DbKind::DynamoDB, SchemaLoadingStrategy::SingleDatabase),
             (
                 DbKind::CloudWatchLogs,
@@ -1393,6 +1549,7 @@ mod tests {
                 DbKind::SqlServer => DbConfig::default_sqlserver(),
                 DbKind::Redshift => DbConfig::default_redshift(),
                 DbKind::S3 => DbConfig::default_s3(),
+                DbKind::ClickHouse => DbConfig::default_clickhouse(),
             };
 
             let profile = ConnectionProfile::new("fake", config);

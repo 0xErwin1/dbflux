@@ -515,6 +515,9 @@ fn profile_config_context(config: &DbConfig) -> (Option<String>, Option<u16>, Op
             default_bucket,
             ..
         } => (Some(url.clone()), None, default_bucket.clone()),
+        DbConfig::ClickHouse { url, database, .. } => {
+            (credential_free_authority(url), None, Some(database.clone()))
+        }
         DbConfig::SqlServer {
             host,
             port,
@@ -543,6 +546,27 @@ fn profile_config_context(config: &DbConfig) -> (Option<String>, Option<u16>, Op
             (host, port, database)
         }
     }
+}
+
+fn credential_free_authority(url: &str) -> Option<String> {
+    let (scheme, remainder) = url.split_once("://")?;
+    if scheme.is_empty()
+        || !scheme.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.')
+        })
+    {
+        return None;
+    }
+
+    let authority = remainder.split(['/', '?', '#']).next()?;
+    let authority = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    if authority.is_empty() {
+        return None;
+    }
+
+    Some(format!("{scheme}://{authority}"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1774,6 +1798,38 @@ mod tests {
         assert!(ctx.host.is_none());
         assert!(ctx.port.is_none());
         assert_eq!(ctx.database.as_deref(), Some("/data/app.db"));
+    }
+
+    #[test]
+    fn hook_context_from_clickhouse_profile() {
+        let profile = ConnectionProfile::new("clickhouse", DbConfig::default_clickhouse());
+
+        let ctx = HookContext::from_profile(&profile);
+
+        assert_eq!(ctx.host.as_deref(), Some("http://localhost:8123"));
+        assert_eq!(ctx.port, None);
+        assert_eq!(ctx.database.as_deref(), Some("default"));
+    }
+
+    #[test]
+    fn hook_context_removes_url_credentials() {
+        let profile = ConnectionProfile::new(
+            "clickhouse",
+            DbConfig::ClickHouse {
+                url: "https://alice:secret@clickhouse.example.com:8443/query".to_string(),
+                user: "alice".to_string(),
+                database: "default".to_string(),
+                request_timeout_seconds: None,
+            },
+        );
+
+        let context = HookContext::from_profile(&profile);
+
+        assert_eq!(
+            context.host.as_deref(),
+            Some("https://clickhouse.example.com:8443")
+        );
+        assert!(!format!("{context:?}").contains("secret"));
     }
 
     #[test]

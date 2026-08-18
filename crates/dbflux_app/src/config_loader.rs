@@ -467,6 +467,7 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::SqlServer => "SqlServer",
         DbKind::Redshift => "Redshift",
         DbKind::S3 => "S3",
+        DbKind::ClickHouse => "ClickHouse",
     }
     .to_string()
 }
@@ -485,6 +486,7 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "SqlServer" => Some(DbKind::SqlServer),
         "Redshift" => Some(DbKind::Redshift),
         "S3" => Some(DbKind::S3),
+        "ClickHouse" => Some(DbKind::ClickHouse),
         _ => None,
     }
 }
@@ -502,6 +504,7 @@ fn default_db_config_for_kind(kind: DbKind) -> dbflux_core::DbConfig {
         DbKind::SqlServer => dbflux_core::DbConfig::default_sqlserver(),
         DbKind::Redshift => dbflux_core::DbConfig::default_redshift(),
         DbKind::S3 => dbflux_core::DbConfig::default_s3(),
+        DbKind::ClickHouse => dbflux_core::DbConfig::default_clickhouse(),
     }
 }
 
@@ -1798,9 +1801,9 @@ fn load_ssh_tunnels(
 #[cfg(test)]
 mod tests {
     use super::{
-        HookDefinitionSave, default_db_config_for_kind, general_settings_theme_to_storage,
-        load_config, save_hook_definitions, save_profiles, save_services, save_ssh_tunnels,
-        theme_setting_from_storage,
+        HookDefinitionSave, db_kind_to_str, default_db_config_for_kind,
+        general_settings_theme_to_storage, load_config, save_hook_definitions, save_profiles,
+        save_services, save_ssh_tunnels, str_to_db_kind, theme_setting_from_storage,
     };
     use dbflux_core::{
         AccessKind, ConnectionHook, ConnectionHookBindings, ConnectionHooks, ConnectionProfile,
@@ -2328,6 +2331,21 @@ mod tests {
         assert!(matches!(
             default_db_config_for_kind(DbKind::InfluxDB),
             DbConfig::InfluxDB { .. }
+        ));
+    }
+
+    #[test]
+    fn clickhouse_kind_and_default_config_use_canonical_storage_name() {
+        assert_eq!(db_kind_to_str(DbKind::ClickHouse), "ClickHouse");
+        assert_eq!(str_to_db_kind("ClickHouse"), Some(DbKind::ClickHouse));
+        assert!(matches!(
+            default_db_config_for_kind(DbKind::ClickHouse),
+            DbConfig::ClickHouse {
+                ref url,
+                ref user,
+                ref database,
+                request_timeout_seconds: None,
+            } if url == "http://localhost:8123" && user == "default" && database == "default"
         ));
     }
 

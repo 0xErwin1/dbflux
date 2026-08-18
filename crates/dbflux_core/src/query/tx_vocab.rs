@@ -119,7 +119,8 @@ impl TransactionVocab {
             | DbKind::CloudWatchLogs
             | DbKind::InfluxDB
             | DbKind::Redshift
-            | DbKind::S3 => None,
+            | DbKind::S3
+            | DbKind::ClickHouse => None,
         }
     }
 

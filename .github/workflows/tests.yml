@@ -51,7 +51,7 @@ jobs:
           cache-on-failure: true
 
       - name: Run deterministic workspace tests
-        run: cargo test --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,aws"
+        run: cargo test --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,aws"
 
   driver-live-integration:
     name: Driver Live Integration
@@ -105,9 +105,9 @@ jobs:
       - name: Run SQLite live integration tests
         run: cargo test -p dbflux_driver_sqlite --locked --test live_integration
 
-      # MSSQL and InfluxDB spin up one container per test (the SQL Server image
-      # is ~2 GB), so these suites run single-threaded to avoid exhausting the
-      # runner with concurrent containers.
+      # MSSQL, InfluxDB, and ClickHouse spin up one container per test (the SQL
+      # Server image is ~2 GB), so these suites run single-threaded to avoid
+      # exhausting the runner with concurrent containers.
       - name: Run MSSQL live integration tests
         run: cargo test -p dbflux_driver_mssql --locked --test live_integration -- --ignored --test-threads=1
 
@@ -119,6 +119,9 @@ jobs:
 
       - name: Run InfluxDB live integration tests
         run: cargo test -p dbflux_driver_influxdb --locked --test live_integration -- --ignored --test-threads=1
+
+      - name: Run ClickHouse live integration tests
+        run: cargo test -p dbflux_driver_clickhouse --locked --test live_integration -- --ignored --test-threads=1
 
   cross-platform-check:
     name: Cross-platform check ${{ matrix.os }}
@@ -158,4 +161,4 @@ jobs:
           cache-on-failure: true
 
       - name: Cargo check
-        run: cargo check --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,aws${{ matrix.extra_features }}"
+        run: cargo check --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,aws${{ matrix.extra_features }}"

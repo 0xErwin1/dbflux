@@ -445,6 +445,7 @@ impl ConnectionManagerWindow {
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
+            | DbConfig::ClickHouse { .. }
             | DbConfig::External { .. } => {}
         }
 

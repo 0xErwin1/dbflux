@@ -1,0 +1,29 @@
+[package]
+name = "dbflux_driver_clickhouse"
+version.workspace = true
+edition.workspace = true
+publish = false
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+chrono.workspace = true
+dbflux_core = { path = "../dbflux_core" }
+hex.workspace = true
+log.workspace = true
+reqwest = { workspace = true, default-features = false, features = ["blocking", "rustls-tls", "gzip"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+dbflux_test_support.workspace = true
+
+[lints]
+workspace = true
