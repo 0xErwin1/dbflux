@@ -424,6 +424,7 @@ impl ConnectionManagerWindow {
                                         Button::new("copy-test-connection-error", "Copy")
                                             .ghost()
                                             .small()
+                                            .text_color(gpui::white())
                                             .icon(Icon::new(AppIcon::Copy))
                                             .on_click(move |_, _, cx| {
                                                 cx.write_to_clipboard(ClipboardItem::new_string(
