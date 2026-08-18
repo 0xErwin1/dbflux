@@ -41,7 +41,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     ),
     default_port: Some(8123),
     uri_scheme: "http".to_string(),
-    icon: Icon::Database,
+    icon: Icon::Clickhouse,
     syntax: Some(SyntaxInfo {
         identifier_quote: '`',
         string_quote: '\'',

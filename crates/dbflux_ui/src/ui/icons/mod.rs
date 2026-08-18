@@ -89,6 +89,7 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::BrandSqlite,
     AppIcon::BrandMongodb,
     AppIcon::BrandRedis,
+    AppIcon::BrandClickhouse,
     AppIcon::BrandLua,
     AppIcon::BrandPython,
     AppIcon::BrandBash,
@@ -237,6 +238,9 @@ pub(crate) fn embedded_bytes(icon: AppIcon) -> &'static [u8] {
             include_bytes!("../../../../../resources/icons/brand/mongodb.svg")
         }
         AppIcon::BrandRedis => include_bytes!("../../../../../resources/icons/brand/redis.svg"),
+        AppIcon::BrandClickhouse => {
+            include_bytes!("../../../../../resources/icons/brand/clickhouse.svg")
+        }
         AppIcon::BrandLua => include_bytes!("../../../../../resources/icons/brand/lua.svg"),
         AppIcon::BrandPython => include_bytes!("../../../../../resources/icons/brand/python.svg"),
         AppIcon::BrandBash => include_bytes!("../../../../../resources/icons/brand/gnubash.svg"),
@@ -260,7 +264,11 @@ mod tests {
 
     #[test]
     fn semantic_driver_fallback_assets_are_registered() {
-        for icon in [AppIcon::ChartNoAxesColumn, AppIcon::Boxes] {
+        for icon in [
+            AppIcon::ChartNoAxesColumn,
+            AppIcon::Boxes,
+            AppIcon::BrandClickhouse,
+        ] {
             assert!(ALL_ICONS.contains(&icon));
             assert!(embedded_bytes(icon).starts_with(b"<svg"));
         }

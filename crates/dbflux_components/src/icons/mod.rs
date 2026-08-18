@@ -118,6 +118,7 @@ pub enum AppIcon {
     BrandSqlite,
     BrandMongodb,
     BrandRedis,
+    BrandClickhouse,
 
     // Language brands (for script file icons)
     BrandLua,
@@ -220,6 +221,7 @@ impl AppIcon {
             Self::BrandSqlite => "icons/brand/sqlite.svg",
             Self::BrandMongodb => "icons/brand/mongodb.svg",
             Self::BrandRedis => "icons/brand/redis.svg",
+            Self::BrandClickhouse => "icons/brand/clickhouse.svg",
             Self::BrandLua => "icons/brand/lua.svg",
             Self::BrandPython => "icons/brand/python.svg",
             Self::BrandBash => "icons/brand/gnubash.svg",
@@ -285,6 +287,7 @@ impl AppIcon {
             Icon::Dynamodb => Self::Braces,
             Icon::Redshift => Self::ChartNoAxesColumn,
             Icon::S3 => Self::Boxes,
+            Icon::Clickhouse => Self::BrandClickhouse,
             Icon::Influxdb => Self::BrandInfluxDb,
             Icon::Logs => Self::Logs,
             Icon::Database => match category {
@@ -335,6 +338,10 @@ mod tests {
         assert_eq!(
             AppIcon::for_driver(Icon::S3, DatabaseCategory::ObjectStorage),
             AppIcon::Boxes
+        );
+        assert_eq!(
+            AppIcon::for_driver(Icon::Clickhouse, DatabaseCategory::Relational),
+            AppIcon::BrandClickhouse
         );
     }
 
