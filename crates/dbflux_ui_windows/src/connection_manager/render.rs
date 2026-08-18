@@ -412,12 +412,24 @@ impl ConnectionManagerWindow {
                             TestStatus::Failed => {
                                 let message =
                                     test_error.unwrap_or_else(|| "Connection failed".to_string());
+                                let message_to_copy = message.clone();
                                 BannerBlock::new(BannerVariant::Danger, "Connection failed")
                                     .with_body(message)
                                     .with_icon(
                                         AppIconElement::new(AppIcon::Info)
                                             .size(Heights::ICON_SM)
                                             .color(banners.error_fg),
+                                    )
+                                    .with_actions(
+                                        Button::new("copy-test-connection-error", "Copy")
+                                            .ghost()
+                                            .small()
+                                            .icon(Icon::new(AppIcon::Copy))
+                                            .on_click(move |_, _, cx| {
+                                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                                    message_to_copy.clone(),
+                                                ));
+                                            }),
                                     )
                             }
                             TestStatus::None => unreachable!("guarded by when condition"),
