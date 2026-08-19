@@ -1,0 +1,197 @@
+@import "./tokens.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: var(--s-8);
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-mono);
+  color: var(--text-strong);
+  line-height: var(--lh-tight);
+  font-weight: 700;
+  margin: 0;
+}
+
+a {
+  color: var(--link);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--link-hover);
+  text-decoration: underline;
+}
+
+img {
+  max-width: 100%;
+  display: block;
+}
+
+:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+::selection {
+  background: var(--selection);
+  color: var(--text-strong);
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--font-mono);
+}
+
+.skip-link {
+  position: absolute;
+  left: var(--s-5);
+  top: -100px;
+  z-index: calc(var(--z-nav) + 1);
+  background: var(--accent);
+  color: var(--accent-on);
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  font-weight: 700;
+  padding: var(--s-4) var(--s-5);
+  transition: top var(--t-instant) var(--ease-std);
+}
+
+.skip-link:focus {
+  top: var(--s-5);
+  text-decoration: none;
+}
+
+.shell {
+  max-width: var(--content-max);
+  margin-inline: auto;
+  padding-inline: var(--s-8);
+}
+
+.label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-3);
+  min-height: var(--control-h);
+  padding: var(--s-4) var(--s-6);
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  border: var(--bw) solid transparent;
+  cursor: pointer;
+  transition:
+    background var(--t-instant) linear,
+    border-color var(--t-instant) linear,
+    color var(--t-instant) linear,
+    transform var(--t-instant) var(--ease-out);
+}
+
+.btn:hover {
+  text-decoration: none;
+}
+
+.btn--primary {
+  background: var(--accent);
+  color: var(--accent-on);
+  font-weight: 700;
+}
+
+.btn--primary:hover {
+  background: var(--accent-hover);
+  color: var(--accent-on);
+  transform: translateY(-1px);
+}
+
+.btn--primary:active {
+  background: var(--accent-active);
+  transform: none;
+}
+
+.btn--secondary {
+  border-color: var(--border-interactive);
+  color: var(--text);
+}
+
+.btn--secondary:hover {
+  border-color: var(--accent);
+  color: var(--text-strong);
+}
+
+/*
+ * Section entrance. Scroll-driven where the browser supports view() timelines,
+ * and a plain load animation everywhere else. `both` keeps the end state visible
+ * either way, so no content depends on the animation running.
+ */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.reveal {
+  animation: rise var(--t-entrance) var(--ease-out) both;
+}
+
+@supports (animation-timeline: view()) {
+  .reveal {
+    animation-timeline: view();
+    animation-range: entry 0% cover 26%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (max-width: 1024px) {
+  .shell {
+    padding-inline: var(--s-7);
+  }
+}
+
+@media (max-width: 640px) {
+  .shell {
+    padding-inline: var(--s-6);
+  }
+}

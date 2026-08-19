@@ -1,0 +1,256 @@
+---
+import Icon from './Icon.astro';
+import { REPO } from '../data/nav';
+
+interface Props {
+  current?: 'home' | 'docs' | 'about';
+}
+
+const { current } = Astro.props;
+
+const LINKS = [
+  { href: '/#features', label: 'Features', key: 'features' },
+  { href: '/#drivers', label: 'Drivers', key: 'drivers' },
+  { href: '/docs/', label: 'Docs', key: 'docs' },
+  { href: '/about/', label: 'About', key: 'about' },
+] as const;
+---
+
+<header class="nav" data-nav>
+  <div class="nav__inner">
+    <a class="nav__brand" href="/">
+      <Icon name="database" size={20} />
+      <span>DBFlux</span>
+    </a>
+
+    <nav class="nav__links" aria-label="Main">
+      {
+        LINKS.map((link) => (
+          <a
+            href={link.href}
+            class="nav__link"
+            aria-current={current === link.key ? 'page' : undefined}
+          >
+            {link.label}
+          </a>
+        ))
+      }
+    </nav>
+
+    <div class="nav__actions">
+      <a class="nav__link nav__link--icon" href={REPO} rel="noopener">
+        <Icon name="github" size={16} />
+        <span>GitHub</span>
+      </a>
+      <a class="btn btn--primary nav__cta" href="/#install">Download</a>
+      <button class="nav__toggle" type="button" data-nav-toggle aria-expanded="false" aria-controls="nav-sheet">
+        <span class="visually-hidden">Menu</span>
+        <Icon name="menu" size={20} />
+      </button>
+    </div>
+  </div>
+
+  <div class="nav__sheet" id="nav-sheet" hidden>
+    {LINKS.map((link) => <a href={link.href}>{link.label}</a>)}
+    <a href={REPO} rel="noopener">GitHub</a>
+    <div class="nav__sheet-cta"><a class="btn btn--primary" href="/#install">Download</a></div>
+  </div>
+</header>
+
+<style>
+  .nav {
+    position: sticky;
+    top: 0;
+    z-index: var(--z-nav);
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: var(--bw) solid var(--border);
+  }
+
+  .nav__inner {
+    max-width: var(--content-max);
+    margin-inline: auto;
+    padding-inline: var(--s-8);
+    height: 64px;
+    display: flex;
+    align-items: center;
+    gap: var(--s-7);
+  }
+
+  .nav__brand {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    font-family: var(--font-mono);
+    font-size: 0.9375rem;
+    font-weight: 700;
+    color: var(--text-strong);
+  }
+
+  .nav__brand:hover {
+    text-decoration: none;
+  }
+
+  .nav__brand :global(svg) {
+    color: var(--accent);
+  }
+
+  .nav__links {
+    display: flex;
+    gap: var(--s-6);
+    flex-grow: 1;
+  }
+
+  .nav__link {
+    position: relative;
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    color: var(--text);
+    padding-bottom: 3px;
+    transition: color var(--t-instant) linear;
+  }
+
+  .nav__link::after {
+    content: '';
+    position: absolute;
+    inset-inline: 0;
+    bottom: -1px;
+    height: 1px;
+    background: var(--accent);
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform var(--t-quick) var(--ease-std);
+  }
+
+  .nav__link:hover {
+    color: var(--text-strong);
+    text-decoration: none;
+  }
+
+  .nav__link:hover::after,
+  .nav__link[aria-current='page']::after {
+    transform: scaleX(1);
+  }
+
+  .nav__link[aria-current='page'] {
+    color: var(--text-strong);
+  }
+
+  .nav__actions {
+    display: flex;
+    align-items: center;
+    gap: var(--s-5);
+  }
+
+  .nav__link--icon {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+  }
+
+  .nav__toggle {
+    display: none;
+    width: var(--tap-min);
+    height: var(--tap-min);
+    margin-right: calc(var(--s-4) * -1);
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: 0;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .nav__sheet {
+    display: none;
+    flex-direction: column;
+    background: var(--panel);
+    border-top: var(--bw) solid var(--border);
+  }
+
+  .nav__sheet[data-open] {
+    display: flex;
+  }
+
+  .nav__sheet a {
+    font-family: var(--font-mono);
+    font-size: var(--fs-body);
+    color: var(--text);
+    padding: var(--s-5) var(--s-6);
+    border-bottom: var(--bw) solid var(--border);
+    min-height: var(--tap-min);
+    display: flex;
+    align-items: center;
+  }
+
+  .nav__sheet-cta {
+    padding: var(--s-5) var(--s-6);
+  }
+
+  .nav__sheet-cta .btn {
+    width: 100%;
+  }
+
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  @media (max-width: 1024px) {
+    .nav__inner {
+      padding-inline: var(--s-7);
+    }
+  }
+
+  @media (max-width: 900px) {
+    .nav__links,
+    .nav__link--icon {
+      display: none;
+    }
+
+    .nav__toggle {
+      display: flex;
+    }
+
+    .nav__actions {
+      flex-grow: 1;
+      justify-content: flex-end;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .nav__inner {
+      padding-inline: var(--s-6);
+      height: 54px;
+    }
+
+    .nav__cta {
+      display: none;
+    }
+  }
+</style>
+
+<script>
+  const toggle = document.querySelector<HTMLButtonElement>('[data-nav-toggle]');
+  const sheet = document.querySelector<HTMLElement>('#nav-sheet');
+
+  if (toggle && sheet) {
+    toggle.addEventListener('click', () => {
+      const open = sheet.hasAttribute('data-open');
+
+      if (open) {
+        sheet.removeAttribute('data-open');
+        sheet.hidden = true;
+      } else {
+        sheet.hidden = false;
+        sheet.setAttribute('data-open', '');
+      }
+
+      toggle.setAttribute('aria-expanded', String(!open));
+    });
+  }
+</script>

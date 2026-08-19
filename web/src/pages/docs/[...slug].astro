@@ -1,0 +1,38 @@
+---
+import { getCollection, render } from 'astro:content';
+import DocsLayout from '../../layouts/DocsLayout.astro';
+import { docTitle } from '../../data/nav';
+
+export async function getStaticPaths() {
+  const docs = await getCollection('docs');
+  const available = docs.map((doc) => doc.id);
+
+  return docs.map((doc) => ({
+    params: { slug: doc.id },
+    props: { doc, available },
+  }));
+}
+
+const { doc, available } = Astro.props;
+const { Content, headings } = await render(doc);
+
+const title = docTitle(doc.id);
+const firstParagraph = doc.body
+  ?.split('\n\n')
+  .map((block) => block.trim())
+  .find((block) => block.length > 0 && !block.startsWith('#'));
+const description = firstParagraph
+  ? firstParagraph.replace(/\s+/g, ' ').slice(0, 180)
+  : `${title} — DBFlux documentation.`;
+---
+
+<DocsLayout
+  currentId={doc.id}
+  available={available}
+  headings={headings}
+  title={title}
+  description={description}
+  editPath={doc.filePath?.split('/').pop()}
+>
+  <Content />
+</DocsLayout>

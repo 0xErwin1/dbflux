@@ -1,0 +1,247 @@
+---
+interface Method {
+  readonly id: string;
+  readonly label: string;
+  readonly command: string;
+  readonly hint: string;
+}
+
+/**
+ * Commands are the ones in the repository README. Any change there has to land
+ * here in the same commit — a stale install line is the most expensive typo on
+ * the site.
+ */
+const METHODS: readonly Method[] = [
+  {
+    id: 'tarball',
+    label: 'Tarball',
+    command:
+      'curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/install.sh | sudo bash',
+    hint: 'Prefer no sudo? Append -s -- --prefix ~/.local to install under your home directory.',
+  },
+  {
+    id: 'aur',
+    label: 'AUR',
+    command: 'paru -S dbflux',
+    hint: 'Any AUR helper works. yay -S dbflux is equivalent.',
+  },
+  {
+    id: 'deb',
+    label: 'deb / rpm',
+    command: 'sudo dpkg -i dbflux-linux-amd64.deb',
+    hint: 'Swap amd64 for arm64 on ARM machines. The .rpm installs the same way with dnf.',
+  },
+  {
+    id: 'appimage',
+    label: 'AppImage',
+    command: 'chmod +x dbflux-linux-amd64.AppImage && ./dbflux-linux-amd64.AppImage',
+    hint: 'Fully portable. Nothing is written outside your home directory.',
+  },
+  {
+    id: 'nix',
+    label: 'Nix',
+    command: 'nix profile install github:0xErwin1/dbflux',
+    hint: 'The default package is a prebuilt binary. Use #dbflux-source to build from source instead.',
+  },
+];
+---
+
+<div class="install">
+  <div class="install__tabs" role="tablist" aria-label="Installation method">
+    {
+      METHODS.map((method, index) => (
+        <button
+          type="button"
+          role="tab"
+          id={`tab-${method.id}`}
+          aria-controls={`panel-${method.id}`}
+          aria-selected={index === 0 ? 'true' : 'false'}
+          tabindex={index === 0 ? 0 : -1}
+          data-install-tab={method.id}
+        >
+          {method.label}
+        </button>
+      ))
+    }
+  </div>
+
+  {
+    METHODS.map((method, index) => (
+      <div
+        class="install__panel"
+        role="tabpanel"
+        id={`panel-${method.id}`}
+        aria-labelledby={`tab-${method.id}`}
+        data-install-panel={method.id}
+        hidden={index !== 0}
+      >
+        <div class="install__cmd">
+          <code>
+            <span class="prompt">$</span> {method.command}
+          </code>
+          <button type="button" class="install__copy" data-copy={method.command}>
+            copy
+          </button>
+        </div>
+        <p class="install__hint">{method.hint}</p>
+      </div>
+    ))
+  }
+</div>
+
+<style>
+  .install {
+    background: var(--panel);
+    border: var(--bw) solid var(--border);
+  }
+
+  .install__tabs {
+    display: flex;
+    border-bottom: var(--bw) solid var(--border);
+    overflow-x: auto;
+  }
+
+  .install__tabs button {
+    flex-shrink: 0;
+    background: none;
+    border: 0;
+    border-right: var(--bw) solid var(--border);
+    padding: var(--s-4) var(--s-6);
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition:
+      color var(--t-instant) linear,
+      background var(--t-instant) linear;
+  }
+
+  .install__tabs button:last-child {
+    border-right: 0;
+  }
+
+  .install__tabs button:hover {
+    color: var(--text-strong);
+  }
+
+  .install__tabs button[aria-selected='true'] {
+    color: var(--text-strong);
+    background: var(--raised);
+    box-shadow: inset 0 -2px 0 0 var(--accent);
+  }
+
+  .install__panel {
+    padding: var(--s-6);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-4);
+  }
+
+  /* `display: flex` above outranks the UA rule for [hidden], so the inactive
+     panels have to be hidden explicitly or every method renders at once. */
+  .install__panel[hidden] {
+    display: none;
+  }
+
+  .install__cmd {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-5);
+  }
+
+  .install__cmd code {
+    font-size: var(--fs-code);
+    line-height: var(--lh-code);
+    color: var(--text-strong);
+    word-break: break-all;
+  }
+
+  .prompt {
+    color: var(--text-muted);
+  }
+
+  .install__copy {
+    flex-shrink: 0;
+    background: none;
+    border: var(--bw) solid var(--border);
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    padding: var(--s-2) var(--s-4);
+    cursor: pointer;
+    transition:
+      color 130ms linear,
+      border-color 130ms linear;
+  }
+
+  .install__copy:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
+  .install__hint {
+    margin: 0;
+    font-size: var(--fs-small);
+    color: var(--text-muted);
+  }
+
+  @media (max-width: 640px) {
+    .install__cmd {
+      flex-direction: column;
+      align-items: stretch;
+      gap: var(--s-4);
+    }
+
+    .install__copy {
+      min-height: var(--tap-min);
+    }
+  }
+</style>
+
+<script>
+  const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-install-tab]'));
+  const panels = Array.from(document.querySelectorAll<HTMLElement>('[data-install-panel]'));
+
+  const select = (id: string) => {
+    for (const tab of tabs) {
+      const active = tab.dataset.installTab === id;
+      tab.setAttribute('aria-selected', String(active));
+      tab.tabIndex = active ? 0 : -1;
+    }
+
+    for (const panel of panels) {
+      panel.hidden = panel.dataset.installPanel !== id;
+    }
+  };
+
+  tabs.forEach((tab, index) => {
+    tab.addEventListener('click', () => select(tab.dataset.installTab ?? ''));
+
+    tab.addEventListener('keydown', (event) => {
+      if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+
+      event.preventDefault();
+      const step = event.key === 'ArrowRight' ? 1 : -1;
+      const next = tabs[(index + step + tabs.length) % tabs.length];
+
+      select(next.dataset.installTab ?? '');
+      next.focus();
+    });
+  });
+
+  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-copy]')) {
+    button.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(button.dataset.copy ?? '');
+        button.textContent = 'copied';
+      } catch {
+        button.textContent = 'press ctrl+c';
+      }
+
+      window.setTimeout(() => {
+        button.textContent = 'copy';
+      }, 1600);
+    });
+  }
+</script>

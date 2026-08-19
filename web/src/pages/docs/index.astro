@@ -1,0 +1,63 @@
+---
+import { getCollection } from 'astro:content';
+import DocsLayout from '../../layouts/DocsLayout.astro';
+import { DOCS_SECTIONS, docTitle } from '../../data/nav';
+
+const docs = await getCollection('docs');
+const available = docs.map((doc) => doc.id);
+const known = new Set(available);
+
+const sections = DOCS_SECTIONS.map((section) => ({
+  ...section,
+  entries: section.entries.filter((id) => known.has(id)),
+})).filter((section) => section.entries.length > 0);
+
+const listed = new Set(sections.flatMap((section) => section.entries));
+const unlisted = available.filter((id) => !listed.has(id)).sort();
+---
+
+<DocsLayout
+  available={available}
+  title="Documentation"
+  description="Guides for installing, connecting, querying, charting and governing DBFlux."
+>
+  <h1>Documentation</h1>
+  <p>
+    Every page here is rendered from the markdown in the repository&rsquo;s <code>docs/</code>
+    directory, so a change in behaviour and the paragraph describing it ship in the same commit.
+  </p>
+
+  {
+    sections.map((section) => (
+      <section>
+        <h2 id={section.id}>{section.title}</h2>
+        <ul>
+          {section.entries.map((id) => (
+            <li>
+              <a href={`/docs/${id}/`}>{docTitle(id)}</a>
+            </li>
+          ))}
+        </ul>
+      </section>
+    ))
+  }
+
+  {
+    unlisted.length > 0 && (
+      <section>
+        <h2 id="unfiled">Not yet filed</h2>
+        <p>
+          These pages exist in <code>docs/</code> but have no place in the reading order declared in
+          <code>src/data/nav.ts</code>.
+        </p>
+        <ul>
+          {unlisted.map((id) => (
+            <li>
+              <a href={`/docs/${id}/`}>{id}</a>
+            </li>
+          ))}
+        </ul>
+      </section>
+    )
+  }
+</DocsLayout>

@@ -1,0 +1,304 @@
+---
+import Base from '../layouts/Base.astro';
+import DocsTree from '../components/DocsTree.astro';
+import { docTitle } from '../data/nav';
+
+interface Heading {
+  depth: number;
+  slug: string;
+  text: string;
+}
+
+interface Props {
+  currentId?: string;
+  available: readonly string[];
+  headings?: readonly Heading[];
+  title: string;
+  description: string;
+  editPath?: string;
+}
+
+const { currentId, available, headings = [], title, description, editPath } = Astro.props;
+const onThisPage = headings.filter((heading) => heading.depth === 2);
+---
+
+<Base title={`${title} — DBFlux docs`} description={description} current="docs" wide>
+  <div class="docs">
+    <aside class="docs__rail"><DocsTree current={currentId} available={available} /></aside>
+
+    <article class="docs__body">
+      <p class="crumbs">
+        <a href="/docs/">Docs</a> <span>/</span>
+        <span class="crumbs__here">{currentId ? docTitle(currentId) : 'Overview'}</span>
+      </p>
+      <div class="prose"><slot /></div>
+    </article>
+
+    <aside class="docs__toc">
+      {
+        onThisPage.length > 0 && (
+          <nav aria-label="On this page">
+            <p class="toc__title">On this page</p>
+            <ul>
+              {onThisPage.map((heading) => (
+                <li>
+                  <a href={`#${heading.slug}`}>{heading.text}</a>
+                </li>
+              ))}
+            </ul>
+          </nav>
+        )
+      }
+      {
+        editPath && (
+          <div class="toc__edit">
+            <a href={`https://github.com/0xErwin1/dbflux/blob/main/docs/${editPath}`} rel="noopener">
+              Edit this page
+            </a>
+            <a href="https://github.com/0xErwin1/dbflux/issues/new" rel="noopener">
+              Report an issue
+            </a>
+          </div>
+        )
+      }
+    </aside>
+  </div>
+</Base>
+
+<style>
+  .docs {
+    max-width: var(--docs-max);
+    margin-inline: auto;
+    display: grid;
+    grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--toc-w);
+    align-items: start;
+  }
+
+  .docs__rail {
+    position: sticky;
+    top: 64px;
+    height: calc(100vh - 64px);
+    overflow-y: auto;
+    border-right: var(--bw) solid var(--border);
+    z-index: var(--z-rail);
+  }
+
+  .docs__body {
+    padding: var(--s-7) var(--s-8) var(--s-9);
+    min-width: 0;
+  }
+
+  .docs__toc {
+    position: sticky;
+    top: 64px;
+    padding: var(--s-7) var(--s-5);
+    border-left: var(--bw) solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-6);
+  }
+
+  .crumbs {
+    margin: 0 0 var(--s-6);
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    color: var(--text-muted);
+  }
+
+  .crumbs span {
+    color: var(--border);
+    margin-inline: var(--s-2);
+  }
+
+  .crumbs__here {
+    color: var(--text) !important;
+  }
+
+  .toc__title {
+    margin: 0 0 var(--s-3);
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .docs__toc ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+  }
+
+  .docs__toc li a {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    color: var(--text-muted);
+    border-left: var(--bw) solid var(--border);
+    padding-left: var(--s-4);
+    transition:
+      color 140ms linear,
+      border-color 140ms linear;
+  }
+
+  .docs__toc li a:hover {
+    color: var(--text);
+    border-left-color: var(--text-muted);
+    text-decoration: none;
+  }
+
+  .toc__edit {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-3);
+    border: var(--bw) solid var(--border);
+    padding: var(--s-4);
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+  }
+
+  /* Markdown output. The docs are authored in the repository and rendered as-is:
+     their own H1 is the page heading, so the layout never adds a second one. */
+  .prose :global(h1) {
+    font-size: var(--fs-h1);
+    margin-block-end: var(--s-6);
+  }
+
+  .prose :global(h2) {
+    font-size: var(--fs-h2);
+    margin-block: var(--s-8) var(--s-5);
+    padding-block-end: var(--s-4);
+    border-bottom: var(--bw) solid var(--border);
+  }
+
+  .prose :global(h3) {
+    font-size: var(--fs-h3);
+    font-weight: 500;
+    margin-block: var(--s-6) var(--s-4);
+  }
+
+  .prose :global(p),
+  .prose :global(li) {
+    max-width: var(--prose-max);
+  }
+
+  .prose :global(ul),
+  .prose :global(ol) {
+    padding-left: var(--s-6);
+  }
+
+  .prose :global(li) {
+    margin-block: var(--s-2);
+  }
+
+  .prose :global(a) {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .prose :global(code) {
+    font-size: var(--fs-code);
+    color: var(--accent);
+  }
+
+  .prose :global(pre) {
+    background: var(--panel) !important;
+    border: var(--bw) solid var(--border);
+    padding: var(--s-5);
+    overflow-x: auto;
+    font-size: var(--fs-code);
+    line-height: var(--lh-code);
+  }
+
+  .prose :global(pre code) {
+    color: inherit;
+  }
+
+  .prose :global(blockquote) {
+    margin: var(--s-5) 0;
+    padding: var(--s-4) var(--s-5);
+    background: var(--panel);
+    border: var(--bw) solid var(--border);
+    border-left: var(--bw-emphasis) solid var(--accent);
+  }
+
+  .prose :global(blockquote p) {
+    margin: 0;
+  }
+
+  /*
+   * The docs carry wide capability matrices. `display: block` turns the table
+   * itself into the scroll container (rows still lay out through anonymous table
+   * boxes), so columns keep their natural width instead of being crushed to the
+   * prose measure, and the page body never scrolls sideways.
+   */
+  .prose :global(table) {
+    display: block;
+    width: max-content;
+    max-width: 100%;
+    overflow-x: auto;
+    border-collapse: collapse;
+    border: var(--bw) solid var(--border);
+    margin-block: var(--s-5);
+    font-size: var(--fs-small);
+  }
+
+  .prose :global(th) {
+    text-align: left;
+    background: var(--panel);
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    font-weight: 400;
+  }
+
+  .prose :global(th),
+  .prose :global(td) {
+    padding: var(--s-3) var(--s-5);
+    border-bottom: var(--bw) solid var(--border);
+  }
+
+  .prose :global(tbody tr:nth-child(odd)) {
+    background: var(--panel);
+  }
+
+  .prose :global(hr) {
+    border: 0;
+    border-top: var(--bw) solid var(--border);
+    margin-block: var(--s-7);
+  }
+
+
+
+  @media (max-width: 1200px) {
+    .docs {
+      grid-template-columns: var(--rail-w) minmax(0, 1fr);
+    }
+
+    .docs__toc {
+      display: none;
+    }
+  }
+
+  @media (max-width: 900px) {
+    .docs {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .docs__rail {
+      position: static;
+      max-height: none;
+      border-right: 0;
+      border-bottom: var(--bw) solid var(--border);
+    }
+
+    .docs__body {
+      padding: var(--s-6) var(--s-6) var(--s-8);
+    }
+  }
+</style>
