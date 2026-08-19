@@ -1,6 +1,8 @@
 ---
 import SiteNav from '../components/SiteNav.astro';
 import SiteFooter from '../components/SiteFooter.astro';
+import BackToTop from '../components/BackToTop.astro';
+import Mermaid from '../components/Mermaid.astro';
 import '../styles/global.css';
 
 interface Props {
@@ -40,5 +42,7 @@ const canonical = Astro.site ? new URL(Astro.url.pathname, Astro.site).href : un
     <SiteNav current={current} />
     <main id="main"><slot /></main>
     <SiteFooter />
+    <BackToTop />
+    <Mermaid />
   </body>
 </html>

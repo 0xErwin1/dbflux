@@ -22,9 +22,35 @@ export const DOCS_SECTIONS: readonly DocsSection[] = [
   { id: 'integrate', title: 'Integrations', entries: ['mcp_ai_integration', 'audit'] },
   { id: 'reference', title: 'Reference', entries: ['drivers', 'concepts'] },
   {
+    id: 'drivers',
+    title: 'Driver reference',
+    entries: [
+      'drivers/postgres',
+      'drivers/mysql',
+      'drivers/mssql',
+      'drivers/sqlite',
+      'drivers/redshift',
+      'drivers/clickhouse',
+      'drivers/mongodb',
+      'drivers/redis',
+      'drivers/dynamodb',
+      'drivers/influxdb',
+      'drivers/cloudwatch',
+      'drivers/s3',
+      'drivers/ipc',
+    ],
+  },
+  {
     id: 'contribute',
     title: 'Contributing',
-    entries: ['driver_authoring', 'driver_rpc_protocol', 'rpc_services_config', 'release'],
+    entries: [
+      'contributing',
+      'architecture',
+      'driver_authoring',
+      'driver_rpc_protocol',
+      'rpc_services_config',
+      'release',
+    ],
   },
 ];
 
@@ -46,6 +72,21 @@ export const DOC_TITLES: Readonly<Record<string, string>> = {
   driver_rpc_protocol: 'Driver RPC protocol',
   rpc_services_config: 'RPC services config',
   release: 'Release process',
+  architecture: 'Architecture',
+  contributing: 'Contributing',
+  'drivers/postgres': 'PostgreSQL',
+  'drivers/mysql': 'MySQL / MariaDB',
+  'drivers/mssql': 'SQL Server',
+  'drivers/sqlite': 'SQLite',
+  'drivers/redshift': 'Amazon Redshift',
+  'drivers/clickhouse': 'ClickHouse',
+  'drivers/mongodb': 'MongoDB',
+  'drivers/redis': 'Redis',
+  'drivers/dynamodb': 'DynamoDB',
+  'drivers/influxdb': 'InfluxDB',
+  'drivers/cloudwatch': 'CloudWatch',
+  'drivers/s3': 'S3',
+  'drivers/ipc': 'External RPC drivers',
 };
 
 export const docTitle = (id: string): string => DOC_TITLES[id] ?? id;

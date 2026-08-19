@@ -78,7 +78,7 @@ const DOC_CARDS = [
 >
   <section class="hero shell">
     <div class="hero__copy">
-      <p class="label">Rust &middot; GPUI &middot; v{VERSION}</p>
+      <p class="eyebrow">Rust &middot; GPUI &middot; v{VERSION}</p>
       <h1>Every database you run, in one keyboard-driven window.</h1>
       <p class="hero__lede">
         An extensible, keyboard-first data platform. Twelve built-in drivers, a driver-neutral core,
@@ -111,7 +111,7 @@ const DOC_CARDS = [
 
   <section class="shell reveal" id="drivers">
     <header class="sec-head">
-      <p class="label">Built-in drivers</p>
+      <p class="eyebrow">Built-in drivers</p>
       <a href="/docs/drivers/">Capability matrix &rarr;</a>
     </header>
     <ul class="chips">
@@ -124,7 +124,7 @@ const DOC_CARDS = [
   </section>
 
   <section class="shell reveal" id="features">
-    <p class="label">What you get</p>
+    <p class="eyebrow">What you get</p>
     <ul class="features">
       {
         FEATURES.map((feature) => (
@@ -140,7 +140,7 @@ const DOC_CARDS = [
 
   <section class="shell reveal split">
     <div class="split__copy">
-      <p class="label">Keyboard-first</p>
+      <p class="eyebrow">Keyboard-first</p>
       <h2>The mouse is optional, not assumed.</h2>
       <p>
         Every surface has a binding and a command-palette entry: open a connection, run a statement,
@@ -161,7 +161,7 @@ const DOC_CARDS = [
 
   <section class="shell reveal cards2">
     <article>
-      <p class="label label--link">Governance</p>
+      <p class="eyebrow eyebrow--link">Governance</p>
       <h2>Give an AI client a connection, not your database.</h2>
       <p>
         The MCP server classifies every operation — metadata, read, write, destructive, admin — and a
@@ -170,7 +170,7 @@ const DOC_CARDS = [
       </p>
     </article>
     <article>
-      <p class="label label--ok">Audit</p>
+      <p class="eyebrow eyebrow--ok">Audit</p>
       <h2>Every query, hook and tool call, on the record.</h2>
       <p>
         Events land in a local SQLite log with category, severity, actor and outcome. Query text is
@@ -182,7 +182,7 @@ const DOC_CARDS = [
 
   <section class="shell reveal">
     <header class="sec-head">
-      <p class="label">Documentation</p>
+      <p class="eyebrow">Documentation</p>
       <a href="/docs/">All guides &rarr;</a>
     </header>
     <ul class="doccards">
@@ -434,11 +434,11 @@ const DOC_CARDS = [
     line-height: 1.3;
   }
 
-  .label--link {
+  .eyebrow--link {
     color: var(--link);
   }
 
-  .label--ok {
+  .eyebrow--ok {
     color: var(--success);
   }
 
