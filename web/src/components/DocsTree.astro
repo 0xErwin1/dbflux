@@ -23,10 +23,10 @@ const sections = DOCS_SECTIONS.map((section) => {
 ---
 
 <nav class="tree" aria-label="Documentation">
-  <div class="tree__search">
-    <span><Icon name="search" size={13} /> Filter the docs</span>
+  <button class="tree__search" type="button" data-search-open>
+    <span><Icon name="search" size={13} /> Search the docs</span>
     <kbd>Ctrl K</kbd>
-  </div>
+  </button>
 
   <ul class="tree__groups">
     {
@@ -62,6 +62,9 @@ const sections = DOCS_SECTIONS.map((section) => {
   }
 
   .tree__search {
+    width: calc(100% - var(--s-4) * 2);
+    text-align: left;
+    cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: space-between;

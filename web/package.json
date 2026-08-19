@@ -6,7 +6,9 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "check": "astro check"
+    "check": "astro check",
+    "clean": "rm -rf dist .astro node_modules/.astro node_modules/.vite",
+    "rebuild": "pnpm clean && pnpm build"
   },
   "dependencies": {
     "@astrojs/markdown-remark": "^7.2.3",

@@ -3,6 +3,7 @@ import SiteNav from '../components/SiteNav.astro';
 import SiteFooter from '../components/SiteFooter.astro';
 import BackToTop from '../components/BackToTop.astro';
 import Mermaid from '../components/Mermaid.astro';
+import SearchDialog from '../components/SearchDialog.astro';
 import '../styles/global.css';
 
 interface Props {
@@ -44,5 +45,6 @@ const canonical = Astro.site ? new URL(Astro.url.pathname, Astro.site).href : un
     <SiteFooter />
     <BackToTop />
     <Mermaid />
+    <SearchDialog />
   </body>
 </html>

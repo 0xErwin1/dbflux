@@ -50,6 +50,29 @@ function rehypeRepoLinks() {
         }
       }
 
+      // A bare `docs/AUDIT.md` in prose is a file reference, which means
+      // nothing to a reader who has no checkout. When the site renders that
+      // file, turn the mention into a link to the page.
+      if (node.type === 'element' && node.tagName !== 'a' && Array.isArray(node.children)) {
+        node.children = node.children.map((child: any) => {
+          if (child.type !== 'element' || child.tagName !== 'code') return child;
+
+          const mention = textOf(child).trim();
+          if (!/^[\w./-]+\.md$/.test(mention)) return child;
+
+          const repoPath = mention.replace(/^\.\//, '');
+          const title = titleForRepoPath(repoPath);
+          if (!title) return child;
+
+          return {
+            type: 'element',
+            tagName: 'a',
+            properties: { href: routeForRepoPath(repoPath) },
+            children: [{ type: 'text', value: title }],
+          };
+        });
+      }
+
       for (const child of node.children ?? []) visit(child);
     };
 
