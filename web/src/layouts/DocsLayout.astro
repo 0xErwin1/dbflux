@@ -5,6 +5,7 @@ import VersionPicker from '../components/VersionPicker.astro';
 import { docTitle } from '../data/nav';
 import type { DocsVersion } from '../data/versions';
 import { CURRENT, versionHome, versionLabel } from '../data/versions';
+import { docsUrl } from '../data/site';
 
 interface Heading {
   depth: number;
@@ -41,7 +42,7 @@ const suffix = isCurrent ? '' : ` (${versionLabel(version)})`;
  * Older and unreleased versions point at the current release, so a search engine
  * ranks the version most readers are running rather than whichever it crawled.
  */
-const canonicalPath = isCurrent ? undefined : currentPath ? `/docs/${currentPath}/` : '/docs/';
+const canonicalPath = isCurrent ? undefined : docsUrl(currentPath ?? '');
 ---
 
 <Base
