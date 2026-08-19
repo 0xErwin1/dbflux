@@ -2,26 +2,34 @@ import { defineCollection } from 'astro:content';
 import { glob } from 'astro/loaders';
 
 /**
- * Documentation is authored once, in the repository, and read from there at
- * build time. The site never keeps its own copy: a change to driver behaviour
- * and the paragraph describing it stay in the same commit.
+ * Documentation for every published version.
  *
- * Everything a reader might be sent to lives here, including the driver READMEs
- * and the architecture and contributing guides. The site does not hand people
- * off to the repository to finish reading.
+ * Files are materialised into `.versions/<version>/` from each version's git ref
+ * before the collection loads, so the site can document several releases while
+ * living on a single branch. Entry ids are `<version>/<page>` — the current
+ * release is served unprefixed and the rest keep their version in the URL.
+ *
+ * The site never keeps its own copy of a document: the driver READMEs and the
+ * architecture and contributing guides are read from the repository too, so a
+ * change in behaviour and the paragraph describing it stay in one commit.
  */
 const docs = defineCollection({
   loader: glob({
-    base: '..',
-    pattern: ['docs/*.md', 'ARCHITECTURE.md', 'CONTRIBUTING.md', 'crates/dbflux_driver_*/README.md'],
+    base: '.versions',
+    pattern: [
+      '*/docs/*.md',
+      '*/ARCHITECTURE.md',
+      '*/CONTRIBUTING.md',
+      '*/crates/dbflux_driver_*/README.md',
+    ],
     generateId: ({ entry }) => {
-      const driver = entry.match(/^crates\/dbflux_driver_([^/]+)\/README\.md$/);
-      if (driver) return `drivers/${driver[1]}`;
+      const [version, ...rest] = entry.split('/');
+      const path = rest.join('/');
 
-      return entry
-        .replace(/^docs\//, '')
-        .replace(/\.md$/, '')
-        .toLowerCase();
+      const driver = path.match(/^crates\/dbflux_driver_([^/]+)\/README\.md$/);
+      if (driver) return `${version}/drivers/${driver[1]}`;
+
+      return `${version}/${path.replace(/^docs\//, '').replace(/\.md$/, '').toLowerCase()}`;
     },
   }),
 });

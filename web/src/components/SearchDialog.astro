@@ -2,12 +2,18 @@
 /**
  * Full-text search across every page the site renders.
  *
- * The index is built at `/search-index.json` and fetched on first open, so a
- * reader who never searches never downloads it.
+ * The index is built per version and fetched on first open, so a reader who
+ * never searches never downloads it, and a reader on an older version is never
+ * shown a page that only exists in a newer one.
  */
+interface Props {
+  indexUrl: string;
+}
+
+const { indexUrl } = Astro.props;
 ---
 
-<dialog class="search" data-search>
+<dialog class="search" data-search data-search-index={indexUrl}>
   <form class="search__form" method="dialog">
     <div class="search__field">
       <svg
@@ -308,7 +314,8 @@
       if (index) return;
 
       try {
-        index = (await fetch('/search-index.json').then((r) => r.json())) as Section[];
+        const url = dialog.dataset.searchIndex ?? '/search-index.json';
+        index = (await fetch(url).then((r) => r.json())) as Section[];
       } catch {
         index = [];
         results.innerHTML = '<p class="search__empty">Search is unavailable right now.</p>';

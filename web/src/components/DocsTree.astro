@@ -1,25 +1,22 @@
 ---
 import Icon from '../components/Icon.astro';
-import { DOCS_SECTIONS, docTitle } from '../data/nav';
+import { docTitle, sectionsFor } from '../data/docs';
+import type { DocsVersion } from '../data/versions';
+import { docsHref } from '../data/versions';
 
 interface Props {
-  /** Collection id of the page being read, or undefined on the docs index. */
+  version: DocsVersion;
+  /** Version-less path of the page being read, absent on the index. */
   current?: string;
   available: readonly string[];
 }
 
-const { current, available } = Astro.props;
-const known = new Set(available);
+const { version, current, available } = Astro.props;
 
-const sections = DOCS_SECTIONS.map((section) => {
-  const entries = section.entries.filter((id) => known.has(id));
-
-  return {
-    ...section,
-    entries,
-    holdsCurrent: current !== undefined && entries.includes(current),
-  };
-});
+const sections = sectionsFor(available).sections.map((section) => ({
+  ...section,
+  holdsCurrent: current !== undefined && section.entries.includes(current),
+}));
 ---
 
 <nav class="tree" aria-label="Documentation">
@@ -42,7 +39,10 @@ const sections = DOCS_SECTIONS.map((section) => {
             <ul class="tree__leaves">
               {section.entries.map((id) => (
                 <li>
-                  <a href={`/docs/${id}/`} aria-current={id === current ? 'page' : undefined}>
+                  <a
+                    href={docsHref(`${version.id}/${id}`)}
+                    aria-current={id === current ? 'page' : undefined}
+                  >
                     {docTitle(id)}
                   </a>
                 </li>

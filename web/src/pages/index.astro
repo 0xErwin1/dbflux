@@ -2,7 +2,8 @@
 import Base from '../layouts/Base.astro';
 import Icon from '../components/Icon.astro';
 import InstallTabs from '../components/InstallTabs.astro';
-import { REPO, VERSION } from '../data/nav';
+import { REPO } from '../data/nav';
+import { CURRENT } from '../data/versions';
 
 const DRIVERS = [
   'PostgreSQL',
@@ -86,7 +87,7 @@ const DOC_CARDS = [
 >
   <section class="hero shell">
     <div class="hero__copy">
-      <p class="eyebrow">Rust &middot; GPUI &middot; v{VERSION}</p>
+      <p class="eyebrow">Rust &middot; GPUI &middot; v{CURRENT.version}</p>
       <h1>Every database you run, in one keyboard-driven window.</h1>
       <p class="hero__lede">
         An extensible, keyboard-first data platform. Twelve built-in drivers, a driver-neutral core,

@@ -1,0 +1,209 @@
+---
+import { getCollection } from 'astro:content';
+import { pathsForVersion } from '../data/docs';
+import type { DocsVersion } from '../data/versions';
+import { CURRENT, VERSIONS, docsHref, versionHome } from '../data/versions';
+
+interface Props {
+  version: DocsVersion;
+  /** Version-less path of the page being read, absent on the index. */
+  currentPath?: string;
+}
+
+const { version, currentPath } = Astro.props;
+
+const entries = await getCollection('docs');
+
+/**
+ * Switching version keeps the reader on the same page where that page exists,
+ * and falls back to that version's index where it does not.
+ *
+ * Versions genuinely differ — 0.6 has no concepts guide and no Redshift or S3
+ * driver — so linking the same path across all of them would hand the reader a
+ * 404 for the crime of running an older release.
+ */
+const targets = VERSIONS.map((candidate) => {
+  const has = currentPath !== undefined && pathsForVersion(entries, candidate.id).includes(currentPath);
+
+  return {
+    version: candidate,
+    href: has ? docsHref(`${candidate.id}/${currentPath}`) : versionHome(candidate),
+    exact: has,
+  };
+});
+---
+
+<div class="picker" data-version-picker>
+  <button
+    type="button"
+    class="picker__button"
+    aria-expanded="false"
+    aria-controls="version-menu"
+    data-version-toggle
+  >
+    <span class="picker__label">Version</span>
+    <span class="picker__value">{version.label}</span>
+    <svg
+      width="11"
+      height="11"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2.2"
+      stroke-linecap="square"
+      aria-hidden="true"
+    >
+      <path d="M5 9l7 7 7-7"></path>
+    </svg>
+  </button>
+
+  <ul class="picker__menu" id="version-menu" hidden>
+    {
+      targets.map((target) => (
+        <li>
+          <a
+            href={target.href}
+            aria-current={target.version.id === version.id ? 'true' : undefined}
+            data-version-link={target.version.id}
+          >
+            <span>{target.version.label}</span>
+            {!target.exact && target.version.id !== version.id && (
+              <span class="picker__tag" title="This page does not exist in that version">
+                index
+              </span>
+            )}
+            {target.exact && target.version.id === CURRENT.id && (
+              <span class="picker__tag">default</span>
+            )}
+          </a>
+        </li>
+      ))
+    }
+  </ul>
+</div>
+
+<style>
+  .picker {
+    position: relative;
+    margin: var(--s-5) var(--s-4) 0;
+  }
+
+  .picker__button {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    min-height: 34px;
+    padding: var(--s-3) var(--s-4);
+    background: var(--panel);
+    border: var(--bw) solid var(--border-interactive);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    text-align: left;
+    cursor: pointer;
+    transition: border-color var(--t-instant) linear;
+  }
+
+  .picker__button:hover {
+    border-color: var(--accent);
+  }
+
+  .picker__label {
+    font-size: var(--fs-label);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .picker__value {
+    flex-grow: 1;
+    color: var(--text-strong);
+  }
+
+  .picker__button svg {
+    color: var(--text-muted);
+    transition: transform 160ms var(--ease-std);
+  }
+
+  .picker__button[aria-expanded='true'] svg {
+    transform: rotate(180deg);
+  }
+
+  .picker__menu {
+    position: absolute;
+    inset-inline: 0;
+    top: calc(100% + 2px);
+    z-index: var(--z-dropdown);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    background: var(--raised);
+    border: var(--bw) solid var(--border-interactive);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .picker__menu[hidden] {
+    display: none;
+  }
+
+  .picker__menu a {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-4);
+    padding: var(--s-3) var(--s-4);
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    color: var(--text-muted);
+    transition:
+      background 120ms linear,
+      color 120ms linear;
+  }
+
+  .picker__menu a:hover {
+    background: var(--panel);
+    color: var(--text-strong);
+    text-decoration: none;
+  }
+
+  .picker__menu a[aria-current='true'] {
+    color: var(--text-strong);
+    box-shadow: inset 2px 0 0 0 var(--accent);
+  }
+
+  .picker__tag {
+    font-size: var(--fs-label);
+    color: var(--text-muted);
+    border: var(--bw) solid var(--border);
+    padding: 1px 5px;
+  }
+</style>
+
+<script>
+  const picker = document.querySelector<HTMLElement>('[data-version-picker]');
+  const toggle = document.querySelector<HTMLButtonElement>('[data-version-toggle]');
+  const menu = document.querySelector<HTMLElement>('#version-menu');
+
+  if (picker && toggle && menu) {
+    const close = () => {
+      menu.hidden = true;
+      toggle.setAttribute('aria-expanded', 'false');
+    };
+
+    toggle.addEventListener('click', () => {
+      const open = !menu.hidden;
+
+      menu.hidden = open;
+      toggle.setAttribute('aria-expanded', String(!open));
+    });
+
+    document.addEventListener('click', (event) => {
+      if (event.target instanceof Node && !picker.contains(event.target)) close();
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') close();
+    });
+  }
+</script>

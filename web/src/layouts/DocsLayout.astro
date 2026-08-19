@@ -1,7 +1,10 @@
 ---
 import Base from '../layouts/Base.astro';
 import DocsTree from '../components/DocsTree.astro';
+import VersionPicker from '../components/VersionPicker.astro';
 import { docTitle } from '../data/nav';
+import type { DocsVersion } from '../data/versions';
+import { CURRENT, versionHome } from '../data/versions';
 
 interface Heading {
   depth: number;
@@ -10,7 +13,9 @@ interface Heading {
 }
 
 interface Props {
-  currentId?: string;
+  version: DocsVersion;
+  /** Version-less path of the page being read, absent on the index. */
+  currentPath?: string;
   available: readonly string[];
   headings?: readonly Heading[];
   title: string;
@@ -18,11 +23,32 @@ interface Props {
   editPath?: string;
 }
 
-const { currentId, available, headings = [], title, description, editPath } = Astro.props;
+const { version, currentPath, available, headings = [], title, description, editPath } = Astro.props;
 const onThisPage = headings.filter((heading) => heading.depth === 2);
+
+const isCurrent = version.id === CURRENT.id;
+const suffix = isCurrent ? '' : ` (${version.label})`;
+
+/**
+ * Older and unreleased versions point at the current release, so a search engine
+ * ranks the version most readers are running rather than whichever it crawled.
+ */
+const canonicalPath = isCurrent
+  ? undefined
+  : currentPath
+    ? `/docs/${currentPath}/`
+    : '/docs/';
 ---
 
-<Base title={`${title} — DBFlux docs`} description={description} current="docs" wide>
+<Base
+  title={`${title} — DBFlux docs${suffix}`}
+  description={description}
+  current="docs"
+  wide
+  noindex={version.noindex}
+  canonicalPath={canonicalPath}
+  searchIndex={isCurrent ? '/search-index.json' : `/${version.id}/search-index.json`}
+>
   <div class="docs">
     <button
       class="docs__railtoggle"
@@ -35,12 +61,15 @@ const onThisPage = headings.filter((heading) => heading.depth === 2);
       <span class="docs__railtoggle-mark" aria-hidden="true"></span>
     </button>
 
-    <aside class="docs__rail" id="docs-rail"><DocsTree current={currentId} available={available} /></aside>
+    <aside class="docs__rail" id="docs-rail">
+      <VersionPicker version={version} currentPath={currentPath} />
+      <DocsTree version={version} current={currentPath} available={available} />
+    </aside>
 
     <article class="docs__body">
       <p class="crumbs">
-        <a href="/docs/">Docs</a> <span>/</span>
-        <span class="crumbs__here">{currentId ? docTitle(currentId) : 'Overview'}</span>
+        <a href={versionHome(version)}>Docs</a> <span>/</span>
+        <span class="crumbs__here">{currentPath ? docTitle(currentPath) : 'Overview'}</span>
       </p>
       <div class="prose"><slot /></div>
     </article>

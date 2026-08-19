@@ -3,6 +3,25 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
 import { routeForRepoPath, titleForRepoPath } from './src/data/nav';
+import { VERSIONS } from './src/data/versions';
+import { fetchDocs } from './scripts/fetch-docs.mjs';
+
+/**
+ * Pull every published version's markdown out of git before anything reads it.
+ *
+ * Runs as an integration hook rather than a package script so dev and build take
+ * the same path and the version registry stays in one place.
+ */
+function docsVersions() {
+  return {
+    name: 'dbflux:docs-versions',
+    hooks: {
+      'astro:config:setup': () => {
+        fetchDocs(VERSIONS);
+      },
+    },
+  };
+}
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -114,7 +133,7 @@ function rehypeMermaid() {
 
 export default defineConfig({
   site: 'https://dbflux.dev',
-  integrations: [sitemap()],
+  integrations: [docsVersions(), sitemap()],
   markdown: {
     rehypePlugins: [rehypeRepoLinks, rehypeMermaid],
     shikiConfig: {

@@ -11,12 +11,28 @@ interface Props {
   description: string;
   current?: 'home' | 'docs' | 'about';
   wide?: boolean;
+  /** Keep this page out of search results — used for unreleased documentation. */
+  noindex?: boolean;
+  /** Point search engines at another path, for older and unreleased versions. */
+  canonicalPath?: string;
+  /** Which search index this page's dialog should load. */
+  searchIndex?: string;
 }
 
-const { title, description, current, wide = false } = Astro.props;
+const {
+  title,
+  description,
+  current,
+  wide = false,
+  noindex = false,
+  canonicalPath,
+  searchIndex = '/search-index.json',
+} = Astro.props;
 // Astro.site is unset when the config fails to load, and a crashed canonical tag
 // should not take the whole page down with it.
-const canonical = Astro.site ? new URL(Astro.url.pathname, Astro.site).href : undefined;
+const canonical = Astro.site
+  ? new URL(canonicalPath ?? Astro.url.pathname, Astro.site).href
+  : undefined;
 ---
 
 <!doctype html>
@@ -27,6 +43,7 @@ const canonical = Astro.site ? new URL(Astro.url.pathname, Astro.site).href : un
     <title>{title}</title>
     <meta name="description" content={description} />
     {canonical && <link rel="canonical" href={canonical} />}
+    {noindex && <meta name="robots" content="noindex, follow" />}
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />
@@ -56,6 +73,6 @@ const canonical = Astro.site ? new URL(Astro.url.pathname, Astro.site).href : un
     <SiteFooter />
     <BackToTop />
     <Mermaid />
-    <SearchDialog />
+    <SearchDialog indexUrl={searchIndex} />
   </body>
 </html>

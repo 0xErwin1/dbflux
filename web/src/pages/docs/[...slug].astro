@@ -1,22 +1,26 @@
 ---
 import { getCollection, render } from 'astro:content';
 import DocsLayout from '../../layouts/DocsLayout.astro';
-import { docTitle } from '../../data/nav';
+import { docTitle, pathsForVersion, splitId } from '../../data/docs';
+import { CURRENT } from '../../data/versions';
 
 export async function getStaticPaths() {
   const docs = await getCollection('docs');
-  const available = docs.map((doc) => doc.id);
+  const available = pathsForVersion(docs, CURRENT.id);
 
-  return docs.map((doc) => ({
-    params: { slug: doc.id },
-    props: { doc, available },
-  }));
+  return docs
+    .filter((doc) => splitId(doc.id).version === CURRENT.id)
+    .map((doc) => ({
+      params: { slug: splitId(doc.id).path },
+      props: { doc, available },
+    }));
 }
 
 const { doc, available } = Astro.props;
 const { Content, headings } = await render(doc);
 
-const title = docTitle(doc.id);
+const path = splitId(doc.id).path;
+const title = docTitle(path);
 const firstParagraph = doc.body
   ?.split('\n\n')
   .map((block) => block.trim())
@@ -27,7 +31,8 @@ const description = firstParagraph
 ---
 
 <DocsLayout
-  currentId={doc.id}
+  version={CURRENT}
+  currentPath={path}
   available={available}
   headings={headings}
   title={title}

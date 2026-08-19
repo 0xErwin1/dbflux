@@ -1,5 +1,4 @@
 export const REPO = 'https://github.com/0xErwin1/dbflux';
-export const VERSION = '0.7.7';
 
 export interface DocsSection {
   readonly id: string;
