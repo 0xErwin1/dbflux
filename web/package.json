@@ -1,5 +1,5 @@
 {
-  "name": "@dbflux/web",
+  "name": "dbflux-web",
   "type": "module",
   "private": true,
   "scripts": {

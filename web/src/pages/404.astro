@@ -1,0 +1,74 @@
+---
+import Base from '../layouts/Base.astro';
+import { CURRENT, VERSIONS } from '../data/versions';
+
+/**
+ * Versions come and go, so a link that worked against one release can land here
+ * against another. Offer the documentation of every published version rather
+ * than a dead end.
+ */
+const versions = VERSIONS;
+---
+
+<Base title="Page not found — DBFlux" description="That page does not exist." noindex>
+  <section class="miss">
+    <p class="eyebrow">404</p>
+    <h1>That page does not exist.</h1>
+    <p class="miss__lede">
+      It may have been renamed, or it may belong to a version of DBFlux other than the one you were
+      reading.
+    </p>
+
+    <div class="miss__actions">
+      <a class="btn btn--primary" href="/docs/">Documentation</a>
+      <a class="btn btn--secondary" href="/">Home</a>
+    </div>
+
+    <p class="miss__versions">
+      Documentation by version:
+      {
+        versions.map((version, index) => (
+          <>
+            {index > 0 && <span aria-hidden="true"> &middot; </span>}
+            <a href={version.id === CURRENT.id ? '/docs/' : `/${version.id}/docs/`}>
+              {version.label}
+            </a>
+          </>
+        ))
+      }
+    </p>
+  </section>
+</Base>
+
+<style>
+  .miss {
+    max-width: 640px;
+    margin-inline: auto;
+    padding: var(--s-9) var(--s-8);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-5);
+  }
+
+  h1 {
+    font-size: var(--fs-h1);
+  }
+
+  .miss__lede {
+    margin: 0;
+  }
+
+  .miss__actions {
+    display: flex;
+    gap: var(--s-4);
+    flex-wrap: wrap;
+    padding-block: var(--s-4);
+  }
+
+  .miss__versions {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    color: var(--text-muted);
+  }
+</style>
