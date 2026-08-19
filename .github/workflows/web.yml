@@ -1,0 +1,62 @@
+name: Web
+
+# The site reads the repository's own markdown at build time, so a change to
+# `docs/` or a driver README can break it even though no site file was touched.
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - 'web/**'
+      - 'docs/**'
+      - 'ARCHITECTURE.md'
+      - 'CONTRIBUTING.md'
+      - 'crates/dbflux_driver_*/README.md'
+      - '.github/workflows/web.yml'
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'web/**'
+      - 'docs/**'
+      - 'ARCHITECTURE.md'
+      - 'CONTRIBUTING.md'
+      - 'crates/dbflux_driver_*/README.md'
+      - '.github/workflows/web.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build the site
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        working-directory: web
+        run: pnpm build
+
+      - name: Check for links to pages that do not exist
+        working-directory: web
+        run: node scripts/check-links.mjs

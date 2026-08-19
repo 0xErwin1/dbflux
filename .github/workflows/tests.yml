@@ -1,10 +1,20 @@
 name: Tests
 
+# The site and the prose docs cannot break a Rust build, and a change confined
+# to them would otherwise run the full matrix including the Docker-backed driver
+# suites. A pull request touching both still runs: paths-ignore only skips when
+# every changed file matches.
 on:
   push:
     branches: [main, dev]
+    paths-ignore:
+      - 'web/**'
+      - 'docs/**'
   pull_request:
     branches: [main, dev]
+    paths-ignore:
+      - 'web/**'
+      - 'docs/**'
   workflow_call:
   workflow_dispatch:
 
