@@ -158,10 +158,12 @@ const sections = sectionsFor(available).sections.map((section) => ({
     color: var(--text-strong);
   }
 
+  /* This is a count, not an ornament: it has to be readable. --border is a
+     separator colour at 1.25:1 and was never a text colour. */
   .tree__count {
     font-family: var(--font-mono);
     font-size: var(--fs-label);
-    color: var(--border);
+    color: var(--text-muted);
   }
 
   @keyframes unfurl {
