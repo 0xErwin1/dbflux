@@ -65,6 +65,19 @@ function workspaceVersion(ref) {
 }
 
 /**
+ * What the documentation was built from.
+ *
+ * The version number alone does not identify a moving target: nightly reports
+ * the same `-dev` number for months, and a release branch keeps its number
+ * across cherry-picked fixes.
+ */
+function buildOf(ref) {
+  const [commit, date] = git(['show', '-s', '--format=%h%n%cs', ref]).trim().split('\n');
+
+  return { commit, date };
+}
+
+/**
  * @param {ReadonlyArray<{ id: string, ref: string }>} versions
  * @returns {Array<{ id: string, ref: string, version: string }>} what was materialised
  */
@@ -90,9 +103,10 @@ export function fetchDocs(versions) {
     }
 
     const version = workspaceVersion(ref);
+    const { commit, date } = buildOf(ref);
 
-    console.log(`  docs: ${id} <- ${ref} @ ${version} (${files.length} files)`);
-    done.push({ id, ref, version });
+    console.log(`  docs: ${id} <- ${ref} @ ${version} (${commit}, ${files.length} files)`);
+    done.push({ id, ref, version, commit, date });
   }
 
   writeFileSync(join(VERSIONS_DIR, 'manifest.json'), JSON.stringify(done, null, 2));

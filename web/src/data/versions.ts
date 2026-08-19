@@ -16,6 +16,14 @@ export interface DocsVersion {
   readonly ref: string;
   /** Excluded from search engines. Nightly documents behaviour nobody is running yet. */
   readonly noindex?: boolean;
+  /**
+   * The release served unprefixed at `/docs/`.
+   *
+   * Separate from list order on purpose: the list is what the selector shows,
+   * newest first, and nightly leads it. Making position decide which release is
+   * current would have put unreleased documentation at `/docs/`.
+   */
+  readonly current?: boolean;
 }
 
 /**
@@ -25,9 +33,11 @@ export interface DocsVersion {
  * cherry-picked fixes only, so a documentation change between two patches is a
  * correction — someone on X.Y.7 should read it, not be pinned to the wrong text.
  *
- * The first entry is the current release. It is served unprefixed at `/docs/`,
- * so a link to `/docs/usage/` always means "whatever is current". Every other
- * entry is served under its id and keeps that URL for good.
+ * Order is what the version selector shows, newest first. Which entry is the
+ * current release is the `current` flag, not the position: that release is
+ * served unprefixed at `/docs/`, so a link to `/docs/usage/` always means
+ * "whatever is current". Every other entry is served under its id and keeps
+ * that URL for good.
  *
  * Note what is *not* here: the product version. It is read from each ref's
  * Cargo.toml at build time, because a number typed here is a number that goes
@@ -35,15 +45,41 @@ export interface DocsVersion {
  */
 export const VERSIONS: readonly DocsVersion[] = registry;
 
-export const CURRENT = VERSIONS[0];
+export const CURRENT = VERSIONS.find((version) => version.current) ?? VERSIONS[0];
 
-/** The product version a documentation set describes, from its own Cargo.toml. */
-export function productVersion(id: string): string {
-  const entry = manifest.find((candidate) => candidate.id === id);
+/** One record written by `scripts/fetch-docs.mjs` while it pulls that ref. */
+interface ManifestEntry {
+  id: string;
+  ref: string;
+  version: string;
+  commit: string;
+  date: string;
+}
+
+function entryFor(id: string): ManifestEntry {
+  const entry = (manifest as ManifestEntry[]).find((candidate) => candidate.id === id);
 
   if (!entry) throw new Error(`No materialised documentation for version "${id}"`);
 
-  return entry.version;
+  return entry;
+}
+
+/** The product version a documentation set describes, from its own Cargo.toml. */
+export function productVersion(id: string): string {
+  return entryFor(id).version;
+}
+
+/**
+ * What exactly this documentation was built from.
+ *
+ * A version number is not enough to identify a moving target: nightly reports
+ * `0.8.0-dev.0` for months, and a release branch keeps its number across
+ * cherry-picked fixes. The commit says which one you are reading.
+ */
+export function buildInfo(id: string): { version: string; commit: string; date: string } {
+  const entry = entryFor(id);
+
+  return { version: entry.version, commit: entry.commit, date: entry.date };
 }
 
 /** What the version selector and page titles show. */
