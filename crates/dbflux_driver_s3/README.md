@@ -1,4 +1,12 @@
-# dbflux_driver_s3
+# Amazon S3
+
+AWS S3 and S3-compatible object storage, including Cloudflare R2 and MinIO.
+
+## At a glance
+
+- **Category** — Object storage
+- **Query language** — Object browser (no query language)
+- **URI scheme** — `s3`
 
 AWS S3 and S3-compatible object-storage driver for DBFlux, built on the [`aws-sdk-s3`](https://crates.io/crates/aws-sdk-s3) SDK. Gated behind the `s3` feature flag.
 

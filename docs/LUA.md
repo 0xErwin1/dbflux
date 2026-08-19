@@ -14,43 +14,37 @@ The crate exposes exactly one public type: `LuaExecutor`. Everything else — th
 
 ## Architecture Overview
 
-```
-┌─────────────────────────────────────┐
-│  dbflux (app crate)                 │
-│                                     │
-│  CompositeExecutor                  │
-│    ├── ProcessExecutor  (commands,  │
-│    │                     scripts)   │
-│    └── LuaExecutor      (Lua hooks)│◄── feature = "lua"
-│         ▲                           │
-└─────────┼───────────────────────────┘
-          │ implements HookExecutor
-┌─────────┴───────────────────────────┐
-│  dbflux_lua                         │
-│                                     │
-│  LuaExecutor (zero-sized)           │
-│    └── creates fresh LuaVm per call │
-│         ├── Lua 5.4 VM (mlua)       │
-│         ├── LuaRuntimeState (shared)│
-│         └── Instruction hook (1000) │
-│                                     │
-│  API modules:                       │
-│    hook.*          (always)         │
-│    connection.*    (capability)     │
-│    dbflux.log.*    (capability)     │
-│    dbflux.env.*    (capability)     │
-│    dbflux.process.*(capability+gate)│
-└─────────────────────────────────────┘
-          │
-          │ types + traits
-┌─────────┴───────────────────────────┐
-│  dbflux_core                        │
-│                                     │
-│  HookExecutor trait                 │
-│  ConnectionHook, HookKind::Lua      │
-│  LuaCapabilities, HookContext       │
-│  HookResult, CancelToken            │
-└─────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph APP["dbflux (app crate)"]
+        COMPOSITE["CompositeExecutor"]
+        PROCESS["ProcessExecutor<br/>commands, scripts"]
+        LUAEXEC["LuaExecutor<br/>Lua hooks — feature = lua"]
+        COMPOSITE --> PROCESS
+        COMPOSITE --> LUAEXEC
+    end
+
+    subgraph LUA["dbflux_lua"]
+        EXEC["LuaExecutor (zero-sized)"]
+        VM["fresh LuaVm per call"]
+        MLUA["Lua 5.4 VM (mlua)"]
+        STATE["LuaRuntimeState (shared)"]
+        HOOKI["instruction hook (1000)"]
+        API["API modules<br/>hook.* always<br/>connection.* capability<br/>dbflux.log.* capability<br/>dbflux.env.* capability<br/>dbflux.process.* capability + gate"]
+        EXEC --> VM
+        VM --> MLUA
+        VM --> STATE
+        VM --> HOOKI
+        EXEC --> API
+    end
+
+    subgraph CORE["dbflux_core"]
+        TRAIT["HookExecutor trait"]
+        TYPES["ConnectionHook, HookKind::Lua<br/>LuaCapabilities, HookContext<br/>HookResult, CancelToken"]
+    end
+
+    LUAEXEC -->|implements HookExecutor| EXEC
+    EXEC -->|types + traits| TRAIT
 ```
 
 The key design principle: **a fresh Lua VM is created for every hook execution**. No VM pooling, no state leaking between runs. This makes the sandbox trivially safe — even if a script somehow corrupts the VM state, it's thrown away after execution.

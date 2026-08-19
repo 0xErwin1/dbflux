@@ -1,4 +1,13 @@
-# dbflux_driver_mysql
+# MySQL and MariaDB
+
+Popular open-source relational database.
+
+## At a glance
+
+- **Category** — Relational
+- **Query language** — SQL
+- **Default port** — 3306
+- **URI scheme** — `mysql`
 
 ## Features
 

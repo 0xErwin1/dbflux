@@ -1,4 +1,13 @@
-# dbflux_driver_postgres
+# PostgreSQL
+
+Advanced open-source relational database.
+
+## At a glance
+
+- **Category** — Relational
+- **Query language** — SQL
+- **Default port** — 5432
+- **URI scheme** — `postgresql`
 
 ## Features
 

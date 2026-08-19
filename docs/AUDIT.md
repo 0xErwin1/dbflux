@@ -274,19 +274,15 @@ The tracing bridge captures structured events emitted by `log::*!` and `tracing:
 
 ### Event Flow
 
-```
-log::warn!("…")  ──►  LogTracer (tracing-log)  ──►  tracing event
-tracing::info!("…")  ──────────────────────────────►  tracing event
-                                                          │
-                                                    AuditLayer::on_event
-                                                          │ level gate + recursion guard
-                                                          │
-                                                    bounded mpsc::sync_channel (512)
-                                                          │
-                                                    drain thread
-                                                          │ AuditService::record()
-                                                          ▼
-                                               aud_audit_events (SQLite)
+```mermaid
+flowchart TD
+    LOG["log::warn!(...)"] --> BRIDGE["LogTracer (tracing-log)"]
+    BRIDGE --> EVENT["tracing event"]
+    TRACING["tracing::info!(...)"] --> EVENT
+    EVENT --> LAYER["AuditLayer::on_event"]
+    LAYER -->|level gate + recursion guard| CHANNEL["bounded mpsc::sync_channel (512)"]
+    CHANNEL --> DRAIN["drain thread"]
+    DRAIN -->|AuditService::record| TABLE[("aud_audit_events (SQLite)")]
 ```
 
 ### Bridge-Allowed Category

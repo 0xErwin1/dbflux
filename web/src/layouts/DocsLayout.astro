@@ -1,0 +1,486 @@
+---
+import Base from '../layouts/Base.astro';
+import DocsTree from '../components/DocsTree.astro';
+import VersionPicker from '../components/VersionPicker.astro';
+import { docTitle } from '../data/nav';
+import type { DocsVersion } from '../data/versions';
+import { CURRENT, versionHome } from '../data/versions';
+
+interface Heading {
+  depth: number;
+  slug: string;
+  text: string;
+}
+
+interface Props {
+  version: DocsVersion;
+  /** Version-less path of the page being read, absent on the index. */
+  currentPath?: string;
+  available: readonly string[];
+  headings?: readonly Heading[];
+  title: string;
+  description: string;
+  editPath?: string;
+}
+
+const {
+  version,
+  currentPath,
+  available,
+  headings = [],
+  title,
+  description,
+  editPath,
+} = Astro.props;
+const onThisPage = headings.filter((heading) => heading.depth === 2);
+
+const isCurrent = version.id === CURRENT.id;
+const suffix = isCurrent ? '' : ` (${version.label})`;
+
+/**
+ * Older and unreleased versions point at the current release, so a search engine
+ * ranks the version most readers are running rather than whichever it crawled.
+ */
+const canonicalPath = isCurrent ? undefined : currentPath ? `/docs/${currentPath}/` : '/docs/';
+---
+
+<Base
+  title={`${title} — DBFlux docs${suffix}`}
+  description={description}
+  current="docs"
+  wide
+  noindex={version.noindex}
+  canonicalPath={canonicalPath}
+  searchIndex={isCurrent ? '/search-index.json' : `/${version.id}/search-index.json`}
+>
+  <div class="docs">
+    <button
+      class="docs__railtoggle"
+      type="button"
+      data-rail-toggle
+      aria-expanded="false"
+      aria-controls="docs-rail"
+    >
+      <span>Documentation menu</span>
+      <span class="docs__railtoggle-mark" aria-hidden="true"></span>
+    </button>
+
+    <aside class="docs__rail" id="docs-rail">
+      <VersionPicker version={version} currentPath={currentPath} />
+      <DocsTree version={version} current={currentPath} available={available} />
+    </aside>
+
+    <article class="docs__body">
+      <p class="crumbs">
+        <a href={versionHome(version)}>Docs</a>
+        <span>/</span>
+        <span class="crumbs__here">{currentPath ? docTitle(currentPath) : 'Overview'}</span>
+      </p>
+      <div class="prose"><slot /></div>
+    </article>
+
+    <aside class="docs__toc">
+      {
+        onThisPage.length > 0 && (
+          <nav aria-label="On this page" data-toc>
+            <p class="toc__title">On this page</p>
+            <ul>
+              {onThisPage.map((heading) => (
+                <li>
+                  <a href={`#${heading.slug}`} data-toc-link={heading.slug}>
+                    {heading.text}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </nav>
+        )
+      }
+      {
+        editPath && (
+          <div class="toc__edit">
+            <a
+              href={`https://github.com/0xErwin1/dbflux/blob/main/docs/${editPath}`}
+              rel="noopener"
+            >
+              Edit this page
+            </a>
+            <a href="https://github.com/0xErwin1/dbflux/issues/new" rel="noopener">
+              Report an issue
+            </a>
+          </div>
+        )
+      }
+    </aside>
+  </div>
+</Base>
+
+<style>
+  .docs {
+    max-width: var(--docs-max);
+    margin-inline: auto;
+    display: grid;
+    grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--toc-w);
+    align-items: start;
+  }
+
+  .docs__rail {
+    position: sticky;
+    top: var(--nav-h);
+    height: calc(100vh - var(--nav-h));
+    overflow-y: auto;
+    border-right: var(--bw) solid var(--border);
+    z-index: var(--z-rail);
+  }
+
+  .docs__body {
+    padding: var(--s-7) var(--s-8) var(--s-9);
+    min-width: 0;
+  }
+
+  .docs__toc {
+    position: sticky;
+    top: var(--nav-h);
+    padding: var(--s-7) var(--s-5);
+    border-left: var(--bw) solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-6);
+  }
+
+  .docs__railtoggle {
+    display: none;
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-4);
+    min-height: var(--tap-min);
+    padding: var(--s-4) var(--s-6);
+    background: var(--panel);
+    border: 0;
+    border-bottom: var(--bw) solid var(--border);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .docs__railtoggle-mark {
+    width: 9px;
+    height: 9px;
+    border-right: var(--bw-emphasis) solid var(--text-muted);
+    border-bottom: var(--bw-emphasis) solid var(--text-muted);
+    transform: rotate(45deg) translate(-2px, -2px);
+    transition: transform var(--t-quick) var(--ease-std);
+  }
+
+  .docs__railtoggle[aria-expanded='true'] .docs__railtoggle-mark {
+    transform: rotate(-135deg) translate(-2px, -2px);
+  }
+
+  .crumbs {
+    margin: 0 0 var(--s-6);
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    color: var(--text-muted);
+  }
+
+  .crumbs span {
+    color: var(--border);
+    margin-inline: var(--s-2);
+  }
+
+  .crumbs__here {
+    color: var(--text) !important;
+  }
+
+  .toc__title {
+    margin: 0 0 var(--s-3);
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .docs__toc ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+  }
+
+  .docs__toc li a {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    color: var(--text-muted);
+    border-left: var(--bw) solid var(--border);
+    padding-left: var(--s-4);
+    transition:
+      color 140ms linear,
+      border-color 140ms linear;
+  }
+
+  .docs__toc li a:hover {
+    color: var(--text);
+    border-left-color: var(--text-muted);
+    text-decoration: none;
+  }
+
+  .docs__toc li a[aria-current='location'] {
+    color: var(--accent);
+    border-left-color: var(--accent);
+  }
+
+  .toc__edit {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-3);
+    border: var(--bw) solid var(--border);
+    padding: var(--s-4);
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+  }
+
+  /* Markdown output. The docs are authored in the repository and rendered as-is:
+     their own H1 is the page heading, so the layout never adds a second one. */
+  .prose :global(h1) {
+    font-size: var(--fs-h1);
+    margin-block-end: var(--s-6);
+  }
+
+  .prose :global(h2) {
+    font-size: var(--fs-h2);
+    margin-block: var(--s-8) var(--s-5);
+    padding-block-end: var(--s-4);
+    border-bottom: var(--bw) solid var(--border);
+  }
+
+  .prose :global(h3) {
+    font-size: var(--fs-h3);
+    font-weight: 500;
+    margin-block: var(--s-6) var(--s-4);
+  }
+
+  .prose :global(p),
+  .prose :global(li) {
+    max-width: var(--prose-max);
+  }
+
+  .prose :global(ul),
+  .prose :global(ol) {
+    padding-left: var(--s-6);
+  }
+
+  .prose :global(li) {
+    margin-block: var(--s-2);
+  }
+
+  .prose :global(a) {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .prose :global(code) {
+    font-size: var(--fs-code);
+    color: var(--accent);
+  }
+
+  .prose :global(pre) {
+    background: var(--panel) !important;
+    border: var(--bw) solid var(--border);
+    padding: var(--s-5);
+    overflow-x: auto;
+    font-size: var(--fs-code);
+    line-height: var(--lh-code);
+  }
+
+  .prose :global(pre code) {
+    color: inherit;
+  }
+
+  .prose :global(blockquote) {
+    margin: var(--s-5) 0;
+    padding: var(--s-4) var(--s-5);
+    background: var(--panel);
+    border: var(--bw) solid var(--border);
+    border-left: var(--bw-emphasis) solid var(--accent);
+  }
+
+  .prose :global(blockquote p) {
+    margin: 0;
+  }
+
+  /*
+   * The docs carry wide capability matrices. `display: block` turns the table
+   * itself into the scroll container (rows still lay out through anonymous table
+   * boxes), so columns keep their natural width instead of being crushed to the
+   * prose measure, and the page body never scrolls sideways.
+   */
+  .prose :global(table) {
+    display: block;
+    width: max-content;
+    max-width: 100%;
+    overflow-x: auto;
+    border-collapse: collapse;
+    border: var(--bw) solid var(--border);
+    margin-block: var(--s-5);
+    font-size: var(--fs-small);
+  }
+
+  .prose :global(th) {
+    text-align: left;
+    background: var(--panel);
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    font-weight: 400;
+  }
+
+  .prose :global(th),
+  .prose :global(td) {
+    padding: var(--s-3) var(--s-5);
+    border-bottom: var(--bw) solid var(--border);
+  }
+
+  .prose :global(tbody tr:nth-child(odd)) {
+    background: var(--panel);
+  }
+
+  .prose :global(hr) {
+    border: 0;
+    border-top: var(--bw) solid var(--border);
+    margin-block: var(--s-7);
+  }
+
+  @media (max-width: 1200px) {
+    .docs {
+      grid-template-columns: var(--rail-w) minmax(0, 1fr);
+    }
+
+    .docs__toc {
+      display: none;
+    }
+  }
+
+  @media (max-width: 900px) {
+    .docs {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .docs__railtoggle {
+      display: flex;
+    }
+
+    /*
+     * The rail is a drawer here, not a stacked block. Left sticky and full
+     * height it pushed a whole empty viewport between the header and the
+     * article, so the reader had to scroll past nothing to reach the text.
+     */
+    .docs__rail {
+      display: none;
+      position: static;
+      height: auto;
+      overflow: visible;
+      border-right: 0;
+      border-bottom: var(--bw) solid var(--border);
+    }
+
+    .docs__rail[data-open] {
+      display: block;
+    }
+
+    .docs__body {
+      padding: var(--s-6) var(--s-6) var(--s-8);
+    }
+  }
+</style>
+
+<script>
+  const toggle = document.querySelector<HTMLButtonElement>('[data-rail-toggle]');
+  const rail = document.querySelector<HTMLElement>('#docs-rail');
+
+  if (toggle && rail) {
+    toggle.addEventListener('click', () => {
+      const open = rail.hasAttribute('data-open');
+
+      rail.toggleAttribute('data-open', !open);
+      toggle.setAttribute('aria-expanded', String(!open));
+    });
+
+    // Choosing a page is the end of the drawer's job.
+    rail.addEventListener('click', (event) => {
+      if (!(event.target instanceof Element) || !event.target.closest('a')) return;
+
+      rail.removeAttribute('data-open');
+      toggle.setAttribute('aria-expanded', 'false');
+    });
+  }
+</script>
+
+<script>
+  const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('[data-toc-link]'));
+
+  if (links.length > 0) {
+    const sections = links
+      .map((link) => ({ link, heading: document.getElementById(link.dataset.tocLink ?? '') }))
+      .filter(
+        (entry): entry is { link: HTMLAnchorElement; heading: HTMLElement } => !!entry.heading,
+      );
+
+    let current: HTMLAnchorElement | null = null;
+
+    const mark = (link: HTMLAnchorElement | null) => {
+      if (link === current) return;
+
+      current?.removeAttribute('aria-current');
+      link?.setAttribute('aria-current', 'location');
+      current = link;
+    };
+
+    const sync = () => {
+      // The reading line sits just below the sticky header: a heading counts as
+      // current once it has passed under it, not when it first appears.
+      const line =
+        parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--nav-h')) + 24;
+
+      const atBottom =
+        window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2;
+
+      if (atBottom) {
+        mark(sections[sections.length - 1].link);
+        return;
+      }
+
+      let active = sections[0];
+
+      for (const section of sections) {
+        if (section.heading.getBoundingClientRect().top <= line) active = section;
+      }
+
+      mark(active.link);
+    };
+
+    let queued = false;
+
+    const onScroll = () => {
+      if (queued) return;
+
+      queued = true;
+      requestAnimationFrame(() => {
+        queued = false;
+        sync();
+      });
+    };
+
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll, { passive: true });
+    sync();
+  }
+</script>

@@ -1,0 +1,66 @@
+---
+/**
+ * Renders any `.mermaid` block on the page.
+ *
+ * Mermaid is large, so it is imported only once a diagram is actually present.
+ * Pages without one pay nothing beyond this guard.
+ */
+---
+
+<style is:global>
+  .mermaid {
+    margin-block: var(--s-6);
+    padding: var(--s-6);
+    background: var(--panel);
+    border: var(--bw) solid var(--border);
+    overflow-x: auto;
+  }
+
+  /* Until the renderer replaces it, the source would otherwise flash as one long line. */
+  .mermaid:not([data-processed]) {
+    font-family: var(--font-mono);
+    font-size: var(--fs-code);
+    color: var(--text-faint);
+    white-space: pre;
+  }
+
+  .mermaid svg {
+    max-width: 100%;
+    height: auto;
+    margin-inline: auto;
+  }
+</style>
+
+<script>
+  const blocks = document.querySelectorAll<HTMLElement>('.mermaid');
+
+  if (blocks.length > 0) {
+    const { default: mermaid } = await import('mermaid');
+
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: 'strict',
+      fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+      theme: 'base',
+      themeVariables: {
+        darkMode: true,
+        background: '#0f1419',
+        primaryColor: '#151e2b',
+        primaryTextColor: '#e6e1cf',
+        primaryBorderColor: '#5c6773',
+        secondaryColor: '#0a0e14',
+        tertiaryColor: '#0a0e14',
+        lineColor: '#828d9d',
+        textColor: '#b3b1ad',
+        mainBkg: '#151e2b',
+        nodeBorder: '#5c6773',
+        clusterBkg: '#0a0e14',
+        clusterBorder: '#1f2430',
+        edgeLabelBackground: '#0f1419',
+        fontSize: '13px',
+      },
+    });
+
+    await mermaid.run({ nodes: Array.from(blocks) });
+  }
+</script>

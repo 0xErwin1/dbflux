@@ -1,4 +1,12 @@
-# dbflux_driver_dynamodb
+# DynamoDB
+
+AWS managed NoSQL key-value and document database.
+
+## At a glance
+
+- **Category** — Document
+- **Query language** — DynamoDB expressions
+- **URI scheme** — `dynamodb`
 
 AWS DynamoDB driver for DBFlux, built on the [`aws-sdk-dynamodb`](https://crates.io/crates/aws-sdk-dynamodb) SDK.
 

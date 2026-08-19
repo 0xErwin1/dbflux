@@ -1,0 +1,78 @@
+---
+import SiteNav from '../components/SiteNav.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+import BackToTop from '../components/BackToTop.astro';
+import Mermaid from '../components/Mermaid.astro';
+import SearchDialog from '../components/SearchDialog.astro';
+import '../styles/global.css';
+
+interface Props {
+  title: string;
+  description: string;
+  current?: 'home' | 'docs' | 'about';
+  wide?: boolean;
+  /** Keep this page out of search results — used for unreleased documentation. */
+  noindex?: boolean;
+  /** Point search engines at another path, for older and unreleased versions. */
+  canonicalPath?: string;
+  /** Which search index this page's dialog should load. */
+  searchIndex?: string;
+}
+
+const {
+  title,
+  description,
+  current,
+  wide = false,
+  noindex = false,
+  canonicalPath,
+  searchIndex = '/search-index.json',
+} = Astro.props;
+// Astro.site is unset when the config fails to load, and a crashed canonical tag
+// should not take the whole page down with it.
+const canonical = Astro.site
+  ? new URL(canonicalPath ?? Astro.url.pathname, Astro.site).href
+  : undefined;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    {canonical && <link rel="canonical" href={canonical} />}
+    {noindex && <meta name="robots" content="noindex, follow" />}
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <link rel="icon" href="/brand/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/brand/mark-256.png" />
+    <meta property="og:image" content="/brand/mark-256.png" />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+    <link
+      rel="preload"
+      href="/fonts/jetbrains-mono-latin-wght-normal.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link
+      rel="preload"
+      href="/fonts/ibm-plex-sans-latin-400-normal.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+  </head>
+  <body data-wide={wide ? '' : undefined}>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <SiteNav current={current} />
+    <main id="main"><slot /></main>
+    <SiteFooter />
+    <BackToTop />
+    <Mermaid />
+    <SearchDialog indexUrl={searchIndex} />
+  </body>
+</html>

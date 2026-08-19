@@ -1,4 +1,13 @@
-# dbflux_driver_mssql
+# SQL Server
+
+Microsoft SQL Server relational database.
+
+## At a glance
+
+- **Category** — Relational
+- **Query language** — T-SQL
+- **Default port** — 1433
+- **URI scheme** — `sqlserver`
 
 Microsoft SQL Server driver for DBFlux, built on the
 [`tiberius`](https://crates.io/crates/tiberius) TDS client.

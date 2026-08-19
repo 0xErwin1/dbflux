@@ -1,0 +1,19 @@
+---
+import { getCollection } from 'astro:content';
+import DocsLayout from '../../layouts/DocsLayout.astro';
+import DocsIndex from '../../components/DocsIndex.astro';
+import { pathsForVersion } from '../../data/docs';
+import { CURRENT } from '../../data/versions';
+
+const docs = await getCollection('docs');
+const available = pathsForVersion(docs, CURRENT.id);
+---
+
+<DocsLayout
+  version={CURRENT}
+  available={available}
+  title="Documentation"
+  description="Guides for installing, connecting, querying, charting and governing DBFlux."
+>
+  <DocsIndex versionId={CURRENT.id} available={available} />
+</DocsLayout>

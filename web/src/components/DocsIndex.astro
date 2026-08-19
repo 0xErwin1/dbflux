@@ -1,0 +1,52 @@
+---
+import { docTitle, sectionsFor } from '../data/docs';
+import { docsHref } from '../data/versions';
+
+interface Props {
+  versionId: string;
+  available: readonly string[];
+}
+
+const { versionId, available } = Astro.props;
+const { sections, unfiled } = sectionsFor(available);
+---
+
+<h1>Documentation</h1>
+<p>
+  Every page here is rendered from the markdown in the repository&rsquo;s <code>docs/</code>{' '}
+  directory, so a change in behaviour and the paragraph describing it ship in the same commit.
+</p>
+
+{
+  sections.map((section) => (
+    <section>
+      <h2 id={section.id}>{section.title}</h2>
+      <ul>
+        {section.entries.map((path) => (
+          <li>
+            <a href={docsHref(`${versionId}/${path}`)}>{docTitle(path)}</a>
+          </li>
+        ))}
+      </ul>
+    </section>
+  ))
+}
+
+{
+  unfiled.length > 0 && (
+    <section>
+      <h2 id="unfiled">Not yet filed</h2>
+      <p>
+        These pages exist in this version but have no place in the reading order declared in
+        <code>src/data/nav.ts</code>.
+      </p>
+      <ul>
+        {unfiled.map((path) => (
+          <li>
+            <a href={docsHref(`${versionId}/${path}`)}>{path}</a>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}

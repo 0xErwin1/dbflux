@@ -1,0 +1,111 @@
+/*
+ * Design tokens for the DBFlux site.
+ *
+ * Surfaces, accents and semantics mirror the desktop client's Ayu Dark theme
+ * (crates/dbflux_components/src/theme.rs) so the site and the app read as one
+ * product. Two values deliberately diverge, both for measured contrast reasons
+ * documented on --text-muted and --border-interactive below.
+ *
+ * Names describe role, never appearance, so a value can change without a rename.
+ */
+:root {
+  --bg: #0a0e14;
+  --panel: #0f1419;
+  --raised: #151e2b;
+  --selection: #273747;
+  --scrim: rgba(0, 0, 0, 0.55);
+  /* From the client's own theme: scrollbar_thumb and scrollbar_thumb_hover. */
+  --scrollbar-thumb: rgba(179, 177, 173, 0.15);
+  --scrollbar-thumb-hover: rgba(179, 177, 173, 0.25);
+  --scrollbar-size: 10px;
+
+  --text: #b3b1ad;
+  --text-strong: #e6e1cf;
+  /* The app's muted #5c6773 measures 3.35:1 on --bg, below the 4.5:1 floor for
+     text. Secondary copy uses this lighter value (5.51:1 on --panel) instead. */
+  --text-muted: #828d9d;
+  /* Decoration only: icon strokes, tree guides. Never the sole carrier of meaning. */
+  --text-faint: #5c6773;
+
+  --border: #1f2430;
+  /* 3.35:1 against --bg, which clears the 3.0 floor for non-text UI boundaries.
+     Any control the reader has to find uses this, not the hairline. */
+  --border-interactive: #5c6773;
+
+  --accent: #ffb454;
+  --accent-hover: #e6a34c;
+  --accent-active: #cc9143;
+  --accent-on: #0a0e14;
+  --link: #59c2ff;
+  --link-hover: #8dd6ff;
+  --success: #aad94c;
+  --warning: #ffb454;
+  --danger: #f07178;
+  --danger-on: #ffffff;
+
+  --series-1: #59c2ff;
+  --series-2: #aad94c;
+  --series-3: #ffb454;
+  --series-4: #f07178;
+  --series-5: #d2a6ff;
+  --series-6: #95e6cb;
+
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --fs-display: clamp(2rem, 1.2rem + 2.6vw, 3.375rem);
+  --fs-h1: clamp(1.75rem, 1.2rem + 1.6vw, 2.375rem);
+  --fs-h2: 1.5rem;
+  --fs-h3: 1.0625rem;
+  --fs-body: 0.9375rem;
+  --fs-small: 0.8125rem;
+  --fs-label: 0.6875rem;
+  --fs-code: 0.8125rem;
+  --lh-body: 1.75;
+  --lh-tight: 1.2;
+  --lh-code: 1.8;
+  --ls-label: 0.18em;
+
+  --s-1: 4px;
+  --s-2: 6px;
+  --s-3: 8px;
+  --s-4: 12px;
+  --s-5: 16px;
+  --s-6: 24px;
+  --s-7: 40px;
+  --s-8: 64px;
+  --s-9: 96px;
+
+  --radius: 0;
+  --radius-full: 9999px;
+  --bw: 1px;
+  --bw-emphasis: 2px;
+
+  --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.24);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.32);
+
+  --control-h: 40px;
+  --tap-min: 44px;
+  --focus-ring: 2px solid var(--accent);
+  --focus-offset: 2px;
+
+  --t-instant: 140ms;
+  --t-quick: 200ms;
+  --t-entrance: 660ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-std: cubic-bezier(0.4, 0, 0.2, 1);
+
+  --content-max: 1200px;
+  --docs-max: 1440px;
+  --prose-max: 72ch;
+  --rail-w: 268px;
+  --toc-w: 224px;
+  --gutter: 24px;
+  --nav-h: 64px;
+
+  --z-nav: 100;
+  --z-rail: 90;
+  --z-dropdown: 200;
+  --z-scrim: 300;
+  --z-modal: 310;
+  --z-tooltip: 400;
+}

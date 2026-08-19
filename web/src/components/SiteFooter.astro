@@ -1,0 +1,146 @@
+---
+import BrandMark from './BrandMark.astro';
+import { REPO } from '../data/nav';
+
+const COLUMNS = [
+  {
+    title: 'Product',
+    links: [
+      { href: '/#features', label: 'Features' },
+      { href: '/#drivers', label: 'Drivers' },
+      { href: `${REPO}/releases`, label: 'Releases' },
+    ],
+  },
+  {
+    title: 'Docs',
+    links: [
+      { href: '/docs/usage/', label: 'Usage guide' },
+      { href: '/docs/connections/', label: 'Connecting' },
+      { href: '/docs/mcp_ai_integration/', label: 'AI + MCP' },
+    ],
+  },
+  {
+    title: 'Project',
+    links: [
+      { href: '/about/', label: 'About' },
+      { href: '/docs/contributing/', label: 'Contributing' },
+      { href: REPO, label: 'Source' },
+    ],
+  },
+] as const;
+---
+
+<footer class="foot">
+  <div class="foot__inner shell">
+    <div class="foot__brand">
+      <span class="foot__mark">
+        <BrandMark size={26} />
+        <span>DBFlux</span>
+      </span>
+      <p>A fully open-source alternative to DBeaver, built in the open.</p>
+      <p class="foot__license">MIT or Apache-2.0, at your option.</p>
+    </div>
+
+    <div class="foot__cols">
+      {
+        COLUMNS.map((column) => (
+          <div class="foot__col">
+            <p class="foot__title">{column.title}</p>
+            {column.links.map((link) => (
+              <a href={link.href}>{link.label}</a>
+            ))}
+          </div>
+        ))
+      }
+    </div>
+  </div>
+</footer>
+
+<style>
+  .foot {
+    border-top: var(--bw) solid var(--border);
+    margin-top: var(--s-9);
+  }
+
+  .foot__inner {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--s-8);
+    padding-block: var(--s-7);
+  }
+
+  .foot__brand {
+    max-width: 320px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-3);
+  }
+
+  .foot__mark {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    font-family: var(--font-mono);
+    font-size: var(--fs-body);
+    font-weight: 700;
+    color: var(--text-strong);
+  }
+
+  .foot__mark :global(svg) {
+    color: var(--accent);
+  }
+
+  .foot__brand p {
+    margin: 0;
+    font-size: var(--fs-small);
+    color: var(--text-muted);
+    line-height: 1.65;
+  }
+
+  .foot__license {
+    font-family: var(--font-mono);
+  }
+
+  .foot__cols {
+    display: flex;
+    gap: var(--s-8);
+  }
+
+  .foot__col {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-3);
+  }
+
+  .foot__title {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .foot__col a {
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    color: var(--text);
+    transition: color var(--t-instant) linear;
+  }
+
+  .foot__col a:hover {
+    color: var(--accent);
+    text-decoration: none;
+  }
+
+  @media (max-width: 900px) {
+    .foot__inner {
+      flex-direction: column;
+    }
+
+    .foot__cols {
+      flex-wrap: wrap;
+      gap: var(--s-6) var(--s-7);
+    }
+  }
+</style>

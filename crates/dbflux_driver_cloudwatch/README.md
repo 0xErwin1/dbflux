@@ -1,4 +1,12 @@
-# dbflux_driver_cloudwatch
+# CloudWatch Logs
+
+AWS CloudWatch Logs Insights queries with editor-managed source context.
+
+## At a glance
+
+- **Category** — Log stream
+- **Query language** — Logs Insights (SQL editor mode)
+- **URI scheme** — `cloudwatch`
 
 AWS CloudWatch Logs driver for DBFlux, built on the [`aws-sdk-cloudwatchlogs`](https://crates.io/crates/aws-sdk-cloudwatchlogs) SDK.
 
