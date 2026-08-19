@@ -26,6 +26,28 @@ const git = (args) =>
   execFileSync('git', args, { cwd: REPO, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 
 /**
+ * List a ref's tracked paths, fetching the ref first if this clone lacks it.
+ *
+ * Build platforms clone shallowly and usually check out one branch, so the other
+ * release branches are simply absent. A targeted fetch is cheaper than asking
+ * every deployment to clone the full history, and it fails loudly enough to be
+ * caught by the caller when there is no network or no remote.
+ */
+function readTree(ref) {
+  const list = () =>
+    git(['ls-tree', '-r', '--name-only', ref])
+      .split('\n')
+      .filter((path) => WANTED.test(path));
+
+  try {
+    return list();
+  } catch {
+    git(['fetch', '--depth=1', '--no-tags', 'origin', `${ref}:${ref}`]);
+    return list();
+  }
+}
+
+/**
  * @param {ReadonlyArray<{ id: string, ref: string }>} versions
  * @returns {string[]} ids that were materialised
  */
@@ -38,9 +60,7 @@ export function fetchDocs(versions) {
     let files;
 
     try {
-      files = git(['ls-tree', '-r', '--name-only', ref])
-        .split('\n')
-        .filter((path) => WANTED.test(path));
+      files = readTree(ref);
     } catch {
       console.warn(`  docs: ref "${ref}" is unreachable — version "${id}" will be missing`);
       continue;
