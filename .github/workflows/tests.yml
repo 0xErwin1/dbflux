@@ -1,20 +1,27 @@
 name: Tests
 
-# The site and the prose docs cannot break a Rust build, and a change confined
-# to them would otherwise run the full matrix including the Docker-backed driver
-# suites. A pull request touching both still runs: paths-ignore only skips when
-# every changed file matches.
+# Prose and the site cannot break a Rust build, and a change confined to them
+# would otherwise run the full matrix including the Docker-backed driver suites.
+#
+# Markdown is safe to ignore here because no crate pulls it into the build: there
+# is no `include_str!` of a .md file, no `#[doc = include_str!]`, and no `readme`
+# key in any manifest. Re-check that before assuming it still holds.
+#
+# paths-ignore skips only when *every* changed file matches, so a pull request
+# touching code and docs together still runs.
 on:
   push:
     branches: [main, dev]
     paths-ignore:
+      - '**/*.md'
       - 'web/**'
-      - 'docs/**'
+      - '.github/workflows/web.yml'
   pull_request:
     branches: [main, dev]
     paths-ignore:
+      - '**/*.md'
       - 'web/**'
-      - 'docs/**'
+      - '.github/workflows/web.yml'
   workflow_call:
   workflow_dispatch:
 

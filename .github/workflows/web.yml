@@ -1,25 +1,21 @@
 name: Web
 
-# The site reads the repository's own markdown at build time, so a change to
-# `docs/` or a driver README can break it even though no site file was touched.
+# The site renders the repository's own markdown, so a change to any of it can
+# break the build even when no file under web/ was touched. Triggering on all
+# markdown costs a needless 30-second build for a file the site does not read,
+# and buys never having to edit this list when a document moves.
 on:
   push:
     branches: [main, dev]
     paths:
       - 'web/**'
-      - 'docs/**'
-      - 'ARCHITECTURE.md'
-      - 'CONTRIBUTING.md'
-      - 'crates/dbflux_driver_*/README.md'
+      - '**/*.md'
       - '.github/workflows/web.yml'
   pull_request:
     branches: [main, dev]
     paths:
       - 'web/**'
-      - 'docs/**'
-      - 'ARCHITECTURE.md'
-      - 'CONTRIBUTING.md'
-      - 'crates/dbflux_driver_*/README.md'
+      - '**/*.md'
       - '.github/workflows/web.yml'
   workflow_dispatch:
 
