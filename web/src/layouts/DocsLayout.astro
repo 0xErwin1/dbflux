@@ -24,7 +24,18 @@ const onThisPage = headings.filter((heading) => heading.depth === 2);
 
 <Base title={`${title} — DBFlux docs`} description={description} current="docs" wide>
   <div class="docs">
-    <aside class="docs__rail"><DocsTree current={currentId} available={available} /></aside>
+    <button
+      class="docs__railtoggle"
+      type="button"
+      data-rail-toggle
+      aria-expanded="false"
+      aria-controls="docs-rail"
+    >
+      <span>Documentation menu</span>
+      <span class="docs__railtoggle-mark" aria-hidden="true"></span>
+    </button>
+
+    <aside class="docs__rail" id="docs-rail"><DocsTree current={currentId} available={available} /></aside>
 
     <article class="docs__body">
       <p class="crumbs">
@@ -76,8 +87,8 @@ const onThisPage = headings.filter((heading) => heading.depth === 2);
 
   .docs__rail {
     position: sticky;
-    top: 64px;
-    height: calc(100vh - 64px);
+    top: var(--nav-h);
+    height: calc(100vh - var(--nav-h));
     overflow-y: auto;
     border-right: var(--bw) solid var(--border);
     z-index: var(--z-rail);
@@ -90,12 +101,43 @@ const onThisPage = headings.filter((heading) => heading.depth === 2);
 
   .docs__toc {
     position: sticky;
-    top: 64px;
+    top: var(--nav-h);
     padding: var(--s-7) var(--s-5);
     border-left: var(--bw) solid var(--border);
     display: flex;
     flex-direction: column;
     gap: var(--s-6);
+  }
+
+  .docs__railtoggle {
+    display: none;
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-4);
+    min-height: var(--tap-min);
+    padding: var(--s-4) var(--s-6);
+    background: var(--panel);
+    border: 0;
+    border-bottom: var(--bw) solid var(--border);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .docs__railtoggle-mark {
+    width: 9px;
+    height: 9px;
+    border-right: var(--bw-emphasis) solid var(--text-muted);
+    border-bottom: var(--bw-emphasis) solid var(--text-muted);
+    transform: rotate(45deg) translate(-2px, -2px);
+    transition: transform var(--t-quick) var(--ease-std);
+  }
+
+  .docs__railtoggle[aria-expanded='true'] .docs__railtoggle-mark {
+    transform: rotate(-135deg) translate(-2px, -2px);
   }
 
   .crumbs {
@@ -290,11 +332,26 @@ const onThisPage = headings.filter((heading) => heading.depth === 2);
       grid-template-columns: minmax(0, 1fr);
     }
 
+    .docs__railtoggle {
+      display: flex;
+    }
+
+    /*
+     * The rail is a drawer here, not a stacked block. Left sticky and full
+     * height it pushed a whole empty viewport between the header and the
+     * article, so the reader had to scroll past nothing to reach the text.
+     */
     .docs__rail {
+      display: none;
       position: static;
-      max-height: none;
+      height: auto;
+      overflow: visible;
       border-right: 0;
       border-bottom: var(--bw) solid var(--border);
+    }
+
+    .docs__rail[data-open] {
+      display: block;
     }
 
     .docs__body {
@@ -302,3 +359,25 @@ const onThisPage = headings.filter((heading) => heading.depth === 2);
     }
   }
 </style>
+
+<script>
+  const toggle = document.querySelector<HTMLButtonElement>('[data-rail-toggle]');
+  const rail = document.querySelector<HTMLElement>('#docs-rail');
+
+  if (toggle && rail) {
+    toggle.addEventListener('click', () => {
+      const open = rail.hasAttribute('data-open');
+
+      rail.toggleAttribute('data-open', !open);
+      toggle.setAttribute('aria-expanded', String(!open));
+    });
+
+    // Choosing a page is the end of the drawer's job.
+    rail.addEventListener('click', (event) => {
+      if (!(event.target instanceof Element) || !event.target.closest('a')) return;
+
+      rail.removeAttribute('data-open');
+      toggle.setAttribute('aria-expanded', 'false');
+    });
+  }
+</script>
