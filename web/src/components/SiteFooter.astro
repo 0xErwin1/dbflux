@@ -1,6 +1,7 @@
 ---
 import BrandMark from './BrandMark.astro';
 import { REPO } from '../data/nav';
+import { docsUrl } from '../data/site';
 
 const COLUMNS = [
   {
@@ -14,16 +15,16 @@ const COLUMNS = [
   {
     title: 'Docs',
     links: [
-      { href: '/docs/usage/', label: 'Usage guide' },
-      { href: '/docs/connections/', label: 'Connecting' },
-      { href: '/docs/mcp_ai_integration/', label: 'AI + MCP' },
+      { href: docsUrl('usage'), label: 'Usage guide' },
+      { href: docsUrl('connections'), label: 'Connecting' },
+      { href: docsUrl('mcp_ai_integration'), label: 'AI + MCP' },
     ],
   },
   {
     title: 'Project',
     links: [
       { href: '/about/', label: 'About' },
-      { href: '/docs/contributing/', label: 'Contributing' },
+      { href: docsUrl('contributing'), label: 'Contributing' },
       { href: REPO, label: 'Source' },
     ],
   },

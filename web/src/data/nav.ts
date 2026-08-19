@@ -1,3 +1,5 @@
+import { docsUrl } from './site';
+
 export const REPO = 'https://github.com/0xErwin1/dbflux';
 
 export interface DocsSection {
@@ -101,13 +103,13 @@ export const REPO_URL = REPO;
  */
 export function routeForRepoPath(path: string): string {
   const driver = path.match(/^crates\/dbflux_driver_([^/]+)\/README\.md$/);
-  if (driver) return `/docs/drivers/${driver[1]}/`;
+  if (driver) return docsUrl(`drivers/${driver[1]}`);
 
   const doc = path.match(/^docs\/([^/]+)\.md$/);
-  if (doc) return `/docs/${doc[1].toLowerCase()}/`;
+  if (doc) return docsUrl(doc[1].toLowerCase());
 
-  if (path === 'ARCHITECTURE.md') return '/docs/architecture/';
-  if (path === 'CONTRIBUTING.md') return '/docs/contributing/';
+  if (path === 'ARCHITECTURE.md') return docsUrl('architecture');
+  if (path === 'CONTRIBUTING.md') return docsUrl('contributing');
 
   return `${REPO}/blob/main/${path}`;
 }

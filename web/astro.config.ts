@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
 import { routeForRepoPath, titleForRepoPath } from './src/data/nav';
+import { ORIGIN } from './src/data/site';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -113,7 +114,7 @@ function rehypeMermaid() {
 }
 
 export default defineConfig({
-  site: 'https://dbflux.dev',
+  site: ORIGIN,
   integrations: [sitemap()],
   markdown: {
     rehypePlugins: [rehypeRepoLinks, rehypeMermaid],

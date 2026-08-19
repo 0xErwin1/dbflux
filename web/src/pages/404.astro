@@ -1,6 +1,7 @@
 ---
 import Base from '../layouts/Base.astro';
-import { CURRENT, VERSIONS, versionLabel } from '../data/versions';
+import { VERSIONS, versionHome, versionLabel } from '../data/versions';
+import { docsUrl, siteUrl } from '../data/site';
 
 /**
  * Versions come and go, so a link that worked against one release can land here
@@ -20,8 +21,8 @@ const versions = VERSIONS;
     </p>
 
     <div class="miss__actions">
-      <a class="btn btn--primary" href="/docs/">Documentation</a>
-      <a class="btn btn--secondary" href="/">Home</a>
+      <a class="btn btn--primary" href={docsUrl('')}>Documentation</a>
+      <a class="btn btn--secondary" href={siteUrl()}>Home</a>
     </div>
 
     <p class="miss__versions">
@@ -30,9 +31,7 @@ const versions = VERSIONS;
         versions.map((version, index) => (
           <>
             {index > 0 && <span aria-hidden="true"> &middot; </span>}
-            <a href={version.id === CURRENT.id ? '/docs/' : `/${version.id}/docs/`}>
-              {versionLabel(version)}
-            </a>
+            <a href={versionHome(version)}>{versionLabel(version)}</a>
           </>
         ))
       }

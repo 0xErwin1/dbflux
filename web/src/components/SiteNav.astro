@@ -2,6 +2,7 @@
 import Icon from './Icon.astro';
 import BrandMark from './BrandMark.astro';
 import { REPO } from '../data/nav';
+import { docsUrl, siteUrl } from '../data/site';
 
 interface Props {
   current?: 'home' | 'docs' | 'about';
@@ -10,16 +11,16 @@ interface Props {
 const { current } = Astro.props;
 
 const LINKS = [
-  { href: '/#features', label: 'Features', key: 'features' },
-  { href: '/#drivers', label: 'Drivers', key: 'drivers' },
-  { href: '/docs/', label: 'Docs', key: 'docs' },
-  { href: '/about/', label: 'About', key: 'about' },
+  { href: `${siteUrl()}#features`, label: 'Features', key: 'features' },
+  { href: `${siteUrl()}#drivers`, label: 'Drivers', key: 'drivers' },
+  { href: docsUrl(''), label: 'Docs', key: 'docs' },
+  { href: siteUrl('about/'), label: 'About', key: 'about' },
 ] as const;
 ---
 
 <header class="nav" data-nav>
   <div class="nav__inner">
-    <a class="nav__brand" href="/">
+    <a class="nav__brand" href={siteUrl()}>
       <BrandMark size={28} />
       <span>DBFlux</span>
     </a>
@@ -43,7 +44,7 @@ const LINKS = [
         <Icon name="github" size={16} />
         <span>GitHub</span>
       </a>
-      <a class="btn btn--primary nav__cta" href="/#install">Download</a>
+      <a class="btn btn--primary nav__cta" href={`${siteUrl()}#install`}>Download</a>
       <button
         class="nav__toggle"
         type="button"
@@ -60,7 +61,9 @@ const LINKS = [
   <div class="nav__sheet" id="nav-sheet" hidden>
     {LINKS.map((link) => <a href={link.href}>{link.label}</a>)}
     <a href={REPO} rel="noopener">GitHub</a>
-    <div class="nav__sheet-cta"><a class="btn btn--primary" href="/#install">Download</a></div>
+    <div class="nav__sheet-cta">
+      <a class="btn btn--primary" href={`${siteUrl()}#install`}>Download</a>
+    </div>
   </div>
 </header>
 

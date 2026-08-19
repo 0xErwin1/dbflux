@@ -1,5 +1,6 @@
 // Vite inlines this at build time. Reading it with `fs` instead breaks once the
 // module is bundled, because the relative path no longer points at the file.
+import { docsPath, docsUrl } from './site';
 import registry from '../../versions.json';
 import manifest from '../../.versions/manifest.json';
 
@@ -92,16 +93,28 @@ export function versionLabel(version: DocsVersion): string {
 export const versionById = (id: string): DocsVersion | undefined =>
   VERSIONS.find((version) => version.id === id);
 
+/** Prefix a version occupies in a URL — empty for the current release. */
+function prefixFor(versionId: string): string {
+  return versionId === CURRENT.id ? '' : versionId;
+}
+
 /** Documentation URL for an entry id of the form `<version>/<path>`. */
 export function docsHref(entryId: string): string {
   const separator = entryId.indexOf('/');
-  const versionId = entryId.slice(0, separator);
-  const path = entryId.slice(separator + 1);
 
-  return versionId === CURRENT.id ? `/docs/${path}/` : `/${versionId}/docs/${path}/`;
+  return docsUrl(entryId.slice(separator + 1), prefixFor(entryId.slice(0, separator)));
 }
 
 /** Root of a version's documentation. */
 export function versionHome(version: DocsVersion): string {
-  return version.id === CURRENT.id ? '/docs/' : `/${version.id}/docs/`;
+  return docsUrl('', prefixFor(version.id));
+}
+
+/**
+ * The path a documentation page is generated at.
+ *
+ * Distinct from `docsHref`, which is for linking and may point at another host.
+ */
+export function docsRoute(versionId: string, path: string): string {
+  return docsPath(path, prefixFor(versionId));
 }

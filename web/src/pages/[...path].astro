@@ -1,0 +1,84 @@
+---
+import { getCollection, render } from 'astro:content';
+import DocsLayout from '../layouts/DocsLayout.astro';
+import DocsIndex from '../components/DocsIndex.astro';
+import { docTitle, pathsForVersion, splitId } from '../data/docs';
+import { CURRENT, VERSIONS, docsRoute, versionById, versionLabel } from '../data/versions';
+import DocsRedirect from '../components/DocsRedirect.astro';
+import { DOCS_MODE, docsUrl } from '../data/site';
+
+/**
+ * Every documentation page, for every published version.
+ *
+ * One catch-all rather than a route file per shape, because the URL prefix moves
+ * with the deployment: `/docs/usage/` when the documentation shares the site's
+ * origin, `/usage/` when it has its own. A file tree cannot express that; a
+ * computed path can.
+ */
+export async function getStaticPaths() {
+  const docs = await getCollection('docs');
+
+  const pages = docs.map((doc) => {
+    const { version, path } = splitId(doc.id);
+
+    return {
+      params: { path: docsRoute(version, path) },
+      props: { versionId: version, path, doc },
+    };
+  });
+
+  const indexes = VERSIONS.map((version) => ({
+    params: { path: docsRoute(version.id, '') || undefined },
+    props: { versionId: version.id, path: undefined, doc: undefined },
+  }))
+    // With the documentation at the root of its own host, the current release's
+    // index is `/`, which `index.astro` already owns.
+    .filter((entry) => entry.params.path !== undefined);
+
+  return [...pages, ...indexes];
+}
+
+const { versionId, path, doc } = Astro.props;
+
+// This build does not carry the documentation; keep the published URL working.
+const movedTo =
+  DOCS_MODE === 'site' ? docsUrl(path ?? '', versionId === CURRENT.id ? '' : versionId) : undefined;
+const version = versionById(versionId)!;
+const available = movedTo ? [] : pathsForVersion(await getCollection('docs'), versionId);
+const isCurrent = versionId === CURRENT.id;
+
+const rendered = doc && !movedTo ? await render(doc) : undefined;
+
+const title = path ? docTitle(path) : 'Documentation';
+
+const firstParagraph = doc?.body
+  ?.split('\n\n')
+  .map((block) => block.trim())
+  .find((block) => block.length > 0 && !block.startsWith('#'));
+
+const description = doc
+  ? firstParagraph
+    ? firstParagraph.replace(/\s+/g, ' ').slice(0, 180)
+    : `${title} — DBFlux documentation.`
+  : isCurrent
+    ? 'Guides for installing, connecting, querying, charting and governing DBFlux.'
+    : `DBFlux ${versionLabel(version)} documentation.`;
+---
+
+{
+  movedTo ? (
+    <DocsRedirect to={movedTo} />
+  ) : (
+    <DocsLayout
+      version={version}
+      currentPath={path}
+      available={available}
+      headings={rendered?.headings ?? []}
+      title={title}
+      description={description}
+      editPath={doc?.filePath?.split('/').pop()}
+    >
+      {rendered ? <rendered.Content /> : <DocsIndex versionId={versionId} available={available} />}
+    </DocsLayout>
+  )
+}

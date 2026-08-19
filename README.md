@@ -261,6 +261,10 @@ pnpm format       # prettier
 Which versions are published is declared in `web/versions.json`. Each entry names a git ref; the
 product version shown for it is read from that ref's `Cargo.toml`.
 
+`DOCS_MODE` decides where the documentation is served: `embedded` (the default, everything on one
+origin under `/docs/`), or `site` and `docs` for a split deployment across two hosts. Local
+development uses the default, so one command still brings up the whole site.
+
 ### Nix Development Shell
 
 If you use Nix, you can enter a development shell with all dependencies:
