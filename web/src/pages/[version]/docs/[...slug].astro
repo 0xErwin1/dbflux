@@ -2,7 +2,7 @@
 import { getCollection, render } from 'astro:content';
 import DocsLayout from '../../../layouts/DocsLayout.astro';
 import { docTitle, pathsForVersion, splitId } from '../../../data/docs';
-import { CURRENT, VERSIONS, versionById } from '../../../data/versions';
+import { CURRENT, VERSIONS, versionById, versionLabel } from '../../../data/versions';
 
 export async function getStaticPaths() {
   const docs = await getCollection('docs');
@@ -32,7 +32,7 @@ const firstParagraph = doc.body
   .find((block) => block.length > 0 && !block.startsWith('#'));
 const description = firstParagraph
   ? firstParagraph.replace(/\s+/g, ' ').slice(0, 180)
-  : `${title} — DBFlux ${version.label} documentation.`;
+  : `${title} — DBFlux ${versionLabel(version)} documentation.`;
 ---
 
 <DocsLayout

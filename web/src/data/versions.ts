@@ -1,8 +1,11 @@
+// Vite inlines this at build time. Reading it with `fs` instead breaks once the
+// module is bundled, because the relative path no longer points at the file.
+import registry from '../../versions.json';
+import manifest from '../../.versions/manifest.json';
+
 export interface DocsVersion {
   /** Directory name under `.versions/`, and the URL prefix for non-current versions. */
   readonly id: string;
-  /** What the selector shows. */
-  readonly label: string;
   /**
    * Git ref the documentation is read from.
    *
@@ -11,8 +14,6 @@ export interface DocsVersion {
    * a deleted branch breaks the next build.
    */
   readonly ref: string;
-  /** Product version this documents, shown on the page and in the hero. */
-  readonly version: string;
   /** Excluded from search engines. Nightly documents behaviour nobody is running yet. */
   readonly noindex?: boolean;
 }
@@ -27,14 +28,30 @@ export interface DocsVersion {
  * The first entry is the current release. It is served unprefixed at `/docs/`,
  * so a link to `/docs/usage/` always means "whatever is current". Every other
  * entry is served under its id and keeps that URL for good.
+ *
+ * Note what is *not* here: the product version. It is read from each ref's
+ * Cargo.toml at build time, because a number typed here is a number that goes
+ * quietly wrong at the next release.
  */
-export const VERSIONS: readonly DocsVersion[] = [
-  { id: 'v0.7', label: '0.7 — current', ref: 'release/v0.7', version: '0.7.7' },
-  { id: 'nightly', label: 'nightly', ref: 'main', version: 'main', noindex: true },
-  { id: 'v0.6', label: '0.6', ref: 'release/v0.6', version: '0.6.4' },
-];
+export const VERSIONS: readonly DocsVersion[] = registry;
 
 export const CURRENT = VERSIONS[0];
+
+/** The product version a documentation set describes, from its own Cargo.toml. */
+export function productVersion(id: string): string {
+  const entry = manifest.find((candidate) => candidate.id === id);
+
+  if (!entry) throw new Error(`No materialised documentation for version "${id}"`);
+
+  return entry.version;
+}
+
+/** What the version selector and page titles show. */
+export function versionLabel(version: DocsVersion): string {
+  if (version.id === 'nightly') return 'nightly';
+
+  return version.id.replace(/^v/, '');
+}
 
 export const versionById = (id: string): DocsVersion | undefined =>
   VERSIONS.find((version) => version.id === id);

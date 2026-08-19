@@ -3,7 +3,7 @@ import { getCollection } from 'astro:content';
 import DocsLayout from '../../../layouts/DocsLayout.astro';
 import DocsIndex from '../../../components/DocsIndex.astro';
 import { pathsForVersion } from '../../../data/docs';
-import { CURRENT, VERSIONS, versionById } from '../../../data/versions';
+import { CURRENT, VERSIONS, versionById, versionLabel } from '../../../data/versions';
 
 export async function getStaticPaths() {
   return VERSIONS.filter((version) => version.id !== CURRENT.id).map((version) => ({
@@ -20,7 +20,7 @@ const available = pathsForVersion(docs, version.id);
   version={version}
   available={available}
   title="Documentation"
-  description={`DBFlux ${version.label} documentation.`}
+  description={`DBFlux ${versionLabel(version)} documentation.`}
 >
   <DocsIndex versionId={version.id} available={available} />
 </DocsLayout>

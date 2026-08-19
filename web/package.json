@@ -3,15 +3,16 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "astro dev",
-    "build": "astro build",
+    "dev": "pnpm run sync-docs && astro dev",
+    "build": "pnpm run sync-docs && astro build",
     "preview": "astro preview",
-    "check": "astro check",
+    "check": "pnpm run sync-docs && astro check",
     "clean": "rm -rf dist .astro node_modules/.astro node_modules/.vite",
     "rebuild": "pnpm clean && pnpm build",
     "stop": "astro dev stop; astro preview stop",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "sync-docs": "node scripts/fetch-docs.mjs"
   },
   "dependencies": {
     "@astrojs/markdown-remark": "^7.2.3",

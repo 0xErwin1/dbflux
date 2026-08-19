@@ -533,6 +533,52 @@ A `pub use dbflux_ui_base::platform::*` shim remains at `crates/dbflux_ui/src/pl
 - The channel-aware DB path lives in `crates/dbflux_storage/src/paths.rs` (`dbflux_db_path`); nightly can opt into the stable DB via `set_nightly_shares_stable_db` / `nightly_shares_stable_db`.
 - Brand assets live under `resources/branding/{stable,nightly}/` (served per channel in `crates/dbflux_ui/src/assets.rs`). Packaging and Nix files substitute channel placeholders. The release/nightly flow is documented in `docs/RELEASE.md`.
 
+## Website
+
+The site lives in `web/` and is an Astro static build. It is not a crate: `cargo` excludes it, and
+the Rust workflows skip changes confined to it or to markdown.
+
+**It renders the repository's own documentation.** `docs/*.md`, the driver READMEs,
+`ARCHITECTURE.md` and `CONTRIBUTING.md` are read straight out of git at build time. There is no
+second copy, so a behaviour change and the paragraph describing it belong in the same commit, and
+editing a document is all that is needed to change the site.
+
+**It publishes several versions.** `web/versions.json` lists them; each entry is a git ref, and the
+product version shown for it is read from that ref's `Cargo.toml` rather than typed. The first
+entry is the current release and is served unprefixed at `/docs/`; the rest are served under their
+id (`/v0.6/docs/`, `/nightly/docs/`) and keep those URLs. Granularity is the minor series, not the
+patch, because a release branch takes cherry-picked fixes only.
+
+Rules that matter when touching documentation:
+
+- Write markdown that reads correctly on GitHub. Relative links between documents and labels that
+  name a file are rewritten to site routes at build time, so `[Settings](SETTINGS.md)` works in
+  both places.
+- Diagrams go in ```mermaid fences. They render as diagrams on the site; ASCII art does not.
+- Adding a document to `docs/` gives it a page automatically. Its place in the reading order is
+  declared in `web/src/data/nav.ts`; unlisted documents still get a page and appear under "Not yet
+  filed" on the documentation index.
+- Never send a reader to the repository for something the site renders. Link to the page.
+
+```bash
+cd web
+pnpm install
+pnpm dev          # local server
+pnpm build        # static output in web/dist
+pnpm check        # types — this is a real gate, not decoration
+pnpm format       # prettier
+```
+
+`web/scripts/check-links.mjs` runs in CI after the build and fails on an internal link that points
+at a page which is not built. Versions differ, so a link that resolves in nightly may not resolve
+in an older release.
+
+Two caches will mislead you. Astro keeps rendered markdown in `web/.astro` **and**
+`web/node_modules/.astro`, so a change to the markdown pipeline can appear to do nothing — use
+`pnpm clean`. And `astro dev` and `astro preview` are daemons that outlive the shell and silently
+redirect to an existing instance instead of starting a new one, so a stale server can serve an old
+build long after a rebuild; use `pnpm stop`.
+
 ## Common Pitfalls
 
 1. Forgetting `cx.notify()` after state changes
