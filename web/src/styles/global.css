@@ -58,6 +58,43 @@ img {
   color: var(--text-strong);
 }
 
+/*
+ * Scrollbars, matching the desktop client.
+ *
+ * The platform default is a pale chunky bar that reads as a seam across a dark
+ * page, and it appears on the docs rail, on every code block wide enough to
+ * scroll, and on the search results. `scrollbar-color` covers Firefox and
+ * current Chrome; the -webkit- rules cover the rest.
+ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 code,
 pre,
 kbd {

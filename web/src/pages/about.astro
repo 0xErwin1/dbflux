@@ -1,6 +1,5 @@
 ---
 import Base from '../layouts/Base.astro';
-import { REPO } from '../data/nav';
 
 const PRINCIPLES = [
   {
@@ -100,16 +99,20 @@ const LAYERS = [
         }
       </div>
       <p class="muted">
-        The full crate map and the cross-crate flows live in
-        <a href={`${REPO}/blob/main/ARCHITECTURE.md`} rel="noopener">ARCHITECTURE.md</a>. If you want
-        to write a driver, start with <a href="/docs/driver_authoring/">driver authoring</a>.
+        The full crate map and the cross-crate flows live in the{' '}
+        <a href="/docs/architecture/">architecture guide</a>. If you want to write a driver, start
+        with <a href="/docs/driver_authoring/">driver authoring</a>.
       </p>
     </section>
 
     <section class="reveal cards">
       <article>
         <p class="cards__title">Maintainer</p>
-        <p class="muted">[YOUR NAME] &middot; [@HANDLE]</p>
+        <p class="muted">
+          Ignacio Perez, a backend and systems developer working in Rust and C. DBFlux is his, and
+          the great majority of its commits are too.
+        </p>
+        <a href="https://github.com/0xErwin1" rel="noopener">@0xErwin1 on GitHub &rarr;</a>
       </article>
       <article>
         <p class="cards__title">Contribute</p>
@@ -117,7 +120,7 @@ const LAYERS = [
           Issues, drivers and docs are all welcome. The contributing guide covers the checks a pull
           request has to pass before review.
         </p>
-        <a href={`${REPO}/blob/main/CONTRIBUTING.md`} rel="noopener">Read CONTRIBUTING &rarr;</a>
+        <a href="/docs/contributing/">Read the contributing guide &rarr;</a>
       </article>
     </section>
   </div>

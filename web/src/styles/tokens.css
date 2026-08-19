@@ -14,6 +14,10 @@
   --raised: #151e2b;
   --selection: #273747;
   --scrim: rgba(0, 0, 0, 0.55);
+  /* From the client's own theme: scrollbar_thumb and scrollbar_thumb_hover. */
+  --scrollbar-thumb: rgba(179, 177, 173, 0.15);
+  --scrollbar-thumb-hover: rgba(179, 177, 173, 0.25);
+  --scrollbar-size: 10px;
 
   --text: #b3b1ad;
   --text-strong: #e6e1cf;
