@@ -8,12 +8,17 @@
     "preview": "astro preview",
     "check": "astro check",
     "clean": "rm -rf dist .astro node_modules/.astro node_modules/.vite",
-    "rebuild": "pnpm clean && pnpm build"
+    "rebuild": "pnpm clean && pnpm build",
+    "stop": "astro dev stop; astro preview stop"
   },
   "dependencies": {
     "@astrojs/markdown-remark": "^7.2.3",
     "@astrojs/sitemap": "^3.7.3",
     "astro": "^7.2.3",
     "mermaid": "^11.16.1"
+  },
+  "devDependencies": {
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@fontsource/ibm-plex-sans": "^5.3.0"
   }
 }
