@@ -9,6 +9,9 @@
   // generated file derived the Worker name from the npm package name, and a
   // scoped name is rejected: Worker names are lowercase alphanumeric with
   // dashes, so `@dbflux/web` failed the deploy.
+  //
+  // `wrangler.docs.jsonc` is the same thing for the documentation host, used
+  // when DOCS_MODE splits the site across two origins.
   "name": "dbflux-web",
   "compatibility_date": "2026-08-19",
   "assets": {

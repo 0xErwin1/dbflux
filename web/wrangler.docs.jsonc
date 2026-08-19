@@ -1,0 +1,15 @@
+{
+  // Deploy configuration for the documentation host.
+  //
+  // Identical to `wrangler.jsonc` apart from the name: two Workers cannot share
+  // one, and the deployments are independent. Pair it with `pnpm build:docs`,
+  // which puts the documentation at the root rather than under `/docs`.
+  //
+  //   wrangler deploy --config wrangler.docs.jsonc
+  "name": "dbflux-docs",
+  "compatibility_date": "2026-08-19",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "404-page",
+  },
+}
