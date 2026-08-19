@@ -2,41 +2,31 @@ import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
+import { routeForRepoPath, titleForRepoPath } from './src/data/nav';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
-const REPO_URL = 'https://github.com/0xErwin1/dbflux';
 
-/**
- * Map a repository path to the page that renders it, or to the repository when
- * the site does not host it.
- *
- * Kept in step with the patterns in `src/content.config.ts`.
- */
-function routeForRepoPath(path) {
-  const driver = path.match(/^crates\/dbflux_driver_([^/]+)\/README\.md$/);
-  if (driver) return `/docs/drivers/${driver[1]}/`;
-
-  const doc = path.match(/^docs\/([^/]+)\.md$/);
-  if (doc) return `/docs/${doc[1].toLowerCase()}/`;
-
-  if (path === 'ARCHITECTURE.md') return '/docs/architecture/';
-  if (path === 'CONTRIBUTING.md') return '/docs/contributing/';
-
-  return `${REPO_URL}/blob/main/${path}`;
+/** Collect the text of a node back into a plain string. */
+function textOf(node: any): string {
+  if (node.type === 'text') return node.value;
+  return (node.children ?? []).map(textOf).join('');
 }
 
 /**
- * Rewrite the repository's relative markdown links to site routes.
+ * Point the repository's relative markdown links at the pages rendering them,
+ * and give them a title a reader can act on.
  *
- * The docs are written to be read on GitHub, where `SETTINGS.md` is a sibling
- * file. Served under `/docs/usage/` that same href resolves to a page that does
- * not exist, so every link is re-pointed at the page rendering that file.
+ * The docs are written to be read on GitHub, where `SETTINGS.md` is both a
+ * working href and a sensible label. Served under `/docs/usage/` that href
+ * resolves to a page that does not exist, and the label names a file the reader
+ * does not have. Both are rewritten here so the markdown stays correct in the
+ * repository and reads correctly on the site.
  */
 function rehypeRepoLinks() {
-  return (tree, file) => {
+  return (tree: any, file: any) => {
     const fromDir = dirname(file.path ?? file.history?.[0] ?? '');
 
-    const visit = (node) => {
+    const visit = (node: any) => {
       if (node.type === 'element' && node.tagName === 'a') {
         const href = node.properties?.href;
 
@@ -45,7 +35,17 @@ function rehypeRepoLinks() {
 
           if (target.endsWith('.md')) {
             const repoPath = relative(REPO_ROOT, resolve(fromDir, target)).split('\\').join('/');
+
             node.properties.href = routeForRepoPath(repoPath) + (hash ? `#${hash}` : '');
+
+            // Only relabel when the text is the path itself. A link already
+            // written as a sentence is the author's wording and stays.
+            const label = textOf(node).trim();
+            const title = titleForRepoPath(repoPath);
+
+            if (title && /\.md$/.test(label)) {
+              node.children = [{ type: 'text', value: title }];
+            }
           }
         }
       }
@@ -57,28 +57,22 @@ function rehypeRepoLinks() {
   };
 }
 
-/** Collect the text of a highlighted code block back into its original source. */
-function textOf(node) {
-  if (node.type === 'text') return node.value;
-  return (node.children ?? []).map(textOf).join('');
-}
-
 /**
  * Hand mermaid fences to the client renderer instead of the syntax highlighter,
  * so diagrams draw as diagrams rather than as a listing of their own source.
  */
 function rehypeMermaid() {
-  return (tree) => {
-    const visit = (node) => {
+  return (tree: any) => {
+    const visit = (node: any) => {
       if (!Array.isArray(node.children)) return;
 
-      node.children = node.children.map((child) => {
+      node.children = node.children.map((child: any) => {
         visit(child);
 
         const isMermaid =
           child.type === 'element' &&
           child.tagName === 'pre' &&
-          child.properties?.['dataLanguage'] === 'mermaid';
+          child.properties?.dataLanguage === 'mermaid';
 
         if (!isMermaid) return child;
 

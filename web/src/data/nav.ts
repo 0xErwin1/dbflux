@@ -90,3 +90,44 @@ export const DOC_TITLES: Readonly<Record<string, string>> = {
 };
 
 export const docTitle = (id: string): string => DOC_TITLES[id] ?? id;
+
+export const REPO_URL = REPO;
+
+/**
+ * Map a repository path to the page that renders it, or to the repository when
+ * the site does not host it.
+ *
+ * Kept in step with the patterns in `src/content.config.ts`.
+ */
+export function routeForRepoPath(path: string): string {
+  const driver = path.match(/^crates\/dbflux_driver_([^/]+)\/README\.md$/);
+  if (driver) return `/docs/drivers/${driver[1]}/`;
+
+  const doc = path.match(/^docs\/([^/]+)\.md$/);
+  if (doc) return `/docs/${doc[1].toLowerCase()}/`;
+
+  if (path === 'ARCHITECTURE.md') return '/docs/architecture/';
+  if (path === 'CONTRIBUTING.md') return '/docs/contributing/';
+
+  return `${REPO}/blob/main/${path}`;
+}
+
+/**
+ * The display title for a repository path, when the site renders it as a page.
+ *
+ * The docs are written to be read on GitHub, so they link to each other by
+ * filename. "See `SETTINGS.md`" is the right sentence in a repository and the
+ * wrong one on a documentation site, where the reader has no files.
+ */
+export function titleForRepoPath(path: string): string | null {
+  const driver = path.match(/^crates\/dbflux_driver_([^/]+)\/README\.md$/);
+  if (driver) return DOC_TITLES[`drivers/${driver[1]}`] ?? null;
+
+  const doc = path.match(/^docs\/([^/]+)\.md$/);
+  if (doc) return DOC_TITLES[doc[1].toLowerCase()] ?? null;
+
+  if (path === 'ARCHITECTURE.md') return DOC_TITLES.architecture ?? null;
+  if (path === 'CONTRIBUTING.md') return DOC_TITLES.contributing ?? null;
+
+  return null;
+}

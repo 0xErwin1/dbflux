@@ -8,7 +8,7 @@
 
 html {
   scroll-behavior: smooth;
-  scroll-padding-top: var(--s-8);
+  scroll-padding-top: calc(var(--nav-h) + var(--s-5));
 }
 
 body {

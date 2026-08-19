@@ -48,12 +48,14 @@ const onThisPage = headings.filter((heading) => heading.depth === 2);
     <aside class="docs__toc">
       {
         onThisPage.length > 0 && (
-          <nav aria-label="On this page">
+          <nav aria-label="On this page" data-toc>
             <p class="toc__title">On this page</p>
             <ul>
               {onThisPage.map((heading) => (
                 <li>
-                  <a href={`#${heading.slug}`}>{heading.text}</a>
+                  <a href={`#${heading.slug}`} data-toc-link={heading.slug}>
+                    {heading.text}
+                  </a>
                 </li>
               ))}
             </ul>
@@ -190,6 +192,11 @@ const onThisPage = headings.filter((heading) => heading.depth === 2);
     color: var(--text);
     border-left-color: var(--text-muted);
     text-decoration: none;
+  }
+
+  .docs__toc li a[aria-current='location'] {
+    color: var(--accent);
+    border-left-color: var(--accent);
   }
 
   .toc__edit {
@@ -379,5 +386,64 @@ const onThisPage = headings.filter((heading) => heading.depth === 2);
       rail.removeAttribute('data-open');
       toggle.setAttribute('aria-expanded', 'false');
     });
+  }
+</script>
+
+<script>
+  const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('[data-toc-link]'));
+
+  if (links.length > 0) {
+    const sections = links
+      .map((link) => ({ link, heading: document.getElementById(link.dataset.tocLink ?? '') }))
+      .filter((entry): entry is { link: HTMLAnchorElement; heading: HTMLElement } => !!entry.heading);
+
+    let current: HTMLAnchorElement | null = null;
+
+    const mark = (link: HTMLAnchorElement | null) => {
+      if (link === current) return;
+
+      current?.removeAttribute('aria-current');
+      link?.setAttribute('aria-current', 'location');
+      current = link;
+    };
+
+    const sync = () => {
+      // The reading line sits just below the sticky header: a heading counts as
+      // current once it has passed under it, not when it first appears.
+      const line =
+        parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--nav-h')) + 24;
+
+      const atBottom =
+        window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2;
+
+      if (atBottom) {
+        mark(sections[sections.length - 1].link);
+        return;
+      }
+
+      let active = sections[0];
+
+      for (const section of sections) {
+        if (section.heading.getBoundingClientRect().top <= line) active = section;
+      }
+
+      mark(active.link);
+    };
+
+    let queued = false;
+
+    const onScroll = () => {
+      if (queued) return;
+
+      queued = true;
+      requestAnimationFrame(() => {
+        queued = false;
+        sync();
+      });
+    };
+
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll, { passive: true });
+    sync();
   }
 </script>
