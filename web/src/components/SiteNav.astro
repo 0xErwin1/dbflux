@@ -172,7 +172,12 @@ const LINKS = [
     display: flex;
   }
 
-  .nav__sheet a {
+  /*
+   * Scoped styles carry the cid attribute, so a bare `a` rule here outranks
+   * `.btn--primary` from the global sheet. Without :not(.btn) the call to action
+   * inherits --text on an amber fill, which measures about 1.2:1.
+   */
+  .nav__sheet a:not(.btn) {
     font-family: var(--font-mono);
     font-size: var(--fs-body);
     color: var(--text);
@@ -183,12 +188,20 @@ const LINKS = [
     align-items: center;
   }
 
+  .nav__sheet a:not(.btn):hover {
+    color: var(--text-strong);
+    background: var(--raised);
+    text-decoration: none;
+  }
+
   .nav__sheet-cta {
     padding: var(--s-5) var(--s-6);
   }
 
   .nav__sheet-cta .btn {
     width: 100%;
+    min-height: var(--tap-min);
+    color: var(--accent-on);
   }
 
   .visually-hidden {
