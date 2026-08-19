@@ -1,4 +1,13 @@
-# dbflux_driver_redis
+# Redis
+
+In-memory key-value database.
+
+## At a glance
+
+- **Category** — Key-value
+- **Query language** — Redis commands
+- **Default port** — 6379
+- **URI scheme** — `redis`
 
 Redis key-value driver for DBFlux, built on the [`redis`](https://crates.io/crates/redis) crate.
 

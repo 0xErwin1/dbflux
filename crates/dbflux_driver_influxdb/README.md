@@ -1,4 +1,13 @@
-# dbflux_driver_influxdb
+# InfluxDB
+
+InfluxDB v1 and v2 time-series database with InfluxQL and Flux query support.
+
+## At a glance
+
+- **Category** — Time series
+- **Query language** — InfluxQL / Flux
+- **Default port** — 8086
+- **URI scheme** — `http`
 
 InfluxDB driver for DBFlux.
 

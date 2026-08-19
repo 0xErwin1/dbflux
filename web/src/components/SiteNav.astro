@@ -1,5 +1,6 @@
 ---
 import Icon from './Icon.astro';
+import BrandMark from './BrandMark.astro';
 import { REPO } from '../data/nav';
 
 interface Props {
@@ -19,7 +20,7 @@ const LINKS = [
 <header class="nav" data-nav>
   <div class="nav__inner">
     <a class="nav__brand" href="/">
-      <Icon name="database" size={20} />
+      <BrandMark size={28} />
       <span>DBFlux</span>
     </a>
 

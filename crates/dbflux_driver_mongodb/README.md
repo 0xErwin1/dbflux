@@ -1,4 +1,13 @@
-# dbflux_driver_mongodb
+# MongoDB
+
+Document database for modern applications.
+
+## At a glance
+
+- **Category** — Document
+- **Query language** — MongoDB query syntax
+- **Default port** — 27017
+- **URI scheme** — `mongodb`
 
 MongoDB document driver for DBFlux.
 

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="DBFlux">
+  <rect x="0" y="0" width="128" height="128" rx="26" ry="26" fill="#0A0E14"></rect>
+  <circle cx="64" cy="64" r="44" fill="none" stroke="#FFB454" stroke-width="6"></circle>
+  <path d="M76 22 L36 70 L58 70 L52 106 L92 58 L70 58 Z" fill="#FFB454" stroke="#0A0E14" stroke-width="5" stroke-linejoin="round"></path>
+</svg>

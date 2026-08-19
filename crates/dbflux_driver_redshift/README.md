@@ -1,4 +1,13 @@
-# dbflux_driver_redshift
+# Amazon Redshift
+
+AWS managed data warehouse, wire-compatible with PostgreSQL. Read-only.
+
+## At a glance
+
+- **Category** — Relational
+- **Query language** — SQL
+- **Default port** — 5439
+- **URI scheme** — `redshift`
 
 Amazon Redshift driver for DBFlux (read-only v1), built directly on the [`postgres`](https://crates.io/crates/postgres) wire client rather than on `dbflux_driver_postgres`.
 

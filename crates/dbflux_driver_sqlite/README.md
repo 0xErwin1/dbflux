@@ -1,4 +1,12 @@
-# dbflux_driver_sqlite
+# SQLite
+
+Embedded file-based database.
+
+## At a glance
+
+- **Category** — Relational
+- **Query language** — SQL
+- **URI scheme** — `sqlite`
 
 ## Features
 
