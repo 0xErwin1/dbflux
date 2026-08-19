@@ -16,7 +16,7 @@ export interface DocsSection {
  * missing from disk is reported at build time by `docsSections()`.
  */
 export const DOCS_SECTIONS: readonly DocsSection[] = [
-  { id: 'start', title: 'Start here', entries: ['usage', 'connections'] },
+  { id: 'start', title: 'Start here', entries: ['install', 'usage', 'connections'] },
   { id: 'using', title: 'Using DBFlux', entries: ['charts', 'dashboards', 'dashboards_and_audit'] },
   { id: 'configure', title: 'Configuring', entries: ['settings', 'lua', 'data_and_privacy'] },
   { id: 'integrate', title: 'Integrations', entries: ['mcp_ai_integration', 'audit'] },
@@ -56,6 +56,7 @@ export const DOCS_SECTIONS: readonly DocsSection[] = [
 
 /** Display titles for the rail. The markdown H1 stays the page heading. */
 export const DOC_TITLES: Readonly<Record<string, string>> = {
+  install: 'Installing',
   usage: 'Usage guide',
   connections: 'Connecting',
   charts: 'Charts',

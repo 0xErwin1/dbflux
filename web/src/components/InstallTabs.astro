@@ -1,19 +1,26 @@
 ---
 interface Method {
   readonly id: string;
+  readonly platform: 'linux' | 'macos' | 'windows';
   readonly label: string;
-  readonly command: string;
+  /** A single command the reader can copy. */
+  readonly command?: string;
+  /** Numbered steps, for the platforms where installing is not one line. */
+  readonly steps?: readonly string[];
   readonly hint: string;
 }
 
+const RELEASES = 'https://github.com/0xErwin1/dbflux/releases';
+
 /**
- * Commands are the ones in the repository README. Any change there has to land
+ * Commands and steps come from `docs/INSTALL.md`. Any change there has to land
  * here in the same commit — a stale install line is the most expensive typo on
  * the site.
  */
 const METHODS: readonly Method[] = [
   {
     id: 'tarball',
+    platform: 'linux',
     label: 'Tarball',
     command:
       'curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/install.sh | sudo bash',
@@ -21,43 +28,103 @@ const METHODS: readonly Method[] = [
   },
   {
     id: 'aur',
+    platform: 'linux',
     label: 'AUR',
     command: 'paru -S dbflux',
     hint: 'Any AUR helper works. yay -S dbflux is equivalent.',
   },
   {
     id: 'deb',
+    platform: 'linux',
     label: 'deb / rpm',
     command: 'sudo dpkg -i dbflux-linux-amd64.deb',
     hint: 'Swap amd64 for arm64 on ARM machines. The .rpm installs the same way with dnf.',
   },
   {
     id: 'appimage',
+    platform: 'linux',
     label: 'AppImage',
     command: 'chmod +x dbflux-linux-amd64.AppImage && ./dbflux-linux-amd64.AppImage',
     hint: 'Fully portable. Nothing is written outside your home directory.',
   },
   {
     id: 'nix',
+    platform: 'linux',
     label: 'Nix',
     command: 'nix profile install github:0xErwin1/dbflux',
     hint: 'The default package is a prebuilt binary. Use #dbflux-source to build from source instead.',
   },
+  {
+    id: 'dmg',
+    platform: 'macos',
+    label: 'DMG',
+    steps: [
+      'Download dbflux-macos-arm64.dmg for Apple Silicon, or dbflux-macos-amd64.dmg for Intel.',
+      'Open the DMG and drag DBFlux to Applications.',
+      'On the "unidentified developer" warning, go to System Settings → Privacy & Security and click Open Anyway.',
+    ],
+    hint: 'The build is not signed with an Apple developer certificate. To skip the dialog: xattr -cr /Applications/DBFlux.app. Requires macOS 11 Big Sur or later.',
+  },
+  {
+    id: 'installer',
+    platform: 'windows',
+    label: 'Installer',
+    steps: [
+      'Download dbflux-windows-amd64-setup.exe.',
+      'Run it and follow the wizard.',
+      'If SmartScreen warns, choose More info → Run anyway.',
+    ],
+    hint: 'The executable is not signed with a Windows code signing certificate. Requires Windows 10 or later on x86_64; ARM64 is not supported yet.',
+  },
+  {
+    id: 'portable',
+    platform: 'windows',
+    label: 'Portable',
+    steps: [
+      'Download dbflux-windows-amd64.zip.',
+      'Extract it anywhere.',
+      'Run dbflux.exe.',
+    ],
+    hint: 'Nothing is installed and nothing is written outside the folder you extract into.',
+  },
 ];
+
+const PLATFORMS = [
+  { id: 'linux', label: 'Linux' },
+  { id: 'macos', label: 'macOS' },
+  { id: 'windows', label: 'Windows' },
+] as const;
 ---
 
-<div class="install">
-  <div class="install__tabs" role="tablist" aria-label="Installation method">
+<div class="install" data-install>
+  <div class="install__platforms" role="tablist" aria-label="Platform">
+    {
+      PLATFORMS.map((platform, index) => (
+        <button
+          type="button"
+          role="tab"
+          aria-selected={index === 0 ? 'true' : 'false'}
+          tabindex={index === 0 ? 0 : -1}
+          data-platform-tab={platform.id}
+        >
+          {platform.label}
+        </button>
+      ))
+    }
+    <a class="install__releases" href={RELEASES} rel="noopener">All downloads &rarr;</a>
+  </div>
+
+  <div class="install__methods" role="tablist" aria-label="Installation method">
     {
       METHODS.map((method, index) => (
         <button
           type="button"
           role="tab"
-          id={`tab-${method.id}`}
-          aria-controls={`panel-${method.id}`}
           aria-selected={index === 0 ? 'true' : 'false'}
           tabindex={index === 0 ? 0 : -1}
-          data-install-tab={method.id}
+          data-method-tab={method.id}
+          data-method-platform={method.platform}
+          hidden={method.platform !== 'linux'}
         >
           {method.label}
         </button>
@@ -67,22 +134,24 @@ const METHODS: readonly Method[] = [
 
   {
     METHODS.map((method, index) => (
-      <div
-        class="install__panel"
-        role="tabpanel"
-        id={`panel-${method.id}`}
-        aria-labelledby={`tab-${method.id}`}
-        data-install-panel={method.id}
-        hidden={index !== 0}
-      >
-        <div class="install__cmd">
-          <code>
-            <span class="prompt">$</span> {method.command}
-          </code>
-          <button type="button" class="install__copy" data-copy={method.command}>
-            copy
-          </button>
-        </div>
+      <div class="install__panel" data-method-panel={method.id} hidden={index !== 0}>
+        {method.command && (
+          <div class="install__cmd">
+            <code>
+              <span class="prompt">$</span> {method.command}
+            </code>
+            <button type="button" class="install__copy" data-copy={method.command}>
+              copy
+            </button>
+          </div>
+        )}
+        {method.steps && (
+          <ol class="install__steps">
+            {method.steps.map((step) => (
+              <li>{step}</li>
+            ))}
+          </ol>
+        )}
         <p class="install__hint">{method.hint}</p>
       </div>
     ))
@@ -95,13 +164,19 @@ const METHODS: readonly Method[] = [
     border: var(--bw) solid var(--border);
   }
 
-  .install__tabs {
+  .install__platforms,
+  .install__methods {
     display: flex;
     border-bottom: var(--bw) solid var(--border);
     overflow-x: auto;
   }
 
-  .install__tabs button {
+  .install__platforms {
+    background: var(--bg);
+  }
+
+  .install__platforms button,
+  .install__methods button {
     flex-shrink: 0;
     background: none;
     border: 0;
@@ -116,18 +191,35 @@ const METHODS: readonly Method[] = [
       background var(--t-instant) linear;
   }
 
-  .install__tabs button:last-child {
-    border-right: 0;
-  }
-
-  .install__tabs button:hover {
+  .install__platforms button:hover,
+  .install__methods button:hover {
     color: var(--text-strong);
   }
 
-  .install__tabs button[aria-selected='true'] {
+  .install__platforms button[aria-selected='true'] {
+    color: var(--text-strong);
+    background: var(--panel);
+    box-shadow: inset 0 -2px 0 0 var(--accent);
+  }
+
+  .install__methods button[aria-selected='true'] {
     color: var(--text-strong);
     background: var(--raised);
     box-shadow: inset 0 -2px 0 0 var(--accent);
+  }
+
+  .install__platforms button[hidden],
+  .install__methods button[hidden] {
+    display: none;
+  }
+
+  .install__releases {
+    margin-left: auto;
+    align-self: center;
+    padding-inline: var(--s-6);
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    white-space: nowrap;
   }
 
   .install__panel {
@@ -159,6 +251,22 @@ const METHODS: readonly Method[] = [
 
   .prompt {
     color: var(--text-muted);
+  }
+
+  .install__steps {
+    margin: 0;
+    padding-left: var(--s-6);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-3);
+    font-size: var(--fs-small);
+    line-height: 1.65;
+  }
+
+  .install__steps::marker,
+  .install__steps li::marker {
+    color: var(--accent);
+    font-family: var(--font-mono);
   }
 
   .install__copy {
@@ -196,39 +304,85 @@ const METHODS: readonly Method[] = [
     .install__copy {
       min-height: var(--tap-min);
     }
+
+    .install__releases {
+      display: none;
+    }
   }
 </style>
 
 <script>
-  const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-install-tab]'));
-  const panels = Array.from(document.querySelectorAll<HTMLElement>('[data-install-panel]'));
+  const platformTabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-platform-tab]'));
+  const methodTabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-method-tab]'));
+  const panels = Array.from(document.querySelectorAll<HTMLElement>('[data-method-panel]'));
 
-  const select = (id: string) => {
-    for (const tab of tabs) {
-      const active = tab.dataset.installTab === id;
-      tab.setAttribute('aria-selected', String(active));
-      tab.tabIndex = active ? 0 : -1;
+  if (platformTabs.length > 0) {
+    const selectMethod = (id: string) => {
+      for (const tab of methodTabs) {
+        const active = tab.dataset.methodTab === id;
+        tab.setAttribute('aria-selected', String(active));
+        tab.tabIndex = active ? 0 : -1;
+      }
+
+      for (const panel of panels) {
+        panel.hidden = panel.dataset.methodPanel !== id;
+      }
+    };
+
+    const selectPlatform = (platform: string) => {
+      for (const tab of platformTabs) {
+        const active = tab.dataset.platformTab === platform;
+        tab.setAttribute('aria-selected', String(active));
+        tab.tabIndex = active ? 0 : -1;
+      }
+
+      const visible = methodTabs.filter((tab) => tab.dataset.methodPlatform === platform);
+
+      for (const tab of methodTabs) {
+        tab.hidden = tab.dataset.methodPlatform !== platform;
+      }
+
+      if (visible[0]?.dataset.methodTab) selectMethod(visible[0].dataset.methodTab);
+    };
+
+    for (const tab of platformTabs) {
+      tab.addEventListener('click', () => selectPlatform(tab.dataset.platformTab ?? 'linux'));
     }
 
-    for (const panel of panels) {
-      panel.hidden = panel.dataset.installPanel !== id;
+    for (const [index, tab] of methodTabs.entries()) {
+      tab.addEventListener('click', () => selectMethod(tab.dataset.methodTab ?? ''));
+
+      tab.addEventListener('keydown', (event) => {
+        if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+
+        event.preventDefault();
+        const visible = methodTabs.filter((candidate) => !candidate.hidden);
+        const position = visible.indexOf(tab);
+        const step = event.key === 'ArrowRight' ? 1 : -1;
+        const next = visible[(position + step + visible.length) % visible.length];
+
+        selectMethod(next.dataset.methodTab ?? '');
+        next.focus();
+      });
     }
-  };
 
-  tabs.forEach((tab, index) => {
-    tab.addEventListener('click', () => select(tab.dataset.installTab ?? ''));
+    // Open on the reader's own platform. Defaulting everyone to Linux sends a
+    // Mac visitor looking for a tab before they find anything they can run.
+    const agent = navigator.userAgent;
+    const guess = /Mac|iPhone|iPad/.test(agent) ? 'macos' : /Win/.test(agent) ? 'windows' : 'linux';
 
-    tab.addEventListener('keydown', (event) => {
-      if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+    if (guess !== 'linux') selectPlatform(guess);
 
-      event.preventDefault();
-      const step = event.key === 'ArrowRight' ? 1 : -1;
-      const next = tabs[(index + step + tabs.length) % tabs.length];
+    // Keep the hero's call to action honest about where it is sending the reader.
+    const cta = document.querySelector<HTMLAnchorElement>('[data-download-cta]');
+    const LABELS: Record<string, string> = {
+      linux: 'Download for Linux',
+      macos: 'Download for macOS',
+      windows: 'Download for Windows',
+    };
 
-      select(next.dataset.installTab ?? '');
-      next.focus();
-    });
-  });
+    if (cta) cta.textContent = LABELS[guess];
+  }
 
   for (const button of document.querySelectorAll<HTMLButtonElement>('[data-copy]')) {
     button.addEventListener('click', async () => {
