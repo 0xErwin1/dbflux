@@ -1,6 +1,6 @@
 ---
 import Base from '../layouts/Base.astro';
-import { CURRENT, VERSIONS } from '../data/versions';
+import { CURRENT, VERSIONS, versionLabel } from '../data/versions';
 
 /**
  * Versions come and go, so a link that worked against one release can land here
@@ -31,7 +31,7 @@ const versions = VERSIONS;
           <>
             {index > 0 && <span aria-hidden="true"> &middot; </span>}
             <a href={version.id === CURRENT.id ? '/docs/' : `/${version.id}/docs/`}>
-              {version.label}
+              {versionLabel(version)}
             </a>
           </>
         ))

@@ -10,7 +10,7 @@
  * build: one unreachable branch should cost that version, not the whole site.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 const WEB = new URL('..', import.meta.url).pathname;
@@ -48,8 +48,25 @@ function readTree(ref) {
 }
 
 /**
+ * The product version a ref documents.
+ *
+ * `docs/RELEASE.md` names the workspace version in Cargo.toml as the source of
+ * truth and requires every other manifest to stay in lockstep, so it is the one
+ * place worth reading. Hard-coding these in the site is how the 0.6 entry ended
+ * up claiming a release that was never cut.
+ */
+function workspaceVersion(ref) {
+  const manifest = git(['show', `${ref}:Cargo.toml`]);
+  const match = manifest.match(/^version\s*=\s*"([^"]+)"/m);
+
+  if (!match) throw new Error(`No workspace version in ${ref}:Cargo.toml`);
+
+  return match[1];
+}
+
+/**
  * @param {ReadonlyArray<{ id: string, ref: string }>} versions
- * @returns {string[]} ids that were materialised
+ * @returns {Array<{ id: string, ref: string, version: string }>} what was materialised
  */
 export function fetchDocs(versions) {
   rmSync(VERSIONS_DIR, { recursive: true, force: true });
@@ -72,9 +89,13 @@ export function fetchDocs(versions) {
       writeFileSync(target, git(['show', `${ref}:${path}`]));
     }
 
-    console.log(`  docs: ${id} <- ${ref} (${files.length} files)`);
-    done.push(id);
+    const version = workspaceVersion(ref);
+
+    console.log(`  docs: ${id} <- ${ref} @ ${version} (${files.length} files)`);
+    done.push({ id, ref, version });
   }
+
+  writeFileSync(join(VERSIONS_DIR, 'manifest.json'), JSON.stringify(done, null, 2));
 
   if (done.length === 0) {
     throw new Error('No documentation version could be read. Is this a full clone?');
@@ -82,3 +103,7 @@ export function fetchDocs(versions) {
 
   return done;
 }
+
+const registry = JSON.parse(readFileSync(join(WEB, 'versions.json'), 'utf8'));
+
+fetchDocs(registry);

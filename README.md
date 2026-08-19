@@ -2,6 +2,8 @@
 
 An extensible, keyboard-first data platform delivered as a Rust + GPUI desktop client.
 
+**[dbflux.dev](https://dbflux.dev)** &middot; [Documentation](https://dbflux.dev/docs/) &middot; [Install](https://dbflux.dev/docs/install/)
+
 ## Overview
 
 DBFlux is an open-source desktop client with built-in drivers for relational and non-relational databases. Its core contracts are driver-neutral, and external drivers can integrate over RPC.
@@ -11,6 +13,10 @@ The client focuses on performance, a clean UX, and keyboard-first workflows. The
 ![DBFlux](resources/dbflux.png)
 
 ## Documentation
+
+Everything below is published at **[dbflux.dev/docs](https://dbflux.dev/docs/)**, rendered from
+these same files, with search and a version selector. The links here point at the source; read them
+on the site if you prefer.
 
 Choose the path that matches what you want to do.
 
@@ -236,6 +242,24 @@ Live integration tests (normally `#[ignore]`d) use a different flag under nextes
 ```bash
 cargo nextest run -p dbflux_driver_sqlite --run-ignored all
 ```
+
+### Website
+
+The site under `web/` is an Astro static build. It reads `docs/`, the driver READMEs,
+`ARCHITECTURE.md` and `CONTRIBUTING.md` out of git, one set per published version, so editing a
+document is all that is needed to change what the site shows.
+
+```bash
+cd web
+pnpm install
+pnpm dev          # local server
+pnpm build        # static output in web/dist
+pnpm check        # types
+pnpm format       # prettier
+```
+
+Which versions are published is declared in `web/versions.json`. Each entry names a git ref; the
+product version shown for it is read from that ref's `Cargo.toml`.
 
 ### Nix Development Shell
 

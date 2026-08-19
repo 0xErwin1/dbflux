@@ -2,7 +2,7 @@
 import { getCollection } from 'astro:content';
 import { pathsForVersion } from '../data/docs';
 import type { DocsVersion } from '../data/versions';
-import { CURRENT, VERSIONS, docsHref, versionHome } from '../data/versions';
+import { CURRENT, VERSIONS, docsHref, versionHome, versionLabel } from '../data/versions';
 
 interface Props {
   version: DocsVersion;
@@ -43,7 +43,7 @@ const targets = VERSIONS.map((candidate) => {
     data-version-toggle
   >
     <span class="picker__label">Version</span>
-    <span class="picker__value">{version.label}</span>
+    <span class="picker__value">{versionLabel(version)}</span>
     <svg
       width="11"
       height="11"
@@ -67,7 +67,7 @@ const targets = VERSIONS.map((candidate) => {
             aria-current={target.version.id === version.id ? 'true' : undefined}
             data-version-link={target.version.id}
           >
-            <span>{target.version.label}</span>
+            <span>{versionLabel(target.version)}</span>
             {!target.exact && target.version.id !== version.id && (
               <span class="picker__tag" title="This page does not exist in that version">
                 index

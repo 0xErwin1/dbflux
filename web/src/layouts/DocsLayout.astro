@@ -4,7 +4,7 @@ import DocsTree from '../components/DocsTree.astro';
 import VersionPicker from '../components/VersionPicker.astro';
 import { docTitle } from '../data/nav';
 import type { DocsVersion } from '../data/versions';
-import { CURRENT, versionHome } from '../data/versions';
+import { CURRENT, versionHome, versionLabel } from '../data/versions';
 
 interface Heading {
   depth: number;
@@ -35,7 +35,7 @@ const {
 const onThisPage = headings.filter((heading) => heading.depth === 2);
 
 const isCurrent = version.id === CURRENT.id;
-const suffix = isCurrent ? '' : ` (${version.label})`;
+const suffix = isCurrent ? '' : ` (${versionLabel(version)})`;
 
 /**
  * Older and unreleased versions point at the current release, so a search engine
