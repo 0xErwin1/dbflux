@@ -93,20 +93,22 @@ const PLATFORMS = [
 ---
 
 <div class="install" data-install>
-  <div class="install__platforms" role="tablist" aria-label="Platform">
-    {
-      PLATFORMS.map((platform, index) => (
-        <button
-          type="button"
-          role="tab"
-          aria-selected={index === 0 ? 'true' : 'false'}
-          tabindex={index === 0 ? 0 : -1}
-          data-platform-tab={platform.id}
-        >
-          {platform.label}
-        </button>
-      ))
-    }
+  <div class="install__head">
+    <div class="install__platforms" role="tablist" aria-label="Platform">
+      {
+        PLATFORMS.map((platform, index) => (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={index === 0 ? 'true' : 'false'}
+            tabindex={index === 0 ? 0 : -1}
+            data-platform-tab={platform.id}
+          >
+            {platform.label}
+          </button>
+        ))
+      }
+    </div>
     <a class="install__releases" href={RELEASES} rel="noopener">All downloads &rarr;</a>
   </div>
 
@@ -160,15 +162,21 @@ const PLATFORMS = [
     border: var(--bw) solid var(--border);
   }
 
+  .install__head {
+    display: flex;
+    align-items: stretch;
+    background: var(--bg);
+    border-bottom: var(--bw) solid var(--border);
+  }
+
   .install__platforms,
   .install__methods {
     display: flex;
-    border-bottom: var(--bw) solid var(--border);
     overflow-x: auto;
   }
 
-  .install__platforms {
-    background: var(--bg);
+  .install__methods {
+    border-bottom: var(--bw) solid var(--border);
   }
 
   .install__platforms button,

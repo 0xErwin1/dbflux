@@ -43,6 +43,19 @@ a:hover {
   text-decoration: underline;
 }
 
+/*
+ * A link sitting inside a run of text is underlined from the start. Colour alone
+ * does not identify it for a reader who cannot separate the two hues, and every
+ * link in prose or in a breadcrumb is exactly that case. Links that are their
+ * own block — navigation items, cards, buttons — are identifiable by position
+ * and are left alone.
+ */
+.prose a,
+.crumbs a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 img {
   max-width: 100%;
   display: block;
