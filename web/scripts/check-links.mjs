@@ -5,6 +5,10 @@
  * The docs are authored to be read on GitHub and link to each other by
  * filename; those hrefs are rewritten at build time. This is the check that the
  * rewriting kept up when a document is added, renamed or removed.
+ *
+ * Only same-origin links are checked. In a split deployment the landing page
+ * links to the documentation host on purpose, and those targets are not in this
+ * build to verify.
  */
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';

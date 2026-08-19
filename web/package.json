@@ -12,7 +12,10 @@
     "stop": "astro dev stop; astro preview stop",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "sync-docs": "node scripts/fetch-docs.mjs"
+    "sync-docs": "node scripts/fetch-docs.mjs",
+    "build:site": "DOCS_MODE=site pnpm run build",
+    "build:docs": "DOCS_MODE=docs pnpm run build",
+    "dev:docs": "DOCS_MODE=docs pnpm run dev"
   },
   "dependencies": {
     "@astrojs/markdown-remark": "^7.2.3",

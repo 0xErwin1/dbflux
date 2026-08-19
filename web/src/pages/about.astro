@@ -1,5 +1,6 @@
 ---
 import Base from '../layouts/Base.astro';
+import { DOCS_AT_ROOT, SITE_ORIGIN, docsUrl } from '../data/site';
 
 const PRINCIPLES = [
   {
@@ -52,6 +53,8 @@ const LAYERS = [
   title="About DBFlux"
   description="Why DBFlux exists, the principles behind it, and how the codebase is put together."
   current="about"
+  noindex={DOCS_AT_ROOT}
+  canonicalPath={DOCS_AT_ROOT ? `${SITE_ORIGIN}/about/` : undefined}
 >
   <div class="col">
     <section class="intro">
@@ -108,8 +111,8 @@ const LAYERS = [
       </div>
       <p class="muted">
         The full crate map and the cross-crate flows live in the{' '}
-        <a href="/docs/architecture/">architecture guide</a>. If you want to write a driver, start
-        with <a href="/docs/driver_authoring/">driver authoring</a>.
+        <a href={docsUrl('architecture')}>architecture guide</a>. If you want to write a driver,
+        start with <a href={docsUrl('driver_authoring')}>driver authoring</a>.
       </p>
     </section>
 
@@ -128,7 +131,7 @@ const LAYERS = [
           Issues, drivers and docs are all welcome. The contributing guide covers the checks a pull
           request has to pass before review.
         </p>
-        <a href="/docs/contributing/">Read the contributing guide &rarr;</a>
+        <a href={docsUrl('contributing')}>Read the contributing guide &rarr;</a>
       </article>
     </section>
   </div>

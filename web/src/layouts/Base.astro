@@ -30,9 +30,11 @@ const {
 } = Astro.props;
 // Astro.site is unset when the config fails to load, and a crashed canonical tag
 // should not take the whole page down with it.
-const canonical = Astro.site
-  ? new URL(canonicalPath ?? Astro.url.pathname, Astro.site).href
-  : undefined;
+const canonical = canonicalPath?.startsWith('http')
+  ? canonicalPath
+  : Astro.site
+    ? new URL(canonicalPath ?? Astro.url.pathname, Astro.site).href
+    : undefined;
 ---
 
 <!doctype html>

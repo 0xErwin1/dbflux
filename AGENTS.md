@@ -617,6 +617,28 @@ pnpm check        # types — this is a real gate, not decoration
 pnpm format       # prettier
 ```
 
+### Where the documentation is served
+
+`DOCS_MODE` decides, and it has three values:
+
+| Value | What it builds | Documentation URL |
+|---|---|---|
+| `embedded` (default) | everything, one origin | `/docs/usage/` |
+| `site` | landing pages, plus a redirect at every old documentation path | `https://docs.dbflux.dev/usage/` |
+| `docs` | the documentation, at the root of its own host | `/usage/` |
+
+Local development uses the default, so `pnpm dev` still brings up the whole site
+with one command. A split deployment is two builds of this same source:
+
+```bash
+pnpm build:site   # DOCS_MODE=site
+pnpm build:docs   # DOCS_MODE=docs
+```
+
+Override `SITE_ORIGIN` and `DOCS_ORIGIN` if the hostnames change. Nothing else
+in the source knows a URL: pages link through `docsUrl()` and `siteUrl()`, which
+is what lets one variable move an entire section of the site.
+
 `web/scripts/check-links.mjs` runs in CI after the build and fails on an internal link that points
 at a page which is not built. Versions differ, so a link that resolves in nightly may not resolve
 in an older release.

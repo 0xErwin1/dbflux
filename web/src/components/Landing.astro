@@ -1,0 +1,580 @@
+---
+import Icon from './Icon.astro';
+import InstallTabs from './InstallTabs.astro';
+import { REPO } from '../data/nav';
+import { CURRENT, productVersion } from '../data/versions';
+
+const DRIVERS = [
+  'PostgreSQL',
+  'MySQL',
+  'MariaDB',
+  'SQL Server',
+  'SQLite',
+  'MongoDB',
+  'Redis',
+  'DynamoDB',
+  'CloudWatch',
+  'InfluxDB',
+  'Redshift',
+  'S3',
+] as const;
+
+const FEATURES = [
+  {
+    icon: 'query',
+    title: 'Dialect-aware editor',
+    body: 'Completion, validation and dangerous-statement detection come from the driver, not a shared guess. A DELETE without a WHERE is caught before it runs.',
+  },
+  {
+    icon: 'table',
+    title: 'Editable result grid',
+    body: 'Edit cells in place when the result maps cleanly back to one table, page through millions of rows by keyset, and copy any selection as a native query.',
+  },
+  {
+    icon: 'chart',
+    title: 'Charts and dashboards',
+    body: 'Turn any result into a chart, save it, and pin it to a dashboard alongside instance metrics from the same connection.',
+  },
+  {
+    icon: 'hook',
+    title: 'Connection hooks',
+    body: 'Run a command, a script or in-process Lua around connect and disconnect, with live output in the tasks panel and a failure policy you choose.',
+  },
+  {
+    icon: 'lock',
+    title: 'Reach anything',
+    body: 'SSH tunnels, HTTP proxies and AWS SSO are first-class. Secrets live in the OS keyring, never in the profile file.',
+  },
+  {
+    icon: 'shield',
+    title: 'Auditable by default',
+    body: 'Queries, hooks, scripts and MCP calls all write to the same event log, with redaction and retention you control.',
+  },
+] as const;
+
+/** The four the application's own empty state offers on a fresh install. */
+const SHORTCUTS = [
+  { keys: ['Ctrl', 'N'], action: 'new query' },
+  { keys: ['Ctrl', 'Shift', 'P'], action: 'command palette' },
+  { keys: ['Ctrl', 'O'], action: 'open script from disk' },
+  { keys: ['Ctrl', 'Shift', 'N'], action: 'new connection' },
+] as const;
+
+const DOC_CARDS = [
+  {
+    href: '/docs/usage/',
+    title: 'Usage guide',
+    body: 'First launch, creating a connection, running queries, browsing results, charting and exporting.',
+  },
+  {
+    href: '/docs/connections/',
+    title: 'Connecting',
+    body: 'SSH tunnels, proxies, AWS SSO and value sources for everything that is not a plain host and port.',
+  },
+  {
+    href: '/docs/mcp_ai_integration/',
+    title: 'AI + MCP',
+    body: 'Wire an AI client to DBFlux, then set the roles, policies and approvals that keep it inside the lines.',
+  },
+] as const;
+---
+
+---
+<section class="hero shell">
+  <div class="hero__copy">
+    <p class="eyebrow">Rust &middot; GPUI &middot; v{productVersion(CURRENT.id)}</p>
+    <h1>Every database you run, in one keyboard-driven window.</h1>
+    <p class="hero__lede">
+      An extensible, keyboard-first data platform. Twelve built-in drivers, a driver-neutral core,
+      and anything else you need over the RPC driver protocol.
+    </p>
+    <div class="hero__actions">
+      <a class="btn btn--primary" href="#install" data-download-cta>Download for Linux</a>
+      <a class="btn btn--secondary" href={REPO} rel="noopener">View source</a>
+    </div>
+    <p class="hero__meta">Linux &middot; macOS &middot; Windows — MIT or Apache-2.0</p>
+  </div>
+
+  <figure class="hero__shot">
+    <figcaption>
+      <span class="dot" aria-hidden="true"></span>
+      Main server — SELECT * FROM public.transactions (1.5s)
+    </figcaption>
+    <img
+      src="/img/app-hero.jpg"
+      width="1400"
+      height="751"
+      alt="DBFlux with a connection tree open, showing databases, schemas, routines and instance metrics for a PostgreSQL server."
+    />
+  </figure>
+</section>
+
+<section class="shell reveal" id="install">
+  <InstallTabs />
+</section>
+
+<section class="shell reveal" id="drivers">
+  <header class="sec-head">
+    <p class="eyebrow">Built-in drivers</p>
+    <a href="/docs/drivers/">Capability matrix &rarr;</a>
+  </header>
+  <ul class="chips">
+    {DRIVERS.map((driver) => <li>{driver}</li>)}
+  </ul>
+  <p class="sec-note">
+    Relational, document, key-value, time-series and object stores share one result grid, one chart
+    engine and one audit log. External drivers register over the RPC protocol without a fork.
+  </p>
+</section>
+
+<section class="shell reveal" id="features">
+  <p class="eyebrow">What you get</p>
+  <ul class="features">
+    {
+      FEATURES.map((feature) => (
+        <li>
+          <Icon name={feature.icon} size={20} />
+          <h2>{feature.title}</h2>
+          <p>{feature.body}</p>
+        </li>
+      ))
+    }
+  </ul>
+</section>
+
+<section class="shell reveal split">
+  <div class="split__copy">
+    <p class="eyebrow">Keyboard-first</p>
+    <h2>The mouse is optional, not assumed.</h2>
+    <p>
+      Every surface has a binding and a command-palette entry: open a connection, run a statement,
+      jump to a table, pivot a result into a chart. The empty state tells you the four you need on
+      day one.
+    </p>
+    <a href="/docs/usage/">Full keyboard reference &rarr;</a>
+  </div>
+  <ul class="keys">
+    {
+      SHORTCUTS.map((shortcut) => (
+        <li>
+          <span class="keys__combo">
+            {shortcut.keys.map((key, index) => (
+              <>
+                {index > 0 && <span class="keys__plus">+</span>}
+                <kbd>{key}</kbd>
+              </>
+            ))}
+          </span>
+          <span class="keys__action">{shortcut.action}</span>
+        </li>
+      ))
+    }
+  </ul>
+</section>
+
+<section class="shell reveal cards2">
+  <article>
+    <p class="eyebrow eyebrow--link">Governance</p>
+    <h2>Give an AI client a connection, not your database.</h2>
+    <p>
+      The MCP server classifies every operation — metadata, read, write, destructive, admin — and a
+      policy engine decides per role and per connection. Write and destructive calls can sit behind
+      human approval.
+    </p>
+  </article>
+  <article>
+    <p class="eyebrow eyebrow--ok">Audit</p>
+    <h2>Every query, hook and tool call, on the record.</h2>
+    <p>
+      Events land in a local SQLite log with category, severity, actor and outcome. Query text is
+      fingerprinted rather than stored, sensitive values are redacted, and the whole log exports to
+      JSON or CSV.
+    </p>
+  </article>
+</section>
+
+<section class="shell reveal">
+  <header class="sec-head">
+    <p class="eyebrow">Documentation</p>
+    <a href="/docs/">All guides &rarr;</a>
+  </header>
+  <ul class="doccards">
+    {
+      DOC_CARDS.map((card) => (
+        <li>
+          <a href={card.href}>
+            <h2>{card.title}</h2>
+            <p>{card.body}</p>
+          </a>
+        </li>
+      ))
+    }
+  </ul>
+</section>
+<style>
+  section {
+    padding-block-end: var(--s-9);
+  }
+
+  .hero {
+    display: grid;
+    grid-template-columns: 5fr 7fr;
+    gap: var(--s-8);
+    align-items: center;
+    padding-block: var(--s-9);
+  }
+
+  .hero__copy {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-6);
+  }
+
+  h1 {
+    font-size: clamp(2rem, 1.4rem + 1.9vw, 2.625rem);
+    text-wrap: pretty;
+  }
+
+  .hero__lede {
+    margin: 0;
+    font-size: 1rem;
+  }
+
+  .hero__actions {
+    display: flex;
+    gap: var(--s-4);
+    flex-wrap: wrap;
+  }
+
+  .hero__meta {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    color: var(--text-muted);
+  }
+
+  .hero__shot {
+    margin: 0;
+  }
+
+  .hero__shot figcaption {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    background: var(--panel);
+    border: var(--bw) solid var(--border);
+    border-bottom: 0;
+    padding: var(--s-3) var(--s-5);
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    color: var(--text-muted);
+  }
+
+  .hero__shot img {
+    border: var(--bw) solid var(--border);
+    height: auto;
+    transition: border-color 240ms linear;
+  }
+
+  .hero__shot img:hover {
+    border-color: var(--border-interactive);
+  }
+
+  @keyframes pulse {
+    0% {
+      box-shadow: 0 0 0 0 rgba(170, 217, 76, 0.55);
+    }
+    70% {
+      box-shadow: 0 0 0 7px rgba(170, 217, 76, 0);
+    }
+    100% {
+      box-shadow: 0 0 0 0 rgba(170, 217, 76, 0);
+    }
+  }
+
+  .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: var(--radius-full);
+    background: var(--success);
+    animation: pulse 2.4s ease-out infinite;
+  }
+
+  .sec-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--s-5);
+    margin-block-end: var(--s-6);
+  }
+
+  .sec-head a {
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+  }
+
+  .sec-note {
+    margin: var(--s-5) 0 0;
+    font-size: var(--fs-small);
+    color: var(--text-muted);
+  }
+
+  .chips {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-3);
+  }
+
+  .chips li {
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    color: var(--text);
+    background: var(--panel);
+    border: var(--bw) solid var(--border);
+    padding: var(--s-3) var(--s-5);
+    transition:
+      border-color 160ms linear,
+      color 160ms linear,
+      transform 160ms var(--ease-out);
+  }
+
+  .chips li:hover {
+    border-color: var(--accent);
+    color: var(--text-strong);
+    transform: translateY(-2px);
+  }
+
+  .features {
+    list-style: none;
+    margin: var(--s-6) 0 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--bw);
+    background: var(--border);
+    border: var(--bw) solid var(--border);
+  }
+
+  .features li {
+    background: var(--bg);
+    padding: var(--s-6);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-4);
+    transition: background 180ms linear;
+  }
+
+  .features li:hover {
+    background: var(--panel);
+  }
+
+  .features :global(svg) {
+    color: var(--accent);
+    transition: transform 260ms var(--ease-out);
+  }
+
+  .features li:hover :global(svg) {
+    transform: translateY(-2px) scale(1.06);
+  }
+
+  .features h2 {
+    font-size: 0.875rem;
+  }
+
+  .features p,
+  .doccards p,
+  .cards2 p {
+    margin: 0;
+    font-size: var(--fs-small);
+    line-height: 1.65;
+  }
+
+  .split {
+    display: grid;
+    grid-template-columns: 5fr 7fr;
+    gap: var(--s-8);
+    align-items: center;
+  }
+
+  .split__copy {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-5);
+  }
+
+  .split__copy h2 {
+    font-size: 1.75rem;
+  }
+
+  .split__copy p {
+    margin: 0;
+  }
+
+  .split__copy a {
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+  }
+
+  /*
+   * Two columns rather than a fixed-width first cell: the combos differ in
+   * width, and Ctrl+Shift+P overflowed the fixed cell and pushed its own
+   * description out of line with the others.
+   */
+  .keys {
+    list-style: none;
+    margin: 0;
+    padding: var(--s-7);
+    background: var(--panel);
+    border: var(--bw) solid var(--border);
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    align-items: center;
+    gap: var(--s-5);
+  }
+
+  .keys li {
+    display: contents;
+  }
+
+  .keys__combo {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+  }
+
+  .keys kbd {
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    color: var(--text-strong);
+    background: var(--raised);
+    border: var(--bw) solid var(--border);
+    padding: var(--s-2) var(--s-4);
+    line-height: 1;
+  }
+
+  .keys__plus {
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    color: var(--text-muted);
+  }
+
+  .keys__action {
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    color: var(--text-muted);
+  }
+
+  @media (max-width: 640px) {
+    .keys {
+      padding: var(--s-5);
+      grid-template-columns: 1fr;
+      gap: var(--s-2);
+    }
+
+    .keys__action {
+      margin-block-end: var(--s-4);
+    }
+  }
+
+  .cards2 {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--s-5);
+  }
+
+  .cards2 article {
+    background: var(--panel);
+    border: var(--bw) solid var(--border);
+    padding: var(--s-7);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-4);
+  }
+
+  .cards2 h2 {
+    font-size: 1.25rem;
+    line-height: 1.3;
+  }
+
+  .eyebrow--link {
+    color: var(--link);
+  }
+
+  .eyebrow--ok {
+    color: var(--success);
+  }
+
+  .doccards {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--s-5);
+  }
+
+  .doccards a {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-4);
+    height: 100%;
+    background: var(--panel);
+    border: var(--bw) solid var(--border);
+    border-left: var(--bw-emphasis) solid var(--accent);
+    padding: var(--s-6);
+    color: var(--text);
+    transition:
+      background 160ms linear,
+      transform 180ms var(--ease-out);
+  }
+
+  .doccards a:hover {
+    background: var(--raised);
+    transform: translateX(3px);
+    text-decoration: none;
+  }
+
+  .doccards h2 {
+    font-size: 0.875rem;
+  }
+
+  @media (max-width: 1024px) {
+    .features,
+    .doccards {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 900px) {
+    .hero,
+    .split {
+      grid-template-columns: 1fr;
+    }
+
+    .hero {
+      padding-block: var(--s-7);
+    }
+
+    .cards2 {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 640px) {
+    section {
+      padding-block-end: var(--s-7);
+    }
+
+    .features,
+    .doccards {
+      grid-template-columns: 1fr;
+    }
+
+    .hero__actions .btn {
+      width: 100%;
+    }
+  }
+</style>
