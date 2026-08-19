@@ -50,8 +50,8 @@
   --series-5: #d2a6ff;
   --series-6: #95e6cb;
 
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --font-sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
   --fs-display: clamp(2rem, 1.2rem + 2.6vw, 3.375rem);
   --fs-h1: clamp(1.75rem, 1.2rem + 1.6vw, 2.375rem);
   --fs-h2: 1.5rem;

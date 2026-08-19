@@ -23,7 +23,15 @@ interface Props {
   editPath?: string;
 }
 
-const { version, currentPath, available, headings = [], title, description, editPath } = Astro.props;
+const {
+  version,
+  currentPath,
+  available,
+  headings = [],
+  title,
+  description,
+  editPath,
+} = Astro.props;
 const onThisPage = headings.filter((heading) => heading.depth === 2);
 
 const isCurrent = version.id === CURRENT.id;
@@ -33,11 +41,7 @@ const suffix = isCurrent ? '' : ` (${version.label})`;
  * Older and unreleased versions point at the current release, so a search engine
  * ranks the version most readers are running rather than whichever it crawled.
  */
-const canonicalPath = isCurrent
-  ? undefined
-  : currentPath
-    ? `/docs/${currentPath}/`
-    : '/docs/';
+const canonicalPath = isCurrent ? undefined : currentPath ? `/docs/${currentPath}/` : '/docs/';
 ---
 
 <Base
@@ -68,7 +72,8 @@ const canonicalPath = isCurrent
 
     <article class="docs__body">
       <p class="crumbs">
-        <a href={versionHome(version)}>Docs</a> <span>/</span>
+        <a href={versionHome(version)}>Docs</a>
+        <span>/</span>
         <span class="crumbs__here">{currentPath ? docTitle(currentPath) : 'Overview'}</span>
       </p>
       <div class="prose"><slot /></div>
@@ -94,7 +99,10 @@ const canonicalPath = isCurrent
       {
         editPath && (
           <div class="toc__edit">
-            <a href={`https://github.com/0xErwin1/dbflux/blob/main/docs/${editPath}`} rel="noopener">
+            <a
+              href={`https://github.com/0xErwin1/dbflux/blob/main/docs/${editPath}`}
+              rel="noopener"
+            >
               Edit this page
             </a>
             <a href="https://github.com/0xErwin1/dbflux/issues/new" rel="noopener">
@@ -351,8 +359,6 @@ const canonicalPath = isCurrent
     margin-block: var(--s-7);
   }
 
-
-
   @media (max-width: 1200px) {
     .docs {
       grid-template-columns: var(--rail-w) minmax(0, 1fr);
@@ -424,7 +430,9 @@ const canonicalPath = isCurrent
   if (links.length > 0) {
     const sections = links
       .map((link) => ({ link, heading: document.getElementById(link.dataset.tocLink ?? '') }))
-      .filter((entry): entry is { link: HTMLAnchorElement; heading: HTMLElement } => !!entry.heading);
+      .filter(
+        (entry): entry is { link: HTMLAnchorElement; heading: HTMLElement } => !!entry.heading,
+      );
 
     let current: HTMLAnchorElement | null = null;
 

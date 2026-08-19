@@ -80,11 +80,7 @@ const METHODS: readonly Method[] = [
     id: 'portable',
     platform: 'windows',
     label: 'Portable',
-    steps: [
-      'Download dbflux-windows-amd64.zip.',
-      'Extract it anywhere.',
-      'Run dbflux.exe.',
-    ],
+    steps: ['Download dbflux-windows-amd64.zip.', 'Extract it anywhere.', 'Run dbflux.exe.'],
     hint: 'Nothing is installed and nothing is written outside the folder you extract into.',
   },
 ];
@@ -312,7 +308,9 @@ const PLATFORMS = [
 </style>
 
 <script>
-  const platformTabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-platform-tab]'));
+  const platformTabs = Array.from(
+    document.querySelectorAll<HTMLButtonElement>('[data-platform-tab]'),
+  );
   const methodTabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-method-tab]'));
   const panels = Array.from(document.querySelectorAll<HTMLElement>('[data-method-panel]'));
 
@@ -349,7 +347,7 @@ const PLATFORMS = [
       tab.addEventListener('click', () => selectPlatform(tab.dataset.platformTab ?? 'linux'));
     }
 
-    for (const [index, tab] of methodTabs.entries()) {
+    for (const tab of methodTabs) {
       tab.addEventListener('click', () => selectMethod(tab.dataset.methodTab ?? ''));
 
       tab.addEventListener('keydown', (event) => {

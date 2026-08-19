@@ -56,28 +56,28 @@ const { indexUrl } = Astro.props;
    * Astro adds to component styles. Their rules have to be global or nothing
    * matches and the browser defaults show through.
    */
-.search__hit {
+  .search__hit {
     display: block;
     padding: var(--s-4) var(--s-5);
     border-bottom: var(--bw) solid var(--border);
     color: var(--text);
     cursor: pointer;
   }
-.search__hit:hover,
+  .search__hit:hover,
   .search__hit[data-active] {
     background: var(--panel);
     box-shadow: inset 2px 0 0 0 var(--accent);
     text-decoration: none;
   }
-.search__hit-title {
+  .search__hit-title {
     font-family: var(--font-mono);
     font-size: var(--fs-small);
     color: var(--text-strong);
   }
-.search__hit-page {
+  .search__hit-page {
     color: var(--text-muted);
   }
-.search__hit-snippet {
+  .search__hit-snippet {
     margin: var(--s-2) 0 0;
     font-size: var(--fs-small);
     line-height: 1.6;
@@ -87,11 +87,11 @@ const { indexUrl } = Astro.props;
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
-.search__hit mark {
+  .search__hit mark {
     background: none;
     color: var(--accent);
   }
-.search__empty {
+  .search__empty {
     padding: var(--s-7) var(--s-5);
     text-align: center;
     font-size: var(--fs-small);
@@ -168,7 +168,7 @@ const { indexUrl } = Astro.props;
     display: none;
   }
 
-                .search__foot {
+  .search__foot {
     display: flex;
     align-items: center;
     gap: var(--s-5);
@@ -228,7 +228,10 @@ const { indexUrl } = Astro.props;
     let cursor = 0;
 
     const escapeHtml = (value: string) =>
-      value.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+      value.replace(
+        /[&<>"]/g,
+        (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!,
+      );
 
     const highlight = (value: string, terms: string[]) => {
       let out = escapeHtml(value);

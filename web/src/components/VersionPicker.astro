@@ -23,7 +23,8 @@ const entries = await getCollection('docs');
  * 404 for the crime of running an older release.
  */
 const targets = VERSIONS.map((candidate) => {
-  const has = currentPath !== undefined && pathsForVersion(entries, candidate.id).includes(currentPath);
+  const has =
+    currentPath !== undefined && pathsForVersion(entries, candidate.id).includes(currentPath);
 
   return {
     version: candidate,

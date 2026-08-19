@@ -9,7 +9,9 @@
     "check": "astro check",
     "clean": "rm -rf dist .astro node_modules/.astro node_modules/.vite",
     "rebuild": "pnpm clean && pnpm build",
-    "stop": "astro dev stop; astro preview stop"
+    "stop": "astro dev stop; astro preview stop",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "@astrojs/markdown-remark": "^7.2.3",
@@ -18,7 +20,11 @@
     "mermaid": "^11.16.1"
   },
   "devDependencies": {
+    "@astrojs/check": "^0.9.10",
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
-    "@fontsource/ibm-plex-sans": "^5.3.0"
+    "@fontsource/ibm-plex-sans": "^5.3.0",
+    "prettier": "^3.9.6",
+    "prettier-plugin-astro": "^0.14.1",
+    "typescript": "^6.0.3"
   }
 }

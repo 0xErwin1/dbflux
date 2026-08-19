@@ -53,6 +53,14 @@ jobs:
         working-directory: web
         run: pnpm install --frozen-lockfile
 
+      - name: Format
+        working-directory: web
+        run: pnpm format:check
+
+      - name: Types
+        working-directory: web
+        run: pnpm check
+
       - name: Build
         working-directory: web
         run: pnpm build

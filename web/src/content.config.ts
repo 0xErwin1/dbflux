@@ -29,7 +29,10 @@ const docs = defineCollection({
       const driver = path.match(/^crates\/dbflux_driver_([^/]+)\/README\.md$/);
       if (driver) return `${version}/drivers/${driver[1]}`;
 
-      return `${version}/${path.replace(/^docs\//, '').replace(/\.md$/, '').toLowerCase()}`;
+      return `${version}/${path
+        .replace(/^docs\//, '')
+        .replace(/\.md$/, '')
+        .toLowerCase()}`;
     },
   }),
 });

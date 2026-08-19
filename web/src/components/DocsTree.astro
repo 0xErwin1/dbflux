@@ -31,7 +31,9 @@ const sections = sectionsFor(available).sections.map((section) => ({
         <li>
           <details open={section.holdsCurrent} data-holds={section.holdsCurrent ? '' : undefined}>
             <summary>
-              <span class="tree__chev"><Icon name="chevron" size={11} /></span>
+              <span class="tree__chev">
+                <Icon name="chevron" size={11} />
+              </span>
               <span class="tree__num">{String(index + 1).padStart(2, '0')}</span>
               <span class="tree__title">{section.title}</span>
               <span class="tree__count">{section.entries.length}</span>

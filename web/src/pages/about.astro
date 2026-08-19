@@ -25,8 +25,16 @@ const PRINCIPLES = [
 ] as const;
 
 const LAYERS = [
-  { name: 'UI crates', detail: 'Six crates, zero driver dependencies and zero per-driver feature flags.', key: false },
-  { name: 'App layer', detail: 'Registers drivers, resolves RPC services, owns connection state.', key: false },
+  {
+    name: 'UI crates',
+    detail: 'Six crates, zero driver dependencies and zero per-driver feature flags.',
+    key: false,
+  },
+  {
+    name: 'App layer',
+    detail: 'Registers drivers, resolves RPC services, owns connection state.',
+    key: false,
+  },
   {
     name: 'Core contracts',
     detail: 'DbDriver, Connection, capabilities, metadata, language services, query generators.',
