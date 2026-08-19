@@ -1,0 +1,18 @@
+{
+  // Deploy configuration for Cloudflare.
+  //
+  // The site is fully static, so this serves `dist/` as Workers Static Assets
+  // and declares no entry script: there is nothing to run per request, and the
+  // Astro Cloudflare adapter is not needed.
+  //
+  // Committing this stops Cloudflare generating one during the build. The
+  // generated file derived the Worker name from the npm package name, and a
+  // scoped name is rejected: Worker names are lowercase alphanumeric with
+  // dashes, so `@dbflux/web` failed the deploy.
+  "name": "dbflux-web",
+  "compatibility_date": "2026-08-19",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "404-page",
+  },
+}
