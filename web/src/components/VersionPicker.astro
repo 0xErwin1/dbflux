@@ -2,7 +2,14 @@
 import { getCollection } from 'astro:content';
 import { pathsForVersion } from '../data/docs';
 import type { DocsVersion } from '../data/versions';
-import { CURRENT, VERSIONS, docsHref, versionHome, versionLabel } from '../data/versions';
+import {
+  CURRENT,
+  VERSIONS,
+  buildInfo,
+  docsHref,
+  versionHome,
+  versionLabel,
+} from '../data/versions';
 
 interface Props {
   version: DocsVersion;
@@ -13,6 +20,7 @@ interface Props {
 const { version, currentPath } = Astro.props;
 
 const entries = await getCollection('docs');
+const build = buildInfo(version.id);
 
 /**
  * Switching version keeps the reader on the same page where that page exists,
@@ -57,6 +65,14 @@ const targets = VERSIONS.map((candidate) => {
       <path d="M5 9l7 7 7-7"></path>
     </svg>
   </button>
+
+  <p class="picker__build">
+    <span>{build.version}</span>
+    <span aria-hidden="true">&middot;</span>
+    <code>{build.commit}</code>
+    <span aria-hidden="true">&middot;</span>
+    <time datetime={build.date}>{build.date}</time>
+  </p>
 
   <ul class="picker__menu" id="version-menu" hidden>
     {
@@ -129,6 +145,20 @@ const targets = VERSIONS.map((candidate) => {
 
   .picker__button[aria-expanded='true'] svg {
     transform: rotate(180deg);
+  }
+
+  .picker__build {
+    display: flex;
+    gap: var(--s-2);
+    margin: var(--s-2) 0 0;
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    color: var(--text-muted);
+  }
+
+  .picker__build code {
+    font-size: inherit;
+    color: var(--text);
   }
 
   .picker__menu {
