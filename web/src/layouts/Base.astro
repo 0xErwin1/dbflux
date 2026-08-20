@@ -4,6 +4,7 @@ import SiteFooter from '../components/SiteFooter.astro';
 import BackToTop from '../components/BackToTop.astro';
 import Mermaid from '../components/Mermaid.astro';
 import SearchDialog from '../components/SearchDialog.astro';
+import { ORIGIN } from '../data/site';
 import '../styles/global.css';
 
 interface Props {
@@ -35,6 +36,10 @@ const canonical = canonicalPath?.startsWith('http')
   : Astro.site
     ? new URL(canonicalPath ?? Astro.url.pathname, Astro.site).href
     : undefined;
+
+// Open Graph rejects a relative image: the crawler resolves it against nothing
+// and the preview falls back to a blank card.
+const socialImage = new URL('/brand/og-card.jpg', ORIGIN).href;
 ---
 
 <!doctype html>
@@ -49,9 +54,19 @@ const canonical = canonicalPath?.startsWith('http')
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="DBFlux" />
+    {canonical && <meta property="og:url" content={canonical} />}
+    <meta property="og:image" content={socialImage} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="DBFlux: every database you run, in one keyboard-driven window."
+    />
+    {/* Twitter falls back to the og:* tags for everything but the card shape. */}
+    <meta name="twitter:card" content="summary_large_image" />
     <link rel="icon" href="/brand/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/brand/mark-256.png" />
-    <meta property="og:image" content="/brand/mark-256.png" />
     <link rel="sitemap" href="/sitemap-index.xml" />
     <link
       rel="preload"

@@ -3,7 +3,7 @@ import Icon from './Icon.astro';
 import InstallTabs from './InstallTabs.astro';
 import { REPO } from '../data/nav';
 import { CURRENT, productVersion } from '../data/versions';
-import { docsUrl } from '../data/site';
+import { SITE_ORIGIN, docsUrl } from '../data/site';
 
 const DRIVERS = [
   'PostgreSQL',
@@ -78,9 +78,42 @@ const DOC_CARDS = [
     body: 'Wire an AI client to DBFlux, then set the roles, policies and approvals that keep it inside the lines.',
   },
 ] as const;
+
+/**
+ * What this page is about, for the readers that do not read.
+ *
+ * Four unrelated projects are called dbflux, so a crawler matching on the name
+ * alone has no way to tell which one this is. The prose says Rust, GPUI and
+ * database client; this says the same thing in the vocabulary a search engine
+ * indexes on. Every value here is derived or checked against the repository —
+ * a rating or a download count nobody counted would be a fabrication.
+ */
+const APPLICATION = {
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  name: 'DBFlux',
+  alternateName: 'dbflux',
+  url: `${SITE_ORIGIN}/`,
+  description:
+    'An extensible, keyboard-first database client for PostgreSQL, MySQL, SQL Server, SQLite, MongoDB, Redis, DynamoDB and more, written in Rust on GPUI.',
+  applicationCategory: 'DeveloperApplication',
+  applicationSubCategory: 'Database client',
+  operatingSystem: 'Linux, macOS, Windows',
+  softwareVersion: productVersion(CURRENT.id),
+  programmingLanguage: 'Rust',
+  codeRepository: REPO,
+  downloadUrl: `${REPO}/releases`,
+  screenshot: `${SITE_ORIGIN}/img/app-hero.jpg`,
+  license: [`${REPO}/blob/main/LICENSE-MIT`, `${REPO}/blob/main/LICENSE-APACHE`],
+  isAccessibleForFree: true,
+  offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+  author: { '@type': 'Person', name: 'Ignacio Perez', url: 'https://github.com/0xErwin1' },
+  sameAs: [REPO],
+};
 ---
 
----
+<script type="application/ld+json" is:inline set:html={JSON.stringify(APPLICATION)} />
+
 <section class="hero shell">
   <div class="hero__copy">
     <p class="eyebrow">Rust &middot; GPUI &middot; v{productVersion(CURRENT.id)}</p>
