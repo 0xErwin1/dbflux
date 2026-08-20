@@ -4,8 +4,7 @@ import DocsLayout from '../layouts/DocsLayout.astro';
 import DocsIndex from '../components/DocsIndex.astro';
 import { docTitle, pathsForVersion, splitId } from '../data/docs';
 import { CURRENT, VERSIONS, docsRoute, versionById, versionLabel } from '../data/versions';
-import DocsRedirect from '../components/DocsRedirect.astro';
-import { DOCS_MODE, docsUrl } from '../data/site';
+import { DOCS_MODE } from '../data/site';
 
 /**
  * Every documentation page, for every published version.
@@ -16,6 +15,12 @@ import { DOCS_MODE, docsUrl } from '../data/site';
  * computed path can.
  */
 export async function getStaticPaths() {
+  // This build does not carry the documentation. The URLs it used to publish
+  // are answered by a 301 written into `_redirects`, not by a page: a page
+  // would have to answer 200, and a 200 at a moved URL is what makes a reader
+  // — human or otherwise — think the site is still in motion.
+  if (DOCS_MODE === 'site') return [];
+
   const docs = await getCollection('docs');
 
   const pages = docs.map((doc) => {
@@ -40,14 +45,11 @@ export async function getStaticPaths() {
 
 const { versionId, path, doc } = Astro.props;
 
-// This build does not carry the documentation; keep the published URL working.
-const movedTo =
-  DOCS_MODE === 'site' ? docsUrl(path ?? '', versionId === CURRENT.id ? '' : versionId) : undefined;
 const version = versionById(versionId)!;
-const available = movedTo ? [] : pathsForVersion(await getCollection('docs'), versionId);
+const available = pathsForVersion(await getCollection('docs'), versionId);
 const isCurrent = versionId === CURRENT.id;
 
-const rendered = doc && !movedTo ? await render(doc) : undefined;
+const rendered = doc ? await render(doc) : undefined;
 
 const title = path ? docTitle(path) : 'Documentation';
 
@@ -65,20 +67,14 @@ const description = doc
     : `DBFlux ${versionLabel(version)} documentation.`;
 ---
 
-{
-  movedTo ? (
-    <DocsRedirect to={movedTo} />
-  ) : (
-    <DocsLayout
-      version={version}
-      currentPath={path}
-      available={available}
-      headings={rendered?.headings ?? []}
-      title={title}
-      description={description}
-      editPath={doc?.filePath?.split('/').pop()}
-    >
-      {rendered ? <rendered.Content /> : <DocsIndex versionId={versionId} available={available} />}
-    </DocsLayout>
-  )
-}
+<DocsLayout
+  version={version}
+  currentPath={path}
+  available={available}
+  headings={rendered?.headings ?? []}
+  title={title}
+  description={description}
+  editPath={doc?.filePath?.split('/').pop()}
+>
+  {rendered ? <rendered.Content /> : <DocsIndex versionId={versionId} available={available} />}
+</DocsLayout>

@@ -2,7 +2,7 @@
 
 An extensible, keyboard-first data platform delivered as a Rust + GPUI desktop client.
 
-**[dbflux.dev](https://dbflux.dev)** &middot; [Documentation](https://dbflux.dev/docs/) &middot; [Install](https://dbflux.dev/docs/install/)
+**[dbflux.dev](https://dbflux.dev)** &middot; [Documentation](https://docs.dbflux.dev/) &middot; [Install](https://docs.dbflux.dev/install/)
 
 ## Overview
 
@@ -14,7 +14,7 @@ The client focuses on performance, a clean UX, and keyboard-first workflows. The
 
 ## Documentation
 
-Everything below is published at **[dbflux.dev/docs](https://dbflux.dev/docs/)**, rendered from
+Everything below is published at **[docs.dbflux.dev](https://docs.dbflux.dev/)**, rendered from
 these same files, with search and a version selector. The links here point at the source; read them
 on the site if you prefer.
 
