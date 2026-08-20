@@ -1,0 +1,29 @@
+# Cache lifetimes for both hosts.
+#
+# Workers Static Assets serves everything with `max-age=0, must-revalidate` by
+# default, so a returning reader revalidates every stylesheet, script and font
+# on every visit. The zone's Browser Cache TTL does not fix this: no zone-level
+# cache configuration applies to a Worker's responses, which makes this file the
+# only place the lifetimes can be set.
+#
+# HTML is deliberately absent. It keeps the revalidating default so a deploy is
+# visible immediately.
+
+# Astro puts a content hash in these filenames, so a changed file is a changed
+# URL and the old one is never asked for again.
+/_astro/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Self-hosted font files. Their names carry no hash, so `immutable` is a promise
+# this repository has to keep: replacing a face means giving the file a new name,
+# not overwriting it.
+/fonts/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Brand and screenshots. Unhashed and genuinely replaceable — the social card and
+# the hero are edited in place — so these get a day rather than a year.
+/brand/*
+  Cache-Control: public, max-age=86400
+
+/img/*
+  Cache-Control: public, max-age=86400
