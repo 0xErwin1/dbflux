@@ -3,7 +3,8 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
 import { routeForRepoPath, titleForRepoPath } from './src/data/nav';
-import { ORIGIN } from './src/data/site';
+import { DOCS_MODE, ORIGIN } from './src/data/site';
+import { hostRedirects } from './src/integrations/host-redirects';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -115,7 +116,15 @@ function rehypeMermaid() {
 
 export default defineConfig({
   site: ORIGIN,
-  integrations: [sitemap()],
+  integrations: [
+    sitemap({
+      // `/about/` belongs to the site host and says so in its canonical tag.
+      // The documentation build emits it only because one source tree builds
+      // both hosts, so keep it out of this host's sitemap.
+      filter: (page) => !(DOCS_MODE === 'docs' && new URL(page).pathname.startsWith('/about')),
+    }),
+    hostRedirects(),
+  ],
   markdown: {
     rehypePlugins: [rehypeRepoLinks, rehypeMermaid],
     shikiConfig: {

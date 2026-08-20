@@ -3,6 +3,7 @@ import Icon from './Icon.astro';
 import InstallTabs from './InstallTabs.astro';
 import { REPO } from '../data/nav';
 import { CURRENT, productVersion } from '../data/versions';
+import { docsUrl } from '../data/site';
 
 const DRIVERS = [
   'PostgreSQL',
@@ -62,17 +63,17 @@ const SHORTCUTS = [
 
 const DOC_CARDS = [
   {
-    href: '/docs/usage/',
+    href: docsUrl('usage'),
     title: 'Usage guide',
     body: 'First launch, creating a connection, running queries, browsing results, charting and exporting.',
   },
   {
-    href: '/docs/connections/',
+    href: docsUrl('connections'),
     title: 'Connecting',
     body: 'SSH tunnels, proxies, AWS SSO and value sources for everything that is not a plain host and port.',
   },
   {
-    href: '/docs/mcp_ai_integration/',
+    href: docsUrl('mcp_ai_integration'),
     title: 'AI + MCP',
     body: 'Wire an AI client to DBFlux, then set the roles, policies and approvals that keep it inside the lines.',
   },
@@ -116,7 +117,7 @@ const DOC_CARDS = [
 <section class="shell reveal" id="drivers">
   <header class="sec-head">
     <p class="eyebrow">Built-in drivers</p>
-    <a href="/docs/drivers/">Capability matrix &rarr;</a>
+    <a href={docsUrl('drivers')}>Capability matrix &rarr;</a>
   </header>
   <ul class="chips">
     {DRIVERS.map((driver) => <li>{driver}</li>)}
@@ -151,7 +152,7 @@ const DOC_CARDS = [
       jump to a table, pivot a result into a chart. The empty state tells you the four you need on
       day one.
     </p>
-    <a href="/docs/usage/">Full keyboard reference &rarr;</a>
+    <a href={docsUrl('usage')}>Full keyboard reference &rarr;</a>
   </div>
   <ul class="keys">
     {
@@ -196,7 +197,7 @@ const DOC_CARDS = [
 <section class="shell reveal">
   <header class="sec-head">
     <p class="eyebrow">Documentation</p>
-    <a href="/docs/">All guides &rarr;</a>
+    <a href={docsUrl('')}>All guides &rarr;</a>
   </header>
   <ul class="doccards">
     {

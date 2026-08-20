@@ -624,7 +624,7 @@ pnpm format       # prettier
 | Value | What it builds | Documentation URL |
 |---|---|---|
 | `embedded` (default) | everything, one origin | `/docs/usage/` |
-| `site` | landing pages, plus a redirect at every old documentation path | `https://docs.dbflux.dev/usage/` |
+| `site` | landing pages only | `https://docs.dbflux.dev/usage/` |
 | `docs` | the documentation, at the root of its own host | `/usage/` |
 
 Local development uses the default, so `pnpm dev` still brings up the whole site
@@ -638,6 +638,14 @@ pnpm build:docs   # DOCS_MODE=docs
 Override `SITE_ORIGIN` and `DOCS_ORIGIN` if the hostnames change. Nothing else
 in the source knows a URL: pages link through `docsUrl()` and `siteUrl()`, which
 is what lets one variable move an entire section of the site.
+
+Neither host serves a page that belongs to the other. A split build writes a
+Cloudflare `_redirects` file (`web/src/integrations/host-redirects.ts`) so every
+`/docs/...` URL the site once published answers `301` to the documentation host,
+and `/about/` on the documentation host answers `301` back. A moved page must
+answer with a status code rather than a 200 carrying a meta refresh: a 200 at a
+URL that moved reads, to a crawler or an agent, as a site still being
+rearranged.
 
 `web/scripts/check-links.mjs` runs in CI after the build and fails on an internal link that points
 at a page which is not built. Versions differ, so a link that resolves in nightly may not resolve
