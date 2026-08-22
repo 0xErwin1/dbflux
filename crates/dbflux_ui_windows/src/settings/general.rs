@@ -64,6 +64,7 @@ impl GeneralSection {
         let mut rows = vec![
             GeneralFormRow::Theme,
             GeneralFormRow::Style,
+            GeneralFormRow::Language,
             GeneralFormRow::RestoreSession,
             GeneralFormRow::ReopenConnections,
             GeneralFormRow::DefaultFocus,
@@ -105,7 +106,7 @@ impl GeneralSection {
                 report_error(
                     UserFacingError::new(
                         ErrorKind::Config,
-                        "Failed to update the shared-database setting",
+                        dbflux_i18n::t!("settings.general.share_stable_db.error"),
                     )
                     .with_cause(format!("{error}")),
                     cx,
@@ -152,6 +153,11 @@ impl GeneralSection {
             }
             Some(GeneralFormRow::Style) => {
                 self.dropdown_style
+                    .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
+                cx.notify();
+            }
+            Some(GeneralFormRow::Language) => {
+                self.dropdown_language
                     .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
                 cx.notify();
             }
@@ -262,6 +268,7 @@ impl GeneralSection {
         match self.gen_current_row() {
             Some(GeneralFormRow::Theme) => Some(&self.dropdown_theme),
             Some(GeneralFormRow::Style) => Some(&self.dropdown_style),
+            Some(GeneralFormRow::Language) => Some(&self.dropdown_language),
             Some(GeneralFormRow::DefaultFocus) => Some(&self.dropdown_default_focus),
             Some(GeneralFormRow::DefaultRefreshPolicy) => Some(&self.dropdown_refresh_policy),
             _ => None,
@@ -393,9 +400,10 @@ impl GeneralSection {
         let max_history = match max_history_str.parse::<usize>() {
             Ok(value) if value >= 10 => value,
             _ => {
-                Toast::error("Max history entries must be a number >= 10")
+                let message = dbflux_i18n::t!("settings.general.max_history.error");
+                Toast::error(message.clone())
                     .meta_right(now_hms())
-                    .action(copy_action("Max history entries must be a number >= 10"))
+                    .action(copy_action(message))
                     .push(cx);
                 return;
             }
@@ -405,9 +413,10 @@ impl GeneralSection {
         let auto_save_ms = match auto_save_str.parse::<u64>() {
             Ok(value) if value >= 500 => value,
             _ => {
-                Toast::error("Auto-save interval must be >= 500 ms")
+                let message = dbflux_i18n::t!("settings.general.auto_save_interval.error");
+                Toast::error(message.clone())
                     .meta_right(now_hms())
-                    .action(copy_action("Auto-save interval must be >= 500 ms"))
+                    .action(copy_action(message))
                     .push(cx);
                 return;
             }
@@ -422,9 +431,10 @@ impl GeneralSection {
         let refresh_interval = match refresh_interval_str.parse::<u32>() {
             Ok(value) if value >= 1 => value,
             _ => {
-                Toast::error("Refresh interval must be >= 1 second")
+                let message = dbflux_i18n::t!("settings.general.refresh_interval.error");
+                Toast::error(message.clone())
                     .meta_right(now_hms())
-                    .action(copy_action("Refresh interval must be >= 1 second"))
+                    .action(copy_action(message))
                     .push(cx);
                 return;
             }
@@ -434,9 +444,10 @@ impl GeneralSection {
         let max_bg_tasks = match max_bg_str.parse::<usize>() {
             Ok(value) if value >= 1 => value,
             _ => {
-                Toast::error("Max background tasks must be >= 1")
+                let message = dbflux_i18n::t!("settings.general.max_background_tasks.error");
+                Toast::error(message.clone())
                     .meta_right(now_hms())
-                    .action(copy_action("Max background tasks must be >= 1"))
+                    .action(copy_action(message))
                     .push(cx);
                 return;
             }
@@ -451,9 +462,10 @@ impl GeneralSection {
         let object_preview_limit = match preview_limit_str.parse::<u64>() {
             Ok(value) if value >= 1 => value,
             _ => {
-                Toast::error("Object preview size limit must be >= 1 MiB")
+                let message = dbflux_i18n::t!("settings.general.object_preview_limit.error");
+                Toast::error(message.clone())
                     .meta_right(now_hms())
-                    .action(copy_action("Object preview size limit must be >= 1 MiB"))
+                    .action(copy_action(message))
                     .push(cx);
                 return;
             }
@@ -472,7 +484,7 @@ impl GeneralSection {
             report_error(
                 UserFacingError::new(
                     ErrorKind::Storage,
-                    format!("Failed to save general settings: {e}"),
+                    dbflux_i18n::t!("settings.general.save.error", error = e),
                 ),
                 cx,
             );
@@ -493,7 +505,7 @@ impl GeneralSection {
             cx,
         );
 
-        Toast::success("Settings saved. Some changes apply on next startup.")
+        Toast::success(dbflux_i18n::t!("settings.general.save.success"))
             .meta_right(now_hms())
             .push(cx);
     }
@@ -512,17 +524,21 @@ impl GeneralSection {
 
         layout::single_form_section_shell(
             dbflux_components::composites::section_header(
-                "General",
-                "Configure startup, session, refresh, and safety behavior",
+                dbflux_i18n::t!("settings.general.header.title"),
+                dbflux_i18n::t!("settings.general.header.subtitle"),
                 cx,
             ),
             div()
                 .flex()
                 .flex_col()
                 .gap_6()
-                .child(self.render_gen_group_header("Appearance", border, muted_fg))
+                .child(self.render_gen_group_header(
+                    dbflux_i18n::t!("settings.general.appearance.group"),
+                    border,
+                    muted_fg,
+                ))
                 .child(self.render_gen_dropdown(
-                    "Theme",
+                    dbflux_i18n::t!("settings.general.theme.label"),
                     &self.dropdown_theme,
                     is_at(GeneralFormRow::Theme),
                     primary,
@@ -530,17 +546,32 @@ impl GeneralSection {
                     cx,
                 ))
                 .child(self.render_gen_dropdown(
-                    "Style",
+                    dbflux_i18n::t!("settings.general.style.label"),
                     &self.dropdown_style,
                     is_at(GeneralFormRow::Style),
                     primary,
                     GeneralFormRow::Style,
                     cx,
                 ))
-                .child(self.render_gen_group_header("Startup & Session", border, muted_fg))
+                .child(self.render_gen_dropdown(
+                    dbflux_i18n::t!("settings.general.language.label"),
+                    &self.dropdown_language,
+                    is_at(GeneralFormRow::Language),
+                    primary,
+                    GeneralFormRow::Language,
+                    cx,
+                ))
+                .child(div().px_2().child(
+                    Body::new(dbflux_i18n::t!("settings.general.language.notice")).color(muted_fg),
+                ))
+                .child(self.render_gen_group_header(
+                    dbflux_i18n::t!("settings.general.startup.group"),
+                    border,
+                    muted_fg,
+                ))
                 .child(self.render_gen_checkbox(
                     "restore-session",
-                    "Restore session on startup",
+                    dbflux_i18n::t!("settings.general.restore_session.label"),
                     self.gen_settings.restore_session_on_startup,
                     is_at(GeneralFormRow::RestoreSession),
                     GeneralFormRow::RestoreSession,
@@ -549,7 +580,7 @@ impl GeneralSection {
                 ))
                 .child(self.render_gen_checkbox(
                     "reopen-conns",
-                    "Reopen last connections",
+                    dbflux_i18n::t!("settings.general.reopen_connections.label"),
                     self.gen_settings.reopen_last_connections,
                     is_at(GeneralFormRow::ReopenConnections),
                     GeneralFormRow::ReopenConnections,
@@ -557,7 +588,7 @@ impl GeneralSection {
                     cx,
                 ))
                 .child(self.render_gen_dropdown(
-                    "Default focus",
+                    dbflux_i18n::t!("settings.general.default_focus.label"),
                     &self.dropdown_default_focus,
                     is_at(GeneralFormRow::DefaultFocus),
                     primary,
@@ -565,7 +596,7 @@ impl GeneralSection {
                     cx,
                 ))
                 .child(self.render_gen_input_field(
-                    "Max history entries",
+                    dbflux_i18n::t!("settings.general.max_history.label"),
                     &self.input_max_history,
                     is_at(GeneralFormRow::MaxHistory),
                     primary,
@@ -573,16 +604,20 @@ impl GeneralSection {
                     cx,
                 ))
                 .child(self.render_gen_input_field(
-                    "Auto-save interval (ms)",
+                    dbflux_i18n::t!("settings.general.auto_save_interval.label"),
                     &self.input_auto_save,
                     is_at(GeneralFormRow::AutoSaveInterval),
                     primary,
                     GeneralFormRow::AutoSaveInterval,
                     cx,
                 ))
-                .child(self.render_gen_group_header("Refresh & Background", border, muted_fg))
+                .child(self.render_gen_group_header(
+                    dbflux_i18n::t!("settings.general.refresh.group"),
+                    border,
+                    muted_fg,
+                ))
                 .child(self.render_gen_dropdown(
-                    "Default refresh policy",
+                    dbflux_i18n::t!("settings.general.refresh_policy.label"),
                     &self.dropdown_refresh_policy,
                     is_at(GeneralFormRow::DefaultRefreshPolicy),
                     primary,
@@ -590,7 +625,7 @@ impl GeneralSection {
                     cx,
                 ))
                 .child(self.render_gen_input_field(
-                    "Default refresh interval (seconds)",
+                    dbflux_i18n::t!("settings.general.refresh_interval.label"),
                     &self.input_refresh_interval,
                     is_at(GeneralFormRow::DefaultRefreshInterval),
                     primary,
@@ -598,7 +633,7 @@ impl GeneralSection {
                     cx,
                 ))
                 .child(self.render_gen_input_field(
-                    "Max concurrent background tasks",
+                    dbflux_i18n::t!("settings.general.max_background_tasks.label"),
                     &self.input_max_bg_tasks,
                     is_at(GeneralFormRow::MaxBackgroundTasks),
                     primary,
@@ -607,7 +642,7 @@ impl GeneralSection {
                 ))
                 .child(self.render_gen_checkbox(
                     "pause-on-error",
-                    "Pause auto-refresh on error",
+                    dbflux_i18n::t!("settings.general.pause_refresh_on_error.label"),
                     self.gen_settings.auto_refresh_pause_on_error,
                     is_at(GeneralFormRow::PauseRefreshOnError),
                     GeneralFormRow::PauseRefreshOnError,
@@ -616,17 +651,21 @@ impl GeneralSection {
                 ))
                 .child(self.render_gen_checkbox(
                     "refresh-visible",
-                    "Auto-refresh only if tab is visible",
+                    dbflux_i18n::t!("settings.general.refresh_only_if_visible.label"),
                     self.gen_settings.auto_refresh_only_if_visible,
                     is_at(GeneralFormRow::RefreshOnlyIfVisible),
                     GeneralFormRow::RefreshOnlyIfVisible,
                     |this, value, _cx| this.gen_settings.auto_refresh_only_if_visible = value,
                     cx,
                 ))
-                .child(self.render_gen_group_header("Execution Safety", border, muted_fg))
+                .child(self.render_gen_group_header(
+                    dbflux_i18n::t!("settings.general.safety.group"),
+                    border,
+                    muted_fg,
+                ))
                 .child(self.render_gen_checkbox(
                     "confirm-dangerous",
-                    "Confirm dangerous queries",
+                    dbflux_i18n::t!("settings.general.confirm_dangerous.label"),
                     self.gen_settings.confirm_dangerous_queries,
                     is_at(GeneralFormRow::ConfirmDangerous),
                     GeneralFormRow::ConfirmDangerous,
@@ -635,7 +674,7 @@ impl GeneralSection {
                 ))
                 .child(self.render_gen_checkbox(
                     "requires-where",
-                    "Require WHERE for DELETE/UPDATE",
+                    dbflux_i18n::t!("settings.general.requires_where.label"),
                     self.gen_settings.dangerous_requires_where,
                     is_at(GeneralFormRow::RequiresWhere),
                     GeneralFormRow::RequiresWhere,
@@ -644,16 +683,20 @@ impl GeneralSection {
                 ))
                 .child(self.render_gen_checkbox(
                     "requires-preview",
-                    "Always require preview (ignore suppressions)",
+                    dbflux_i18n::t!("settings.general.requires_preview.label"),
                     self.gen_settings.dangerous_requires_preview,
                     is_at(GeneralFormRow::RequiresPreview),
                     GeneralFormRow::RequiresPreview,
                     |this, value, _cx| this.gen_settings.dangerous_requires_preview = value,
                     cx,
                 ))
-                .child(self.render_gen_group_header("Object Storage", border, muted_fg))
+                .child(self.render_gen_group_header(
+                    dbflux_i18n::t!("settings.general.object_storage.group"),
+                    border,
+                    muted_fg,
+                ))
                 .child(self.render_gen_input_field(
-                    "Object preview size limit (MiB)",
+                    dbflux_i18n::t!("settings.general.object_preview_limit.label"),
                     &self.input_object_preview_limit,
                     is_at(GeneralFormRow::ObjectPreviewLimit),
                     primary,
@@ -662,19 +705,22 @@ impl GeneralSection {
                 ))
                 .child(
                     div().px_2().child(
-                        Body::new(
-                            "Objects larger than this are never downloaded for preview; \
-                             the browser shows their metadata only.",
-                        )
+                        Body::new(dbflux_i18n::t!(
+                            "settings.general.object_preview_hint.label"
+                        ))
                         .color(muted_fg),
                     ),
                 )
                 .when(Self::is_nightly(), |column| {
                     column
-                        .child(self.render_gen_group_header("Storage", border, muted_fg))
+                        .child(self.render_gen_group_header(
+                            dbflux_i18n::t!("settings.general.storage.group"),
+                            border,
+                            muted_fg,
+                        ))
                         .child(self.render_gen_checkbox(
                             "share-stable-db",
-                            "Use the stable database",
+                            dbflux_i18n::t!("settings.general.share_stable_db.label"),
                             self.gen_share_stable_db,
                             is_at(GeneralFormRow::ShareStableDb),
                             GeneralFormRow::ShareStableDb,
@@ -683,12 +729,8 @@ impl GeneralSection {
                         ))
                         .child(
                             div().px_2().child(
-                                Body::new(
-                                    "Applied on next launch. Shares the stable database \
-                                     (dbflux.db) instead of this nightly build's \
-                                     dbflux-nightly.db.",
-                                )
-                                .color(muted_fg),
+                                Body::new(dbflux_i18n::t!("settings.general.share_stable_db.hint"))
+                                    .color(muted_fg),
                             ),
                         )
                 }),
@@ -707,26 +749,29 @@ impl GeneralSection {
             .child(layout::footer_action_frame(
                 is_save_focused,
                 cx.theme().primary,
-                FluxButton::new("save-general", "Save")
-                    .small()
-                    .primary()
-                    .w_full()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.content_focused = true;
-                        this.gen_form_cursor = this
-                            .gen_form_rows()
-                            .iter()
-                            .position(|row| *row == GeneralFormRow::SaveButton)
-                            .unwrap_or_default();
-                        this.save_general_settings(window, cx);
-                    })),
+                FluxButton::new(
+                    "save-general",
+                    dbflux_i18n::t!("settings.general.save.button"),
+                )
+                .small()
+                .primary()
+                .w_full()
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.content_focused = true;
+                    this.gen_form_cursor = this
+                        .gen_form_rows()
+                        .iter()
+                        .position(|row| *row == GeneralFormRow::SaveButton)
+                        .unwrap_or_default();
+                    this.save_general_settings(window, cx);
+                })),
             ))
             .into_any_element()
     }
 
     fn render_gen_group_header(
         &self,
-        label: &str,
+        label: impl Into<SharedString>,
         border: Hsla,
         _muted_fg: Hsla,
     ) -> impl IntoElement {
@@ -735,14 +780,14 @@ impl GeneralSection {
             .pb_1()
             .border_b_1()
             .border_color(border)
-            .child(SubSectionLabel::new(label.to_string()))
+            .child(SubSectionLabel::new(label))
     }
 
     #[allow(clippy::too_many_arguments)]
     fn render_gen_checkbox(
         &self,
         id: &'static str,
-        label: &'static str,
+        label: impl Into<SharedString>,
         checked: bool,
         is_focused: bool,
         row: GeneralFormRow,
@@ -789,7 +834,7 @@ impl GeneralSection {
 
     fn render_gen_dropdown(
         &self,
-        label: &str,
+        label: impl Into<SharedString>,
         dropdown: &Entity<Dropdown>,
         is_focused: bool,
         primary: Hsla,
@@ -823,13 +868,13 @@ impl GeneralSection {
                     cx.notify();
                 }),
             )
-            .child(FieldLabel::new(label.to_string()))
+            .child(FieldLabel::new(label))
             .child(div().min_w(px(140.0)).child(dropdown.clone()))
     }
 
     fn render_gen_input_field(
         &self,
-        label: &str,
+        label: impl Into<SharedString>,
         input: &Entity<InputState>,
         is_focused: bool,
         primary: Hsla,
@@ -843,7 +888,7 @@ impl GeneralSection {
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(FieldLabel::new(label.to_string()))
+                .child(FieldLabel::new(label))
                 .child(
                     div()
                         .w_full()
