@@ -1,0 +1,11 @@
+settings:
+  general:
+    language:
+      option:
+        system: System
+        english: English
+        spanish: Spanish
+      notice: Language changes apply after restarting DBFlux.
+    save:
+      button: Save
+      error: "Failed to save general settings: %{error}"

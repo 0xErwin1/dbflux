@@ -40,6 +40,7 @@ members = [
     "crates/dbflux_driver_influxdb",
     "crates/dbflux_portability",
     "crates/dbflux_driver_s3",
+    "crates/dbflux_i18n",
 ]
 default-members = ["crates/dbflux"]
 # The website is not a crate. Excluding it keeps cargo from descending into it
@@ -97,6 +98,7 @@ dbflux_ui_windows = { path = "crates/dbflux_ui_windows" }
 dbflux_ui_sidebar = { path = "crates/dbflux_ui_sidebar" }
 dbflux_ui = { path = "crates/dbflux_ui" }
 dbflux_transfer = { path = "crates/dbflux_transfer" }
+dbflux_i18n = { path = "crates/dbflux_i18n" }
 mysql = "28"
 
 gpui = "0.2.2"
@@ -149,6 +151,9 @@ sha2 = "0.11"
 interprocess = "2.4"
 mlua = "0.11"
 indexmap = "2"
+rust-i18n = "3.1"
+sys-locale = "0.3"
+serde_yaml = "0.9"
 
 [workspace.lints.rust]
 unsafe_code = "warn"

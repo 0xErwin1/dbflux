@@ -1,0 +1,11 @@
+settings:
+  general:
+    language:
+      option:
+        system: Sistema
+        english: Inglés
+        spanish: Español
+      notice: Los cambios de idioma se aplican al reiniciar DBFlux.
+    save:
+      button: Guardar
+      error: "No se pudo guardar la configuración general: %{error}"
