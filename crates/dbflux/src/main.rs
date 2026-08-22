@@ -388,6 +388,12 @@ fn run_gui() {
         let theme_setting = general_settings.theme;
         let style_setting = general_settings.style;
 
+        let language = dbflux_i18n::resolve(
+            Some(general_settings.language.as_str()),
+            dbflux_i18n::detect_system_locale().as_deref(),
+        );
+        dbflux_i18n::set_locale(language);
+
         // Set up the density global and apply the persisted theme+style so
         // radius tokens are correct from the very first frame.
         dbflux_ui::theme::init_with_settings(theme_setting, style_setting, cx);

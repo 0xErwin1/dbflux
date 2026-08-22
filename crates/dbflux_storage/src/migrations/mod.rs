@@ -168,6 +168,7 @@ impl MigrationRegistry {
         registry.register(mod_023_profile_hook_interpreter::MigrationImpl);
         registry.register(mod_024_s3_config_columns::MigrationImpl);
         registry.register(mod_025_general_settings_object_preview_limit::MigrationImpl);
+        registry.register(mod_026_general_settings_language::MigrationImpl);
         registry
     }
 
@@ -376,6 +377,7 @@ mod mod_022_hook_kind_json;
 mod mod_023_profile_hook_interpreter;
 mod mod_024_s3_config_columns;
 mod mod_025_general_settings_object_preview_limit;
+mod mod_026_general_settings_language;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -1026,6 +1028,7 @@ mod tests {
             "023_profile_hook_interpreter",
             "024_s3_config_columns",
             "025_general_settings_object_preview_limit",
+            "026_general_settings_language",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();

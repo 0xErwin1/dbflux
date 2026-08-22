@@ -2609,6 +2609,7 @@ dependencies = [
  "dbflux_audit",
  "dbflux_core",
  "dbflux_driver_ipc",
+ "dbflux_i18n",
  "dbflux_ipc",
  "dbflux_ssh",
  "dbflux_test_support",
