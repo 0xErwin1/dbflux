@@ -31,6 +31,13 @@ built with the `mcp` feature; see [AI + MCP Integration](MCP_AI_INTEGRATION.md).
 |---------|---------|---------|
 | **Theme** | Dark, Mirage, Light | Dark |
 | **Style** | Default, Compact | Default |
+| **Language** | System, English, Spanish | System |
+
+System follows your OS locale and falls back to English when that locale
+isn't supported. A language change takes effect after you restart DBFlux, so
+the control shows a permanent note to that effect. This release only
+translates the General section; the rest of the UI is being converted
+crate by crate and stays in English for now.
 
 ### Startup & session
 
