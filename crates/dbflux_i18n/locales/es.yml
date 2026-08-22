@@ -1,0 +1,77 @@
+settings:
+  general:
+    header:
+      title: General
+      subtitle: Configura el inicio, la sesión, la actualización y el comportamiento de seguridad
+    appearance:
+      group: Apariencia
+    startup:
+      group: Inicio y sesión
+    refresh:
+      group: Actualización y tareas en segundo plano
+    safety:
+      group: Seguridad de ejecución
+    object_storage:
+      group: Almacenamiento de objetos
+    storage:
+      group: Almacenamiento
+    theme:
+      label: Tema
+    style:
+      label: Estilo
+    language:
+      label: Idioma
+      option:
+        system: Sistema
+        english: Inglés
+        spanish: Español
+      notice: Los cambios de idioma se aplican al reiniciar DBFlux.
+    restore_session:
+      label: Restaurar la sesión al iniciar
+    reopen_connections:
+      label: Reabrir las últimas conexiones
+    default_focus:
+      label: Foco predeterminado
+      option:
+        sidebar: Barra lateral
+        last_tab: Última pestaña
+    max_history:
+      label: Máximo de entradas de historial
+      error: El máximo de entradas de historial debe ser un número >= 10
+    auto_save_interval:
+      label: Intervalo de guardado automático (ms)
+      error: El intervalo de guardado automático debe ser >= 500 ms
+    refresh_policy:
+      label: Política de actualización predeterminada
+      option:
+        manual: Manual
+        interval: Intervalo
+    refresh_interval:
+      label: Intervalo de actualización predeterminado (segundos)
+      error: El intervalo de actualización debe ser >= 1 segundo
+    max_background_tasks:
+      label: Máximo de tareas en segundo plano simultáneas
+      error: El máximo de tareas en segundo plano debe ser >= 1
+    pause_refresh_on_error:
+      label: Pausar la actualización automática ante un error
+    refresh_only_if_visible:
+      label: Actualizar automáticamente solo si la pestaña está visible
+    confirm_dangerous:
+      label: Confirmar queries peligrosas
+    requires_where:
+      label: Exigir WHERE en DELETE/UPDATE
+    requires_preview:
+      label: Exigir siempre la vista previa (ignorar supresiones)
+    object_preview_limit:
+      label: Límite de tamaño para la vista previa de objetos (MiB)
+      error: El límite de tamaño para la vista previa de objetos debe ser >= 1 MiB
+    object_preview_hint:
+      label: "Los objetos más grandes que este límite nunca se descargan para la vista previa; el navegador solo muestra sus metadatos."
+    share_stable_db:
+      label: Usar la base de datos estable
+      error: No se pudo actualizar la configuración de base de datos compartida
+      hint: "Se aplica en el próximo inicio. Comparte la base de datos estable (dbflux.db) en lugar de la dbflux-nightly.db de esta compilación nightly."
+    save:
+      button: Guardar
+      error: "No se pudo guardar la configuración general: %{error}"
+      success: Configuración guardada. Algunos cambios se aplican al reiniciar.

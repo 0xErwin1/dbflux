@@ -1,0 +1,20 @@
+[package]
+name = "dbflux_i18n"
+edition.workspace = true
+publish = false
+version.workspace = true
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+rust-i18n = { workspace = true }
+sys-locale = { workspace = true }
+
+[dev-dependencies]
+serde_yaml = { workspace = true }

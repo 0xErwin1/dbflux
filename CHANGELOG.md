@@ -2,6 +2,21 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+* **UI language setting (#360)** — Settings → General gains a Language
+  control with System, English, and Spanish. System follows the OS locale
+  and falls back to English when that locale is not supported; the choice
+  is persisted and applied on the next start, and the control shows a
+  permanent note saying so. This release translates the General section
+  only; the rest of the interface stays in English and is converted crate
+  by crate in follow-up changes. Database terms (query, schema, WHERE, …)
+  stay in English inside Spanish text. The catalogs live in
+  `crates/dbflux_i18n/locales/{en,es}.yml`, one file per locale, so a
+  translation platform can consume them later.
+
 ## [0.7.0] - 2026-07-31
 
 ### Added

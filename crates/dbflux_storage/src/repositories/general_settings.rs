@@ -38,7 +38,7 @@ impl GeneralSettingsRepository {
                        auto_refresh_only_if_visible, confirm_dangerous_queries,
                        dangerous_requires_where, dangerous_requires_preview,
                        style, schema_snapshot_retention,
-                       object_preview_size_limit_mib, updated_at
+                       object_preview_size_limit_mib, language, updated_at
                 FROM cfg_general_settings WHERE id = 1
                 "#,
             )
@@ -67,7 +67,8 @@ impl GeneralSettingsRepository {
                 style: row.get(15)?,
                 schema_snapshot_retention: row.get(16)?,
                 object_preview_size_limit_mib: row.get(17)?,
-                updated_at: row.get(18)?,
+                language: row.get(18)?,
+                updated_at: row.get(19)?,
             })
         });
 
@@ -94,8 +95,8 @@ impl GeneralSettingsRepository {
                     auto_refresh_only_if_visible, confirm_dangerous_queries,
                     dangerous_requires_where, dangerous_requires_preview,
                     style, schema_snapshot_retention,
-                    object_preview_size_limit_mib, updated_at
-                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, datetime('now'))
+                    object_preview_size_limit_mib, language, updated_at
+                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, datetime('now'))
                 ON CONFLICT(id) DO UPDATE SET
                     theme = excluded.theme,
                     restore_session_on_startup = excluded.restore_session_on_startup,
@@ -114,6 +115,7 @@ impl GeneralSettingsRepository {
                     style = excluded.style,
                     schema_snapshot_retention = excluded.schema_snapshot_retention,
                     object_preview_size_limit_mib = excluded.object_preview_size_limit_mib,
+                    language = excluded.language,
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -134,6 +136,7 @@ impl GeneralSettingsRepository {
                     settings.style,
                     settings.schema_snapshot_retention,
                     settings.object_preview_size_limit_mib,
+                    settings.language,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -173,6 +176,10 @@ pub struct GeneralSettingsDto {
     /// Largest object size (in MiB) whose bytes may be fetched for an in-app
     /// object-storage preview.
     pub object_preview_size_limit_mib: i64,
+    /// The user's language preference: a `dbflux_i18n::Language` storage
+    /// identifier (for example `"en"`, `"es"`), or an empty string to follow
+    /// the system locale.
+    pub language: String,
     pub updated_at: String,
 }
 
@@ -225,6 +232,7 @@ mod tests {
             style: "compact".to_string(),
             schema_snapshot_retention: 15,
             object_preview_size_limit_mib: 25,
+            language: String::new(),
             updated_at: String::new(),
         };
 
@@ -272,6 +280,7 @@ mod tests {
                 style: style_str.to_string(),
                 schema_snapshot_retention: 10,
                 object_preview_size_limit_mib: 10,
+                language: String::new(),
                 updated_at: String::new(),
             };
 
@@ -285,6 +294,70 @@ mod tests {
 
             let _ = std::fs::remove_file(&path);
         }
+    }
+
+    #[test]
+    fn migrated_row_defaults_language_to_empty_string() {
+        // Simulate a pre-migration row where 'language' column is absent (DEFAULT kicks in).
+        // After migration 026 runs, existing rows get the column with '' value, meaning
+        // "follow the system locale" per LanguagePreference::System.
+        let path = temp_db("language_column_default");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = GeneralSettingsRepository::new(Arc::new(conn));
+        let fetched = repo.get().expect("should get").expect("should exist");
+        assert_eq!(
+            fetched.language, "",
+            "language column default should be the empty string"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn language_round_trips_through_upsert() {
+        let path = temp_db("language_roundtrip");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = GeneralSettingsRepository::new(Arc::new(conn));
+
+        let dto = GeneralSettingsDto {
+            id: 1,
+            theme: "dark".to_string(),
+            restore_session_on_startup: 1,
+            reopen_last_connections: 0,
+            default_focus_on_startup: "sidebar".to_string(),
+            max_history_entries: 1000,
+            auto_save_interval_ms: 2000,
+            default_refresh_policy: "manual".to_string(),
+            default_refresh_interval_secs: 5,
+            max_concurrent_background_tasks: 8,
+            auto_refresh_pause_on_error: 1,
+            auto_refresh_only_if_visible: 0,
+            confirm_dangerous_queries: 1,
+            dangerous_requires_where: 1,
+            dangerous_requires_preview: 0,
+            style: "default".to_string(),
+            schema_snapshot_retention: 10,
+            object_preview_size_limit_mib: 10,
+            language: "es".to_string(),
+            updated_at: String::new(),
+        };
+
+        repo.upsert(&dto).expect("should upsert");
+
+        let fetched = repo.get().expect("should get").expect("should exist");
+        assert_eq!(fetched.language, "es");
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

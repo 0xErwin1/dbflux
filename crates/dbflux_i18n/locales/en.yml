@@ -1,0 +1,77 @@
+settings:
+  general:
+    header:
+      title: General
+      subtitle: Configure startup, session, refresh, and safety behavior
+    appearance:
+      group: Appearance
+    startup:
+      group: Startup & Session
+    refresh:
+      group: Refresh & Background
+    safety:
+      group: Execution Safety
+    object_storage:
+      group: Object Storage
+    storage:
+      group: Storage
+    theme:
+      label: Theme
+    style:
+      label: Style
+    language:
+      label: Language
+      option:
+        system: System
+        english: English
+        spanish: Spanish
+      notice: Language changes apply after restarting DBFlux.
+    restore_session:
+      label: Restore session on startup
+    reopen_connections:
+      label: Reopen last connections
+    default_focus:
+      label: Default focus
+      option:
+        sidebar: Sidebar
+        last_tab: Last Tab
+    max_history:
+      label: Max history entries
+      error: Max history entries must be a number >= 10
+    auto_save_interval:
+      label: Auto-save interval (ms)
+      error: Auto-save interval must be >= 500 ms
+    refresh_policy:
+      label: Default refresh policy
+      option:
+        manual: Manual
+        interval: Interval
+    refresh_interval:
+      label: Default refresh interval (seconds)
+      error: Refresh interval must be >= 1 second
+    max_background_tasks:
+      label: Max concurrent background tasks
+      error: Max background tasks must be >= 1
+    pause_refresh_on_error:
+      label: Pause auto-refresh on error
+    refresh_only_if_visible:
+      label: Auto-refresh only if tab is visible
+    confirm_dangerous:
+      label: Confirm dangerous queries
+    requires_where:
+      label: Require WHERE for DELETE/UPDATE
+    requires_preview:
+      label: Always require preview (ignore suppressions)
+    object_preview_limit:
+      label: Object preview size limit (MiB)
+      error: Object preview size limit must be >= 1 MiB
+    object_preview_hint:
+      label: "Objects larger than this are never downloaded for preview; the browser shows their metadata only."
+    share_stable_db:
+      label: Use the stable database
+      error: Failed to update the shared-database setting
+      hint: "Applied on next launch. Shares the stable database (dbflux.db) instead of this nightly build's dbflux-nightly.db."
+    save:
+      button: Save
+      error: "Failed to save general settings: %{error}"
+      success: Settings saved. Some changes apply on next startup.

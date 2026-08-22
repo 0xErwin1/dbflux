@@ -12,6 +12,7 @@ use gpui::*;
 pub(super) enum GeneralFormRow {
     Theme,
     Style,
+    Language,
     RestoreSession,
     ReopenConnections,
     DefaultFocus,
@@ -40,6 +41,7 @@ pub(super) struct GeneralSection {
     pub(super) gen_share_stable_db: bool,
     pub(super) dropdown_theme: Entity<Dropdown>,
     pub(super) dropdown_style: Entity<Dropdown>,
+    pub(super) dropdown_language: Entity<Dropdown>,
     pub(super) dropdown_default_focus: Entity<Dropdown>,
     pub(super) dropdown_refresh_policy: Entity<Dropdown>,
     pub(super) input_max_history: Entity<InputState>,
@@ -63,6 +65,7 @@ impl GeneralSection {
         let settings = app_state.read(cx).general_settings().clone();
         let theme_index = Self::theme_index(settings.theme);
         let style_index = Self::style_index(settings.style);
+        let language_index = Self::language_index(&settings.language);
         let startup_focus_index = Self::startup_focus_index(settings.default_focus_on_startup);
         let refresh_policy_index = Self::refresh_policy_index(settings.default_refresh_policy);
         let max_history = settings.max_history_entries.to_string();
@@ -82,6 +85,12 @@ impl GeneralSection {
                 .placeholder("Style")
                 .items(Self::style_items())
                 .selected_index(Some(style_index))
+        });
+        let dropdown_language = cx.new(move |_cx| {
+            Dropdown::new("general-language")
+                .placeholder("Language")
+                .items(Self::language_items())
+                .selected_index(Some(language_index))
         });
         let dropdown_default_focus = cx.new(move |_cx| {
             Dropdown::new("general-default-focus")
@@ -135,6 +144,14 @@ impl GeneralSection {
             &dropdown_style,
             |this, _, event: &DropdownSelectionChanged, cx| {
                 this.gen_settings.style = Self::style_for_index(event.index);
+                cx.notify();
+            },
+        );
+
+        let language_subscription = cx.subscribe(
+            &dropdown_language,
+            |this, _, event: &DropdownSelectionChanged, cx| {
+                this.gen_settings.language = Self::language_for_index(event.index).to_string();
                 cx.notify();
             },
         );
@@ -223,6 +240,7 @@ impl GeneralSection {
             gen_share_stable_db: dbflux_storage::paths::nightly_shares_stable_db(),
             dropdown_theme,
             dropdown_style,
+            dropdown_language,
             dropdown_default_focus,
             dropdown_refresh_policy,
             input_max_history,
@@ -235,6 +253,7 @@ impl GeneralSection {
             _subscriptions: vec![
                 theme_subscription,
                 style_subscription,
+                language_subscription,
                 focus_subscription,
                 refresh_policy_subscription,
                 blur_max_history,
@@ -261,12 +280,34 @@ impl GeneralSection {
         ]
     }
 
+    fn language_items() -> Vec<DropdownItem> {
+        vec![
+            DropdownItem::new(dbflux_i18n::t!("settings.general.language.option.system")),
+            DropdownItem::new(dbflux_i18n::t!("settings.general.language.option.english")),
+            DropdownItem::new(dbflux_i18n::t!("settings.general.language.option.spanish")),
+        ]
+    }
+
     fn startup_focus_items() -> Vec<DropdownItem> {
-        vec![DropdownItem::new("Sidebar"), DropdownItem::new("Last Tab")]
+        vec![
+            DropdownItem::new(dbflux_i18n::t!(
+                "settings.general.default_focus.option.sidebar"
+            )),
+            DropdownItem::new(dbflux_i18n::t!(
+                "settings.general.default_focus.option.last_tab"
+            )),
+        ]
     }
 
     fn refresh_policy_items() -> Vec<DropdownItem> {
-        vec![DropdownItem::new("Manual"), DropdownItem::new("Interval")]
+        vec![
+            DropdownItem::new(dbflux_i18n::t!(
+                "settings.general.refresh_policy.option.manual"
+            )),
+            DropdownItem::new(dbflux_i18n::t!(
+                "settings.general.refresh_policy.option.interval"
+            )),
+        ]
     }
 
     fn theme_index(theme: ThemeSetting) -> usize {
@@ -297,6 +338,23 @@ impl GeneralSection {
             1 => AppStyle::Compact,
             _ => AppStyle::Default,
         }
+    }
+
+    fn language_index(persisted: &str) -> usize {
+        match dbflux_i18n::LanguagePreference::from_storage_str(persisted) {
+            dbflux_i18n::LanguagePreference::System => 0,
+            dbflux_i18n::LanguagePreference::Explicit(dbflux_i18n::Language::English) => 1,
+            dbflux_i18n::LanguagePreference::Explicit(dbflux_i18n::Language::Spanish) => 2,
+        }
+    }
+
+    fn language_for_index(index: usize) -> &'static str {
+        let preference = match index {
+            1 => dbflux_i18n::LanguagePreference::Explicit(dbflux_i18n::Language::English),
+            2 => dbflux_i18n::LanguagePreference::Explicit(dbflux_i18n::Language::Spanish),
+            _ => dbflux_i18n::LanguagePreference::System,
+        };
+        preference.as_storage_str()
     }
 
     fn startup_focus_index(focus: StartupFocus) -> usize {
@@ -419,5 +477,37 @@ mod tests {
         assert_eq!(GeneralSection::style_for_index(1), AppStyle::Compact);
         // Out-of-range falls back to Default
         assert_eq!(GeneralSection::style_for_index(99), AppStyle::Default);
+    }
+
+    #[test]
+    fn language_dropdown_exposes_exactly_three_labels() {
+        let labels: Vec<_> = GeneralSection::language_items()
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+
+        assert_eq!(
+            labels,
+            vec![
+                dbflux_i18n::t!("settings.general.language.option.system"),
+                dbflux_i18n::t!("settings.general.language.option.english"),
+                dbflux_i18n::t!("settings.general.language.option.spanish"),
+            ]
+        );
+    }
+
+    #[test]
+    fn language_index_and_reverse_mapping_cover_system_and_explicit_languages() {
+        assert_eq!(GeneralSection::language_index(""), 0);
+        assert_eq!(GeneralSection::language_index("en"), 1);
+        assert_eq!(GeneralSection::language_index("es"), 2);
+        // An unrecognized persisted value falls back to System.
+        assert_eq!(GeneralSection::language_index("de"), 0);
+
+        assert_eq!(GeneralSection::language_for_index(0), "");
+        assert_eq!(GeneralSection::language_for_index(1), "en");
+        assert_eq!(GeneralSection::language_for_index(2), "es");
+        // Out-of-range falls back to System.
+        assert_eq!(GeneralSection::language_for_index(99), "");
     }
 }

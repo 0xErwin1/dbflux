@@ -89,6 +89,7 @@ pub fn save_general_settings(
         },
         schema_snapshot_retention: settings.schema_snapshot_retention as i64,
         object_preview_size_limit_mib: settings.object_preview_size_limit_mib as i64,
+        language: settings.language.clone(),
         updated_at: String::new(),
     };
     repo.upsert(&dto)?;
@@ -1063,6 +1064,7 @@ fn load_general_settings(
         workspace_inspector_width_px: None,
         schema_snapshot_retention: dto.schema_snapshot_retention as usize,
         object_preview_size_limit_mib: dto.object_preview_size_limit_mib as u64,
+        language: language_setting_from_storage(&dto.language),
     }
 }
 
@@ -1079,6 +1081,20 @@ fn theme_setting_from_storage(theme: &str) -> dbflux_core::ThemeSetting {
         "light" => dbflux_core::ThemeSetting::Light,
         "mirage" => dbflux_core::ThemeSetting::Mirage,
         _ => dbflux_core::ThemeSetting::Dark,
+    }
+}
+
+/// Maps a storage `language` string to a `GeneralSettings::language` value.
+///
+/// Mirrors the supported set of `dbflux_i18n::Language` storage identifiers
+/// without depending on `dbflux_i18n` from this app/core layer. Any value
+/// other than the empty string or a currently supported language falls back
+/// to the empty string, which `dbflux_i18n::resolve` treats as "follow the
+/// system locale" (`LanguagePreference::System`).
+fn language_setting_from_storage(language: &str) -> String {
+    match language {
+        "en" | "es" => language.to_string(),
+        _ => String::new(),
     }
 }
 
@@ -2390,6 +2406,7 @@ mod tests {
             style: "default".to_string(),
             schema_snapshot_retention: 10,
             object_preview_size_limit_mib: 10,
+            language: String::new(),
             updated_at: String::new(),
         };
 
@@ -2421,6 +2438,77 @@ mod tests {
         assert!(!loaded.general_settings.confirm_dangerous_queries);
         assert!(!loaded.general_settings.dangerous_requires_where);
         assert!(loaded.general_settings.dangerous_requires_preview);
+    }
+
+    #[test]
+    fn invalid_language_storage_value_falls_back_to_empty_string() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let mut dto = GeneralSettingsDto {
+            id: 1,
+            theme: "dark".to_string(),
+            restore_session_on_startup: 1,
+            reopen_last_connections: 0,
+            default_focus_on_startup: "sidebar".to_string(),
+            max_history_entries: 1000,
+            auto_save_interval_ms: 2000,
+            default_refresh_policy: "manual".to_string(),
+            default_refresh_interval_secs: 5,
+            max_concurrent_background_tasks: 8,
+            auto_refresh_pause_on_error: 1,
+            auto_refresh_only_if_visible: 0,
+            confirm_dangerous_queries: 1,
+            dangerous_requires_where: 1,
+            dangerous_requires_preview: 0,
+            style: "default".to_string(),
+            schema_snapshot_retention: 10,
+            object_preview_size_limit_mib: 10,
+            language: "de".to_string(),
+            updated_at: String::new(),
+        };
+        runtime
+            .general_settings()
+            .upsert(&dto)
+            .expect("save general settings dto");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(
+            loaded.general_settings.language, "",
+            "unsupported language storage value must fall back to empty string (System)"
+        );
+
+        dto.language = "es".to_string();
+        runtime
+            .general_settings()
+            .upsert(&dto)
+            .expect("save general settings dto");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(
+            loaded.general_settings.language, "es",
+            "supported language storage value must load through unchanged"
+        );
+    }
+
+    #[test]
+    fn language_round_trips_through_save_and_load() {
+        let settings = GeneralSettings {
+            language: "es".to_string(),
+            ..Default::default()
+        };
+
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        super::save_general_settings(&runtime, &settings).expect("save general settings");
+
+        let dto = runtime
+            .general_settings()
+            .get()
+            .expect("load saved dto")
+            .expect("general settings row");
+        assert_eq!(dto.language, "es");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(loaded.general_settings.language, "es");
     }
 
     #[test]
@@ -2505,6 +2593,7 @@ mod tests {
             style: "ultracompact".to_string(), // unknown value
             schema_snapshot_retention: 10,
             object_preview_size_limit_mib: 10,
+            language: String::new(),
             updated_at: String::new(),
         };
         runtime

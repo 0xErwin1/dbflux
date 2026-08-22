@@ -299,6 +299,12 @@ pub struct GeneralSettings {
     #[serde(default)]
     pub style: AppStyle,
 
+    /// The user's language preference: a `dbflux_i18n::Language` storage
+    /// identifier (for example `"en"`, `"es"`), or an empty string to follow
+    /// the system locale.
+    #[serde(default)]
+    pub language: String,
+
     // -- Startup & Session --
     #[serde(default = "default_true")]
     pub restore_session_on_startup: bool,
@@ -365,6 +371,7 @@ impl Default for GeneralSettings {
         Self {
             theme: ThemeSetting::Dark,
             style: AppStyle::Default,
+            language: String::new(),
             restore_session_on_startup: true,
             reopen_last_connections: false,
             default_focus_on_startup: StartupFocus::Sidebar,

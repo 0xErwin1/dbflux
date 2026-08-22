@@ -2609,6 +2609,7 @@ dependencies = [
  "dbflux_audit",
  "dbflux_core",
  "dbflux_driver_ipc",
+ "dbflux_i18n",
  "dbflux_ipc",
  "dbflux_ssh",
  "dbflux_test_support",
@@ -2999,6 +3000,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dbflux_i18n"
+version = "0.8.0-dev.0"
+dependencies = [
+ "rust-i18n",
+ "serde_yaml",
+ "sys-locale",
+]
+
+[[package]]
 name = "dbflux_ipc"
 version = "0.8.0-dev.0"
 dependencies = [
@@ -3305,6 +3315,7 @@ dependencies = [
  "dbflux_app",
  "dbflux_components",
  "dbflux_core",
+ "dbflux_i18n",
  "dbflux_mcp",
  "dbflux_policy",
  "dbflux_portability",
