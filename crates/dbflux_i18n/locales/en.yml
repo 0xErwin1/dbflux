@@ -36,6 +36,17 @@ document:
         dirty:
           one: "%{count} unsaved change"
           many: "%{count} unsaved changes"
+        save: Save
+        revert: Revert
+      toolbar:
+        refresh: Refresh
+        builder: Builder
+        switch_to_document: Switch to Document View
+        switch_to_table: Switch to Table View
+  shared:
+    refresh:
+      off: Off
+      custom: Custom
   tabs:
     menu:
       close: Close

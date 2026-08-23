@@ -989,9 +989,9 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let refresh_label = if self.refresh.refresh_policy.is_auto() {
-            self.refresh.refresh_policy.label()
+            crate::labels::refresh_policy_label(self.refresh.refresh_policy)
         } else {
-            "Refresh"
+            dbflux_i18n::t!("document.data.grid.toolbar.refresh")
         };
 
         let toolbar_has_filter_error =
@@ -1147,8 +1147,12 @@ impl DataGridPanel {
                     DataViewMode::Document => AppIcon::Braces,
                 };
                 let _tooltip = match mode {
-                    DataViewMode::Table => "Switch to Document View",
-                    DataViewMode::Document => "Switch to Table View",
+                    DataViewMode::Table => {
+                        dbflux_i18n::t!("document.data.grid.toolbar.switch_to_document")
+                    }
+                    DataViewMode::Document => {
+                        dbflux_i18n::t!("document.data.grid.toolbar.switch_to_table")
+                    }
                 };
 
                 d.child(
@@ -1191,7 +1195,9 @@ impl DataGridPanel {
                                 .small()
                                 .color(theme.muted_foreground),
                         )
-                        .child(Text::muted("Builder")),
+                        .child(Text::muted(dbflux_i18n::t!(
+                            "document.data.grid.toolbar.builder"
+                        ))),
                 )
             })
             .child(
@@ -1272,20 +1278,13 @@ impl DataGridPanel {
             .border_color(theme.border)
             // Left: status text
             .child(
-                Text::caption(if has_changes {
-                    format!(
-                        "{} unsaved change{}",
-                        dirty_count,
-                        if dirty_count == 1 { "" } else { "s" }
-                    )
-                } else {
-                    "No unsaved changes".to_string()
-                })
-                .color(if has_changes {
-                    theme.warning
-                } else {
-                    theme.muted_foreground
-                }),
+                Text::caption(crate::labels::unsaved_changes_label(dirty_count)).color(
+                    if has_changes {
+                        theme.warning
+                    } else {
+                        theme.muted_foreground
+                    },
+                ),
             )
             // Right: buttons
             .child(
@@ -1408,11 +1407,14 @@ impl DataGridPanel {
                                     }))
                             })
                             .when(!has_changes, |d| d.border_color(theme.border))
-                            .child(Text::caption("Save").color(if has_changes {
-                                theme.primary_foreground
-                            } else {
-                                theme.muted_foreground
-                            }))
+                            .child(
+                                Text::caption(dbflux_i18n::t!("document.data.grid.edit_bar.save"))
+                                    .color(if has_changes {
+                                        theme.primary_foreground
+                                    } else {
+                                        theme.muted_foreground
+                                    }),
+                            )
                             .child(Text::caption(SAVE_ROW_SHORTCUT_HINT).color(if has_changes {
                                 theme.primary_foreground.opacity(0.7)
                             } else {
@@ -1443,11 +1445,16 @@ impl DataGridPanel {
                                         window.focus(&this.focus_handle);
                                     }))
                             })
-                            .child(Text::caption("Revert").color(if has_changes {
-                                theme.foreground
-                            } else {
-                                theme.muted_foreground
-                            })),
+                            .child(
+                                Text::caption(dbflux_i18n::t!(
+                                    "document.data.grid.edit_bar.revert"
+                                ))
+                                .color(if has_changes {
+                                    theme.foreground
+                                } else {
+                                    theme.muted_foreground
+                                }),
+                            ),
                     ),
             )
     }
@@ -3814,5 +3821,49 @@ mod tests {
         let mode = super::content_mode_for_result(false, DataViewMode::Document, true, false);
 
         assert_eq!(mode, DataGridContentMode::EmptyFallback);
+    }
+
+    const DATA_GRID_TOOLBAR_KEYS: &[&str] = &[
+        "document.data.grid.toolbar.refresh",
+        "document.data.grid.toolbar.builder",
+        "document.data.grid.toolbar.switch_to_document",
+        "document.data.grid.toolbar.switch_to_table",
+        "document.data.grid.edit_bar.save",
+        "document.data.grid.edit_bar.revert",
+        "document.shared.refresh.off",
+        "document.shared.refresh.custom",
+    ];
+
+    #[test]
+    fn data_grid_toolbar_keys_resolve_in_both_locales() {
+        for key in DATA_GRID_TOOLBAR_KEYS {
+            let english = dbflux_i18n::t!(*key, locale = "en");
+            let spanish = dbflux_i18n::t!(*key, locale = "es");
+
+            assert!(!english.is_empty(), "empty English translation for {key}");
+            assert!(!spanish.is_empty(), "empty Spanish translation for {key}");
+            assert_ne!(english, *key, "English translation missing for {key}");
+            assert_ne!(spanish, *key, "Spanish translation missing for {key}");
+            assert_ne!(
+                english,
+                format!("en.{key}"),
+                "English translation missing for {key}"
+            );
+            assert_ne!(
+                spanish,
+                format!("es.{key}"),
+                "Spanish translation missing for {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn data_grid_toolbar_refresh_differs_between_locales() {
+        let english = dbflux_i18n::t!("document.data.grid.toolbar.refresh", locale = "en");
+        let spanish = dbflux_i18n::t!("document.data.grid.toolbar.refresh", locale = "es");
+
+        assert_eq!(english, "Refresh");
+        assert_eq!(spanish, "Actualizar");
+        assert_ne!(english, spanish);
     }
 }
