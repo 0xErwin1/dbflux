@@ -14,18 +14,20 @@ impl ObjectEditorDocument {
         let mut segments = vec![
             StatusSegment {
                 text: self.bucket().to_string().into(),
-                tooltip: Some("Bucket".into()),
+                tooltip: Some(
+                    dbflux_i18n::t!("document.object_editor.status.bucket_tooltip").into(),
+                ),
             },
             StatusSegment {
                 text: self.key().to_string().into(),
-                tooltip: Some("Object key".into()),
+                tooltip: Some(dbflux_i18n::t!("document.object_editor.status.key_tooltip").into()),
             },
         ];
 
         if let Some(byte_len) = self.byte_len() {
             segments.push(StatusSegment {
                 text: crate::buckets_table::format_bytes(byte_len).into(),
-                tooltip: Some("Size of the object as last loaded or saved".into()),
+                tooltip: Some(dbflux_i18n::t!("document.object_editor.status.size_tooltip").into()),
             });
         }
 
@@ -151,5 +153,35 @@ impl ObjectEditorDocument {
         });
 
         pane
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The three status-bar tooltips resolve in both locales.
+    ///
+    /// `bucket_tooltip` is excluded from the divergence check: "bucket"
+    /// stays "bucket" in Spanish per the change's vocabulary rule (see
+    /// `document.object_browser.empty.bucket` for the same precedent), so
+    /// its `en` and `es` values are identical by design, not a translation
+    /// gap.
+    #[test]
+    fn status_tooltip_keys_resolve_in_both_locales() {
+        for key in [
+            "document.object_editor.status.bucket_tooltip",
+            "document.object_editor.status.key_tooltip",
+            "document.object_editor.status.size_tooltip",
+        ] {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+
+            assert!(!en.is_empty());
+            assert_ne!(en, key);
+            assert_ne!(en, format!("en.{key}"));
+
+            if key != "document.object_editor.status.bucket_tooltip" {
+                assert_ne!(en, es);
+            }
+        }
     }
 }
