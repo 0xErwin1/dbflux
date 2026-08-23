@@ -1,7 +1,7 @@
 ---
 import { localizedDocTitle, sectionsFor } from '../data/docs';
 import { docsHref } from '../data/versions';
-import { localeFromPathname, t } from '../i18n';
+import { localeFromPathname, sectionTitle, t } from '../i18n';
 import type { Locale } from '../i18n';
 
 interface Props {
@@ -27,7 +27,7 @@ const { sections, unfiled } = sectionsFor(available);
 {
   sections.map((section) => (
     <section>
-      <h2 id={section.id}>{section.title}</h2>
+      <h2 id={section.id}>{sectionTitle(locale, section.id)}</h2>
       <ul>
         {section.entries.map((path) => (
           <li>
