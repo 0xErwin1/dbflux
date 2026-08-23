@@ -762,6 +762,31 @@ document:
       key: Key
       last_modified: Last modified
       size: Size
+    create_folder:
+      cancel: Cancel
+      confirm: Create
+      confirm_in_progress: "Creating…"
+      created_toast: "Created folder %{uri}"
+      hint: 'Created as a zero-byte key ending in "/"'
+      location: "in %{uri}"
+      name_placeholder: folder-name
+      title: New folder
+      error:
+        consecutive_slashes: Folder name cannot contain consecutive slashes.
+        empty: Folder name cannot be empty.
+        leading_trailing_slash: Folder name cannot start or end with a slash.
+    delete:
+      body: '"%{key}" (%{size}) will be removed. This cannot be undone.'
+      cancel: Cancel
+      confirm: Delete
+      deleted_toast: "Deleted %{uri}"
+      title: Delete object?
+      unknown_size: unknown size
+    delete_prefix:
+      versioning_note: "This bucket has versioning enabled — deleted objects become delete markers, not permanently removed."
+      deleted_toast:
+        one: "Deleted %{count} object under %{uri}"
+        many: "Deleted %{count} objects under %{uri}"
     empty:
       bucket: This bucket is empty
       filtered: No keys match this filter
@@ -834,6 +859,17 @@ document:
           many: "%{count} versions"
         loading: "Loading…"
         view: View versions
+    rename:
+      cancel: Cancel
+      confirm: Rename
+      confirm_in_progress: "Renaming…"
+      name_placeholder: object-name
+      renamed_toast: "Renamed to %{uri}"
+      title: Rename object
+      error:
+        contains_slash: "Name cannot contain a slash — rename stays in the same folder."
+        empty: Name cannot be empty.
+        unchanged: New name must differ from the current name.
     status:
       folders:
         one: "%{count} folder"

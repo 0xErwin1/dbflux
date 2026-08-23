@@ -1186,6 +1186,25 @@ pub(crate) fn presign_expiry_label(expiry: crate::object_browser::PresignExpiry)
     }
 }
 
+/// Toast text for a completed recursive-prefix delete, with the deleted
+/// object count interpolated. The target URI is S3 data and stays outside
+/// the catalog.
+pub(crate) fn delete_prefix_deleted_toast(count: u64, uri: &str) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.object_browser.delete_prefix.deleted_toast.one",
+            count = count,
+            uri = uri
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.object_browser.delete_prefix.deleted_toast.many",
+            count = count,
+            uri = uri
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1195,15 +1214,16 @@ mod tests {
         bool_op_label, builder_mode_label, bulk_delete_success_label, chart_degraded_copy,
         chart_dock_shape_label, chart_rail_why_text, code_toolbar_shortcut_hint_label,
         comparator_label, copy_query_language_label, dangerous_query_body, dangerous_query_title,
-        delete_confirm_copy, delete_rows_label, execution_count_state_label, execution_mode_label,
-        history_items_count_label, history_tab_label, image_decode_error, image_header_error,
-        incomplete_aggregate_rows_label, join_kind_label, live_output_lines_label,
-        live_output_truncated_label, object_browser_status_summary,
-        object_browser_versions_count_label, partial_delete_label, pending_change_count_label,
-        pending_edits_summary, presign_expiry_label, presign_method_label, preview_gate_message,
-        refresh_policy_label, result_tab_count_label, row_count_label, schema_change_description,
-        script_confirm_message_label, sort_direction_label, table_action_description,
-        unsaved_changes_label, update_columns_label, valid_lines_label,
+        delete_confirm_copy, delete_prefix_deleted_toast, delete_rows_label,
+        execution_count_state_label, execution_mode_label, history_items_count_label,
+        history_tab_label, image_decode_error, image_header_error, incomplete_aggregate_rows_label,
+        join_kind_label, live_output_lines_label, live_output_truncated_label,
+        object_browser_status_summary, object_browser_versions_count_label, partial_delete_label,
+        pending_change_count_label, pending_edits_summary, presign_expiry_label,
+        presign_method_label, preview_gate_message, refresh_policy_label, result_tab_count_label,
+        row_count_label, schema_change_description, script_confirm_message_label,
+        sort_direction_label, table_action_description, unsaved_changes_label,
+        update_columns_label, valid_lines_label,
     };
     use crate::object_browser::{PresignExpiry, PresignMethodChoice, PreviewGate};
     use crate::schema_diff::apply::TableLevelAction;
@@ -3056,5 +3076,88 @@ mod tests {
     fn object_browser_versions_count_label_covers_singular_and_plural() {
         assert_eq!(object_browser_versions_count_label(1), "1 version");
         assert_eq!(object_browser_versions_count_label(3), "3 versions");
+    }
+
+    /// T20a: every `document.object_browser.{rename,create_folder,delete,
+    /// delete_prefix}.*` key resolves in both locales.
+    #[test]
+    fn object_browser_modal_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.object_browser.create_folder.title",
+            "document.object_browser.create_folder.name_placeholder",
+            "document.object_browser.create_folder.location",
+            "document.object_browser.create_folder.hint",
+            "document.object_browser.create_folder.cancel",
+            "document.object_browser.create_folder.confirm",
+            "document.object_browser.create_folder.confirm_in_progress",
+            "document.object_browser.create_folder.created_toast",
+            "document.object_browser.create_folder.error.empty",
+            "document.object_browser.create_folder.error.leading_trailing_slash",
+            "document.object_browser.create_folder.error.consecutive_slashes",
+            "document.object_browser.delete.title",
+            "document.object_browser.delete.body",
+            "document.object_browser.delete.unknown_size",
+            "document.object_browser.delete.cancel",
+            "document.object_browser.delete.confirm",
+            "document.object_browser.delete.deleted_toast",
+            "document.object_browser.delete_prefix.versioning_note",
+            "document.object_browser.delete_prefix.deleted_toast.one",
+            "document.object_browser.delete_prefix.deleted_toast.many",
+            "document.object_browser.rename.title",
+            "document.object_browser.rename.name_placeholder",
+            "document.object_browser.rename.cancel",
+            "document.object_browser.rename.confirm",
+            "document.object_browser.rename.confirm_in_progress",
+            "document.object_browser.rename.renamed_toast",
+            "document.object_browser.rename.error.empty",
+            "document.object_browser.rename.error.contains_slash",
+            "document.object_browser.rename.error.unchanged",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    /// T20a: the single-object delete title and the rename title translate
+    /// to their exact wording and diverge between locales.
+    #[test]
+    fn object_browser_modal_titles_have_exact_translated_text() {
+        assert_eq!(
+            dbflux_i18n::t!("document.object_browser.delete.title", locale = "en"),
+            "Delete object?"
+        );
+        assert_eq!(
+            dbflux_i18n::t!("document.object_browser.delete.title", locale = "es"),
+            "¿Eliminar objeto?"
+        );
+        assert_ne!(
+            dbflux_i18n::t!("document.object_browser.rename.title", locale = "en"),
+            dbflux_i18n::t!("document.object_browser.rename.title", locale = "es")
+        );
+    }
+
+    /// T20a: the recursive-delete toast uses the singular catalog bucket
+    /// only for exactly one deleted object.
+    #[test]
+    fn delete_prefix_deleted_toast_covers_singular_and_plural() {
+        assert_eq!(
+            delete_prefix_deleted_toast(1, "s3://my-bucket/logs/"),
+            "Deleted 1 object under s3://my-bucket/logs/"
+        );
+        assert_eq!(
+            delete_prefix_deleted_toast(4, "s3://my-bucket/logs/"),
+            "Deleted 4 objects under s3://my-bucket/logs/"
+        );
     }
 }

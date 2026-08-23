@@ -44,15 +44,21 @@ pub(super) fn key_leaf(key: &str) -> String {
 /// the current leaf name.
 pub fn rename_name_error(current_leaf: &str, new_name: &str) -> Option<String> {
     if new_name.is_empty() {
-        return Some("Name cannot be empty.".to_string());
+        return Some(dbflux_i18n::t!(
+            "document.object_browser.rename.error.empty"
+        ));
     }
 
     if new_name.contains('/') {
-        return Some("Name cannot contain a slash — rename stays in the same folder.".to_string());
+        return Some(dbflux_i18n::t!(
+            "document.object_browser.rename.error.contains_slash"
+        ));
     }
 
     if new_name == current_leaf {
-        return Some("New name must differ from the current name.".to_string());
+        return Some(dbflux_i18n::t!(
+            "document.object_browser.rename.error.unchanged"
+        ));
     }
 
     None
@@ -97,7 +103,9 @@ impl ObjectBrowserDocument {
         let leaf = key_leaf(&key);
 
         let name_input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx).placeholder("object-name");
+            let mut state = InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "document.object_browser.rename.name_placeholder"
+            ));
             state.set_value(&leaf, window, cx);
             state
         });
@@ -166,16 +174,12 @@ impl ObjectBrowserDocument {
         cx.notify();
 
         let Some(connection) = self.get_connection(cx) else {
+            let message = dbflux_i18n::t!("document.object_browser.error.connection_unavailable");
             report_error(
-                UserFacingError::new(ErrorKind::Storage, "Connection is no longer active"),
+                UserFacingError::new(ErrorKind::Storage, message.clone()),
                 cx,
             );
-            self.apply_rename_outcome(
-                source_key,
-                new_key,
-                Err("Connection is no longer active".to_string()),
-                cx,
-            );
+            self.apply_rename_outcome(source_key, new_key, Err(message), cx);
             return;
         };
 
@@ -194,7 +198,9 @@ impl ObjectBrowserDocument {
                     let new_key = new_key.clone();
                     async move {
                         let api = connection.object_store_api().ok_or_else(|| {
-                            DbError::NotSupported("Object-store API unavailable".to_string())
+                            DbError::NotSupported(dbflux_i18n::t!(
+                                "document.object_browser.error.api_unavailable"
+                            ))
                         })?;
                         api.copy_object(&bucket, &source_key, &new_key)
                     }
@@ -231,7 +237,9 @@ impl ObjectBrowserDocument {
                     let source_key = source_key.clone();
                     async move {
                         let api = connection.object_store_api().ok_or_else(|| {
-                            DbError::NotSupported("Object-store API unavailable".to_string())
+                            DbError::NotSupported(dbflux_i18n::t!(
+                                "document.object_browser.error.api_unavailable"
+                            ))
                         })?;
                         api.delete_object(&bucket, &source_key)
                     }
@@ -279,9 +287,12 @@ impl ObjectBrowserDocument {
         match result {
             Ok(()) => {
                 self.rename_object = None;
-                Toast::success(format!("Renamed to s3://{}/{new_key}", self.bucket))
-                    .meta_right(now_hms())
-                    .push(cx);
+                Toast::success(dbflux_i18n::t!(
+                    "document.object_browser.rename.renamed_toast",
+                    uri = format!("s3://{}/{new_key}", self.bucket)
+                ))
+                .meta_right(now_hms())
+                .push(cx);
 
                 if self.preview_key.as_deref() == Some(source_key.as_str()) {
                     self.open_preview_now(new_key.clone(), cx);
@@ -326,7 +337,9 @@ impl ObjectBrowserDocument {
                     .items_center()
                     .gap(Spacing::SM)
                     .child(Icon::new(AppIcon::Pencil).size(Heights::ICON_MD).muted())
-                    .child(Text::heading("Rename object")),
+                    .child(Text::heading(dbflux_i18n::t!(
+                        "document.object_browser.rename.title"
+                    ))),
             )
             .child(Text::muted(format!("\"{}\"", state.key)))
             .child(
@@ -363,7 +376,9 @@ impl ObjectBrowserDocument {
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.close_rename_object(cx);
                         }))
-                        .child(Text::caption("Cancel")),
+                        .child(Text::caption(dbflux_i18n::t!(
+                            "document.object_browser.rename.cancel"
+                        ))),
                 )
                 .child(
                     div()
@@ -389,14 +404,14 @@ impl ObjectBrowserDocument {
                             .size(Heights::ICON_SM)
                             .color(theme.primary_foreground),
                         )
-                        .child(
-                            Text::caption(if state.submitting {
-                                "Renaming…"
+                        .child({
+                            let key = if state.submitting {
+                                "document.object_browser.rename.confirm_in_progress"
                             } else {
-                                "Rename"
-                            })
-                            .color(theme.primary_foreground),
-                        ),
+                                "document.object_browser.rename.confirm"
+                            };
+                            Text::caption(dbflux_i18n::t!(key)).color(theme.primary_foreground)
+                        }),
                 ),
         );
 
