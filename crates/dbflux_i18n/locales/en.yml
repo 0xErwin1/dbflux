@@ -1,3 +1,19 @@
+access:
+  tab_label: Access
+  method_label: Access Method
+  direct_hint: Direct connections use the database fields from the Main tab.
+  auth_profile_optional: Auth Profile (optional)
+  manage: Manage
+  login: Login
+  refresh: Refresh
+  auth_profile_hint: Used for resolving Secret/Parameter/Auth value sources in Direct mode.
+  session_valid: Auth profile session is valid
+  ssm_title: SSM Port Forwarding
+  ssm_instance_id: Instance ID
+  ssm_region: Region
+  ssm_remote_port: Remote Port
+  ssm_port_hint: DBFlux and the OS auto-assign the local tunnel port. Only Remote Port is configurable here.
+  auth_profile: Auth Profile
 chart:
   axis_bar:
     group: Group

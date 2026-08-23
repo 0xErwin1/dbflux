@@ -1,3 +1,19 @@
+access:
+  tab_label: Acceso
+  method_label: Método de acceso
+  direct_hint: Las conexiones directas usan los campos de la pestaña Principal.
+  auth_profile_optional: Perfil de autenticación (opcional)
+  manage: Gestionar
+  login: Iniciar sesión
+  refresh: Actualizar
+  auth_profile_hint: Se utiliza para resolver los orígenes de valor Secret/Parameter/Auth en modo Directo.
+  session_valid: La sesión del perfil de autenticación es válida
+  ssm_title: Reenvío de puertos SSM
+  ssm_instance_id: ID de instancia
+  ssm_region: Región
+  ssm_remote_port: Puerto remoto
+  ssm_port_hint: DBFlux y el sistema operativo asignan automáticamente el puerto del túnel local. Aquí solo se puede configurar el puerto remoto.
+  auth_profile: Perfil de autenticación
 chart:
   axis_bar:
     group: Grupo
