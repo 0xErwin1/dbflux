@@ -836,35 +836,35 @@ impl AuditDocument {
         filters
     }
 
-    fn source_loading_label(&self) -> &'static str {
+    fn source_loading_label(&self) -> String {
         if self.is_external_event_stream() {
-            "Loading events..."
+            dbflux_i18n::t!("document.audit.source.loading.external")
         } else {
-            "Loading audit events..."
+            dbflux_i18n::t!("document.audit.source.loading.internal")
         }
     }
 
-    fn source_error_heading(&self) -> &'static str {
+    fn source_error_heading(&self) -> String {
         if self.is_external_event_stream() {
-            "Failed to load events"
+            dbflux_i18n::t!("document.audit.source.error_heading.external")
         } else {
-            "Failed to load audit events"
+            dbflux_i18n::t!("document.audit.source.error_heading.internal")
         }
     }
 
-    fn source_empty_label(&self) -> &'static str {
+    fn source_empty_label(&self) -> String {
         if self.is_external_event_stream() {
-            "No events match the current filters."
+            dbflux_i18n::t!("document.audit.source.empty.external")
         } else {
-            "No audit events match the current filters."
+            dbflux_i18n::t!("document.audit.source.empty.internal")
         }
     }
 
-    fn source_row_label(&self) -> &'static str {
+    fn source_row_label(&self) -> String {
         if self.is_external_event_stream() {
-            "events"
+            dbflux_i18n::t!("document.audit.row.unit.events")
         } else {
-            "rows"
+            dbflux_i18n::t!("document.audit.row.unit.rows")
         }
     }
 
@@ -1031,7 +1031,7 @@ impl AuditDocument {
         let request_id = self.load_request_id;
         self.is_loading = true;
         self.export_menu_open = false;
-        self.status_message = Some(self.source_loading_label().to_string());
+        self.status_message = Some(self.source_loading_label());
         cx.notify();
 
         let page_filter = self.active_filter(
@@ -1774,5 +1774,51 @@ mod tests {
             0o600,
             "export file must be owner read/write only"
         );
+    }
+
+    const SOURCE_AND_ROW_KEYS: &[&str] = &[
+        "document.audit.row.unit.events",
+        "document.audit.row.unit.rows",
+        "document.audit.source.empty.external",
+        "document.audit.source.empty.internal",
+        "document.audit.source.error_heading.external",
+        "document.audit.source.error_heading.internal",
+        "document.audit.source.loading.external",
+        "document.audit.source.loading.internal",
+    ];
+
+    #[test]
+    fn audit_source_and_row_keys_resolve_in_both_locales() {
+        for key in SOURCE_AND_ROW_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, *key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn audit_source_loading_internal_label_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.audit.source.loading.internal", locale = "en");
+        let es = dbflux_i18n::t!("document.audit.source.loading.internal", locale = "es");
+
+        assert_eq!(en, "Loading audit events…");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn audit_row_unit_rows_label_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.audit.row.unit.rows", locale = "en");
+        let es = dbflux_i18n::t!("document.audit.row.unit.rows", locale = "es");
+
+        assert_eq!(en, "rows");
+        assert_ne!(en, es);
     }
 }
