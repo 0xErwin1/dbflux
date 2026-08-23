@@ -5,6 +5,45 @@ errors:
     detail: "Correlation: %{id}"
     clipboard: "%{summary}\nCorrelation: %{id}"
 modals:
+  add_panel_picker:
+    title: Add panels
+    submit:
+      zero: Add panels
+      one: Add 1 panel
+      many: "Add %{count} panels"
+      create: Create panel
+    saved:
+      empty: 'No saved charts on this connection. Use "From query" or "From metric" to create one directly.'
+      search_label: Search
+      search_placeholder: Search charts...
+    tab:
+      saved: Saved charts
+      query: From query
+      metric: From metric
+    name_placeholder: Panel name
+    name_label: Name
+    query:
+      placeholder: Type a query…
+      label: Query
+    chart_kind:
+      label: Chart kind
+      line: Line
+      bar: Bar
+      area: Area
+      scatter: Scatter
+    metric:
+      namespace_filter_placeholder: Filter namespaces…
+      metric_filter_placeholder: Filter metrics…
+      namespace_label: Namespace
+      metric_label: Metric
+      period_label: Period (seconds)
+      statistic_label: Statistic
+      loading_namespaces: Loading namespaces…
+      select_namespace_hint: Select a namespace to load metrics.
+      loading: Loading…
+      no_metrics: No metrics in this namespace.
+      no_metrics_filtered: No metrics match the filter.
+    cancel: Cancel
   rename:
     placeholder: Enter a name
     title:
