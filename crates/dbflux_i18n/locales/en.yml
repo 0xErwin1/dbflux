@@ -1301,6 +1301,25 @@ settings:
     delete: Delete
     save_to_file: Save to File
     cancel: Cancel
+    mirror_label_fallback: Read-only — managed externally
+    conflict_message: "This profile was modified on disk (%{label}) since you opened it. Reload to see the current values before saving."
+    partial_saved_message: "%{written_label} was saved successfully, but %{conflicted_label} was modified on disk since you opened the form. Reload to refresh and re-apply your changes."
+    login_required_hint: "Login required — click Login to load dropdown options."
+    session_expired_hint: Session expired — log in again to reload options
+    session_expired_click_hint: "Session expired — click Login to refresh dropdown options."
+    select_before_login: Select an auth provider before login.
+    interactive_login_unavailable: Interactive login is not available for this provider.
+    fields_required_before_login: Provide a profile name and provider fields before login.
+    starting_login: "Starting auth-provider login for profile '%{name}'..."
+    login_completed: "Auth-provider login completed for profile '%{name}'."
+    login_failed: "Auth-provider login failed for profile '%{name}': %{error}"
+    login_cancelled: Login cancelled by user.
+    login_url_panel_description: Open this URL in your browser to finish the login. DBFlux will continue automatically once you complete authentication.
+    open_browser: Open Browser
+    copy_url: Copy URL
+    login_action: Login
+    logging_in: "Logging in..."
+    runs_interactive_login_hint: Runs interactive login for this auth profile
     update: Update
     create: Create
     section_title: Auth Profiles

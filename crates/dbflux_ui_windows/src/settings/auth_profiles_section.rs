@@ -224,7 +224,9 @@ fn build_auth_profile_from_form(
     })
 }
 
-const MIRROR_LABEL_FALLBACK: &str = "Read-only — managed externally";
+fn mirror_label_fallback() -> String {
+    dbflux_i18n::t!("settings.auth_profiles.mirror_label_fallback")
+}
 fn success_written_fallback() -> String {
     dbflux_i18n::t!("settings.auth_profiles.saved_fallback")
 }
@@ -240,7 +242,7 @@ fn dangling_fallback() -> DanglingMessage {
 fn resolve_mirror_label(edit_caps: Option<&AuthEditCapabilities>) -> String {
     edit_caps
         .map(|e| e.mirror_label.clone())
-        .unwrap_or_else(|| MIRROR_LABEL_FALLBACK.to_string())
+        .unwrap_or_else(mirror_label_fallback)
 }
 
 fn resolve_success_text(edit_caps: Option<&AuthEditCapabilities>) -> String {
@@ -261,11 +263,7 @@ fn resolve_dangling(edit_caps: Option<&AuthEditCapabilities>, origin: &str) -> D
 /// The message names the target's label and instructs the user to reload
 /// before saving again.
 fn resolve_conflict_message(target: &dbflux_core::AuthEditTarget) -> String {
-    let label = &target.label;
-    format!(
-        "This profile was modified on disk ({label}) since you opened it. \
-         Reload to see the current values before saving."
-    )
+    crate::labels::auth_profiles_conflict_message(&target.label)
 }
 
 /// Build the user-visible message for a `PartialSaved` save outcome.
@@ -277,13 +275,7 @@ fn resolve_partial_saved_message(
     written: &dbflux_core::AuthEditTarget,
     conflicted: &dbflux_core::AuthEditTarget,
 ) -> String {
-    let written_label = &written.label;
-    let conflicted_label = &conflicted.label;
-    format!(
-        "{written_label} was saved successfully, but {conflicted_label} was \
-         modified on disk since you opened the form. Reload to refresh and \
-         re-apply your changes."
-    )
+    crate::labels::auth_profiles_partial_saved_message(&written.label, &conflicted.label)
 }
 
 /// Update `field_login_hint` and `provider_login_status` for a
@@ -313,7 +305,7 @@ fn apply_fetch_error_state(
 
             if !login_in_progress {
                 *provider_login_status = Some((
-                    "Login required — click Login to load dropdown options.".to_string(),
+                    dbflux_i18n::t!("settings.auth_profiles.login_required_hint"),
                     false,
                 ));
             }
@@ -321,12 +313,12 @@ fn apply_fetch_error_state(
         FetchOptionsError::SessionExpired => {
             field_login_hint.insert(
                 field_id.to_string(),
-                "Session expired — log in again to reload options".to_string(),
+                dbflux_i18n::t!("settings.auth_profiles.session_expired_hint"),
             );
 
             if !login_in_progress {
                 *provider_login_status = Some((
-                    "Session expired — click Login to refresh dropdown options.".to_string(),
+                    dbflux_i18n::t!("settings.auth_profiles.session_expired_click_hint"),
                     false,
                 ));
             }
@@ -1684,15 +1676,17 @@ impl AuthProfilesSection {
 
     fn login_selected_profile(&mut self, cx: &mut Context<Self>) {
         let Some(provider) = self.selected_provider(cx) else {
-            self.provider_login_status =
-                Some(("Select an auth provider before login.".to_string(), false));
+            self.provider_login_status = Some((
+                dbflux_i18n::t!("settings.auth_profiles.select_before_login"),
+                false,
+            ));
             cx.notify();
             return;
         };
 
         if !provider.capabilities().login.supported {
             self.provider_login_status = Some((
-                "Interactive login is not available for this provider.".to_string(),
+                dbflux_i18n::t!("settings.auth_profiles.interactive_login_unavailable"),
                 false,
             ));
             cx.notify();
@@ -1701,7 +1695,7 @@ impl AuthProfilesSection {
 
         let Some(raw_profile) = self.current_form_profile(cx) else {
             self.provider_login_status = Some((
-                "Provide a profile name and provider fields before login.".to_string(),
+                dbflux_i18n::t!("settings.auth_profiles.fields_required_before_login"),
                 false,
             ));
             cx.notify();
@@ -1725,10 +1719,7 @@ impl AuthProfilesSection {
 
         self.provider_login_loading = true;
         self.provider_login_status = Some((
-            format!(
-                "Starting auth-provider login for profile '{}'...",
-                profile.name
-            ),
+            crate::labels::auth_profiles_starting_login(&profile.name),
             false,
         ));
         cx.notify();
@@ -1790,16 +1781,13 @@ impl AuthProfilesSection {
                     this.active_login_url = None;
                     this.provider_login_status = Some(match &result {
                         Ok(_) => (
-                            format!(
-                                "Auth-provider login completed for profile '{}'.",
-                                profile.name
-                            ),
+                            crate::labels::auth_profiles_login_completed(&profile.name),
                             true,
                         ),
                         Err(error) => (
-                            format!(
-                                "Auth-provider login failed for profile '{}': {}",
-                                profile.name, error
+                            crate::labels::auth_profiles_login_failed(
+                                &profile.name,
+                                &error.to_string(),
                             ),
                             false,
                         ),
@@ -1944,9 +1932,9 @@ impl AuthProfilesSection {
             .flex()
             .flex_col()
             .gap_2()
-            .child(Text::caption(
-                "Open this URL in your browser to finish the login. DBFlux will continue automatically once you complete authentication.",
-            ))
+            .child(Text::caption(dbflux_i18n::t!(
+                "settings.auth_profiles.login_url_panel_description"
+            )))
             .child(
                 div()
                     .p(Spacing::SM)
@@ -1962,44 +1950,53 @@ impl AuthProfilesSection {
                     .items_center()
                     .gap_2()
                     .child(
-                        Button::new("auth-login-open-url", "Open Browser")
-                            .small()
-                            .primary()
-                            .on_click(cx.listener(move |_this, _, _, cx| {
-                                cx.open_url(&url_for_open);
-                            })),
+                        Button::new(
+                            "auth-login-open-url",
+                            dbflux_i18n::t!("settings.auth_profiles.open_browser"),
+                        )
+                        .small()
+                        .primary()
+                        .on_click(cx.listener(move |_this, _, _, cx| {
+                            cx.open_url(&url_for_open);
+                        })),
                     )
                     .child(
-                        Button::new("auth-login-copy-url", "Copy URL")
-                            .small()
-                            .on_click(cx.listener(move |_this, _, _, cx| {
-                                cx.write_to_clipboard(
-                                    gpui::ClipboardItem::new_string(url_for_copy.clone()),
-                                );
-                            })),
+                        Button::new(
+                            "auth-login-copy-url",
+                            dbflux_i18n::t!("settings.auth_profiles.copy_url"),
+                        )
+                        .small()
+                        .on_click(cx.listener(move |_this, _, _, cx| {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                url_for_copy.clone(),
+                            ));
+                        })),
                     )
                     .child(
-                        Button::new("auth-login-cancel", "Cancel")
-                            .small()
-                            .danger()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                // Ask the active provider to abort whatever
-                                // in-flight login it has for the profile
-                                // being edited. The provider's login future
-                                // will then return an error and the spawned
-                                // login task will clean up final status.
-                                if let Some(profile) = this.current_form_profile(cx)
-                                    && let Some(provider) = this.selected_provider(cx)
-                                {
-                                    let _aborted = provider.abort_login(&profile);
-                                }
-                                this.active_login_url = None;
-                                this.provider_login_status = Some((
-                                    "Login cancelled by user.".to_string(),
-                                    false,
-                                ));
-                                cx.notify();
-                            })),
+                        Button::new(
+                            "auth-login-cancel",
+                            dbflux_i18n::t!("settings.auth_profiles.cancel"),
+                        )
+                        .small()
+                        .danger()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            // Ask the active provider to abort whatever
+                            // in-flight login it has for the profile
+                            // being edited. The provider's login future
+                            // will then return an error and the spawned
+                            // login task will clean up final status.
+                            if let Some(profile) = this.current_form_profile(cx)
+                                && let Some(provider) = this.selected_provider(cx)
+                            {
+                                let _aborted = provider.abort_login(&profile);
+                            }
+                            this.active_login_url = None;
+                            this.provider_login_status = Some((
+                                dbflux_i18n::t!("settings.auth_profiles.login_cancelled"),
+                                false,
+                            ));
+                            cx.notify();
+                        })),
                     ),
             )
     }
@@ -2617,9 +2614,9 @@ impl AuthProfilesSection {
                                     Button::new(
                                         "auth-provider-login",
                                         if self.provider_login_loading {
-                                            "Logging in..."
+                                            dbflux_i18n::t!("settings.auth_profiles.logging_in")
                                         } else {
-                                            "Login"
+                                            dbflux_i18n::t!("settings.auth_profiles.login_action")
                                         },
                                     )
                                     .small()
@@ -2631,9 +2628,9 @@ impl AuthProfilesSection {
                                         },
                                     )),
                                 )
-                                .child(Text::caption(
-                                    "Runs interactive login for this auth profile",
-                                )),
+                                .child(Text::caption(dbflux_i18n::t!(
+                                    "settings.auth_profiles.runs_interactive_login_hint"
+                                ))),
                         )
                         .when_some(self.provider_login_status.as_ref(), |content, status| {
                             content.child(if status.1 {
@@ -3716,7 +3713,8 @@ mod tests {
     fn no_edit_caps_mirror_label_returns_fallback() {
         let result = resolve_mirror_label(None);
         assert_eq!(
-            result, MIRROR_LABEL_FALLBACK,
+            result,
+            mirror_label_fallback(),
             "resolve_mirror_label must return the fallback when edit caps are absent"
         );
         assert!(
@@ -3821,8 +3819,9 @@ mod tests {
 
         let without_caps = resolve_mirror_label(None);
         assert_eq!(
-            without_caps, MIRROR_LABEL_FALLBACK,
-            "resolve_mirror_label must return MIRROR_LABEL_FALLBACK when edit is None"
+            without_caps,
+            mirror_label_fallback(),
+            "resolve_mirror_label must return the translated fallback when edit is None"
         );
     }
 
@@ -3986,6 +3985,60 @@ mod tests {
 
         assert_eq!(en, "New Auth Profile");
         assert_eq!(es, "Nuevo perfil de autenticación");
+    }
+
+    // ---------------------------------------------------------------------------
+    // i18n — login flow keys (spec S16): conflict/partial-save banners, the
+    // interactive login status messages, the login-URL panel, and the Login
+    // button chrome.
+    // ---------------------------------------------------------------------------
+
+    const AUTH_PROFILES_LOGIN_KEYS: &[&str] = &[
+        "settings.auth_profiles.cancel",
+        "settings.auth_profiles.mirror_label_fallback",
+        "settings.auth_profiles.login_required_hint",
+        "settings.auth_profiles.session_expired_hint",
+        "settings.auth_profiles.session_expired_click_hint",
+        "settings.auth_profiles.select_before_login",
+        "settings.auth_profiles.interactive_login_unavailable",
+        "settings.auth_profiles.fields_required_before_login",
+        "settings.auth_profiles.login_cancelled",
+        "settings.auth_profiles.login_url_panel_description",
+        "settings.auth_profiles.open_browser",
+        "settings.auth_profiles.copy_url",
+        "settings.auth_profiles.login_action",
+        "settings.auth_profiles.logging_in",
+        "settings.auth_profiles.runs_interactive_login_hint",
+    ];
+
+    #[::core::prelude::v1::test]
+    fn auth_profiles_login_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in AUTH_PROFILES_LOGIN_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn auth_profiles_login_action_differs_between_locales() {
+        let en = dbflux_i18n::t!("settings.auth_profiles.login_action", locale = "en");
+        let es = dbflux_i18n::t!("settings.auth_profiles.login_action", locale = "es");
+
+        assert_eq!(en, "Login");
+        assert_eq!(es, "Iniciar sesión");
+        assert_ne!(en, es);
     }
 
     #[::core::prelude::v1::test]

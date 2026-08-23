@@ -200,10 +200,53 @@ pub(crate) fn auth_profiles_inherited_hint(
     }
 }
 
+/// Builds the user-visible conflict message for a `Conflict` save outcome,
+/// naming the target's label and pointing to the Reload affordance.
+pub(crate) fn auth_profiles_conflict_message(label: &str) -> String {
+    dbflux_i18n::t!("settings.auth_profiles.conflict_message", label = label)
+}
+
+/// Builds the user-visible message for a `PartialSaved` save outcome,
+/// naming both the written and conflicted targets.
+pub(crate) fn auth_profiles_partial_saved_message(
+    written_label: &str,
+    conflicted_label: &str,
+) -> String {
+    dbflux_i18n::t!(
+        "settings.auth_profiles.partial_saved_message",
+        written_label = written_label,
+        conflicted_label = conflicted_label
+    )
+}
+
+/// Formats the status message shown while the Settings-window auth-profile
+/// login is starting.
+pub(crate) fn auth_profiles_starting_login(name: &str) -> String {
+    dbflux_i18n::t!("settings.auth_profiles.starting_login", name = name)
+}
+
+/// Formats the status message shown when the Settings-window auth-profile
+/// login completes successfully.
+pub(crate) fn auth_profiles_login_completed(name: &str) -> String {
+    dbflux_i18n::t!("settings.auth_profiles.login_completed", name = name)
+}
+
+/// Formats the status message shown when the Settings-window auth-profile
+/// login fails.
+pub(crate) fn auth_profiles_login_failed(name: &str, error: &str) -> String {
+    dbflux_i18n::t!(
+        "settings.auth_profiles.login_failed",
+        name = name,
+        error = error
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         access_proxy_disabled_label, auth_login_failed, auth_login_starting,
+        auth_profiles_conflict_message, auth_profiles_login_completed, auth_profiles_login_failed,
+        auth_profiles_partial_saved_message, auth_profiles_starting_login,
         auth_provider_unavailable, auth_session_status_valid_expires, hooks_create_dir_failed,
         hooks_delete_message, hooks_delete_unreadable_message, hooks_duplicate_id,
         hooks_env_pair_invalid, hooks_form_interpreter_hint, hooks_interpreter_auto_label,
@@ -363,5 +406,43 @@ mod tests {
                 locale = "es"
             )
         );
+    }
+
+    #[test]
+    fn auth_profiles_conflict_message_names_target_label() {
+        let message = auth_profiles_conflict_message("FAKE_TARGET_A");
+
+        assert!(message.contains("FAKE_TARGET_A"));
+        assert!(!message.contains("settings.auth_profiles.conflict_message"));
+    }
+
+    #[test]
+    fn auth_profiles_partial_saved_message_names_both_targets() {
+        let message = auth_profiles_partial_saved_message("FAKE_TARGET_A", "FAKE_TARGET_B");
+
+        assert!(message.contains("FAKE_TARGET_A"));
+        assert!(message.contains("FAKE_TARGET_B"));
+    }
+
+    #[test]
+    fn auth_profiles_starting_login_embeds_profile_name() {
+        let message = auth_profiles_starting_login("prod-mongo");
+
+        assert!(message.contains("prod-mongo"));
+    }
+
+    #[test]
+    fn auth_profiles_login_completed_embeds_profile_name() {
+        let message = auth_profiles_login_completed("prod-mongo");
+
+        assert!(message.contains("prod-mongo"));
+    }
+
+    #[test]
+    fn auth_profiles_login_failed_embeds_profile_name_and_error() {
+        let message = auth_profiles_login_failed("prod-mongo", "token expired");
+
+        assert!(message.contains("prod-mongo"));
+        assert!(message.contains("token expired"));
     }
 }
