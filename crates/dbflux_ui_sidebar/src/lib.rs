@@ -3,6 +3,7 @@ mod context_menu;
 mod deletion;
 mod drag_drop;
 mod expansion;
+mod labels;
 pub mod operations;
 mod render;
 mod render_footer;
