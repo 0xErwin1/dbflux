@@ -36,3 +36,38 @@ pub(crate) fn about_copyright(author: &str) -> String {
 pub(crate) fn about_license(license: &str) -> String {
     dbflux_i18n::t!("settings.about.license", license = license)
 }
+
+/// Formats the confirmation prompt for deleting a named hook.
+pub(crate) fn hooks_delete_message(name: &str) -> String {
+    dbflux_i18n::t!("hooks.delete.message", name = name)
+}
+
+/// Formats the confirmation prompt for deleting an unreadable hook row.
+pub(crate) fn hooks_delete_unreadable_message(name: &str) -> String {
+    dbflux_i18n::t!("hooks.delete_unreadable.message", name = name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{hooks_delete_message, hooks_delete_unreadable_message};
+
+    #[test]
+    fn hooks_delete_message_embeds_hook_name() {
+        let message = hooks_delete_message("nightly-backup");
+
+        assert_eq!(
+            message,
+            "Are you sure you want to delete hook \"nightly-backup\"?"
+        );
+    }
+
+    #[test]
+    fn hooks_delete_unreadable_message_embeds_row_name() {
+        let message = hooks_delete_unreadable_message("legacy-row");
+
+        assert_eq!(
+            message,
+            "Permanently delete the unreadable hook row \"legacy-row\"? Its stored data cannot be recovered, but its name becomes reusable afterwards."
+        );
+    }
+}

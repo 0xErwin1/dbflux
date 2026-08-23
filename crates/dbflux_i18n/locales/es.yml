@@ -27,6 +27,40 @@ errors:
   correlation:
     detail: "Correlación: %{id}"
     clipboard: "%{summary}\nCorrelación: %{id}"
+hooks:
+  kind:
+    command: Comando
+    script: Script
+  source:
+    file: Archivo
+  script:
+    placeholder: "Escribe el contenido del script..."
+  execution:
+    blocking: Bloqueante
+    detached: Independiente
+  failure:
+    disconnect: Desconectar
+    warn: Advertir
+    ignore: Ignorar
+  delete:
+    title: Eliminar hook
+    message: '¿Seguro que quieres eliminar el hook "%{name}"?'
+  delete_unreadable:
+    title: Eliminar fila de hook no legible
+    message: '¿Eliminar permanentemente la fila de hook no legible "%{name}"? Sus datos almacenados no se pueden recuperar, pero su nombre podrá reutilizarse después.'
+  action:
+    delete: Eliminar
+    update: Actualizar
+    create: Crear
+  phase:
+    pre_connect_hook: Hook previo a la conexión
+    extra_pre_connect: Extra previo a la conexión
+    post_connect_hook: Hook posterior a la conexión
+    extra_post_connect: Extra posterior a la conexión
+    pre_disconnect_hook: Hook previo a la desconexión
+    extra_pre_disconnect: Extra previo a la desconexión
+    post_disconnect_hook: Hook posterior a la desconexión
+    extra_post_disconnect: Extra posterior a la desconexión
 modals:
   active_query:
     title: Consulta en ejecución

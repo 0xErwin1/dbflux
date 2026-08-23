@@ -27,6 +27,40 @@ errors:
   correlation:
     detail: "Correlation: %{id}"
     clipboard: "%{summary}\nCorrelation: %{id}"
+hooks:
+  kind:
+    command: Command
+    script: Script
+  source:
+    file: File
+  script:
+    placeholder: "Enter script content..."
+  execution:
+    blocking: Blocking
+    detached: Detached
+  failure:
+    disconnect: Disconnect
+    warn: Warn
+    ignore: Ignore
+  delete:
+    title: Delete Hook
+    message: 'Are you sure you want to delete hook "%{name}"?'
+  delete_unreadable:
+    title: Delete Unreadable Hook Row
+    message: 'Permanently delete the unreadable hook row "%{name}"? Its stored data cannot be recovered, but its name becomes reusable afterwards.'
+  action:
+    delete: Delete
+    update: Update
+    create: Create
+  phase:
+    pre_connect_hook: Pre-connect hook
+    extra_pre_connect: Extra pre-connect
+    post_connect_hook: Post-connect hook
+    extra_post_connect: Extra post-connect
+    pre_disconnect_hook: Pre-disconnect hook
+    extra_pre_disconnect: Extra pre-disconnect
+    post_disconnect_hook: Post-disconnect hook
+    extra_post_disconnect: Extra post-disconnect
 modals:
   active_query:
     title: Active query running
