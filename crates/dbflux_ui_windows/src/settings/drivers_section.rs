@@ -16,6 +16,16 @@ use gpui::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Builds the "Use Global / On / Off" items shared by the confirm-dangerous,
+/// requires-where, and requires-preview override dropdowns.
+fn boolean_override_items() -> Vec<DropdownItem> {
+    vec![
+        DropdownItem::with_value(dbflux_i18n::t!("settings.drivers.use_global"), "default"),
+        DropdownItem::with_value(dbflux_i18n::t!("connection_manager.overrides.on"), "true"),
+        DropdownItem::with_value(dbflux_i18n::t!("connection_manager.overrides.off"), "false"),
+    ]
+}
+
 #[derive(Clone)]
 pub(super) struct DriverSettingsEntry {
     pub(super) driver_key: DriverKey,
@@ -85,8 +95,14 @@ impl DriversSection {
         let drv_refresh_policy_dropdown = cx.new(|_cx| {
             Dropdown::new("drv-refresh-policy")
                 .items(vec![
-                    DropdownItem::with_value("Manual", "manual"),
-                    DropdownItem::with_value("Interval", "interval"),
+                    DropdownItem::with_value(
+                        dbflux_i18n::t!("settings.general.refresh_policy.option.manual"),
+                        "manual",
+                    ),
+                    DropdownItem::with_value(
+                        dbflux_i18n::t!("settings.general.refresh_policy.option.interval"),
+                        "interval",
+                    ),
                 ])
                 .selected_index(Some(0))
         });
@@ -99,31 +115,19 @@ impl DriversSection {
 
         let drv_confirm_dangerous_dropdown = cx.new(|_cx| {
             Dropdown::new("drv-confirm-dangerous")
-                .items(vec![
-                    DropdownItem::with_value("Use Global", "default"),
-                    DropdownItem::with_value("On", "true"),
-                    DropdownItem::with_value("Off", "false"),
-                ])
+                .items(boolean_override_items())
                 .selected_index(Some(0))
         });
 
         let drv_requires_where_dropdown = cx.new(|_cx| {
             Dropdown::new("drv-requires-where")
-                .items(vec![
-                    DropdownItem::with_value("Use Global", "default"),
-                    DropdownItem::with_value("On", "true"),
-                    DropdownItem::with_value("Off", "false"),
-                ])
+                .items(boolean_override_items())
                 .selected_index(Some(0))
         });
 
         let drv_requires_preview_dropdown = cx.new(|_cx| {
             Dropdown::new("drv-requires-preview")
-                .items(vec![
-                    DropdownItem::with_value("Use Global", "default"),
-                    DropdownItem::with_value("On", "true"),
-                    DropdownItem::with_value("Off", "false"),
-                ])
+                .items(boolean_override_items())
                 .selected_index(Some(0))
         });
 

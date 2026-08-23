@@ -4,6 +4,7 @@ use super::drivers_section::{
 use super::form_section::FormSection;
 use super::layout;
 use super::section_trait::SectionFocusEvent;
+use crate::labels::{override_default_caption, override_default_seconds_caption};
 use dbflux_components::components::form_renderer;
 use dbflux_components::controls::InputEvent;
 use dbflux_components::controls::{Button, Checkbox, Input};
@@ -22,61 +23,86 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 
-const CAPABILITY_CATALOG: &[(DriverCapabilities, &str)] = &[
-    (DriverCapabilities::MULTIPLE_DATABASES, "Multiple Databases"),
-    (DriverCapabilities::SCHEMAS, "Schemas"),
-    (DriverCapabilities::SSH_TUNNEL, "SSH Tunnel"),
-    (DriverCapabilities::SSL, "SSL/TLS"),
-    (DriverCapabilities::AUTHENTICATION, "Authentication"),
-    (DriverCapabilities::QUERY_CANCELLATION, "Query Cancellation"),
-    (DriverCapabilities::QUERY_TIMEOUT, "Query Timeout"),
-    (DriverCapabilities::TRANSACTIONS, "Transactions"),
+/// Capability ids in their stable display order. Each id doubles as the
+/// catalog key segment for its translated name: `settings.drivers.capability.<id>`.
+const CAPABILITY_IDS: &[(DriverCapabilities, &str)] = &[
+    (DriverCapabilities::MULTIPLE_DATABASES, "multiple_databases"),
+    (DriverCapabilities::SCHEMAS, "schemas"),
+    (DriverCapabilities::SSH_TUNNEL, "ssh_tunnel"),
+    (DriverCapabilities::SSL, "ssl_tls"),
+    (DriverCapabilities::AUTHENTICATION, "authentication"),
+    (DriverCapabilities::QUERY_CANCELLATION, "query_cancellation"),
+    (DriverCapabilities::QUERY_TIMEOUT, "query_timeout"),
+    (DriverCapabilities::TRANSACTIONS, "transactions"),
     (
         DriverCapabilities::PREPARED_STATEMENTS,
-        "Prepared Statements",
+        "prepared_statements",
     ),
-    (DriverCapabilities::VIEWS, "Views"),
-    (DriverCapabilities::FOREIGN_KEYS, "Foreign Keys"),
-    (DriverCapabilities::INDEXES, "Indexes"),
-    (DriverCapabilities::CUSTOM_TYPES, "Custom Types"),
-    (DriverCapabilities::INSERT, "Insert"),
-    (DriverCapabilities::UPDATE, "Update"),
-    (DriverCapabilities::DELETE, "Delete"),
-    (DriverCapabilities::PAGINATION, "Pagination"),
-    (DriverCapabilities::SORTING, "Sorting"),
-    (DriverCapabilities::FILTERING, "Filtering"),
-    (DriverCapabilities::EXPORT_CSV, "Export CSV"),
-    (DriverCapabilities::EXPORT_JSON, "Export JSON"),
-    (DriverCapabilities::NESTED_DOCUMENTS, "Nested Documents"),
-    (DriverCapabilities::ARRAYS, "Arrays"),
-    (DriverCapabilities::AGGREGATION, "Aggregation"),
-    (DriverCapabilities::KV_SCAN, "KV Scan"),
-    (DriverCapabilities::KV_GET, "KV Get"),
-    (DriverCapabilities::KV_SET, "KV Set"),
-    (DriverCapabilities::KV_DELETE, "KV Delete"),
-    (DriverCapabilities::KV_EXISTS, "KV Exists"),
-    (DriverCapabilities::KV_TTL, "KV TTL"),
-    (DriverCapabilities::KV_KEY_TYPES, "KV Key Types"),
-    (DriverCapabilities::KV_VALUE_SIZE, "KV Value Size"),
-    (DriverCapabilities::KV_RENAME, "KV Rename"),
-    (DriverCapabilities::KV_BULK_GET, "KV Bulk Get"),
-    (DriverCapabilities::KV_STREAM_RANGE, "KV Stream Range"),
-    (DriverCapabilities::KV_STREAM_ADD, "KV Stream Add"),
-    (DriverCapabilities::KV_STREAM_DELETE, "KV Stream Delete"),
-    (DriverCapabilities::PUBSUB, "Pub/Sub"),
-    (DriverCapabilities::GRAPH_TRAVERSAL, "Graph Traversal"),
-    (DriverCapabilities::EDGE_PROPERTIES, "Edge Properties"),
+    (DriverCapabilities::VIEWS, "views"),
+    (DriverCapabilities::FOREIGN_KEYS, "foreign_keys"),
+    (DriverCapabilities::INDEXES, "indexes"),
+    (DriverCapabilities::CUSTOM_TYPES, "custom_types"),
+    (DriverCapabilities::INSERT, "insert"),
+    (DriverCapabilities::UPDATE, "update"),
+    (DriverCapabilities::DELETE, "delete"),
+    (DriverCapabilities::PAGINATION, "pagination"),
+    (DriverCapabilities::SORTING, "sorting"),
+    (DriverCapabilities::FILTERING, "filtering"),
+    (DriverCapabilities::EXPORT_CSV, "export_csv"),
+    (DriverCapabilities::EXPORT_JSON, "export_json"),
+    (DriverCapabilities::NESTED_DOCUMENTS, "nested_documents"),
+    (DriverCapabilities::ARRAYS, "arrays"),
+    (DriverCapabilities::AGGREGATION, "aggregation"),
+    (DriverCapabilities::KV_SCAN, "kv_scan"),
+    (DriverCapabilities::KV_GET, "kv_get"),
+    (DriverCapabilities::KV_SET, "kv_set"),
+    (DriverCapabilities::KV_DELETE, "kv_delete"),
+    (DriverCapabilities::KV_EXISTS, "kv_exists"),
+    (DriverCapabilities::KV_TTL, "kv_ttl"),
+    (DriverCapabilities::KV_KEY_TYPES, "kv_key_types"),
+    (DriverCapabilities::KV_VALUE_SIZE, "kv_value_size"),
+    (DriverCapabilities::KV_RENAME, "kv_rename"),
+    (DriverCapabilities::KV_BULK_GET, "kv_bulk_get"),
+    (DriverCapabilities::KV_STREAM_RANGE, "kv_stream_range"),
+    (DriverCapabilities::KV_STREAM_ADD, "kv_stream_add"),
+    (DriverCapabilities::KV_STREAM_DELETE, "kv_stream_delete"),
+    (DriverCapabilities::PUBSUB, "pub_sub"),
+    (DriverCapabilities::GRAPH_TRAVERSAL, "graph_traversal"),
+    (DriverCapabilities::EDGE_PROPERTIES, "edge_properties"),
 ];
 
-fn policy_label(policy: RefreshPolicySetting) -> &'static str {
+/// Resolves the capability display catalog for the active locale: (flag,
+/// translated name). Call once per render and reuse across capability chip
+/// rows instead of re-resolving per row.
+fn capability_catalog() -> Vec<(DriverCapabilities, String)> {
+    CAPABILITY_IDS
+        .iter()
+        .map(|&(capability, id)| {
+            (
+                capability,
+                dbflux_i18n::t!(&format!("settings.drivers.capability.{id}")),
+            )
+        })
+        .collect()
+}
+
+fn policy_label(policy: RefreshPolicySetting) -> String {
     match policy {
-        RefreshPolicySetting::Manual => "Manual",
-        RefreshPolicySetting::Interval => "Interval",
+        RefreshPolicySetting::Manual => {
+            dbflux_i18n::t!("settings.general.refresh_policy.option.manual")
+        }
+        RefreshPolicySetting::Interval => {
+            dbflux_i18n::t!("settings.general.refresh_policy.option.interval")
+        }
     }
 }
 
-fn bool_label(value: bool) -> &'static str {
-    if value { "On" } else { "Off" }
+fn bool_override_caption(value: bool) -> String {
+    if value {
+        dbflux_i18n::t!("connection_manager.overrides.on")
+    } else {
+        dbflux_i18n::t!("connection_manager.overrides.off")
+    }
 }
 
 fn bool_override_index(value: Option<bool>) -> usize {
@@ -505,7 +531,9 @@ impl DriversSection {
 
             if raw.is_empty() {
                 if strict {
-                    return Err("Refresh interval override must not be empty".to_string());
+                    return Err(dbflux_i18n::t!(
+                        "settings.drivers.error.refresh_interval_empty"
+                    ));
                 }
             } else {
                 match raw.parse::<u32>() {
@@ -513,9 +541,9 @@ impl DriversSection {
                         overrides.refresh_interval_secs = Some(value);
                     }
                     _ if strict => {
-                        return Err(
-                            "Refresh interval override must be a number greater than 0".to_string()
-                        );
+                        return Err(dbflux_i18n::t!(
+                            "settings.drivers.error.refresh_interval_invalid"
+                        ));
                     }
                     _ => {}
                 }
@@ -667,12 +695,12 @@ impl DriversSection {
         }
 
         if all_warnings.is_empty() {
-            Toast::success("Driver settings saved.")
+            Toast::success(dbflux_i18n::t!("settings.drivers.toast.saved"))
                 .meta_right(now_hms())
                 .push(cx);
         } else {
             let body = all_warnings.join("\n");
-            Toast::warning("Driver settings saved with warnings")
+            Toast::warning(dbflux_i18n::t!("settings.drivers.toast.saved_warnings"))
                 .meta_right(now_hms())
                 .body(body)
                 .collapsible()
@@ -683,8 +711,8 @@ impl DriversSection {
     pub(super) fn render_drivers_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         layout::section_container(layout::split_section_shell(
             dbflux_components::composites::section_header(
-                "Drivers",
-                "Configure per-driver overrides and driver-defined settings",
+                dbflux_i18n::t!("settings.drivers.section_title"),
+                dbflux_i18n::t!("settings.drivers.section_description"),
                 cx,
             ),
             self.render_driver_list(cx),
@@ -721,9 +749,12 @@ impl DriversSection {
                     .flex_col()
                     .gap_1()
                     .when(self.drv_entries.is_empty(), |d| {
-                        d.child(div().p_3().child(
-                            Body::new("No registered drivers").color(theme.muted_foreground),
-                        ))
+                        d.child(
+                            div().p_3().child(
+                                Body::new(dbflux_i18n::t!("settings.drivers.empty"))
+                                    .color(theme.muted_foreground),
+                            ),
+                        )
                     })
                     .children(self.drv_entries.iter().enumerate().map(|(idx, entry)| {
                         let selected = self.drv_selected_idx == Some(idx);
@@ -797,7 +828,7 @@ impl DriversSection {
                 .items_center()
                 .justify_center()
                 .child(
-                    Body::new("Select a driver to configure settings")
+                    Body::new(dbflux_i18n::t!("settings.drivers.select_hint"))
                         .color(theme.muted_foreground),
                 );
         };
@@ -880,13 +911,16 @@ impl DriversSection {
             .child(layout::footer_action_frame(
                 editor_focused && self.drv_editor_field == DriverEditorField::Save,
                 cx.theme().primary,
-                Button::new("save-driver-settings", "Save")
-                    .small()
-                    .primary()
-                    .w_full()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.save_driver_settings(window, cx);
-                    })),
+                Button::new(
+                    "save-driver-settings",
+                    dbflux_i18n::t!("settings.drivers.action.save"),
+                )
+                .small()
+                .primary()
+                .w_full()
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.save_driver_settings(window, cx);
+                })),
             ))
             .into_any_element()
     }
@@ -899,19 +933,22 @@ impl DriversSection {
         let theme = cx.theme();
         let caps = entry.metadata.capabilities;
         let relevant = entry.metadata.category.relevant_capabilities();
+        let catalog = capability_catalog();
 
         div()
             .flex()
             .flex_col()
             .gap_2()
-            .child(FieldLabel::new("Capabilities"))
+            .child(FieldLabel::new(dbflux_i18n::t!(
+                "settings.drivers.field.capabilities"
+            )))
             .child(
                 div().flex().flex_wrap().gap_2().children(
-                    CAPABILITY_CATALOG
-                        .iter()
+                    catalog
+                        .into_iter()
                         .filter(|(capability, _)| relevant.contains(*capability))
                         .map(|(capability, label)| {
-                            let supported = caps.contains(*capability);
+                            let supported = caps.contains(capability);
                             div()
                                 .px_2()
                                 .py_1()
@@ -945,9 +982,11 @@ impl DriversSection {
             .flex()
             .flex_col()
             .gap_3()
-            .child(FieldLabel::new("Global Overrides"))
+            .child(FieldLabel::new(dbflux_i18n::t!(
+                "settings.drivers.field.global_overrides"
+            )))
             .child(
-                Body::new("Enable override to replace the global default for this driver.")
+                Body::new(dbflux_i18n::t!("settings.drivers.global_overrides_hint"))
                     .color(theme.muted_foreground),
             )
             .child(
@@ -963,7 +1002,9 @@ impl DriversSection {
                             .items_center()
                             .gap_3()
                             .child(div().w(Widths::SETTINGS_FORM_LABEL))
-                            .child(div().w(px(160.0)).child(FieldLabel::new("Override Value"))),
+                            .child(div().w(px(160.0)).child(FieldLabel::new(dbflux_i18n::t!(
+                                "settings.general.override_value_header"
+                            )))),
                     )
                     .child(
                         div()
@@ -1015,11 +1056,9 @@ impl DriversSection {
                                             )),
                                     ),
                             )
-                            .child(
-                                div()
-                                    .w(Widths::SETTINGS_FORM_LABEL)
-                                    .child(Label::new("Refresh policy")),
-                            )
+                            .child(div().w(Widths::SETTINGS_FORM_LABEL).child(Label::new(
+                                dbflux_i18n::t!("settings.general.refresh_policy.label"),
+                            )))
                             .child(
                                 div()
                                     .min_w(px(160.0))
@@ -1052,10 +1091,9 @@ impl DriversSection {
                                     )
                                     .child(self.drv_refresh_policy_dropdown.clone()),
                             )
-                            .child(MonoCaption::new(format!(
-                                "Default: {}",
-                                policy_label(global.default_refresh_policy)
-                            ))),
+                            .child(MonoCaption::new(override_default_caption(&policy_label(
+                                global.default_refresh_policy,
+                            )))),
                     )
                     .child(
                         div()
@@ -1107,11 +1145,9 @@ impl DriversSection {
                                             )),
                                     ),
                             )
-                            .child(
-                                div()
-                                    .w(Widths::SETTINGS_FORM_LABEL)
-                                    .child(Label::new("Refresh interval (sec)")),
-                            )
+                            .child(div().w(Widths::SETTINGS_FORM_LABEL).child(Label::new(
+                                dbflux_i18n::t!("settings.general.refresh_interval.label"),
+                            )))
                             .child(
                                 div()
                                     .w(px(160.0))
@@ -1148,9 +1184,8 @@ impl DriversSection {
                                             .disabled(!self.drv_override_refresh_interval),
                                     ),
                             )
-                            .child(MonoCaption::new(format!(
-                                "Default: {}",
-                                global.default_refresh_interval_secs
+                            .child(MonoCaption::new(override_default_seconds_caption(
+                                global.default_refresh_interval_secs,
                             ))),
                     )
                     .child(
@@ -1160,11 +1195,9 @@ impl DriversSection {
                             .flex()
                             .items_center()
                             .gap_3()
-                            .child(
-                                div()
-                                    .w(Widths::SETTINGS_FORM_LABEL)
-                                    .child(Label::new("Confirm dangerous queries")),
-                            )
+                            .child(div().w(Widths::SETTINGS_FORM_LABEL).child(Label::new(
+                                dbflux_i18n::t!("settings.general.confirm_dangerous.label"),
+                            )))
                             .child(
                                 div()
                                     .w(px(160.0))
@@ -1192,9 +1225,8 @@ impl DriversSection {
                                     )
                                     .child(self.drv_confirm_dangerous_dropdown.clone()),
                             )
-                            .child(MonoCaption::new(format!(
-                                "Default: {}",
-                                bool_label(global.confirm_dangerous_queries)
+                            .child(MonoCaption::new(override_default_caption(
+                                &bool_override_caption(global.confirm_dangerous_queries),
                             ))),
                     )
                     .child(
@@ -1204,11 +1236,9 @@ impl DriversSection {
                             .flex()
                             .items_center()
                             .gap_3()
-                            .child(
-                                div()
-                                    .w(Widths::SETTINGS_FORM_LABEL)
-                                    .child(Label::new("Require WHERE")),
-                            )
+                            .child(div().w(Widths::SETTINGS_FORM_LABEL).child(Label::new(
+                                dbflux_i18n::t!("settings.general.requires_where.label"),
+                            )))
                             .child(
                                 div()
                                     .w(px(160.0))
@@ -1236,9 +1266,8 @@ impl DriversSection {
                                     )
                                     .child(self.drv_requires_where_dropdown.clone()),
                             )
-                            .child(MonoCaption::new(format!(
-                                "Default: {}",
-                                bool_label(global.dangerous_requires_where)
+                            .child(MonoCaption::new(override_default_caption(
+                                &bool_override_caption(global.dangerous_requires_where),
                             ))),
                     )
                     .child(
@@ -1248,11 +1277,9 @@ impl DriversSection {
                             .flex()
                             .items_center()
                             .gap_3()
-                            .child(
-                                div()
-                                    .w(Widths::SETTINGS_FORM_LABEL)
-                                    .child(Label::new("Require preview")),
-                            )
+                            .child(div().w(Widths::SETTINGS_FORM_LABEL).child(Label::new(
+                                dbflux_i18n::t!("settings.general.requires_preview.label"),
+                            )))
                             .child(
                                 div()
                                     .w(px(160.0))
@@ -1280,9 +1307,8 @@ impl DriversSection {
                                     )
                                     .child(self.drv_requires_preview_dropdown.clone()),
                             )
-                            .child(MonoCaption::new(format!(
-                                "Default: {}",
-                                bool_label(global.dangerous_requires_preview)
+                            .child(MonoCaption::new(override_default_caption(
+                                &bool_override_caption(global.dangerous_requires_preview),
                             ))),
                     ),
             )
@@ -1298,9 +1324,11 @@ impl DriversSection {
                 .flex()
                 .flex_col()
                 .gap_2()
-                .child(FieldLabel::new("Driver Settings"))
+                .child(FieldLabel::new(dbflux_i18n::t!(
+                    "settings.drivers.field.driver_settings"
+                )))
                 .child(
-                    Body::new("No custom settings for this driver.")
+                    Body::new(dbflux_i18n::t!("settings.drivers.no_custom_settings"))
                         .color(cx.theme().muted_foreground),
                 );
         };
@@ -1309,7 +1337,9 @@ impl DriversSection {
             .flex()
             .flex_col()
             .gap_3()
-            .child(FieldLabel::new("Driver Settings"))
+            .child(FieldLabel::new(dbflux_i18n::t!(
+                "settings.drivers.field.driver_settings"
+            )))
             .children(
                 schema
                     .tabs
@@ -1409,9 +1439,133 @@ impl DriversSection {
 
 #[cfg(test)]
 mod tests {
-    use super::{driver_entry_key_text, driver_entry_name_text};
+    use super::{
+        CAPABILITY_IDS, bool_override_caption, capability_catalog, driver_entry_key_text,
+        driver_entry_name_text, policy_label,
+    };
     use dbflux_components::tokens::FontSizes;
     use dbflux_components::typography::{AppFonts, MonoColorSelection, MonoDefaultColor};
+    use dbflux_core::{DriverCapabilities, RefreshPolicySetting};
+
+    const CHROME_KEYS: &[&str] = &[
+        "settings.drivers.section_title",
+        "settings.drivers.section_description",
+        "settings.drivers.empty",
+        "settings.drivers.select_hint",
+        "settings.drivers.action.save",
+        "settings.drivers.field.capabilities",
+        "settings.drivers.field.global_overrides",
+        "settings.drivers.global_overrides_hint",
+        "settings.drivers.no_custom_settings",
+        "settings.drivers.field.driver_settings",
+        "settings.drivers.use_global",
+        "settings.drivers.error.refresh_interval_empty",
+        "settings.drivers.error.refresh_interval_invalid",
+        "settings.drivers.toast.saved",
+        "settings.drivers.toast.saved_warnings",
+    ];
+
+    #[test]
+    fn drivers_chrome_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in CHROME_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn drivers_section_description_differs_between_locales() {
+        let english = dbflux_i18n::t!("settings.drivers.section_description", locale = "en");
+        let spanish = dbflux_i18n::t!("settings.drivers.section_description", locale = "es");
+
+        assert_eq!(
+            english,
+            "Configure per-driver overrides and driver-defined settings"
+        );
+        assert_eq!(
+            spanish,
+            "Configura anulaciones por driver y ajustes definidos por el driver"
+        );
+        assert_ne!(english, spanish);
+    }
+
+    #[test]
+    fn capability_names_cover_every_flag() {
+        for &(_, id) in CAPABILITY_IDS {
+            for locale in ["en", "es"] {
+                let key = format!("settings.drivers.capability.{id}");
+                let value = dbflux_i18n::t!(&key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn capability_catalog_flags_unchanged() {
+        let catalog = capability_catalog();
+        let actual_flags: Vec<DriverCapabilities> =
+            catalog.iter().map(|(capability, _)| *capability).collect();
+        let expected_flags: Vec<DriverCapabilities> = CAPABILITY_IDS
+            .iter()
+            .map(|&(capability, _)| capability)
+            .collect();
+
+        assert_eq!(actual_flags, expected_flags);
+    }
+
+    #[test]
+    fn capability_name_differs_between_locales() {
+        let english = dbflux_i18n::t!("settings.drivers.capability.ssh_tunnel", locale = "en");
+        let spanish = dbflux_i18n::t!("settings.drivers.capability.ssh_tunnel", locale = "es");
+
+        assert_eq!(english, "SSH Tunnel");
+        assert_eq!(spanish, "Túnel SSH");
+        assert_ne!(english, spanish);
+    }
+
+    #[test]
+    fn policy_label_differs_between_locales() {
+        assert_ne!(
+            dbflux_i18n::t!(
+                "settings.general.refresh_policy.option.interval",
+                locale = "en"
+            ),
+            dbflux_i18n::t!(
+                "settings.general.refresh_policy.option.interval",
+                locale = "es"
+            )
+        );
+        assert!(!policy_label(RefreshPolicySetting::Manual).is_empty());
+    }
+
+    #[test]
+    fn bool_override_caption_resolves_on_and_off() {
+        assert!(!bool_override_caption(true).is_empty());
+        assert!(!bool_override_caption(false).is_empty());
+        assert_ne!(bool_override_caption(true), bool_override_caption(false));
+    }
 
     #[test]
     fn driver_list_preserves_prominent_names_and_deemphasized_keys() {

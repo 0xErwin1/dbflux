@@ -1611,6 +1611,67 @@ settings:
       create_role: Create Role
       update_policy: Update Policy
       create_policy: Create Policy
+  drivers:
+    section_title: Drivers
+    section_description: Configure per-driver overrides and driver-defined settings
+    empty: No registered drivers
+    select_hint: Select a driver to configure settings
+    action:
+      save: Save
+    field:
+      capabilities: Capabilities
+      global_overrides: Global Overrides
+      driver_settings: Driver Settings
+    global_overrides_hint: Enable override to replace the global default for this driver.
+    no_custom_settings: No custom settings for this driver.
+    use_global: Use Global
+    error:
+      refresh_interval_empty: Refresh interval override must not be empty
+      refresh_interval_invalid: Refresh interval override must be a number greater than 0
+    toast:
+      saved: Driver settings saved.
+      saved_warnings: Driver settings saved with warnings
+    capability:
+      multiple_databases: Multiple Databases
+      schemas: Schemas
+      ssh_tunnel: SSH Tunnel
+      ssl_tls: SSL/TLS
+      authentication: Authentication
+      query_cancellation: Query Cancellation
+      query_timeout: Query Timeout
+      transactions: Transactions
+      prepared_statements: Prepared Statements
+      views: Views
+      foreign_keys: Foreign Keys
+      indexes: Indexes
+      custom_types: Custom Types
+      insert: Insert
+      update: Update
+      delete: Delete
+      pagination: Pagination
+      sorting: Sorting
+      filtering: Filtering
+      export_csv: Export CSV
+      export_json: Export JSON
+      nested_documents: Nested Documents
+      arrays: Arrays
+      aggregation: Aggregation
+      kv_scan: KV Scan
+      kv_get: KV Get
+      kv_set: KV Set
+      kv_delete: KV Delete
+      kv_exists: KV Exists
+      kv_ttl: KV TTL
+      kv_key_types: KV Key Types
+      kv_value_size: KV Value Size
+      kv_rename: KV Rename
+      kv_bulk_get: KV Bulk Get
+      kv_stream_range: KV Stream Range
+      kv_stream_add: KV Stream Add
+      kv_stream_delete: KV Stream Delete
+      pub_sub: Pub/Sub
+      graph_traversal: Graph Traversal
+      edge_properties: Edge Properties
   nav:
     general_group: General
     general: General
