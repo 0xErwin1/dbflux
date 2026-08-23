@@ -9,11 +9,11 @@ archivos clave.
 
 ```text
 UI document
-  -> app orchestration (profiles, connections, policy, lifecycle)
-    -> dbflux_core contracts (metadata, capabilities, requests, values)
-      -> built-in driver or RPC-adapted driver
-        -> QueryResult -> generic result views
-        -> EventRecord -> audit sink
+  -&gt; app orchestration (profiles, connections, policy, lifecycle)
+    -&gt; dbflux_core contracts (metadata, capabilities, requests, values)
+      -&gt; built-in driver or RPC-adapted driver
+        -&gt; QueryResult -&gt; generic result views
+        -&gt; EventRecord -&gt; audit sink
 ```
 
 La dirección importante es hacia adentro: la presentación y los workflows
