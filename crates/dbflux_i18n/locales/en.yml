@@ -1356,6 +1356,83 @@ settings:
     login_hint: Log in to load options
     inherited_from: "Inherited from %{trigger}."
     inherited_from_named: "Inherited from %{trigger} '%{name}'."
+  mcp:
+    tool:
+      list_connections:
+        name: List Connections
+        description: Enumerate all configured database connections
+      get_connection:
+        name: Get Connection
+        description: Retrieve full details of a specific connection
+      get_connection_metadata:
+        name: Connection Metadata
+        description: Fetch driver capabilities and metadata for a connection
+      list_databases:
+        name: List Databases
+        description: List all databases accessible on a connection
+      list_schemas:
+        name: List Schemas
+        description: List schemas within a database
+      list_tables:
+        name: List Tables
+        description: List tables and collections within a schema
+      list_collections:
+        name: List Collections
+        description: List MongoDB collections or similar document stores
+      describe_object:
+        name: Describe Object
+        description: Get column/field definitions and indexes for a table or collection
+      read_query:
+        name: Read Query
+        description: Execute a SELECT or equivalent read-only query
+      explain_query:
+        name: Explain Query
+        description: Show the query execution plan without running it
+      preview_mutation:
+        name: Preview Mutation
+        description: Dry-run a write/delete query and report affected rows
+      list_scripts:
+        name: List Scripts
+        description: List saved scripts in the scripts directory
+      get_script:
+        name: Get Script
+        description: Retrieve the source of a specific saved script
+      create_script:
+        name: Create Script
+        description: Save a new script to the scripts directory
+      update_script:
+        name: Update Script
+        description: Overwrite an existing saved script
+      delete_script:
+        name: Delete Script
+        description: Permanently remove a script from the scripts directory
+      run_script:
+        name: Run Script
+        description: Execute a saved Lua/SQL/shell script against a connection
+      request_execution:
+        name: Request Execution
+        description: Submit a mutation for human approval before it runs
+      list_pending_executions:
+        name: List Pending
+        description: View all executions awaiting approval
+      get_pending_execution:
+        name: Get Pending
+        description: Retrieve details of a specific pending execution
+      approve_execution:
+        name: Approve Execution
+        description: Approve and trigger a pending mutation
+      reject_execution:
+        name: Reject Execution
+        description: Reject and discard a pending mutation
+      query_audit_logs:
+        name: Query Audit Logs
+        description: Search and filter the audit trail
+      get_audit_entry:
+        name: Get Audit Entry
+        description: Retrieve a single audit log entry by ID
+      export_audit_logs:
+        name: Export Audit Logs
+        description: Download audit log entries as a file
   nav:
     general_group: General
     general: General

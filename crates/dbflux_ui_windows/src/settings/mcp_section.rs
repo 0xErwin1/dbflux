@@ -18,134 +18,50 @@ use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
 use std::collections::HashSet;
 
-/// Tool display metadata: (id, label, description)
-const TOOL_META: &[(&str, &str, &str)] = &[
-    (
-        "list_connections",
-        "List Connections",
-        "Enumerate all configured database connections",
-    ),
-    (
-        "get_connection",
-        "Get Connection",
-        "Retrieve full details of a specific connection",
-    ),
-    (
-        "get_connection_metadata",
-        "Connection Metadata",
-        "Fetch driver capabilities and metadata for a connection",
-    ),
-    (
-        "list_databases",
-        "List Databases",
-        "List all databases accessible on a connection",
-    ),
-    (
-        "list_schemas",
-        "List Schemas",
-        "List schemas within a database",
-    ),
-    (
-        "list_tables",
-        "List Tables",
-        "List tables and collections within a schema",
-    ),
-    (
-        "list_collections",
-        "List Collections",
-        "List MongoDB collections or similar document stores",
-    ),
-    (
-        "describe_object",
-        "Describe Object",
-        "Get column/field definitions and indexes for a table or collection",
-    ),
-    (
-        "read_query",
-        "Read Query",
-        "Execute a SELECT or equivalent read-only query",
-    ),
-    (
-        "explain_query",
-        "Explain Query",
-        "Show the query execution plan without running it",
-    ),
-    (
-        "preview_mutation",
-        "Preview Mutation",
-        "Dry-run a write/delete query and report affected rows",
-    ),
-    (
-        "list_scripts",
-        "List Scripts",
-        "List saved scripts in the scripts directory",
-    ),
-    (
-        "get_script",
-        "Get Script",
-        "Retrieve the source of a specific saved script",
-    ),
-    (
-        "create_script",
-        "Create Script",
-        "Save a new script to the scripts directory",
-    ),
-    (
-        "update_script",
-        "Update Script",
-        "Overwrite an existing saved script",
-    ),
-    (
-        "delete_script",
-        "Delete Script",
-        "Permanently remove a script from the scripts directory",
-    ),
-    (
-        "run_script",
-        "Run Script",
-        "Execute a saved Lua/SQL/shell script against a connection",
-    ),
-    (
-        "request_execution",
-        "Request Execution",
-        "Submit a mutation for human approval before it runs",
-    ),
-    (
-        "list_pending_executions",
-        "List Pending",
-        "View all executions awaiting approval",
-    ),
-    (
-        "get_pending_execution",
-        "Get Pending",
-        "Retrieve details of a specific pending execution",
-    ),
-    (
-        "approve_execution",
-        "Approve Execution",
-        "Approve and trigger a pending mutation",
-    ),
-    (
-        "reject_execution",
-        "Reject Execution",
-        "Reject and discard a pending mutation",
-    ),
-    (
-        "query_audit_logs",
-        "Query Audit Logs",
-        "Search and filter the audit trail",
-    ),
-    (
-        "get_audit_entry",
-        "Get Audit Entry",
-        "Retrieve a single audit log entry by ID",
-    ),
-    (
-        "export_audit_logs",
-        "Export Audit Logs",
-        "Download audit log entries as a file",
-    ),
+/// Tool ids in their stable display order. Each id doubles as the catalog key
+/// segment for its translated name and description: `settings.mcp.tool.<id>.name`
+/// and `settings.mcp.tool.<id>.description`.
+const TOOL_IDS: &[&str] = &[
+    "list_connections",
+    "get_connection",
+    "get_connection_metadata",
+    "list_databases",
+    "list_schemas",
+    "list_tables",
+    "list_collections",
+    "describe_object",
+    "read_query",
+    "explain_query",
+    "preview_mutation",
+    "list_scripts",
+    "get_script",
+    "create_script",
+    "update_script",
+    "delete_script",
+    "run_script",
+    "request_execution",
+    "list_pending_executions",
+    "get_pending_execution",
+    "approve_execution",
+    "reject_execution",
+    "query_audit_logs",
+    "get_audit_entry",
+    "export_audit_logs",
 ];
+
+/// Resolves the tool display metadata for the active locale: (id, translated
+/// name, translated description). Call once per render and reuse the result
+/// across the tool checkbox rows instead of re-resolving per row.
+fn tool_meta() -> Vec<(&'static str, String, String)> {
+    TOOL_IDS
+        .iter()
+        .map(|&id| {
+            let name = dbflux_i18n::t!(&format!("settings.mcp.tool.{id}.name"));
+            let description = dbflux_i18n::t!(&format!("settings.mcp.tool.{id}.description"));
+            (id, name, description)
+        })
+        .collect()
+}
 
 /// Execution class display metadata: (id, label, description)
 const CLASS_META: &[(&str, &str, &str)] = &[
@@ -227,20 +143,18 @@ const TOOL_GROUPS: &[(&str, &[&str])] = &[
     ),
 ];
 
-fn tool_label(id: &str) -> &str {
-    TOOL_META
-        .iter()
+fn tool_label(meta: &[(&'static str, String, String)], id: &str) -> String {
+    meta.iter()
         .find(|(t, _, _)| *t == id)
-        .map(|(_, l, _)| *l)
-        .unwrap_or(id)
+        .map(|(_, name, _)| name.clone())
+        .unwrap_or_else(|| id.to_string())
 }
 
-fn tool_description(id: &str) -> &'static str {
-    TOOL_META
-        .iter()
+fn tool_description(meta: &[(&'static str, String, String)], id: &str) -> String {
+    meta.iter()
         .find(|(t, _, _)| *t == id)
-        .map(|(_, _, d)| *d)
-        .unwrap_or("")
+        .map(|(_, _, description)| description.clone())
+        .unwrap_or_default()
 }
 
 use dbflux_mcp::builtin_display_name;
@@ -1007,6 +921,7 @@ impl McpSection {
 
     fn render_policies_content(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let tool_meta = tool_meta();
         let policies: Vec<ToolPolicyDto> = self
             .app_state
             .read(cx)
@@ -1179,8 +1094,8 @@ impl McpSection {
                             .child(div().flex().flex_col().gap_2().pl_2().children(
                                 tools.iter().map(|&tool| {
                                     let checked = self.draft_policy_tools.contains(tool);
-                                    let label = tool_label(tool);
-                                    let description = tool_description(tool);
+                                    let label = tool_label(&tool_meta, tool);
+                                    let description = tool_description(&tool_meta, tool);
                                     div()
                                         .flex()
                                         .items_start()
@@ -1680,5 +1595,79 @@ impl Render for McpSection {
                 cx,
             ))
             .child(div().flex_1().min_h_0().overflow_hidden().child(content))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tool_meta;
+
+    const EXPECTED_TOOL_IDS: &[&str] = &[
+        "list_connections",
+        "get_connection",
+        "get_connection_metadata",
+        "list_databases",
+        "list_schemas",
+        "list_tables",
+        "list_collections",
+        "describe_object",
+        "read_query",
+        "explain_query",
+        "preview_mutation",
+        "list_scripts",
+        "get_script",
+        "create_script",
+        "update_script",
+        "delete_script",
+        "run_script",
+        "request_execution",
+        "list_pending_executions",
+        "get_pending_execution",
+        "approve_execution",
+        "reject_execution",
+        "query_audit_logs",
+        "get_audit_entry",
+        "export_audit_logs",
+    ];
+
+    #[test]
+    fn mcp_tool_meta_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for id in EXPECTED_TOOL_IDS {
+                for field in ["name", "description"] {
+                    let key = format!("settings.mcp.tool.{id}.{field}");
+                    let value = dbflux_i18n::t!(&key, locale = locale);
+
+                    assert!(
+                        !value.is_empty(),
+                        "key {key} resolved empty for locale {locale}"
+                    );
+                    assert_ne!(value, key, "key {key} did not resolve for locale {locale}");
+                    assert_ne!(
+                        value,
+                        format!("{locale}.{key}"),
+                        "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mcp_tool_meta_ids_unchanged() {
+        let meta = tool_meta();
+        let actual_ids: Vec<&str> = meta.iter().map(|(id, _, _)| *id).collect();
+
+        assert_eq!(actual_ids, EXPECTED_TOOL_IDS);
+    }
+
+    #[test]
+    fn mcp_tool_list_connections_name_differs_between_locales() {
+        let english = dbflux_i18n::t!("settings.mcp.tool.list_connections.name", locale = "en");
+        let spanish = dbflux_i18n::t!("settings.mcp.tool.list_connections.name", locale = "es");
+
+        assert_eq!(english, "List Connections");
+        assert_eq!(spanish, "Listar conexiones");
+        assert_ne!(english, spanish);
     }
 }
