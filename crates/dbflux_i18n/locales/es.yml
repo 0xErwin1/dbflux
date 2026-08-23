@@ -541,6 +541,22 @@ document:
         references: REFERENCIAS
         row: FILA
   key_value:
+    add_member_modal:
+      cancel: Cancelar
+      error:
+        at_least_one_entry: Se requiere al menos una entrada
+        prefix: "Error: %{error}"
+      section:
+        fields: Campos
+        members: Miembros
+      submit: Agregar
+      title:
+        default: Agregar miembro
+        hash: Agregar campos de hash
+        list: Agregar miembros de lista
+        set: Agregar miembros de conjunto
+        sorted_set: Agregar miembros de conjunto ordenado
+        stream: Agregar entrada de stream
     context_menu:
       add_entry: Agregar entrada
       add_member: Agregar miembro
@@ -556,6 +572,23 @@ document:
       edit_value: Editar valor
       new_key: Nueva clave
       rename: Renombrar
+    history_modal:
+      empty:
+        recent: Aún no hay historial
+        saved: No hay consultas guardadas
+      footer:
+        items:
+          one: "%{count} elemento"
+          many: "%{count} elementos"
+      save:
+        name_placeholder: Nombre de la consulta
+        name_required: Ingresa un nombre para la consulta
+        success_toast: Consulta guardada
+        title: Guardar consulta
+      search_placeholder: "Buscar..."
+      tabs:
+        recent: Recientes
+        saved: Guardadas
     mutation:
       error:
         connection_inactive: La conexión ya no está activa
