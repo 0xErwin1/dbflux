@@ -2309,6 +2309,48 @@ settings:
     discard_dialog_title: Descartar cambios del proxy
     discard_dialog:
       body: Tienes cambios sin guardar en el proxy. ¿Deseas descartarlos?
+  audit:
+    placeholder_level: Nivel
+    section_title: Auditoría
+    section_description: Configura la captura y retención de eventos de auditoría globales
+    group:
+      status: Estado
+      enable_disable: Habilitar o deshabilitar
+      capture_settings: Ajustes de captura
+      privacy: Privacidad
+      retention: Retención
+      purge: Purga
+      log_capture: Captura de registros
+    field:
+      enable_global: Habilitar auditoría global
+      capture_user_actions: Capturar acciones de usuario
+      capture_system_events: Capturar eventos del sistema
+      capture_full_query_text: Capturar el texto completo de la consulta (desactiva para solo huellas)
+      capture_hook_output: Capturar metadatos de salida de hooks/scripts
+      redact_sensitive: "Ocultar valores sensibles (contraseñas, tokens, claves)"
+      retention_days: Días de retención
+      max_detail_bytes: Bytes máximos de detalle
+      purge_on_startup: Purgar eventos antiguos al iniciar
+      purge_interval_minutes: Intervalo de purga en segundo plano (minutos)
+      min_log_level: Nivel mínimo de registro capturado en auditoría
+      not_wired: (aún no conectado)
+    action:
+      save: Guardar
+    status:
+      degraded: Auditoría degradada (requiere reiniciar)
+      enabled: Auditoría habilitada
+      disabled: Auditoría deshabilitada
+    error:
+      retention_days_invalid: Los días de retención deben ser un número mayor o igual a 1
+      max_detail_bytes_invalid: Los bytes máximos de detalle deben ser mayores o iguales a 1024
+      purge_interval_invalid: El intervalo de purga debe ser un número
+      cannot_enable: La auditoría no se puede habilitar
+      cannot_enable_body: "La auditoría no se puede habilitar: no se pudo abrir la base de datos de auditoría. Reinicia la aplicación. Si el problema persiste, revisa el espacio en disco y los permisos de archivo del directorio de datos de dbflux."
+      cannot_enable_copy: "La auditoría no se puede habilitar: La auditoría no se puede habilitar: no se pudo abrir la base de datos de auditoría. Reinicia la aplicación. Si el problema persiste, revisa el espacio en disco y los permisos de archivo del directorio de datos de dbflux."
+      save_failed: No se pudo guardar
+      save_failed_copy: "No se pudo guardar: %{error}"
+    toast:
+      saved: Ajustes de auditoría guardados.
   nav:
     general_group: General
     general: General

@@ -286,18 +286,24 @@ pub(crate) fn proxies_delete_body(name: &str, affected_connections: usize) -> St
     }
 }
 
+/// Formats the copy-action text for the audit "Failed to save" toast,
+/// embedding the storage error cause.
+pub(crate) fn audit_save_failed_copy(error: &str) -> String {
+    dbflux_i18n::t!("settings.audit.error.save_failed_copy", error = error)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        access_proxy_disabled_label, auth_login_failed, auth_login_starting,
-        auth_profiles_conflict_message, auth_profiles_login_completed, auth_profiles_login_failed,
-        auth_profiles_partial_saved_message, auth_profiles_starting_login,
-        auth_provider_unavailable, auth_session_status_valid_expires, hooks_create_dir_failed,
-        hooks_delete_message, hooks_delete_unreadable_message, hooks_duplicate_id,
-        hooks_env_pair_invalid, hooks_form_interpreter_hint, hooks_interpreter_auto_label,
-        hooks_interpreter_missing, hooks_open_script_failed, hooks_write_script_failed,
-        mcp_preview_summary, proxies_delete_body, ssh_private_key_with_path,
-        ssh_tunnels_delete_body,
+        access_proxy_disabled_label, audit_save_failed_copy, auth_login_failed,
+        auth_login_starting, auth_profiles_conflict_message, auth_profiles_login_completed,
+        auth_profiles_login_failed, auth_profiles_partial_saved_message,
+        auth_profiles_starting_login, auth_provider_unavailable, auth_session_status_valid_expires,
+        hooks_create_dir_failed, hooks_delete_message, hooks_delete_unreadable_message,
+        hooks_duplicate_id, hooks_env_pair_invalid, hooks_form_interpreter_hint,
+        hooks_interpreter_auto_label, hooks_interpreter_missing, hooks_open_script_failed,
+        hooks_write_script_failed, mcp_preview_summary, proxies_delete_body,
+        ssh_private_key_with_path, ssh_tunnels_delete_body,
     };
 
     #[test]
@@ -553,5 +559,12 @@ mod tests {
 
         assert!(message.contains("corporate-proxy"));
         assert!(!message.contains('0'));
+    }
+
+    #[test]
+    fn audit_save_failed_copy_embeds_error_cause() {
+        let message = audit_save_failed_copy("disk full");
+
+        assert!(message.contains("disk full"));
     }
 }

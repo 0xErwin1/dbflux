@@ -2309,6 +2309,48 @@ settings:
     discard_dialog_title: Discard Proxy Changes
     discard_dialog:
       body: You have unsaved proxy changes. Discard them?
+  audit:
+    placeholder_level: Level
+    section_title: Audit
+    section_description: Configure global audit event capture and retention
+    group:
+      status: Status
+      enable_disable: Enable/Disable
+      capture_settings: Capture Settings
+      privacy: Privacy
+      retention: Retention
+      purge: Purge
+      log_capture: Log Capture
+    field:
+      enable_global: Enable global audit
+      capture_user_actions: Capture user actions
+      capture_system_events: Capture system events
+      capture_full_query_text: Capture full query text (disable for fingerprints only)
+      capture_hook_output: Capture hook/script output metadata
+      redact_sensitive: "Redact sensitive values (passwords, tokens, keys)"
+      retention_days: Retention days
+      max_detail_bytes: Max detail bytes
+      purge_on_startup: Purge old events on startup
+      purge_interval_minutes: Background purge interval (minutes)
+      min_log_level: Minimum log level captured to audit
+      not_wired: (not yet wired)
+    action:
+      save: Save
+    status:
+      degraded: Audit is degraded (restart required)
+      enabled: Audit is enabled
+      disabled: Audit is disabled
+    error:
+      retention_days_invalid: Retention days must be a number >= 1
+      max_detail_bytes_invalid: Max detail bytes must be >= 1024
+      purge_interval_invalid: Background purge interval must be a number
+      cannot_enable: Audit cannot be enabled
+      cannot_enable_body: "Audit cannot be enabled: the audit database could not be opened. Please restart the application. If the problem persists, check disk space and file permissions for the dbflux data directory."
+      cannot_enable_copy: "Audit cannot be enabled: Audit cannot be enabled: the audit database could not be opened. Please restart the application. If the problem persists, check disk space and file permissions for the dbflux data directory."
+      save_failed: Failed to save
+      save_failed_copy: "Failed to save: %{error}"
+    toast:
+      saved: Audit settings saved.
   nav:
     general_group: General
     general: General

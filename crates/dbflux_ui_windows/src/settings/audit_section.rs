@@ -1,6 +1,7 @@
 use super::SettingsSection;
 use super::SettingsSectionId;
 use super::section_trait::SectionFocusEvent;
+use crate::labels::audit_save_failed_copy;
 use crate::settings::layout;
 use dbflux_app::keymap::Modifiers;
 use dbflux_components::controls::{
@@ -89,7 +90,7 @@ impl AuditSection {
         let log_level_index = Self::log_level_index(&settings.log_capture_min_level);
         let dropdown_log_level = cx.new(move |_cx| {
             Dropdown::new("audit-log-capture-level")
-                .placeholder("Level")
+                .placeholder(dbflux_i18n::t!("settings.audit.placeholder_level"))
                 .items(Self::log_level_items())
                 .selected_index(Some(log_level_index))
         });
@@ -324,9 +325,10 @@ impl AuditSection {
         let retention_days = match retention_str.parse::<u32>() {
             Ok(value) if value >= 1 => value,
             _ => {
-                Toast::error("Retention days must be a number >= 1")
+                let msg = dbflux_i18n::t!("settings.audit.error.retention_days_invalid");
+                Toast::error(msg.clone())
                     .meta_right(now_hms())
-                    .action(copy_action("Retention days must be a number >= 1"))
+                    .action(copy_action(msg))
                     .push(cx);
                 return;
             }
@@ -341,9 +343,10 @@ impl AuditSection {
         let max_detail_bytes = match max_detail_str.parse::<usize>() {
             Ok(value) if value >= 1024 => value,
             _ => {
-                Toast::error("Max detail bytes must be >= 1024")
+                let msg = dbflux_i18n::t!("settings.audit.error.max_detail_bytes_invalid");
+                Toast::error(msg.clone())
                     .meta_right(now_hms())
-                    .action(copy_action("Max detail bytes must be >= 1024"))
+                    .action(copy_action(msg))
                     .push(cx);
                 return;
             }
@@ -358,9 +361,10 @@ impl AuditSection {
         let purge_interval = match purge_interval_str.parse::<u32>() {
             Ok(value) => value,
             _ => {
-                Toast::error("Background purge interval must be a number")
+                let msg = dbflux_i18n::t!("settings.audit.error.purge_interval_invalid");
+                Toast::error(msg.clone())
                     .meta_right(now_hms())
-                    .action(copy_action("Background purge interval must be a number"))
+                    .action(copy_action(msg))
                     .push(cx);
                 return;
             }
@@ -378,13 +382,12 @@ impl AuditSection {
         // (real DB could not be opened), do not allow enabling it. This avoids the
         // write-then-correct pattern that could leave bad persisted state on crash.
         if app_state.is_audit_degraded() && self.settings.enabled {
-            let msg = "Audit cannot be enabled: the audit database could not be opened. \
-                 Please restart the application. If the problem persists, check disk space \
-                 and file permissions for the dbflux data directory.";
-            Toast::error("Audit cannot be enabled")
+            Toast::error(dbflux_i18n::t!("settings.audit.error.cannot_enable"))
                 .meta_right(now_hms())
-                .body(msg)
-                .action(copy_action(format!("Audit cannot be enabled: {}", msg)))
+                .body(dbflux_i18n::t!("settings.audit.error.cannot_enable_body"))
+                .action(copy_action(dbflux_i18n::t!(
+                    "settings.audit.error.cannot_enable_copy"
+                )))
                 .push(cx);
             // Revert to disabled in-memory only; do NOT write — user must uncheck
             // the enabled checkbox and save again to persist a disabled state.
@@ -394,10 +397,10 @@ impl AuditSection {
 
         if let Err(e) = repo.upsert(&self.settings) {
             let body = e.to_string();
-            Toast::error("Failed to save")
+            Toast::error(dbflux_i18n::t!("settings.audit.error.save_failed"))
                 .meta_right(now_hms())
                 .body(body.clone())
-                .action(copy_action(format!("Failed to save: {}", body)))
+                .action(copy_action(audit_save_failed_copy(&body)))
                 .push(cx);
             return;
         }
@@ -416,7 +419,7 @@ impl AuditSection {
 
         self.original_settings = self.settings.clone();
 
-        Toast::success("Audit settings saved.")
+        Toast::success(dbflux_i18n::t!("settings.audit.toast.saved"))
             .meta_right(now_hms())
             .push(cx);
     }
@@ -549,8 +552,8 @@ impl AuditSection {
             .flex_col()
             .overflow_hidden()
             .child(dbflux_components::composites::section_header(
-                "Audit",
-                "Configure global audit event capture and retention",
+                dbflux_i18n::t!("settings.audit.section_title"),
+                dbflux_i18n::t!("settings.audit.section_description"),
                 cx,
             ))
             .child(
@@ -562,36 +565,48 @@ impl AuditSection {
                     .flex()
                     .flex_col()
                     .gap_5()
-                    .child(self.render_audit_group_header("Status", border, muted_fg))
+                    .child(self.render_audit_group_header(
+                        dbflux_i18n::t!("settings.audit.group.status"),
+                        border,
+                        muted_fg,
+                    ))
                     .child(self.render_audit_status_indicator(cx))
-                    .child(self.render_audit_group_header("Enable/Disable", border, muted_fg))
+                    .child(self.render_audit_group_header(
+                        dbflux_i18n::t!("settings.audit.group.enable_disable"),
+                        border,
+                        muted_fg,
+                    ))
                     .child(self.render_audit_checkbox(
                         "audit-enabled",
-                        "Enable global audit",
+                        dbflux_i18n::t!("settings.audit.field.enable_global"),
                         self.settings.enabled,
                         is_at(AuditFormRow::EnableAudit),
                         AuditFormRow::EnableAudit,
                         |this, value| this.settings.enabled = value,
                         cx,
                     ))
-                    .child(self.render_audit_group_header("Capture Settings", border, muted_fg))
+                    .child(self.render_audit_group_header(
+                        dbflux_i18n::t!("settings.audit.group.capture_settings"),
+                        border,
+                        muted_fg,
+                    ))
                     .child(self.render_audit_unsupported_checkbox(
                         "capture-user-actions",
-                        "Capture user actions",
+                        dbflux_i18n::t!("settings.audit.field.capture_user_actions"),
                         self.settings.capture_user_actions,
                         is_at(AuditFormRow::CaptureUserActions),
                         cx,
                     ))
                     .child(self.render_audit_unsupported_checkbox(
                         "capture-system-events",
-                        "Capture system events",
+                        dbflux_i18n::t!("settings.audit.field.capture_system_events"),
                         self.settings.capture_system_events,
                         is_at(AuditFormRow::CaptureSystemEvents),
                         cx,
                     ))
                     .child(self.render_audit_checkbox(
                         "capture-query-text",
-                        "Capture full query text (disable for fingerprints only)",
+                        dbflux_i18n::t!("settings.audit.field.capture_full_query_text"),
                         self.settings.capture_query_text,
                         is_at(AuditFormRow::CaptureQueryText),
                         AuditFormRow::CaptureQueryText,
@@ -600,24 +615,32 @@ impl AuditSection {
                     ))
                     .child(self.render_audit_unsupported_checkbox(
                         "capture-hook-output",
-                        "Capture hook/script output metadata",
+                        dbflux_i18n::t!("settings.audit.field.capture_hook_output"),
                         self.settings.capture_hook_output_metadata,
                         is_at(AuditFormRow::CaptureHookOutputMetadata),
                         cx,
                     ))
-                    .child(self.render_audit_group_header("Privacy", border, muted_fg))
+                    .child(self.render_audit_group_header(
+                        dbflux_i18n::t!("settings.audit.group.privacy"),
+                        border,
+                        muted_fg,
+                    ))
                     .child(self.render_audit_checkbox(
                         "redact-sensitive",
-                        "Redact sensitive values (passwords, tokens, keys)",
+                        dbflux_i18n::t!("settings.audit.field.redact_sensitive"),
                         self.settings.redact_sensitive_values,
                         is_at(AuditFormRow::RedactSensitiveValues),
                         AuditFormRow::RedactSensitiveValues,
                         |this, value| this.settings.redact_sensitive_values = value,
                         cx,
                     ))
-                    .child(self.render_audit_group_header("Retention", border, muted_fg))
+                    .child(self.render_audit_group_header(
+                        dbflux_i18n::t!("settings.audit.group.retention"),
+                        border,
+                        muted_fg,
+                    ))
                     .child(self.render_audit_input_field(
-                        "Retention days",
+                        &dbflux_i18n::t!("settings.audit.field.retention_days"),
                         &self.input_retention_days,
                         is_at(AuditFormRow::RetentionDays),
                         primary,
@@ -625,17 +648,21 @@ impl AuditSection {
                         cx,
                     ))
                     .child(self.render_audit_input_field(
-                        "Max detail bytes",
+                        &dbflux_i18n::t!("settings.audit.field.max_detail_bytes"),
                         &self.input_max_detail_bytes,
                         is_at(AuditFormRow::MaxDetailBytes),
                         primary,
                         AuditFormRow::MaxDetailBytes,
                         cx,
                     ))
-                    .child(self.render_audit_group_header("Purge", border, muted_fg))
+                    .child(self.render_audit_group_header(
+                        dbflux_i18n::t!("settings.audit.group.purge"),
+                        border,
+                        muted_fg,
+                    ))
                     .child(self.render_audit_checkbox(
                         "purge-on-startup",
-                        "Purge old events on startup",
+                        dbflux_i18n::t!("settings.audit.field.purge_on_startup"),
                         self.settings.purge_on_startup,
                         is_at(AuditFormRow::PurgeOnStartup),
                         AuditFormRow::PurgeOnStartup,
@@ -643,16 +670,20 @@ impl AuditSection {
                         cx,
                     ))
                     .child(self.render_audit_input_field(
-                        "Background purge interval (minutes)",
+                        &dbflux_i18n::t!("settings.audit.field.purge_interval_minutes"),
                         &self.input_background_purge_interval,
                         is_at(AuditFormRow::BackgroundPurgeInterval),
                         primary,
                         AuditFormRow::BackgroundPurgeInterval,
                         cx,
                     ))
-                    .child(self.render_audit_group_header("Log Capture", border, muted_fg))
+                    .child(self.render_audit_group_header(
+                        dbflux_i18n::t!("settings.audit.group.log_capture"),
+                        border,
+                        muted_fg,
+                    ))
                     .child(self.render_audit_dropdown(
-                        "Minimum log level captured to audit",
+                        &dbflux_i18n::t!("settings.audit.field.min_log_level"),
                         &self.dropdown_log_level,
                         is_at(AuditFormRow::LogCaptureMinLevel),
                         primary,
@@ -674,19 +705,22 @@ impl AuditSection {
             .child(layout::footer_action_frame(
                 is_save_focused,
                 cx.theme().primary,
-                dbflux_components::controls::Button::new("save-audit", "Save")
-                    .small()
-                    .primary()
-                    .w_full()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.content_focused = true;
-                        this.audit_form_cursor = this
-                            .audit_form_rows()
-                            .iter()
-                            .position(|row| *row == AuditFormRow::SaveButton)
-                            .unwrap_or_default();
-                        this.save_audit_settings(window, cx);
-                    })),
+                dbflux_components::controls::Button::new(
+                    "save-audit",
+                    dbflux_i18n::t!("settings.audit.action.save"),
+                )
+                .small()
+                .primary()
+                .w_full()
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.content_focused = true;
+                    this.audit_form_cursor = this
+                        .audit_form_rows()
+                        .iter()
+                        .position(|row| *row == AuditFormRow::SaveButton)
+                        .unwrap_or_default();
+                    this.save_audit_settings(window, cx);
+                })),
             ))
             .into_any_element()
     }
@@ -765,7 +799,7 @@ impl AuditSection {
 
     fn render_audit_group_header(
         &self,
-        label: &str,
+        label: impl Into<SharedString>,
         border: Hsla,
         _muted_fg: Hsla,
     ) -> impl IntoElement {
@@ -774,7 +808,7 @@ impl AuditSection {
             .pb_1()
             .border_b_1()
             .border_color(border)
-            .child(SubSectionLabel::new(label.to_string()))
+            .child(SubSectionLabel::new(label))
     }
 
     fn render_audit_status_indicator(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -799,11 +833,11 @@ impl AuditSection {
                 theme.muted_foreground
             }))
             .child(div().text_sm().child(if is_degraded {
-                "Audit is degraded (restart required)"
+                dbflux_i18n::t!("settings.audit.status.degraded")
             } else if is_enabled {
-                "Audit is enabled"
+                dbflux_i18n::t!("settings.audit.status.enabled")
             } else {
-                "Audit is disabled"
+                dbflux_i18n::t!("settings.audit.status.disabled")
             }))
     }
 
@@ -811,7 +845,7 @@ impl AuditSection {
     fn render_audit_checkbox(
         &self,
         id: &'static str,
-        label: &'static str,
+        label: impl Into<SharedString>,
         checked: bool,
         is_focused: bool,
         row: AuditFormRow,
@@ -853,7 +887,7 @@ impl AuditSection {
                     cx.notify();
                 },
             )))
-            .child(div().text_sm().child(label))
+            .child(div().text_sm().child(label.into()))
     }
 
     fn render_audit_input_field(
@@ -871,7 +905,7 @@ impl AuditSection {
     fn render_audit_unsupported_checkbox(
         &self,
         id: &'static str,
-        label: &'static str,
+        label: impl Into<SharedString>,
         checked: bool,
         is_focused: bool,
         cx: &mut Context<Self>,
@@ -902,7 +936,9 @@ impl AuditSection {
             )
             .child(Checkbox::new(id).checked(checked))
             .child(Text::muted(label))
-            .child(div().italic().child(Text::dim_secondary("(not yet wired)")))
+            .child(div().italic().child(Text::dim_secondary(dbflux_i18n::t!(
+                "settings.audit.field.not_wired"
+            ))))
     }
 
     /// Internal implementation for input fields; `unsupported` dims the label
@@ -933,7 +969,9 @@ impl AuditSection {
                         Text::label_sm(label.to_string())
                     })
                     .when(unsupported, |this| {
-                        this.child(div().italic().child(Text::dim_secondary("(not yet wired)")))
+                        this.child(div().italic().child(Text::dim_secondary(dbflux_i18n::t!(
+                            "settings.audit.field.not_wired"
+                        ))))
                     }),
             )
             .child(
@@ -966,5 +1004,113 @@ impl AuditSection {
                     })
                     .child(Input::new(input).small().disabled(unsupported)),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    const AUDIT_SECTION_KEYS: &[&str] = &[
+        "settings.audit.placeholder_level",
+        "settings.audit.section_title",
+        "settings.audit.section_description",
+        "settings.audit.group.status",
+        "settings.audit.group.enable_disable",
+        "settings.audit.group.capture_settings",
+        "settings.audit.group.privacy",
+        "settings.audit.group.retention",
+        "settings.audit.group.purge",
+        "settings.audit.group.log_capture",
+        "settings.audit.field.enable_global",
+        "settings.audit.field.capture_user_actions",
+        "settings.audit.field.capture_system_events",
+        "settings.audit.field.capture_full_query_text",
+        "settings.audit.field.capture_hook_output",
+        "settings.audit.field.redact_sensitive",
+        "settings.audit.field.retention_days",
+        "settings.audit.field.max_detail_bytes",
+        "settings.audit.field.purge_on_startup",
+        "settings.audit.field.purge_interval_minutes",
+        "settings.audit.field.min_log_level",
+        "settings.audit.field.not_wired",
+        "settings.audit.action.save",
+        "settings.audit.status.degraded",
+        "settings.audit.status.enabled",
+        "settings.audit.status.disabled",
+        "settings.audit.error.retention_days_invalid",
+        "settings.audit.error.max_detail_bytes_invalid",
+        "settings.audit.error.purge_interval_invalid",
+        "settings.audit.error.cannot_enable",
+        "settings.audit.error.cannot_enable_body",
+        "settings.audit.error.cannot_enable_copy",
+        "settings.audit.error.save_failed",
+        "settings.audit.error.save_failed_copy",
+        "settings.audit.toast.saved",
+    ];
+
+    #[test]
+    fn audit_settings_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in AUDIT_SECTION_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn audit_section_title_differs_between_locales() {
+        let english = dbflux_i18n::t!("settings.audit.section_title", locale = "en");
+        let spanish = dbflux_i18n::t!("settings.audit.section_title", locale = "es");
+
+        assert_eq!(english, "Audit");
+        assert_eq!(spanish, "Auditoría");
+        assert_ne!(english, spanish);
+    }
+
+    #[test]
+    fn audit_status_labels_differ_between_locales() {
+        let degraded_en = dbflux_i18n::t!("settings.audit.status.degraded", locale = "en");
+        let degraded_es = dbflux_i18n::t!("settings.audit.status.degraded", locale = "es");
+        let enabled_en = dbflux_i18n::t!("settings.audit.status.enabled", locale = "en");
+        let enabled_es = dbflux_i18n::t!("settings.audit.status.enabled", locale = "es");
+        let disabled_en = dbflux_i18n::t!("settings.audit.status.disabled", locale = "en");
+        let disabled_es = dbflux_i18n::t!("settings.audit.status.disabled", locale = "es");
+
+        assert_eq!(degraded_en, "Audit is degraded (restart required)");
+        assert_eq!(enabled_en, "Audit is enabled");
+        assert_eq!(disabled_en, "Audit is disabled");
+        assert_ne!(degraded_en, degraded_es);
+        assert_ne!(enabled_en, enabled_es);
+        assert_ne!(disabled_en, disabled_es);
+    }
+
+    #[test]
+    fn audit_group_headers_differ_between_locales() {
+        let group_keys = [
+            "settings.audit.group.status",
+            "settings.audit.group.enable_disable",
+            "settings.audit.group.capture_settings",
+            "settings.audit.group.privacy",
+            "settings.audit.group.retention",
+            "settings.audit.group.purge",
+            "settings.audit.group.log_capture",
+        ];
+
+        for key in group_keys {
+            let english = dbflux_i18n::t!(key, locale = "en");
+            let spanish = dbflux_i18n::t!(key, locale = "es");
+
+            assert_ne!(english, spanish, "group header {key} did not diverge");
+        }
     }
 }
