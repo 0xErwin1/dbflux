@@ -1,7 +1,7 @@
 //! Translated label helpers for sidebar chrome (tabs, footer, tree folders).
 
 use dbflux_app::ExternalDriverStage;
-use dbflux_core::{DatabaseCategory, RelationKind};
+use dbflux_core::{DatabaseCategory, PipelineState, RelationKind};
 
 /// Translated label for a schema-tree container folder, e.g. `"Tables (12)"`.
 pub(crate) fn container_folder_label(category: DatabaseCategory, count: usize) -> String {
@@ -446,6 +446,64 @@ pub(crate) fn external_driver_unavailable_label(
         socket_id = socket_id,
         summary = summary
     )
+}
+
+/// Translated task-panel label for an in-flight pipeline connect attempt,
+/// e.g. `"Connecting to prod-db (pipeline)"`.
+pub(crate) fn pipeline_connecting_task_label(name: &str) -> String {
+    dbflux_i18n::t!("sidebar.task.pipeline.connecting", name = name)
+}
+
+/// Translated task-detail line appended when a pipeline connect attempt is
+/// cancelled.
+pub(crate) fn pipeline_cancelled_detail_label() -> String {
+    dbflux_i18n::t!("sidebar.task.pipeline.cancelled")
+}
+
+/// Translated task-detail line appended when a pipeline connect attempt
+/// fails, e.g. `"Pipeline failed: connection refused"`.
+pub(crate) fn pipeline_failed_detail_label(error: &str) -> String {
+    dbflux_i18n::t!("sidebar.task.pipeline.failed", error = error)
+}
+
+/// Translated task-detail line appended when a pipeline connect attempt
+/// completes successfully.
+pub(crate) fn pipeline_completed_detail_label() -> String {
+    dbflux_i18n::t!("sidebar.task.pipeline.completed")
+}
+
+/// Translated task-panel label for the current pipeline stage, shown as a
+/// subtask under the pipeline connect task. Returns `None` for stages with
+/// no user-facing subtask (idle and terminal states).
+pub(crate) fn pipeline_stage_label(state: &PipelineState) -> Option<String> {
+    match state {
+        PipelineState::Idle => None,
+        PipelineState::Authenticating { provider_name } => Some(dbflux_i18n::t!(
+            "sidebar.task.pipeline.stage.authenticating",
+            provider = provider_name
+        )),
+        PipelineState::WaitingForLogin { provider_name, .. } => Some(dbflux_i18n::t!(
+            "sidebar.task.pipeline.stage.waiting_for_login",
+            provider = provider_name
+        )),
+        PipelineState::ResolvingValues { total, resolved } => Some(dbflux_i18n::t!(
+            "sidebar.task.pipeline.stage.resolving_values",
+            resolved = resolved,
+            total = total
+        )),
+        PipelineState::OpeningAccess { method_label } => Some(dbflux_i18n::t!(
+            "sidebar.task.pipeline.stage.opening_access",
+            method = method_label
+        )),
+        PipelineState::Connecting { driver_name } => Some(dbflux_i18n::t!(
+            "sidebar.task.pipeline.stage.connecting",
+            driver = driver_name
+        )),
+        PipelineState::FetchingSchema => Some(dbflux_i18n::t!(
+            "sidebar.task.pipeline.stage.fetching_schema"
+        )),
+        PipelineState::Connected | PipelineState::Failed { .. } | PipelineState::Cancelled => None,
+    }
 }
 
 #[cfg(test)]
@@ -1084,5 +1142,152 @@ mod tests {
         let spanish = dbflux_i18n::t!("sidebar.toast.connected.many", locale = "es");
 
         assert_ne!(english, spanish);
+    }
+
+    const D1B_KEYS: [&str; 10] = [
+        "sidebar.task.pipeline.connecting",
+        "sidebar.task.pipeline.cancelled",
+        "sidebar.task.pipeline.failed",
+        "sidebar.task.pipeline.completed",
+        "sidebar.task.pipeline.stage.authenticating",
+        "sidebar.task.pipeline.stage.waiting_for_login",
+        "sidebar.task.pipeline.stage.resolving_values",
+        "sidebar.task.pipeline.stage.opening_access",
+        "sidebar.task.pipeline.stage.connecting",
+        "sidebar.task.pipeline.stage.fetching_schema",
+    ];
+
+    #[test]
+    fn d1b_keys_resolve_in_both_locales() {
+        for key in D1B_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key, "missing translation for {locale}.{key}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "translation fell back to the miss sentinel for {locale}.{key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sidebar_task_pipeline_connecting_diverges_between_locales() {
+        let english = dbflux_i18n::t!("sidebar.task.pipeline.connecting", locale = "en");
+        let spanish = dbflux_i18n::t!("sidebar.task.pipeline.connecting", locale = "es");
+
+        assert_ne!(english, spanish);
+    }
+
+    use dbflux_core::PipelineState;
+
+    #[test]
+    fn pipeline_stage_label_covers_all_variants() {
+        assert_eq!(
+            super::pipeline_stage_label(&PipelineState::Idle),
+            None,
+            "idle has no subtask label"
+        );
+        assert_eq!(
+            super::pipeline_stage_label(&PipelineState::Connected),
+            None,
+            "connected has no subtask label"
+        );
+        assert_eq!(
+            super::pipeline_stage_label(&PipelineState::Cancelled),
+            None,
+            "cancelled has no subtask label"
+        );
+        assert_eq!(
+            super::pipeline_stage_label(&PipelineState::Failed {
+                stage: "driver_connect".to_string(),
+                error: "boom".to_string(),
+            }),
+            None,
+            "failed has no subtask label"
+        );
+
+        let authenticating = super::pipeline_stage_label(&PipelineState::Authenticating {
+            provider_name: "aws-sso".to_string(),
+        })
+        .expect("authenticating has a subtask label");
+        assert_eq!(
+            authenticating,
+            dbflux_i18n::t!(
+                "sidebar.task.pipeline.stage.authenticating",
+                provider = "aws-sso"
+            )
+        );
+
+        let waiting_for_login = super::pipeline_stage_label(&PipelineState::WaitingForLogin {
+            provider_name: "aws-sso".to_string(),
+            verification_url: None,
+        })
+        .expect("waiting_for_login has a subtask label");
+        assert_eq!(
+            waiting_for_login,
+            dbflux_i18n::t!(
+                "sidebar.task.pipeline.stage.waiting_for_login",
+                provider = "aws-sso"
+            )
+        );
+
+        let resolving_values = super::pipeline_stage_label(&PipelineState::ResolvingValues {
+            total: 3,
+            resolved: 1,
+        })
+        .expect("resolving_values has a subtask label");
+        assert_eq!(
+            resolving_values,
+            dbflux_i18n::t!(
+                "sidebar.task.pipeline.stage.resolving_values",
+                resolved = 1,
+                total = 3
+            )
+        );
+
+        let opening_access = super::pipeline_stage_label(&PipelineState::OpeningAccess {
+            method_label: "SSH tunnel".to_string(),
+        })
+        .expect("opening_access has a subtask label");
+        assert_eq!(
+            opening_access,
+            dbflux_i18n::t!(
+                "sidebar.task.pipeline.stage.opening_access",
+                method = "SSH tunnel"
+            )
+        );
+
+        let connecting = super::pipeline_stage_label(&PipelineState::Connecting {
+            driver_name: "PostgreSQL".to_string(),
+        })
+        .expect("connecting has a subtask label");
+        assert_eq!(
+            connecting,
+            dbflux_i18n::t!(
+                "sidebar.task.pipeline.stage.connecting",
+                driver = "PostgreSQL"
+            )
+        );
+
+        let fetching_schema = super::pipeline_stage_label(&PipelineState::FetchingSchema)
+            .expect("fetching_schema has a subtask label");
+        assert_eq!(
+            fetching_schema,
+            dbflux_i18n::t!("sidebar.task.pipeline.stage.fetching_schema")
+        );
+    }
+
+    #[test]
+    fn pipeline_failed_detail_label_includes_the_error() {
+        let label = super::pipeline_failed_detail_label("connection refused");
+
+        assert!(label.contains("connection refused"));
+        assert_eq!(
+            label,
+            dbflux_i18n::t!("sidebar.task.pipeline.failed", error = "connection refused")
+        );
     }
 }

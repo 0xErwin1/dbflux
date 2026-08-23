@@ -6,31 +6,8 @@ use dbflux_ui_base::toast::PendingToast;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
 use std::sync::Arc;
 
-fn pipeline_stage_task_description(state: &PipelineState) -> Option<String> {
-    match state {
-        PipelineState::Idle => None,
-        PipelineState::Authenticating { provider_name } => {
-            Some(format!("Pipeline: Authenticating ({provider_name})"))
-        }
-        PipelineState::WaitingForLogin { provider_name, .. } => {
-            Some(format!("Pipeline: Waiting for {provider_name} login"))
-        }
-        PipelineState::ResolvingValues { total, resolved } => {
-            Some(format!("Pipeline: Resolving values ({resolved}/{total})"))
-        }
-        PipelineState::OpeningAccess { method_label } => {
-            Some(format!("Pipeline: Opening access ({method_label})"))
-        }
-        PipelineState::Connecting { driver_name } => {
-            Some(format!("Pipeline: Connecting driver ({driver_name})"))
-        }
-        PipelineState::FetchingSchema => Some("Pipeline: Fetching schema".to_string()),
-        PipelineState::Connected | PipelineState::Failed { .. } | PipelineState::Cancelled => None,
-    }
-}
-
 fn pipeline_stage_task_detail_line(state: &PipelineState) -> Option<String> {
-    pipeline_stage_task_description(state).map(|description| format!("> {description}"))
+    crate::labels::pipeline_stage_label(state).map(|description| format!("> {description}"))
 }
 
 impl Sidebar {
@@ -46,11 +23,17 @@ impl Sidebar {
             hook_context,
         ) = match self.app_state.update(cx, |state, _cx| {
             if state.is_operation_pending(profile_id, None) {
-                return Err(("Connection already pending".to_string(), false));
+                return Err((
+                    crate::labels::connection_already_pending_toast_label(),
+                    false,
+                ));
             }
 
             if !state.start_pending_operation(profile_id, None) {
-                return Err(("Operation started by another thread".to_string(), false));
+                return Err((
+                    crate::labels::operation_started_elsewhere_toast_label(),
+                    false,
+                ));
             }
 
             let cancel = CancelToken::new();
@@ -102,7 +85,7 @@ impl Sidebar {
                 state.finish_pending_operation(profile_id, None);
             });
             self.pending_toast = Some(PendingToast {
-                message: "Too many background tasks running, please wait".to_string(),
+                message: crate::labels::background_task_limit_toast_label(),
                 is_error: true,
             });
             self.refresh_tree(cx);
@@ -113,7 +96,7 @@ impl Sidebar {
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
             let result = state.start_task(
                 TaskKind::Connect,
-                format!("Connecting to {} (pipeline)", profile_name),
+                crate::labels::pipeline_connecting_task_label(&profile_name),
             );
             cx.emit(dbflux_ui_base::AppStateChanged);
             result
@@ -138,7 +121,7 @@ impl Sidebar {
 
                 let state = watcher.borrow().clone();
 
-                if let Some(description) = pipeline_stage_task_description(&state)
+                if let Some(description) = crate::labels::pipeline_stage_label(&state)
                     && current_stage
                         .as_ref()
                         .is_none_or(|(active, _)| active != &description)
@@ -183,20 +166,33 @@ impl Sidebar {
                             if let Some((_, stage_task_id)) = current_stage.take() {
                                 match &terminal_state {
                                     PipelineState::Cancelled => {
-                                        app_state
-                                            .append_task_details(task_id, "Pipeline cancelled\n");
+                                        app_state.append_task_details(
+                                            task_id,
+                                            format!(
+                                                "{}\n",
+                                                crate::labels::pipeline_cancelled_detail_label()
+                                            ),
+                                        );
                                         app_state.cancel_task(stage_task_id);
                                     }
                                     PipelineState::Failed { error, .. } => {
                                         app_state.append_task_details(
                                             task_id,
-                                            format!("Pipeline failed: {error}\n"),
+                                            format!(
+                                                "{}\n",
+                                                crate::labels::pipeline_failed_detail_label(error)
+                                            ),
                                         );
                                         app_state.fail_task(stage_task_id, error.clone());
                                     }
                                     _ => {
-                                        app_state
-                                            .append_task_details(task_id, "Pipeline completed\n");
+                                        app_state.append_task_details(
+                                            task_id,
+                                            format!(
+                                                "{}\n",
+                                                crate::labels::pipeline_completed_detail_label()
+                                            ),
+                                        );
                                         app_state.complete_task(stage_task_id);
                                     }
                                 }
@@ -305,14 +301,17 @@ impl Sidebar {
                         }
 
                         app_state.update(cx, |state, cx| {
-                            state.fail_task(task_id, "Connection hook cancelled");
+                            state.fail_task(
+                                task_id,
+                                crate::labels::connection_hook_cancelled_task_label(),
+                            );
                             state.finish_pending_operation(profile_id, None);
                             cx.emit(dbflux_ui_base::AppStateChanged);
                         });
 
                         sidebar.update(cx, |sidebar, cx| {
                             sidebar.pending_toast = Some(PendingToast {
-                                message: "Connection cancelled by hook".to_string(),
+                                message: crate::labels::connection_cancelled_by_hook_toast_label(),
                                 is_error: true,
                             });
                             sidebar.refresh_tree(cx);
@@ -577,14 +576,18 @@ impl Sidebar {
                         }
 
                         app_state.update(cx, |state, cx| {
-                            state.fail_task(task_id, "Post-connect hook cancelled");
+                            state.fail_task(
+                                task_id,
+                                crate::labels::post_connect_hook_cancelled_task_label(),
+                            );
                             state.finish_pending_operation(profile_id, None);
                             cx.emit(dbflux_ui_base::AppStateChanged);
                         });
 
                         sidebar.update(cx, |sidebar, cx| {
                             sidebar.pending_toast = Some(PendingToast {
-                                message: "Connection cancelled by post-connect hook".to_string(),
+                                message:
+                                    crate::labels::connection_cancelled_by_post_connect_hook_toast_label(),
                                 is_error: true,
                             });
                             sidebar.refresh_tree(cx);
@@ -669,16 +672,8 @@ impl Sidebar {
                     cx.notify();
                 });
 
-                let message = if hook_warnings.is_empty() {
-                    format!("Connected to {}", connected_name)
-                } else {
-                    format!(
-                        "Connected to {} (with {} hook warning{})",
-                        connected_name,
-                        hook_warnings.len(),
-                        if hook_warnings.len() == 1 { "" } else { "s" }
-                    )
-                };
+                let message =
+                    crate::labels::connected_toast_label(&connected_name, hook_warnings.len());
 
                 sidebar.update(cx, |sidebar, cx| {
                     sidebar.pending_toast = Some(PendingToast {
