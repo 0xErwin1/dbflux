@@ -6,16 +6,25 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
-* **UI language setting (#360)** — Settings → General gains a Language
+* **Spanish user interface (#360)** — Settings → General gains a Language
   control with System, English, and Spanish. System follows the OS locale
   and falls back to English when that locale is not supported; the choice
   is persisted and applied on the next start, and the control shows a
-  permanent note saying so. This release translates the General section
-  only; the rest of the interface stays in English and is converted crate
-  by crate in follow-up changes. Database terms (query, schema, WHERE, …)
-  stay in English inside Spanish text. The catalogs live in
-  `crates/dbflux_i18n/locales/{en,es}.yml`, one file per locale, so a
-  translation platform can consume them later.
+  permanent note saying so. The whole application is translated: shared
+  components and modals, the connections and scripts sidebar, the command
+  palette, every document type (data grid and its context menus, query
+  builder, code editor and scripts, key-value, audit viewer, schema diff,
+  charts and dashboards, object browser and editor, buckets table, the
+  import, export and migrate wizards), the workspace shell (status bar,
+  tasks panel, shutdown overlay, login modal, toasts), the settings window
+  (general, keybindings, hooks, auth profiles, drivers, MCP, audit, RPC
+  services, SSH tunnels, proxies) and the connection manager (all tabs,
+  import panel, export modal). Database and protocol vocabulary (query,
+  schema, WHERE, SQL, JSON, CSV, driver names, AWS terms, statistic
+  names, key chords) stays in English inside Spanish text; persisted
+  names and audit records are never translated. The catalogs live in
+  `crates/dbflux_i18n/locales/{en,es}.yml`, one file per locale, and are
+  managed through Weblate.
 
 ## [0.7.0] - 2026-07-31
 
