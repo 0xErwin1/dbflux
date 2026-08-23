@@ -5,6 +5,8 @@ import sitemap from '@astrojs/sitemap';
 import { routeForRepoPath, titleForRepoPath } from './src/data/nav';
 import { DOCS_MODE, ORIGIN } from './src/data/site';
 import { hostRedirects } from './src/integrations/host-redirects';
+import { DEFAULT_LOCALE } from './src/i18n';
+import type { Locale } from './src/i18n';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -12,6 +14,45 @@ const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 function textOf(node: any): string {
   if (node.type === 'text') return node.value;
   return (node.children ?? []).map(textOf).join('');
+}
+
+/**
+ * The repository root a rendered doc file was materialised from, and the
+ * locale it renders in.
+ *
+ * `content.config.ts` mirrors each version's repository tree under
+ * `.versions/<version>/` (see `scripts/fetch-docs.mjs`), so a source file's
+ * `fromDir` sits inside that per-version mirror, not inside the actual
+ * checkout `REPO_ROOT` points at. Resolving a relative link against
+ * `REPO_ROOT` therefore left `web/.versions/<version>/` in the computed repo
+ * path, which never matched `routeForRepoPath`'s patterns and silently fell
+ * back to a broken `github.com/.../blob/main/web/.versions/...` link. The
+ * per-version mirror root is the correct base for that resolution.
+ *
+ * The locale is read the same way: `docs/es/<page>.md` inside the mirror is
+ * the Spanish sibling `content.config.ts` loads under the `es/` id segment.
+ * The version is the mirror's own directory name, needed so a link written
+ * inside a version-exclusive page (e.g. a driver only shipped in `nightly`)
+ * resolves within that same version instead of silently falling back to the
+ * current release.
+ */
+function versionContext(
+  filePath: string,
+): { root: string; locale: Locale; version: string } | null {
+  const marker = '/.versions/';
+  const markerIndex = filePath.indexOf(marker);
+  if (markerIndex === -1) return null;
+
+  const afterMarker = filePath.slice(markerIndex + marker.length);
+  const versionEnd = afterMarker.indexOf('/');
+  if (versionEnd === -1) return null;
+
+  const version = afterMarker.slice(0, versionEnd);
+  const root = filePath.slice(0, markerIndex + marker.length) + version;
+  const repoPath = afterMarker.slice(versionEnd + 1);
+  const locale: Locale = repoPath.startsWith('docs/es/') ? 'es' : 'en';
+
+  return { root, locale, version };
 }
 
 /**
@@ -26,7 +67,12 @@ function textOf(node: any): string {
  */
 function rehypeRepoLinks() {
   return (tree: any, file: any) => {
-    const fromDir = dirname(file.path ?? file.history?.[0] ?? '');
+    const filePath = file.path ?? file.history?.[0] ?? '';
+    const context = versionContext(filePath);
+    const root = context?.root ?? REPO_ROOT;
+    const locale = context?.locale ?? DEFAULT_LOCALE;
+    const version = context?.version;
+    const fromDir = dirname(filePath);
 
     const visit = (node: any) => {
       if (node.type === 'element' && node.tagName === 'a') {
@@ -36,9 +82,10 @@ function rehypeRepoLinks() {
           const [target, hash] = href.split('#');
 
           if (target.endsWith('.md')) {
-            const repoPath = relative(REPO_ROOT, resolve(fromDir, target)).split('\\').join('/');
+            const repoPath = relative(root, resolve(fromDir, target)).split('\\').join('/');
 
-            node.properties.href = routeForRepoPath(repoPath) + (hash ? `#${hash}` : '');
+            node.properties.href =
+              routeForRepoPath(repoPath, locale, version) + (hash ? `#${hash}` : '');
 
             // Only relabel when the text is the path itself. A link already
             // written as a sentence is the author's wording and stays.
@@ -69,7 +116,7 @@ function rehypeRepoLinks() {
           return {
             type: 'element',
             tagName: 'a',
-            properties: { href: routeForRepoPath(repoPath) },
+            properties: { href: routeForRepoPath(repoPath, locale, version) },
             children: [{ type: 'text', value: title }],
           };
         });

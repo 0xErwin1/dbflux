@@ -2,7 +2,7 @@
 import { getCollection, render } from 'astro:content';
 import DocsLayout from '../layouts/DocsLayout.astro';
 import DocsIndex from '../components/DocsIndex.astro';
-import { docTitle, pathsForVersion, splitId } from '../data/docs';
+import { docTitle, pathsForVersion, repoPathFor, splitId } from '../data/docs';
 import { CURRENT, VERSIONS, docsRoute, versionById, versionLabel } from '../data/versions';
 import { DOCS_MODE } from '../data/site';
 import { DEFAULT_LOCALE, LOCALES } from '../i18n';
@@ -105,7 +105,7 @@ const description = doc
   headings={rendered?.headings ?? []}
   title={title}
   description={description}
-  editPath={doc?.filePath?.split('/').pop()}
+  editPath={doc?.filePath ? repoPathFor(doc.filePath, versionId) : undefined}
   locale={locale}
   translated={translated}
 >
