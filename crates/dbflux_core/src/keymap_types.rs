@@ -368,6 +368,7 @@ impl Command {
     /// Intended for exhaustive coverage in tests (id uniqueness, translation
     /// coverage) across `dbflux_core` and downstream UI crates.
     pub fn all_variants() -> Vec<Command> {
+        #[cfg_attr(not(feature = "mcp"), allow(unused_mut))]
         let mut variants = vec![
             Command::ToggleCommandPalette,
             Command::NewQueryTab,
