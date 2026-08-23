@@ -29,6 +29,15 @@ access:
   value_no: "No"
   no_proxy_placeholder: (none)
   edit_in_settings: Edit in Settings
+  use_ssh_tunnel: Use SSH Tunnel
+  ssh_tunnel_label: SSH Tunnel
+  ssh_server_saved: SSH Server (saved tunnel)
+  test_ssh: Test SSH
+  testing_ssh: Testing SSH connection...
+  ssh_success: SSH connection successful
+  ssh_failed: SSH connection failed
+  save_as_tunnel: Save as tunnel
+  ssh_disabled_hint: Enable SSH tunnel to configure connection through a bastion host
 chart:
   axis_bar:
     group: Group
@@ -1052,6 +1061,29 @@ sql_preview:
     refresh: Refresh
     copy: Copy
     close: Close
+ssh:
+  agent_default: SSH Agent / default
+  authentication: Authentication
+  private_key: Private Key
+  password: Password
+  private_key_path: Private Key Path
+  browse: Browse
+  key_passphrase: Key Passphrase
+  save: Save
+  passphrase_hint: Leave empty if key has no passphrase
+  ssh_password: SSH Password
+  ssh_server: SSH Server
+  host: Host
+  port: Port
+  username: Username
+  host_user_required: Host and user are required
+  private_key_short: Private key
+  update: Update
+  create: Create
+  test: Test
+  private_key_with_path: "Private Key (%{path})"
+  private_key_hint: "Leave empty to use SSH agent or default keys (~/.ssh/id_rsa)"
+  auth_label: Auth
 sso_wizard:
   title: AWS SSO Wizard
   step:

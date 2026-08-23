@@ -29,6 +29,15 @@ access:
   value_no: "No"
   no_proxy_placeholder: (ninguno)
   edit_in_settings: Editar en Ajustes
+  use_ssh_tunnel: Usar túnel SSH
+  ssh_tunnel_label: Túnel SSH
+  ssh_server_saved: Servidor SSH (túnel guardado)
+  test_ssh: Probar SSH
+  testing_ssh: Probando conexión SSH...
+  ssh_success: Conexión SSH correcta
+  ssh_failed: Fallo en la conexión SSH
+  save_as_tunnel: Guardar como túnel
+  ssh_disabled_hint: Habilita el túnel SSH para configurar la conexión a través de un host bastión
 chart:
   axis_bar:
     group: Grupo
@@ -1052,6 +1061,29 @@ sql_preview:
     refresh: Actualizar
     copy: Copiar
     close: Cerrar
+ssh:
+  agent_default: Agente SSH / predeterminado
+  authentication: Autenticación
+  private_key: Clave privada
+  password: Contraseña
+  private_key_path: Ruta de la clave privada
+  browse: Examinar
+  key_passphrase: Frase de la clave
+  save: Guardar
+  passphrase_hint: Déjala vacía si la clave no tiene frase
+  ssh_password: Contraseña SSH
+  ssh_server: Servidor SSH
+  host: Host
+  port: Puerto
+  username: Usuario
+  host_user_required: El host y el usuario son obligatorios
+  private_key_short: Clave privada
+  update: Actualizar
+  create: Crear
+  test: Probar
+  private_key_with_path: "Clave privada (%{path})"
+  private_key_hint: "Déjala vacía para usar el agente SSH o las claves predeterminadas (~/.ssh/id_rsa)"
+  auth_label: Autenticación
 sso_wizard:
   title: Asistente de AWS SSO
   step:

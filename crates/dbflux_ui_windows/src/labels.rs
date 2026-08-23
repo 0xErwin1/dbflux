@@ -98,13 +98,18 @@ pub(crate) fn access_proxy_disabled_label(name: &str) -> String {
     dbflux_i18n::t!("access.proxy_disabled_label", name = name)
 }
 
+/// Formats the "Private Key (<path>)" label shown for a saved SSH tunnel's private key auth.
+pub(crate) fn ssh_private_key_with_path(path: &str) -> String {
+    dbflux_i18n::t!("ssh.private_key_with_path", path = path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         access_proxy_disabled_label, hooks_create_dir_failed, hooks_delete_message,
         hooks_delete_unreadable_message, hooks_duplicate_id, hooks_env_pair_invalid,
         hooks_form_interpreter_hint, hooks_interpreter_auto_label, hooks_interpreter_missing,
-        hooks_open_script_failed, hooks_write_script_failed,
+        hooks_open_script_failed, hooks_write_script_failed, ssh_private_key_with_path,
     };
 
     #[test]
@@ -188,5 +193,12 @@ mod tests {
         let message = access_proxy_disabled_label("corporate-proxy");
 
         assert_eq!(message, "corporate-proxy (disabled)");
+    }
+
+    #[test]
+    fn ssh_private_key_with_path_embeds_key_path() {
+        let message = ssh_private_key_with_path("~/.ssh/id_ed25519");
+
+        assert_eq!(message, "Private Key (~/.ssh/id_ed25519)");
     }
 }
