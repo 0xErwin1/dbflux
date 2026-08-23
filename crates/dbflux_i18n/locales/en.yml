@@ -70,6 +70,44 @@ common:
       start_after_end: Start time must be before end time
       no_date_range: No date range selected
       incomplete_time_selection: Incomplete time selection
+charts:
+  default_import_name: Imported Dashboard
+  orphaned_profile_label: (orphaned)
+  status:
+    loading_namespaces: Loading metric namespaces
+    loading_metrics: "Loading metrics for %{namespace}"
+  toast:
+    chart_not_found: Saved chart not found
+    dashboard_not_found: Dashboard not found
+    connection_not_found: Connection not found for this dashboard.
+    add_profile_first: Add a connection profile before creating a dashboard.
+    import_success: "Imported %{count} panels into a new dashboard."
+    panel_already_exists: "A panel for %{namespace}/%{metric} is already in this dashboard"
+  error:
+    cannot_open_chart: "Cannot open chart: %{error}"
+    rescale_failed: Failed to rescale panel to 12-column grid
+    no_active_connection_import: "No active connection — connect to a profile before importing."
+    import_unsupported: The active connection does not support dashboard import.
+    import_failed: "Dashboard import failed: %{error}"
+    persist_import_chart_failed: "Failed to persist imported chart '%{name}'"
+    persist_import_dashboard_failed: "Failed to persist imported dashboard '%{name}'"
+    persist_import_panels_failed: Failed to persist imported dashboard panels
+    save_dashboard_failed: "Failed to save dashboard '%{name}': %{message}"
+    browsing_unsupported: The connection does not support dashboard browsing.
+    parse_unsupported: The connection cannot parse dashboards.
+    remote_parse_failed: "Dashboard parse failed: %{error}"
+    create_dashboard_failed: "Failed to create dashboard: %{error}"
+    delete_dashboard_failed: "Failed to delete dashboard: %{error}"
+    duplicate_dashboard_failed: "Failed to duplicate dashboard: %{error}"
+    rename_failed: "Failed to rename: %{error}"
+    delete_chart_failed: "Failed to delete saved chart: %{error}"
+    duplicate_chart_failed: "Failed to duplicate saved chart: %{error}"
+    load_namespaces_failed: "Failed to load metric namespaces: %{error}"
+    load_metrics_failed: "Failed to load metrics: %{error}"
+    persist_chart_for_panel_failed: "Failed to persist chart '%{name}' for new panel"
+    add_panel_failed: "Failed to add panel: %{error}"
+    persist_metric_chart_for_panel_failed: "Failed to persist metric chart '%{name}' for new panel"
+    add_panels_failed: "Failed to add panels: %{error}"
 components:
   json_editor:
     empty_error: Document cannot be empty
@@ -1206,6 +1244,29 @@ hooks:
   tab:
     intro: Select reusable hooks configured in Settings -> Hooks
     lua_process_run_note: Selected hook enables Lua process.run and can execute external programs with your user permissions
+login:
+  window_title: Connection Flow
+  field:
+    start_url: Start URL
+  action:
+    open_browser: Open Browser
+    copy_url: Copy URL
+    cancel: Cancel
+    close: Close
+    open_auth_profiles: Open Auth Profiles
+  banner:
+    connection_failed: Connection failed
+    completed: Login completed
+    closing: Authentication succeeded. Closing this dialog...
+  body:
+    sign_in_prompt: 'Sign in with %{provider} to continue connecting "%{profile}".'
+    instructions: Open the login URL in your browser and finish authentication. DBFlux will continue automatically once the login completes.
+    elapsed: "Login can take up to 5 minutes. Elapsed: %{seconds}s"
+    browser_open_failed: "Could not open browser automatically. Open the URL manually. (%{error}; fallback failed: %{fallback_error})"
+  error:
+    timed_out: Login timed out after 5 minutes
+    no_url: No login URL is available for this provider.
+    no_url_provided: Login URL not provided by provider
 modals:
   active_query:
     title: Active query running

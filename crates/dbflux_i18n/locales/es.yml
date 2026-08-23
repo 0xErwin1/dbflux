@@ -70,6 +70,44 @@ common:
       start_after_end: La hora de inicio debe ser anterior a la hora de fin
       no_date_range: No se seleccionó un rango de fechas
       incomplete_time_selection: Selección de hora incompleta
+charts:
+  default_import_name: Imported Dashboard
+  orphaned_profile_label: (huérfano)
+  status:
+    loading_namespaces: Cargando namespaces de métricas
+    loading_metrics: "Cargando métricas de %{namespace}"
+  toast:
+    chart_not_found: No se encontró el gráfico guardado
+    dashboard_not_found: No se encontró el dashboard
+    connection_not_found: No se encontró la conexión de este dashboard.
+    add_profile_first: Agrega un perfil de conexión antes de crear un dashboard.
+    import_success: "Se importaron %{count} paneles en un nuevo dashboard."
+    panel_already_exists: "Ya existe un panel para %{namespace}/%{metric} en este dashboard"
+  error:
+    cannot_open_chart: "No se pudo abrir el gráfico: %{error}"
+    rescale_failed: No se pudo reescalar el panel a la cuadrícula de 12 columnas
+    no_active_connection_import: "No hay conexión activa. Conéctate a un perfil antes de importar."
+    import_unsupported: La conexión activa no admite la importación de dashboards.
+    import_failed: "Fallo en la importación del dashboard: %{error}"
+    persist_import_chart_failed: "No se pudo guardar el gráfico importado '%{name}'"
+    persist_import_dashboard_failed: "No se pudo guardar el dashboard importado '%{name}'"
+    persist_import_panels_failed: No se pudieron guardar los paneles del dashboard importado
+    save_dashboard_failed: "No se pudo guardar el dashboard '%{name}': %{message}"
+    browsing_unsupported: La conexión no admite la exploración de dashboards.
+    parse_unsupported: La conexión no puede interpretar dashboards.
+    remote_parse_failed: "Fallo al interpretar el dashboard: %{error}"
+    create_dashboard_failed: "No se pudo crear el dashboard: %{error}"
+    delete_dashboard_failed: "No se pudo eliminar el dashboard: %{error}"
+    duplicate_dashboard_failed: "No se pudo duplicar el dashboard: %{error}"
+    rename_failed: "No se pudo renombrar: %{error}"
+    delete_chart_failed: "No se pudo eliminar el gráfico guardado: %{error}"
+    duplicate_chart_failed: "No se pudo duplicar el gráfico guardado: %{error}"
+    load_namespaces_failed: "No se pudieron cargar los namespaces de métricas: %{error}"
+    load_metrics_failed: "No se pudieron cargar las métricas: %{error}"
+    persist_chart_for_panel_failed: "No se pudo guardar el gráfico '%{name}' del nuevo panel"
+    add_panel_failed: "No se pudo agregar el panel: %{error}"
+    persist_metric_chart_for_panel_failed: "No se pudo guardar el gráfico de métrica '%{name}' del nuevo panel"
+    add_panels_failed: "No se pudieron agregar los paneles: %{error}"
 components:
   json_editor:
     empty_error: El documento no puede estar vacío
@@ -1206,6 +1244,29 @@ hooks:
   tab:
     intro: Selecciona hooks reutilizables configurados en Ajustes -> Hooks
     lua_process_run_note: El hook seleccionado habilita Lua process.run y puede ejecutar programas externos con tus permisos de usuario
+login:
+  window_title: Flujo de conexión
+  field:
+    start_url: URL de inicio
+  action:
+    open_browser: Abrir navegador
+    copy_url: Copiar URL
+    cancel: Cancelar
+    close: Cerrar
+    open_auth_profiles: Abrir perfiles de autenticación
+  banner:
+    connection_failed: Fallo en la conexión
+    completed: Inicio de sesión completado
+    closing: Autenticación correcta. Cerrando este diálogo...
+  body:
+    sign_in_prompt: 'Inicia sesión con %{provider} para continuar conectando "%{profile}".'
+    instructions: Abre la URL de inicio de sesión en tu navegador y completa la autenticación. DBFlux continuará automáticamente cuando el inicio de sesión finalice.
+    elapsed: "El inicio de sesión puede tardar hasta 5 minutos. Transcurrido: %{seconds}s"
+    browser_open_failed: "No se pudo abrir el navegador automáticamente. Abre la URL manualmente. (%{error}; fallo alternativo: %{fallback_error})"
+  error:
+    timed_out: El inicio de sesión superó el tiempo de espera de 5 minutos
+    no_url: No hay URL de inicio de sesión disponible para este proveedor.
+    no_url_provided: El proveedor no facilitó la URL de inicio de sesión
 modals:
   active_query:
     title: Consulta en ejecución

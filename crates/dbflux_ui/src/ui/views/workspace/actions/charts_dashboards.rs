@@ -1,4 +1,17 @@
 use super::*;
+use crate::ui::labels::{
+    charts_add_panel_failed_message, charts_add_panels_failed_message,
+    charts_cannot_open_chart_message, charts_create_dashboard_failed_message,
+    charts_delete_chart_failed_message, charts_delete_dashboard_failed_message,
+    charts_duplicate_chart_failed_message, charts_duplicate_dashboard_failed_message,
+    charts_import_failed_message, charts_import_success_message,
+    charts_load_metrics_failed_message, charts_load_namespaces_failed_message,
+    charts_loading_metrics_label, charts_panel_already_exists_message,
+    charts_persist_chart_for_panel_failed_message, charts_persist_import_chart_failed_message,
+    charts_persist_import_dashboard_failed_message,
+    charts_persist_metric_chart_for_panel_failed_message, charts_remote_parse_failed_message,
+    charts_rename_failed_message, charts_save_dashboard_failed_message,
+};
 
 impl Workspace {
     /// Opens a new `ChartDocument` seeded with the given query.
@@ -61,7 +74,7 @@ impl Workspace {
                     .iter()
                     .find(|p| p.id == chart.profile_id)
                     .map(|p| p.name.clone())
-                    .unwrap_or_else(|| "(orphaned)".to_string());
+                    .unwrap_or_else(|| dbflux_i18n::t!("charts.orphaned_profile_label"));
 
                 PaletteItem::SavedChart {
                     id: chart.id,
@@ -109,7 +122,7 @@ impl Workspace {
             .cloned();
 
         let Some(chart) = saved_chart else {
-            Toast::error("Saved chart not found")
+            Toast::error(dbflux_i18n::t!("charts.toast.chart_not_found"))
                 .meta_right(now_hms())
                 .push(cx);
             return;
@@ -133,7 +146,10 @@ impl Workspace {
                 let validation = crate::ui::document::ChartDocument::validate_saved_source(&chart);
                 if let Err(e) = validation {
                     report_error(
-                        UserFacingError::new(ErrorKind::Storage, format!("Cannot open chart: {e}")),
+                        UserFacingError::new(
+                            ErrorKind::Storage,
+                            charts_cannot_open_chart_message(e),
+                        ),
                         cx,
                     );
                     return;
@@ -195,7 +211,7 @@ impl Workspace {
             .cloned();
 
         let Some(dashboard) = dashboard_meta else {
-            Toast::error("Dashboard not found")
+            Toast::error(dbflux_i18n::t!("charts.toast.dashboard_not_found"))
                 .meta_right(now_hms())
                 .push(cx);
             return;
@@ -260,7 +276,7 @@ impl Workspace {
                                 dbflux_core::observability::actions::CONFIG_UPDATE,
                                 "dashboard_panel",
                                 format!("{dashboard_id_local}#{panel_index}"),
-                                "Failed to rescale panel to 12-column grid".to_string(),
+                                dbflux_i18n::t!("charts.error.rescale_failed"),
                                 message,
                             );
                         });
@@ -436,11 +452,9 @@ impl Workspace {
             let app_state = self.app_state.read(cx);
 
             let Some(active) = app_state.active_connection() else {
-                return Toast::error(
-                    "No active connection — connect to a profile before importing.",
-                )
-                .meta_right(now_hms())
-                .push(cx);
+                return Toast::error(dbflux_i18n::t!("charts.error.no_active_connection_import"))
+                    .meta_right(now_hms())
+                    .push(cx);
             };
 
             let profile_id = active.profile.id;
@@ -448,17 +462,15 @@ impl Workspace {
             let importer = match active.connection.dashboard_importer() {
                 Some(i) => i,
                 None => {
-                    return Toast::error(
-                        "The active connection does not support dashboard import.",
-                    )
-                    .meta_right(now_hms())
-                    .push(cx);
+                    return Toast::error(dbflux_i18n::t!("charts.error.import_unsupported"))
+                        .meta_right(now_hms())
+                        .push(cx);
                 }
             };
 
             match importer.import(&json) {
                 Ok(specs) => Ok((profile_id, specs)),
-                Err(e) => Err(format!("Dashboard import failed: {e}")),
+                Err(e) => Err(charts_import_failed_message(e)),
             }
         };
 
@@ -476,7 +488,7 @@ impl Workspace {
         let dashboard = Dashboard {
             id: dashboard_id,
             name: if name.trim().is_empty() {
-                "Imported Dashboard".to_string()
+                dbflux_i18n::t!("charts.default_import_name")
             } else {
                 name
             },
@@ -612,7 +624,7 @@ impl Workspace {
                             dbflux_core::observability::actions::CONFIG_CREATE,
                             "saved_chart",
                             chart.id.to_string(),
-                            format!("Failed to persist imported chart '{}'", chart.name),
+                            charts_persist_import_chart_failed_message(&chart.name),
                             e.to_string(),
                         );
                         return Err((chart.name.clone(), e.to_string()));
@@ -624,7 +636,7 @@ impl Workspace {
                         dbflux_core::observability::actions::CONFIG_CREATE,
                         "dashboard",
                         dashboard.id.to_string(),
-                        format!("Failed to persist imported dashboard '{}'", dashboard.name),
+                        charts_persist_import_dashboard_failed_message(&dashboard.name),
                         e.to_string(),
                     );
                     return Err((dashboard.name.clone(), e.to_string()));
@@ -635,7 +647,7 @@ impl Workspace {
                         dbflux_core::observability::actions::CONFIG_UPDATE,
                         "dashboard_panels",
                         dashboard_id.to_string(),
-                        "Failed to persist imported dashboard panels".to_string(),
+                        dbflux_i18n::t!("charts.error.persist_import_panels_failed"),
                         e.to_string(),
                     );
                     return Err((dashboard.name.clone(), e.to_string()));
@@ -648,19 +660,16 @@ impl Workspace {
             report_error(
                 UserFacingError::new(
                     ErrorKind::Storage,
-                    format!("Failed to save dashboard '{name}': {message}"),
+                    charts_save_dashboard_failed_message(&name, &message),
                 ),
                 cx,
             );
             return;
         }
 
-        Toast::info(format!(
-            "Imported {} panels into a new dashboard.",
-            charts.len()
-        ))
-        .meta_right(now_hms())
-        .push(cx);
+        Toast::info(charts_import_success_message(charts.len()))
+            .meta_right(now_hms())
+            .push(cx);
 
         self.open_dashboard(dashboard_id, window, cx);
     }
@@ -705,7 +714,7 @@ impl Workspace {
         {
             Some(c) => c,
             None => {
-                return Toast::error("Connection not found for this dashboard.")
+                return Toast::error(dbflux_i18n::t!("charts.toast.connection_not_found"))
                     .meta_right(now_hms())
                     .push(cx);
             }
@@ -719,18 +728,18 @@ impl Workspace {
         let background = cx.background_executor().spawn(async move {
             let source = connection
                 .dashboard_source()
-                .ok_or_else(|| "The connection does not support dashboard browsing.".to_string())?;
+                .ok_or_else(|| dbflux_i18n::t!("charts.error.browsing_unsupported"))?;
             let remote = source
                 .fetch_dashboard(&name_for_fetch)
                 .map_err(|e| e.to_string())?;
 
             let importer = connection
                 .dashboard_importer()
-                .ok_or_else(|| "The connection cannot parse dashboards.".to_string())?;
+                .ok_or_else(|| dbflux_i18n::t!("charts.error.parse_unsupported"))?;
             importer
                 .import(&remote.body_json)
                 .map(|specs| (remote.body_json, specs))
-                .map_err(|e| format!("Dashboard parse failed: {e}"))
+                .map_err(charts_remote_parse_failed_message)
         });
 
         cx.spawn_in(window, async move |this, cx| {
@@ -980,7 +989,7 @@ impl Workspace {
                 });
             }
             None => {
-                Toast::warning("Add a connection profile before creating a dashboard.")
+                Toast::warning(dbflux_i18n::t!("charts.toast.add_profile_first"))
                     .meta_right(now_hms())
                     .push(cx);
             }
@@ -1019,7 +1028,7 @@ impl Workspace {
                 report_error(
                     UserFacingError::new(
                         ErrorKind::Storage,
-                        format!("Failed to create dashboard: {e}"),
+                        charts_create_dashboard_failed_message(e),
                     ),
                     cx,
                 );
@@ -1132,7 +1141,7 @@ impl Workspace {
                 report_error(
                     UserFacingError::new(
                         ErrorKind::Storage,
-                        format!("Failed to delete dashboard: {e}"),
+                        charts_delete_dashboard_failed_message(e),
                     ),
                     cx,
                 );
@@ -1160,7 +1169,7 @@ impl Workspace {
                 report_error(
                     UserFacingError::new(
                         ErrorKind::Storage,
-                        format!("Failed to duplicate dashboard: {e}"),
+                        charts_duplicate_dashboard_failed_message(e),
                     ),
                     cx,
                 );
@@ -1230,7 +1239,7 @@ impl Workspace {
             }
             Err(e) => {
                 report_error(
-                    UserFacingError::new(ErrorKind::Storage, format!("Failed to rename: {e}")),
+                    UserFacingError::new(ErrorKind::Storage, charts_rename_failed_message(e)),
                     cx,
                 );
             }
@@ -1323,10 +1332,7 @@ impl Workspace {
             }
             Err(e) => {
                 report_error(
-                    UserFacingError::new(
-                        ErrorKind::Storage,
-                        format!("Failed to delete saved chart: {e}"),
-                    ),
+                    UserFacingError::new(ErrorKind::Storage, charts_delete_chart_failed_message(e)),
                     cx,
                 );
             }
@@ -1353,7 +1359,7 @@ impl Workspace {
                 report_error(
                     UserFacingError::new(
                         ErrorKind::Storage,
-                        format!("Failed to duplicate saved chart: {e}"),
+                        charts_duplicate_chart_failed_message(e),
                     ),
                     cx,
                 );
@@ -1436,7 +1442,7 @@ impl Workspace {
             let (task_id, _cancel) = self.app_state.update(cx, |state, _| {
                 state.start_task_for_profile(
                     dbflux_core::TaskKind::LoadSchema,
-                    "Loading metric namespaces",
+                    dbflux_i18n::t!("charts.status.loading_namespaces"),
                     Some(profile_id),
                 )
             });
@@ -1465,7 +1471,7 @@ impl Workspace {
                         report_error(
                             UserFacingError::new(
                                 ErrorKind::Network,
-                                format!("Failed to load metric namespaces: {msg}"),
+                                charts_load_namespaces_failed_message(&msg),
                             ),
                             cx,
                         );
@@ -1505,7 +1511,7 @@ impl Workspace {
         let (task_id, _cancel) = self.app_state.update(cx, |state, _| {
             state.start_task_for_profile(
                 dbflux_core::TaskKind::LoadSchema,
-                format!("Loading metrics for {}", ev.namespace),
+                charts_loading_metrics_label(&ev.namespace),
                 Some(ev.profile_id),
             )
         });
@@ -1539,7 +1545,7 @@ impl Workspace {
                     report_error(
                         UserFacingError::new(
                             ErrorKind::Network,
-                            format!("Failed to load metrics: {msg}"),
+                            charts_load_metrics_failed_message(&msg),
                         ),
                         cx,
                     );
@@ -1600,7 +1606,7 @@ impl Workspace {
                     dbflux_core::observability::actions::CONFIG_CREATE,
                     "saved_chart",
                     chart_id.to_string(),
-                    format!("Failed to persist chart '{name}' for new panel"),
+                    charts_persist_chart_for_panel_failed_message(&name),
                     e.to_string(),
                 );
                 return Err(e);
@@ -1622,7 +1628,7 @@ impl Workspace {
             }
             Err(e) => {
                 report_error(
-                    UserFacingError::new(ErrorKind::Storage, format!("Failed to add panel: {e}")),
+                    UserFacingError::new(ErrorKind::Storage, charts_add_panel_failed_message(e)),
                     cx,
                 );
             }
@@ -1689,8 +1695,9 @@ impl Workspace {
         };
 
         if already_present {
-            Toast::error(format!(
-                "A panel for {namespace}/{metric_name} is already in this dashboard"
+            Toast::error(charts_panel_already_exists_message(
+                &namespace,
+                &metric_name,
             ))
             .meta_right(now_hms())
             .push(cx);
@@ -1736,7 +1743,7 @@ impl Workspace {
                     dbflux_core::observability::actions::CONFIG_CREATE,
                     "saved_chart",
                     chart_id.to_string(),
-                    format!("Failed to persist metric chart '{name}' for new panel"),
+                    charts_persist_metric_chart_for_panel_failed_message(&name),
                     e.to_string(),
                 );
                 return Err(e);
@@ -1758,7 +1765,7 @@ impl Workspace {
             }
             Err(e) => {
                 report_error(
-                    UserFacingError::new(ErrorKind::Storage, format!("Failed to add panel: {e}")),
+                    UserFacingError::new(ErrorKind::Storage, charts_add_panel_failed_message(e)),
                     cx,
                 );
             }
@@ -1795,10 +1802,80 @@ impl Workspace {
             }
             Err(e) => {
                 report_error(
-                    UserFacingError::new(ErrorKind::Storage, format!("Failed to add panels: {e}")),
+                    UserFacingError::new(ErrorKind::Storage, charts_add_panels_failed_message(e)),
                     cx,
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    const CHARTS_CATALOG_KEYS: &[&str] = &[
+        "charts.default_import_name",
+        "charts.orphaned_profile_label",
+        "charts.status.loading_namespaces",
+        "charts.status.loading_metrics",
+        "charts.toast.chart_not_found",
+        "charts.toast.dashboard_not_found",
+        "charts.toast.connection_not_found",
+        "charts.toast.add_profile_first",
+        "charts.toast.import_success",
+        "charts.toast.panel_already_exists",
+        "charts.error.cannot_open_chart",
+        "charts.error.rescale_failed",
+        "charts.error.no_active_connection_import",
+        "charts.error.import_unsupported",
+        "charts.error.import_failed",
+        "charts.error.persist_import_chart_failed",
+        "charts.error.persist_import_dashboard_failed",
+        "charts.error.persist_import_panels_failed",
+        "charts.error.save_dashboard_failed",
+        "charts.error.browsing_unsupported",
+        "charts.error.parse_unsupported",
+        "charts.error.remote_parse_failed",
+        "charts.error.create_dashboard_failed",
+        "charts.error.delete_dashboard_failed",
+        "charts.error.duplicate_dashboard_failed",
+        "charts.error.rename_failed",
+        "charts.error.delete_chart_failed",
+        "charts.error.duplicate_chart_failed",
+        "charts.error.load_namespaces_failed",
+        "charts.error.load_metrics_failed",
+        "charts.error.persist_chart_for_panel_failed",
+        "charts.error.add_panel_failed",
+        "charts.error.persist_metric_chart_for_panel_failed",
+        "charts.error.add_panels_failed",
+    ];
+
+    #[::core::prelude::v1::test]
+    fn charts_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in CHARTS_CATALOG_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn charts_dashboard_not_found_differs_between_locales() {
+        let english = dbflux_i18n::t!("charts.toast.dashboard_not_found", locale = "en");
+        let spanish = dbflux_i18n::t!("charts.toast.dashboard_not_found", locale = "es");
+
+        assert_eq!(english, "Dashboard not found");
+        assert_eq!(spanish, "No se encontró el dashboard");
+        assert_ne!(english, spanish);
     }
 }
