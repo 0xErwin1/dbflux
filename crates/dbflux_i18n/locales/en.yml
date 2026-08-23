@@ -1268,21 +1268,6 @@ settings:
     delete: Delete
     save_to_file: Save to File
     cancel: Cancel
-    update: Update
-    create: Create
-    section_title: Auth Profiles
-    section_description: Manage reusable authentication profiles for connection access
-    delete_dialog_title: Delete Auth Profile
-    delete_dialog:
-      body_none: 'Are you sure you want to delete "%{name}"?'
-      body_one: 'Are you sure you want to delete "%{name}"? 1 connection using this auth profile will be updated.'
-      body_many: 'Are you sure you want to delete "%{name}"? %{count} connections using this auth profile will be updated.'
-    saved_fallback: Profile saved.
-    reference_invalid_title: Profile reference invalid
-    reference_invalid_body: This profile cannot be loaded.
-    login_hint: Log in to load options
-    inherited_from: "Inherited from %{trigger}."
-    inherited_from_named: "Inherited from %{trigger} '%{name}'."
     mirror_label_fallback: Read-only — managed externally
     conflict_message: "This profile was modified on disk (%{label}) since you opened it. Reload to see the current values before saving."
     partial_saved_message: "%{written_label} was saved successfully, but %{conflicted_label} was modified on disk since you opened the form. Reload to refresh and re-apply your changes."
@@ -1302,6 +1287,21 @@ settings:
     login_action: Login
     logging_in: "Logging in..."
     runs_interactive_login_hint: Runs interactive login for this auth profile
+    update: Update
+    create: Create
+    section_title: Auth Profiles
+    section_description: Manage reusable authentication profiles for connection access
+    delete_dialog_title: Delete Auth Profile
+    delete_dialog:
+      body_none: 'Are you sure you want to delete "%{name}"?'
+      body_one: 'Are you sure you want to delete "%{name}"? 1 connection using this auth profile will be updated.'
+      body_many: 'Are you sure you want to delete "%{name}"? %{count} connections using this auth profile will be updated.'
+    saved_fallback: Profile saved.
+    reference_invalid_title: Profile reference invalid
+    reference_invalid_body: This profile cannot be loaded.
+    login_hint: Log in to load options
+    inherited_from: "Inherited from %{trigger}."
+    inherited_from_named: "Inherited from %{trigger} '%{name}'."
   nav:
     general_group: General
     general: General

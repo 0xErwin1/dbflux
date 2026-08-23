@@ -3994,6 +3994,7 @@ mod tests {
     // ---------------------------------------------------------------------------
 
     const AUTH_PROFILES_LOGIN_KEYS: &[&str] = &[
+        "settings.auth_profiles.cancel",
         "settings.auth_profiles.mirror_label_fallback",
         "settings.auth_profiles.login_required_hint",
         "settings.auth_profiles.session_expired_hint",
