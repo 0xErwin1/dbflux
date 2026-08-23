@@ -10,8 +10,6 @@
 /// Uses the singular catalog bucket only for exactly one pending edit;
 /// every other count, including zero, uses the plural bucket. Zero maps to
 /// the dedicated "clean" bucket instead of the plural one.
-// Wired into the data grid edit bar in a later PR of this change.
-#[allow(dead_code)]
 pub(crate) fn unsaved_changes_label(count: usize) -> String {
     match count {
         0 => dbflux_i18n::t!("document.data.grid.edit_bar.clean"),
@@ -20,9 +18,30 @@ pub(crate) fn unsaved_changes_label(count: usize) -> String {
     }
 }
 
+/// Label for a [`dbflux_core::RefreshPolicy`], mirroring
+/// `RefreshPolicy::label()` in English while routing every arm through the
+/// translation catalog.
+///
+/// A named interval renders its seconds directly (`"{every_secs}s"`), which
+/// is a unit suffix, not translated prose, so it stays outside the catalog.
+/// Manual and any interval outside the named set fall back to their
+/// respective `document.shared.refresh.*` catalog entries.
+pub(crate) fn refresh_policy_label(policy: dbflux_core::RefreshPolicy) -> String {
+    use dbflux_core::RefreshPolicy;
+
+    match policy {
+        RefreshPolicy::Manual => dbflux_i18n::t!("document.shared.refresh.off"),
+        RefreshPolicy::Interval { every_secs } if RefreshPolicy::ALL.contains(&policy) => {
+            format!("{every_secs}s")
+        }
+        RefreshPolicy::Interval { .. } => dbflux_i18n::t!("document.shared.refresh.custom"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::unsaved_changes_label;
+    use super::{refresh_policy_label, unsaved_changes_label};
+    use dbflux_core::RefreshPolicy;
 
     #[test]
     fn unsaved_changes_label_zero_one_many() {
@@ -34,6 +53,18 @@ mod tests {
         assert!(one.contains('1'));
         assert!(many.contains('2'));
         assert_ne!(one, many);
+    }
+
+    #[test]
+    fn refresh_policy_label_covers_all_variants() {
+        for policy in RefreshPolicy::ALL {
+            assert_eq!(refresh_policy_label(*policy), policy.label());
+        }
+
+        assert_eq!(refresh_policy_label(RefreshPolicy::Manual), "Off");
+
+        let custom = RefreshPolicy::Interval { every_secs: 7 };
+        assert_eq!(refresh_policy_label(custom), "Custom");
     }
 
     #[test]

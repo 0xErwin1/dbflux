@@ -13,6 +13,17 @@ document:
         dirty:
           one: "%{count} cambio sin guardar"
           many: "%{count} cambios sin guardar"
+        save: Guardar
+        revert: Descartar
+      toolbar:
+        refresh: Actualizar
+        builder: Constructor
+        switch_to_document: Cambiar a vista de documento
+        switch_to_table: Cambiar a vista de tabla
+  shared:
+    refresh:
+      off: Apagado
+      custom: Personalizado
   tabs:
     menu:
       close: Cerrar
