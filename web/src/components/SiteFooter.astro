@@ -1,7 +1,7 @@
 ---
 import BrandMark from './BrandMark.astro';
 import { REPO } from '../data/nav';
-import { docsUrl } from '../data/site';
+import { docsUrl, siteUrl } from '../data/site';
 import { localeFromPathname, t } from '../i18n';
 import type { Locale } from '../i18n';
 
@@ -15,8 +15,8 @@ const COLUMNS = [
   {
     title: t(locale, 'footer.product'),
     links: [
-      { href: '/#features', label: t(locale, 'footer.features') },
-      { href: '/#drivers', label: t(locale, 'footer.drivers') },
+      { href: `${siteUrl('', locale)}#features`, label: t(locale, 'footer.features') },
+      { href: `${siteUrl('', locale)}#drivers`, label: t(locale, 'footer.drivers') },
       { href: `${REPO}/releases`, label: t(locale, 'footer.releases') },
     ],
   },
@@ -31,7 +31,7 @@ const COLUMNS = [
   {
     title: t(locale, 'footer.project'),
     links: [
-      { href: '/about/', label: t(locale, 'footer.about') },
+      { href: siteUrl('about/', locale), label: t(locale, 'footer.about') },
       { href: docsUrl('contributing', '', locale), label: t(locale, 'footer.contributing') },
       { href: REPO, label: t(locale, 'footer.source') },
     ],

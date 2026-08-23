@@ -63,6 +63,15 @@ export interface Dictionary {
     index_tag: string;
     default_tag: string;
   };
+  docs_sections: {
+    start: string;
+    using: string;
+    configure: string;
+    integrate: string;
+    reference: string;
+    drivers: string;
+    contribute: string;
+  };
   docs_tree: {
     search_cta: string;
     rail_toggle: string;
@@ -217,6 +226,25 @@ export function t(locale: Locale, key: DictionaryKey): string {
 
   if (typeof value !== 'string') {
     throw new Error(`i18n key "${key}" does not resolve to a string for locale "${locale}"`);
+  }
+
+  return value;
+}
+
+/**
+ * The translated title for a docs rail section, keyed by `DocsSection.id`.
+ *
+ * `DocsSection.id` is typed as a plain `string` in `data/nav.ts` (it doubles
+ * as an anchor id and a `<details>` key), so this resolves it against
+ * `docs_sections` with a runtime check rather than widening `t()`'s key type
+ * for one caller.
+ */
+export function sectionTitle(locale: Locale, id: string): string {
+  const key = id as keyof Dictionary['docs_sections'];
+  const value = DICTIONARIES[locale].docs_sections[key];
+
+  if (typeof value !== 'string') {
+    throw new Error(`Missing docs section title for id "${id}"`);
   }
 
   return value;

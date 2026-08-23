@@ -44,6 +44,15 @@ export const es: Dictionary = {
     index_tag: 'índice',
     default_tag: 'predeterminada',
   },
+  docs_sections: {
+    start: 'Empieza aquí',
+    using: 'Usando DBFlux',
+    configure: 'Configuración',
+    integrate: 'Integraciones',
+    reference: 'Referencia',
+    drivers: 'Referencia de drivers',
+    contribute: 'Cómo contribuir',
+  },
   docs_tree: {
     search_cta: 'Busca en la documentación',
     rail_toggle: 'Menú de documentación',

@@ -43,6 +43,15 @@ export const en = {
     index_tag: 'index',
     default_tag: 'default',
   },
+  docs_sections: {
+    start: 'Start here',
+    using: 'Using DBFlux',
+    configure: 'Configuring',
+    integrate: 'Integrations',
+    reference: 'Reference',
+    drivers: 'Driver reference',
+    contribute: 'Contributing',
+  },
   docs_tree: {
     search_cta: 'Search the docs',
     rail_toggle: 'Documentation menu',

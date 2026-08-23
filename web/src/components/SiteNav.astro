@@ -15,10 +15,10 @@ interface Props {
 const { current, locale = localeFromPathname(Astro.url.pathname) } = Astro.props;
 
 const LINKS = [
-  { href: `${siteUrl()}#features`, label: t(locale, 'nav.features'), key: 'features' },
-  { href: `${siteUrl()}#drivers`, label: t(locale, 'nav.drivers'), key: 'drivers' },
+  { href: `${siteUrl('', locale)}#features`, label: t(locale, 'nav.features'), key: 'features' },
+  { href: `${siteUrl('', locale)}#drivers`, label: t(locale, 'nav.drivers'), key: 'drivers' },
   { href: docsUrl('', '', locale), label: t(locale, 'nav.docs'), key: 'docs' },
-  { href: siteUrl('about/'), label: t(locale, 'nav.about'), key: 'about' },
+  { href: siteUrl('about/', locale), label: t(locale, 'nav.about'), key: 'about' },
 ] as const;
 
 /**
@@ -38,7 +38,7 @@ const localeLinks = LOCALES.map((target) => ({
 
 <header class="nav" data-nav>
   <div class="nav__inner">
-    <a class="nav__brand" href={siteUrl()}>
+    <a class="nav__brand" href={siteUrl('', locale)}>
       <BrandMark size={28} />
       <span>DBFlux</span>
     </a>
@@ -63,7 +63,7 @@ const localeLinks = LOCALES.map((target) => ({
         <Icon name="github" size={16} />
         <span>{t(locale, 'nav.github')}</span>
       </a>
-      <a class="btn btn--primary nav__cta" href={`${siteUrl()}#install`}>
+      <a class="btn btn--primary nav__cta" href={`${siteUrl('', locale)}#install`}>
         {t(locale, 'nav.download')}
       </a>
       <button
@@ -98,7 +98,7 @@ const localeLinks = LOCALES.map((target) => ({
       {t(locale, 'nav.github')}
     </a>
     <div class="nav__sheet-cta">
-      <a class="btn btn--primary" href={`${siteUrl()}#install`}>
+      <a class="btn btn--primary" href={`${siteUrl('', locale)}#install`}>
         {t(locale, 'nav.download')}
       </a>
     </div>
