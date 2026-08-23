@@ -66,8 +66,9 @@ pub fn bucket_delete_allowed(page: &dbflux_core::ObjectListingPage) -> bool {
 /// Message shown when the user tries to delete a bucket that still holds
 /// objects. Points at the recursive prefix delete instead of silently failing.
 pub(super) fn bucket_not_empty_message(bucket: &str) -> String {
-    format!(
-        "Bucket \"{bucket}\" is not empty. Delete its objects with a recursive prefix delete before removing the bucket."
+    dbflux_i18n::t!(
+        "document.buckets_table.error.bucket_not_empty",
+        bucket = bucket
     )
 }
 
@@ -107,7 +108,9 @@ impl BucketsTableDocument {
 
         let Some(connection) = self.get_connection(cx) else {
             self.state = DocumentState::Error;
-            self.last_error = Some("Connection is no longer active".to_string());
+            self.last_error = Some(dbflux_i18n::t!(
+                "document.object_browser.error.connection_unavailable"
+            ));
             cx.notify();
             return;
         };
@@ -119,9 +122,9 @@ impl BucketsTableDocument {
 
             let result = match connection.object_store_api() {
                 Some(api) => api.list_buckets(),
-                None => Err(DbError::NotSupported(
-                    "Object-store API unavailable".to_string(),
-                )),
+                None => Err(DbError::NotSupported(dbflux_i18n::t!(
+                    "document.object_browser.error.api_unavailable"
+                ))),
             };
 
             (result, started.elapsed().as_millis())
@@ -209,7 +212,7 @@ impl BucketsTableDocument {
         let Some(connection) = self.get_connection(cx) else {
             self.set_bucket_details_error(
                 &bucket_name,
-                "Connection is no longer active".to_string(),
+                dbflux_i18n::t!("document.object_browser.error.connection_unavailable"),
             );
             cx.notify();
             return;
@@ -219,9 +222,11 @@ impl BucketsTableDocument {
         let bucket_for_task = bucket_name.clone();
 
         let task = cx.background_executor().spawn(async move {
-            let api = connection
-                .object_store_api()
-                .ok_or_else(|| DbError::NotSupported("Object-store API unavailable".to_string()))?;
+            let api = connection.object_store_api().ok_or_else(|| {
+                DbError::NotSupported(dbflux_i18n::t!(
+                    "document.object_browser.error.api_unavailable"
+                ))
+            })?;
             api.get_bucket_details(&bucket_for_task)
         });
 
@@ -294,7 +299,7 @@ impl BucketsTableDocument {
         let Some(connection) = self.get_connection(cx) else {
             self.set_bucket_size_estimate_error(
                 &bucket_name,
-                "Connection is no longer active".to_string(),
+                dbflux_i18n::t!("document.object_browser.error.connection_unavailable"),
             );
             cx.notify();
             return;
@@ -304,9 +309,11 @@ impl BucketsTableDocument {
         let bucket_for_task = bucket_name.clone();
 
         let task = cx.background_executor().spawn(async move {
-            let api = connection
-                .object_store_api()
-                .ok_or_else(|| DbError::NotSupported("Object-store API unavailable".to_string()))?;
+            let api = connection.object_store_api().ok_or_else(|| {
+                DbError::NotSupported(dbflux_i18n::t!(
+                    "document.object_browser.error.api_unavailable"
+                ))
+            })?;
             api.estimate_bucket_size(&bucket_for_task, BUCKET_SIZE_ESTIMATE_CAP)
         });
 
@@ -383,7 +390,10 @@ impl BucketsTableDocument {
         let Some(connection) = self.get_connection(cx) else {
             self.delete_probe = None;
             report_error(
-                UserFacingError::new(ErrorKind::User, "Connection is no longer active"),
+                UserFacingError::new(
+                    ErrorKind::User,
+                    dbflux_i18n::t!("document.object_browser.error.connection_unavailable"),
+                ),
                 cx,
             );
             cx.notify();
@@ -394,9 +404,11 @@ impl BucketsTableDocument {
         let bucket_for_task = bucket_name.clone();
 
         let task = cx.background_executor().spawn(async move {
-            let api = connection
-                .object_store_api()
-                .ok_or_else(|| DbError::NotSupported("Object-store API unavailable".to_string()))?;
+            let api = connection.object_store_api().ok_or_else(|| {
+                DbError::NotSupported(dbflux_i18n::t!(
+                    "document.object_browser.error.api_unavailable"
+                ))
+            })?;
             api.list_objects(&bucket_for_task, "", None)
         });
 
@@ -452,7 +464,10 @@ impl BucketsTableDocument {
 
         let Some(connection) = self.get_connection(cx) else {
             report_error(
-                UserFacingError::new(ErrorKind::User, "Connection is no longer active"),
+                UserFacingError::new(
+                    ErrorKind::User,
+                    dbflux_i18n::t!("document.object_browser.error.connection_unavailable"),
+                ),
                 cx,
             );
             return;
@@ -464,9 +479,11 @@ impl BucketsTableDocument {
         let bucket_for_task = bucket_name.clone();
 
         let task = cx.background_executor().spawn(async move {
-            let api = connection
-                .object_store_api()
-                .ok_or_else(|| DbError::NotSupported("Object-store API unavailable".to_string()))?;
+            let api = connection.object_store_api().ok_or_else(|| {
+                DbError::NotSupported(dbflux_i18n::t!(
+                    "document.object_browser.error.api_unavailable"
+                ))
+            })?;
             api.delete_bucket(&bucket_for_task)
         });
 

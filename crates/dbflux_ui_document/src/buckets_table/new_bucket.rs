@@ -24,17 +24,18 @@ use uuid::Uuid;
 /// hyphens (the subset of the S3 rules the spec pins down).
 pub fn bucket_name_error(name: &str) -> Option<String> {
     if name.len() < 3 || name.len() > 63 {
-        return Some("Bucket names must be 3-63 characters long.".to_string());
+        return Some(dbflux_i18n::t!(
+            "document.buckets_table.new_bucket.error.length"
+        ));
     }
 
     if !name
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-')
     {
-        return Some(
-            "Bucket names may only contain lowercase letters, digits, dots and hyphens."
-                .to_string(),
-        );
+        return Some(dbflux_i18n::t!(
+            "document.buckets_table.new_bucket.error.charset"
+        ));
     }
 
     None
@@ -62,12 +63,8 @@ impl BucketEncryptionChoice {
         }
     }
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::SseS3 => "SSE-S3",
-            Self::SseKms => "SSE-KMS",
-            Self::None => "None",
-        }
+    pub fn label(self) -> String {
+        crate::labels::bucket_encryption_choice_label(self)
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
@@ -217,11 +214,9 @@ impl BucketsTableDocument {
         cx.notify();
 
         let Some(connection) = self.get_connection(cx) else {
-            report_error(
-                UserFacingError::new(ErrorKind::User, "Connection is no longer active"),
-                cx,
-            );
-            self.apply_bucket_created(name, Err("Connection is no longer active".to_string()), cx);
+            let message = dbflux_i18n::t!("document.object_browser.error.connection_unavailable");
+            report_error(UserFacingError::new(ErrorKind::User, message.clone()), cx);
+            self.apply_bucket_created(name, Err(message), cx);
             return;
         };
 
@@ -236,7 +231,9 @@ impl BucketsTableDocument {
                     let name = name.clone();
                     async move {
                         let api = connection.object_store_api().ok_or_else(|| {
-                            DbError::NotSupported("Object-store API unavailable".to_string())
+                            DbError::NotSupported(dbflux_i18n::t!(
+                                "document.object_browser.error.api_unavailable"
+                            ))
                         })?;
                         api.create_bucket(&name, options)
                     }
@@ -277,14 +274,20 @@ impl BucketsTableDocument {
                 self.new_bucket = None;
 
                 if outcome.warnings.is_empty() {
-                    Toast::success(format!("Created bucket \"{name}\""))
-                        .meta_right(now_hms())
-                        .push(cx);
+                    Toast::success(dbflux_i18n::t!(
+                        "document.buckets_table.new_bucket.toast.created",
+                        name = name.as_str()
+                    ))
+                    .meta_right(now_hms())
+                    .push(cx);
                 } else {
-                    Toast::warning(format!("Created bucket \"{name}\" with limitations"))
-                        .body(outcome.warnings.join("\n"))
-                        .meta_right(now_hms())
-                        .push(cx);
+                    Toast::warning(dbflux_i18n::t!(
+                        "document.buckets_table.new_bucket.toast.created_with_limitations",
+                        name = name.as_str()
+                    ))
+                    .body(outcome.warnings.join("\n"))
+                    .meta_right(now_hms())
+                    .push(cx);
                 }
 
                 self.load_buckets(cx);
@@ -357,13 +360,15 @@ impl BucketsTableDocument {
                     .flex()
                     .flex_col()
                     .gap(Spacing::XS)
-                    .child(Text::caption("Name"))
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "document.buckets_table.new_bucket.field.name"
+                    )))
                     .child(Input::new(&state.name_input).small().w_full())
                     .child(match &name_error {
                         Some(error) => Text::caption(error.clone()).danger(),
-                        None => Text::caption(
-                            "3-63 characters · lowercase letters, digits, dots and hyphens",
-                        )
+                        None => Text::caption(dbflux_i18n::t!(
+                            "document.buckets_table.new_bucket.field.name_hint"
+                        ))
                         .muted_foreground(),
                     }),
             )
@@ -372,7 +377,9 @@ impl BucketsTableDocument {
                     .flex()
                     .flex_col()
                     .gap(Spacing::XS)
-                    .child(Text::caption("Region"))
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "document.buckets_table.new_bucket.field.region"
+                    )))
                     .child(Input::new(&state.region_input).small().w_full()),
             )
             .child(
@@ -380,10 +387,12 @@ impl BucketsTableDocument {
                     .flex()
                     .flex_col()
                     .gap(Spacing::SM)
-                    .child(Text::caption("Options"))
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "document.buckets_table.new_bucket.section.options"
+                    )))
                     .child(
                         Checkbox::new("new-bucket-versioning")
-                            .label("Enable versioning")
+                            .label(dbflux_i18n::t!("document.buckets_table.new_bucket.option.versioning"))
                             .checked(state.versioning)
                             .on_click(cx.listener(|this, checked: &bool, _window, cx| {
                                 if let Some(state) = this.new_bucket.as_mut() {
@@ -394,7 +403,9 @@ impl BucketsTableDocument {
                     )
                     .child(
                         Checkbox::new("new-bucket-block-public")
-                            .label("Block all public access")
+                            .label(dbflux_i18n::t!(
+                                "document.buckets_table.new_bucket.option.block_public_access"
+                            ))
                             .checked(state.block_public_access)
                             .on_click(cx.listener(|this, checked: &bool, _window, cx| {
                                 if let Some(state) = this.new_bucket.as_mut() {
@@ -405,7 +416,7 @@ impl BucketsTableDocument {
                     )
                     .child(
                         Checkbox::new("new-bucket-object-lock")
-                            .label("Object lock")
+                            .label(dbflux_i18n::t!("document.buckets_table.new_bucket.option.object_lock"))
                             .checked(state.object_lock)
                             .on_click(cx.listener(|this, checked: &bool, _window, cx| {
                                 if let Some(state) = this.new_bucket.as_mut() {
@@ -422,9 +433,9 @@ impl BucketsTableDocument {
                                 .gap(Spacing::SM)
                                 .child(Icon::new(AppIcon::TriangleAlert).small().warning())
                                 .child(
-                                    Text::caption(
-                                        "Object lock cannot be disabled after the bucket is created.",
-                                    )
+                                    Text::caption(dbflux_i18n::t!(
+                                        "document.buckets_table.new_bucket.option.object_lock_warning"
+                                    ))
                                     .warning(),
                                 ),
                         )
@@ -436,7 +447,9 @@ impl BucketsTableDocument {
                     .items_center()
                     .justify_between()
                     .gap(Spacing::MD)
-                    .child(Text::caption("Default encryption"))
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "document.buckets_table.new_bucket.field.encryption"
+                    )))
                     .child(encryption_control),
             );
 
@@ -450,7 +463,13 @@ impl BucketsTableDocument {
                 .items_center()
                 .justify_between()
                 .gap(Spacing::MD)
-                .child(Text::caption("CreateBucket · applied immediately").muted_foreground())
+                .child(
+                    Text::caption(format!(
+                        "CreateBucket · {}",
+                        dbflux_i18n::t!("document.buckets_table.new_bucket.applied_immediately")
+                    ))
+                    .muted_foreground(),
+                )
                 .child(
                     div()
                         .flex()
@@ -470,7 +489,9 @@ impl BucketsTableDocument {
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.close_new_bucket(cx);
                                 }))
-                                .child(Text::caption("Cancel")),
+                                .child(Text::caption(dbflux_i18n::t!(
+                                    "document.buckets_table.new_bucket.cancel"
+                                ))),
                         )
                         .child(
                             div()
@@ -498,9 +519,11 @@ impl BucketsTableDocument {
                                 )
                                 .child(
                                     Text::caption(if state.submitting {
-                                        "Creating…"
+                                        dbflux_i18n::t!(
+                                            "document.buckets_table.new_bucket.creating"
+                                        )
                                     } else {
-                                        "Create"
+                                        dbflux_i18n::t!("document.buckets_table.new_bucket.create")
                                     })
                                     .color(theme.primary_foreground),
                                 ),
@@ -509,7 +532,7 @@ impl BucketsTableDocument {
         );
 
         ModalFrame::new("buckets-new-bucket-modal", &self.focus_handle, close)
-            .title("New Bucket")
+            .title(dbflux_i18n::t!("document.buckets_table.new_bucket.title"))
             .icon(AppIcon::Plus)
             .width(px(560.0))
             .max_height(px(620.0))

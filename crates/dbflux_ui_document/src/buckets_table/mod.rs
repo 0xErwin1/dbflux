@@ -76,8 +76,10 @@ impl BucketsTableDocument {
             .map(|connected| connected.profile.name.clone())
             .unwrap_or_default();
 
-        let search_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Find buckets by name…"));
+        let search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("document.buckets_table.search_placeholder"))
+        });
 
         let search_subscription = cx.subscribe_in(
             &search_input,
@@ -93,7 +95,10 @@ impl BucketsTableDocument {
 
         let mut doc = Self {
             id: DocumentId::new(),
-            title: format!("Buckets — {connection_name}"),
+            title: dbflux_i18n::t!(
+                "document.buckets_table.title",
+                connection = connection_name.as_str()
+            ),
             profile_id,
             app_state,
             focus_handle: cx.focus_handle(),

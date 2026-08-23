@@ -13,7 +13,6 @@ use dbflux_components::controls::Input;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_panel};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
-use dbflux_core::VersioningStatus;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -64,18 +63,7 @@ pub(super) fn summary_line(rows: &[&BucketRow]) -> String {
     regions.sort_unstable();
     regions.dedup();
 
-    let bucket_word = if rows.len() == 1 { "bucket" } else { "buckets" };
-    let region_word = if regions.len() == 1 {
-        "region"
-    } else {
-        "regions"
-    };
-
-    format!(
-        "{} {bucket_word} · {} {region_word}",
-        rows.len(),
-        regions.len()
-    )
+    crate::labels::buckets_table_summary_line(rows.len(), regions.len())
 }
 
 fn region_label(row: &BucketRow) -> String {
@@ -86,13 +74,11 @@ fn region_label(row: &BucketRow) -> String {
     }
 }
 
-fn versioning_label(row: &BucketRow) -> Option<&'static str> {
+fn versioning_label(row: &BucketRow) -> Option<String> {
     match &row.details {
-        BucketDetailsState::Loaded(details) => match details.versioning {
-            VersioningStatus::Enabled => Some("on"),
-            VersioningStatus::Suspended => Some("suspended"),
-            VersioningStatus::Disabled => None,
-        },
+        BucketDetailsState::Loaded(details) => {
+            crate::labels::versioning_status_label(details.versioning)
+        }
         _ => None,
     }
 }
@@ -196,7 +182,9 @@ impl BucketsTableDocument {
                                 .small()
                                 .muted(),
                             )
-                            .child(Text::caption("Refresh")),
+                            .child(Text::caption(dbflux_i18n::t!(
+                                "document.buckets_table.toolbar.refresh"
+                            ))),
                     )
                     .child(
                         div()
@@ -218,7 +206,12 @@ impl BucketsTableDocument {
                                     .size(Heights::ICON_SM)
                                     .color(theme.primary_foreground),
                             )
-                            .child(Text::caption("New bucket").color(theme.primary_foreground)),
+                            .child(
+                                Text::caption(dbflux_i18n::t!(
+                                    "document.buckets_table.toolbar.new_bucket"
+                                ))
+                                .color(theme.primary_foreground),
+                            ),
                     ),
             )
     }
@@ -235,24 +228,40 @@ impl BucketsTableDocument {
             .border_b_1()
             .border_color(theme.border)
             .bg(theme.secondary)
-            .child(div().flex_1().child(Text::caption("Name")))
-            .child(div().w(REGION_WIDTH).child(Text::caption("Region")))
+            .child(div().flex_1().child(Text::caption(dbflux_i18n::t!(
+                "document.buckets_table.columns.name"
+            ))))
+            .child(div().w(REGION_WIDTH).child(Text::caption(dbflux_i18n::t!(
+                "document.buckets_table.columns.region"
+            ))))
             .child(
                 div()
                     .w(OBJECTS_WIDTH)
                     .flex()
                     .justify_end()
-                    .child(Text::caption("Objects")),
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "document.buckets_table.columns.objects"
+                    ))),
             )
             .child(
                 div()
                     .w(SIZE_WIDTH)
                     .flex()
                     .justify_end()
-                    .child(Text::caption("Size")),
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "document.buckets_table.columns.size"
+                    ))),
             )
-            .child(div().w(VERSIONING_WIDTH).child(Text::caption("Versioning")))
-            .child(div().w(CREATED_WIDTH).child(Text::caption("Created")))
+            .child(
+                div()
+                    .w(VERSIONING_WIDTH)
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "document.buckets_table.columns.versioning"
+                    ))),
+            )
+            .child(div().w(CREATED_WIDTH).child(Text::caption(dbflux_i18n::t!(
+                "document.buckets_table.columns.created"
+            ))))
     }
 
     fn render_row(&self, row: &BucketRow, selected: bool, cx: &mut Context<Self>) -> AnyElement {
@@ -338,9 +347,9 @@ impl BucketsTableDocument {
         let theme = cx.theme();
         let estimate_pending = matches!(row.size_estimate, BucketSizeEstimateState::Loading);
 
-        let versioning = versioning_label(row).unwrap_or("off");
+        let versioning = versioning_label(row).unwrap_or_else(crate::labels::versioning_off_label);
 
-        let detail_pair = |label: &'static str, value: String| {
+        let detail_pair = |label: String, value: String| {
             div()
                 .flex()
                 .flex_col()
@@ -364,11 +373,26 @@ impl BucketsTableDocument {
                     .flex()
                     .items_center()
                     .gap(Spacing::XL)
-                    .child(detail_pair("Region", region_label(row)))
-                    .child(detail_pair("Versioning", versioning.to_string()))
-                    .child(detail_pair("Created", created_label(row)))
-                    .child(detail_pair("Objects", object_count_label(row)))
-                    .child(detail_pair("Size", size_label(row))),
+                    .child(detail_pair(
+                        dbflux_i18n::t!("document.buckets_table.columns.region"),
+                        region_label(row),
+                    ))
+                    .child(detail_pair(
+                        dbflux_i18n::t!("document.buckets_table.columns.versioning"),
+                        versioning,
+                    ))
+                    .child(detail_pair(
+                        dbflux_i18n::t!("document.buckets_table.columns.created"),
+                        created_label(row),
+                    ))
+                    .child(detail_pair(
+                        dbflux_i18n::t!("document.buckets_table.columns.objects"),
+                        object_count_label(row),
+                    ))
+                    .child(detail_pair(
+                        dbflux_i18n::t!("document.buckets_table.columns.size"),
+                        size_label(row),
+                    )),
             )
             .child(
                 div()
@@ -391,9 +415,9 @@ impl BucketsTableDocument {
                     .when(estimate_pending, |d| d.opacity(0.6))
                     .child(Icon::new(AppIcon::Sigma).small().muted())
                     .child(Text::caption(if estimate_pending {
-                        "Calculating…"
+                        dbflux_i18n::t!("document.buckets_table.details.calculating")
                     } else {
-                        "Calculate size"
+                        dbflux_i18n::t!("document.buckets_table.details.calculate_size")
                     })),
             )
     }
@@ -424,21 +448,33 @@ impl BucketsTableDocument {
                     .flex()
                     .items_center()
                     .gap(Spacing::MD)
-                    .child(Text::key_hint("Enter browse"))
-                    .child(Text::key_hint("Space properties"))
-                    .child(Text::key_hint("x delete (empty only)")),
+                    .child(Text::key_hint(dbflux_i18n::t!(
+                        "document.buckets_table.footer.hint.open"
+                    )))
+                    .child(Text::key_hint(dbflux_i18n::t!(
+                        "document.buckets_table.footer.hint.properties"
+                    )))
+                    .child(Text::key_hint(dbflux_i18n::t!(
+                        "document.buckets_table.footer.hint.delete"
+                    ))),
             )
     }
 
     fn render_empty_state(&self) -> AnyElement {
         let message = match (self.state, &self.last_error) {
-            (DocumentState::Loading, _) => "Loading buckets…".to_string(),
-            (DocumentState::Error, Some(err)) => format!("Failed to list buckets: {err}"),
-            (DocumentState::Error, None) => "Failed to list buckets".to_string(),
-            _ if !self.search_query.trim().is_empty() => {
-                format!("No buckets match \"{}\"", self.search_query.trim())
+            (DocumentState::Loading, _) => dbflux_i18n::t!("document.buckets_table.empty.loading"),
+            (DocumentState::Error, Some(err)) => {
+                dbflux_i18n::t!(
+                    "document.buckets_table.empty.error_detail",
+                    error = err.as_str()
+                )
             }
-            _ => "This connection has no buckets".to_string(),
+            (DocumentState::Error, None) => dbflux_i18n::t!("document.buckets_table.empty.error"),
+            _ if !self.search_query.trim().is_empty() => dbflux_i18n::t!(
+                "document.buckets_table.empty.no_match",
+                query = self.search_query.trim()
+            ),
+            _ => dbflux_i18n::t!("document.buckets_table.empty.no_buckets"),
         };
 
         let is_error = self.state == DocumentState::Error;
@@ -464,7 +500,9 @@ impl BucketsTableDocument {
             } else {
                 Text::muted(message)
             })
-            .child(Text::key_hint("r refresh"))
+            .child(Text::key_hint(dbflux_i18n::t!(
+                "document.buckets_table.empty.hint_refresh"
+            )))
             .into_any_element()
     }
 
@@ -500,10 +538,13 @@ impl BucketsTableDocument {
                                     .size(Heights::ICON_MD)
                                     .warning(),
                             )
-                            .child(Text::heading("Delete bucket?")),
+                            .child(Text::heading(dbflux_i18n::t!(
+                                "document.buckets_table.delete_confirm.title"
+                            ))),
                     )
-                    .child(Text::muted(format!(
-                        "\"{bucket}\" is empty and will be removed. This cannot be undone."
+                    .child(Text::muted(dbflux_i18n::t!(
+                        "document.buckets_table.delete_confirm.body",
+                        bucket = bucket
                     )))
                     .child(
                         div()
@@ -525,7 +566,9 @@ impl BucketsTableDocument {
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.cancel_delete_bucket(cx);
                                     }))
-                                    .child(Text::caption("Cancel")),
+                                    .child(Text::caption(dbflux_i18n::t!(
+                                        "document.buckets_table.delete_confirm.cancel"
+                                    ))),
                             )
                             .child(
                                 div()
@@ -547,7 +590,12 @@ impl BucketsTableDocument {
                                             .size(Heights::ICON_SM)
                                             .color(theme.background),
                                     )
-                                    .child(Text::caption("Delete").color(theme.background)),
+                                    .child(
+                                        Text::caption(dbflux_i18n::t!(
+                                            "document.buckets_table.delete_confirm.confirm"
+                                        ))
+                                        .color(theme.background),
+                                    ),
                             ),
                     ),
             )
@@ -716,7 +764,10 @@ mod tests {
     /// `Disabled` collapses to the muted placeholder rather than a label.
     #[test]
     fn versioning_label_reflects_details_state() {
-        assert_eq!(versioning_label(&row("a", Some("us-east-1"))), Some("on"));
+        assert_eq!(
+            versioning_label(&row("a", Some("us-east-1"))),
+            Some(dbflux_i18n::t!("document.buckets_table.versioning.on"))
+        );
         assert_eq!(versioning_label(&row("b", None)), None);
     }
 }
