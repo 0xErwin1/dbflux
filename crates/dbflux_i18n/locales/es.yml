@@ -1,3 +1,19 @@
+chart:
+  axis_bar:
+    group: Grupo
+  engine:
+    no_data: Sin datos
+  point_inspector:
+    series: SERIE
+    hovered_point: PUNTO SELECCIONADO
+    time: Hora
+    value: Valor
+    source_doc: DOCUMENTO DE ORIGEN
+    quick_actions: ACCIONES RÁPIDAS
+    show_in_tree: Mostrar en árbol
+    annotate: Anotar
+    copy_as_query: Copiar como consulta
+    coming_soon: Próximamente
 components:
   json_editor:
     empty_error: El documento no puede estar vacío
@@ -5,6 +21,13 @@ components:
     compact: Compactar
     cancel: Cancelar
     save: Guardar
+  value_source:
+    literal: Literal
+    env: Variable de entorno
+    secret: Secret Manager
+    parameter: Parameter Store
+    auth: Campo de sesión de autenticación
+    json_key_placeholder: Clave JSON (opcional)
 document:
   data:
     grid:
@@ -21,6 +44,13 @@ document:
       close_others: Cerrar las demás
       close_right: Cerrar a la derecha
     unsaved_changes: Cambios sin guardar
+document_tree:
+  search_placeholder: Buscar...
+  view:
+    tree: Vista de árbol
+    raw_json: JSON sin formato
+  no_matches: Sin coincidencias
+  document_label: "Documento %{index}"
 errors:
   action:
     view_in_audit: Ver en auditoría

@@ -44,19 +44,34 @@ impl ValueSourceSelector {
     pub fn new(id_prefix: &'static str, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let source_dropdown = cx.new(|_cx| {
             Dropdown::new(id_prefix)
-                .placeholder("Literal")
+                .placeholder(dbflux_i18n::t!("components.value_source.literal"))
                 .items(vec![
-                    DropdownItem::with_value("Literal", "literal"),
-                    DropdownItem::with_value("Environment Variable", "env"),
-                    DropdownItem::with_value("Secret Manager", "secret"),
-                    DropdownItem::with_value("Parameter Store", "parameter"),
-                    DropdownItem::with_value("Auth Session Field", "auth"),
+                    DropdownItem::with_value(
+                        dbflux_i18n::t!("components.value_source.literal"),
+                        "literal",
+                    ),
+                    DropdownItem::with_value(dbflux_i18n::t!("components.value_source.env"), "env"),
+                    DropdownItem::with_value(
+                        dbflux_i18n::t!("components.value_source.secret"),
+                        "secret",
+                    ),
+                    DropdownItem::with_value(
+                        dbflux_i18n::t!("components.value_source.parameter"),
+                        "parameter",
+                    ),
+                    DropdownItem::with_value(
+                        dbflux_i18n::t!("components.value_source.auth"),
+                        "auth",
+                    ),
                 ])
                 .selected_index(Some(0))
         });
 
-        let secondary_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("JSON key (optional)"));
+        let secondary_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "components.value_source.json_key_placeholder"
+            ))
+        });
 
         let dropdown_subscription = cx.subscribe(
             &source_dropdown,
@@ -230,5 +245,38 @@ impl Render for ValueSourceSelector {
                     .child(self.source_dropdown.clone()),
             )
             .into_any_element()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn value_source_keys_resolve_in_both_locales() {
+        let keys = [
+            "components.value_source.literal",
+            "components.value_source.env",
+            "components.value_source.secret",
+            "components.value_source.parameter",
+            "components.value_source.auth",
+            "components.value_source.json_key_placeholder",
+        ];
+
+        for key in keys {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert!(!en.is_empty() && en != key, "en missing for {key}");
+            assert!(!es.is_empty() && es != key, "es missing for {key}");
+        }
+    }
+
+    #[test]
+    fn value_source_env_differs_between_locales() {
+        let en = dbflux_i18n::t!("components.value_source.env", locale = "en");
+        let es = dbflux_i18n::t!("components.value_source.env", locale = "es");
+        assert_ne!(en, es);
     }
 }
