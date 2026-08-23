@@ -986,6 +986,63 @@ document:
         column: COLUMNA
         references: REFERENCIAS
         row: FILA
+  import_wizard:
+    title: Importar datos
+    rail:
+      pick_folder: Elegir carpeta
+      configure: Configurar
+      confirm: Confirmar
+      run: Ejecutar
+    pick_folder:
+      description: "Elige la carpeta que contiene manifest.json y los archivos de tabla exportados."
+      choose_folder: "Elegir carpeta…"
+      reading_manifest: "Leyendo manifiesto…"
+      dialog_title: Elegir carpeta de importación
+      error:
+        no_connection: No hay una conexión activa para este perfil
+        no_dialog: No hay selector de carpetas disponible en esta plataforma
+        invalid_bundle: "Paquete de importación inválido: %{error}"
+    configure:
+      mode_placeholder: Modo
+      target_placeholder: Columna destino
+      source_placeholder: Columna origen
+      source_unset: "(sin asignar)"
+      apply_mapping: Aplicar mapeo
+      continue: Continuar
+      unmatched_source: "Columna(s) de origen sin coincidencia, se omitirán salvo que se remapeen: %{names}"
+    mapping_mode:
+      create: Crear
+      existing: "Existente (solo insertar)"
+      recreate: "Recrear (eliminar + crear)"
+      skip: Omitir
+      truncate: "Truncar (vaciar + insertar)"
+    confirm:
+      body: "Esto eliminará y recreará o truncará la(s) siguiente(s) tabla(s) antes de cargar los datos: %{tables}"
+      warning: Esta acción no se puede deshacer. Confirma para continuar.
+      back: Atrás
+      proceed: "Sí, continuar"
+    running:
+      title: "Importando…"
+      progress:
+        of_total: "%{done} / %{total} filas"
+        only: "%{done} filas"
+    done:
+      close: Cerrar
+    error:
+      no_connection: No hay una conexión activa para esta importación
+    toast:
+      cancelled: Importación cancelada
+      completed: Importación completada
+      table_failed: "La importación falló en la tabla «%{table}»: %{error}"
+      failed: "Error al importar: %{error}"
+    summary:
+      with_failures: "Se importaron %{completed} tabla(s), %{rows} fila(s) en total (%{skipped} omitida(s), %{failed} fallida(s))"
+      ok: "Se importaron %{completed} tabla(s), %{rows} fila(s) en total (%{skipped} omitida(s))"
+    status_line:
+      completed: "%{table}: completada (%{rows} fila(s))"
+      skipped: "%{table}: omitida"
+      failed: "%{table}: FALLIDA — %{error}"
+      not_attempted: "%{table}: no intentada"
   key_value:
     add_member_modal:
       cancel: Cancelar

@@ -45,13 +45,6 @@ enum WizardStep {
     Done,
 }
 
-/// The rail's four fixed entries, in display order. `Confirm` stays a rail
-/// entry even on a non-destructive plan, where `continue_from_configure`
-/// skips straight from `Configure` to `Running` — it simply never becomes
-/// `current` in that flow and reads as already passed, matching a linear
-/// progress rail rather than a literal per-click history.
-const RAIL_LABELS: [&str; 4] = ["Pick Folder", "Configure", "Confirm", "Run"];
-
 /// `Running` and `Done` collapse onto the same rail index so the terminal
 /// steps of the five-variant `WizardStep` state machine share the rail's
 /// fourth "Run" entry instead of growing a fifth marker.
@@ -66,16 +59,16 @@ fn rail_index(step: WizardStep) -> usize {
 
 /// Maps the wizard's current [`WizardStep`] to the shared rail composite's
 /// domain-free [`RailItem`]s, marking every entry before the current one as
-/// completed — see [`RAIL_LABELS`] for why `Confirm` may show completed
-/// without the user ever visiting it.
+/// completed — see [`crate::labels::import_rail_labels`] for why `Confirm`
+/// may show completed without the user ever visiting it.
 fn import_rail_items(step: WizardStep) -> Vec<RailItem> {
     let current_index = rail_index(step);
 
-    RAIL_LABELS
-        .iter()
+    crate::labels::import_rail_labels()
+        .into_iter()
         .enumerate()
         .map(|(index, label)| RailItem {
-            label: SharedString::from(*label),
+            label: SharedString::from(label),
             completed: index < current_index,
             current: index == current_index,
         })
@@ -196,7 +189,9 @@ impl ImportWizard {
 
     fn choose_folder(&mut self, cx: &mut Context<Self>) {
         let Some(connection) = self.resolve_connection(cx) else {
-            self.manifest_error = Some("No active connection for this profile".to_string());
+            self.manifest_error = Some(dbflux_i18n::t!(
+                "document.import_wizard.pick_folder.error.no_connection"
+            ));
             cx.notify();
             return;
         };
@@ -210,7 +205,9 @@ impl ImportWizard {
         cx.spawn(async move |this, cx| {
             let dir = if dialog_available {
                 match rfd::AsyncFileDialog::new()
-                    .set_title("Choose Import Folder")
+                    .set_title(dbflux_i18n::t!(
+                        "document.import_wizard.pick_folder.dialog_title"
+                    ))
                     .pick_folder()
                     .await
                 {
@@ -227,8 +224,9 @@ impl ImportWizard {
             } else {
                 this.update(cx, |this, cx| {
                     this.loading = false;
-                    this.manifest_error =
-                        Some("No folder picker available on this platform".to_string());
+                    this.manifest_error = Some(dbflux_i18n::t!(
+                        "document.import_wizard.pick_folder.error.no_dialog"
+                    ));
                     cx.notify();
                 })
                 .ok();
@@ -246,7 +244,10 @@ impl ImportWizard {
                 Err(e) => {
                     this.update(cx, |this, cx| {
                         this.loading = false;
-                        this.manifest_error = Some(format!("Invalid import bundle: {e}"));
+                        this.manifest_error = Some(dbflux_i18n::t!(
+                            "document.import_wizard.pick_folder.error.invalid_bundle",
+                            error = e.to_string()
+                        ));
                         cx.notify();
                     })
                     .ok();
@@ -310,14 +311,16 @@ impl ImportWizard {
                 .position(|(_, mode)| *mode == config.mapping_mode);
             let mode_items: Vec<DropdownItem> = mode_options
                 .iter()
-                .map(|(label, _)| DropdownItem::new(*label))
+                .map(|(label, _)| DropdownItem::new(label.clone()))
                 .collect();
 
             let mapping_mode_dropdown = cx.new(|_cx| {
                 Dropdown::new(SharedString::from(format!("import-mode-{table_index}")))
                     .items(mode_items)
                     .selected_index(selected_mode_index)
-                    .placeholder("Mode")
+                    .placeholder(dbflux_i18n::t!(
+                        "document.import_wizard.configure.mode_placeholder"
+                    ))
             });
 
             let target_items: Vec<DropdownItem> = config
@@ -328,10 +331,14 @@ impl ImportWizard {
             let rebind_target_dropdown = cx.new(|_cx| {
                 Dropdown::new(SharedString::from(format!("import-target-{table_index}")))
                     .items(target_items)
-                    .placeholder("Target column")
+                    .placeholder(dbflux_i18n::t!(
+                        "document.import_wizard.configure.target_placeholder"
+                    ))
             });
 
-            let mut source_items = vec![DropdownItem::new("(unset)")];
+            let mut source_items = vec![DropdownItem::new(dbflux_i18n::t!(
+                "document.import_wizard.configure.source_unset"
+            ))];
             source_items.extend(
                 config
                     .source_columns
@@ -341,7 +348,9 @@ impl ImportWizard {
             let rebind_source_dropdown = cx.new(|_cx| {
                 Dropdown::new(SharedString::from(format!("import-source-{table_index}")))
                     .items(source_items)
-                    .placeholder("Source column")
+                    .placeholder(dbflux_i18n::t!(
+                        "document.import_wizard.configure.source_placeholder"
+                    ))
             });
 
             let mode_sub = cx.subscribe(
@@ -424,7 +433,10 @@ impl ImportWizard {
     fn start_import(&mut self, cx: &mut Context<Self>) {
         let Some(connection) = self.resolve_connection(cx) else {
             report_error(
-                UserFacingError::new(ErrorKind::Storage, "No active connection for this import"),
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    dbflux_i18n::t!("document.import_wizard.error.no_connection"),
+                ),
                 cx,
             );
             return;
@@ -548,7 +560,8 @@ impl ImportWizard {
                             state.tasks_mut().cancel(task_id);
                             cx.emit(AppStateChanged);
                         });
-                        this.result_summary = Some("Import cancelled".to_string());
+                        this.result_summary =
+                            Some(dbflux_i18n::t!("document.import_wizard.toast.cancelled"));
                     }
                     Ok(outcome) => {
                         let failed_table = outcome.tables.iter().find_map(|t| match &t.status {
@@ -566,7 +579,11 @@ impl ImportWizard {
                             report_error(
                                 UserFacingError::new(
                                     ErrorKind::Driver,
-                                    format!("Import failed on table '{table}': {error}"),
+                                    dbflux_i18n::t!(
+                                        "document.import_wizard.toast.table_failed",
+                                        table = table,
+                                        error = error
+                                    ),
                                 ),
                                 cx,
                             );
@@ -575,7 +592,10 @@ impl ImportWizard {
                                 state.complete_task(task_id);
                                 cx.emit(AppStateChanged);
                             });
-                            Toast::success("Import completed").push(cx);
+                            Toast::success(dbflux_i18n::t!(
+                                "document.import_wizard.toast.completed"
+                            ))
+                            .push(cx);
                         }
 
                         this.result_summary = Some(Self::summarize(&outcome));
@@ -587,11 +607,12 @@ impl ImportWizard {
                             state.fail_task(task_id, e.to_string());
                             cx.emit(AppStateChanged);
                         });
-                        report_error(
-                            UserFacingError::new(ErrorKind::Driver, format!("Import failed: {e}")),
-                            cx,
+                        let message = dbflux_i18n::t!(
+                            "document.import_wizard.toast.failed",
+                            error = e.to_string()
                         );
-                        this.result_summary = Some(format!("Import failed: {e}"));
+                        report_error(UserFacingError::new(ErrorKind::Driver, message.clone()), cx);
+                        this.result_summary = Some(message);
                     }
                 }
 
@@ -627,13 +648,7 @@ impl ImportWizard {
             })
             .sum();
 
-        if failed > 0 {
-            format!(
-                "Imported {completed} table(s), {rows} row(s) total ({skipped} skipped, {failed} failed)"
-            )
-        } else {
-            format!("Imported {completed} table(s), {rows} row(s) total ({skipped} skipped)")
-        }
+        crate::labels::import_summary_label(completed, rows, skipped, failed)
     }
 
     /// Renders one status line per planned table when the run left any table
@@ -654,22 +669,12 @@ impl ImportWizard {
             return engine_warnings.to_vec();
         }
 
-        let mut lines: Vec<String> = tables.iter().map(Self::table_status_line).collect();
+        let mut lines: Vec<String> = tables
+            .iter()
+            .map(crate::labels::import_table_status_line)
+            .collect();
         lines.extend(engine_warnings.iter().cloned());
         lines
-    }
-
-    fn table_status_line(table: &ImportedTable) -> String {
-        match &table.status {
-            TableTransferStatus::Completed { rows } => {
-                format!("{}: completed ({rows} row(s))", table.source_table)
-            }
-            TableTransferStatus::Skipped => format!("{}: skipped", table.source_table),
-            TableTransferStatus::Failed { error } => {
-                format!("{}: FAILED — {error}", table.source_table)
-            }
-            TableTransferStatus::NotStarted => format!("{}: not attempted", table.source_table),
-        }
     }
 }
 
@@ -685,7 +690,7 @@ impl Render for ImportWizard {
         };
 
         let mut frame = ModalFrame::new("import-wizard", &self.focus_handle, close)
-            .title("Import Data")
+            .title(dbflux_i18n::t!("document.import_wizard.title"))
             .icon(AppIcon::Download)
             .width(px(720.0))
             .max_height(px(640.0));
@@ -732,9 +737,9 @@ impl ImportWizard {
             .flex_col()
             .gap(Spacing::MD)
             .p(Spacing::MD)
-            .child(Text::body(
-                "Choose the folder that contains manifest.json and the exported table files.",
-            ))
+            .child(Text::body(dbflux_i18n::t!(
+                "document.import_wizard.pick_folder.description"
+            )))
             .when_some(self.manifest_error.clone(), |d, error| {
                 d.child(Text::caption(error))
             })
@@ -742,9 +747,9 @@ impl ImportWizard {
                 Button::new(
                     "import-wizard-choose-folder",
                     if self.loading {
-                        "Reading manifest..."
+                        dbflux_i18n::t!("document.import_wizard.pick_folder.reading_manifest")
                     } else {
-                        "Choose Folder..."
+                        dbflux_i18n::t!("document.import_wizard.pick_folder.choose_folder")
                     },
                 )
                 .disabled(self.loading)
@@ -777,7 +782,7 @@ impl ImportWizard {
                         .child(
                             Button::new(
                                 SharedString::from(format!("import-apply-mapping-{table_index}")),
-                                "Apply Mapping",
+                                dbflux_i18n::t!("document.import_wizard.configure.apply_mapping"),
                             )
                             .ghost()
                             .on_click(cx.listener(
@@ -788,9 +793,9 @@ impl ImportWizard {
                         ),
                 )
                 .when(!unmatched.is_empty(), |d| {
-                    d.child(Text::caption(format!(
-                        "Unmatched source column(s), will be skipped unless remapped: {}",
-                        unmatched.join(", ")
+                    d.child(Text::caption(dbflux_i18n::t!(
+                        "document.import_wizard.configure.unmatched_source",
+                        names = unmatched.join(", ")
                     )))
                 })
                 .into_any_element()
@@ -803,8 +808,11 @@ impl ImportWizard {
             .p(Spacing::MD)
             .children(rows)
             .child(
-                Button::new("import-wizard-continue", "Continue")
-                    .on_click(cx.listener(|this, _, _, cx| this.continue_from_configure(cx))),
+                Button::new(
+                    "import-wizard-continue",
+                    dbflux_i18n::t!("document.import_wizard.configure.continue"),
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.continue_from_configure(cx))),
             )
             .into_any_element()
     }
@@ -822,27 +830,37 @@ impl ImportWizard {
             .flex_col()
             .gap(Spacing::MD)
             .p(Spacing::MD)
-            .child(Text::body(format!(
-                "This will drop-and-recreate or truncate the following table(s) before loading data: {}",
-                destructive_tables.join(", ")
+            .child(Text::body(dbflux_i18n::t!(
+                "document.import_wizard.confirm.body",
+                tables = destructive_tables.join(", ")
             )))
-            .child(Text::caption("This cannot be undone. Confirm to proceed."))
+            .child(Text::caption(dbflux_i18n::t!(
+                "document.import_wizard.confirm.warning"
+            )))
             .child(
                 div()
                     .flex()
                     .gap(Spacing::SM)
                     .child(
-                        Button::new("import-wizard-cancel-confirm", "Back")
-                            .ghost()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.step = WizardStep::Configure;
-                                this.confirmed_destructive = false;
-                                cx.notify();
-                            })),
+                        Button::new(
+                            "import-wizard-cancel-confirm",
+                            dbflux_i18n::t!("document.import_wizard.confirm.back"),
+                        )
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.step = WizardStep::Configure;
+                            this.confirmed_destructive = false;
+                            cx.notify();
+                        })),
                     )
                     .child(
-                        Button::new("import-wizard-confirm-destructive", "Yes, proceed")
-                            .on_click(cx.listener(|this, _, _, cx| this.confirm_destructive_and_run(cx))),
+                        Button::new(
+                            "import-wizard-confirm-destructive",
+                            dbflux_i18n::t!("document.import_wizard.confirm.proceed"),
+                        )
+                        .on_click(
+                            cx.listener(|this, _, _, cx| this.confirm_destructive_and_run(cx)),
+                        ),
                     ),
             )
             .into_any_element()
@@ -851,8 +869,15 @@ impl ImportWizard {
     fn render_running(&self) -> AnyElement {
         let (rows_done, estimated_total) = *self.progress.lock().unwrap_or_else(|p| p.into_inner());
         let label = match estimated_total {
-            Some(total) if total > 0 => format!("{rows_done} / {total} rows"),
-            _ => format!("{rows_done} rows"),
+            Some(total) if total > 0 => dbflux_i18n::t!(
+                "document.import_wizard.running.progress.of_total",
+                done = rows_done,
+                total = total
+            ),
+            _ => dbflux_i18n::t!(
+                "document.import_wizard.running.progress.only",
+                done = rows_done
+            ),
         };
 
         div()
@@ -860,7 +885,9 @@ impl ImportWizard {
             .flex_col()
             .gap(Spacing::MD)
             .p(Spacing::MD)
-            .child(Text::body("Importing..."))
+            .child(Text::body(dbflux_i18n::t!(
+                "document.import_wizard.running.title"
+            )))
             .child(Text::caption(label))
             .into_any_element()
     }
@@ -878,8 +905,11 @@ impl ImportWizard {
                 d.child(Text::caption(self.result_warnings.join("; ")))
             })
             .child(
-                Button::new("import-wizard-close", "Close")
-                    .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
+                Button::new(
+                    "import-wizard-close",
+                    dbflux_i18n::t!("document.import_wizard.done.close"),
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
             )
             .into_any_element()
     }

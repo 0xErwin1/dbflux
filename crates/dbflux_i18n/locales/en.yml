@@ -986,6 +986,63 @@ document:
         column: COLUMN
         references: REFERENCES
         row: ROW
+  import_wizard:
+    title: Import Data
+    rail:
+      pick_folder: Pick Folder
+      configure: Configure
+      confirm: Confirm
+      run: Run
+    pick_folder:
+      description: "Choose the folder that contains manifest.json and the exported table files."
+      choose_folder: "Choose Folder..."
+      reading_manifest: "Reading manifest..."
+      dialog_title: Choose Import Folder
+      error:
+        no_connection: No active connection for this profile
+        no_dialog: No folder picker available on this platform
+        invalid_bundle: "Invalid import bundle: %{error}"
+    configure:
+      mode_placeholder: Mode
+      target_placeholder: Target column
+      source_placeholder: Source column
+      source_unset: "(unset)"
+      apply_mapping: Apply Mapping
+      continue: Continue
+      unmatched_source: "Unmatched source column(s), will be skipped unless remapped: %{names}"
+    mapping_mode:
+      create: Create
+      existing: Existing (insert only)
+      recreate: Recreate (drop + create)
+      skip: Skip
+      truncate: Truncate (empty + insert)
+    confirm:
+      body: "This will drop-and-recreate or truncate the following table(s) before loading data: %{tables}"
+      warning: This cannot be undone. Confirm to proceed.
+      back: Back
+      proceed: "Yes, proceed"
+    running:
+      title: "Importing..."
+      progress:
+        of_total: "%{done} / %{total} rows"
+        only: "%{done} rows"
+    done:
+      close: Close
+    error:
+      no_connection: No active connection for this import
+    toast:
+      cancelled: Import cancelled
+      completed: Import completed
+      table_failed: "Import failed on table '%{table}': %{error}"
+      failed: "Import failed: %{error}"
+    summary:
+      with_failures: "Imported %{completed} table(s), %{rows} row(s) total (%{skipped} skipped, %{failed} failed)"
+      ok: "Imported %{completed} table(s), %{rows} row(s) total (%{skipped} skipped)"
+    status_line:
+      completed: "%{table}: completed (%{rows} row(s))"
+      skipped: "%{table}: skipped"
+      failed: "%{table}: FAILED — %{error}"
+      not_attempted: "%{table}: not attempted"
   key_value:
     add_member_modal:
       cancel: Cancel
