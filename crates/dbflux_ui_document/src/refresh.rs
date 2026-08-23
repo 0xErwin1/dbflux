@@ -29,14 +29,23 @@ pub const REFRESH_POLICY_OPTIONS: &[SavedChartRefreshPolicy] = &[
 /// Translated label for a refresh policy dropdown option.
 ///
 /// `Off` and `OnOpen` route through the catalog; a named interval renders
-/// its seconds directly (`"{every_secs}s"`), which is a unit suffix, not
+/// as a unit suffix (`"10s"`, `"30s"`, `"1m"`, `"5m"`), which is not
 /// translated prose, so it stays outside the catalog — identical in every
-/// locale DBFlux ships.
+/// locale DBFlux ships. Whole minutes render in minutes so the labels match
+/// the ones the dropdown showed before the catalog refactor.
 pub(crate) fn refresh_policy_option_label(policy: SavedChartRefreshPolicy) -> String {
     match policy {
         SavedChartRefreshPolicy::Off => dbflux_i18n::t!("document.shared.refresh.off"),
-        SavedChartRefreshPolicy::Interval { every_secs } => format!("{every_secs}s"),
+        SavedChartRefreshPolicy::Interval { every_secs } => interval_unit_label(every_secs),
         SavedChartRefreshPolicy::OnOpen => dbflux_i18n::t!("document.shared.refresh.on_open"),
+    }
+}
+
+fn interval_unit_label(every_secs: u32) -> String {
+    if every_secs >= 60 && every_secs.is_multiple_of(60) {
+        format!("{}m", every_secs / 60)
+    } else {
+        format!("{every_secs}s")
     }
 }
 
@@ -85,6 +94,20 @@ mod tests {
             refresh_policy_option_label(SavedChartRefreshPolicy::Interval { every_secs: 30 });
 
         assert_eq!(value, "30s");
+    }
+
+    #[test]
+    fn refresh_policy_option_label_whole_minutes_render_in_minutes() {
+        let one_minute =
+            refresh_policy_option_label(SavedChartRefreshPolicy::Interval { every_secs: 60 });
+        let five_minutes =
+            refresh_policy_option_label(SavedChartRefreshPolicy::Interval { every_secs: 300 });
+        let ninety_seconds =
+            refresh_policy_option_label(SavedChartRefreshPolicy::Interval { every_secs: 90 });
+
+        assert_eq!(one_minute, "1m");
+        assert_eq!(five_minutes, "5m");
+        assert_eq!(ninety_seconds, "90s");
     }
 
     #[test]
