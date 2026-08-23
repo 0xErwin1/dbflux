@@ -2301,14 +2301,7 @@ impl DataGridPanel {
     pub fn change_summary(&self, cx: &App) -> Option<String> {
         let (inserts, updates, deletes) = self.pending_edit_counts(cx);
 
-        if inserts == 0 && updates == 0 && deletes == 0 {
-            None
-        } else {
-            Some(format!(
-                "{} inserts · {} updates · {} deletes",
-                inserts, updates, deletes
-            ))
-        }
+        crate::labels::pending_edits_summary(inserts, updates, deletes)
     }
 
     // === Filter bar presentation helpers ===

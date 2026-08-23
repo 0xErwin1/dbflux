@@ -67,6 +67,50 @@ document:
         builder: Builder
         switch_to_document: Switch to Document View
         switch_to_table: Switch to Table View
+      editing:
+        aggregated: Aggregated results cannot be edited
+        no_primary_key: This table has no primary key - editing is disabled
+        not_single_table: "Editing disabled: result is not bound to a single table."
+      loading: Loading…
+      empty: No data
+      views:
+        table: Data
+        chart: Chart
+        json: JSON
+        text: Text
+        raw: Raw
+        truncated: "(truncated at %{max_lines} lines)"
+        empty: "(empty)"
+      status:
+        rows:
+          one: "%{count} row"
+          many: "%{count} rows"
+        pending_changes:
+          one: "%{count} pending change"
+          many: "%{count} pending changes"
+      export:
+        trigger: Export
+        save_as_file: Save as file
+        copy_to_clipboard: Copy to clipboard
+        png_coming_soon: "PNG export coming in v0.7 — %{detail}"
+        format:
+          csv: CSV
+          json_pretty: "JSON (pretty)"
+          json_compact: "JSON (compact)"
+          text: Text
+          binary: Binary
+          hex: Hex
+          base64: Base64
+      pending:
+        inserted:
+          one: "%{count} insert"
+          many: "%{count} inserts"
+        updated:
+          one: "%{count} update"
+          many: "%{count} updates"
+        deleted:
+          one: "%{count} delete"
+          many: "%{count} deletes"
   shared:
     refresh:
       off: Off
