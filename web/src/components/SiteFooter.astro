@@ -2,30 +2,38 @@
 import BrandMark from './BrandMark.astro';
 import { REPO } from '../data/nav';
 import { docsUrl } from '../data/site';
+import { localeFromPathname, t } from '../i18n';
+import type { Locale } from '../i18n';
+
+interface Props {
+  locale?: Locale;
+}
+
+const { locale = localeFromPathname(Astro.url.pathname) } = Astro.props;
 
 const COLUMNS = [
   {
-    title: 'Product',
+    title: t(locale, 'footer.product'),
     links: [
-      { href: '/#features', label: 'Features' },
-      { href: '/#drivers', label: 'Drivers' },
-      { href: `${REPO}/releases`, label: 'Releases' },
+      { href: '/#features', label: t(locale, 'footer.features') },
+      { href: '/#drivers', label: t(locale, 'footer.drivers') },
+      { href: `${REPO}/releases`, label: t(locale, 'footer.releases') },
     ],
   },
   {
-    title: 'Docs',
+    title: t(locale, 'footer.docs'),
     links: [
-      { href: docsUrl('usage'), label: 'Usage guide' },
-      { href: docsUrl('connections'), label: 'Connecting' },
-      { href: docsUrl('mcp_ai_integration'), label: 'AI + MCP' },
+      { href: docsUrl('usage'), label: t(locale, 'footer.usage') },
+      { href: docsUrl('connections'), label: t(locale, 'footer.connecting') },
+      { href: docsUrl('mcp_ai_integration'), label: t(locale, 'footer.mcp') },
     ],
   },
   {
-    title: 'Project',
+    title: t(locale, 'footer.project'),
     links: [
-      { href: '/about/', label: 'About' },
-      { href: docsUrl('contributing'), label: 'Contributing' },
-      { href: REPO, label: 'Source' },
+      { href: '/about/', label: t(locale, 'footer.about') },
+      { href: docsUrl('contributing'), label: t(locale, 'footer.contributing') },
+      { href: REPO, label: t(locale, 'footer.source') },
     ],
   },
 ] as const;
@@ -38,8 +46,8 @@ const COLUMNS = [
         <BrandMark size={26} />
         <span>DBFlux</span>
       </span>
-      <p>A fully open-source alternative to DBeaver, built in the open.</p>
-      <p class="foot__license">MIT or Apache-2.0, at your option.</p>
+      <p>{t(locale, 'footer.tagline')}</p>
+      <p class="foot__license">{t(locale, 'footer.license')}</p>
     </div>
 
     <div class="foot__cols">

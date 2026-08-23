@@ -1,16 +1,17 @@
 ---
 import { getCollection } from 'astro:content';
-import Base from '../layouts/Base.astro';
-import DocsLayout from '../layouts/DocsLayout.astro';
-import DocsIndex from '../components/DocsIndex.astro';
-import Landing from '../components/Landing.astro';
-import { pathsForVersion } from '../data/docs';
-import { CURRENT } from '../data/versions';
-import { DOCS_AT_ROOT } from '../data/site';
+import Base from '../../layouts/Base.astro';
+import DocsLayout from '../../layouts/DocsLayout.astro';
+import DocsIndex from '../../components/DocsIndex.astro';
+import Landing from '../../components/Landing.astro';
+import { pathsForVersion } from '../../data/docs';
+import { CURRENT } from '../../data/versions';
+import { DOCS_AT_ROOT } from '../../data/site';
 
 /**
- * The root is whatever this build is for: the landing page normally, and the
- * documentation index when the documentation has an origin of its own.
+ * The Spanish counterpart of `index.astro`. Documentation pages only exist in
+ * English so far — this route covers the `/es/` landing/index only, ahead of
+ * the locale-aware docs pipeline.
  */
 const available = DOCS_AT_ROOT ? pathsForVersion(await getCollection('docs'), CURRENT.id) : [];
 ---
@@ -22,15 +23,17 @@ const available = DOCS_AT_ROOT ? pathsForVersion(await getCollection('docs'), CU
       available={available}
       title="Documentation"
       description="Guides for installing, connecting, querying, charting and governing DBFlux."
+      locale="es"
       translated
     >
-      <DocsIndex versionId={CURRENT.id} available={available} />
+      <DocsIndex versionId={CURRENT.id} available={available} locale="es" />
     </DocsLayout>
   ) : (
     <Base
       title="DBFlux — a keyboard-first database client"
       description="An extensible, keyboard-first data platform for Postgres, MySQL, SQL Server, MongoDB, Redis, DynamoDB and more. Open source, built in Rust on GPUI."
       current="home"
+      locale="es"
       translated
     >
       <Landing />

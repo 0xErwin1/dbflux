@@ -6,6 +6,8 @@ import { docTitle } from '../data/nav';
 import type { DocsVersion } from '../data/versions';
 import { CURRENT, versionHome, versionLabel } from '../data/versions';
 import { docsUrl } from '../data/site';
+import { localeFromPathname, t } from '../i18n';
+import type { Locale } from '../i18n';
 
 interface Heading {
   depth: number;
@@ -22,6 +24,9 @@ interface Props {
   title: string;
   description: string;
   editPath?: string;
+  locale?: Locale;
+  /** Forwarded to `Base` — see its `translated` prop. Only the docs index is today. */
+  translated?: boolean;
 }
 
 const {
@@ -32,6 +37,8 @@ const {
   title,
   description,
   editPath,
+  locale = localeFromPathname(Astro.url.pathname),
+  translated = false,
 } = Astro.props;
 const onThisPage = headings.filter((heading) => heading.depth === 2);
 
@@ -41,8 +48,10 @@ const suffix = isCurrent ? '' : ` (${versionLabel(version)})`;
 /**
  * Older and unreleased versions point at the current release, so a search engine
  * ranks the version most readers are running rather than whichever it crawled.
+ * The version canonical and the locale prefix are independent axes, so the
+ * active locale is passed through rather than always resolving to English.
  */
-const canonicalPath = isCurrent ? undefined : docsUrl(currentPath ?? '');
+const canonicalPath = isCurrent ? undefined : docsUrl(currentPath ?? '', undefined, locale);
 ---
 
 <Base
@@ -53,6 +62,8 @@ const canonicalPath = isCurrent ? undefined : docsUrl(currentPath ?? '');
   noindex={version.noindex}
   canonicalPath={canonicalPath}
   searchIndex={isCurrent ? '/search-index.json' : `/${version.id}/search-index.json`}
+  locale={locale}
+  translated={translated}
 >
   <div class="docs">
     <button
@@ -62,20 +73,22 @@ const canonicalPath = isCurrent ? undefined : docsUrl(currentPath ?? '');
       aria-expanded="false"
       aria-controls="docs-rail"
     >
-      <span>Documentation menu</span>
+      <span>{t(locale, 'docs_tree.rail_toggle')}</span>
       <span class="docs__railtoggle-mark" aria-hidden="true"></span>
     </button>
 
     <aside class="docs__rail" id="docs-rail">
-      <VersionPicker version={version} currentPath={currentPath} />
-      <DocsTree version={version} current={currentPath} available={available} />
+      <VersionPicker version={version} currentPath={currentPath} locale={locale} />
+      <DocsTree version={version} current={currentPath} available={available} locale={locale} />
     </aside>
 
     <article class="docs__body">
       <p class="crumbs">
-        <a href={versionHome(version)}>Docs</a>
+        <a href={versionHome(version)}>{t(locale, 'docs_tree.crumb_docs')}</a>
         <span>/</span>
-        <span class="crumbs__here">{currentPath ? docTitle(currentPath) : 'Overview'}</span>
+        <span class="crumbs__here">
+          {currentPath ? docTitle(currentPath) : t(locale, 'docs_tree.crumb_overview')}
+        </span>
       </p>
       <div class="prose"><slot /></div>
     </article>
@@ -83,8 +96,8 @@ const canonicalPath = isCurrent ? undefined : docsUrl(currentPath ?? '');
     <aside class="docs__toc">
       {
         onThisPage.length > 0 && (
-          <nav aria-label="On this page" data-toc>
-            <p class="toc__title">On this page</p>
+          <nav aria-label={t(locale, 'docs_tree.on_this_page')} data-toc>
+            <p class="toc__title">{t(locale, 'docs_tree.on_this_page')}</p>
             <ul>
               {onThisPage.map((heading) => (
                 <li>
@@ -104,10 +117,10 @@ const canonicalPath = isCurrent ? undefined : docsUrl(currentPath ?? '');
               href={`https://github.com/0xErwin1/dbflux/blob/main/docs/${editPath}`}
               rel="noopener"
             >
-              Edit this page
+              {t(locale, 'docs_tree.edit_page')}
             </a>
             <a href="https://github.com/0xErwin1/dbflux/issues/new" rel="noopener">
-              Report an issue
+              {t(locale, 'docs_tree.report_issue')}
             </a>
           </div>
         )

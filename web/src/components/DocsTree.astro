@@ -3,15 +3,23 @@ import Icon from '../components/Icon.astro';
 import { docTitle, sectionsFor } from '../data/docs';
 import type { DocsVersion } from '../data/versions';
 import { docsHref } from '../data/versions';
+import { localeFromPathname, t } from '../i18n';
+import type { Locale } from '../i18n';
 
 interface Props {
   version: DocsVersion;
   /** Version-less path of the page being read, absent on the index. */
   current?: string;
   available: readonly string[];
+  locale?: Locale;
 }
 
-const { version, current, available } = Astro.props;
+const {
+  version,
+  current,
+  available,
+  locale = localeFromPathname(Astro.url.pathname),
+} = Astro.props;
 
 const sections = sectionsFor(available).sections.map((section) => ({
   ...section,
@@ -21,7 +29,7 @@ const sections = sectionsFor(available).sections.map((section) => ({
 
 <nav class="tree" aria-label="Documentation">
   <button class="tree__search" type="button" data-search-open>
-    <span><Icon name="search" size={13} /> Search the docs</span>
+    <span><Icon name="search" size={13} /> {t(locale, 'docs_tree.search_cta')}</span>
     <kbd>Ctrl K</kbd>
   </button>
 

@@ -3,19 +3,33 @@ import Icon from './Icon.astro';
 import BrandMark from './BrandMark.astro';
 import { REPO } from '../data/nav';
 import { docsUrl, siteUrl } from '../data/site';
+import { localeFromPathname, t } from '../i18n';
+import type { Locale } from '../i18n';
 
 interface Props {
   current?: 'home' | 'docs' | 'about';
+  locale?: Locale;
 }
 
-const { current } = Astro.props;
+const { current, locale = localeFromPathname(Astro.url.pathname) } = Astro.props;
 
 const LINKS = [
-  { href: `${siteUrl()}#features`, label: 'Features', key: 'features' },
-  { href: `${siteUrl()}#drivers`, label: 'Drivers', key: 'drivers' },
-  { href: docsUrl(''), label: 'Docs', key: 'docs' },
-  { href: siteUrl('about/'), label: 'About', key: 'about' },
+  { href: `${siteUrl()}#features`, label: t(locale, 'nav.features'), key: 'features' },
+  { href: `${siteUrl()}#drivers`, label: t(locale, 'nav.drivers'), key: 'drivers' },
+  { href: docsUrl(''), label: t(locale, 'nav.docs'), key: 'docs' },
+  { href: siteUrl('about/'), label: t(locale, 'nav.about'), key: 'about' },
 ] as const;
+
+/**
+ * `/` and `/es/` are the only pages that currently exist in both locales — the
+ * docs and about routes gain their `/es/` counterpart in a later slice. Until
+ * then the switcher only appears on the home page, so it never links to an
+ * unbuilt page.
+ */
+const pathname = Astro.url.pathname;
+const isHome = pathname === '/' || pathname === '/es/' || pathname === '/es';
+const switchTarget = locale === 'es' ? '/' : '/es/';
+const switchHreflang = locale === 'es' ? 'en' : 'es';
 ---
 
 <header class="nav" data-nav>
@@ -40,11 +54,20 @@ const LINKS = [
     </nav>
 
     <div class="nav__actions">
+      {
+        isHome && (
+          <a class="nav__link nav__switch" href={switchTarget} hreflang={switchHreflang}>
+            {t(locale, 'nav.switch_locale')}
+          </a>
+        )
+      }
       <a class="nav__link nav__link--icon" href={REPO} rel="noopener">
         <Icon name="github" size={16} />
-        <span>GitHub</span>
+        <span>{t(locale, 'nav.github')}</span>
       </a>
-      <a class="btn btn--primary nav__cta" href={`${siteUrl()}#install`}>Download</a>
+      <a class="btn btn--primary nav__cta" href={`${siteUrl()}#install`}>
+        {t(locale, 'nav.download')}
+      </a>
       <button
         class="nav__toggle"
         type="button"
@@ -52,7 +75,7 @@ const LINKS = [
         aria-expanded="false"
         aria-controls="nav-sheet"
       >
-        <span class="visually-hidden">Menu</span>
+        <span class="visually-hidden">{t(locale, 'nav.menu')}</span>
         <Icon name="menu" size={20} />
       </button>
     </div>
@@ -60,9 +83,20 @@ const LINKS = [
 
   <div class="nav__sheet" id="nav-sheet" hidden>
     {LINKS.map((link) => <a href={link.href}>{link.label}</a>)}
-    <a href={REPO} rel="noopener">GitHub</a>
+    {
+      isHome && (
+        <a href={switchTarget} hreflang={switchHreflang}>
+          {t(locale, 'nav.switch_locale')}
+        </a>
+      )
+    }
+    <a href={REPO} rel="noopener">
+      {t(locale, 'nav.github')}
+    </a>
     <div class="nav__sheet-cta">
-      <a class="btn btn--primary" href={`${siteUrl()}#install`}>Download</a>
+      <a class="btn btn--primary" href={`${siteUrl()}#install`}>
+        {t(locale, 'nav.download')}
+      </a>
     </div>
   </div>
 </header>

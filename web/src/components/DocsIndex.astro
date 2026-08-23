@@ -1,21 +1,21 @@
 ---
 import { docTitle, sectionsFor } from '../data/docs';
 import { docsHref } from '../data/versions';
+import { localeFromPathname, t } from '../i18n';
+import type { Locale } from '../i18n';
 
 interface Props {
   versionId: string;
   available: readonly string[];
+  locale?: Locale;
 }
 
-const { versionId, available } = Astro.props;
+const { versionId, available, locale = localeFromPathname(Astro.url.pathname) } = Astro.props;
 const { sections, unfiled } = sectionsFor(available);
 ---
 
-<h1>Documentation</h1>
-<p>
-  Every page here is rendered from the markdown in the repository&rsquo;s <code>docs/</code>{' '}
-  directory, so a change in behaviour and the paragraph describing it ship in the same commit.
-</p>
+<h1>{t(locale, 'docs_index.title')}</h1>
+<p set:html={t(locale, 'docs_index.intro')} />
 
 {
   sections.map((section) => (
@@ -35,11 +35,8 @@ const { sections, unfiled } = sectionsFor(available);
 {
   unfiled.length > 0 && (
     <section>
-      <h2 id="unfiled">Not yet filed</h2>
-      <p>
-        These pages exist in this version but have no place in the reading order declared in
-        <code>src/data/nav.ts</code>.
-      </p>
+      <h2 id="unfiled">{t(locale, 'docs_index.unfiled_title')}</h2>
+      <p set:html={t(locale, 'docs_index.unfiled_body')} />
       <ul>
         {unfiled.map((path) => (
           <li>

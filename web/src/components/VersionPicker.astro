@@ -10,14 +10,17 @@ import {
   versionHome,
   versionLabel,
 } from '../data/versions';
+import { localeFromPathname, t } from '../i18n';
+import type { Locale } from '../i18n';
 
 interface Props {
   version: DocsVersion;
   /** Version-less path of the page being read, absent on the index. */
   currentPath?: string;
+  locale?: Locale;
 }
 
-const { version, currentPath } = Astro.props;
+const { version, currentPath, locale = localeFromPathname(Astro.url.pathname) } = Astro.props;
 
 const entries = await getCollection('docs');
 const build = buildInfo(version.id);
@@ -50,7 +53,7 @@ const targets = VERSIONS.map((candidate) => {
     aria-controls="version-menu"
     data-version-toggle
   >
-    <span class="picker__label">Version</span>
+    <span class="picker__label">{t(locale, 'versions.label')}</span>
     <span class="picker__value">{versionLabel(version)}</span>
     <svg
       width="11"
@@ -85,12 +88,12 @@ const targets = VERSIONS.map((candidate) => {
           >
             <span>{versionLabel(target.version)}</span>
             {!target.exact && target.version.id !== version.id && (
-              <span class="picker__tag" title="This page does not exist in that version">
-                index
+              <span class="picker__tag" title={t(locale, 'versions.index_tag_title')}>
+                {t(locale, 'versions.index_tag')}
               </span>
             )}
             {target.exact && target.version.id === CURRENT.id && (
-              <span class="picker__tag">default</span>
+              <span class="picker__tag">{t(locale, 'versions.default_tag')}</span>
             )}
           </a>
         </li>
