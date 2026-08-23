@@ -212,6 +212,43 @@ connection_manager:
     configure_named: "Configurar %{name}"
 document:
   audit:
+    actor:
+      app: Aplicación
+      external_auth_provider: Proveedor de autenticación externo
+      external_driver: Driver externo
+      hook: Hook
+      mcp_client: Cliente MCP
+      script: Script
+      system: Sistema
+      user: Usuario
+    category:
+      config: Configuración
+      connection: Conexión
+      governance: Gobernanza
+      hook: Hook
+      mcp: MCP
+      object_storage: Almacenamiento de objetos
+      query: Consulta
+      script: Script
+      system: Sistema
+    detail:
+      action: Acción
+      actor: Actor
+      category: Categoría
+      connection_driver: "Conexión/Driver"
+      correlation_id: ID de correlación
+      details: Detalles
+      duration: Duración
+      error: Error
+      event_id: ID de evento
+      level: Nivel
+      message: Mensaje
+      outcome: Resultado
+      partition: Partición
+      secondary_time: Hora secundaria
+      source: Origen
+      summary: Resumen
+      time: Hora
     filter:
       apply: Aplicar
       clear: Limpiar
@@ -224,6 +261,13 @@ document:
       y_scale:
         linear: "Y: Lineal"
         log: "Y: Logarítmica"
+    level:
+      debug: Depuración
+      error: Error
+      fatal: Fatal
+      info: Información
+      trace: Traza
+      warn: Advertencia
     menu:
       copy_row_as_csv: Copiar fila como CSV
       copy_summary: Copiar resumen
@@ -232,6 +276,25 @@ document:
         csv: CSV
         json: JSON
       filter_by_correlation: Filtrar por correlación
+    outcome:
+      cancelled: Cancelado
+      failure: Fallo
+      pending: Pendiente
+      success: Éxito
+    row:
+      unit:
+        events: eventos
+        rows: filas
+    source:
+      empty:
+        external: "Ningún evento coincide con los filtros actuales."
+        internal: "Ningún evento de auditoría coincide con los filtros actuales."
+      error_heading:
+        external: "Error al cargar eventos"
+        internal: "Error al cargar eventos de auditoría"
+      loading:
+        external: "Cargando eventos…"
+        internal: "Cargando eventos de auditoría…"
   code:
     toolbar:
       refresh: Actualizar

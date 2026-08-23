@@ -866,14 +866,100 @@ pub(crate) fn add_member_modal_placeholders(key_type: dbflux_core::KeyType) -> (
     }
 }
 
+/// Label for a [`dbflux_core::EventCategory`] shown in the audit viewer's
+/// detail pane.
+///
+/// Exhaustive by construction (no wildcard arm) so a new variant added to
+/// `dbflux_core::EventCategory` fails this crate's build until its catalog
+/// key is added here.
+pub(crate) fn audit_category_label(category: dbflux_core::EventCategory) -> String {
+    use dbflux_core::EventCategory;
+
+    match category {
+        EventCategory::Config => dbflux_i18n::t!("document.audit.category.config"),
+        EventCategory::Connection => dbflux_i18n::t!("document.audit.category.connection"),
+        EventCategory::Query => dbflux_i18n::t!("document.audit.category.query"),
+        EventCategory::Hook => dbflux_i18n::t!("document.audit.category.hook"),
+        EventCategory::Script => dbflux_i18n::t!("document.audit.category.script"),
+        EventCategory::System => dbflux_i18n::t!("document.audit.category.system"),
+        EventCategory::Mcp => dbflux_i18n::t!("document.audit.category.mcp"),
+        EventCategory::Governance => dbflux_i18n::t!("document.audit.category.governance"),
+        EventCategory::ObjectStorage => {
+            dbflux_i18n::t!("document.audit.category.object_storage")
+        }
+    }
+}
+
+/// Label for a [`dbflux_core::EventOutcome`] shown in the audit viewer's
+/// detail pane.
+///
+/// Exhaustive by construction (no wildcard arm) so a new variant added to
+/// `dbflux_core::EventOutcome` fails this crate's build until its catalog
+/// key is added here.
+pub(crate) fn audit_outcome_label(outcome: dbflux_core::EventOutcome) -> String {
+    use dbflux_core::EventOutcome;
+
+    match outcome {
+        EventOutcome::Success => dbflux_i18n::t!("document.audit.outcome.success"),
+        EventOutcome::Failure => dbflux_i18n::t!("document.audit.outcome.failure"),
+        EventOutcome::Cancelled => dbflux_i18n::t!("document.audit.outcome.cancelled"),
+        EventOutcome::Pending => dbflux_i18n::t!("document.audit.outcome.pending"),
+    }
+}
+
+/// Label for a [`dbflux_core::EventSeverity`] shown in the audit viewer's
+/// detail pane.
+///
+/// Exhaustive by construction (no wildcard arm) so a new variant added to
+/// `dbflux_core::EventSeverity` fails this crate's build until its catalog
+/// key is added here.
+pub(crate) fn audit_level_label(level: dbflux_core::EventSeverity) -> String {
+    use dbflux_core::EventSeverity;
+
+    match level {
+        EventSeverity::Trace => dbflux_i18n::t!("document.audit.level.trace"),
+        EventSeverity::Debug => dbflux_i18n::t!("document.audit.level.debug"),
+        EventSeverity::Info => dbflux_i18n::t!("document.audit.level.info"),
+        EventSeverity::Warn => dbflux_i18n::t!("document.audit.level.warn"),
+        EventSeverity::Error => dbflux_i18n::t!("document.audit.level.error"),
+        EventSeverity::Fatal => dbflux_i18n::t!("document.audit.level.fatal"),
+    }
+}
+
+/// Label for a [`dbflux_core::EventActorType`] shown in the audit viewer's
+/// detail pane.
+///
+/// Exhaustive by construction (no wildcard arm) so a new variant added to
+/// `dbflux_core::EventActorType` fails this crate's build until its catalog
+/// key is added here.
+pub(crate) fn audit_actor_type_label(actor_type: dbflux_core::EventActorType) -> String {
+    use dbflux_core::EventActorType;
+
+    match actor_type {
+        EventActorType::User => dbflux_i18n::t!("document.audit.actor.user"),
+        EventActorType::System => dbflux_i18n::t!("document.audit.actor.system"),
+        EventActorType::App => dbflux_i18n::t!("document.audit.actor.app"),
+        EventActorType::McpClient => dbflux_i18n::t!("document.audit.actor.mcp_client"),
+        EventActorType::Hook => dbflux_i18n::t!("document.audit.actor.hook"),
+        EventActorType::Script => dbflux_i18n::t!("document.audit.actor.script"),
+        EventActorType::ExternalDriver => {
+            dbflux_i18n::t!("document.audit.actor.external_driver")
+        }
+        EventActorType::ExternalAuthProvider => {
+            dbflux_i18n::t!("document.audit.actor.external_auth_provider")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         MutationItemKind, add_member_modal_placeholders, add_member_modal_section_label,
-        add_member_modal_title, agg_fn_display, assignment_value_kind_label, bool_op_label,
-        builder_mode_label, bulk_delete_success_label, chart_degraded_copy, chart_dock_shape_label,
-        chart_rail_why_text, code_toolbar_shortcut_hint_label, comparator_label,
-        copy_query_language_label, dangerous_query_body, dangerous_query_title,
+        add_member_modal_title, agg_fn_display, assignment_value_kind_label,
+        audit_actor_type_label, audit_category_label, audit_level_label, audit_outcome_label,
+        bool_op_label, builder_mode_label, bulk_delete_success_label, chart_degraded_copy,
+        chart_dock_shape_label, chart_rail_why_text, code_toolbar_shortcut_hint_label,
+        comparator_label, copy_query_language_label, dangerous_query_body, dangerous_query_title,
         delete_confirm_copy, delete_rows_label, execution_count_state_label, execution_mode_label,
         history_items_count_label, history_tab_label, incomplete_aggregate_rows_label,
         join_kind_label, live_output_lines_label, live_output_truncated_label,
@@ -883,7 +969,10 @@ mod tests {
         update_columns_label, valid_lines_label,
     };
     use dbflux_components::chart::ChartDetection;
-    use dbflux_core::{DangerousQueryKind, QueryLanguage, RefreshPolicy};
+    use dbflux_core::{
+        DangerousQueryKind, EventActorType, EventCategory, EventOutcome, EventSeverity,
+        QueryLanguage, RefreshPolicy,
+    };
 
     const ALL_DANGEROUS_QUERY_KINDS: &[DangerousQueryKind] = &[
         DangerousQueryKind::DeleteNoWhere,
@@ -2038,6 +2127,212 @@ mod tests {
         );
 
         assert_eq!(en, "Add Hash Fields");
+        assert_ne!(en, es);
+    }
+
+    const ALL_EVENT_CATEGORIES: &[EventCategory] = &[
+        EventCategory::Config,
+        EventCategory::Connection,
+        EventCategory::Query,
+        EventCategory::Hook,
+        EventCategory::Script,
+        EventCategory::System,
+        EventCategory::Mcp,
+        EventCategory::Governance,
+        EventCategory::ObjectStorage,
+    ];
+
+    const ALL_EVENT_OUTCOMES: &[EventOutcome] = &[
+        EventOutcome::Success,
+        EventOutcome::Failure,
+        EventOutcome::Cancelled,
+        EventOutcome::Pending,
+    ];
+
+    const ALL_EVENT_SEVERITIES: &[EventSeverity] = &[
+        EventSeverity::Trace,
+        EventSeverity::Debug,
+        EventSeverity::Info,
+        EventSeverity::Warn,
+        EventSeverity::Error,
+        EventSeverity::Fatal,
+    ];
+
+    const ALL_EVENT_ACTOR_TYPES: &[EventActorType] = &[
+        EventActorType::User,
+        EventActorType::System,
+        EventActorType::App,
+        EventActorType::McpClient,
+        EventActorType::Hook,
+        EventActorType::Script,
+        EventActorType::ExternalDriver,
+        EventActorType::ExternalAuthProvider,
+    ];
+
+    fn audit_category_key(category: EventCategory) -> &'static str {
+        match category {
+            EventCategory::Config => "document.audit.category.config",
+            EventCategory::Connection => "document.audit.category.connection",
+            EventCategory::Query => "document.audit.category.query",
+            EventCategory::Hook => "document.audit.category.hook",
+            EventCategory::Script => "document.audit.category.script",
+            EventCategory::System => "document.audit.category.system",
+            EventCategory::Mcp => "document.audit.category.mcp",
+            EventCategory::Governance => "document.audit.category.governance",
+            EventCategory::ObjectStorage => "document.audit.category.object_storage",
+        }
+    }
+
+    fn audit_outcome_key(outcome: EventOutcome) -> &'static str {
+        match outcome {
+            EventOutcome::Success => "document.audit.outcome.success",
+            EventOutcome::Failure => "document.audit.outcome.failure",
+            EventOutcome::Cancelled => "document.audit.outcome.cancelled",
+            EventOutcome::Pending => "document.audit.outcome.pending",
+        }
+    }
+
+    fn audit_level_key(level: EventSeverity) -> &'static str {
+        match level {
+            EventSeverity::Trace => "document.audit.level.trace",
+            EventSeverity::Debug => "document.audit.level.debug",
+            EventSeverity::Info => "document.audit.level.info",
+            EventSeverity::Warn => "document.audit.level.warn",
+            EventSeverity::Error => "document.audit.level.error",
+            EventSeverity::Fatal => "document.audit.level.fatal",
+        }
+    }
+
+    fn audit_actor_type_key(actor_type: EventActorType) -> &'static str {
+        match actor_type {
+            EventActorType::User => "document.audit.actor.user",
+            EventActorType::System => "document.audit.actor.system",
+            EventActorType::App => "document.audit.actor.app",
+            EventActorType::McpClient => "document.audit.actor.mcp_client",
+            EventActorType::Hook => "document.audit.actor.hook",
+            EventActorType::Script => "document.audit.actor.script",
+            EventActorType::ExternalDriver => "document.audit.actor.external_driver",
+            EventActorType::ExternalAuthProvider => "document.audit.actor.external_auth_provider",
+        }
+    }
+
+    #[test]
+    fn audit_category_label_covers_all_variants_and_keys_resolve_in_both_locales() {
+        for category in ALL_EVENT_CATEGORIES {
+            let key = audit_category_key(*category);
+
+            assert_eq!(audit_category_label(*category), dbflux_i18n::t!(key));
+
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn audit_outcome_label_covers_all_variants_and_keys_resolve_in_both_locales() {
+        for outcome in ALL_EVENT_OUTCOMES {
+            let key = audit_outcome_key(*outcome);
+
+            assert_eq!(audit_outcome_label(*outcome), dbflux_i18n::t!(key));
+
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn audit_level_label_covers_all_variants_and_keys_resolve_in_both_locales() {
+        for level in ALL_EVENT_SEVERITIES {
+            let key = audit_level_key(*level);
+
+            assert_eq!(audit_level_label(*level), dbflux_i18n::t!(key));
+
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn audit_actor_type_label_covers_all_variants_and_keys_resolve_in_both_locales() {
+        for actor_type in ALL_EVENT_ACTOR_TYPES {
+            let key = audit_actor_type_key(*actor_type);
+
+            assert_eq!(audit_actor_type_label(*actor_type), dbflux_i18n::t!(key));
+
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn audit_category_label_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.audit.category.query", locale = "en");
+        let es = dbflux_i18n::t!("document.audit.category.query", locale = "es");
+
+        assert_eq!(en, "Query");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn audit_outcome_label_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.audit.outcome.success", locale = "en");
+        let es = dbflux_i18n::t!("document.audit.outcome.success", locale = "es");
+
+        assert_eq!(en, "Success");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn audit_level_label_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.audit.level.warn", locale = "en");
+        let es = dbflux_i18n::t!("document.audit.level.warn", locale = "es");
+
+        assert_eq!(en, "Warning");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn audit_actor_type_label_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.audit.actor.mcp_client", locale = "en");
+        let es = dbflux_i18n::t!("document.audit.actor.mcp_client", locale = "es");
+
+        assert_eq!(en, "MCP Client");
         assert_ne!(en, es);
     }
 }

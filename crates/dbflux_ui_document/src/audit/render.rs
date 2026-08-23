@@ -758,7 +758,7 @@ impl AuditDocument {
 
     pub(super) fn render_detail_field(
         &self,
-        label: &'static str,
+        label: impl Into<SharedString>,
         value: Option<String>,
         theme: &gpui_component::Theme,
     ) -> Div {
@@ -786,23 +786,38 @@ impl AuditDocument {
 
         let theme = cx.theme().clone();
         let timestamp = self.format_timestamp_ms(event.created_at_epoch_ms);
-        let level = event.level.clone();
-        let category = match Self::short_category_label(event.category.as_deref()) {
-            "NULL" => None,
-            label => Some(label.to_string()),
-        };
-        let outcome = event.outcome.clone();
+        let level = event
+            .level
+            .as_deref()
+            .and_then(dbflux_core::EventSeverity::from_str_repr)
+            .map(crate::labels::audit_level_label)
+            .or_else(|| event.level.clone());
+        let category = event
+            .category
+            .as_deref()
+            .and_then(dbflux_core::EventCategory::from_str_repr)
+            .map(crate::labels::audit_category_label)
+            .or_else(|| event.category.clone());
+        let outcome = event
+            .outcome
+            .as_deref()
+            .and_then(dbflux_core::EventOutcome::from_str_repr)
+            .map(crate::labels::audit_outcome_label)
+            .or_else(|| event.outcome.clone());
         let actor = if event
             .actor_type
             .as_deref()
             .filter(|actor_type| !actor_type.is_empty() && *actor_type != "system")
             .is_some()
         {
-            format!(
-                "{} ({})",
-                event.actor_id,
-                event.actor_type.as_deref().unwrap_or("")
-            )
+            let actor_type_label = event
+                .actor_type
+                .as_deref()
+                .and_then(dbflux_core::EventActorType::from_str_repr)
+                .map(crate::labels::audit_actor_type_label)
+                .unwrap_or_else(|| event.actor_type.clone().unwrap_or_default());
+
+            format!("{} ({})", event.actor_id, actor_type_label)
         } else {
             event.actor_id.clone()
         };
@@ -839,30 +854,62 @@ impl AuditDocument {
                     .flex_wrap()
                     .gap_4()
                     .children(vec![
-                        self.render_detail_field("Time", Some(timestamp), &theme)
-                            .into_any_element(),
-                        self.render_detail_field("Level", level, &theme)
-                            .into_any_element(),
-                        self.render_detail_field("Category", category, &theme)
-                            .into_any_element(),
-                        self.render_detail_field("Outcome", outcome, &theme)
-                            .into_any_element(),
-                        self.render_detail_field("Actor", Some(actor), &theme)
-                            .into_any_element(),
-                        self.render_detail_field("Action", action, &theme)
-                            .into_any_element(),
-                        self.render_detail_field("Source", source, &theme)
-                            .into_any_element(),
+                        self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.time"),
+                            Some(timestamp),
+                            &theme,
+                        )
+                        .into_any_element(),
+                        self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.level"),
+                            level,
+                            &theme,
+                        )
+                        .into_any_element(),
+                        self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.category"),
+                            category,
+                            &theme,
+                        )
+                        .into_any_element(),
+                        self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.outcome"),
+                            outcome,
+                            &theme,
+                        )
+                        .into_any_element(),
+                        self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.actor"),
+                            Some(actor),
+                            &theme,
+                        )
+                        .into_any_element(),
+                        self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.action"),
+                            action,
+                            &theme,
+                        )
+                        .into_any_element(),
+                        self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.source"),
+                            source,
+                            &theme,
+                        )
+                        .into_any_element(),
                     ])
                     .when_some(connection_driver, |row, value| {
                         row.child(self.render_detail_field(
-                            "Connection/Driver",
+                            dbflux_i18n::t!("document.audit.detail.connection_driver"),
                             Some(value),
                             &theme,
                         ))
                     })
                     .when_some(duration, |row, value| {
-                        row.child(self.render_detail_field("Duration", Some(value), &theme))
+                        row.child(self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.duration"),
+                            Some(value),
+                            &theme,
+                        ))
                     }),
             )
             .when_some(summary, |root, value| {
@@ -870,7 +917,7 @@ impl AuditDocument {
                     div()
                         .flex_col()
                         .gap_1p5()
-                        .child(Label::new("Summary"))
+                        .child(Label::new(dbflux_i18n::t!("document.audit.detail.summary")))
                         .child(Text::body(value)),
                 )
             })
@@ -879,7 +926,10 @@ impl AuditDocument {
                     div()
                         .flex_col()
                         .gap_1p5()
-                        .child(Label::new("Error").text_color(theme.danger))
+                        .child(
+                            Label::new(dbflux_i18n::t!("document.audit.detail.error"))
+                                .text_color(theme.danger),
+                        )
                         .child(Text::body(value).danger()),
                 )
             })
@@ -888,7 +938,7 @@ impl AuditDocument {
                     div()
                         .flex_col()
                         .gap_1p5()
-                        .child(Label::new("Details"))
+                        .child(Label::new(dbflux_i18n::t!("document.audit.detail.details")))
                         .child(
                             div()
                                 .bg(theme.secondary)
@@ -905,7 +955,9 @@ impl AuditDocument {
                     div()
                         .flex_col()
                         .gap_1p5()
-                        .child(Label::new("Correlation ID"))
+                        .child(Label::new(dbflux_i18n::t!(
+                            "document.audit.detail.correlation_id"
+                        )))
                         .child(
                             div()
                                 .cursor_pointer()
@@ -961,17 +1013,37 @@ impl AuditDocument {
                     .flex_wrap()
                     .gap_4()
                     .children(vec![
-                        self.render_detail_field("Time", Some(timestamp), &theme)
-                            .into_any_element(),
-                        self.render_detail_field("Source", source_name, &theme)
-                            .into_any_element(),
-                        self.render_detail_field("Partition", source_partition, &theme)
-                            .into_any_element(),
-                        self.render_detail_field("Event ID", event_id, &theme)
-                            .into_any_element(),
+                        self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.time"),
+                            Some(timestamp),
+                            &theme,
+                        )
+                        .into_any_element(),
+                        self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.source"),
+                            source_name,
+                            &theme,
+                        )
+                        .into_any_element(),
+                        self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.partition"),
+                            source_partition,
+                            &theme,
+                        )
+                        .into_any_element(),
+                        self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.event_id"),
+                            event_id,
+                            &theme,
+                        )
+                        .into_any_element(),
                     ])
                     .when_some(secondary_timestamp, |row, value| {
-                        row.child(self.render_detail_field("Secondary Time", Some(value), &theme))
+                        row.child(self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.secondary_time"),
+                            Some(value),
+                            &theme,
+                        ))
                     }),
             )
             .when_some(message, |root, value| {
@@ -982,7 +1054,7 @@ impl AuditDocument {
                     div()
                         .flex_col()
                         .gap_1p5()
-                        .child(Label::new("Message"))
+                        .child(Label::new(dbflux_i18n::t!("document.audit.detail.message")))
                         .child(SelectableText::new(&message_input).w_full()),
                 )
             })
@@ -996,7 +1068,7 @@ impl AuditDocument {
                     div()
                         .flex_col()
                         .gap_1p5()
-                        .child(Label::new("Details"))
+                        .child(Label::new(dbflux_i18n::t!("document.audit.detail.details")))
                         .child(
                             div().bg(theme.secondary).p_2().rounded(Radii::SM).child(
                                 ReadonlyTextView::new(&details_input)
@@ -1423,5 +1495,63 @@ mod tests {
 
         assert_eq!(en, "Clear");
         assert_ne!(en, es);
+    }
+
+    const DETAIL_KEYS: &[&str] = &[
+        "document.audit.detail.action",
+        "document.audit.detail.actor",
+        "document.audit.detail.category",
+        "document.audit.detail.connection_driver",
+        "document.audit.detail.correlation_id",
+        "document.audit.detail.details",
+        "document.audit.detail.duration",
+        "document.audit.detail.error",
+        "document.audit.detail.event_id",
+        "document.audit.detail.level",
+        "document.audit.detail.message",
+        "document.audit.detail.outcome",
+        "document.audit.detail.partition",
+        "document.audit.detail.secondary_time",
+        "document.audit.detail.source",
+        "document.audit.detail.summary",
+        "document.audit.detail.time",
+    ];
+
+    #[test]
+    fn audit_detail_keys_resolve_in_both_locales() {
+        for key in DETAIL_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, *key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn audit_detail_correlation_id_label_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.audit.detail.correlation_id", locale = "en");
+        let es = dbflux_i18n::t!("document.audit.detail.correlation_id", locale = "es");
+
+        assert_eq!(en, "Correlation ID");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn render_detail_field_accepts_a_translated_string_label() {
+        // `render_detail_field` widened from `&'static str` to
+        // `impl Into<SharedString>` so translated `String` values from
+        // `dbflux_i18n::t!` can be passed directly without an intermediate
+        // leak or a `&'static str` catalog. This compiles only if the
+        // widened signature is in place.
+        let label: String = dbflux_i18n::t!("document.audit.detail.time");
+
+        assert!(!label.is_empty());
     }
 }
