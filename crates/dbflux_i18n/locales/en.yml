@@ -478,6 +478,31 @@ document:
       connection_not_found: Connection not found
       connection_error: "Connection error: %{error}"
       collection_source_unsupported: "Collection source not supported in ChartDocument; open via DataDocument"
+    metric_picker:
+      apply: Apply
+      dropdown:
+        custom: "Custom…"
+      period:
+        placeholder: Period (seconds)
+        error: "Period: %{message}"
+        validation:
+          not_a_number: "period must be a number, got %{value}"
+          too_low: period must be at least 1 second
+          too_high: period must not exceed 86400 seconds (24 hours)
+      statistic:
+        placeholder: "Statistic (e.g. p99)"
+        error: "Statistic: %{message}"
+        validation:
+          empty: statistic must not be empty
+      dimensions:
+        title: DIMENSIONS
+        loading: "Loading dimensions…"
+        error: "Error: %{message}"
+        retry: Retry
+        aggregate_all: Aggregate all
+        empty: No dimension combinations
+        connection_not_found: Connection not found or not active
+        catalog_unsupported: Connection does not support metric catalog
   code:
     toolbar:
       refresh: Refresh
