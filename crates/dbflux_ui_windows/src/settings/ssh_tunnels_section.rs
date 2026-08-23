@@ -1117,6 +1117,7 @@ mod tests {
         "settings.ssh_tunnels.action.import",
         "settings.ssh_tunnels.action.export",
         "settings.ssh_tunnels.action.delete",
+        "settings.ssh_tunnels.error.host_and_user_required",
     ];
 
     // Reused from the shared `ssh.*` vocabulary (slice S10, `access_tab.rs`).

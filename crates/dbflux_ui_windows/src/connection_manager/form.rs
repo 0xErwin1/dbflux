@@ -95,13 +95,13 @@ impl ConnectionManagerWindow {
             let name = self.form.input_name.read(cx).value().to_string();
             if name.trim().is_empty() {
                 self.validation_errors
-                    .push("Connection name is required".to_string());
+                    .push(dbflux_i18n::t!("form.validation.connection_name_required"));
             }
         }
 
         let Some(driver) = &self.form.selected_driver else {
             self.validation_errors
-                .push("No driver selected".to_string());
+                .push(dbflux_i18n::t!("form.validation.no_driver_selected"));
             return false;
         };
 
@@ -130,16 +130,20 @@ impl ConnectionManagerWindow {
                         && value.trim().is_empty()
                         && !self.has_dynamic_value_ref_for_field(&field.id, cx)
                     {
-                        self.validation_errors
-                            .push(format!("{} is required", field.label));
+                        self.validation_errors.push(dbflux_i18n::t!(
+                            "form.validation.field_required",
+                            field = field.label.clone()
+                        ));
                     }
 
                     if !value.trim().is_empty()
                         && field.kind == FormFieldKind::Number
                         && value.parse::<u16>().is_err()
                     {
-                        self.validation_errors
-                            .push(format!("{} must be a valid number", field.label));
+                        self.validation_errors.push(dbflux_i18n::t!(
+                            "form.validation.field_invalid_number",
+                            field = field.label.clone()
+                        ));
                     }
                 }
             }
@@ -149,19 +153,19 @@ impl ConnectionManagerWindow {
             let ssh_host = self.access.input_ssh_host.read(cx).value().to_string();
             if ssh_host.trim().is_empty() {
                 self.validation_errors
-                    .push("SSH Host is required when SSH is enabled".to_string());
+                    .push(dbflux_i18n::t!("form.validation.ssh_host_required"));
             }
 
             let ssh_user = self.access.input_ssh_user.read(cx).value().to_string();
             if ssh_user.trim().is_empty() {
                 self.validation_errors
-                    .push("SSH User is required when SSH is enabled".to_string());
+                    .push(dbflux_i18n::t!("form.validation.ssh_user_required"));
             }
 
             let ssh_port_str = self.access.input_ssh_port.read(cx).value().to_string();
             if !ssh_port_str.trim().is_empty() && ssh_port_str.parse::<u16>().is_err() {
                 self.validation_errors
-                    .push("SSH Port must be a valid number".to_string());
+                    .push(dbflux_i18n::t!("form.validation.ssh_port_invalid"));
             }
         }
 
@@ -175,19 +179,19 @@ impl ConnectionManagerWindow {
                 .to_string();
             if instance_id.trim().is_empty() {
                 self.validation_errors
-                    .push("SSM Instance ID is required".to_string());
+                    .push(dbflux_i18n::t!("form.validation.ssm_instance_id_required"));
             } else if !self.has_dynamic_value_ref_for_field("ssm_instance_id", cx)
                 && !instance_id.starts_with("i-")
                 && !instance_id.starts_with("mi-")
             {
                 self.validation_errors
-                    .push("SSM Instance ID must start with 'i-' or 'mi-'".to_string());
+                    .push(dbflux_i18n::t!("form.validation.ssm_instance_id_format"));
             }
 
             let region = self.access.input_ssm_region.read(cx).value().to_string();
             if region.trim().is_empty() {
                 self.validation_errors
-                    .push("SSM Region is required".to_string());
+                    .push(dbflux_i18n::t!("form.validation.ssm_region_required"));
             }
 
             let port_str = self
@@ -200,11 +204,11 @@ impl ConnectionManagerWindow {
                 match port_str.parse::<u16>() {
                     Ok(0) => {
                         self.validation_errors
-                            .push("SSM Remote Port must be greater than 0".to_string());
+                            .push(dbflux_i18n::t!("form.validation.ssm_remote_port_positive"));
                     }
                     Err(_) => {
                         self.validation_errors
-                            .push("SSM Remote Port must be a valid number".to_string());
+                            .push(dbflux_i18n::t!("form.validation.ssm_remote_port_invalid"));
                     }
                     _ => {}
                 }
@@ -225,27 +229,23 @@ impl ConnectionManagerWindow {
 
             match bound_profile {
                 None => {
-                    self.validation_errors.push(format!(
-                        "AWS profile '{}' not found in ~/.aws/config — please restore or \
-                         recreate the profile in ~/.aws/config before connecting.",
-                        auth_profile_id
+                    self.validation_errors.push(dbflux_i18n::t!(
+                        "form.validation.auth_profile_not_found",
+                        id = auth_profile_id.to_string()
                     ));
                 }
 
                 Some(profile) if profile.dangling_origin.as_deref() == Some("keyring-only") => {
-                    self.validation_errors.push(format!(
-                        "Auth profile '{}' is only in the DBFlux keyring and no longer has a \
-                         corresponding entry in ~/.aws/config or ~/.aws/credentials. \
-                         Add the credentials to ~/.aws/credentials to connect with this profile.",
-                        profile.name
+                    self.validation_errors.push(dbflux_i18n::t!(
+                        "form.validation.auth_profile_dangling_keyring_only",
+                        name = profile.name
                     ));
                 }
 
                 Some(profile) if profile.dangling_origin.is_some() => {
-                    self.validation_errors.push(format!(
-                        "Auth profile '{}' could not be found in ~/.aws/config. \
-                         Please recreate the profile or update the connection binding.",
-                        profile.name
+                    self.validation_errors.push(dbflux_i18n::t!(
+                        "form.validation.auth_profile_dangling",
+                        name = profile.name
                     ));
                 }
 
@@ -262,10 +262,9 @@ impl ConnectionManagerWindow {
 
         if uses_dynamic_auth_sources {
             let Some(auth_profile_id) = self.auth_profile.selected_auth_profile_id else {
-                self.validation_errors.push(
-                    "Dynamic value sources require an Auth Profile. Select one in Access tab."
-                        .to_string(),
-                );
+                self.validation_errors.push(dbflux_i18n::t!(
+                    "form.validation.dynamic_auth_profile_required"
+                ));
                 return self.validation_errors.is_empty();
             };
 
@@ -283,9 +282,9 @@ impl ConnectionManagerWindow {
                     .auth_provider_by_id(&profile.provider_id)
                     .is_none()
                 {
-                    self.validation_errors.push(format!(
-                        "Selected Auth Profile '{}' has no registered provider for dynamic value sources.",
-                        profile.name
+                    self.validation_errors.push(dbflux_i18n::t!(
+                        "form.validation.auth_profile_no_provider",
+                        name = profile.name
                     ));
                 }
             } else {
@@ -554,9 +553,14 @@ impl ConnectionManagerWindow {
             .read(cx)
             .is_literal(cx);
 
+        let save_action = if is_edit {
+            dbflux_i18n::t!("form.action.updating")
+        } else {
+            dbflux_i18n::t!("form.action.saving")
+        };
         info!(
             "{} profile: {}, save_password={}, password_len={}, ssh_enabled={}, ssh_auth={:?}",
-            if is_edit { "Updating" } else { "Saving" },
+            save_action,
             profile.name,
             profile.save_password,
             password.len(),
@@ -570,7 +574,7 @@ impl ConnectionManagerWindow {
                 .as_ref()
                 .is_none_or(|ov| ov.refresh_interval_secs.is_none())
         {
-            Toast::warning("Refresh interval override ignored: value must be a positive number")
+            Toast::warning(dbflux_i18n::t!("form.warning.refresh_interval_invalid"))
                 .meta_right(now_hms())
                 .push(cx);
         }
@@ -701,14 +705,14 @@ impl ConnectionManagerWindow {
 
         let Some(profile) = self.build_profile(cx) else {
             self.test_status = TestStatus::Failed;
-            self.test_error = Some("Failed to build profile".to_string());
+            self.test_error = Some(dbflux_i18n::t!("form.error.build_profile_failed"));
             cx.notify();
             return;
         };
 
         let Some(driver) = self.form.selected_driver.clone() else {
             self.test_status = TestStatus::Failed;
-            self.test_error = Some("No driver selected".to_string());
+            self.test_error = Some(dbflux_i18n::t!("form.validation.no_driver_selected"));
             cx.notify();
             return;
         };
@@ -795,9 +799,10 @@ impl ConnectionManagerWindow {
                                         dbflux_core::run_pipeline(pipeline_input, &state_tx)
                                             .await
                                             .map_err(|error| {
-                                                format!(
-                                                    "Pipeline stage '{}': {}",
-                                                    error.stage, error.source
+                                                dbflux_i18n::t!(
+                                                    "form.error.pipeline_stage_failed",
+                                                    stage = error.stage,
+                                                    source = error.source.to_string()
                                                 )
                                             })?;
 
@@ -1007,12 +1012,15 @@ where
 
     match (outcome, cleanup) {
         (Ok(result), Ok(())) => Ok(result),
-        (Ok(_), Err(cleanup_error)) => {
-            Err(format!("Test connection cleanup failed: {cleanup_error}"))
-        }
+        (Ok(_), Err(cleanup_error)) => Err(dbflux_i18n::t!(
+            "form.error.test_cleanup_failed",
+            error = cleanup_error
+        )),
         (Err(primary_error), Ok(())) => Err(primary_error),
-        (Err(primary_error), Err(cleanup_error)) => Err(format!(
-            "{primary_error} (cleanup warning: {cleanup_error})"
+        (Err(primary_error), Err(cleanup_error)) => Err(dbflux_i18n::t!(
+            "form.error.test_cleanup_warning",
+            primary_error = primary_error,
+            cleanup_error = cleanup_error
         )),
     }
 }
@@ -1045,7 +1053,7 @@ where
         HookPhaseState::Continue { warnings } => warnings,
         HookPhaseState::Aborted { error } => return Err(error),
         HookPhaseState::Cancelled => {
-            return Err("Test connection cancelled by pre-connect hook".to_string());
+            return Err(dbflux_i18n::t!("form.error.test_cancelled_pre"));
         }
     };
 
@@ -1063,9 +1071,7 @@ where
             })
         }
         HookPhaseState::Aborted { error } => Err(error),
-        HookPhaseState::Cancelled => {
-            Err("Test connection cancelled by post-connect hook".to_string())
-        }
+        HookPhaseState::Cancelled => Err(dbflux_i18n::t!("form.error.test_cancelled_post")),
     }
 }
 
@@ -1081,9 +1087,12 @@ fn format_detached_hook_cleanup_failure(
         .collect::<Vec<_>>()
         .join(", ");
 
-    format!(
-        "Failed to release detached test hook tasks for profile '{profile_name}' ({profile_id}); scoped task IDs [{task_ids}]: {}",
-        error.source()
+    dbflux_i18n::t!(
+        "form.error.detached_hook_cleanup_failed",
+        profile_name = profile_name,
+        profile_id = profile_id.to_string(),
+        task_ids = task_ids,
+        error = error.source().to_string()
     )
 }
 
@@ -1104,14 +1113,7 @@ fn normalize_aws_credentials_error(profile_name: &str, error: &str) -> String {
         || lower.contains("no credentials in chain");
 
     if is_missing_credentials {
-        return format!(
-            "AWS credentials for profile '{}' could not be resolved. \
-             Add the credentials to ~/.aws/credentials (or use environment \
-             variables / IAM role) and retry. \
-             DBFlux does not store AWS access keys — credentials are read \
-             directly by the AWS SDK.",
-            profile_name
-        );
+        return dbflux_i18n::t!("form.error.aws_credentials_missing", name = profile_name);
     }
 
     error.to_string()
@@ -1125,6 +1127,65 @@ mod tests {
     };
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
+
+    const FORM_KEYS: &[&str] = &[
+        "form.validation.connection_name_required",
+        "form.validation.no_driver_selected",
+        "form.validation.field_required",
+        "form.validation.field_invalid_number",
+        "form.validation.ssh_host_required",
+        "form.validation.ssh_user_required",
+        "form.validation.ssh_port_invalid",
+        "form.validation.ssm_instance_id_required",
+        "form.validation.ssm_instance_id_format",
+        "form.validation.ssm_region_required",
+        "form.validation.ssm_remote_port_positive",
+        "form.validation.ssm_remote_port_invalid",
+        "form.validation.auth_profile_not_found",
+        "form.validation.auth_profile_dangling_keyring_only",
+        "form.validation.auth_profile_dangling",
+        "form.validation.dynamic_auth_profile_required",
+        "form.validation.auth_profile_no_provider",
+        "form.action.updating",
+        "form.action.saving",
+        "form.warning.refresh_interval_invalid",
+        "form.error.build_profile_failed",
+        "form.error.test_cancelled_pre",
+        "form.error.test_cancelled_post",
+        "form.error.test_cleanup_failed",
+        "form.error.test_cleanup_warning",
+        "form.error.detached_hook_cleanup_failed",
+        "form.error.aws_credentials_missing",
+        "form.error.pipeline_stage_failed",
+    ];
+
+    #[::core::prelude::v1::test]
+    fn form_validation_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in FORM_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn form_validation_connection_name_required_differs_between_locales() {
+        let english = dbflux_i18n::t!("form.validation.connection_name_required", locale = "en");
+        let spanish = dbflux_i18n::t!("form.validation.connection_name_required", locale = "es");
+
+        assert_ne!(english, spanish);
+    }
 
     fn hook(command: &str) -> ConnectionHook {
         ConnectionHook {
@@ -1497,9 +1558,12 @@ mod tests {
             current_unsaved_hook_context(),
         ));
 
-        assert!(
-            matches!(result, Err(error) if error == "driver probe failed (cleanup warning: detached hook cleanup failed)")
+        let expected = dbflux_i18n::t!(
+            "form.error.test_cleanup_warning",
+            primary_error = "driver probe failed",
+            cleanup_error = "detached hook cleanup failed"
         );
+        assert!(matches!(result, Err(error) if error == expected));
         assert_eq!(*cleanup_calls.lock().expect("cleanup log poisoned"), 1);
     }
 
@@ -1619,9 +1683,8 @@ mod tests {
             current_unsaved_hook_context(),
         ));
 
-        assert!(
-            matches!(result, Err(error) if error == "Test connection cancelled by pre-connect hook")
-        );
+        let expected = dbflux_i18n::t!("form.error.test_cancelled_pre");
+        assert!(matches!(result, Err(error) if error == expected));
         assert_eq!(*cleanup_calls.lock().expect("cleanup log poisoned"), 1);
     }
 
@@ -1641,9 +1704,11 @@ mod tests {
             current_unsaved_hook_context(),
         ));
 
-        assert!(
-            matches!(result, Err(error) if error == "Test connection cleanup failed: access handle did not close")
+        let expected = dbflux_i18n::t!(
+            "form.error.test_cleanup_failed",
+            error = "access handle did not close"
         );
+        assert!(matches!(result, Err(error) if error == expected));
     }
 
     #[::core::prelude::v1::test]

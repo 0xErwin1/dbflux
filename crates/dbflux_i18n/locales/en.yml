@@ -1729,6 +1729,39 @@ errors:
   correlation:
     detail: "Correlation: %{id}"
     clipboard: "%{summary}\nCorrelation: %{id}"
+form:
+  validation:
+    connection_name_required: Connection name is required
+    no_driver_selected: No driver selected
+    field_required: "%{field} is required"
+    field_invalid_number: "%{field} must be a valid number"
+    ssh_host_required: SSH Host is required when SSH is enabled
+    ssh_user_required: SSH User is required when SSH is enabled
+    ssh_port_invalid: SSH Port must be a valid number
+    ssm_instance_id_required: SSM Instance ID is required
+    ssm_instance_id_format: SSM Instance ID must start with 'i-' or 'mi-'
+    ssm_region_required: SSM Region is required
+    ssm_remote_port_positive: SSM Remote Port must be greater than 0
+    ssm_remote_port_invalid: SSM Remote Port must be a valid number
+    auth_profile_not_found: "AWS profile '%{id}' not found in ~/.aws/config — please restore or recreate the profile in ~/.aws/config before connecting."
+    auth_profile_dangling_keyring_only: "Auth profile '%{name}' is only in the DBFlux keyring and no longer has a corresponding entry in ~/.aws/config or ~/.aws/credentials. Add the credentials to ~/.aws/credentials to connect with this profile."
+    auth_profile_dangling: "Auth profile '%{name}' could not be found in ~/.aws/config. Please recreate the profile or update the connection binding."
+    dynamic_auth_profile_required: Dynamic value sources require an Auth Profile. Select one in Access tab.
+    auth_profile_no_provider: "Selected Auth Profile '%{name}' has no registered provider for dynamic value sources."
+  action:
+    updating: Updating
+    saving: Saving
+  warning:
+    refresh_interval_invalid: "Refresh interval override ignored: value must be a positive number"
+  error:
+    build_profile_failed: Failed to build profile
+    test_cancelled_pre: Test connection cancelled by pre-connect hook
+    test_cancelled_post: Test connection cancelled by post-connect hook
+    test_cleanup_failed: "Test connection cleanup failed: %{error}"
+    test_cleanup_warning: "%{primary_error} (cleanup warning: %{cleanup_error})"
+    detached_hook_cleanup_failed: "Failed to release detached test hook tasks for profile '%{profile_name}' (%{profile_id}); scoped task IDs [%{task_ids}]: %{error}"
+    aws_credentials_missing: "AWS credentials for profile '%{name}' could not be resolved. Add the credentials to ~/.aws/credentials (or use environment variables / IAM role) and retry. DBFlux does not store AWS access keys — credentials are read directly by the AWS SDK."
+    pipeline_stage_failed: "Pipeline stage '%{stage}': %{source}"
 hooks:
   kind:
     command: Command
@@ -2525,6 +2558,9 @@ settings:
     empty: No RPC services configured
     edit_title: Edit RPC Service
     new_title: New RPC Service
+    delete_dialog_title: Delete Service
+    delete_dialog:
+      body: 'Are you sure you want to delete "%{name}"?'
     error:
       socket_id_required: Socket ID is required
       timeout_invalid: Timeout must be a valid number (milliseconds)
@@ -2566,6 +2602,8 @@ settings:
       import: "Import…"
       export: Export
       delete: Delete
+    error:
+      host_and_user_required: Host and user are required
   proxies:
     placeholder_name: Proxy name
     placeholder_username: username

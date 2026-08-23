@@ -272,6 +272,11 @@ pub(crate) fn ssh_tunnels_delete_body(name: &str) -> String {
     dbflux_i18n::t!("settings.ssh_tunnels.delete_dialog.body", name = name)
 }
 
+/// Formats the delete-confirmation body for a named RPC service.
+pub(crate) fn rpc_services_delete_body(name: &str) -> String {
+    dbflux_i18n::t!("settings.rpc_services.delete_dialog.body", name = name)
+}
+
 /// Builds the delete-confirmation body for a proxy profile, embedding the
 /// proxy name and pluralizing the affected-connections count.
 pub(crate) fn proxies_delete_body(name: &str, affected_connections: usize) -> String {
@@ -705,7 +710,7 @@ mod tests {
         import_preview_required_banner, import_required_auth_profile_ref_label,
         import_required_aws_reference_label, import_required_secret_label,
         import_status_imported_toast, mcp_preview_summary, proxies_delete_body,
-        ssh_private_key_with_path, ssh_tunnels_delete_body,
+        rpc_services_delete_body, ssh_private_key_with_path, ssh_tunnels_delete_body,
     };
     use super::{
         export_error_cannot_determine_output_path, export_error_failed, export_error_write_failed,
@@ -943,6 +948,13 @@ mod tests {
         let message = ssh_tunnels_delete_body("bastion-prod");
 
         assert!(message.contains("bastion-prod"));
+    }
+
+    #[test]
+    fn rpc_services_delete_body_embeds_service_name() {
+        let message = rpc_services_delete_body("my-driver.sock");
+
+        assert!(message.contains("my-driver.sock"));
     }
 
     #[test]

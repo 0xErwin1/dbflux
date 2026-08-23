@@ -1729,6 +1729,39 @@ errors:
   correlation:
     detail: "Correlación: %{id}"
     clipboard: "%{summary}\nCorrelación: %{id}"
+form:
+  validation:
+    connection_name_required: El nombre de la conexión es obligatorio
+    no_driver_selected: No se seleccionó ningún driver
+    field_required: "%{field} es obligatorio"
+    field_invalid_number: "%{field} debe ser un número válido"
+    ssh_host_required: El host SSH es obligatorio cuando SSH está habilitado
+    ssh_user_required: El usuario SSH es obligatorio cuando SSH está habilitado
+    ssh_port_invalid: El puerto SSH debe ser un número válido
+    ssm_instance_id_required: El ID de instancia SSM es obligatorio
+    ssm_instance_id_format: 'El ID de instancia SSM debe comenzar con "i-" o "mi-"'
+    ssm_region_required: La región SSM es obligatoria
+    ssm_remote_port_positive: El puerto remoto SSM debe ser mayor que 0
+    ssm_remote_port_invalid: El puerto remoto SSM debe ser un número válido
+    auth_profile_not_found: "No se encontró el perfil de AWS '%{id}' en ~/.aws/config — restaura o recrea el perfil en ~/.aws/config antes de conectar."
+    auth_profile_dangling_keyring_only: "El perfil de autenticación '%{name}' solo existe en el llavero de DBFlux y ya no tiene una entrada correspondiente en ~/.aws/config o ~/.aws/credentials. Agrega las credenciales a ~/.aws/credentials para conectar con este perfil."
+    auth_profile_dangling: "No se pudo encontrar el perfil de autenticación '%{name}' en ~/.aws/config. Recrea el perfil o actualiza el enlace de la conexión."
+    dynamic_auth_profile_required: Las fuentes de valores dinámicos requieren un perfil de autenticación. Selecciona uno en la pestaña Acceso.
+    auth_profile_no_provider: "El perfil de autenticación seleccionado '%{name}' no tiene un proveedor registrado para fuentes de valores dinámicos."
+  action:
+    updating: Actualizando
+    saving: Guardando
+  warning:
+    refresh_interval_invalid: "Anulación del intervalo de actualización ignorada: el valor debe ser un número positivo"
+  error:
+    build_profile_failed: No se pudo construir el perfil
+    test_cancelled_pre: La prueba de conexión fue cancelada por el hook previo a la conexión
+    test_cancelled_post: La prueba de conexión fue cancelada por el hook posterior a la conexión
+    test_cleanup_failed: "Error al limpiar la conexión de prueba: %{error}"
+    test_cleanup_warning: "%{primary_error} (advertencia de limpieza: %{cleanup_error})"
+    detached_hook_cleanup_failed: "No se pudieron liberar las tareas de hook de prueba independientes para el perfil '%{profile_name}' (%{profile_id}); IDs de tarea con alcance [%{task_ids}]: %{error}"
+    aws_credentials_missing: "No se pudieron resolver las credenciales de AWS para el perfil '%{name}'. Agrega las credenciales a ~/.aws/credentials (o usa variables de entorno / rol de IAM) y vuelve a intentarlo. DBFlux no almacena claves de acceso de AWS: las credenciales se leen directamente desde el SDK de AWS."
+    pipeline_stage_failed: "Etapa de la canalización '%{stage}': %{source}"
 hooks:
   kind:
     command: Comando
@@ -2525,6 +2558,9 @@ settings:
     empty: No hay servicios RPC configurados
     edit_title: Editar servicio RPC
     new_title: Nuevo servicio RPC
+    delete_dialog_title: Eliminar servicio
+    delete_dialog:
+      body: '¿Seguro que quieres eliminar "%{name}"?'
     error:
       socket_id_required: El ID del socket es obligatorio
       timeout_invalid: El tiempo de espera debe ser un número válido (milisegundos)
@@ -2566,6 +2602,8 @@ settings:
       import: "Importar…"
       export: Exportar
       delete: Eliminar
+    error:
+      host_and_user_required: El host y el usuario son obligatorios
   proxies:
     placeholder_name: Nombre del proxy
     placeholder_username: usuario
