@@ -188,6 +188,45 @@ document:
         deleted:
           one: "%{count} eliminación"
           many: "%{count} eliminaciones"
+    mutation:
+      confirm:
+        delete:
+          summary:
+            one: 'Eliminar %{count} fila de "%{table}"'
+            many: 'Eliminar %{count} filas de "%{table}"'
+            unknown: 'Eliminar filas de "%{table}"'
+        update:
+          summary:
+            one: 'Actualizar %{count} columna en "%{table}"'
+            many: 'Actualizar %{count} columnas en "%{table}"'
+      error:
+        update_document_unsupported_id: "No se puede actualizar el campo del documento: el documento tiene un valor de _id no admitido"
+        update_document_failed: "No se pudo actualizar el documento: %{error}"
+        save_row_unsupported_pk: "No se puede guardar la fila: la clave primaria usa un tipo de valor no admitido"
+        save_row_identity_failed: "No se puede guardar la fila: no se pudo construir la identidad de la fila a partir de las columnas de clave primaria"
+        save_row_unsupported_values: "No se puede guardar la fila: los valores no admitidos son de solo lectura"
+        save_failed: "Error al guardar: %{error}"
+        save_document_unsupported_id: "No se puede guardar el documento: tiene un valor de _id no admitido"
+        insert_failed: "Error al insertar: %{error}"
+        insert_no_values: "No se puede insertar: no se proporcionaron valores"
+        delete_document_unsupported_id: "No se puede eliminar el documento: tiene un valor de _id no admitido"
+        delete_failed: "Error al eliminar: %{error}"
+        delete_no_primary_key: "No se puede eliminar: esta tabla no tiene clave primaria definida"
+        delete_identity_failed: "No se puede eliminar: no se pudo identificar la fila"
+        bulk_delete_no_rows_identified: "No se puede eliminar: no se pudo identificar ninguna fila"
+        bulk_delete_no_documents_identified: "No se puede eliminar: no se pudo identificar ningún documento"
+      toast:
+        document_updated: Documento actualizado
+        saved: Guardado
+        document_inserted: Documento insertado
+        row_inserted: Fila insertada
+        document_deleted: Documento eliminado
+        row_deleted: Fila eliminada
+        rows_deleted: "%{count} fila(s) eliminada(s)"
+        documents_deleted: "%{count} documento(s) eliminado(s)"
+        partial_delete:
+          row: "Se eliminaron %{done} de %{total} fila(s); luego falló: %{error}"
+          document: "Se eliminaron %{done} de %{total} documento(s); luego falló: %{error}"
     row_inspector:
       badge:
         primary_key: PK

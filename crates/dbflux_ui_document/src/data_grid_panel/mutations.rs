@@ -241,7 +241,9 @@ impl DataGridPanel {
                     report_error(
                         UserFacingError::new(
                             ErrorKind::User,
-                            "Cannot update document field: the document has an unsupported _id value",
+                            dbflux_i18n::t!(
+                                "document.data.mutation.error.update_document_unsupported_id"
+                            ),
                         ),
                         cx,
                     );
@@ -330,7 +332,9 @@ impl DataGridPanel {
                             }
 
                             panel.pending.toast = Some(PendingToast {
-                                message: "Document updated".to_string(),
+                                message: dbflux_i18n::t!(
+                                    "document.data.mutation.toast.document_updated"
+                                ),
                                 is_error: false,
                             });
                         }
@@ -339,7 +343,10 @@ impl DataGridPanel {
                             report_error(
                                 UserFacingError::new(
                                     ErrorKind::Driver,
-                                    format!("Failed to update document: {error}"),
+                                    dbflux_i18n::t!(
+                                        "document.data.mutation.error.update_document_failed",
+                                        error = error
+                                    ),
                                 ),
                                 cx,
                             );
@@ -444,12 +451,12 @@ impl DataGridPanel {
             .iter()
             .any(|value| matches!(value, Value::Unsupported(_)))
         {
-            let message = "Cannot save row: primary key uses an unsupported value type";
+            let message = dbflux_i18n::t!("document.data.mutation.error.save_row_unsupported_pk");
 
             table_state.update(cx, |state, cx| {
                 state
                     .edit_buffer_mut()
-                    .set_row_state(row_idx, RowState::Error(message.to_string()));
+                    .set_row_state(row_idx, RowState::Error(message.clone()));
                 cx.notify();
             });
 
@@ -461,7 +468,7 @@ impl DataGridPanel {
             report_error(
                 UserFacingError::new(
                     ErrorKind::User,
-                    "Cannot save row: failed to build row identity from primary key columns",
+                    dbflux_i18n::t!("document.data.mutation.error.save_row_identity_failed"),
                 ),
                 cx,
             );
@@ -485,12 +492,13 @@ impl DataGridPanel {
             .iter()
             .any(|a| matches!(a.value, Value::Unsupported(_)))
         {
-            let message = "Cannot save row: unsupported values are read-only";
+            let message =
+                dbflux_i18n::t!("document.data.mutation.error.save_row_unsupported_values");
 
             table_state.update(cx, |state, cx| {
                 state
                     .edit_buffer_mut()
-                    .set_row_state(row_idx, RowState::Error(message.to_string()));
+                    .set_row_state(row_idx, RowState::Error(message.clone()));
                 cx.notify();
             });
 
@@ -607,7 +615,9 @@ impl DataGridPanel {
                     report_error(
                         UserFacingError::new(
                             ErrorKind::User,
-                            "Cannot save document: it has an unsupported _id value",
+                            dbflux_i18n::t!(
+                                "document.data.mutation.error.save_document_unsupported_id"
+                            ),
                         ),
                         cx,
                     );
@@ -730,7 +740,7 @@ impl DataGridPanel {
                     cx.notify();
                 });
                 self.pending.toast = Some(PendingToast {
-                    message: "Saved".to_string(),
+                    message: dbflux_i18n::t!("document.data.mutation.toast.saved"),
                     is_error: false,
                 });
             }
@@ -742,7 +752,10 @@ impl DataGridPanel {
                     cx.notify();
                 });
                 report_error(
-                    UserFacingError::new(ErrorKind::Driver, format!("Save failed: {e}")),
+                    UserFacingError::new(
+                        ErrorKind::Driver,
+                        dbflux_i18n::t!("document.data.mutation.error.save_failed", error = e),
+                    ),
                     cx,
                 );
             }
@@ -871,7 +884,9 @@ impl DataGridPanel {
                                 cx.notify();
                             });
                             panel.pending.toast = Some(PendingToast {
-                                message: "Document inserted".to_string(),
+                                message: dbflux_i18n::t!(
+                                    "document.data.mutation.toast.document_inserted"
+                                ),
                                 is_error: false,
                             });
                             panel.queue_refresh_after_mutation_success(cx);
@@ -881,7 +896,10 @@ impl DataGridPanel {
                             report_error(
                                 UserFacingError::new(
                                     ErrorKind::Driver,
-                                    format!("Insert failed: {e}"),
+                                    dbflux_i18n::t!(
+                                        "document.data.mutation.error.insert_failed",
+                                        error = e
+                                    ),
                                 ),
                                 cx,
                             );
@@ -946,7 +964,10 @@ impl DataGridPanel {
 
         if assignments.is_empty() {
             report_error(
-                UserFacingError::new(ErrorKind::Driver, "Cannot insert: no values provided"),
+                UserFacingError::new(
+                    ErrorKind::Driver,
+                    dbflux_i18n::t!("document.data.mutation.error.insert_no_values"),
+                ),
                 cx,
             );
             return;
@@ -1014,7 +1035,9 @@ impl DataGridPanel {
                                 cx.notify();
                             });
                             panel.pending.toast = Some(PendingToast {
-                                message: "Row inserted".to_string(),
+                                message: dbflux_i18n::t!(
+                                    "document.data.mutation.toast.row_inserted"
+                                ),
                                 is_error: false,
                             });
                             panel.queue_refresh_after_mutation_success(cx);
@@ -1024,7 +1047,10 @@ impl DataGridPanel {
                             report_error(
                                 UserFacingError::new(
                                     ErrorKind::Driver,
-                                    format!("Insert failed: {e}"),
+                                    dbflux_i18n::t!(
+                                        "document.data.mutation.error.insert_failed",
+                                        error = e
+                                    ),
                                 ),
                                 cx,
                             );
@@ -1152,7 +1178,9 @@ impl DataGridPanel {
                     report_error(
                         UserFacingError::new(
                             ErrorKind::User,
-                            "Cannot delete document: it has an unsupported _id value",
+                            dbflux_i18n::t!(
+                                "document.data.mutation.error.delete_document_unsupported_id"
+                            ),
                         ),
                         cx,
                     );
@@ -1225,7 +1253,9 @@ impl DataGridPanel {
                                 cx.notify();
                             });
                             panel.pending.toast = Some(PendingToast {
-                                message: "Document deleted".to_string(),
+                                message: dbflux_i18n::t!(
+                                    "document.data.mutation.toast.document_deleted"
+                                ),
                                 is_error: false,
                             });
                             panel.pending.refresh = true;
@@ -1235,7 +1265,10 @@ impl DataGridPanel {
                             report_error(
                                 UserFacingError::new(
                                     ErrorKind::Driver,
-                                    format!("Delete failed: {e}"),
+                                    dbflux_i18n::t!(
+                                        "document.data.mutation.error.delete_failed",
+                                        error = e
+                                    ),
                                 ),
                                 cx,
                             );
@@ -1291,7 +1324,7 @@ impl DataGridPanel {
             report_error(
                 UserFacingError::new(
                     ErrorKind::Driver,
-                    "Cannot delete: no primary key defined for this table",
+                    dbflux_i18n::t!("document.data.mutation.error.delete_no_primary_key"),
                 ),
                 cx,
             );
@@ -1300,7 +1333,10 @@ impl DataGridPanel {
 
         if pk_columns.len() != pk_count || pk_values.len() != pk_count {
             report_error(
-                UserFacingError::new(ErrorKind::Driver, "Cannot delete: failed to identify row"),
+                UserFacingError::new(
+                    ErrorKind::Driver,
+                    dbflux_i18n::t!("document.data.mutation.error.delete_identity_failed"),
+                ),
                 cx,
             );
             return;
@@ -1363,7 +1399,9 @@ impl DataGridPanel {
                                 cx.notify();
                             });
                             panel.pending.toast = Some(PendingToast {
-                                message: "Row deleted".to_string(),
+                                message: dbflux_i18n::t!(
+                                    "document.data.mutation.toast.row_deleted"
+                                ),
                                 is_error: false,
                             });
                             panel.pending.refresh = true;
@@ -1373,7 +1411,10 @@ impl DataGridPanel {
                             report_error(
                                 UserFacingError::new(
                                     ErrorKind::Driver,
-                                    format!("Delete failed: {e}"),
+                                    dbflux_i18n::t!(
+                                        "document.data.mutation.error.delete_failed",
+                                        error = e
+                                    ),
                                 ),
                                 cx,
                             );
@@ -1509,7 +1550,7 @@ impl DataGridPanel {
             report_error(
                 UserFacingError::new(
                     ErrorKind::Driver,
-                    "Cannot delete: no primary key defined for this table",
+                    dbflux_i18n::t!("document.data.mutation.error.delete_no_primary_key"),
                 ),
                 cx,
             );
@@ -1551,7 +1592,7 @@ impl DataGridPanel {
             report_error(
                 UserFacingError::new(
                     ErrorKind::Driver,
-                    "Cannot delete: failed to identify any rows",
+                    dbflux_i18n::t!("document.data.mutation.error.bulk_delete_no_rows_identified"),
                 ),
                 cx,
             );
@@ -1634,10 +1675,11 @@ impl DataGridPanel {
                         report_error(
                             UserFacingError::new(
                                 ErrorKind::Driver,
-                                format!(
-                                    "Deleted {} of {} row(s), then failed: {e}",
+                                crate::labels::partial_delete_label(
+                                    crate::labels::MutationItemKind::Row,
                                     success_count,
-                                    identities.len()
+                                    identities.len(),
+                                    &e.to_string(),
                                 ),
                             ),
                             cx,
@@ -1654,7 +1696,10 @@ impl DataGridPanel {
                         });
 
                         panel.pending.toast = Some(PendingToast {
-                            message: format!("{} row(s) deleted", success_count),
+                            message: crate::labels::bulk_delete_success_label(
+                                crate::labels::MutationItemKind::Row,
+                                success_count,
+                            ),
                             is_error: false,
                         });
 
@@ -1740,7 +1785,9 @@ impl DataGridPanel {
             report_error(
                 UserFacingError::new(
                     ErrorKind::Driver,
-                    "Cannot delete: failed to identify any documents",
+                    dbflux_i18n::t!(
+                        "document.data.mutation.error.bulk_delete_no_documents_identified"
+                    ),
                 ),
                 cx,
             );
@@ -1819,10 +1866,11 @@ impl DataGridPanel {
                         report_error(
                             UserFacingError::new(
                                 ErrorKind::Driver,
-                                format!(
-                                    "Deleted {} of {} document(s), then failed: {e}",
+                                crate::labels::partial_delete_label(
+                                    crate::labels::MutationItemKind::Document,
                                     success_count,
-                                    filters.len()
+                                    filters.len(),
+                                    &e.to_string(),
                                 ),
                             ),
                             cx,
@@ -1838,7 +1886,10 @@ impl DataGridPanel {
                         });
 
                         panel.pending.toast = Some(PendingToast {
-                            message: format!("{} document(s) deleted", success_count),
+                            message: crate::labels::bulk_delete_success_label(
+                                crate::labels::MutationItemKind::Document,
+                                success_count,
+                            ),
                             is_error: false,
                         });
 

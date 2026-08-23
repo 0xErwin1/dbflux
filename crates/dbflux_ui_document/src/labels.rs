@@ -248,12 +248,94 @@ pub(crate) fn chart_rail_why_text(numeric_columns: usize, timestamp_columns: usi
     )
 }
 
+/// Item kind affected by a bulk delete, selecting the plural noun used in
+/// the completion toast and the partial-failure catalog buckets.
+pub(crate) enum MutationItemKind {
+    Row,
+    Document,
+}
+
+/// Confirmation-modal summary for a DELETE mutation, with the estimated row
+/// count interpolated when known.
+///
+/// Uses the singular catalog bucket only for exactly one row; every other
+/// known count uses the plural bucket. `None` (the row count has not been
+/// estimated yet) renders through the dedicated "unknown" bucket with no
+/// count at all.
+pub(crate) fn delete_rows_label(est_rows: Option<u64>, table: &str) -> String {
+    match est_rows {
+        Some(1) => dbflux_i18n::t!(
+            "document.data.mutation.confirm.delete.summary.one",
+            count = 1,
+            table = table
+        ),
+        Some(count) => dbflux_i18n::t!(
+            "document.data.mutation.confirm.delete.summary.many",
+            count = count,
+            table = table
+        ),
+        None => dbflux_i18n::t!(
+            "document.data.mutation.confirm.delete.summary.unknown",
+            table = table
+        ),
+    }
+}
+
+/// Confirmation-modal summary for an UPDATE mutation, with the affected
+/// column count interpolated.
+///
+/// Uses the singular catalog bucket only for exactly one column; every
+/// other count, including zero, uses the plural bucket.
+pub(crate) fn update_columns_label(column_count: usize, table: &str) -> String {
+    if column_count == 1 {
+        dbflux_i18n::t!(
+            "document.data.mutation.confirm.update.summary.one",
+            count = column_count,
+            table = table
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.data.mutation.confirm.update.summary.many",
+            count = column_count,
+            table = table
+        )
+    }
+}
+
+/// Toast/error text for a batch delete that stopped partway through after
+/// hitting an error, reporting how many items succeeded before the failure.
+pub(crate) fn partial_delete_label(
+    kind: MutationItemKind,
+    done: usize,
+    total: usize,
+    error: &str,
+) -> String {
+    let key = match kind {
+        MutationItemKind::Row => "document.data.mutation.toast.partial_delete.row",
+        MutationItemKind::Document => "document.data.mutation.toast.partial_delete.document",
+    };
+
+    dbflux_i18n::t!(key, done = done, total = total, error = error)
+}
+
+/// Toast text for a batch delete that completed in full, with the number of
+/// deleted items interpolated.
+pub(crate) fn bulk_delete_success_label(kind: MutationItemKind, count: usize) -> String {
+    let key = match kind {
+        MutationItemKind::Row => "document.data.mutation.toast.rows_deleted",
+        MutationItemKind::Document => "document.data.mutation.toast.documents_deleted",
+    };
+
+    dbflux_i18n::t!(key, count = count)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        chart_degraded_copy, chart_dock_shape_label, chart_rail_why_text,
-        pending_change_count_label, pending_edits_summary, refresh_policy_label, row_count_label,
-        unsaved_changes_label,
+        MutationItemKind, bulk_delete_success_label, chart_degraded_copy, chart_dock_shape_label,
+        chart_rail_why_text, delete_rows_label, partial_delete_label, pending_change_count_label,
+        pending_edits_summary, refresh_policy_label, row_count_label, unsaved_changes_label,
+        update_columns_label,
     };
     use dbflux_components::chart::ChartDetection;
     use dbflux_core::RefreshPolicy;
@@ -494,5 +576,115 @@ mod tests {
         );
         assert!(many.contains("3 numeric columns"));
         assert!(many.contains("2 timestamp-like columns"));
+    }
+
+    #[test]
+    fn delete_rows_label_unknown_one_many() {
+        let unknown = delete_rows_label(None, "orders");
+        let one = delete_rows_label(Some(1), "orders");
+        let many = delete_rows_label(Some(3), "orders");
+
+        assert_eq!(unknown, "Delete rows from \"orders\"");
+        assert_eq!(one, "Delete 1 row from \"orders\"");
+        assert_eq!(many, "Delete 3 rows from \"orders\"");
+    }
+
+    #[test]
+    fn update_columns_label_zero_one_many() {
+        let zero = update_columns_label(0, "orders");
+        let one = update_columns_label(1, "orders");
+        let many = update_columns_label(2, "orders");
+
+        assert_eq!(zero, "Update 0 columns in \"orders\"");
+        assert_eq!(one, "Update 1 column in \"orders\"");
+        assert_eq!(many, "Update 2 columns in \"orders\"");
+    }
+
+    #[test]
+    fn partial_delete_label_rows_and_documents() {
+        let rows = partial_delete_label(MutationItemKind::Row, 2, 5, "connection lost");
+        let documents = partial_delete_label(MutationItemKind::Document, 1, 3, "timeout");
+
+        assert_eq!(rows, "Deleted 2 of 5 row(s), then failed: connection lost");
+        assert_eq!(
+            documents,
+            "Deleted 1 of 3 document(s), then failed: timeout"
+        );
+    }
+
+    #[test]
+    fn bulk_delete_success_label_rows_and_documents() {
+        assert_eq!(
+            bulk_delete_success_label(MutationItemKind::Row, 4),
+            "4 row(s) deleted"
+        );
+        assert_eq!(
+            bulk_delete_success_label(MutationItemKind::Document, 1),
+            "1 document(s) deleted"
+        );
+    }
+
+    #[test]
+    fn mutation_confirm_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.data.mutation.confirm.delete.summary.one",
+            "document.data.mutation.confirm.delete.summary.many",
+            "document.data.mutation.confirm.delete.summary.unknown",
+            "document.data.mutation.confirm.update.summary.one",
+            "document.data.mutation.confirm.update.summary.many",
+            "document.data.mutation.error.update_document_unsupported_id",
+            "document.data.mutation.error.update_document_failed",
+            "document.data.mutation.error.save_row_unsupported_pk",
+            "document.data.mutation.error.save_row_identity_failed",
+            "document.data.mutation.error.save_row_unsupported_values",
+            "document.data.mutation.error.save_failed",
+            "document.data.mutation.error.save_document_unsupported_id",
+            "document.data.mutation.error.insert_failed",
+            "document.data.mutation.error.insert_no_values",
+            "document.data.mutation.error.delete_document_unsupported_id",
+            "document.data.mutation.error.delete_failed",
+            "document.data.mutation.error.delete_no_primary_key",
+            "document.data.mutation.error.delete_identity_failed",
+            "document.data.mutation.error.bulk_delete_no_rows_identified",
+            "document.data.mutation.error.bulk_delete_no_documents_identified",
+            "document.data.mutation.toast.document_updated",
+            "document.data.mutation.toast.saved",
+            "document.data.mutation.toast.document_inserted",
+            "document.data.mutation.toast.row_inserted",
+            "document.data.mutation.toast.document_deleted",
+            "document.data.mutation.toast.row_deleted",
+            "document.data.mutation.toast.rows_deleted",
+            "document.data.mutation.toast.documents_deleted",
+            "document.data.mutation.toast.partial_delete.row",
+            "document.data.mutation.toast.partial_delete.document",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mutation_confirm_title_differs_between_locales() {
+        let en = dbflux_i18n::t!(
+            "document.data.mutation.confirm.delete.summary.many",
+            locale = "en"
+        );
+        let es = dbflux_i18n::t!(
+            "document.data.mutation.confirm.delete.summary.many",
+            locale = "es"
+        );
+
+        assert_ne!(en, es);
     }
 }
