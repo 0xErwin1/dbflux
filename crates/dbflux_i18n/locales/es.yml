@@ -82,6 +82,55 @@ document:
         x_axis_label: Eje X (columna de tiempo o etiqueta)
         y_axis_label: Eje Y (columnas numéricas)
         apply: Aplicar
+      rail:
+        shape:
+          rows:
+            one: "%{count} fila"
+            many: "%{count} filas"
+          columns:
+            one: "%{count} columna"
+            many: "%{count} columnas"
+          template: "%{rows} × %{columns}"
+      configure:
+        why:
+          numeric:
+            one: "%{count} columna numérica"
+            many: "%{count} columnas numéricas"
+          timestamp:
+            one: "%{count} columna con marca de tiempo"
+            many: "%{count} columnas con marca de tiempo"
+          template: "El resultado tiene %{numeric} y %{timestamp}. Elige cuál es el eje de tiempo y qué series graficar."
+          title: Por qué este panel
+        time_column:
+          title: Columna de tiempo
+        series:
+          title: Series
+        axis_stacking:
+          title: Eje y apilamiento
+          y_axis: eje y
+          y_axis_value: lineal · 0 → auto
+          stack: apilamiento
+          stack_value: desactivado (v0.6.0)
+          interpolation: interpolación
+          interpolation_value: lineal
+        reset: Restablecer
+      stats:
+        rebuilding: "Reconstruyendo el gráfico…"
+        no_stats: No hay estadísticas disponibles para esta serie.
+        unavailable: no disponible
+        title: Estadísticas
+        window:
+          title: Ventana
+          start: inicio
+          end: fin
+          span: duración
+          points: puntos
+        source:
+          title: Origen
+          measurement: medición
+          field: campo
+          host: host
+          region: región
     grid:
       edit_bar:
         clean: Sin cambios pendientes

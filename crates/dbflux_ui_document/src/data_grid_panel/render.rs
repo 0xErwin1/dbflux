@@ -2302,7 +2302,7 @@ impl DataGridPanel {
         let row_count = self.result.row_count();
         let col_count = self.result.columns.len();
         let shape_label: SharedString =
-            format!("{} rows × {} columns", row_count, col_count).into();
+            crate::labels::chart_dock_shape_label(row_count, col_count).into();
 
         let col_chips: Vec<AnyElement> = self
             .result
@@ -2839,14 +2839,7 @@ impl DataGridPanel {
         let any_y_checked = y_checked.iter().any(|&c| c);
         let reset_enabled = detection_ok || has_manual;
 
-        let why_text = format!(
-            "The result has {} numeric column{} and {} timestamp-like column{}. \
-             Pick which one is the time axis and which series to plot.",
-            num_numeric,
-            if num_numeric == 1 { "" } else { "s" },
-            num_ts,
-            if num_ts == 1 { "" } else { "s" },
-        );
+        let why_text = crate::labels::chart_rail_why_text(num_numeric, num_ts);
 
         div()
             .id("rail-configure-scroll")
@@ -2860,7 +2853,10 @@ impl DataGridPanel {
                     .flex()
                     .flex_col()
                     .gap(Spacing::XS)
-                    .child(Self::dock_header("Why this panel", &chart_colors))
+                    .child(Self::dock_header(
+                        &dbflux_i18n::t!("document.data.chart_dock.configure.why.title"),
+                        &chart_colors,
+                    ))
                     .child(
                         div()
                             .text_size(px(11.0))
@@ -2875,7 +2871,10 @@ impl DataGridPanel {
                     .flex()
                     .flex_col()
                     .gap(Spacing::XS)
-                    .child(Self::dock_header("Time column", &chart_colors))
+                    .child(Self::dock_header(
+                        &dbflux_i18n::t!("document.data.chart_dock.configure.time_column.title"),
+                        &chart_colors,
+                    ))
                     .children(x_candidates.iter().enumerate().map(
                         |(cand_idx, (col_idx, col_name))| {
                             let col_idx = *col_idx;
@@ -2921,7 +2920,10 @@ impl DataGridPanel {
                     .flex()
                     .flex_col()
                     .gap(Spacing::XXS)
-                    .child(Self::dock_header("Series", &chart_colors))
+                    .child(Self::dock_header(
+                        &dbflux_i18n::t!("document.data.chart_dock.configure.series.title"),
+                        &chart_colors,
+                    ))
                     .children(y_candidates.iter().enumerate().map(
                         |(cand_idx, (col_idx, col_name))| {
                             let col_idx = *col_idx;
@@ -2984,29 +2986,38 @@ impl DataGridPanel {
                     .flex()
                     .flex_col()
                     .gap(px(2.0))
-                    .child(Self::dock_header("Axis & Stacking", &chart_colors))
-                    .child(Self::dock_kv_row(
-                        "y-axis",
-                        div()
-                            .text_size(px(11.0))
-                            .text_color(theme.foreground)
-                            .child("linear · 0 → auto"),
+                    .child(Self::dock_header(
+                        &dbflux_i18n::t!("document.data.chart_dock.configure.axis_stacking.title"),
                         &chart_colors,
                     ))
                     .child(Self::dock_kv_row(
-                        "stack",
+                        &dbflux_i18n::t!("document.data.chart_dock.configure.axis_stacking.y_axis"),
+                        div().text_size(px(11.0)).text_color(theme.foreground).child(
+                            dbflux_i18n::t!(
+                                "document.data.chart_dock.configure.axis_stacking.y_axis_value"
+                            ),
+                        ),
+                        &chart_colors,
+                    ))
+                    .child(Self::dock_kv_row(
+                        &dbflux_i18n::t!("document.data.chart_dock.configure.axis_stacking.stack"),
                         div()
                             .text_size(px(11.0))
                             .text_color(theme.muted_foreground)
-                            .child("off (v0.6.0)"),
+                            .child(dbflux_i18n::t!(
+                                "document.data.chart_dock.configure.axis_stacking.stack_value"
+                            )),
                         &chart_colors,
                     ))
                     .child(Self::dock_kv_row(
-                        "interpolation",
-                        div()
-                            .text_size(px(11.0))
-                            .text_color(theme.foreground)
-                            .child("linear"),
+                        &dbflux_i18n::t!(
+                            "document.data.chart_dock.configure.axis_stacking.interpolation"
+                        ),
+                        div().text_size(px(11.0)).text_color(theme.foreground).child(
+                            dbflux_i18n::t!(
+                                "document.data.chart_dock.configure.axis_stacking.interpolation_value"
+                            ),
+                        ),
                         &chart_colors,
                     )),
                 theme,
@@ -3041,7 +3052,7 @@ impl DataGridPanel {
                             .when(!reset_enabled, |d| {
                                 d.text_color(theme.muted_foreground).opacity(0.4)
                             })
-                            .child("Reset"),
+                            .child(dbflux_i18n::t!("document.data.chart_dock.configure.reset")),
                     )
                     // Apply button
                     .child(
@@ -3074,7 +3085,7 @@ impl DataGridPanel {
                                     ..chart_colors.muted_fg
                                 })
                             })
-                            .child("Apply"),
+                            .child(dbflux_i18n::t!("document.data.chart_dock.toolbar.apply")),
                     ),
             )
     }
@@ -3123,7 +3134,7 @@ impl DataGridPanel {
                 .p_2()
                 .text_size(FontSizes::XS)
                 .text_color(theme.muted_foreground)
-                .child("Rebuilding chart…")
+                .child(dbflux_i18n::t!("document.data.chart_dock.stats.rebuilding"))
                 .into_any_element();
         };
 
@@ -3132,7 +3143,7 @@ impl DataGridPanel {
                 .p_2()
                 .text_size(FontSizes::XS)
                 .text_color(theme.muted_foreground)
-                .child("No stats available for this series.")
+                .child(dbflux_i18n::t!("document.data.chart_dock.stats.no_stats"))
                 .into_any_element();
         };
 
@@ -3181,7 +3192,9 @@ impl DataGridPanel {
                 .text_size(px(11.0))
                 .text_color(theme.muted_foreground)
                 .italic()
-                .child("unavailable")
+                .child(dbflux_i18n::t!(
+                    "document.data.chart_dock.stats.unavailable"
+                ))
                 .into_any_element()
         };
 
@@ -3214,7 +3227,10 @@ impl DataGridPanel {
                     .flex()
                     .flex_col()
                     .gap(px(2.0))
-                    .child(Self::dock_header("Stats", &chart_colors))
+                    .child(Self::dock_header(
+                        &dbflux_i18n::t!("document.data.chart_dock.stats.title"),
+                        &chart_colors,
+                    ))
                     .child(Self::dock_kv_row("min", cyan_val(stats.min), &chart_colors))
                     .child(Self::dock_kv_row("max", cyan_val(stats.max), &chart_colors))
                     .child(Self::dock_kv_row("avg", cyan_val(stats.avg), &chart_colors))
@@ -3234,20 +3250,27 @@ impl DataGridPanel {
                     .flex()
                     .flex_col()
                     .gap(px(2.0))
-                    .child(Self::dock_header("Window", &chart_colors))
+                    .child(Self::dock_header(
+                        &dbflux_i18n::t!("document.data.chart_dock.stats.window.title"),
+                        &chart_colors,
+                    ))
                     .child(Self::dock_kv_row(
-                        "start",
+                        &dbflux_i18n::t!("document.data.chart_dock.stats.window.start"),
                         str_val(start_label),
                         &chart_colors,
                     ))
-                    .child(Self::dock_kv_row("end", str_val(end_label), &chart_colors))
                     .child(Self::dock_kv_row(
-                        "span",
+                        &dbflux_i18n::t!("document.data.chart_dock.stats.window.end"),
+                        str_val(end_label),
+                        &chart_colors,
+                    ))
+                    .child(Self::dock_kv_row(
+                        &dbflux_i18n::t!("document.data.chart_dock.stats.window.span"),
                         str_val(span_label),
                         &chart_colors,
                     ))
                     .child(Self::dock_kv_row(
-                        "points",
+                        &dbflux_i18n::t!("document.data.chart_dock.stats.window.points"),
                         str_val(format!("{}", points_count)),
                         &chart_colors,
                     )),
@@ -3260,15 +3283,30 @@ impl DataGridPanel {
                     .flex()
                     .flex_col()
                     .gap(px(2.0))
-                    .child(Self::dock_header("Source", &chart_colors))
+                    .child(Self::dock_header(
+                        &dbflux_i18n::t!("document.data.chart_dock.stats.source.title"),
+                        &chart_colors,
+                    ))
                     .child(Self::dock_kv_row(
-                        "measurement",
+                        &dbflux_i18n::t!("document.data.chart_dock.stats.source.measurement"),
                         unavail_val(),
                         &chart_colors,
                     ))
-                    .child(Self::dock_kv_row("field", unavail_val(), &chart_colors))
-                    .child(Self::dock_kv_row("host", unavail_val(), &chart_colors))
-                    .child(Self::dock_kv_row("region", unavail_val(), &chart_colors)),
+                    .child(Self::dock_kv_row(
+                        &dbflux_i18n::t!("document.data.chart_dock.stats.source.field"),
+                        unavail_val(),
+                        &chart_colors,
+                    ))
+                    .child(Self::dock_kv_row(
+                        &dbflux_i18n::t!("document.data.chart_dock.stats.source.host"),
+                        unavail_val(),
+                        &chart_colors,
+                    ))
+                    .child(Self::dock_kv_row(
+                        &dbflux_i18n::t!("document.data.chart_dock.stats.source.region"),
+                        unavail_val(),
+                        &chart_colors,
+                    )),
                 theme,
             ))
             .into_any_element()
