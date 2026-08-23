@@ -292,6 +292,28 @@ sidebar:
     query_measurement: Consultar medición
     generate_query: Generar consulta
     drop_collection: Eliminar colección
+    connect: Conectar
+    disconnect: Desconectar
+    edit: Editar
+    duplicate: Duplicar
+    rename: Renombrar
+    export_ellipsis: Exportar…
+    import_ellipsis: Importar…
+    compare_schema: Comparar esquema…
+    move_to: Mover a...
+    delete: Eliminar
+    delete_count: "Eliminar %{count} elementos"
+    close: Cerrar
+    new_query: Nueva consulta
+    drop_database: Eliminar base de datos
+    new_connection: Nueva conexión
+    new_folder: Nueva carpeta
+    root: Raíz
+    new_script_file: Nuevo archivo
+    new_script_folder: Nueva carpeta
+    reveal_file_manager: Mostrar en el explorador de archivos
+    copy_path: Copiar ruta
+    schema_diff_unsupported: La comparación de esquemas solo está disponible para conexiones relacionales.
   overlay:
     add_folder: Nueva carpeta
     add_connection: Nueva conexión
