@@ -483,6 +483,8 @@ document:
       clear: Limpiar
       group_label: "Agrupar:"
       loading: "Cargando…"
+      placeholder:
+        local: Local
       retry: Reintentar
       view_mode:
         chart: Gráfico
@@ -800,6 +802,12 @@ document:
         script_failed: Script fallido
       copy_error: Copiar error
       result_tab_title: "Resultado %{index}"
+      error:
+        select_source: Selecciona al menos un origen
+        start_time_required: La hora de inicio es obligatoria
+        end_time_required: La hora de fin es obligatoria
+        start_before_end: La hora de inicio debe ser anterior a la hora de fin
+      hint_prefix: "%{message}\nSugerencia: %{hint}"
     file_ops:
       save_as:
         title: Guardar script como
@@ -977,6 +985,13 @@ document:
         remove: Quitar orden
       generate_sql:
         title: Generar SQL
+      error:
+        no_results_to_export: No hay resultados para exportar
+        invalid_json: JSON no válido
+        document_must_be_json_object: El documento debe ser un objeto JSON
+        document_missing_id: El documento debe tener un campo _id
+        table_state_not_available: Estado de la tabla no disponible
+        primary_key_not_determined: No se pudo determinar la clave primaria del documento
     grid:
       edit_bar:
         clean: Sin cambios pendientes
@@ -1037,6 +1052,17 @@ document:
         deleted:
           one: "%{count} eliminación"
           many: "%{count} eliminaciones"
+      error:
+        limit_must_be_positive: El límite debe ser mayor que 0
+        invalid_limit: Valor de límite no válido
+        connection_not_found: Conexión no encontrada
+        connection_not_available: Conexión no disponible
+        invalid_json_filter: Filtro JSON no válido
+      placeholder:
+        chart_name: Nombre del gráfico
+      toast:
+        query_imported: Consulta importada correctamente
+        mutation_queued: Mutación en cola para aprobación.
     mutation:
       confirm:
         delete:
@@ -1653,6 +1679,7 @@ document:
       refresh: Actualizar
       tree: Árbol
       upload: Subir
+      filter_prefix_placeholder: "Filtrar este prefijo…"
     transfer:
       dialog_title: Guardar objeto como
       dialog_filter_all_files: Todos los archivos
@@ -1863,6 +1890,7 @@ document:
         drop: Eliminar tabla
   shared:
     add: Agregar
+    error_with_detail_clipboard: "%{title}: %{detail}"
     refresh:
       off: Apagado
       custom: Personalizado

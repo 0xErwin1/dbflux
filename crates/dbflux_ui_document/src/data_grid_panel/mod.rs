@@ -1247,7 +1247,8 @@ impl DataGridPanel {
         let bindings = shell.read(cx).active_bindings();
 
         let name_input = cx.new(|cx| {
-            dbflux_components::controls::InputState::new(window, cx).placeholder("Chart name")
+            dbflux_components::controls::InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("document.data.grid.placeholder.chart_name"))
         });
 
         let sub = cx.subscribe_in(
@@ -3611,9 +3612,11 @@ impl DataGridPanel {
 
         match result {
             Ok(_summary) => {
-                dbflux_ui_base::toast::Toast::success("Query imported successfully")
-                    .meta_right(dbflux_ui_base::toast::now_hms())
-                    .push(cx);
+                dbflux_ui_base::toast::Toast::success(dbflux_i18n::t!(
+                    "document.data.grid.toast.query_imported"
+                ))
+                .meta_right(dbflux_ui_base::toast::now_hms())
+                .push(cx);
             }
             Err(e) => {
                 dbflux_ui_base::user_error::report_error(
@@ -3706,8 +3709,10 @@ impl DataGridPanel {
                     });
                     match enqueue_result {
                         Ok(_) => {
-                            dbflux_ui_base::toast::Toast::info("Mutation queued for approval.")
-                                .push(cx);
+                            dbflux_ui_base::toast::Toast::info(dbflux_i18n::t!(
+                                "document.data.grid.toast.mutation_queued"
+                            ))
+                            .push(cx);
                         }
                         Err(e) => {
                             dbflux_ui_base::user_error::report_error(
@@ -3852,7 +3857,10 @@ impl DataGridPanel {
             });
             match enqueue_result {
                 Ok(_) => {
-                    dbflux_ui_base::toast::Toast::info("Mutation queued for approval.").push(cx);
+                    dbflux_ui_base::toast::Toast::info(dbflux_i18n::t!(
+                        "document.data.grid.toast.mutation_queued"
+                    ))
+                    .push(cx);
                 }
                 Err(e) => {
                     dbflux_ui_base::user_error::report_error(

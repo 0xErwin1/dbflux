@@ -321,7 +321,9 @@ impl CodeDocument {
                 ValidationResult::Valid => {}
                 ValidationResult::SyntaxError(diag) => {
                     let msg = match diag.hint {
-                        Some(ref hint) => format!("{}\nHint: {}", diag.message, hint),
+                        Some(ref hint) => {
+                            crate::labels::syntax_error_with_hint(&diag.message, hint)
+                        }
                         None => diag.message,
                     };
                     let toast_msg = msg.to_string();
@@ -357,7 +359,7 @@ impl CodeDocument {
                 }
                 Err(message) => {
                     self.source.exec_ctx.source = None;
-                    let toast_msg = message.to_string();
+                    let toast_msg = crate::labels::source_window_error_message(message);
                     Toast::error(toast_msg.clone())
                         .meta_right(now_hms())
                         .action(copy_action(toast_msg))

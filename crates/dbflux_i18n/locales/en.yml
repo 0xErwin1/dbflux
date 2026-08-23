@@ -483,6 +483,8 @@ document:
       clear: Clear
       group_label: "Group:"
       loading: "Loading…"
+      placeholder:
+        local: Local
       retry: Retry
       view_mode:
         chart: Chart
@@ -800,6 +802,12 @@ document:
         script_failed: Script failed
       copy_error: Copy error
       result_tab_title: "Result %{index}"
+      error:
+        select_source: Select at least one source
+        start_time_required: Start time is required
+        end_time_required: End time is required
+        start_before_end: Start time must be earlier than end time
+      hint_prefix: "%{message}\nHint: %{hint}"
     file_ops:
       save_as:
         title: Save Script As
@@ -977,6 +985,13 @@ document:
         remove: Remove ordering
       generate_sql:
         title: Generate SQL
+      error:
+        no_results_to_export: No results to export
+        invalid_json: Invalid JSON
+        document_must_be_json_object: Document must be a JSON object
+        document_missing_id: Document must have an _id field
+        table_state_not_available: Table state not available
+        primary_key_not_determined: Could not determine document primary key
     grid:
       edit_bar:
         clean: No unsaved changes
@@ -1037,6 +1052,17 @@ document:
         deleted:
           one: "%{count} delete"
           many: "%{count} deletes"
+      error:
+        limit_must_be_positive: Limit must be greater than 0
+        invalid_limit: Invalid limit value
+        connection_not_found: Connection not found
+        connection_not_available: Connection not available
+        invalid_json_filter: Invalid JSON filter
+      placeholder:
+        chart_name: Chart name
+      toast:
+        query_imported: Query imported successfully
+        mutation_queued: Mutation queued for approval.
     mutation:
       confirm:
         delete:
@@ -1653,6 +1679,7 @@ document:
       refresh: Refresh
       tree: Tree
       upload: Upload
+      filter_prefix_placeholder: "Filter this prefix…"
     transfer:
       dialog_title: Save Object As
       dialog_filter_all_files: All Files
@@ -1863,6 +1890,7 @@ document:
         drop: Drop table
   shared:
     add: Add
+    error_with_detail_clipboard: "%{title}: %{detail}"
     refresh:
       off: Off
       custom: Custom

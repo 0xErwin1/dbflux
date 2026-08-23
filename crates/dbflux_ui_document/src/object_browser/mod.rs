@@ -184,8 +184,11 @@ impl ObjectBrowserDocument {
     ) -> Self {
         let tree = ObjectTree::new(bucket.clone());
 
-        let filter_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Filter this prefix…"));
+        let filter_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "document.object_browser.toolbar.filter_prefix_placeholder"
+            ))
+        });
 
         let filter_subscription = cx.subscribe_in(
             &filter_input,

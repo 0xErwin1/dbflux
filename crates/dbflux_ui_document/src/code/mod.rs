@@ -139,6 +139,8 @@ fn build_source_window_context(
     let requires_targets = query_mode.as_deref() != Some("sql");
 
     if requires_targets && targets.is_empty() {
+        // This is a stable token, not display text: `labels::source_window_error_message`
+        // maps it to the translated catalog entry at the toast display site.
         return Err("Select at least one source");
     }
 

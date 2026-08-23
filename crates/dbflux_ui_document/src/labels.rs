@@ -1718,6 +1718,51 @@ pub(crate) fn migrate_source_target_checked_count_label(count: usize) -> String 
     }
 }
 
+/// Translated message for a `build_source_window_context` validation
+/// failure.
+///
+/// `build_source_window_context` returns a `&'static str` token instead of a
+/// translated string so its own tests stay locale-independent; this maps
+/// each token to its catalog entry once, at the toast display site, instead
+/// of threading a `Context<Self>` through the validation helper.
+pub(crate) fn source_window_error_message(err: &'static str) -> String {
+    match err {
+        "Select at least one source" => {
+            dbflux_i18n::t!("document.code.execution.error.select_source")
+        }
+        "Start time is required" => {
+            dbflux_i18n::t!("document.code.execution.error.start_time_required")
+        }
+        "End time is required" => {
+            dbflux_i18n::t!("document.code.execution.error.end_time_required")
+        }
+        "Start time must be earlier than end time" => {
+            dbflux_i18n::t!("document.code.execution.error.start_before_end")
+        }
+        other => other.to_string(),
+    }
+}
+
+/// Label for a query-syntax error toast, appending the driver-provided hint
+/// (when present) on its own line.
+pub(crate) fn syntax_error_with_hint(message: &str, hint: &str) -> String {
+    dbflux_i18n::t!(
+        "document.code.execution.hint_prefix",
+        message = message,
+        hint = hint
+    )
+}
+
+/// Clipboard text for a toast copy action that pairs a translated error
+/// title with a dynamic detail (for example a parser error message).
+pub(crate) fn error_with_detail_clipboard(title: &str, detail: &str) -> String {
+    dbflux_i18n::t!(
+        "document.shared.error_with_detail_clipboard",
+        title = title,
+        detail = detail
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1730,12 +1775,13 @@ mod tests {
         comparator_label, configure_chart_kind_label, copy_query_language_label,
         dangerous_query_body, dangerous_query_title, delete_confirm_copy,
         delete_prefix_delete_button_label, delete_prefix_deleted_toast, delete_prefix_probe_totals,
-        delete_rows_label, execution_count_state_label, execution_mode_label,
-        export_running_position_label, export_running_rows_label, export_summary_label,
-        export_table_status_line, history_items_count_label, history_tab_label, image_decode_error,
-        image_header_error, import_mapping_mode_label, import_rail_labels, import_summary_label,
-        import_table_status_line, incomplete_aggregate_rows_label, join_kind_label,
-        live_output_lines_label, live_output_truncated_label, metric_picker_custom_dropdown_label,
+        delete_rows_label, error_with_detail_clipboard, execution_count_state_label,
+        execution_mode_label, export_running_position_label, export_running_rows_label,
+        export_summary_label, export_table_status_line, history_items_count_label,
+        history_tab_label, image_decode_error, image_header_error, import_mapping_mode_label,
+        import_rail_labels, import_summary_label, import_table_status_line,
+        incomplete_aggregate_rows_label, join_kind_label, live_output_lines_label,
+        live_output_truncated_label, metric_picker_custom_dropdown_label,
         metric_picker_dimensions_error_label, metric_picker_period_error_label,
         metric_picker_period_not_a_number_error, metric_picker_statistic_error_label,
         migrate_mapping_unmapped_count_label, migrate_running_position_label,
@@ -1744,9 +1790,9 @@ mod tests {
         object_browser_versions_count_label, partial_delete_label, pending_change_count_label,
         pending_edits_summary, presign_expiry_label, presign_method_label, preview_gate_message,
         refresh_policy_label, result_tab_count_label, row_count_label, schema_change_description,
-        script_confirm_message_label, sort_direction_label, table_action_description,
-        unsaved_changes_label, update_columns_label, valid_lines_label, versioning_off_label,
-        versioning_status_label,
+        script_confirm_message_label, sort_direction_label, source_window_error_message,
+        syntax_error_with_hint, table_action_description, unsaved_changes_label,
+        update_columns_label, valid_lines_label, versioning_off_label, versioning_status_label,
     };
     use crate::buckets_table::BucketEncryptionChoice;
     use crate::object_browser::{PresignExpiry, PresignMethodChoice, PreviewGate};
@@ -4990,5 +5036,152 @@ mod tests {
 
             assert_ne!(en, es, "{key} should differ between en and es");
         }
+    }
+
+    #[test]
+    fn sweep_leftover_keys_resolve_in_both_locales() {
+        // New keys introduced by this sweep.
+        let new_keys = [
+            "document.data.grid.error.limit_must_be_positive",
+            "document.data.grid.error.invalid_limit",
+            "document.data.grid.error.connection_not_found",
+            "document.data.grid.error.connection_not_available",
+            "document.data.grid.error.invalid_json_filter",
+            "document.data.grid.placeholder.chart_name",
+            "document.data.grid.toast.query_imported",
+            "document.data.grid.toast.mutation_queued",
+            "document.data.context_menu.error.no_results_to_export",
+            "document.data.context_menu.error.invalid_json",
+            "document.data.context_menu.error.document_must_be_json_object",
+            "document.data.context_menu.error.document_missing_id",
+            "document.data.context_menu.error.table_state_not_available",
+            "document.data.context_menu.error.primary_key_not_determined",
+            "document.object_browser.toolbar.filter_prefix_placeholder",
+            "document.audit.filter.placeholder.local",
+            "document.code.execution.error.select_source",
+            "document.code.execution.error.start_time_required",
+            "document.code.execution.error.end_time_required",
+            "document.code.execution.error.start_before_end",
+            "document.code.execution.hint_prefix",
+            "document.shared.error_with_detail_clipboard",
+        ];
+
+        // Existing keys reused as-is because their English value is
+        // byte-identical to a leftover literal found in this sweep.
+        let reused_keys = [
+            "document.audit.detail.level",
+            "document.audit.detail.category",
+            "document.audit.detail.outcome",
+        ];
+
+        for key in new_keys.iter().chain(reused_keys.iter()) {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(*key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, *key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sweep_leftover_keys_differ_between_locales() {
+        // "document.audit.filter.placeholder.local" is intentionally
+        // excluded: "Local" is the same word in English and Spanish.
+        let keys = [
+            "document.data.grid.error.limit_must_be_positive",
+            "document.data.context_menu.error.no_results_to_export",
+            "document.object_browser.toolbar.filter_prefix_placeholder",
+            "document.code.execution.error.select_source",
+            "document.code.execution.hint_prefix",
+        ];
+
+        for key in keys {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+
+            assert_ne!(en, es, "{key} should differ between en and es");
+        }
+    }
+
+    #[test]
+    fn source_window_error_message_covers_every_build_source_window_context_variant() {
+        // Relies on the process-wide default locale ("en"); no test in this
+        // suite calls `set_locale`, so the default is stable across tests.
+        let variants = [
+            (
+                "Select at least one source",
+                "document.code.execution.error.select_source",
+            ),
+            (
+                "Start time is required",
+                "document.code.execution.error.start_time_required",
+            ),
+            (
+                "End time is required",
+                "document.code.execution.error.end_time_required",
+            ),
+            (
+                "Start time must be earlier than end time",
+                "document.code.execution.error.start_before_end",
+            ),
+        ];
+
+        for (variant, key) in variants {
+            let value = source_window_error_message(variant);
+
+            assert_eq!(
+                value,
+                dbflux_i18n::t!(key),
+                "{variant} did not route through {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_window_error_message_falls_back_to_input_for_unmapped_tokens() {
+        let value = source_window_error_message("not a known validation token");
+
+        assert_eq!(value, "not a known validation token");
+    }
+
+    #[test]
+    fn source_window_error_message_keys_resolve_in_spanish() {
+        let keys = [
+            "document.code.execution.error.select_source",
+            "document.code.execution.error.start_time_required",
+            "document.code.execution.error.end_time_required",
+            "document.code.execution.error.start_before_end",
+        ];
+
+        for key in keys {
+            let value = dbflux_i18n::t!(key, locale = "es");
+
+            assert!(!value.is_empty(), "{key} resolved empty in es");
+            assert_ne!(value, format!("es.{key}"), "{key} missing from es catalog");
+        }
+    }
+
+    #[test]
+    fn syntax_error_with_hint_interpolates_message_and_hint() {
+        let value = syntax_error_with_hint("unexpected token", "check your syntax");
+
+        assert!(value.contains("unexpected token"));
+        assert!(value.contains("check your syntax"));
+        assert_ne!(value, "document.code.execution.hint_prefix");
+    }
+
+    #[test]
+    fn error_with_detail_clipboard_interpolates_title_and_detail() {
+        let value = error_with_detail_clipboard("Invalid JSON filter", "unexpected end of input");
+
+        assert!(value.contains("Invalid JSON filter"));
+        assert!(value.contains("unexpected end of input"));
+        assert_ne!(value, "document.shared.error_with_detail_clipboard");
     }
 }
