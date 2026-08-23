@@ -1006,14 +1006,18 @@ impl Sidebar {
         let visible_entry_count = Self::count_visible_entries(&items);
         let gutter_metadata = compute_gutter_map(&items);
         let tree_state = cx.new(|cx| TreeState::new(cx).items(items));
-        let connections_search_input = cx
-            .new(|cx| InputState::new(window, cx).placeholder("Filter connections and schema..."));
+        let connections_search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("sidebar.filter.connections_placeholder"))
+        });
 
         let scripts_items = Self::build_initial_scripts_tree(app_state.read(cx));
         let scripts_gutter_metadata = compute_gutter_map(&scripts_items);
         let scripts_tree_state = cx.new(|cx| TreeState::new(cx).items(scripts_items));
-        let scripts_search_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Filter scripts..."));
+        let scripts_search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("sidebar.filter.scripts_placeholder"))
+        });
 
         let rename_input = cx.new(|cx| InputState::new(window, cx));
 
@@ -1281,23 +1285,28 @@ impl Sidebar {
             .iter()
             .find(|profile| profile.id == profile_id)
             .map(|profile| profile.name.clone())
-            .unwrap_or_else(|| "connection".to_string());
+            .unwrap_or_else(|| dbflux_i18n::t!("sidebar.status.profile_fallback_name"));
 
         let app_state_for_action = app_state.clone();
-        let reconnect_action =
-            dbflux_ui_base::toast::ToastAction::new("edit-reconnect-now", "Reconnect now")
-                .primary()
-                .on_click(move |cx| {
-                    app_state_for_action.update(cx, |state, cx| {
-                        state.pending_reconnect_request = Some(profile_id);
-                        cx.emit(AppStateChanged);
-                    });
-                });
+        let reconnect_action = dbflux_ui_base::toast::ToastAction::new(
+            "edit-reconnect-now",
+            dbflux_i18n::t!("sidebar.toast.edit_reconnect_now"),
+        )
+        .primary()
+        .on_click(move |cx| {
+            app_state_for_action.update(cx, |state, cx| {
+                state.pending_reconnect_request = Some(profile_id);
+                cx.emit(AppStateChanged);
+            });
+        });
 
-        let later_action = dbflux_ui_base::toast::ToastAction::new("edit-reconnect-later", "Later");
+        let later_action = dbflux_ui_base::toast::ToastAction::new(
+            "edit-reconnect-later",
+            dbflux_i18n::t!("sidebar.toast.edit_reconnect_later"),
+        );
 
-        dbflux_ui_base::toast::Toast::info(format!("'{}' updated", profile_name))
-            .body("Reconnect to apply the changes to the live session.")
+        dbflux_ui_base::toast::Toast::info(labels::profile_updated_label(&profile_name))
+            .body(dbflux_i18n::t!("sidebar.toast.edit_reconnect_body"))
             .meta_right(dbflux_ui_base::toast::now_hms())
             .action(reconnect_action)
             .action(later_action)

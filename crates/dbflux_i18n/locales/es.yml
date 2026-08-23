@@ -220,11 +220,37 @@ sidebar:
     connections_hint: Usa + para agregar una nueva conexión
     scripts_title: Aún no hay scripts
     scripts_hint: Usa + para crear un script nuevo o importar un archivo existente
+  filter:
+    connections_placeholder: Filtrar conexiones y esquema...
+    scripts_placeholder: Filtrar scripts...
+    stream_placeholder: Filtrar nombres de streams...
+  overlay:
+    add_folder: Nueva carpeta
+    add_connection: Nueva conexión
+    add_script_file: Nuevo archivo
+    add_script_folder: Nueva carpeta
+    import_file: Importar archivo
+    child_picker:
+      title: "Flujos de eventos: %{name}"
+      column_name: Nombre del stream
+      column_last_event: Último evento
+      empty: No se encontraron flujos de eventos
+      prev: Anterior
+      next: Siguiente
+      page_label: "Página %{current}/%{total} (%{start}-%{end})"
+      page_label_empty: Página 0/0
+      unsupported: Los flujos de eventos no están disponibles para esta colección
   status:
     connection_summary: "%{connected} conectadas · %{idle} inactivas"
+    profile_fallback_name: conexión
   tabs:
     connections: CONEXIONES
     scripts: SCRIPTS
+  toast:
+    edit_reconnect_updated: "'%{name}' actualizado"
+    edit_reconnect_body: Reconecta para aplicar los cambios a la sesión activa.
+    edit_reconnect_now: Reconectar ahora
+    edit_reconnect_later: Más tarde
   tree:
     container:
       relational: Tablas (%{count})
@@ -235,6 +261,8 @@ sidebar:
       wide_column: Tablas (%{count})
       log_stream: Log Groups (%{count})
       object_storage: Buckets (%{count})
+    status:
+      loading: Cargando…
 sql_preview:
   title:
     sql: Vista previa de SQL

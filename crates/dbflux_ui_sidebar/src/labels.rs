@@ -43,6 +43,34 @@ pub(crate) fn footer_counts_label(connected: usize, idle: usize) -> String {
     )
 }
 
+/// Translated page indicator for the collection child picker, e.g.
+/// `"Page 1/3 (1-50)"`. `page` and `pages` are 1-based, `from`/`to` are the
+/// 1-based inclusive row range shown on the current page.
+pub(crate) fn page_label(page: usize, pages: usize, from: usize, to: usize) -> String {
+    if pages == 0 {
+        return dbflux_i18n::t!("sidebar.overlay.child_picker.page_label_empty");
+    }
+
+    dbflux_i18n::t!(
+        "sidebar.overlay.child_picker.page_label",
+        current = page,
+        total = pages,
+        start = from,
+        end = to
+    )
+}
+
+/// Translated child-picker modal title, e.g. `"Event streams: orders"`.
+pub(crate) fn child_picker_title(collection: &str) -> String {
+    dbflux_i18n::t!("sidebar.overlay.child_picker.title", name = collection)
+}
+
+/// Translated toast headline reporting a connection profile was updated,
+/// e.g. `"'prod-db' updated"`.
+pub(crate) fn profile_updated_label(name: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.edit_reconnect_updated", name = name)
+}
+
 #[cfg(test)]
 mod tests {
     use dbflux_core::DatabaseCategory;
@@ -80,6 +108,32 @@ mod tests {
         "sidebar.status.connection_summary",
         "sidebar.tree.container.relational",
         "sidebar.tree.container.log_stream",
+    ];
+
+    const OVERLAY_KEYS: [&str; 23] = [
+        "sidebar.filter.connections_placeholder",
+        "sidebar.filter.scripts_placeholder",
+        "sidebar.filter.stream_placeholder",
+        "sidebar.overlay.add_folder",
+        "sidebar.overlay.add_connection",
+        "sidebar.overlay.add_script_file",
+        "sidebar.overlay.add_script_folder",
+        "sidebar.overlay.import_file",
+        "sidebar.overlay.child_picker.title",
+        "sidebar.overlay.child_picker.column_name",
+        "sidebar.overlay.child_picker.column_last_event",
+        "sidebar.overlay.child_picker.empty",
+        "sidebar.overlay.child_picker.prev",
+        "sidebar.overlay.child_picker.next",
+        "sidebar.overlay.child_picker.page_label",
+        "sidebar.overlay.child_picker.page_label_empty",
+        "sidebar.overlay.child_picker.unsupported",
+        "sidebar.toast.edit_reconnect_updated",
+        "sidebar.toast.edit_reconnect_body",
+        "sidebar.toast.edit_reconnect_now",
+        "sidebar.toast.edit_reconnect_later",
+        "sidebar.status.profile_fallback_name",
+        "sidebar.tree.status.loading",
     ];
 
     #[test]
@@ -152,5 +206,82 @@ mod tests {
 
             assert_eq!(expected, translated);
         }
+    }
+
+    #[test]
+    fn overlay_keys_resolve_in_both_locales() {
+        for key in OVERLAY_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key, "missing translation for {locale}.{key}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "translation fell back to the miss sentinel for {locale}.{key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn overlay_prev_differs_between_locales() {
+        let english = dbflux_i18n::t!("sidebar.overlay.child_picker.prev", locale = "en");
+        let spanish = dbflux_i18n::t!("sidebar.overlay.child_picker.prev", locale = "es");
+
+        assert_eq!(english, "Prev");
+        assert_eq!(spanish, "Anterior");
+        assert_ne!(english, spanish);
+    }
+
+    #[test]
+    fn page_label_reports_current_page_and_visible_range() {
+        let label = super::page_label(1, 3, 1, 50);
+
+        assert!(label.contains('1'));
+        assert!(label.contains('3'));
+        assert!(label.contains("50"));
+        assert_eq!(
+            label,
+            dbflux_i18n::t!(
+                "sidebar.overlay.child_picker.page_label",
+                current = 1,
+                total = 3,
+                start = 1,
+                end = 50
+            )
+        );
+    }
+
+    #[test]
+    fn page_label_falls_back_to_empty_variant_when_there_are_no_pages() {
+        let label = super::page_label(0, 0, 0, 0);
+
+        assert_eq!(
+            label,
+            dbflux_i18n::t!("sidebar.overlay.child_picker.page_label_empty")
+        );
+    }
+
+    #[test]
+    fn child_picker_title_includes_the_collection_name() {
+        let title = super::child_picker_title("orders");
+
+        assert!(title.contains("orders"));
+        assert_eq!(
+            title,
+            dbflux_i18n::t!("sidebar.overlay.child_picker.title", name = "orders")
+        );
+    }
+
+    #[test]
+    fn profile_updated_label_includes_the_profile_name() {
+        let label = super::profile_updated_label("prod-db");
+
+        assert!(label.contains("prod-db"));
+        assert_eq!(
+            label,
+            dbflux_i18n::t!("sidebar.toast.edit_reconnect_updated", name = "prod-db")
+        );
     }
 }

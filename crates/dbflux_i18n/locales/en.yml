@@ -220,11 +220,37 @@ sidebar:
     connections_hint: Use + to add a new connection
     scripts_title: No scripts yet
     scripts_hint: Use + to create a new script or import an existing file
+  filter:
+    connections_placeholder: Filter connections and schema...
+    scripts_placeholder: Filter scripts...
+    stream_placeholder: Filter stream names...
+  overlay:
+    add_folder: New Folder
+    add_connection: New Connection
+    add_script_file: New File
+    add_script_folder: New Folder
+    import_file: Import File
+    child_picker:
+      title: "Event streams: %{name}"
+      column_name: Stream name
+      column_last_event: Last event
+      empty: No event streams found
+      prev: Prev
+      next: Next
+      page_label: "Page %{current}/%{total} (%{start}-%{end})"
+      page_label_empty: Page 0/0
+      unsupported: Event streams are not available for this collection
   status:
     connection_summary: "%{connected} connected · %{idle} idle"
+    profile_fallback_name: connection
   tabs:
     connections: CONNECTIONS
     scripts: SCRIPTS
+  toast:
+    edit_reconnect_updated: "'%{name}' updated"
+    edit_reconnect_body: Reconnect to apply the changes to the live session.
+    edit_reconnect_now: Reconnect now
+    edit_reconnect_later: Later
   tree:
     container:
       relational: Tables (%{count})
@@ -235,6 +261,8 @@ sidebar:
       wide_column: Tables (%{count})
       log_stream: Log Groups (%{count})
       object_storage: Buckets (%{count})
+    status:
+      loading: Loading…
 sql_preview:
   title:
     sql: SQL Preview
