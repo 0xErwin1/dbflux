@@ -25,6 +25,10 @@ use super::hooks_section::{
     HookFocus, HookFormField, HookKindSelection, HooksSection, ScriptSourceSelection,
 };
 use super::layout;
+use crate::labels::{
+    hooks_create_dir_failed, hooks_duplicate_id, hooks_env_pair_invalid, hooks_interpreter_missing,
+    hooks_open_script_failed, hooks_write_script_failed,
+};
 
 fn commit_saved_hook_definitions(
     current: &mut HashMap<String, EditableGlobalHook>,
@@ -79,7 +83,7 @@ impl HooksSection {
                 .code_editor(editor_mode)
                 .line_number(true)
                 .soft_wrap(true)
-                .placeholder("Enter script content...");
+                .placeholder(dbflux_i18n::t!("hooks.script.placeholder"));
 
             state.set_value(value.clone(), window, cx);
             state
@@ -253,7 +257,7 @@ impl HooksSection {
                         format!("{interpreter} {path}")
                     }
                 }
-                None => "Unsupported on this platform".to_string(),
+                None => dbflux_i18n::t!("settings.hooks.status.unsupported_platform"),
             },
             HookKindSelection::Lua => {
                 let path = self
@@ -293,7 +297,7 @@ impl HooksSection {
                 .to_string();
 
             if !path.is_empty() && !Path::new(&path).exists() {
-                warnings.push("Script file does not exist yet".to_string());
+                warnings.push(dbflux_i18n::t!("settings.hooks.status.script_missing"));
             }
         }
 
@@ -301,12 +305,12 @@ impl HooksSection {
             match self.resolved_script_interpreter(cx) {
                 Some(interpreter) => {
                     if !interpreter_exists(&interpreter) {
-                        warnings.push(format!("Interpreter '{interpreter}' was not found in PATH"));
+                        warnings.push(hooks_interpreter_missing(&interpreter));
                     }
                 }
-                None => {
-                    warnings.push("Selected language is unsupported on this platform".to_string())
-                }
+                None => warnings.push(dbflux_i18n::t!(
+                    "settings.hooks.status.language_unsupported"
+                )),
             }
         }
 
@@ -332,7 +336,7 @@ impl HooksSection {
             report_error(
                 UserFacingError::new(
                     ErrorKind::Storage,
-                    format!("Failed to open script: {error}"),
+                    hooks_open_script_failed(&error.to_string()),
                 ),
                 cx,
             );
@@ -371,9 +375,10 @@ impl HooksSection {
         let hook_id = self.input_hook_id.read(cx).value().trim().to_string();
 
         if hook_id.is_empty() {
-            Toast::error("Hook ID is required")
+            let toast_msg = dbflux_i18n::t!("settings.hooks.validation.id_required");
+            Toast::error(toast_msg.clone())
                 .meta_right(now_hms())
-                .action(copy_action("Hook ID is required"))
+                .action(copy_action(toast_msg))
                 .push(cx);
             return None;
         }
@@ -388,7 +393,7 @@ impl HooksSection {
                 self.input_hook_script_content.read(cx).value().to_string(),
             ),
             HookKindSelection::Command => {
-                Toast::warning("Commands do not open in the script editor")
+                Toast::warning(dbflux_i18n::t!("settings.hooks.error.command_not_editable"))
                     .meta_right(now_hms())
                     .push(cx);
                 return None;
@@ -399,7 +404,7 @@ impl HooksSection {
             if !path.exists()
                 && let Err(error) = std::fs::write(&path, &content)
             {
-                let toast_msg = (format!("Failed to write script file: {error}")).to_string();
+                let toast_msg = hooks_write_script_failed(&error.to_string());
                 Toast::error(toast_msg.clone())
                     .meta_right(now_hms())
                     .action(copy_action(toast_msg))
@@ -417,16 +422,16 @@ impl HooksSection {
         let path = match self.app_state.update(cx, |state, cx| {
             let scripts_dir = state
                 .scripts_directory_mut()
-                .ok_or_else(|| "Scripts directory is not available in this session".to_string())?;
+                .ok_or_else(|| dbflux_i18n::t!("settings.hooks.error.no_scripts_dir"))?;
 
             let hooks_dir = scripts_dir
                 .hooks_directory()
-                .map_err(|error| format!("Failed to create hooks directory: {error}"))?;
+                .map_err(|error| hooks_create_dir_failed(&error.to_string()))?;
 
             let path = hooks_dir.join(format!("{}.{}", hook_id, extension));
 
             std::fs::write(&path, &content)
-                .map_err(|error| format!("Failed to write script file: {error}"))?;
+                .map_err(|error| hooks_write_script_failed(&error.to_string()))?;
 
             scripts_dir.refresh();
             cx.emit(AppStateChanged);
@@ -617,7 +622,7 @@ impl HooksSection {
         }
 
         if hook_id.is_empty() {
-            return Err("Hook ID is required".to_string());
+            return Err(dbflux_i18n::t!("settings.hooks.validation.id_required"));
         }
 
         let selected = self.hook_editor_selection().save_selection();
@@ -628,7 +633,7 @@ impl HooksSection {
         } else {
             match timeout_text.parse::<u64>() {
                 Ok(value) => Some(value),
-                Err(_) => return Err("Timeout must be a valid number (milliseconds)".to_string()),
+                Err(_) => return Err(dbflux_i18n::t!("settings.hooks.validation.timeout")),
             }
         };
 
@@ -659,7 +664,9 @@ impl HooksSection {
         let kind = match selected_kind {
             HookKindSelection::Command => {
                 if command.is_empty() {
-                    return Err("Command is required".to_string());
+                    return Err(dbflux_i18n::t!(
+                        "settings.hooks.validation.command_required"
+                    ));
                 }
 
                 HookKind::Command {
@@ -673,7 +680,9 @@ impl HooksSection {
             HookKindSelection::Script => {
                 let language = self.selected_script_language(cx);
                 if script_file_path.is_empty() {
-                    return Err("Script file path is required".to_string());
+                    return Err(dbflux_i18n::t!(
+                        "settings.hooks.validation.script_path_required"
+                    ));
                 }
 
                 let source = ScriptSource::File {
@@ -688,7 +697,9 @@ impl HooksSection {
             }
             HookKindSelection::Lua => {
                 if script_file_path.is_empty() {
-                    return Err("Lua script file path is required".to_string());
+                    return Err(dbflux_i18n::t!(
+                        "settings.hooks.validation.lua_path_required"
+                    ));
                 }
 
                 let source = ScriptSource::File {
@@ -753,8 +764,11 @@ impl HooksSection {
             Ok(hooks) => hooks,
             Err(e) => {
                 report_error(
-                    UserFacingError::new(ErrorKind::Storage, "Failed to save hooks")
-                        .with_cause(e.to_string()),
+                    UserFacingError::new(
+                        ErrorKind::Storage,
+                        dbflux_i18n::t!("settings.hooks.error.save"),
+                    )
+                    .with_cause(e.to_string()),
                     cx,
                 );
                 return false;
@@ -1195,7 +1209,7 @@ impl HooksSection {
             && self.editing_hook_id.as_deref() != Some(hook_id.as_str());
 
         if duplicate {
-            let msg = format!("A hook with ID '{}' already exists", hook_id);
+            let msg = hooks_duplicate_id(&hook_id);
             Toast::error(msg.clone())
                 .meta_right(now_hms())
                 .action(copy_action(msg))
@@ -1217,7 +1231,9 @@ impl HooksSection {
 
         self.load_hook_into_form(&hook_id, window, cx);
         self.hook_focus = HookFocus::Form;
-        Toast::success("Hook saved").meta_right(now_hms()).push(cx);
+        Toast::success(dbflux_i18n::t!("settings.hooks.toast.saved"))
+            .meta_right(now_hms())
+            .push(cx);
     }
 
     pub(super) fn request_delete_hook(&mut self, hook_id: String, cx: &mut Context<Self>) {
@@ -1246,7 +1262,7 @@ impl HooksSection {
             self.hook_definitions = saved_definitions;
             return;
         }
-        Toast::success("Hook deleted")
+        Toast::success(dbflux_i18n::t!("settings.hooks.toast.deleted"))
             .meta_right(now_hms())
             .push(cx);
         cx.notify();
@@ -1273,14 +1289,17 @@ impl HooksSection {
 
         if let Err(error) = result {
             report_error(
-                UserFacingError::new(ErrorKind::Storage, "Failed to delete unreadable hook row")
-                    .with_cause(error.to_string()),
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    dbflux_i18n::t!("settings.hooks.error.delete_unreadable"),
+                )
+                .with_cause(error.to_string()),
                 cx,
             );
             return;
         }
 
-        Toast::success("Unreadable hook row deleted")
+        Toast::success(dbflux_i18n::t!("settings.hooks.toast.unreadable_deleted"))
             .meta_right(now_hms())
             .push(cx);
         cx.notify();
@@ -1314,15 +1333,12 @@ impl HooksSection {
             }
 
             let Some((key, value)) = pair.split_once('=') else {
-                return Err(format!(
-                    "Invalid env pair '{}'. Expected KEY=value format",
-                    pair
-                ));
+                return Err(hooks_env_pair_invalid(pair));
             };
 
             let key = key.trim();
             if key.is_empty() {
-                return Err("Environment variable key cannot be empty".to_string());
+                return Err(dbflux_i18n::t!("settings.hooks.validation.env_key_empty"));
             }
 
             env.insert(key.to_string(), value.to_string());
@@ -1334,8 +1350,8 @@ impl HooksSection {
     pub(super) fn render_hooks_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         layout::split_section_shell(
             dbflux_components::composites::section_header(
-                "Hooks",
-                "Create reusable hooks and associate them from connection settings",
+                dbflux_i18n::t!("settings.hooks.header.title"),
+                dbflux_i18n::t!("settings.hooks.header.subtitle"),
                 cx,
             ),
             self.render_hooks_list(cx),
@@ -1372,7 +1388,7 @@ impl HooksSection {
                             gpui::transparent_black()
                         })
                         .child(
-                            Button::new("new-hook", "New Hook")
+                            Button::new("new-hook", dbflux_i18n::t!("settings.hooks.list.new"))
                                 .small()
                                 .w_full()
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -1394,7 +1410,10 @@ impl HooksSection {
                     .flex_col()
                     .gap_1()
                     .when(hook_ids.is_empty(), |container| {
-                        container.child(Body::new("No hooks defined").color(theme.muted_foreground))
+                        container.child(
+                            Body::new(dbflux_i18n::t!("settings.hooks.list.empty"))
+                                .color(theme.muted_foreground),
+                        )
                     })
                     .children(hook_ids.into_iter().enumerate().map(|(idx, hook_id)| {
                         let selected = self.editing_hook_id.as_deref() == Some(hook_id.as_str());
@@ -1471,9 +1490,14 @@ impl HooksSection {
             .gap_1()
             .when(!protected.is_empty(), |container| {
                 container
-                    .child(div().mt_2().child(
-                        MonoCaption::new("Unreadable hook rows").color(theme.muted_foreground),
-                    ))
+                    .child(
+                        div().mt_2().child(
+                            MonoCaption::new(dbflux_i18n::t!(
+                                "settings.hooks.list.unreadable.title"
+                            ))
+                            .color(theme.muted_foreground),
+                        ),
+                    )
                     .children(protected.into_iter().map(|(row_id, label)| {
                         let row_id_for_click = row_id.clone();
 
@@ -1508,8 +1532,10 @@ impl HooksSection {
                                             .gap_1()
                                             .child(MonoLabel::new(label))
                                             .child(
-                                                Body::new("Unreadable — cannot be edited")
-                                                    .color(theme.muted_foreground),
+                                                Body::new(dbflux_i18n::t!(
+                                                    "settings.hooks.list.unreadable.hint"
+                                                ))
+                                                .color(theme.muted_foreground),
                                             ),
                                     )
                                     .child(
@@ -1518,7 +1544,7 @@ impl HooksSection {
                                                 "delete-protected-{}",
                                                 row_id
                                             )),
-                                            "Delete",
+                                            dbflux_i18n::t!("hooks.action.delete"),
                                         )
                                         .small()
                                         .danger()
@@ -2294,5 +2320,65 @@ mod tests {
                 .and_then(|definition| definition.id.as_deref()),
             None
         );
+    }
+
+    const SETTINGS_HOOKS_CATALOG_KEYS: &[&str] = &[
+        "settings.hooks.header.title",
+        "settings.hooks.header.subtitle",
+        "settings.hooks.list.new",
+        "settings.hooks.list.empty",
+        "settings.hooks.list.unreadable.title",
+        "settings.hooks.list.unreadable.hint",
+        "settings.hooks.status.unsupported_platform",
+        "settings.hooks.status.script_missing",
+        "settings.hooks.status.interpreter_missing",
+        "settings.hooks.status.language_unsupported",
+        "settings.hooks.error.open_script",
+        "settings.hooks.error.command_not_editable",
+        "settings.hooks.error.write_script",
+        "settings.hooks.error.no_scripts_dir",
+        "settings.hooks.error.create_dir",
+        "settings.hooks.error.save",
+        "settings.hooks.error.delete_unreadable",
+        "settings.hooks.validation.id_required",
+        "settings.hooks.validation.timeout",
+        "settings.hooks.validation.command_required",
+        "settings.hooks.validation.script_path_required",
+        "settings.hooks.validation.lua_path_required",
+        "settings.hooks.validation.duplicate_id",
+        "settings.hooks.validation.env_pair",
+        "settings.hooks.validation.env_key_empty",
+        "settings.hooks.toast.saved",
+        "settings.hooks.toast.deleted",
+        "settings.hooks.toast.unreadable_deleted",
+    ];
+
+    #[test]
+    fn settings_hooks_list_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in SETTINGS_HOOKS_CATALOG_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn settings_hooks_saved_toast_differs_between_locales() {
+        let english = dbflux_i18n::t!("settings.hooks.toast.saved", locale = "en");
+        let spanish = dbflux_i18n::t!("settings.hooks.toast.saved", locale = "es");
+
+        assert_eq!(english, "Hook saved");
+        assert_ne!(english, spanish);
     }
 }

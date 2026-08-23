@@ -47,9 +47,46 @@ pub(crate) fn hooks_delete_unreadable_message(name: &str) -> String {
     dbflux_i18n::t!("hooks.delete_unreadable.message", name = name)
 }
 
+/// Formats the "interpreter not found in PATH" warning shown in the hook form.
+pub(crate) fn hooks_interpreter_missing(interpreter: &str) -> String {
+    dbflux_i18n::t!(
+        "settings.hooks.status.interpreter_missing",
+        interpreter = interpreter
+    )
+}
+
+/// Formats the toast shown when opening a hook's script in the OS default editor fails.
+pub(crate) fn hooks_open_script_failed(error: &str) -> String {
+    dbflux_i18n::t!("settings.hooks.error.open_script", error = error)
+}
+
+/// Formats the toast shown when writing a hook's script file to disk fails.
+pub(crate) fn hooks_write_script_failed(error: &str) -> String {
+    dbflux_i18n::t!("settings.hooks.error.write_script", error = error)
+}
+
+/// Formats the toast shown when creating the hooks scripts directory fails.
+pub(crate) fn hooks_create_dir_failed(error: &str) -> String {
+    dbflux_i18n::t!("settings.hooks.error.create_dir", error = error)
+}
+
+/// Formats the validation error shown when saving a hook with an ID already in use.
+pub(crate) fn hooks_duplicate_id(id: &str) -> String {
+    dbflux_i18n::t!("settings.hooks.validation.duplicate_id", id = id)
+}
+
+/// Formats the validation error shown for a malformed `KEY=value` environment pair.
+pub(crate) fn hooks_env_pair_invalid(pair: &str) -> String {
+    dbflux_i18n::t!("settings.hooks.validation.env_pair", pair = pair)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{hooks_delete_message, hooks_delete_unreadable_message};
+    use super::{
+        hooks_create_dir_failed, hooks_delete_message, hooks_delete_unreadable_message,
+        hooks_duplicate_id, hooks_env_pair_invalid, hooks_interpreter_missing,
+        hooks_open_script_failed, hooks_write_script_failed,
+    };
 
     #[test]
     fn hooks_delete_message_embeds_hook_name() {
@@ -69,5 +106,47 @@ mod tests {
             message,
             "Permanently delete the unreadable hook row \"legacy-row\"? Its stored data cannot be recovered, but its name becomes reusable afterwards."
         );
+    }
+
+    #[test]
+    fn hooks_interpreter_missing_embeds_interpreter_name() {
+        let message = hooks_interpreter_missing("python3");
+
+        assert_eq!(message, "Interpreter 'python3' was not found in PATH");
+    }
+
+    #[test]
+    fn hooks_open_script_failed_embeds_error_cause() {
+        let message = hooks_open_script_failed("no application registered");
+
+        assert_eq!(message, "Failed to open script: no application registered");
+    }
+
+    #[test]
+    fn hooks_write_script_failed_embeds_error_cause() {
+        let message = hooks_write_script_failed("permission denied");
+
+        assert_eq!(message, "Failed to write script file: permission denied");
+    }
+
+    #[test]
+    fn hooks_create_dir_failed_embeds_error_cause() {
+        let message = hooks_create_dir_failed("disk full");
+
+        assert_eq!(message, "Failed to create hooks directory: disk full");
+    }
+
+    #[test]
+    fn hooks_duplicate_id_embeds_id() {
+        let message = hooks_duplicate_id("nightly-backup");
+
+        assert_eq!(message, "A hook with ID 'nightly-backup' already exists");
+    }
+
+    #[test]
+    fn hooks_env_pair_invalid_embeds_pair() {
+        let message = hooks_env_pair_invalid("FOO");
+
+        assert_eq!(message, "Invalid env pair 'FOO'. Expected KEY=value format");
     }
 }
