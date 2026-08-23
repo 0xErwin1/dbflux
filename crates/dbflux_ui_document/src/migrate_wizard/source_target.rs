@@ -140,15 +140,18 @@ fn status_child(parent: &SharedString, load: &NodeLoad) -> Option<TreeNavNode> {
     match load {
         NodeLoad::Loaded => None,
         NodeLoad::NotLoaded | NodeLoad::Loading => {
-            let mut node =
-                TreeNavNode::leaf(status_child_id(parent), "Loading…", Some(AppIcon::Loader));
+            let mut node = TreeNavNode::leaf(
+                status_child_id(parent),
+                dbflux_i18n::t!("document.migrate_wizard.footer.loading"),
+                Some(AppIcon::Loader),
+            );
             node.selectable = false;
             Some(node)
         }
         NodeLoad::Failed(error) => {
             let mut node = TreeNavNode::leaf(
                 retry_child_id(parent),
-                SharedString::from(format!("Retry — {error}")),
+                dbflux_i18n::t!("document.migrate_wizard.source_target.retry", error = error),
                 Some(AppIcon::RotateCcw),
             );
             node.selectable = true;
@@ -653,10 +656,10 @@ impl SourceTargetPhase {
                     cx.emit(SourceTargetChanged);
                     cx.notify();
                 } else {
-                    self.error = Some(format!(
-                        "A migration has a single source database. Only tables in \
-                         '{}' can be selected — tables in '{database}' can't be mixed in.",
-                        self.source_database
+                    self.error = Some(dbflux_i18n::t!(
+                        "document.migrate_wizard.source_target.cross_database_error",
+                        source = self.source_database,
+                        other = database
                     ));
                     cx.notify();
                 }
@@ -727,7 +730,9 @@ impl SourceTargetPhase {
         let Some(connection) = self.resolve_source_connection(&database, cx) else {
             self.source.model.set_load(
                 node_id,
-                NodeLoad::Failed("Source connection is gone".to_string()),
+                NodeLoad::Failed(dbflux_i18n::t!(
+                    "document.migrate_wizard.source_target.source_connection_gone"
+                )),
             );
             self.rebuild_side(TreeSide::Source);
             cx.notify();
@@ -791,7 +796,9 @@ impl SourceTargetPhase {
         let Some(connection) = self.resolve_target_connection(profile_id, cx) else {
             self.target.model.set_load(
                 node_id,
-                NodeLoad::Failed("Target connection is gone".to_string()),
+                NodeLoad::Failed(dbflux_i18n::t!(
+                    "document.migrate_wizard.source_target.target_connection_gone"
+                )),
             );
             self.rebuild_side(TreeSide::Target);
             cx.notify();
@@ -979,8 +986,8 @@ impl Render for SourceTargetPhase {
                     .gap(Spacing::MD)
                     .flex_1()
                     .min_h(px(0.0))
-                    .child(self.render_tree_panel(TreeSide::Source, "Source", cx))
-                    .child(self.render_tree_panel(TreeSide::Target, "Target", cx)),
+                    .child(self.render_tree_panel(TreeSide::Source, cx))
+                    .child(self.render_tree_panel(TreeSide::Target, cx)),
             )
             .when_some(self.error.clone(), |parent, error| {
                 parent.child(Text::caption(error).danger())
@@ -989,20 +996,32 @@ impl Render for SourceTargetPhase {
 }
 
 impl SourceTargetPhase {
-    fn render_tree_panel(
-        &self,
-        side: TreeSide,
-        title: &str,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render_tree_panel(&self, side: TreeSide, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+
+        // `id_segment` stays a fixed, untranslated ASCII literal — the GPUI
+        // element id must never be built from catalog-resolved text.
+        let (title, id_segment) = match side {
+            TreeSide::Source => (
+                dbflux_i18n::t!("document.migrate_wizard.source_target.source_title"),
+                "source",
+            ),
+            TreeSide::Target => (
+                dbflux_i18n::t!("document.migrate_wizard.source_target.target_title"),
+                "target",
+            ),
+        };
         let subtitle = match side {
-            TreeSide::Source => format!("{} checked", self.source.model.checked_count()),
+            TreeSide::Source => crate::labels::migrate_source_target_checked_count_label(
+                self.source.model.checked_count(),
+            ),
             TreeSide::Target => self
                 .target_selection
                 .as_ref()
                 .map(|selection| selection.database.clone())
-                .unwrap_or_else(|| "No target selected".to_string()),
+                .unwrap_or_else(|| {
+                    dbflux_i18n::t!("document.migrate_wizard.source_target.no_target_selected")
+                }),
         };
 
         div()
@@ -1021,12 +1040,12 @@ impl SourceTargetPhase {
                     .py(Spacing::XS)
                     .border_b_1()
                     .border_color(theme.border)
-                    .child(Text::body(title.to_string()))
+                    .child(Text::body(title))
                     .child(Text::caption(subtitle)),
             )
             .child(
                 div()
-                    .id(SharedString::from(format!("migrate-tree-{title}")))
+                    .id(SharedString::from(format!("migrate-tree-{id_segment}")))
                     .flex_1()
                     .min_h(px(0.0))
                     .overflow_y_scroll()
@@ -1561,5 +1580,66 @@ mod tests {
         assert_eq!(parent_of_synthetic("db:1:app::__status"), Some("db:1:app"));
         assert_eq!(parent_of_synthetic("conn:1::__retry"), Some("conn:1"));
         assert_eq!(parent_of_synthetic("db:1:app"), None);
+    }
+
+    // ── PR 27a-2: migrate_wizard/source_target.rs ──
+
+    const MIGRATE_SOURCE_TARGET_KEYS: &[&str] = &[
+        "document.migrate_wizard.source_target.source_title",
+        "document.migrate_wizard.source_target.target_title",
+        "document.migrate_wizard.source_target.checked_count.one",
+        "document.migrate_wizard.source_target.checked_count.many",
+        "document.migrate_wizard.source_target.no_target_selected",
+        "document.migrate_wizard.source_target.retry",
+        "document.migrate_wizard.source_target.source_connection_gone",
+        "document.migrate_wizard.source_target.target_connection_gone",
+        "document.migrate_wizard.source_target.cross_database_error",
+        // Reused from PR 27a (`footer.loading`), listed here because the
+        // unloaded-branch placeholder row resolves it from this file too.
+        "document.migrate_wizard.footer.loading",
+    ];
+
+    /// Every `document.migrate_wizard.source_target.*` key introduced by this
+    /// file (plus the key it reuses from PR 27a) resolves to a non-empty,
+    /// non-fallback value in both locales.
+    #[test]
+    fn migrate_source_target_keys_resolve_in_both_locales() {
+        for key in MIGRATE_SOURCE_TARGET_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, *key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    /// A representative sample of `document.migrate_wizard.source_target.*`
+    /// keys diverges between locales.
+    #[test]
+    fn migrate_source_target_keys_differ_between_locales() {
+        for key in [
+            "document.migrate_wizard.source_target.source_title",
+            "document.migrate_wizard.source_target.no_target_selected",
+            "document.migrate_wizard.source_target.retry",
+            "document.migrate_wizard.source_target.cross_database_error",
+        ] {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert_ne!(en, es, "{key} must differ between en and es");
+        }
+    }
+
+    /// `IMPLICIT_DATABASE_LABEL` names an actual SQLite database identity
+    /// ("main"), not UI chrome, so it is never routed through the
+    /// translation catalog.
+    #[test]
+    fn implicit_database_label_is_the_real_sqlite_database_name() {
+        assert_eq!(super::IMPLICIT_DATABASE_LABEL, "main");
     }
 }

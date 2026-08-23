@@ -1289,6 +1289,105 @@ document:
         no_limit: Sin límite
         missing: Ausente
         expired: Expirado
+  migrate_wizard:
+    title: Migrar datos
+    rail:
+      source_target: Origen y destino
+      tables_mapping: Mapeo de tablas
+      options: Opciones
+      confirm: Confirmar
+      run: Ejecutar
+    mapping_mode:
+      create: Crear
+      existing: "Existente (solo insertar)"
+      recreate: "Recrear (eliminar + crear)"
+      skip: Omitir
+      truncate: "Truncar (vaciar + insertar)"
+    options:
+      segment_size_label: Tamaño de segmento / confirmación
+      segment_size_placeholder: Tamaño de segmento / confirmación
+      segment_size_invalid: "Debe ser un número entero de 1 o más; se mantuvo el valor anterior."
+      disable_referential_integrity: Deshabilitar la integridad referencial durante la migración
+    confirm:
+      review_plan: Revisar plan de migración
+      destructive_ack: "Entiendo que este plan eliminará o vaciará los datos existentes en el destino."
+      destructive_tag: destructiva
+      start_migration: Iniciar migración
+      mode_label:
+        create: Crear
+        existing: Existente
+        recreate: Recrear
+        skip: Omitir
+        truncate: Truncar
+      reorder:
+        warning: "Estas tablas se referencian entre sí en un ciclo y no se pueden ordenar automáticamente. Elige el orden de carga antes de comenzar:"
+        up: Subir
+        down: Bajar
+        accept: Usar este orden
+    running:
+      title: "Migrando…"
+      position:
+        of_total: "Tabla %{index} de %{total}"
+        preparing: Preparando
+      progress:
+        of_total: "%{done} / %{total} filas"
+        only: "%{done} filas"
+    done:
+      completed_in: "Completado en %{elapsed}"
+    toast:
+      success: Migración completada
+    status:
+      cancelled: Migración cancelada
+    error:
+      no_source_connection: No hay una conexión activa para el perfil de origen
+      no_target_connection: No hay una conexión activa para el perfil de destino
+      table_schema_read_failed: "No se pudo leer el esquema de la tabla: %{error}"
+      foreign_keys_read_failed: "No se pudieron leer las claves foráneas: %{error}"
+      table_failed: "La migración falló en la tabla «%{table}»: %{error}"
+      cyclic_order: "Error de migración: el orden de claves foráneas se volvió cíclico durante la ejecución"
+      failed: "Error de migración: %{error}"
+    summary:
+      with_failures: "Se migraron %{completed} tabla(s), %{rows} fila(s) en total (%{skipped} omitida(s), %{failed} fallida(s))"
+      ok: "Se migraron %{completed} tabla(s), %{rows} fila(s) en total (%{skipped} omitida(s))"
+    status_line:
+      completed: "%{table}: completada (%{rows} fila(s))"
+      skipped: "%{table}: omitida"
+      failed: "%{table}: FALLIDA — %{error}"
+      not_attempted: "%{table}: no intentada"
+    mapping:
+      target_placeholder: Tabla destino
+      mode_placeholder: Modo
+      unset_option: "(sin asignar)"
+      set_all_label: "Establecer todo:"
+      columns_button: "Columnas…"
+      unmapped_count:
+        one: "%{count} columna sin asignar"
+        many: "%{count} columnas sin asignar"
+      column_mapping_title: "Mapeo de columnas — %{table}"
+      target_column_header: Columna destino
+      source_column_header: Columna origen
+      unmapped_columns: "Columnas de origen sin asignar: %{columns}"
+      header_source: Origen
+      header_target: Destino
+      header_mapping_mode: Modo de mapeo
+      header_transform: Transformación
+    source_target:
+      source_title: Origen
+      target_title: Destino
+      checked_count:
+        one: "%{count} marcada"
+        many: "%{count} marcadas"
+      no_target_selected: Ningún destino seleccionado
+      retry: "Reintentar — %{error}"
+      source_connection_gone: La conexión de origen ya no está disponible
+      target_connection_gone: La conexión de destino ya no está disponible
+      cross_database_error: "Una migración usa una única base de datos de origen. Solo se pueden seleccionar tablas de «%{source}»; las tablas de «%{other}» no se pueden combinar."
+    footer:
+      back: Atrás
+      continue: Continuar
+      loading: "Cargando…"
+      cancel: Cancelar
+      close: Cerrar
   object_browser:
     columns:
       class: Clase

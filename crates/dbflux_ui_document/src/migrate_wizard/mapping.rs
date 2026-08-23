@@ -48,7 +48,6 @@ use crate::migrate_wizard::tree_model::NodeLoad;
 const TARGET_COL_W: Pixels = px(220.0);
 const MODE_COL_W: Pixels = px(200.0);
 const TRANSFORM_COL_W: Pixels = px(160.0);
-const UNSET_LABEL: &str = "(unset)";
 
 /// Whether a typed target-table name refers to a table that already exists in
 /// the chosen target container (⇒ [`TargetResolution::Existing`]) or a new one
@@ -261,7 +260,9 @@ impl MappingPhase {
             let target_input = cx.new(|cx| {
                 InputState::new(window, cx)
                     .default_value(config.target_table.clone())
-                    .placeholder("Target table")
+                    .placeholder(dbflux_i18n::t!(
+                        "document.migrate_wizard.mapping.target_placeholder"
+                    ))
             });
 
             let mode_options = mapping_mode_options(supports_truncate);
@@ -270,13 +271,15 @@ impl MappingPhase {
                 .position(|(_, mode)| *mode == config.mapping_mode);
             let mode_items: Vec<DropdownItem> = mode_options
                 .iter()
-                .map(|(label, _)| DropdownItem::new(*label))
+                .map(|(label, _)| DropdownItem::new(label.clone()))
                 .collect();
             let mode_dropdown = cx.new(|_cx| {
                 Dropdown::new(SharedString::from(format!("migrate-mode-{row_index}")))
                     .items(mode_items)
                     .selected_index(selected_mode)
-                    .placeholder("Mode")
+                    .placeholder(dbflux_i18n::t!(
+                        "document.migrate_wizard.mapping.mode_placeholder"
+                    ))
             });
 
             let input_sub = cx.subscribe_in(
@@ -352,7 +355,7 @@ impl MappingPhase {
 
     fn on_mode_changed(&mut self, row_index: usize, index: usize, cx: &mut Context<Self>) {
         let mode_options = mapping_mode_options(self.supports_truncate);
-        let Some((_, mode)) = mode_options.get(index).copied() else {
+        let Some((_, mode)) = mode_options.get(index).cloned() else {
             return;
         };
         if let Some(row) = self.rows.get_mut(row_index) {
@@ -457,7 +460,9 @@ impl MappingPhase {
         let mut subscriptions = Vec::new();
 
         for (target_index, binding) in row.config.bindings.iter().enumerate() {
-            let mut items = vec![DropdownItem::new(UNSET_LABEL)];
+            let mut items = vec![DropdownItem::new(dbflux_i18n::t!(
+                "document.migrate_wizard.mapping.unset_option"
+            ))];
             items.extend(source_names.iter().cloned().map(DropdownItem::new));
 
             let selected = binding.map(|source_index| source_index + 1).or(Some(0));
@@ -590,32 +595,43 @@ impl MappingPhase {
             .flex_row()
             .items_center()
             .gap(Spacing::SM)
-            .child(Text::caption("Set all:"))
+            .child(Text::caption(dbflux_i18n::t!(
+                "document.migrate_wizard.mapping.set_all_label"
+            )))
             .child(
-                Button::new("migrate-bulk-existing", "Existing")
-                    .small()
-                    .ghost()
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.set_all_modes(TableMappingMode::Existing, cx);
-                    })),
+                Button::new(
+                    "migrate-bulk-existing",
+                    dbflux_i18n::t!("document.migrate_wizard.confirm.mode_label.existing"),
+                )
+                .small()
+                .ghost()
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.set_all_modes(TableMappingMode::Existing, cx);
+                })),
             )
             .when(supports_truncate, |parent| {
                 parent.child(
-                    Button::new("migrate-bulk-truncate", "Truncate")
-                        .small()
-                        .ghost()
-                        .on_click(cx.listener(|this, _event, _window, cx| {
-                            this.set_all_modes(TableMappingMode::Truncate, cx);
-                        })),
-                )
-            })
-            .child(
-                Button::new("migrate-bulk-skip", "Skip")
+                    Button::new(
+                        "migrate-bulk-truncate",
+                        dbflux_i18n::t!("document.migrate_wizard.confirm.mode_label.truncate"),
+                    )
                     .small()
                     .ghost()
                     .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.set_all_modes(TableMappingMode::Skip, cx);
+                        this.set_all_modes(TableMappingMode::Truncate, cx);
                     })),
+                )
+            })
+            .child(
+                Button::new(
+                    "migrate-bulk-skip",
+                    dbflux_i18n::t!("document.migrate_wizard.confirm.mode_label.skip"),
+                )
+                .small()
+                .ghost()
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.set_all_modes(TableMappingMode::Skip, cx);
+                })),
             )
     }
 
@@ -636,7 +652,7 @@ impl MappingPhase {
             .child(
                 Button::new(
                     SharedString::from(format!("migrate-transform-{row_index}")),
-                    "Columns…",
+                    dbflux_i18n::t!("document.migrate_wizard.mapping.columns_button"),
                 )
                 .small()
                 .ghost()
@@ -647,8 +663,10 @@ impl MappingPhase {
             )
             .when(!unmatched.is_empty(), |parent| {
                 parent.child(
-                    Text::caption(SharedString::from(format!("{} unmapped", unmatched.len())))
-                        .color(theme.warning),
+                    Text::caption(crate::labels::migrate_mapping_unmapped_count_label(
+                        unmatched.len(),
+                    ))
+                    .color(theme.warning),
                 )
             });
 
@@ -709,18 +727,23 @@ impl MappingPhase {
                     .items_center()
                     .gap(Spacing::SM)
                     .child(
-                        Button::new("migrate-drilldown-back", "Back")
-                            .small()
-                            .ghost()
-                            .icon(AppIcon::ChevronLeft)
-                            .on_click(cx.listener(|this, _event, _window, cx| {
+                        Button::new(
+                            "migrate-drilldown-back",
+                            dbflux_i18n::t!("document.migrate_wizard.footer.back"),
+                        )
+                        .small()
+                        .ghost()
+                        .icon(AppIcon::ChevronLeft)
+                        .on_click(cx.listener(
+                            |this, _event, _window, cx| {
                                 this.close_drilldown(cx);
-                            })),
+                            },
+                        )),
                     )
-                    .child(Text::body(SharedString::from(format!(
-                        "Column mapping — {}",
-                        row.config.source_table.qualified_name()
-                    )))),
+                    .child(Text::body(dbflux_i18n::t!(
+                        "document.migrate_wizard.mapping.column_mapping_title",
+                        table = row.config.source_table.qualified_name()
+                    ))),
             )
             .child(
                 div()
@@ -728,8 +751,12 @@ impl MappingPhase {
                     .flex_row()
                     .items_center()
                     .gap(Spacing::SM)
-                    .child(div().w(TARGET_COL_W).child(Text::label("Target column")))
-                    .child(div().w(TARGET_COL_W).child(Text::label("Source column"))),
+                    .child(div().w(TARGET_COL_W).child(Text::label(dbflux_i18n::t!(
+                        "document.migrate_wizard.mapping.target_column_header"
+                    ))))
+                    .child(div().w(TARGET_COL_W).child(Text::label(dbflux_i18n::t!(
+                        "document.migrate_wizard.mapping.source_column_header"
+                    )))),
             )
             .child(
                 div()
@@ -744,10 +771,10 @@ impl MappingPhase {
             )
             .when(!unmatched.is_empty(), |parent| {
                 parent.child(
-                    Text::caption(SharedString::from(format!(
-                        "Unmapped source columns: {}",
-                        unmatched.join(", ")
-                    )))
+                    Text::caption(dbflux_i18n::t!(
+                        "document.migrate_wizard.mapping.unmapped_columns",
+                        columns = unmatched.join(", ")
+                    ))
                     .color(theme.warning),
                 )
             })
@@ -766,10 +793,23 @@ fn render_grid_header(cx: &mut Context<MappingPhase>) -> impl IntoElement {
         .h(Heights::ROW)
         .border_b_1()
         .border_color(theme.border)
-        .child(div().flex_1().min_w(px(0.0)).child(Text::label("Source")))
-        .child(div().w(TARGET_COL_W).child(Text::label("Target")))
-        .child(div().w(MODE_COL_W).child(Text::label("Mapping mode")))
-        .child(div().w(TRANSFORM_COL_W).child(Text::label("Transform")))
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .child(Text::label(dbflux_i18n::t!(
+                    "document.migrate_wizard.mapping.header_source"
+                ))),
+        )
+        .child(div().w(TARGET_COL_W).child(Text::label(dbflux_i18n::t!(
+            "document.migrate_wizard.mapping.header_target"
+        ))))
+        .child(div().w(MODE_COL_W).child(Text::label(dbflux_i18n::t!(
+            "document.migrate_wizard.mapping.header_mapping_mode"
+        ))))
+        .child(div().w(TRANSFORM_COL_W).child(Text::label(dbflux_i18n::t!(
+            "document.migrate_wizard.mapping.header_transform"
+        ))))
 }
 
 fn render_binding_row(
@@ -917,5 +957,69 @@ mod tests {
         config.set_binding(1, None);
         let overrides = config.to_overrides();
         assert_eq!(overrides[1].source_column, None);
+    }
+
+    // ── PR 27a-2: migrate_wizard/mapping.rs ──
+
+    const MIGRATE_MAPPING_KEYS: &[&str] = &[
+        "document.migrate_wizard.mapping.target_placeholder",
+        "document.migrate_wizard.mapping.mode_placeholder",
+        "document.migrate_wizard.mapping.unset_option",
+        "document.migrate_wizard.mapping.set_all_label",
+        "document.migrate_wizard.mapping.columns_button",
+        "document.migrate_wizard.mapping.unmapped_count.one",
+        "document.migrate_wizard.mapping.unmapped_count.many",
+        "document.migrate_wizard.mapping.column_mapping_title",
+        "document.migrate_wizard.mapping.target_column_header",
+        "document.migrate_wizard.mapping.source_column_header",
+        "document.migrate_wizard.mapping.unmapped_columns",
+        "document.migrate_wizard.mapping.header_source",
+        "document.migrate_wizard.mapping.header_target",
+        "document.migrate_wizard.mapping.header_mapping_mode",
+        "document.migrate_wizard.mapping.header_transform",
+        // Reused from PR 27a (`confirm.mode_label.*`, `footer.back`), listed
+        // here because the bulk "Set all" buttons and the drilldown Back
+        // button resolve them from this file too.
+        "document.migrate_wizard.confirm.mode_label.existing",
+        "document.migrate_wizard.confirm.mode_label.truncate",
+        "document.migrate_wizard.confirm.mode_label.skip",
+        "document.migrate_wizard.footer.back",
+    ];
+
+    /// Every `document.migrate_wizard.mapping.*` key introduced by this file
+    /// (plus the keys it reuses from PR 27a) resolves to a non-empty,
+    /// non-fallback value in both locales.
+    #[test]
+    fn migrate_mapping_keys_resolve_in_both_locales() {
+        for key in MIGRATE_MAPPING_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, *key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    /// A representative sample of `document.migrate_wizard.mapping.*` keys
+    /// diverges between locales.
+    #[test]
+    fn migrate_mapping_keys_differ_between_locales() {
+        for key in [
+            "document.migrate_wizard.mapping.target_placeholder",
+            "document.migrate_wizard.mapping.set_all_label",
+            "document.migrate_wizard.mapping.columns_button",
+            "document.migrate_wizard.mapping.column_mapping_title",
+            "document.migrate_wizard.mapping.header_mapping_mode",
+        ] {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert_ne!(en, es, "{key} must differ between en and es");
+        }
     }
 }
