@@ -186,6 +186,9 @@ connection_manager:
     default_seconds_caption: "Predeterminado: %{value}s"
     on: Activado
     off: Desactivado
+  form_title:
+    edit: "Editar conexión %{driver}"
+    new: "Nueva conexión %{driver}"
   connection_overrides_title: Anulaciones de conexión
   connection_hooks_title: Hooks de conexión
   new_auth_profile: "Nuevo perfil de autenticación..."
@@ -1748,6 +1751,7 @@ form:
     auth_profile_dangling: "No se pudo encontrar el perfil de autenticación '%{name}' en ~/.aws/config. Recrea el perfil o actualiza el enlace de la conexión."
     dynamic_auth_profile_required: Las fuentes de valores dinámicos requieren un perfil de autenticación. Selecciona uno en la pestaña Acceso.
     auth_profile_no_provider: "El perfil de autenticación seleccionado '%{name}' no tiene un proveedor registrado para fuentes de valores dinámicos."
+    unknown_hook: "Hook de %{label} desconocido '%{token}'. Configúralo en Configuración > Hooks"
   action:
     updating: Actualizando
     saving: Guardando
@@ -2090,6 +2094,10 @@ scripts:
 settings:
   action:
     default_connection_name: conexión
+    close: Cerrar
+  discard:
+    title: Descartar cambios sin guardar
+    body: "Tienes cambios sin guardar. ¿Descartarlos y cambiar a %{section}?"
   general:
     header:
       title: General
@@ -2163,6 +2171,8 @@ settings:
       error: No se pudo actualizar la configuración de base de datos compartida
       hint: "Se aplica en el próximo inicio. Comparte la base de datos estable (dbflux.db) en lugar de la dbflux-nightly.db de esta compilación nightly."
     override_value_header: Valor de anulación
+    placeholder:
+      refresh_policy: Política de actualización
     save:
       button: Guardar
       error: "No se pudo guardar la configuración general: %{error}"

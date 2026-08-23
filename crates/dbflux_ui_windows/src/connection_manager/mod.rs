@@ -1736,7 +1736,8 @@ impl ConnectionManagerWindow {
             .collect();
 
         let mut role_items = vec![dbflux_components::controls::DropdownItem::with_value(
-            "No role", "",
+            dbflux_i18n::t!("connection_manager.placeholder.no_role"),
+            "",
         )];
         role_items.extend(roles.iter().map(|r| {
             let label = dbflux_mcp::builtin_display_name(&r.id)
@@ -1746,7 +1747,7 @@ impl ConnectionManagerWindow {
         }));
 
         let mut policy_items = vec![dbflux_components::controls::DropdownItem::with_value(
-            "No policy",
+            dbflux_i18n::t!("connection_manager.placeholder.no_policy"),
             "",
         )];
         policy_items.extend(policies.iter().map(|p| {
@@ -2345,9 +2346,8 @@ impl ConnectionManagerWindow {
 
         for (label, primary, extra) in phases {
             for token in Self::unresolved_hook_tokens(primary, &extra, &name_to_id, &known_ids) {
-                self.validation_errors.push(format!(
-                    "Unknown {label} hook '{token}'. Configure it in Settings > Hooks"
-                ));
+                self.validation_errors
+                    .push(crate::labels::form_unknown_hook(label, &token));
             }
         }
     }

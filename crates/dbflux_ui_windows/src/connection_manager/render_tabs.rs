@@ -613,8 +613,16 @@ impl ConnectionManagerWindow {
                                 let default_val = effective
                                     .driver_values
                                     .get(&field.id)
-                                    .map(|v| if v == "true" { "On" } else { "Off" })
-                                    .unwrap_or("Off");
+                                    .map(|v| {
+                                        if v == "true" {
+                                            dbflux_i18n::t!("connection_manager.overrides.on")
+                                        } else {
+                                            dbflux_i18n::t!("connection_manager.overrides.off")
+                                        }
+                                    })
+                                    .unwrap_or_else(|| {
+                                        dbflux_i18n::t!("connection_manager.overrides.off")
+                                    });
 
                                 Some(
                                     div()
@@ -650,7 +658,7 @@ impl ConnectionManagerWindow {
                                             )),
                                         )
                                         .child(Text::caption(
-                                            crate::labels::override_default_caption(default_val),
+                                            crate::labels::override_default_caption(&default_val),
                                         ))
                                         .into_any_element(),
                                 )

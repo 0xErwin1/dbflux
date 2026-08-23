@@ -186,6 +186,9 @@ connection_manager:
     default_seconds_caption: "Default: %{value}s"
     on: "On"
     off: "Off"
+  form_title:
+    edit: "Edit %{driver} Connection"
+    new: "New %{driver} Connection"
   connection_overrides_title: Connection Overrides
   connection_hooks_title: Connection Hooks
   new_auth_profile: "New Auth Profile..."
@@ -1748,6 +1751,7 @@ form:
     auth_profile_dangling: "Auth profile '%{name}' could not be found in ~/.aws/config. Please recreate the profile or update the connection binding."
     dynamic_auth_profile_required: Dynamic value sources require an Auth Profile. Select one in Access tab.
     auth_profile_no_provider: "Selected Auth Profile '%{name}' has no registered provider for dynamic value sources."
+    unknown_hook: "Unknown %{label} hook '%{token}'. Configure it in Settings > Hooks"
   action:
     updating: Updating
     saving: Saving
@@ -2090,6 +2094,10 @@ scripts:
 settings:
   action:
     default_connection_name: connection
+    close: Close
+  discard:
+    title: Discard Unsaved Changes
+    body: "You have unsaved changes. Discard them and switch to %{section}?"
   general:
     header:
       title: General
@@ -2163,6 +2171,8 @@ settings:
       error: Failed to update the shared-database setting
       hint: "Applied on next launch. Shares the stable database (dbflux.db) instead of this nightly build's dbflux-nightly.db."
     override_value_header: Override Value
+    placeholder:
+      refresh_policy: Refresh policy
     save:
       button: Save
       error: "Failed to save general settings: %{error}"

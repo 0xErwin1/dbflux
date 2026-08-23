@@ -265,9 +265,9 @@ impl ConnectionManagerWindow {
             .filter(|s| !s.is_empty());
         let is_editing = self.editing_profile_id.is_some();
         let title = if is_editing {
-            format!("Edit {} Connection", driver_name)
+            crate::labels::connection_manager_window_title_edit(&driver_name)
         } else {
-            format!("New {} Connection", driver_name)
+            crate::labels::connection_manager_window_title_new(&driver_name)
         };
 
         let show_focus = self.edit_state == EditState::Navigating;

@@ -664,6 +664,28 @@ pub(crate) fn export_result_omitted_fields(count: usize) -> String {
     }
 }
 
+/// Formats the "Unknown <label> hook '<token>'. Configure it in Settings >
+/// Hooks" validation error for an unresolved hook binding.
+pub(crate) fn form_unknown_hook(label: &str, token: &str) -> String {
+    dbflux_i18n::t!("form.validation.unknown_hook", label = label, token = token)
+}
+
+/// Formats the "Edit <driver> Connection" connection-form window title.
+pub(crate) fn connection_manager_window_title_edit(driver: &str) -> String {
+    dbflux_i18n::t!("connection_manager.form_title.edit", driver = driver)
+}
+
+/// Formats the "New <driver> Connection" connection-form window title.
+pub(crate) fn connection_manager_window_title_new(driver: &str) -> String {
+    dbflux_i18n::t!("connection_manager.form_title.new", driver = driver)
+}
+
+/// Formats the "Discard them and switch to <section>?" body of the settings
+/// unsaved-changes confirmation dialog.
+pub(crate) fn settings_discard_body(section: &str) -> String {
+    dbflux_i18n::t!("settings.discard.body", section = section)
+}
+
 /// Formats the "Warning: <message>" export-result line.
 pub(crate) fn export_result_warning_line(message: &str) -> String {
     dbflux_i18n::t!(
@@ -713,11 +735,83 @@ mod tests {
         rpc_services_delete_body, ssh_private_key_with_path, ssh_tunnels_delete_body,
     };
     use super::{
+        connection_manager_window_title_edit, connection_manager_window_title_new,
+        form_unknown_hook, settings_discard_body,
+    };
+    use super::{
         export_error_cannot_determine_output_path, export_error_failed, export_error_write_failed,
         export_result_omitted_fields, export_result_success_title, export_result_warning_line,
         export_summary_auth_profile_line, export_summary_proxy_line, export_summary_ssh_line,
         export_title_with_kind, export_toast_success,
     };
+
+    /// Locale keys added or newly reused by the final windows-ui sweep (PR29):
+    /// hook-binding validation, connection-form window titles, the settings
+    /// discard-changes dialog, and the settings-window "Close" action.
+    const SWEEP_LEFTOVER_KEYS: &[&str] = &[
+        "form.validation.unknown_hook",
+        "connection_manager.form_title.edit",
+        "connection_manager.form_title.new",
+        "settings.discard.title",
+        "settings.discard.body",
+        "settings.action.close",
+        "settings.general.placeholder.refresh_policy",
+    ];
+
+    #[test]
+    fn sweep_leftover_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in SWEEP_LEFTOVER_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sweep_leftover_keys_differ_between_locales() {
+        for key in SWEEP_LEFTOVER_KEYS {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+
+            assert_ne!(en, es, "key {key} should differ between en and es");
+        }
+    }
+
+    #[test]
+    fn form_unknown_hook_embeds_label_and_token() {
+        let message = form_unknown_hook("pre-connect", "missing-hook");
+
+        assert!(message.contains("pre-connect"));
+        assert!(message.contains("missing-hook"));
+    }
+
+    #[test]
+    fn connection_manager_window_title_edit_and_new_embed_driver_name() {
+        assert!(connection_manager_window_title_edit("PostgreSQL").contains("PostgreSQL"));
+        assert!(connection_manager_window_title_new("PostgreSQL").contains("PostgreSQL"));
+        assert_ne!(
+            connection_manager_window_title_edit("PostgreSQL"),
+            connection_manager_window_title_new("PostgreSQL")
+        );
+    }
+
+    #[test]
+    fn settings_discard_body_embeds_section_name() {
+        let message = settings_discard_body("Audit");
+
+        assert!(message.contains("Audit"));
+    }
 
     #[test]
     fn hooks_delete_message_embeds_hook_name() {
