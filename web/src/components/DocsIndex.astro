@@ -24,7 +24,7 @@ const { sections, unfiled } = sectionsFor(available);
       <ul>
         {section.entries.map((path) => (
           <li>
-            <a href={docsHref(`${versionId}/${path}`)}>{docTitle(path)}</a>
+            <a href={docsHref(`${versionId}/${path}`, locale)}>{docTitle(path)}</a>
           </li>
         ))}
       </ul>
@@ -40,7 +40,7 @@ const { sections, unfiled } = sectionsFor(available);
       <ul>
         {unfiled.map((path) => (
           <li>
-            <a href={docsHref(`${versionId}/${path}`)}>{path}</a>
+            <a href={docsHref(`${versionId}/${path}`, locale)}>{path}</a>
           </li>
         ))}
       </ul>

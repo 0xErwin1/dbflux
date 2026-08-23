@@ -66,6 +66,7 @@ export interface Dictionary {
     edit_page: string;
     report_issue: string;
     not_translated: string;
+    view_in_english: string;
   };
   docs_index: {
     title: string;

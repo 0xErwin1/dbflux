@@ -50,8 +50,11 @@ export async function buildSearchIndex(versionId: string): Promise<Section[]> {
   const sections: Section[] = [];
 
   for (const doc of docs) {
-    const { version, path } = splitId(doc.id);
-    if (version !== versionId) continue;
+    const { version, locale, path } = splitId(doc.id);
+    // The index stays English-only for now — a Spanish entry's id carries an
+    // `es/` path segment that `docsHref` does not expect, and there is no
+    // Spanish snippet UI yet to show its matches in.
+    if (version !== versionId || locale !== 'en') continue;
 
     const { headings } = await render(doc);
     const href = docsHref(doc.id);

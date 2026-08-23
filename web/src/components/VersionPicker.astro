@@ -39,7 +39,7 @@ const targets = VERSIONS.map((candidate) => {
 
   return {
     version: candidate,
-    href: has ? docsHref(`${candidate.id}/${currentPath}`) : versionHome(candidate),
+    href: has ? docsHref(`${candidate.id}/${currentPath}`, locale) : versionHome(candidate, locale),
     exact: has,
   };
 });

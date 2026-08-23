@@ -52,6 +52,7 @@ export const es: Dictionary = {
     edit_page: 'Editar esta página',
     report_issue: 'Reportar un problema',
     not_translated: 'Esta página aún no está traducida. Se muestra la versión en inglés.',
+    view_in_english: 'Ver en inglés',
   },
   docs_index: {
     title: 'Documentación',

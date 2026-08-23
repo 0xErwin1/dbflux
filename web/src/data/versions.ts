@@ -1,6 +1,8 @@
 // Vite inlines this at build time. Reading it with `fs` instead breaks once the
 // module is bundled, because the relative path no longer points at the file.
 import { docsPath, docsUrl } from './site';
+import { DEFAULT_LOCALE } from '../i18n';
+import type { Locale } from '../i18n';
 import registry from '../../versions.json';
 import manifest from '../../.versions/manifest.json';
 
@@ -98,16 +100,22 @@ function prefixFor(versionId: string): string {
   return versionId === CURRENT.id ? '' : versionId;
 }
 
-/** Documentation URL for an entry id of the form `<version>/<path>`. */
-export function docsHref(entryId: string): string {
+/**
+ * Documentation URL for an entry id of the form `<version>/<path>`.
+ *
+ * `entryId` is always the canonical English id, never the `<version>/es/<path>`
+ * shape a Spanish collection entry carries — `locale` is what selects the
+ * `/es/` URL prefix, independent of which entry's content is being linked to.
+ */
+export function docsHref(entryId: string, locale: Locale = DEFAULT_LOCALE): string {
   const separator = entryId.indexOf('/');
 
-  return docsUrl(entryId.slice(separator + 1), prefixFor(entryId.slice(0, separator)));
+  return docsUrl(entryId.slice(separator + 1), prefixFor(entryId.slice(0, separator)), locale);
 }
 
 /** Root of a version's documentation. */
-export function versionHome(version: DocsVersion): string {
-  return docsUrl('', prefixFor(version.id));
+export function versionHome(version: DocsVersion, locale: Locale = DEFAULT_LOCALE): string {
+  return docsUrl('', prefixFor(version.id), locale);
 }
 
 /**
@@ -115,6 +123,10 @@ export function versionHome(version: DocsVersion): string {
  *
  * Distinct from `docsHref`, which is for linking and may point at another host.
  */
-export function docsRoute(versionId: string, path: string): string {
-  return docsPath(path, prefixFor(versionId));
+export function docsRoute(
+  versionId: string,
+  path: string,
+  locale: Locale = DEFAULT_LOCALE,
+): string {
+  return docsPath(path, prefixFor(versionId), locale);
 }

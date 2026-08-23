@@ -1,20 +1,39 @@
 import type { CollectionEntry } from 'astro:content';
+import type { Locale } from '../i18n';
 import { DOCS_SECTIONS, docTitle } from './nav';
 
-/** Split a collection id of the form `<version>/<path>`. */
-export function splitId(id: string): { version: string; path: string } {
+/**
+ * Split a collection id of the form `<version>/<path>`, or its Spanish
+ * counterpart `<version>/es/<path>` (see `content.config.ts`). The locale
+ * segment is reported separately so callers never have to special-case it out
+ * of `path` themselves.
+ */
+export function splitId(id: string): { version: string; locale: Locale; path: string } {
   const separator = id.indexOf('/');
+  const version = id.slice(0, separator);
+  const rest = id.slice(separator + 1);
 
-  return { version: id.slice(0, separator), path: id.slice(separator + 1) };
+  if (rest.startsWith('es/')) return { version, locale: 'es', path: rest.slice(3) };
+
+  return { version, locale: 'en', path: rest };
 }
 
-/** The pages a version actually ships, as version-less paths. */
+/**
+ * The pages a version actually ships, as version-less paths.
+ *
+ * Restricted to the English entries: this drives the sidebar tree and the
+ * version-switcher's "does this page exist there" check, both of which stay
+ * on the canonical English page set until W2b translates navigation itself.
+ */
 export function pathsForVersion(
   entries: readonly CollectionEntry<'docs'>[],
   versionId: string,
 ): string[] {
   return entries
-    .filter((entry) => splitId(entry.id).version === versionId)
+    .filter((entry) => {
+      const parsed = splitId(entry.id);
+      return parsed.version === versionId && parsed.locale === 'en';
+    })
     .map((entry) => splitId(entry.id).path);
 }
 

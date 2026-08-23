@@ -50,7 +50,7 @@ const sections = sectionsFor(available).sections.map((section) => ({
               {section.entries.map((id) => (
                 <li>
                   <a
-                    href={docsHref(`${version.id}/${id}`)}
+                    href={docsHref(`${version.id}/${id}`, locale)}
                     aria-current={id === current ? 'page' : undefined}
                   >
                     {docTitle(id)}

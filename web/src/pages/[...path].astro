@@ -5,14 +5,20 @@ import DocsIndex from '../components/DocsIndex.astro';
 import { docTitle, pathsForVersion, splitId } from '../data/docs';
 import { CURRENT, VERSIONS, docsRoute, versionById, versionLabel } from '../data/versions';
 import { DOCS_MODE } from '../data/site';
+import { DEFAULT_LOCALE, LOCALES } from '../i18n';
 
 /**
- * Every documentation page, for every published version.
+ * Every documentation page, for every published version, in every locale.
  *
  * One catch-all rather than a route file per shape, because the URL prefix moves
  * with the deployment: `/docs/usage/` when the documentation shares the site's
- * origin, `/usage/` when it has its own. A file tree cannot express that; a
+ * origin, `/usage/` when it has its own — and now also with the locale:
+ * `/es/docs/usage/` alongside `/docs/usage/`. A file tree cannot express that; a
  * computed path can.
+ *
+ * A page missing its Spanish translation is never a 404: it renders the English
+ * body under the `/es/` URL, with `translated: false` telling `DocsLayout` to
+ * show the fallback notice and keep the page out of search results.
  */
 export async function getStaticPaths() {
   // This build does not carry the documentation. The URLs it used to publish
@@ -22,28 +28,53 @@ export async function getStaticPaths() {
   if (DOCS_MODE === 'site') return [];
 
   const docs = await getCollection('docs');
+  const enDocs = docs.filter((doc) => splitId(doc.id).locale === 'en');
 
-  const pages = docs.map((doc) => {
-    const { version, path } = splitId(doc.id);
+  const esByKey = new Map(
+    docs
+      .filter((doc) => splitId(doc.id).locale === 'es')
+      .map((doc) => {
+        const { version, path } = splitId(doc.id);
+        return [`${version}/${path}`, doc] as const;
+      }),
+  );
 
-    return {
-      params: { path: docsRoute(version, path) },
-      props: { versionId: version, path, doc },
-    };
-  });
+  const pages = LOCALES.flatMap((locale) =>
+    enDocs.map((doc) => {
+      const { version, path } = splitId(doc.id);
+      const esDoc = esByKey.get(`${version}/${path}`);
+      // hreflang only pairs pages that genuinely exist in both locales — an
+      // English page never alternates to a Spanish URL that is only showing
+      // its own English fallback, and vice versa.
+      const translated = esDoc !== undefined;
+      const activeDoc = locale === 'es' && esDoc ? esDoc : doc;
 
-  const indexes = VERSIONS.map((version) => ({
-    params: { path: docsRoute(version.id, '') || undefined },
-    props: { versionId: version.id, path: undefined, doc: undefined },
-  }))
-    // With the documentation at the root of its own host, the current release's
-    // index is `/`, which `index.astro` already owns.
-    .filter((entry) => entry.params.path !== undefined);
+      return {
+        params: { path: docsRoute(version, path, locale) },
+        props: { versionId: version, path, doc: activeDoc, locale, translated },
+      };
+    }),
+  );
+
+  // The version index has no translatable body of its own — `DocsIndex` is
+  // rendered entirely from the chrome dictionary, so it exists in every locale
+  // the same way `/` and `/es/` already do.
+  const indexes = LOCALES.flatMap((locale) =>
+    VERSIONS.map((version) => ({
+      params: { path: docsRoute(version.id, '', locale) },
+      props: { versionId: version.id, path: undefined, doc: undefined, locale, translated: true },
+    })).filter(
+      // With the documentation at the root of its own host, the current
+      // release's index is `/` (or `/es/`), which `index.astro` (or
+      // `es/index.astro`) already owns.
+      (entry) => entry.params.path !== (locale === DEFAULT_LOCALE ? '' : locale),
+    ),
+  );
 
   return [...pages, ...indexes];
 }
 
-const { versionId, path, doc } = Astro.props;
+const { versionId, path, doc, locale, translated } = Astro.props;
 
 const version = versionById(versionId)!;
 const available = pathsForVersion(await getCollection('docs'), versionId);
@@ -75,6 +106,14 @@ const description = doc
   title={title}
   description={description}
   editPath={doc?.filePath?.split('/').pop()}
+  locale={locale}
+  translated={translated}
 >
-  {rendered ? <rendered.Content /> : <DocsIndex versionId={versionId} available={available} />}
+  {
+    rendered ? (
+      <rendered.Content />
+    ) : (
+      <DocsIndex versionId={versionId} available={available} locale={locale} />
+    )
+  }
 </DocsLayout>
