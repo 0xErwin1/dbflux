@@ -57,8 +57,10 @@ pub(super) struct KeybindingsSection {
 
 impl KeybindingsSection {
     pub(super) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let keybindings_filter =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Filter keybindings..."));
+        let keybindings_filter = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("settings.keybindings.filter_placeholder"))
+        });
 
         let mut keybindings_expanded = HashSet::new();
         keybindings_expanded.insert(ContextId::Global);

@@ -11,48 +11,96 @@ impl SettingsCoordinator {
         let nodes = vec![
             TreeNavNode::group(
                 "general-group",
-                "General",
+                dbflux_i18n::t!("settings.nav.general_group"),
                 Some(AppIcon::Settings),
                 vec![
-                    TreeNavNode::leaf("general", "General", Some(AppIcon::Settings)),
-                    TreeNavNode::leaf("keybindings", "Keybindings", Some(AppIcon::Keyboard)),
-                    TreeNavNode::leaf("audit", "Audit", Some(AppIcon::History)),
-                    TreeNavNode::leaf("about", "About", Some(AppIcon::Info)),
+                    TreeNavNode::leaf(
+                        "general",
+                        dbflux_i18n::t!("settings.nav.general"),
+                        Some(AppIcon::Settings),
+                    ),
+                    TreeNavNode::leaf(
+                        "keybindings",
+                        dbflux_i18n::t!("settings.nav.keybindings"),
+                        Some(AppIcon::Keyboard),
+                    ),
+                    TreeNavNode::leaf(
+                        "audit",
+                        dbflux_i18n::t!("settings.nav.audit"),
+                        Some(AppIcon::History),
+                    ),
+                    TreeNavNode::leaf(
+                        "about",
+                        dbflux_i18n::t!("settings.nav.about"),
+                        Some(AppIcon::Info),
+                    ),
                 ],
             ),
             TreeNavNode::group(
                 "network",
-                "Network",
+                dbflux_i18n::t!("settings.nav.network"),
                 Some(AppIcon::Server),
                 vec![
                     TreeNavNode::leaf(
                         "ssh-tunnels",
-                        "SSH Tunnels",
+                        dbflux_i18n::t!("settings.nav.ssh_tunnels"),
                         Some(AppIcon::FingerprintPattern),
                     ),
-                    TreeNavNode::leaf("proxies", "Proxy", Some(AppIcon::Server)),
-                    TreeNavNode::leaf("auth-profiles", "Access Providers", Some(AppIcon::KeyRound)),
+                    TreeNavNode::leaf(
+                        "proxies",
+                        dbflux_i18n::t!("settings.nav.proxies"),
+                        Some(AppIcon::Server),
+                    ),
+                    TreeNavNode::leaf(
+                        "auth-profiles",
+                        dbflux_i18n::t!("settings.nav.auth_profiles"),
+                        Some(AppIcon::KeyRound),
+                    ),
                 ],
             ),
             TreeNavNode::group(
                 "connection",
-                "Connection",
+                dbflux_i18n::t!("settings.nav.connection"),
                 Some(AppIcon::Link2),
                 vec![
-                    TreeNavNode::leaf("hooks", "Hooks", Some(AppIcon::SquareTerminal)),
-                    TreeNavNode::leaf("drivers", "Drivers", Some(AppIcon::Database)),
-                    TreeNavNode::leaf("services", "RPC Services", Some(AppIcon::Plug)),
+                    TreeNavNode::leaf(
+                        "hooks",
+                        dbflux_i18n::t!("settings.nav.hooks"),
+                        Some(AppIcon::SquareTerminal),
+                    ),
+                    TreeNavNode::leaf(
+                        "drivers",
+                        dbflux_i18n::t!("settings.nav.drivers"),
+                        Some(AppIcon::Database),
+                    ),
+                    TreeNavNode::leaf(
+                        "services",
+                        dbflux_i18n::t!("settings.nav.services"),
+                        Some(AppIcon::Plug),
+                    ),
                 ],
             ),
             #[cfg(feature = "mcp")]
             TreeNavNode::group(
                 "mcp-governance",
-                "MCP Governance",
+                dbflux_i18n::t!("settings.nav.mcp_governance"),
                 Some(AppIcon::Bot),
                 vec![
-                    TreeNavNode::leaf("mcp-clients", "Clients", Some(AppIcon::Plug)),
-                    TreeNavNode::leaf("mcp-roles", "Roles", Some(AppIcon::KeyRound)),
-                    TreeNavNode::leaf("mcp-policies", "Policies", Some(AppIcon::ScrollText)),
+                    TreeNavNode::leaf(
+                        "mcp-clients",
+                        dbflux_i18n::t!("settings.nav.mcp_clients"),
+                        Some(AppIcon::Plug),
+                    ),
+                    TreeNavNode::leaf(
+                        "mcp-roles",
+                        dbflux_i18n::t!("settings.nav.mcp_roles"),
+                        Some(AppIcon::KeyRound),
+                    ),
+                    TreeNavNode::leaf(
+                        "mcp-policies",
+                        dbflux_i18n::t!("settings.nav.mcp_policies"),
+                        Some(AppIcon::ScrollText),
+                    ),
                 ],
             ),
         ];
@@ -197,6 +245,59 @@ mod tests {
             .find(|row| row.id.as_ref() == "services")
             .expect("services row");
 
-        assert_eq!(services_row.label.as_ref(), "RPC Services");
+        assert_eq!(
+            services_row.label.as_ref(),
+            dbflux_i18n::t!("settings.nav.services")
+        );
+    }
+
+    const NAV_CATALOG_KEYS: &[&str] = &[
+        "settings.nav.general_group",
+        "settings.nav.general",
+        "settings.nav.keybindings",
+        "settings.nav.audit",
+        "settings.nav.about",
+        "settings.nav.network",
+        "settings.nav.ssh_tunnels",
+        "settings.nav.proxies",
+        "settings.nav.auth_profiles",
+        "settings.nav.connection",
+        "settings.nav.hooks",
+        "settings.nav.drivers",
+        "settings.nav.services",
+        "settings.nav.mcp_governance",
+        "settings.nav.mcp_clients",
+        "settings.nav.mcp_roles",
+        "settings.nav.mcp_policies",
+    ];
+
+    #[test]
+    fn settings_nav_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in NAV_CATALOG_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn settings_nav_keybindings_differs_between_locales() {
+        let english = dbflux_i18n::t!("settings.nav.keybindings", locale = "en");
+        let spanish = dbflux_i18n::t!("settings.nav.keybindings", locale = "es");
+
+        assert_eq!(english, "Keybindings");
+        assert_eq!(spanish, "Atajos de teclado");
+        assert_ne!(english, spanish);
     }
 }

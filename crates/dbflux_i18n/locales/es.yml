@@ -353,6 +353,50 @@ settings:
       button: Guardar
       error: "No se pudo guardar la configuración general: %{error}"
       success: Configuración guardada. Algunos cambios se aplican al reiniciar.
+  about:
+    title: Acerca de
+    subtitle: Información del proyecto
+    report_bug: Reportar un error
+    or: o
+    view_source: ver el código fuente
+    on_github: en GitHub.
+    copyright: "Copyright © 2026 %{author} y colaboradores."
+    license: "Con licencias %{license}."
+    third_party_licenses: Licencias de terceros
+    lucide: Iconos de interfaz de Lucide (Licencia ISC)
+    simple_icons: Iconos de marca de Simple Icons (CC0 1.0)
+  keybindings:
+    title: Atajos de teclado
+    subtitle: Ver todos los atajos de teclado por contexto
+    filter_placeholder: Filtrar atajos de teclado...
+    binding_count:
+      one: (1 atajo)
+      many: "(%{count} atajos)"
+    inherits_from: "hereda de %{parent}"
+    inherited: heredado
+    conflict:
+      title: "Conflicto: %{chord} también está asignado a %{others}"
+      body: Dos o más comandos comparten este atajo en este contexto.
+      unknown_other: otro atajo
+  nav:
+    general_group: General
+    general: General
+    keybindings: Atajos de teclado
+    audit: Auditoría
+    about: Acerca de
+    network: Red
+    ssh_tunnels: Túneles SSH
+    proxies: Proxy
+    auth_profiles: Proveedores de acceso
+    connection: Conexión
+    hooks: Hooks
+    drivers: Drivers
+    services: Servicios RPC
+    mcp_governance: Gobernanza MCP
+    mcp_clients: Clientes
+    mcp_roles: Roles
+    mcp_policies: Políticas
+
 sidebar:
   confirm:
     delete_hint: Presiona x para confirmar la eliminación, ESC para cancelar

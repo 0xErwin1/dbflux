@@ -10,4 +10,5 @@ pub mod connection_manager;
 pub mod settings;
 pub mod ssh_shared;
 
+mod labels;
 mod style_guardrails;
