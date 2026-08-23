@@ -327,8 +327,12 @@ impl ConnectionManagerWindow {
 
         // --- Global Overrides Section ---
         let policy_label = match effective.refresh_policy {
-            dbflux_core::RefreshPolicySetting::Manual => "Manual",
-            dbflux_core::RefreshPolicySetting::Interval => "Interval",
+            dbflux_core::RefreshPolicySetting::Manual => {
+                dbflux_i18n::t!("settings.general.refresh_policy.option.manual")
+            }
+            dbflux_core::RefreshPolicySetting::Interval => {
+                dbflux_i18n::t!("settings.general.refresh_policy.option.interval")
+            }
         };
 
         let override_rows = div()
@@ -341,7 +345,9 @@ impl ConnectionManagerWindow {
                     .items_center()
                     .gap_3()
                     .child(div().w(px(200.0)))
-                    .child(div().w(px(160.0)).child(Text::caption("Override Value"))),
+                    .child(div().w(px(160.0)).child(Text::caption(dbflux_i18n::t!(
+                        "settings.general.override_value_header"
+                    )))),
             )
             // Refresh policy row
             .child(
@@ -368,7 +374,9 @@ impl ConnectionManagerWindow {
                                 cx.notify();
                             })),
                     )
-                    .child(div().w(px(180.0)).text_sm().child("Refresh policy"))
+                    .child(div().w(px(180.0)).text_sm().child(dbflux_i18n::t!(
+                        "connection_manager.overrides.refresh_policy"
+                    )))
                     .child(
                         div()
                             .min_w(px(160.0))
@@ -390,7 +398,9 @@ impl ConnectionManagerWindow {
                                 )
                             }),
                     )
-                    .child(Text::caption(format!("Default: {}", policy_label))),
+                    .child(Text::caption(crate::labels::override_default_caption(
+                        &policy_label,
+                    ))),
             )
             // Refresh interval row
             .child(
@@ -417,7 +427,9 @@ impl ConnectionManagerWindow {
                                 cx.notify();
                             })),
                     )
-                    .child(div().w(px(180.0)).text_sm().child("Refresh interval (s)"))
+                    .child(div().w(px(180.0)).text_sm().child(dbflux_i18n::t!(
+                        "connection_manager.overrides.refresh_interval"
+                    )))
                     .child(
                         div()
                             .w(px(100.0))
@@ -432,10 +444,11 @@ impl ConnectionManagerWindow {
                                     .disabled(!self.settings_tab.conn_override_refresh_interval),
                             ),
                     )
-                    .child(Text::caption(format!(
-                        "Default: {}s",
-                        effective.refresh_interval_secs
-                    ))),
+                    .child(Text::caption(
+                        crate::labels::override_default_seconds_caption(
+                            effective.refresh_interval_secs,
+                        ),
+                    )),
             )
             // Confirm dangerous queries
             .child(
@@ -454,24 +467,20 @@ impl ConnectionManagerWindow {
                         |d| d.border_color(gpui::transparent_black()),
                     )
                     .p(px(2.0))
-                    .child(
-                        div()
-                            .w(px(200.0))
-                            .text_sm()
-                            .child("Confirm dangerous queries"),
-                    )
+                    .child(div().w(px(200.0)).text_sm().child(dbflux_i18n::t!(
+                        "connection_manager.overrides.confirm_dangerous"
+                    )))
                     .child(
                         div()
                             .min_w(px(160.0))
                             .child(self.settings_tab.conn_confirm_dangerous_dropdown.clone()),
                     )
-                    .child(Text::caption(format!(
-                        "Default: {}",
-                        if effective.confirm_dangerous {
-                            "On"
+                    .child(Text::caption(crate::labels::override_default_caption(
+                        &if effective.confirm_dangerous {
+                            dbflux_i18n::t!("connection_manager.overrides.on")
                         } else {
-                            "Off"
-                        }
+                            dbflux_i18n::t!("connection_manager.overrides.off")
+                        },
                     ))),
             )
             // Requires WHERE clause
@@ -491,19 +500,20 @@ impl ConnectionManagerWindow {
                         |d| d.border_color(gpui::transparent_black()),
                     )
                     .p(px(2.0))
-                    .child(div().w(px(200.0)).text_sm().child("Requires WHERE clause"))
+                    .child(div().w(px(200.0)).text_sm().child(dbflux_i18n::t!(
+                        "connection_manager.overrides.requires_where"
+                    )))
                     .child(
                         div()
                             .min_w(px(160.0))
                             .child(self.settings_tab.conn_requires_where_dropdown.clone()),
                     )
-                    .child(Text::caption(format!(
-                        "Default: {}",
-                        if effective.requires_where {
-                            "On"
+                    .child(Text::caption(crate::labels::override_default_caption(
+                        &if effective.requires_where {
+                            dbflux_i18n::t!("connection_manager.overrides.on")
                         } else {
-                            "Off"
-                        }
+                            dbflux_i18n::t!("connection_manager.overrides.off")
+                        },
                     ))),
             )
             // Requires preview
@@ -523,32 +533,41 @@ impl ConnectionManagerWindow {
                         |d| d.border_color(gpui::transparent_black()),
                     )
                     .p(px(2.0))
-                    .child(div().w(px(200.0)).text_sm().child("Requires preview"))
+                    .child(div().w(px(200.0)).text_sm().child(dbflux_i18n::t!(
+                        "connection_manager.overrides.requires_preview"
+                    )))
                     .child(
                         div()
                             .min_w(px(160.0))
                             .child(self.settings_tab.conn_requires_preview_dropdown.clone()),
                     )
-                    .child(Text::caption(format!(
-                        "Default: {}",
-                        if effective.requires_preview {
-                            "On"
+                    .child(Text::caption(crate::labels::override_default_caption(
+                        &if effective.requires_preview {
+                            dbflux_i18n::t!("connection_manager.overrides.on")
                         } else {
-                            "Off"
-                        }
+                            dbflux_i18n::t!("connection_manager.overrides.off")
+                        },
                     ))),
             );
 
         sections.push(
-            self.render_section("Connection Overrides", override_rows, &theme)
-                .into_any_element(),
+            self.render_section(
+                dbflux_i18n::t!("connection_manager.connection_overrides_title").as_str(),
+                override_rows,
+                &theme,
+            )
+            .into_any_element(),
         );
 
         let hooks_rows = self.render_hooks_rows(muted, cx);
 
         sections.push(
-            self.render_section("Connection Hooks", hooks_rows, &theme)
-                .into_any_element(),
+            self.render_section(
+                dbflux_i18n::t!("connection_manager.connection_hooks_title").as_str(),
+                hooks_rows,
+                &theme,
+            )
+            .into_any_element(),
         );
 
         // --- Driver Schema Section ---
@@ -622,7 +641,9 @@ impl ConnectionManagerWindow {
                                                 },
                                             )),
                                         )
-                                        .child(Text::caption(format!("Default: {}", default_val)))
+                                        .child(Text::caption(
+                                            crate::labels::override_default_caption(default_val),
+                                        ))
                                         .into_any_element(),
                                 )
                             }
@@ -659,10 +680,11 @@ impl ConnectionManagerWindow {
                                                 .items_center()
                                                 .gap_2()
                                                 .child(div().text_sm().child(field.label.clone()))
-                                                .child(Text::caption(format!(
-                                                    "Default: {}",
-                                                    default_val
-                                                ))),
+                                                .child(Text::caption(
+                                                    crate::labels::override_default_caption(
+                                                        &default_val,
+                                                    ),
+                                                )),
                                         )
                                         .child(div().w(Widths::CM_FORM_DROPDOWN).child(dropdown))
                                         .into_any_element(),
@@ -700,10 +722,11 @@ impl ConnectionManagerWindow {
                                                 .items_center()
                                                 .gap_2()
                                                 .child(div().text_sm().child(field.label.clone()))
-                                                .child(Text::caption(format!(
-                                                    "Default: {}",
-                                                    default_val
-                                                ))),
+                                                .child(Text::caption(
+                                                    crate::labels::override_default_caption(
+                                                        &default_val,
+                                                    ),
+                                                )),
                                         )
                                         .child(Input::new(&input).small().disabled(!enabled))
                                         .into_any_element(),
@@ -835,4 +858,103 @@ impl ConnectionManagerWindow {
 
 // The `file_picker_label` helper and its tests moved to
 // `dbflux_components::primitives::file_picker` together with the `FilePicker`
+
+#[cfg(test)]
+mod connection_overrides_i18n_tests {
+    const CONNECTION_OVERRIDES_KEYS: &[&str] = &[
+        "connection_manager.connection_overrides_title",
+        "connection_manager.connection_hooks_title",
+        "connection_manager.overrides.on",
+        "connection_manager.overrides.off",
+        "connection_manager.placeholder.extra_hook_ids",
+        "connection_manager.placeholder.use_connection_auth_profile",
+        "settings.general.override_value_header",
+    ];
+
+    #[test]
+    fn connection_overrides_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in CONNECTION_OVERRIDES_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn connection_overrides_title_differs_between_locales() {
+        let en = dbflux_i18n::t!(
+            "connection_manager.connection_overrides_title",
+            locale = "en"
+        );
+        let es = dbflux_i18n::t!(
+            "connection_manager.connection_overrides_title",
+            locale = "es"
+        );
+
+        assert_ne!(
+            en, es,
+            "connection_manager.connection_overrides_title should differ between en and es"
+        );
+    }
+
+    #[test]
+    fn connection_overrides_keep_their_own_row_labels() {
+        assert_eq!(
+            dbflux_i18n::t!("connection_manager.overrides.refresh_policy", locale = "en"),
+            "Refresh policy"
+        );
+        assert_eq!(
+            dbflux_i18n::t!(
+                "connection_manager.overrides.refresh_interval",
+                locale = "en"
+            ),
+            "Refresh interval (s)"
+        );
+        assert_eq!(
+            dbflux_i18n::t!(
+                "connection_manager.overrides.confirm_dangerous",
+                locale = "en"
+            ),
+            "Confirm dangerous queries"
+        );
+        assert_eq!(
+            dbflux_i18n::t!("connection_manager.overrides.requires_where", locale = "en"),
+            "Requires WHERE clause"
+        );
+        assert_eq!(
+            dbflux_i18n::t!(
+                "connection_manager.overrides.requires_preview",
+                locale = "en"
+            ),
+            "Requires preview"
+        );
+        assert_ne!(
+            dbflux_i18n::t!("connection_manager.overrides.requires_where", locale = "en"),
+            dbflux_i18n::t!("connection_manager.overrides.requires_where", locale = "es")
+        );
+    }
+
+    #[test]
+    fn overrides_on_off_have_expected_english_text() {
+        assert_eq!(
+            dbflux_i18n::t!("connection_manager.overrides.on", locale = "en"),
+            "On"
+        );
+        assert_eq!(
+            dbflux_i18n::t!("connection_manager.overrides.off", locale = "en"),
+            "Off"
+        );
+    }
+}
 // primitive itself.

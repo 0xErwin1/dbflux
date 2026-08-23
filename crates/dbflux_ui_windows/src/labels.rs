@@ -93,6 +93,22 @@ pub(crate) fn hooks_form_interpreter_hint(default_interpreter: &str) -> String {
     )
 }
 
+/// Formats the "Default: <value>" caption under a connection override control.
+pub(crate) fn override_default_caption(value: &str) -> String {
+    dbflux_i18n::t!(
+        "connection_manager.overrides.default_caption",
+        value = value
+    )
+}
+
+/// Formats the "Default: <seconds>s" caption under the refresh interval override.
+pub(crate) fn override_default_seconds_caption(seconds: u32) -> String {
+    dbflux_i18n::t!(
+        "connection_manager.overrides.default_seconds_caption",
+        value = seconds
+    )
+}
+
 /// Formats the "<name> (disabled)" label shown for a disabled proxy in the proxy dropdown.
 pub(crate) fn access_proxy_disabled_label(name: &str) -> String {
     dbflux_i18n::t!("access.proxy_disabled_label", name = name)
@@ -200,5 +216,21 @@ mod tests {
         let message = ssh_private_key_with_path("~/.ssh/id_ed25519");
 
         assert_eq!(message, "Private Key (~/.ssh/id_ed25519)");
+    }
+
+    #[test]
+    fn override_default_captions_embed_value() {
+        assert!(super::override_default_caption("On").contains("On"));
+        assert!(super::override_default_seconds_caption(30).contains("30"));
+        assert_ne!(
+            dbflux_i18n::t!(
+                "connection_manager.overrides.default_caption",
+                locale = "en"
+            ),
+            dbflux_i18n::t!(
+                "connection_manager.overrides.default_caption",
+                locale = "es"
+            )
+        );
     }
 }

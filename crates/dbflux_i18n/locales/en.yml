@@ -115,11 +115,25 @@ connection_manager:
     select_trusted_client: Select trusted client
     no_role: No role
     no_policy: No policy
+    extra_hook_ids: extra hook IDs (comma-separated)
+    use_connection_auth_profile: Use Connection Auth Profile
   access_method:
     direct: Direct
     ssh_tunnel: SSH Tunnel
     proxy: Proxy
     ssm: SSM Port Forwarding
+  overrides:
+    refresh_policy: "Refresh policy"
+    refresh_interval: "Refresh interval (s)"
+    confirm_dangerous: "Confirm dangerous queries"
+    requires_where: "Requires WHERE clause"
+    requires_preview: "Requires preview"
+    default_caption: "Default: %{value}"
+    default_seconds_caption: "Default: %{value}s"
+    on: "On"
+    off: "Off"
+  connection_overrides_title: Connection Overrides
+  connection_hooks_title: Connection Hooks
   new_auth_profile: "New Auth Profile..."
   aws_sso_wizard_title: AWS SSO Wizard
   aws_sso_open_failed: Failed to open AWS SSO wizard window
@@ -850,6 +864,7 @@ settings:
       label: Use the stable database
       error: Failed to update the shared-database setting
       hint: "Applied on next launch. Shares the stable database (dbflux.db) instead of this nightly build's dbflux-nightly.db."
+    override_value_header: Override Value
     save:
       button: Save
       error: "Failed to save general settings: %{error}"
