@@ -171,11 +171,11 @@ pub fn format_label(format: ImageFormat) -> &'static str {
 pub fn decode_image_dimensions(bytes: &[u8]) -> Result<(u32, u32), String> {
     let reader = image::ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
-        .map_err(|e| format!("Could not read the image header: {e}"))?;
+        .map_err(|e| crate::labels::image_header_error(&e.to_string()))?;
 
     let decoded = reader
         .decode()
-        .map_err(|e| format!("Could not decode the image: {e}"))?;
+        .map_err(|e| crate::labels::image_decode_error(&e.to_string()))?;
 
     Ok((decoded.width(), decoded.height()))
 }
@@ -185,12 +185,14 @@ pub fn decode_image_dimensions(bytes: &[u8]) -> Result<(u32, u32), String> {
 /// broken body has to be caught here to reach the decode-failure fallback.
 pub fn validate_svg_body(bytes: &[u8]) -> Result<(), String> {
     let text = std::str::from_utf8(bytes)
-        .map_err(|_| "This object is not valid UTF-8, so it cannot be an SVG.".to_string())?;
+        .map_err(|_| dbflux_i18n::t!("document.object_browser.preview.body.svg_invalid_utf8"))?;
 
     if text.to_ascii_lowercase().contains("<svg") {
         Ok(())
     } else {
-        Err("This object does not contain an <svg> root element.".to_string())
+        Err(dbflux_i18n::t!(
+            "document.object_browser.preview.body.svg_missing_root"
+        ))
     }
 }
 
@@ -272,11 +274,44 @@ mod tests {
         assert!(super::validate_svg_body(&[0xFF, 0xFE, 0x00]).is_err());
     }
 
+    /// T19: the SVG body-validation refusals route through the catalog
+    /// instead of hardcoding the English prose.
+    #[test]
+    fn svg_body_validation_errors_are_translated() {
+        assert_eq!(
+            super::validate_svg_body(&[0xFF, 0xFE, 0x00]).unwrap_err(),
+            dbflux_i18n::t!("document.object_browser.preview.body.svg_invalid_utf8")
+        );
+        assert_eq!(
+            super::validate_svg_body(b"<html></html>").unwrap_err(),
+            dbflux_i18n::t!("document.object_browser.preview.body.svg_missing_root")
+        );
+    }
+
     /// T29: garbage bytes are rejected by the decode probe instead of reaching
     /// the renderer as an empty image.
     #[test]
     fn decode_rejects_bytes_that_are_not_an_image() {
         assert!(decode_image_dimensions(b"not an image at all").is_err());
+    }
+
+    /// T19: garbage bytes with a guessable-but-wrong header fail the decode
+    /// step, and the resulting error routes through the translated
+    /// `image_decode_error` helper rather than a hardcoded English prefix,
+    /// with the underlying decoder cause interpolated verbatim.
+    #[test]
+    fn decode_failure_is_translated() {
+        let bytes: &[u8] = b"not an image at all";
+        let underlying = image::ImageReader::new(std::io::Cursor::new(bytes))
+            .with_guessed_format()
+            .expect("heuristic format guess still succeeds on this input")
+            .decode()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+            .unwrap_err();
+
+        let message = decode_image_dimensions(bytes).unwrap_err();
+        assert_eq!(message, crate::labels::image_decode_error(&underlying));
     }
 
     /// T29: a real image reports its pixel size, which the meta strip shows

@@ -41,6 +41,14 @@ impl PresignMethodChoice {
         }
     }
 
+    /// Stable English token for audit summaries; never localized.
+    pub fn audit_label(self) -> &'static str {
+        match self {
+            Self::Get => "GET",
+            Self::Put => "PUT",
+        }
+    }
+
     pub fn method(self) -> PresignMethod {
         match self {
             Self::Get => PresignMethod::Get,
@@ -55,11 +63,8 @@ impl PresignMethodChoice {
         }
     }
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Get => "GET download",
-            Self::Put => "PUT upload",
-        }
+    pub fn label(self) -> String {
+        crate::labels::presign_method_label(self)
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
@@ -95,13 +100,8 @@ impl PresignExpiry {
         }
     }
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::FifteenMinutes => "15 min",
-            Self::OneHour => "1 hour",
-            Self::TwelveHours => "12 hours",
-            Self::SevenDays => "7 days",
-        }
+    pub fn label(self) -> String {
+        crate::labels::presign_expiry_label(self)
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
@@ -151,17 +151,27 @@ pub(super) fn presign_warning(
     signed_by: &str,
 ) -> String {
     let capability = match method {
-        PresignMethod::Get => "download this object",
-        PresignMethod::Put => "overwrite this object",
+        PresignMethod::Get => {
+            dbflux_i18n::t!("document.object_browser.presign.warning.capability.get")
+        }
+        PresignMethod::Put => {
+            dbflux_i18n::t!("document.object_browser.presign.warning.capability.put")
+        }
     };
 
     let expiry = match expires_at {
-        Some(at) => format!("until {}", at.format("%Y-%m-%d %H:%M UTC")),
-        None => "until it expires".to_string(),
+        Some(at) => dbflux_i18n::t!(
+            "document.object_browser.presign.warning.until_instant",
+            instant = at.format("%Y-%m-%d %H:%M UTC")
+        ),
+        None => dbflux_i18n::t!("document.object_browser.presign.warning.until_it_expires"),
     };
 
-    format!(
-        "Anyone holding this URL can {capability} {expiry}. It is signed with the credentials of \"{signed_by}\" and carries their permissions."
+    dbflux_i18n::t!(
+        "document.object_browser.presign.warning.body",
+        capability = capability,
+        expiry = expiry,
+        signed_by = signed_by
     )
 }
 
@@ -234,15 +244,12 @@ impl ObjectBrowserDocument {
         cx.notify();
 
         let Some(connection) = self.get_connection(cx) else {
+            let message = dbflux_i18n::t!("document.object_browser.error.connection_unavailable");
             report_error(
-                UserFacingError::new(ErrorKind::Storage, "Connection is no longer active"),
+                UserFacingError::new(ErrorKind::Storage, message.clone()),
                 cx,
             );
-            self.apply_presigned_url(
-                generation,
-                Err("Connection is no longer active".to_string()),
-                cx,
-            );
+            self.apply_presigned_url(generation, Err(message), cx);
             return;
         };
 
@@ -259,7 +266,9 @@ impl ObjectBrowserDocument {
                     let key = key.clone();
                     async move {
                         let api = connection.object_store_api().ok_or_else(|| {
-                            DbError::NotSupported("Object-store API unavailable".to_string())
+                            DbError::NotSupported(dbflux_i18n::t!(
+                                "document.object_browser.error.api_unavailable"
+                            ))
                         })?;
                         api.presign(&bucket, &key, method, expiry.duration())
                     }
@@ -331,9 +340,11 @@ impl ObjectBrowserDocument {
         };
 
         cx.write_to_clipboard(ClipboardItem::new_string(url));
-        Toast::success("Copied presigned URL to clipboard")
-            .meta_right(now_hms())
-            .push(cx);
+        Toast::success(dbflux_i18n::t!(
+            "document.object_browser.presign.copied_toast"
+        ))
+        .meta_right(now_hms())
+        .push(cx);
     }
 
     /// Name the URL is signed as, shown in the warning line.
@@ -343,7 +354,9 @@ impl ObjectBrowserDocument {
             .connections()
             .get(&self.profile_id)
             .map(|connected| connected.profile.name.clone())
-            .unwrap_or_else(|| "this connection".to_string())
+            .unwrap_or_else(|| {
+                dbflux_i18n::t!("document.object_browser.presign.signing_identity_fallback")
+            })
     }
 
     pub(super) fn render_presign_modal(
@@ -411,7 +424,9 @@ impl ObjectBrowserDocument {
                 .items_center()
                 .gap(Spacing::SM)
                 .child(Icon::new(AppIcon::Loader).small().muted())
-                .child(Text::caption("Signing URL…"))
+                .child(Text::caption(dbflux_i18n::t!(
+                    "document.object_browser.presign.signing"
+                )))
                 .into_any_element(),
             PresignUrlState::Ready(url) => Text::code(url.clone())
                 .muted_foreground()
@@ -435,7 +450,9 @@ impl ObjectBrowserDocument {
                     .items_center()
                     .justify_between()
                     .gap(Spacing::MD)
-                    .child(Text::caption("Method"))
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "document.object_browser.presign.method_field_label"
+                    )))
                     .child(method_control),
             )
             .child(
@@ -444,7 +461,9 @@ impl ObjectBrowserDocument {
                     .items_center()
                     .justify_between()
                     .gap(Spacing::MD)
-                    .child(Text::caption("Expires in"))
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "document.object_browser.presign.expiry_field_label"
+                    )))
                     .child(expiry_control),
             )
             .child(
@@ -493,7 +512,12 @@ impl ObjectBrowserDocument {
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.close_presign(cx);
                             }))
-                            .child(Text::caption("Close").color(theme.foreground)),
+                            .child(
+                                Text::caption(dbflux_i18n::t!(
+                                    "document.object_browser.presign.close"
+                                ))
+                                .color(theme.foreground),
+                            ),
                     )
                     .child(
                         div()
@@ -515,12 +539,17 @@ impl ObjectBrowserDocument {
                                     .size(Heights::ICON_SM)
                                     .color(theme.primary_foreground),
                             )
-                            .child(Text::caption("Copy URL").color(theme.primary_foreground)),
+                            .child(
+                                Text::caption(dbflux_i18n::t!(
+                                    "document.object_browser.presign.copy_url"
+                                ))
+                                .color(theme.primary_foreground),
+                            ),
                     ),
             );
 
         ModalFrame::new("object-browser-presign-modal", &self.focus_handle, close)
-            .title("Presigned URL")
+            .title(dbflux_i18n::t!("document.object_browser.presign.title"))
             .icon(AppIcon::Link2)
             .width(px(560.0))
             .max_height(px(460.0))
@@ -555,11 +584,11 @@ fn build_presign_audit_event(
         None => (EventSeverity::Info, EventOutcome::Success, "object_presign"),
     };
 
-    let method_label = PresignMethodChoice::from_method(method).label();
+    let method_label = PresignMethodChoice::from_method(method).audit_label();
 
     let mut summary = format!(
         "Presigned {method_label} URL for s3://{bucket}/{key} ({})",
-        expiry.label()
+        expiry.id()
     );
     if let Some(error) = error {
         summary.push_str(&format!(": {error}"));
