@@ -1586,6 +1586,67 @@ settings:
       create_role: Crear rol
       update_policy: Actualizar política
       create_policy: Crear política
+  drivers:
+    section_title: Drivers
+    section_description: Configura anulaciones por driver y ajustes definidos por el driver
+    empty: No hay drivers registrados
+    select_hint: Selecciona un driver para configurar sus ajustes
+    action:
+      save: Guardar
+    field:
+      capabilities: Capacidades
+      global_overrides: Anulaciones globales
+      driver_settings: Ajustes del driver
+    global_overrides_hint: Habilita la anulación para reemplazar el valor global predeterminado de este driver.
+    no_custom_settings: Este driver no tiene ajustes personalizados.
+    use_global: Usar global
+    error:
+      refresh_interval_empty: El intervalo de actualización no puede estar vacío
+      refresh_interval_invalid: El intervalo de actualización debe ser un número mayor que 0
+    toast:
+      saved: Ajustes del driver guardados.
+      saved_warnings: Ajustes del driver guardados con advertencias
+    capability:
+      multiple_databases: Múltiples bases de datos
+      schemas: Esquemas
+      ssh_tunnel: Túnel SSH
+      ssl_tls: SSL/TLS
+      authentication: Autenticación
+      query_cancellation: Cancelación de consultas
+      query_timeout: Tiempo de espera de consultas
+      transactions: Transacciones
+      prepared_statements: Sentencias preparadas
+      views: Vistas
+      foreign_keys: Claves foráneas
+      indexes: Índices
+      custom_types: Tipos personalizados
+      insert: Insertar
+      update: Actualizar
+      delete: Eliminar
+      pagination: Paginación
+      sorting: Ordenación
+      filtering: Filtrado
+      export_csv: Exportar CSV
+      export_json: Exportar JSON
+      nested_documents: Documentos anidados
+      arrays: Arreglos
+      aggregation: Agregación
+      kv_scan: Escaneo clave-valor
+      kv_get: Obtener clave-valor
+      kv_set: Definir clave-valor
+      kv_delete: Eliminar clave-valor
+      kv_exists: Existe clave-valor
+      kv_ttl: TTL clave-valor
+      kv_key_types: Tipos de clave clave-valor
+      kv_value_size: Tamaño de valor clave-valor
+      kv_rename: Renombrar clave-valor
+      kv_bulk_get: Obtención masiva clave-valor
+      kv_stream_range: Rango de flujo clave-valor
+      kv_stream_add: Añadir a flujo clave-valor
+      kv_stream_delete: Eliminar de flujo clave-valor
+      pub_sub: Pub/Sub
+      graph_traversal: Recorrido de grafo
+      edge_properties: Propiedades de arista
   nav:
     general_group: General
     general: General
