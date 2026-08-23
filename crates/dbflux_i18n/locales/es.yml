@@ -627,11 +627,32 @@ sidebar:
       object_storage: Buckets (%{count})
     folder:
       databases: Bases de datos
+      fields: "Campos (%{count})"
+      indexes: "Índices (%{count})"
+      indexes_plain: Índices
+      foreign_keys: "Claves foráneas (%{count})"
+      foreign_keys_plain: Claves foráneas
+      routines: "Rutinas (%{count})"
+      routines_plain: Rutinas
+      columns: "Columnas (%{count})"
+      constraints: "Restricciones (%{count})"
+      data_types: "Tipos de datos (%{count})"
+      data_types_plain: Tipos de datos
+      views: "Vistas (%{count})"
+      storage: "Almacenamiento (%{count})"
     status:
       loading: Cargando…
       profile_connecting: "Conectando a %{name}…"
       database_loading: "%{name} (cargando…)"
       error_retry: "Error: %{error} — clic para reintentar"
+      used_by_objects:
+        one: Usado por 1 objeto
+        many: "Usado por %{count} objetos"
+      dependent_kind:
+        view: Vista
+        materialized_view: Vista materializada
+        foreign_key_child: FK hija
+        trigger: Trigger
     empty:
       buckets: Sin buckets
 sql_preview:

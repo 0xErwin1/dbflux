@@ -1179,7 +1179,7 @@ impl Sidebar {
                         collection: coll_name.to_string(),
                     }
                     .to_string(),
-                    format!("Fields ({})", field_count),
+                    crate::labels::fields_folder_label(field_count),
                 )
                 .expanded(false)
                 .children(field_children),
@@ -1190,7 +1190,7 @@ impl Sidebar {
                         collection: coll_name.to_string(),
                     }
                     .to_string(),
-                    format!("Indexes ({})", index_count),
+                    crate::labels::indexes_folder_label(index_count),
                 )
                 .expanded(false)
                 .children(index_children),
@@ -2010,7 +2010,7 @@ fn build_db_collection_indexes_folder(
                 database: database_name.to_string(),
             }
             .to_string(),
-            format!("Indexes ({})", all_index_items.len()),
+            crate::labels::indexes_folder_label(all_index_items.len()),
         )
         .expanded(false)
         .children(all_index_items),
@@ -2186,7 +2186,7 @@ fn build_table_storage_children(
                 table: table_name.to_string(),
             }
             .to_string(),
-            format!("Storage ({})", hint_items.len()),
+            crate::labels::storage_folder_label(hint_items.len()),
         )
         .expanded(false)
         .children(hint_items),
@@ -2206,12 +2206,7 @@ fn build_table_dependents_folder(
     let dep_items: Vec<TreeItem> = deps
         .iter()
         .map(|dep| {
-            let kind_label = match dep.kind {
-                dbflux_core::RelationKind::View => "View",
-                dbflux_core::RelationKind::MaterializedView => "Materialized View",
-                dbflux_core::RelationKind::ForeignKeyChild => "FK Child",
-                dbflux_core::RelationKind::Trigger => "Trigger",
-            };
+            let kind_label = crate::labels::dependent_kind_label(&dep.kind);
             let label = format!("{} ({})", dep.qualified_name, kind_label);
 
             TreeItem::new(
@@ -2235,7 +2230,7 @@ fn build_table_dependents_folder(
                 table: table_name.to_string(),
             }
             .to_string(),
-            format!("Used by {} objects", deps.len()),
+            crate::labels::used_by_label(deps.len()),
         )
         .expanded(false)
         .children(dep_items),
@@ -2297,32 +2292,35 @@ fn build_table_sections(
         vec![
             TreeItem::new(
                 columns_folder_id,
-                format!("Columns ({})", children.columns.len()),
+                crate::labels::columns_folder_label(children.columns.len()),
             )
             .expanded(false)
             .children(children.columns),
             TreeItem::new(
                 indexes_folder_id,
-                format!("Indexes ({})", children.indexes.len()),
+                crate::labels::indexes_folder_label(children.indexes.len()),
             )
             .expanded(false)
             .children(children.indexes),
             TreeItem::new(
                 fks_folder_id,
-                format!("Foreign Keys ({})", children.foreign_keys.len()),
+                crate::labels::foreign_keys_folder_label(children.foreign_keys.len()),
             )
             .expanded(false)
             .children(children.foreign_keys),
             TreeItem::new(
                 constraints_folder_id,
-                format!("Constraints ({})", children.constraints.len()),
+                crate::labels::constraints_folder_label(children.constraints.len()),
             )
             .expanded(false)
             .children(children.constraints),
         ]
     } else {
         let table_loading_id = format!("T|{}|{}|{}_loading", profile_id, schema_name, table_name);
-        vec![TreeItem::new(table_loading_id, "Loading…".to_string())]
+        vec![TreeItem::new(
+            table_loading_id,
+            dbflux_i18n::t!("sidebar.tree.status.loading"),
+        )]
     };
 
     sections.extend(children.storage);
@@ -2368,7 +2366,10 @@ fn build_schema_tables_folder(
                 schema: schema_name.to_string(),
             }
             .to_string(),
-            format!("Tables ({})", tables.len()),
+            crate::labels::container_folder_label(
+                dbflux_core::DatabaseCategory::Relational,
+                tables.len(),
+            ),
         )
         .expanded(true)
         .children(table_children),
@@ -2409,7 +2410,7 @@ fn build_schema_views_folder(
                 schema: schema_name.to_string(),
             }
             .to_string(),
-            format!("Views ({})", views.len()),
+            crate::labels::views_folder_label(views.len()),
         )
         .expanded(true)
         .children(view_children),
@@ -2447,11 +2448,14 @@ fn build_schema_types_folder(
                 })
                 .collect();
 
-            TreeItem::new(types_item_id, format!("Data Types ({})", types.len()))
-                .expanded(false)
-                .children(type_children)
+            TreeItem::new(
+                types_item_id,
+                crate::labels::data_types_folder_label(types.len()),
+            )
+            .expanded(false)
+            .children(type_children)
         } else {
-            TreeItem::new(types_item_id, "Data Types (0)".to_string())
+            TreeItem::new(types_item_id, crate::labels::data_types_folder_label(0))
                 .expanded(false)
                 .children(vec![])
         }
@@ -2463,12 +2467,15 @@ fn build_schema_types_folder(
                 schema: schema_name.to_string(),
             }
             .to_string(),
-            "Loading...".to_string(),
+            dbflux_i18n::t!("sidebar.tree.status.loading"),
         );
 
-        TreeItem::new(types_item_id, "Data Types".to_string())
-            .expanded(false)
-            .children(vec![placeholder])
+        TreeItem::new(
+            types_item_id,
+            crate::labels::data_types_folder_label_plain(),
+        )
+        .expanded(false)
+        .children(vec![placeholder])
     }
 }
 
@@ -2515,11 +2522,11 @@ fn build_schema_indexes_folder(
                 })
                 .collect();
 
-            TreeItem::new(item_id, format!("Indexes ({})", indexes.len()))
+            TreeItem::new(item_id, crate::labels::indexes_folder_label(indexes.len()))
                 .expanded(false)
                 .children(index_children)
         } else {
-            TreeItem::new(item_id, "Indexes (0)".to_string())
+            TreeItem::new(item_id, crate::labels::indexes_folder_label(0))
                 .expanded(false)
                 .children(vec![])
         }
@@ -2531,10 +2538,10 @@ fn build_schema_indexes_folder(
                 schema: schema_name.to_string(),
             }
             .to_string(),
-            "Loading...".to_string(),
+            dbflux_i18n::t!("sidebar.tree.status.loading"),
         );
 
-        TreeItem::new(item_id, "Indexes".to_string())
+        TreeItem::new(item_id, crate::labels::indexes_folder_label_plain())
             .expanded(false)
             .children(vec![placeholder])
     }
@@ -2584,11 +2591,11 @@ fn build_schema_fks_folder(
                 })
                 .collect();
 
-            TreeItem::new(item_id, format!("Foreign Keys ({})", fks.len()))
+            TreeItem::new(item_id, crate::labels::foreign_keys_folder_label(fks.len()))
                 .expanded(false)
                 .children(fk_children)
         } else {
-            TreeItem::new(item_id, "Foreign Keys (0)".to_string())
+            TreeItem::new(item_id, crate::labels::foreign_keys_folder_label(0))
                 .expanded(false)
                 .children(vec![])
         }
@@ -2600,10 +2607,10 @@ fn build_schema_fks_folder(
                 schema: schema_name.to_string(),
             }
             .to_string(),
-            "Loading...".to_string(),
+            dbflux_i18n::t!("sidebar.tree.status.loading"),
         );
 
-        TreeItem::new(item_id, "Foreign Keys".to_string())
+        TreeItem::new(item_id, crate::labels::foreign_keys_folder_label_plain())
             .expanded(false)
             .children(vec![placeholder])
     }
@@ -2652,13 +2659,16 @@ fn build_schema_routines_folder(
                 .collect();
 
             Some(
-                TreeItem::new(item_id, format!("Routines ({})", routines.len()))
-                    .expanded(false)
-                    .children(routine_children),
+                TreeItem::new(
+                    item_id,
+                    crate::labels::routines_folder_label(routines.len()),
+                )
+                .expanded(false)
+                .children(routine_children),
             )
         } else {
             Some(
-                TreeItem::new(item_id, "Routines (0)".to_string())
+                TreeItem::new(item_id, crate::labels::routines_folder_label(0))
                     .expanded(false)
                     .children(vec![]),
             )
@@ -2671,11 +2681,11 @@ fn build_schema_routines_folder(
                 schema: schema_name.to_string(),
             }
             .to_string(),
-            "Loading...".to_string(),
+            dbflux_i18n::t!("sidebar.tree.status.loading"),
         );
 
         Some(
-            TreeItem::new(item_id, "Routines".to_string())
+            TreeItem::new(item_id, crate::labels::routines_folder_label_plain())
                 .expanded(false)
                 .children(vec![placeholder]),
         )
@@ -3106,8 +3116,14 @@ mod tests {
 
         assert_eq!(item.label.as_ref(), "/aws/lambda/app");
         assert_eq!(item.children.len(), 2);
-        assert!(item.children[0].label.as_ref().starts_with("Fields"));
-        assert!(item.children[1].label.as_ref().starts_with("Indexes"));
+        assert_eq!(
+            item.children[0].label.as_ref(),
+            crate::labels::fields_folder_label(0)
+        );
+        assert_eq!(
+            item.children[1].label.as_ref(),
+            crate::labels::indexes_folder_label(0)
+        );
     }
 
     #[test]
@@ -3347,7 +3363,13 @@ mod tests {
 
         let tables_folder = content
             .iter()
-            .find(|item| item.label.as_ref().starts_with("Tables"))
+            .find(|item| {
+                item.label.as_ref()
+                    == crate::labels::container_folder_label(
+                        dbflux_core::DatabaseCategory::Relational,
+                        3,
+                    )
+            })
             .expect("Tables folder present");
         assert_eq!(tables_folder.children.len(), 3);
 
@@ -3363,7 +3385,7 @@ mod tests {
 
         let views_folder = content
             .iter()
-            .find(|item| item.label.as_ref().starts_with("Views"))
+            .find(|item| item.label.as_ref() == crate::labels::views_folder_label(1))
             .expect("Views folder present");
         assert_eq!(views_folder.children.len(), 1);
         let view_id: SchemaNodeId = views_folder.children[0]
@@ -3381,7 +3403,7 @@ mod tests {
 
         let types_folder = content
             .iter()
-            .find(|item| item.label.as_ref().starts_with("Data Types"))
+            .find(|item| item.label.as_ref() == crate::labels::data_types_folder_label(2))
             .expect("Data Types folder present");
         assert_eq!(types_folder.children.len(), 2);
 
@@ -4294,7 +4316,10 @@ mod tests {
             ),
             "folder must carry StorageHintsFolder node ID: {folder_id:?}"
         );
-        assert_eq!(folder.label.as_ref(), "Storage (3)");
+        assert_eq!(
+            folder.label.as_ref(),
+            crate::labels::storage_folder_label(3)
+        );
 
         assert_eq!(folder.children.len(), 3, "one child per hint");
 
@@ -4395,6 +4420,79 @@ mod tests {
         assert_eq!(
             resolved,
             dbflux_i18n::t!("sidebar.tree.container.relational", count = 5)
+        );
+    }
+
+    /// Every translation key wired into this slice's remaining tree-builder
+    /// folder and status functions must resolve to a real value in both
+    /// shipped locales, never fall back to the raw key or the
+    /// `{locale}.{key}` miss sentinel.
+    #[test]
+    fn tree_c1b_keys_resolve_in_both_locales() {
+        const KEYS: [&str; 13] = [
+            "sidebar.tree.folder.fields",
+            "sidebar.tree.folder.indexes",
+            "sidebar.tree.folder.indexes_plain",
+            "sidebar.tree.folder.foreign_keys",
+            "sidebar.tree.folder.foreign_keys_plain",
+            "sidebar.tree.folder.routines",
+            "sidebar.tree.folder.routines_plain",
+            "sidebar.tree.folder.columns",
+            "sidebar.tree.folder.constraints",
+            "sidebar.tree.folder.data_types",
+            "sidebar.tree.folder.data_types_plain",
+            "sidebar.tree.folder.views",
+            "sidebar.tree.folder.storage",
+        ];
+
+        for key in KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key, "missing translation for {locale}.{key}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "translation fell back to the miss sentinel for {locale}.{key}"
+                );
+            }
+        }
+
+        const STATUS_KEYS: [&str; 4] = [
+            "sidebar.tree.status.used_by_objects.one",
+            "sidebar.tree.status.dependent_kind.view",
+            "sidebar.tree.status.dependent_kind.materialized_view",
+            "sidebar.tree.status.dependent_kind.foreign_key_child",
+        ];
+
+        for key in STATUS_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key, "missing translation for {locale}.{key}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "translation fell back to the miss sentinel for {locale}.{key}"
+                );
+            }
+        }
+    }
+
+    /// `build_schema_indexes_folder`'s populated-count label, now routed
+    /// through `indexes_folder_label`, must render different text per locale.
+    #[test]
+    fn tree_folder_indexes_differs_between_locales() {
+        let english_template = dbflux_i18n::t!("sidebar.tree.folder.indexes", locale = "en");
+        let spanish_template = dbflux_i18n::t!("sidebar.tree.folder.indexes", locale = "es");
+
+        assert_ne!(english_template, spanish_template);
+
+        let resolved = crate::labels::indexes_folder_label(4);
+
+        assert_eq!(
+            resolved,
+            dbflux_i18n::t!("sidebar.tree.folder.indexes", count = 4)
         );
     }
 }
