@@ -475,14 +475,88 @@ document:
         references: REFERENCES
         row: ROW
   query_builder:
+    aggregate:
+      fn:
+        count_star: "COUNT(*)"
+        count: COUNT
+        count_distinct: COUNT DISTINCT
+        sum: SUM
+        avg: AVG
+        min: MIN
+        max: MAX
+    assignments:
+      add_button: "+ Add assignment"
+      column_placeholder: column
+      value_placeholder: value
+      raw_sql_warning: "Raw SQL — expression is interpolated verbatim. Verify before running."
+      kind:
+        literal: Literal
+        raw_sql: Raw SQL
+        "null": "NULL"
+        default: DEFAULT
     chrome:
       save: Save
       reset: Reset
       untitled_query: Untitled query
+    columns:
+      all_columns: "All columns (*)"
+    comparator:
+      eq: "="
+      neq: "≠"
+      gt: ">"
+      lt: "<"
+      gte: "≥"
+      lte: "≤"
+      like: LIKE
+      ilike: ILIKE
+      in: IN
+      is_null: IS NULL
+      is_not_null: IS NOT NULL
+    execution:
+      mode_label: "Mode:"
+      chunk_size_label: "Chunk size:"
+      lock_timeout_label: "Lock timeout (ms):"
+      lock_timeout_none: none
+      counting: "Counting rows…"
+      rows_estimated: "%{count} rows estimated"
+      timed_out: "Row count timed out — chunked mode recommended"
+      failed: "Row count failed: %{message}"
+      mode:
+        single_tx: Single TX
+        chunked_tx: Chunked TX
+        direct: Direct
+    filters:
+      no_filters: No filters
+      add_filter: "+ Filter"
+      add_subgroup: "+ Sub-group"
+      max_depth: "Maximum filter nesting depth reached (%{depth} levels)"
+      bool_op:
+        and: AND
+        or: OR
+    group_by:
+      heading: Group by columns
+      add_column: "+ Group-by column"
+      aggregates_heading: Aggregates
+      add_aggregate: "+ %{function}"
+      alias_placeholder: alias
+    join:
+      kind:
+        inner: INNER
+        left: LEFT
+        right: RIGHT
+        full: FULL
+    joins:
+      no_fk_metadata: "No foreign key metadata available. Enter conditions as raw expressions."
+      loading_fk: "Loading foreign keys…"
+      add_join: "+ Join"
+      add_condition: "+ Condition"
+      table_placeholder: table
     mode:
       select: SELECT
       update: UPDATE
       delete: DELETE
+    mutation:
+      preview_placeholder: "-- %{kind}: configure assignments / filter to preview SQL"
     section:
       columns: COLUMNS
       execution: EXECUTION
@@ -490,6 +564,14 @@ document:
       filters_where: FILTERS (WHERE)
       sort: SORT
       sql_preview: SQL PREVIEW
+    sort:
+      direction:
+        asc: ASC
+        desc: DESC
+      key_order: Sort key order
+      key_order_named: "Sort key order (%{name})"
+      key_limited_hint: Ordering is limited to the sort key for this driver.
+      invalid_column: "\"%{column}\" is not in the GROUP BY columns or aggregate aliases"
     status:
       limit: Limit
       offset: Offset
@@ -503,6 +585,7 @@ document:
         one: "%{count} aggregate row is incomplete and will be excluded from the query"
         many: "%{count} aggregate rows are incomplete and will be excluded from the query"
   shared:
+    add: Add
     refresh:
       off: Off
       custom: Custom

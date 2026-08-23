@@ -613,17 +613,179 @@ pub(crate) fn dangerous_query_body(kind: dbflux_core::DangerousQueryKind) -> Str
     }
 }
 
+/// Label for a `dbflux_core::Comparator` shown in filter/join predicate rows.
+///
+/// Every arm routes through the catalog for translation consistency, but the
+/// `en`/`es` catalog values stay byte-identical because these are SQL
+/// operators, not prose.
+pub(crate) fn comparator_label(comparator: dbflux_core::Comparator) -> String {
+    use dbflux_core::Comparator;
+
+    match comparator {
+        Comparator::Eq => dbflux_i18n::t!("document.query_builder.comparator.eq"),
+        Comparator::Neq => dbflux_i18n::t!("document.query_builder.comparator.neq"),
+        Comparator::Gt => dbflux_i18n::t!("document.query_builder.comparator.gt"),
+        Comparator::Lt => dbflux_i18n::t!("document.query_builder.comparator.lt"),
+        Comparator::Gte => dbflux_i18n::t!("document.query_builder.comparator.gte"),
+        Comparator::Lte => dbflux_i18n::t!("document.query_builder.comparator.lte"),
+        Comparator::Like => dbflux_i18n::t!("document.query_builder.comparator.like"),
+        Comparator::ILike => dbflux_i18n::t!("document.query_builder.comparator.ilike"),
+        Comparator::In => dbflux_i18n::t!("document.query_builder.comparator.in"),
+        Comparator::IsNull => dbflux_i18n::t!("document.query_builder.comparator.is_null"),
+        Comparator::IsNotNull => {
+            dbflux_i18n::t!("document.query_builder.comparator.is_not_null")
+        }
+    }
+}
+
+/// Label for a `dbflux_core::JoinKind` shown in the join-kind dropdown.
+///
+/// Every arm routes through the catalog for translation consistency, but the
+/// `en`/`es` catalog values stay byte-identical because these are SQL join
+/// keywords, not prose.
+pub(crate) fn join_kind_label(kind: dbflux_core::JoinKind) -> String {
+    use dbflux_core::JoinKind;
+
+    match kind {
+        JoinKind::Inner => dbflux_i18n::t!("document.query_builder.join.kind.inner"),
+        JoinKind::Left => dbflux_i18n::t!("document.query_builder.join.kind.left"),
+        JoinKind::Right => dbflux_i18n::t!("document.query_builder.join.kind.right"),
+        JoinKind::Full => dbflux_i18n::t!("document.query_builder.join.kind.full"),
+    }
+}
+
+/// Display text for a `dbflux_core::AggFn` shown in aggregate function
+/// dropdowns and the "+ function" quick-add buttons.
+///
+/// Every arm routes through the catalog for translation consistency, but the
+/// `en`/`es` catalog values stay byte-identical because these are SQL
+/// aggregate function names, not prose.
+pub(crate) fn agg_fn_display(function: dbflux_core::AggFn) -> String {
+    use dbflux_core::AggFn;
+
+    match function {
+        AggFn::CountStar => dbflux_i18n::t!("document.query_builder.aggregate.fn.count_star"),
+        AggFn::Count => dbflux_i18n::t!("document.query_builder.aggregate.fn.count"),
+        AggFn::CountDistinct => {
+            dbflux_i18n::t!("document.query_builder.aggregate.fn.count_distinct")
+        }
+        AggFn::Sum => dbflux_i18n::t!("document.query_builder.aggregate.fn.sum"),
+        AggFn::Avg => dbflux_i18n::t!("document.query_builder.aggregate.fn.avg"),
+        AggFn::Min => dbflux_i18n::t!("document.query_builder.aggregate.fn.min"),
+        AggFn::Max => dbflux_i18n::t!("document.query_builder.aggregate.fn.max"),
+    }
+}
+
+/// Label for a `dbflux_core::BoolOp` shown on the AND/OR group-toggle button
+/// in the Filters and Joins sections.
+///
+/// Every arm routes through the catalog for translation consistency, but the
+/// `en`/`es` catalog values stay byte-identical because these are SQL boolean
+/// keywords, not prose.
+pub(crate) fn bool_op_label(op: dbflux_core::BoolOp) -> String {
+    use dbflux_core::BoolOp;
+
+    match op {
+        BoolOp::And => dbflux_i18n::t!("document.query_builder.filters.bool_op.and"),
+        BoolOp::Or => dbflux_i18n::t!("document.query_builder.filters.bool_op.or"),
+    }
+}
+
+/// Label for a `dbflux_core::VisualSortDirection` shown on sort-direction
+/// toggle buttons.
+///
+/// Every arm routes through the catalog for translation consistency, but the
+/// `en`/`es` catalog values stay byte-identical because these are SQL sort
+/// keywords, not prose.
+pub(crate) fn sort_direction_label(direction: dbflux_core::VisualSortDirection) -> String {
+    use dbflux_core::VisualSortDirection;
+
+    match direction {
+        VisualSortDirection::Asc => dbflux_i18n::t!("document.query_builder.sort.direction.asc"),
+        VisualSortDirection::Desc => {
+            dbflux_i18n::t!("document.query_builder.sort.direction.desc")
+        }
+    }
+}
+
+/// Label for an `AssignmentValue` kind-cycle button in the mutation
+/// assignments section.
+///
+/// `Null` and `Default` render the literal SQL keywords `NULL`/`DEFAULT`
+/// (byte-identical across locales); `Literal` and `Expression` are UI
+/// concept names and translate normally.
+pub(crate) fn assignment_value_kind_label(value: &dbflux_core::AssignmentValue) -> String {
+    use dbflux_core::AssignmentValue;
+
+    match value {
+        AssignmentValue::Literal(_) => {
+            dbflux_i18n::t!("document.query_builder.assignments.kind.literal")
+        }
+        AssignmentValue::Expression(_) => {
+            dbflux_i18n::t!("document.query_builder.assignments.kind.raw_sql")
+        }
+        AssignmentValue::Null => dbflux_i18n::t!("document.query_builder.assignments.kind.null"),
+        AssignmentValue::Default => {
+            dbflux_i18n::t!("document.query_builder.assignments.kind.default")
+        }
+    }
+}
+
+/// Label for an `ExecutionMode` shown on the execution-mode segmented
+/// control.
+pub(crate) fn execution_mode_label(
+    mode: crate::data_grid_panel::mutation_executor::ExecutionMode,
+) -> String {
+    use crate::data_grid_panel::mutation_executor::ExecutionMode;
+
+    match mode {
+        ExecutionMode::SingleTransaction => {
+            dbflux_i18n::t!("document.query_builder.execution.mode.single_tx")
+        }
+        ExecutionMode::ChunkedTransaction => {
+            dbflux_i18n::t!("document.query_builder.execution.mode.chunked_tx")
+        }
+        ExecutionMode::DirectAutocommit => {
+            dbflux_i18n::t!("document.query_builder.execution.mode.direct")
+        }
+    }
+}
+
+/// Label for the mutation execution section's row-count estimate state.
+pub(crate) fn execution_count_state_label(
+    state: &crate::data_grid_panel::mutation_executor::CountState,
+) -> String {
+    use crate::data_grid_panel::mutation_executor::{CountState, CountUnknownReason};
+
+    match state {
+        CountState::Counting => dbflux_i18n::t!("document.query_builder.execution.counting"),
+        CountState::Done(n) => {
+            dbflux_i18n::t!("document.query_builder.execution.rows_estimated", count = n)
+        }
+        CountState::Unknown { reason } => match reason {
+            CountUnknownReason::TimedOut => {
+                dbflux_i18n::t!("document.query_builder.execution.timed_out")
+            }
+            CountUnknownReason::Failed(message) => {
+                dbflux_i18n::t!("document.query_builder.execution.failed", message = message)
+            }
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        MutationItemKind, builder_mode_label, bulk_delete_success_label, chart_degraded_copy,
-        chart_dock_shape_label, chart_rail_why_text, code_toolbar_shortcut_hint_label,
+        MutationItemKind, agg_fn_display, assignment_value_kind_label, bool_op_label,
+        builder_mode_label, bulk_delete_success_label, chart_degraded_copy, chart_dock_shape_label,
+        chart_rail_why_text, code_toolbar_shortcut_hint_label, comparator_label,
         copy_query_language_label, dangerous_query_body, dangerous_query_title,
-        delete_confirm_copy, delete_rows_label, incomplete_aggregate_rows_label,
-        live_output_lines_label, live_output_truncated_label, partial_delete_label,
-        pending_change_count_label, pending_edits_summary, refresh_policy_label,
-        result_tab_count_label, row_count_label, script_confirm_message_label,
-        unsaved_changes_label, update_columns_label, valid_lines_label,
+        delete_confirm_copy, delete_rows_label, execution_count_state_label, execution_mode_label,
+        incomplete_aggregate_rows_label, join_kind_label, live_output_lines_label,
+        live_output_truncated_label, partial_delete_label, pending_change_count_label,
+        pending_edits_summary, refresh_policy_label, result_tab_count_label, row_count_label,
+        script_confirm_message_label, sort_direction_label, unsaved_changes_label,
+        update_columns_label, valid_lines_label,
     };
     use dbflux_components::chart::ChartDetection;
     use dbflux_core::{DangerousQueryKind, QueryLanguage, RefreshPolicy};
@@ -1431,5 +1593,202 @@ mod tests {
                 "document.code.dangerous_query.kind.raw_expression_in_set.body"
             }
         }
+    }
+
+    #[test]
+    fn comparator_label_covers_all_variants_and_stays_identical_across_locales() {
+        use dbflux_core::Comparator;
+
+        let cases = [
+            (Comparator::Eq, "="),
+            (Comparator::Neq, "≠"),
+            (Comparator::Gt, ">"),
+            (Comparator::Lt, "<"),
+            (Comparator::Gte, "≥"),
+            (Comparator::Lte, "≤"),
+            (Comparator::Like, "LIKE"),
+            (Comparator::ILike, "ILIKE"),
+            (Comparator::In, "IN"),
+            (Comparator::IsNull, "IS NULL"),
+            (Comparator::IsNotNull, "IS NOT NULL"),
+        ];
+
+        for (comparator, expected) in cases {
+            assert_eq!(comparator_label(comparator), expected);
+        }
+    }
+
+    #[test]
+    fn join_kind_label_covers_all_variants_and_stays_identical_across_locales() {
+        use dbflux_core::JoinKind;
+
+        let cases = [
+            (JoinKind::Inner, "INNER"),
+            (JoinKind::Left, "LEFT"),
+            (JoinKind::Right, "RIGHT"),
+            (JoinKind::Full, "FULL"),
+        ];
+
+        for (kind, expected) in cases {
+            assert_eq!(join_kind_label(kind), expected);
+        }
+    }
+
+    #[test]
+    fn agg_fn_display_covers_all_variants_and_stays_identical_across_locales() {
+        use dbflux_core::AggFn;
+
+        let cases = [
+            (AggFn::CountStar, "COUNT(*)"),
+            (AggFn::Count, "COUNT"),
+            (AggFn::CountDistinct, "COUNT DISTINCT"),
+            (AggFn::Sum, "SUM"),
+            (AggFn::Avg, "AVG"),
+            (AggFn::Min, "MIN"),
+            (AggFn::Max, "MAX"),
+        ];
+
+        for (function, expected) in cases {
+            assert_eq!(agg_fn_display(function), expected);
+        }
+    }
+
+    #[test]
+    fn bool_op_label_covers_all_variants_and_stays_identical_across_locales() {
+        use dbflux_core::BoolOp;
+
+        assert_eq!(bool_op_label(BoolOp::And), "AND");
+        assert_eq!(bool_op_label(BoolOp::Or), "OR");
+    }
+
+    #[test]
+    fn sort_direction_label_covers_all_variants_and_stays_identical_across_locales() {
+        use dbflux_core::VisualSortDirection;
+
+        assert_eq!(sort_direction_label(VisualSortDirection::Asc), "ASC");
+        assert_eq!(sort_direction_label(VisualSortDirection::Desc), "DESC");
+    }
+
+    #[test]
+    fn query_builder_sql_literal_keys_resolve_identically_in_both_locales() {
+        let keys = [
+            "document.query_builder.comparator.eq",
+            "document.query_builder.comparator.neq",
+            "document.query_builder.comparator.gt",
+            "document.query_builder.comparator.lt",
+            "document.query_builder.comparator.gte",
+            "document.query_builder.comparator.lte",
+            "document.query_builder.comparator.like",
+            "document.query_builder.comparator.ilike",
+            "document.query_builder.comparator.in",
+            "document.query_builder.comparator.is_null",
+            "document.query_builder.comparator.is_not_null",
+            "document.query_builder.join.kind.inner",
+            "document.query_builder.join.kind.left",
+            "document.query_builder.join.kind.right",
+            "document.query_builder.join.kind.full",
+            "document.query_builder.aggregate.fn.count_star",
+            "document.query_builder.aggregate.fn.count",
+            "document.query_builder.aggregate.fn.count_distinct",
+            "document.query_builder.aggregate.fn.sum",
+            "document.query_builder.aggregate.fn.avg",
+            "document.query_builder.aggregate.fn.min",
+            "document.query_builder.aggregate.fn.max",
+            "document.query_builder.filters.bool_op.and",
+            "document.query_builder.filters.bool_op.or",
+            "document.query_builder.sort.direction.asc",
+            "document.query_builder.sort.direction.desc",
+            "document.query_builder.assignments.kind.null",
+            "document.query_builder.assignments.kind.default",
+        ];
+
+        for key in keys {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+
+            assert_ne!(en, key);
+            assert_ne!(en, format!("en.{key}"));
+            assert!(!en.is_empty());
+            assert_eq!(en, es, "SQL literal key {key} must match across locales");
+        }
+    }
+
+    #[test]
+    fn assignment_value_kind_label_covers_all_variants() {
+        use dbflux_core::{AssignmentValue, ScalarLiteral};
+
+        assert_eq!(
+            assignment_value_kind_label(&AssignmentValue::Literal(ScalarLiteral::Text(
+                String::new()
+            ))),
+            "Literal"
+        );
+        assert_eq!(
+            assignment_value_kind_label(&AssignmentValue::Expression(String::new())),
+            "Raw SQL"
+        );
+        assert_eq!(assignment_value_kind_label(&AssignmentValue::Null), "NULL");
+        assert_eq!(
+            assignment_value_kind_label(&AssignmentValue::Default),
+            "DEFAULT"
+        );
+
+        for key in [
+            "document.query_builder.assignments.kind.literal",
+            "document.query_builder.assignments.kind.raw_sql",
+        ] {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+
+            assert_ne!(en, es, "prose kind label {key} did not translate");
+        }
+    }
+
+    #[test]
+    fn execution_mode_label_covers_all_variants_and_translates_per_locale() {
+        use crate::data_grid_panel::mutation_executor::ExecutionMode;
+
+        for mode in [
+            ExecutionMode::SingleTransaction,
+            ExecutionMode::ChunkedTransaction,
+            ExecutionMode::DirectAutocommit,
+        ] {
+            let en = execution_mode_label(mode);
+            let key = match mode {
+                ExecutionMode::SingleTransaction => {
+                    "document.query_builder.execution.mode.single_tx"
+                }
+                ExecutionMode::ChunkedTransaction => {
+                    "document.query_builder.execution.mode.chunked_tx"
+                }
+                ExecutionMode::DirectAutocommit => "document.query_builder.execution.mode.direct",
+            };
+            let es = dbflux_i18n::t!(key, locale = "es");
+
+            assert!(!en.is_empty());
+            assert_ne!(en, es, "execution mode label {key} did not translate");
+        }
+    }
+
+    #[test]
+    fn execution_count_state_label_zero_one_many_and_reasons() {
+        use crate::data_grid_panel::mutation_executor::{CountState, CountUnknownReason};
+
+        let counting = execution_count_state_label(&CountState::Counting);
+        let done_one = execution_count_state_label(&CountState::Done(1));
+        let done_many = execution_count_state_label(&CountState::Done(42));
+        let timed_out = execution_count_state_label(&CountState::Unknown {
+            reason: CountUnknownReason::TimedOut,
+        });
+        let failed = execution_count_state_label(&CountState::Unknown {
+            reason: CountUnknownReason::Failed("boom".to_string()),
+        });
+
+        assert!(counting.contains("Counting"));
+        assert!(done_one.contains('1'));
+        assert!(done_many.contains("42"));
+        assert_ne!(done_one, done_many);
+        assert!(timed_out.contains("chunked"));
+        assert!(failed.contains("boom"));
     }
 }

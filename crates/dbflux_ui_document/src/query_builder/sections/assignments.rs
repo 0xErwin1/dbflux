@@ -5,18 +5,9 @@ use dbflux_components::controls::{Button, ButtonVariant, Input};
 use dbflux_components::tokens::{FontSizes, Spacing};
 use dbflux_core::{Assignment, AssignmentValue, ScalarLiteral};
 
+use crate::labels::assignment_value_kind_label;
 use crate::query_builder::mutation_state::AssignmentRow;
 use crate::query_builder::panel::QueryBuilderPanel;
-
-/// Returns the display label for an `AssignmentValue` kind selector button.
-fn value_kind_label(value: &AssignmentValue) -> &'static str {
-    match value {
-        AssignmentValue::Literal(_) => "Literal",
-        AssignmentValue::Expression(_) => "Raw SQL",
-        AssignmentValue::Null => "NULL",
-        AssignmentValue::Default => "DEFAULT",
-    }
-}
 
 /// Returns `true` when `value` is the `Expression` variant.
 fn is_expression(value: &AssignmentValue) -> bool {
@@ -73,7 +64,7 @@ pub fn render_assignments(
             .map(|r| r.assignment.value.clone())
             .unwrap_or(AssignmentValue::Null);
 
-        let kind_label = value_kind_label(&value);
+        let kind_label = assignment_value_kind_label(&value);
         let expr_mode = is_expression(&value);
         let kind_variant = if expr_mode {
             ButtonVariant::Danger
@@ -90,21 +81,19 @@ pub fn render_assignments(
 
         // Column name input
         if let Some(col_state) = panel.assign_col_inputs.get(&row_ix).cloned() {
-            row_div = row_div.child(
-                div()
-                    .w(gpui::px(140.0))
-                    .child(Input::new(&col_state).placeholder("column")),
-            );
+            row_div = row_div.child(div().w(gpui::px(140.0)).child(
+                Input::new(&col_state).placeholder(dbflux_i18n::t!(
+                    "document.query_builder.assignments.column_placeholder"
+                )),
+            ));
         }
 
         // Value input (Literal / Expression only)
         if show_value_input {
             if let Some(val_state) = panel.assign_val_inputs.get(&row_ix).cloned() {
-                row_div = row_div.child(
-                    div()
-                        .flex_1()
-                        .child(Input::new(&val_state).placeholder("value")),
-                );
+                row_div = row_div.child(div().flex_1().child(Input::new(&val_state).placeholder(
+                    dbflux_i18n::t!("document.query_builder.assignments.value_placeholder"),
+                )));
             }
         } else {
             row_div = row_div.child(
@@ -112,7 +101,7 @@ pub fn render_assignments(
                     .flex_1()
                     .text_size(FontSizes::SM)
                     .text_color(theme.muted_foreground)
-                    .child(SharedString::from(kind_label)),
+                    .child(SharedString::from(kind_label.clone())),
             );
         }
 
@@ -163,9 +152,9 @@ pub fn render_assignments(
                         .border_color(theme.border)
                         .text_size(FontSizes::XS)
                         .text_color(theme.danger)
-                        .child(
-                            "Raw SQL — expression is interpolated verbatim. Verify before running.",
-                        ),
+                        .child(SharedString::from(dbflux_i18n::t!(
+                            "document.query_builder.assignments.raw_sql_warning"
+                        ))),
                 ),
             );
         }
@@ -173,22 +162,25 @@ pub fn render_assignments(
 
     // "Add assignment" button
     container = container.child(
-        Button::new("qb-assign-add", "+ Add assignment")
-            .variant(ButtonVariant::Ghost)
-            .on_click(cx.listener(|this, _event, _window, cx| {
-                if let Some(state) = this.mutation_state.as_mut() {
-                    state.assignments.push(AssignmentRow {
-                        assignment: Assignment {
-                            column: String::new(),
-                            value: AssignmentValue::Literal(ScalarLiteral::Text(String::new())),
-                        },
-                        raw_text: String::new(),
-                    });
-                    this.pending_assign_rebuild = true;
-                }
-                this.refresh_mutation_preview_pure();
-                cx.notify();
-            })),
+        Button::new(
+            "qb-assign-add",
+            dbflux_i18n::t!("document.query_builder.assignments.add_button"),
+        )
+        .variant(ButtonVariant::Ghost)
+        .on_click(cx.listener(|this, _event, _window, cx| {
+            if let Some(state) = this.mutation_state.as_mut() {
+                state.assignments.push(AssignmentRow {
+                    assignment: Assignment {
+                        column: String::new(),
+                        value: AssignmentValue::Literal(ScalarLiteral::Text(String::new())),
+                    },
+                    raw_text: String::new(),
+                });
+                this.pending_assign_rebuild = true;
+            }
+            this.refresh_mutation_preview_pure();
+            cx.notify();
+        })),
     );
 
     container.into_any_element()

@@ -475,14 +475,88 @@ document:
         references: REFERENCIAS
         row: FILA
   query_builder:
+    aggregate:
+      fn:
+        count_star: "COUNT(*)"
+        count: COUNT
+        count_distinct: COUNT DISTINCT
+        sum: SUM
+        avg: AVG
+        min: MIN
+        max: MAX
+    assignments:
+      add_button: "+ Agregar asignación"
+      column_placeholder: columna
+      value_placeholder: valor
+      raw_sql_warning: "SQL sin procesar — la expresión se interpola literalmente. Verifique antes de ejecutar."
+      kind:
+        literal: Valor literal
+        raw_sql: SQL sin procesar
+        "null": "NULL"
+        default: DEFAULT
     chrome:
       save: Guardar
       reset: Restablecer
       untitled_query: Consulta sin título
+    columns:
+      all_columns: "Todas las columnas (*)"
+    comparator:
+      eq: "="
+      neq: "≠"
+      gt: ">"
+      lt: "<"
+      gte: "≥"
+      lte: "≤"
+      like: LIKE
+      ilike: ILIKE
+      in: IN
+      is_null: IS NULL
+      is_not_null: IS NOT NULL
+    execution:
+      mode_label: "Modo:"
+      chunk_size_label: "Tamaño de lote:"
+      lock_timeout_label: "Tiempo de espera del bloqueo (ms):"
+      lock_timeout_none: ninguno
+      counting: "Contando filas…"
+      rows_estimated: "%{count} filas estimadas"
+      timed_out: "El conteo de filas expiró — se recomienda el modo por lotes"
+      failed: "Error al contar filas: %{message}"
+      mode:
+        single_tx: TX única
+        chunked_tx: TX por lotes
+        direct: Directo
+    filters:
+      no_filters: Sin filtros
+      add_filter: "+ Filtro"
+      add_subgroup: "+ Subgrupo"
+      max_depth: "Se alcanzó la profundidad máxima de anidamiento de filtros (%{depth} niveles)"
+      bool_op:
+        and: AND
+        or: OR
+    group_by:
+      heading: Agrupar por columnas
+      add_column: "+ Columna de agrupación"
+      aggregates_heading: Agregaciones
+      add_aggregate: "+ %{function}"
+      alias_placeholder: alias
+    join:
+      kind:
+        inner: INNER
+        left: LEFT
+        right: RIGHT
+        full: FULL
+    joins:
+      no_fk_metadata: "No hay metadatos de clave foránea disponibles. Ingrese las condiciones como expresiones sin procesar."
+      loading_fk: "Cargando claves foráneas…"
+      add_join: "+ Unión"
+      add_condition: "+ Condición"
+      table_placeholder: tabla
     mode:
       select: SELECT
       update: UPDATE
       delete: DELETE
+    mutation:
+      preview_placeholder: "-- %{kind}: configure las asignaciones o el filtro para previsualizar el SQL"
     section:
       columns: COLUMNAS
       execution: EJECUCIÓN
@@ -490,6 +564,14 @@ document:
       filters_where: FILTROS (WHERE)
       sort: ORDEN
       sql_preview: VISTA PREVIA SQL
+    sort:
+      direction:
+        asc: ASC
+        desc: DESC
+      key_order: Orden de la clave de ordenamiento
+      key_order_named: "Orden de la clave de ordenamiento (%{name})"
+      key_limited_hint: El ordenamiento está limitado a la clave de ordenamiento para este controlador.
+      invalid_column: "\"%{column}\" no está en las columnas de GROUP BY ni en los alias de agregación"
     status:
       limit: Límite
       offset: Desplazamiento
@@ -503,6 +585,7 @@ document:
         one: "%{count} fila agregada está incompleta y se excluirá de la consulta"
         many: "%{count} filas agregadas están incompletas y se excluirán de la consulta"
   shared:
+    add: Agregar
     refresh:
       off: Apagado
       custom: Personalizado
