@@ -5,6 +5,14 @@ errors:
     detail: "Correlation: %{id}"
     clipboard: "%{summary}\nCorrelation: %{id}"
 modals:
+  active_query:
+    title: Active query running
+    prompt: A query is still running on this connection. What would you like to do?
+    elapsed: "Running for %{seconds}s"
+    disconnect_anyway: Disconnect anyway
+    quit_anyway: Quit anyway
+    keep_waiting: Keep waiting
+    cancel_query: Cancel query
   add_panel_picker:
     title: Add panels
     submit:
@@ -44,15 +52,6 @@ modals:
       no_metrics: No metrics in this namespace.
       no_metrics_filtered: No metrics match the filter.
     cancel: Cancel
-  rename:
-    placeholder: Enter a name
-    title:
-      dashboard: Rename dashboard
-      saved_chart: Rename saved chart
-    validation:
-      empty_name: Name cannot be empty
-    cancel: Cancel
-    confirm: Rename
   create_dashboard:
     name_label: Dashboard name
     title: New dashboard
@@ -72,6 +71,47 @@ modals:
         many: "This chart is used in %{count} dashboards: %{names}. Panels that reference it will show broken placeholders."
     cancel: Cancel
     confirm: Delete
+  delete_connection:
+    title: Delete connection
+    warning: "You're about to delete the following connection. This can't be undone."
+    documents_closed: Any open documents using this connection will be closed.
+    cancel: Cancel
+    confirm: Delete
+  drop_table:
+    title: Drop table
+    confirm: Drop table
+    cancel: Cancel
+    confirm_placeholder: Type table name to confirm
+    confirm_prompt: 'Type "%{table}" to confirm'
+    cascade_warning: "Dependent objects will also be dropped (CASCADE):"
+    delete_warning: This will permanently delete the table and any dependent objects.
+  rename:
+    placeholder: Enter a name
+    title:
+      dashboard: Rename dashboard
+      saved_chart: Rename saved chart
+    validation:
+      empty_name: Name cannot be empty
+    cancel: Cancel
+    confirm: Rename
+  tunnel_auth:
+    title: SSH passphrase required
+    prompt: 'Enter the passphrase for tunnel "%{tunnel}"'
+    connection_detail: "Host: %{host}:%{port} · User: %{user}"
+    placeholder: Enter passphrase
+    incorrect: Incorrect passphrase. Try again.
+    empty_error: Passphrase cannot be empty
+    remember: Remember for this session
+    cancel: Cancel
+    connect: Connect
+  unsaved_changes:
+    title: Unsaved changes
+    prompt: You have unsaved changes in the following documents. What would you like to do?
+    save_selected:
+      one: "Save selected (%{count})"
+      many: "Save selected (%{count})"
+    dont_save: Don't save
+    cancel: Cancel
 settings:
   general:
     header:

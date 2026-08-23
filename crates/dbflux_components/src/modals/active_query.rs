@@ -103,6 +103,11 @@ impl ModalActiveQuery {
     }
 }
 
+/// Label for the elapsed-time hint, with the elapsed seconds interpolated.
+fn elapsed_label(seconds: u64) -> String {
+    dbflux_i18n::t!("modals.active_query.elapsed", seconds = seconds)
+}
+
 impl EventEmitter<ActiveQueryOutcome> for ModalActiveQuery {}
 
 impl Render for ModalActiveQuery {
@@ -119,18 +124,13 @@ impl Render for ModalActiveQuery {
         let sql = request.sql.clone();
         let trigger = request.trigger;
         let elapsed = self.elapsed_secs;
-        let elapsed_label = format!("Running for {}s", elapsed);
+        let elapsed_label = elapsed_label(elapsed);
 
         let body = div()
             .flex()
             .flex_col()
             .gap(Spacing::MD)
-            .child(
-                Text::body(
-                    "A query is still running on this connection. What would you like to do?",
-                )
-                .into_any_element(),
-            )
+            .child(Text::body(dbflux_i18n::t!("modals.active_query.prompt")).into_any_element())
             .child(
                 surface_raised(cx)
                     .w_full()
@@ -169,8 +169,10 @@ impl Render for ModalActiveQuery {
         });
 
         let force_btn_label = match trigger {
-            ActiveQueryTrigger::Disconnect => "Disconnect anyway",
-            ActiveQueryTrigger::Shutdown => "Quit anyway",
+            ActiveQueryTrigger::Disconnect => {
+                dbflux_i18n::t!("modals.active_query.disconnect_anyway")
+            }
+            ActiveQueryTrigger::Shutdown => dbflux_i18n::t!("modals.active_query.quit_anyway"),
         };
 
         let footer = div()
@@ -186,23 +188,86 @@ impl Render for ModalActiveQuery {
             .child(div().flex_1())
             .child(
                 Button::new("active-keep-waiting")
-                    .label("Keep waiting")
+                    .label(dbflux_i18n::t!("modals.active_query.keep_waiting"))
                     .on_click(on_keep_waiting),
             )
             .child(
                 Button::new("active-cancel-query")
-                    .label("Cancel query")
+                    .label(dbflux_i18n::t!("modals.active_query.cancel_query"))
                     .danger()
                     .on_click(on_cancel_query),
             );
 
         ModalShell::new(
-            "Active query running",
+            dbflux_i18n::t!("modals.active_query.title"),
             body.into_any_element(),
             footer.into_any_element(),
         )
         .variant(ModalVariant::Default)
         .width(px(520.0))
         .into_any_element()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests — translation key resolution and elapsed label formatting
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn active_query_keys_resolve_in_both_locales() {
+        let keys = [
+            "modals.active_query.title",
+            "modals.active_query.prompt",
+            "modals.active_query.elapsed",
+            "modals.active_query.disconnect_anyway",
+            "modals.active_query.quit_anyway",
+            "modals.active_query.keep_waiting",
+            "modals.active_query.cancel_query",
+        ];
+
+        for key in keys {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert!(!en.is_empty() && en != key, "en missing for {key}");
+            assert!(!es.is_empty() && es != key, "es missing for {key}");
+        }
+    }
+
+    #[test]
+    fn active_query_keep_waiting_diverges_between_locales() {
+        let en = dbflux_i18n::t!("modals.active_query.keep_waiting", locale = "en");
+        let es = dbflux_i18n::t!("modals.active_query.keep_waiting", locale = "es");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn elapsed_label_contains_seconds_for_zero_and_one() {
+        let zero = elapsed_label(0);
+        assert!(zero.contains('0'));
+        assert_eq!(
+            zero,
+            dbflux_i18n::t!("modals.active_query.elapsed", seconds = 0)
+        );
+
+        let one = elapsed_label(1);
+        assert!(one.contains('1'));
+        assert_eq!(
+            one,
+            dbflux_i18n::t!("modals.active_query.elapsed", seconds = 1)
+        );
+    }
+
+    #[test]
+    fn elapsed_label_contains_seconds_for_larger_value() {
+        let label = elapsed_label(42);
+        assert!(label.contains("42"));
+        assert_eq!(
+            label,
+            dbflux_i18n::t!("modals.active_query.elapsed", seconds = 42)
+        );
     }
 }

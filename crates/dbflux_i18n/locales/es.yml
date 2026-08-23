@@ -5,6 +5,14 @@ errors:
     detail: "Correlación: %{id}"
     clipboard: "%{summary}\nCorrelación: %{id}"
 modals:
+  active_query:
+    title: Consulta en ejecución
+    prompt: Todavía hay una consulta ejecutándose en esta conexión. ¿Qué quieres hacer?
+    elapsed: "En ejecución desde hace %{seconds} s"
+    disconnect_anyway: Desconectar de todos modos
+    quit_anyway: Salir de todos modos
+    keep_waiting: Seguir esperando
+    cancel_query: Cancelar consulta
   add_panel_picker:
     title: Agregar paneles
     submit:
@@ -44,15 +52,6 @@ modals:
       no_metrics: No hay métricas en este espacio de nombres.
       no_metrics_filtered: Ninguna métrica coincide con el filtro.
     cancel: Cancelar
-  rename:
-    placeholder: Escribe un nombre
-    title:
-      dashboard: Renombrar dashboard
-      saved_chart: Renombrar gráfico guardado
-    validation:
-      empty_name: El nombre no puede estar vacío
-    cancel: Cancelar
-    confirm: Renombrar
   create_dashboard:
     name_label: Nombre del dashboard
     title: Nuevo dashboard
@@ -72,6 +71,47 @@ modals:
         many: "Este gráfico se usa en %{count} dashboards: %{names}. Los paneles que lo referencian mostrarán marcadores rotos."
     cancel: Cancelar
     confirm: Eliminar
+  delete_connection:
+    title: Eliminar conexión
+    warning: "Vas a eliminar la siguiente conexión. Esta acción no se puede deshacer."
+    documents_closed: Se cerrarán los documentos abiertos que usen esta conexión.
+    cancel: Cancelar
+    confirm: Eliminar
+  drop_table:
+    title: Eliminar tabla
+    confirm: Eliminar tabla
+    cancel: Cancelar
+    confirm_placeholder: Escribe el nombre de la tabla para confirmar
+    confirm_prompt: 'Escribe "%{table}" para confirmar'
+    cascade_warning: "También se eliminarán los objetos dependientes (CASCADE):"
+    delete_warning: Esto eliminará de forma permanente la tabla y cualquier objeto dependiente.
+  rename:
+    placeholder: Escribe un nombre
+    title:
+      dashboard: Renombrar dashboard
+      saved_chart: Renombrar gráfico guardado
+    validation:
+      empty_name: El nombre no puede estar vacío
+    cancel: Cancelar
+    confirm: Renombrar
+  tunnel_auth:
+    title: Se requiere la frase de contraseña SSH
+    prompt: 'Introduce la frase de contraseña del túnel "%{tunnel}"'
+    connection_detail: "Host: %{host}:%{port} · Usuario: %{user}"
+    placeholder: Introduce la frase de contraseña
+    incorrect: Frase de contraseña incorrecta. Inténtalo de nuevo.
+    empty_error: La frase de contraseña no puede estar vacía
+    remember: Recordar durante esta sesión
+    cancel: Cancelar
+    connect: Conectar
+  unsaved_changes:
+    title: Cambios sin guardar
+    prompt: Tienes cambios sin guardar en los siguientes documentos. ¿Qué quieres hacer?
+    save_selected:
+      one: "Guardar seleccionado (%{count})"
+      many: "Guardar seleccionados (%{count})"
+    dont_save: No guardar
+    cancel: Cancelar
 settings:
   general:
     header:

@@ -274,7 +274,7 @@ Architecture details live in `ARCHITECTURE.md`. This file only keeps the agent-f
 
 The UI layer is split into six crates (see `ARCHITECTURE.md` § Layered crate map for the full diagram):
 
-- `dbflux_components` — domain-free leaf: theme, tokens, icons, primitives, composites, controls, data_table, document_tree, result_panel, chart engine, modals. No `dbflux_app` dependency.
+- `dbflux_components` — domain-free leaf: theme, tokens, icons, primitives, composites, controls, data_table, document_tree, result_panel, chart engine, modals. No `dbflux_app` dependency. May depend on `dbflux_i18n` for translated UI copy; `dbflux_i18n` has no `dbflux_*` dependencies.
 - `dbflux_ui_base` — AppStateEntity, events, keymap helpers, toast, modal_frame, platform detection, sql_preview_modal, sso_wizard.
 - `dbflux_ui_document` — tab/pane system, all document types (CodeDocument, DataDocument, ChartDocument, KeyValueDocument, AuditDocument, BucketsTableDocument, ObjectBrowserDocument, ObjectEditorDocument), data_grid_panel, governance view.
 - `dbflux_ui_sidebar` — connections + scripts sidebar tree.
