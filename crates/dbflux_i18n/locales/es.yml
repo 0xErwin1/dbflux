@@ -144,6 +144,37 @@ connection_manager:
   filter_certificates: Certificados / claves
   filter_all_files: Todos los archivos
   select_database_file: Seleccionar archivo de base de datos
+  auth:
+    profile_created_sso: Perfil seleccionado creado por el asistente de AWS SSO.
+    profile_created_wizard: Perfil seleccionado creado por el asistente.
+    refreshing_sessions: Actualizando sesiones de perfiles de autenticación...
+    select_before_login: Selecciona un perfil de autenticación antes de iniciar sesión.
+    provider_unavailable: "El proveedor de autenticación '%{provider_id}' no está disponible."
+    interactive_login_unavailable: El inicio de sesión interactivo no está disponible para este perfil.
+    login_starting: "Iniciando sesión del proveedor de autenticación para '%{name}'..."
+    login_completed: Inicio de sesión del proveedor completado.
+    login_failed: "Error al iniciar sesión con el proveedor: %{error}"
+    session_status_valid_expires: "Estado de la sesión: válida (expira el %{expires_at})"
+    session_status_valid: "Estado de la sesión: válida"
+    session_status_expired: "Estado de la sesión: expirada"
+    session_status_login_required: "Estado de la sesión: requiere inicio de sesión"
+  driver_settings_title: Ajustes del driver
+  driver_no_custom_settings: Este driver no tiene ajustes personalizados.
+  mcp_disabled: MCP deshabilitado para esta conexión
+  mcp_enabled_select_actor: MCP habilitado — selecciona un cliente de confianza para vincular
+  mcp_preview_summary: "Actor '%{actor}' | rol: %{role} | política: %{policy}"
+  mcp_preview_none: ninguno
+  mcp_governance_title: Gobernanza de MCP
+  enable_mcp: Habilitar MCP para esta conexión
+  trusted_client_actor: Cliente de confianza (actor)
+  mcp_actor_hint: Identidad del agente de IA — configúrala en Ajustes → MCP
+  role_label: Rol
+  mcp_role_hint: Configura roles en Ajustes → MCP → Roles
+  additional_roles_optional: Roles adicionales (opcional)
+  policy_label: Política
+  mcp_policy_hint: Configura políticas en Ajustes → MCP → Políticas
+  additional_policies_optional: Políticas adicionales (opcional)
+  scope_policy_preview: Vista previa de alcance y políticas
 document:
   code:
     toolbar:

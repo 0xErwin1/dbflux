@@ -2881,8 +2881,9 @@ impl ConnectionManagerWindow {
                     self.access.selected_ssm_auth_profile_id = Some(profile_id);
                 }
 
-                self.auth_profile.auth_profile_action_message =
-                    Some("Selected profile created by AWS SSO wizard.".to_string());
+                self.auth_profile.auth_profile_action_message = Some(dbflux_i18n::t!(
+                    "connection_manager.auth.profile_created_sso"
+                ));
             }
 
             self.auth_profile.pending_wizard_auth_profile_selection = false;
@@ -2902,8 +2903,9 @@ impl ConnectionManagerWindow {
         }
 
         self.auth_profile.pending_wizard_auth_profile_selection = false;
-        self.auth_profile.auth_profile_action_message =
-            Some("Selected profile created by wizard.".to_string());
+        self.auth_profile.auth_profile_action_message = Some(dbflux_i18n::t!(
+            "connection_manager.auth.profile_created_wizard"
+        ));
 
         self.populate_auth_profile_dropdown(cx);
         self.refresh_auth_profile_sessions(cx);
@@ -2911,16 +2913,18 @@ impl ConnectionManagerWindow {
     }
 
     fn refresh_auth_profile_statuses(&mut self, cx: &mut Context<Self>) {
-        self.auth_profile.auth_profile_action_message =
-            Some("Refreshing auth profile sessions...".to_string());
+        self.auth_profile.auth_profile_action_message = Some(dbflux_i18n::t!(
+            "connection_manager.auth.refreshing_sessions"
+        ));
         self.refresh_auth_profile_sessions(cx);
         cx.notify();
     }
 
     fn login_selected_auth_profile(&mut self, cx: &mut Context<Self>) {
         let Some(profile) = self.selected_auth_profile(cx) else {
-            self.auth_profile.auth_profile_action_message =
-                Some("Select an auth profile before logging in.".to_string());
+            self.auth_profile.auth_profile_action_message = Some(dbflux_i18n::t!(
+                "connection_manager.auth.select_before_login"
+            ));
             cx.notify();
             return;
         };
@@ -2930,26 +2934,24 @@ impl ConnectionManagerWindow {
             .read(cx)
             .auth_provider_by_id(&profile.provider_id)
         else {
-            self.auth_profile.auth_profile_action_message = Some(format!(
-                "Auth provider '{}' is not available.",
-                profile.provider_id
-            ));
+            self.auth_profile.auth_profile_action_message = Some(
+                crate::labels::auth_provider_unavailable(&profile.provider_id),
+            );
             cx.notify();
             return;
         };
 
         if !provider.capabilities().login.supported {
-            self.auth_profile.auth_profile_action_message =
-                Some("Interactive login is not available for this auth profile.".to_string());
+            self.auth_profile.auth_profile_action_message = Some(dbflux_i18n::t!(
+                "connection_manager.auth.interactive_login_unavailable"
+            ));
             cx.notify();
             return;
         }
 
         self.auth_profile.auth_profile_login_in_progress = true;
-        self.auth_profile.auth_profile_action_message = Some(format!(
-            "Starting auth-provider login for '{}'...",
-            profile.name
-        ));
+        self.auth_profile.auth_profile_action_message =
+            Some(crate::labels::auth_login_starting(&profile.name));
         cx.notify();
 
         let this = cx.entity().clone();
@@ -2962,8 +2964,10 @@ impl ConnectionManagerWindow {
                     this.update(cx, |this, cx| {
                         this.auth_profile.auth_profile_login_in_progress = false;
                         this.auth_profile.auth_profile_action_message = Some(match result {
-                            Ok(_) => "Auth-provider login completed.".to_string(),
-                            Err(error) => format!("Auth-provider login failed: {}", error),
+                            Ok(_) => {
+                                dbflux_i18n::t!("connection_manager.auth.login_completed")
+                            }
+                            Err(error) => crate::labels::auth_login_failed(&error.to_string()),
                         });
 
                         this.refresh_auth_profile_sessions(cx);
@@ -2987,16 +2991,22 @@ impl ConnectionManagerWindow {
         let text = match status {
             AuthSessionState::Valid { expires_at } => {
                 if let Some(expires_at) = expires_at {
-                    return Some(format!("Session status: valid (expires at {})", expires_at));
+                    return Some(crate::labels::auth_session_status_valid_expires(
+                        &expires_at.to_string(),
+                    ));
                 }
 
-                "Session status: valid"
+                dbflux_i18n::t!("connection_manager.auth.session_status_valid")
             }
-            AuthSessionState::Expired => "Session status: expired",
-            AuthSessionState::LoginRequired => "Session status: login required",
+            AuthSessionState::Expired => {
+                dbflux_i18n::t!("connection_manager.auth.session_status_expired")
+            }
+            AuthSessionState::LoginRequired => {
+                dbflux_i18n::t!("connection_manager.auth.session_status_login_required")
+            }
         };
 
-        Some(text.to_string())
+        Some(text)
     }
 
     fn selected_auth_profile_is_valid(&self, cx: &App) -> bool {
@@ -4059,5 +4069,61 @@ mod tests {
                 "dropdown item id must stay untranslated for locale {locale}"
             );
         }
+    }
+
+    // --- auth flow i18n ---
+
+    const CONNECTION_MANAGER_AUTH_KEYS: &[&str] = &[
+        "connection_manager.auth.profile_created_sso",
+        "connection_manager.auth.profile_created_wizard",
+        "connection_manager.auth.refreshing_sessions",
+        "connection_manager.auth.select_before_login",
+        "connection_manager.auth.provider_unavailable",
+        "connection_manager.auth.interactive_login_unavailable",
+        "connection_manager.auth.login_starting",
+        "connection_manager.auth.login_completed",
+        "connection_manager.auth.login_failed",
+        "connection_manager.auth.session_status_valid_expires",
+        "connection_manager.auth.session_status_valid",
+        "connection_manager.auth.session_status_expired",
+        "connection_manager.auth.session_status_login_required",
+    ];
+
+    #[test]
+    fn connection_manager_auth_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in CONNECTION_MANAGER_AUTH_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn connection_manager_auth_login_completed_differs_between_locales() {
+        let en = dbflux_i18n::t!("connection_manager.auth.login_completed", locale = "en");
+        let es = dbflux_i18n::t!("connection_manager.auth.login_completed", locale = "es");
+
+        assert_ne!(
+            en, es,
+            "connection_manager.auth.login_completed should differ between en and es"
+        );
+    }
+
+    #[test]
+    fn connection_manager_auth_login_completed_exact_english_value() {
+        let en = dbflux_i18n::t!("connection_manager.auth.login_completed", locale = "en");
+
+        assert_eq!(en, "Auth-provider login completed.");
     }
 }

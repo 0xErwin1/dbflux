@@ -119,13 +119,51 @@ pub(crate) fn ssh_private_key_with_path(path: &str) -> String {
     dbflux_i18n::t!("ssh.private_key_with_path", path = path)
 }
 
+/// Formats the toast shown when the selected auth profile's provider is not registered.
+pub(crate) fn auth_provider_unavailable(provider_id: &str) -> String {
+    dbflux_i18n::t!(
+        "connection_manager.auth.provider_unavailable",
+        provider_id = provider_id
+    )
+}
+
+/// Formats the status message shown while an auth-provider login is starting.
+pub(crate) fn auth_login_starting(name: &str) -> String {
+    dbflux_i18n::t!("connection_manager.auth.login_starting", name = name)
+}
+
+/// Formats the status message shown when an auth-provider login fails.
+pub(crate) fn auth_login_failed(error: &str) -> String {
+    dbflux_i18n::t!("connection_manager.auth.login_failed", error = error)
+}
+
+/// Formats the "Session status: valid (expires at <timestamp>)" caption.
+pub(crate) fn auth_session_status_valid_expires(expires_at: &str) -> String {
+    dbflux_i18n::t!(
+        "connection_manager.auth.session_status_valid_expires",
+        expires_at = expires_at
+    )
+}
+
+/// Formats the MCP tab's "Actor 'x' | role: y | policy: z" scope/policy preview line.
+pub(crate) fn mcp_preview_summary(actor: &str, role: &str, policy: &str) -> String {
+    dbflux_i18n::t!(
+        "connection_manager.mcp_preview_summary",
+        actor = actor,
+        role = role,
+        policy = policy
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        access_proxy_disabled_label, hooks_create_dir_failed, hooks_delete_message,
-        hooks_delete_unreadable_message, hooks_duplicate_id, hooks_env_pair_invalid,
-        hooks_form_interpreter_hint, hooks_interpreter_auto_label, hooks_interpreter_missing,
-        hooks_open_script_failed, hooks_write_script_failed, ssh_private_key_with_path,
+        access_proxy_disabled_label, auth_login_failed, auth_login_starting,
+        auth_provider_unavailable, auth_session_status_valid_expires, hooks_create_dir_failed,
+        hooks_delete_message, hooks_delete_unreadable_message, hooks_duplicate_id,
+        hooks_env_pair_invalid, hooks_form_interpreter_hint, hooks_interpreter_auto_label,
+        hooks_interpreter_missing, hooks_open_script_failed, hooks_write_script_failed,
+        mcp_preview_summary, ssh_private_key_with_path,
     };
 
     #[test]
@@ -216,6 +254,47 @@ mod tests {
         let message = ssh_private_key_with_path("~/.ssh/id_ed25519");
 
         assert_eq!(message, "Private Key (~/.ssh/id_ed25519)");
+    }
+
+    #[test]
+    fn auth_provider_unavailable_embeds_provider_id_untouched() {
+        let message = auth_provider_unavailable("acme-mongo");
+
+        assert!(message.contains("acme-mongo"));
+    }
+
+    #[test]
+    fn auth_login_starting_embeds_profile_name() {
+        let message = auth_login_starting("prod-mongo");
+
+        assert_eq!(message, "Starting auth-provider login for 'prod-mongo'...");
+    }
+
+    #[test]
+    fn auth_login_failed_embeds_error_cause() {
+        let message = auth_login_failed("token expired");
+
+        assert_eq!(message, "Auth-provider login failed: token expired");
+    }
+
+    #[test]
+    fn auth_session_status_valid_expires_embeds_timestamp() {
+        let message = auth_session_status_valid_expires("2026-08-22 00:00:00 UTC");
+
+        assert_eq!(
+            message,
+            "Session status: valid (expires at 2026-08-22 00:00:00 UTC)"
+        );
+    }
+
+    #[test]
+    fn mcp_preview_summary_embeds_actor_role_policy() {
+        let message = mcp_preview_summary("prod-agent", "read-only", "strict");
+
+        assert_eq!(
+            message,
+            "Actor 'prod-agent' | role: read-only | policy: strict"
+        );
     }
 
     #[test]
