@@ -10,22 +10,21 @@ Base de datos embebida basada en archivos.
 
 ## Funcionalidades
 
-- Driver relacional SQLite embebido usando rutas de base de datos basadas
-  en archivos.
-- Soporta ejecución de SQL, descubrimiento de schema, vistas, índices,
-  foreign keys, constraints CHECK, y constraints UNIQUE.
+- Driver relacional SQLite embebido usando rutas de base de datos basadas en
+  archivos.
+- Soporta ejecución de SQL, descubrimiento de schema, vistas, índices, foreign
+  keys, constraints CHECK, y constraints UNIQUE.
 - Soporta cancelación de queries vía los handles de interrupt de SQLite.
-- Incluye generación de SQL/código para CRUD, índices, reindex, create
-  table, y drop table.
-- Los scripts multi-sentencia (varias sentencias separadas por `;`) se
-  dividen y ejecutan sentencia por sentencia, cada una a través del camino
-  preparado tipado, devolviendo un result set por sentencia.
-  (`rusqlite::prepare` solo parsea la primera sentencia de un string, así
-  que un script debe dividirse.)
-- Motor de transferencia de datos: carga masiva nativa multi-fila con
-  `INSERT` (`BULK_INSERT`), DDL `CREATE TABLE` nativo del driver a partir de
-  las columnas de una tabla origen, y un toggle de integridad referencial
-  por conexión (`PRAGMA foreign_keys`) para migraciones seguras con FK.
+- Incluye generación de SQL/código para CRUD, índices, reindex, create table, y
+  drop table.
+- Los scripts multi-sentencia (varias sentencias separadas por `;`) se dividen y
+  ejecutan sentencia por sentencia, cada una a través del camino preparado
+  tipado, devolviendo un result set por sentencia. (`rusqlite::prepare` solo
+  parsea la primera sentencia de un string, así que un script debe dividirse.)
+- Motor de transferencia de datos: carga masiva nativa multi-fila con `INSERT`
+  (`BULK_INSERT`), DDL `CREATE TABLE` nativo del driver a partir de las columnas
+  de una tabla origen, y un toggle de integridad referencial por conexión
+  (`PRAGMA foreign_keys`) para migraciones seguras con FK.
 
 ## Limitaciones
 
@@ -34,8 +33,8 @@ Base de datos embebida basada en archivos.
 - Driver solo SQL; no expone APIs de documentos ni de key-value.
 - El modelo de schema de SQLite no tiene un equivalente de namespace
   multi-schema del lado del servidor.
-- No existe la sentencia `TRUNCATE TABLE`; la opción de carga Truncate del
-  motor de transferencia de datos no está disponible para destinos SQLite
+- No existe la sentencia `TRUNCATE TABLE`; la opción de carga Truncate del motor
+  de transferencia de datos no está disponible para destinos SQLite
   (`DriverCapabilities::TRUNCATE_TABLE` no está fijado).
 
 ## Capacidades de DDL
@@ -68,8 +67,8 @@ ROLLBACK;  -- Seguro de revertir si algo sale mal
 
 ### Patrón de recreación de tabla
 
-Para operaciones de `ALTER TABLE` no soportadas, usa el patrón de
-recreación de tabla:
+Para operaciones de `ALTER TABLE` no soportadas, usa el patrón de recreación de
+tabla:
 
 ```sql
 BEGIN;
@@ -117,14 +116,12 @@ COMMIT;
 
 **Agregar constraints**:
 - SQLite valida los constraints en el momento de `INSERT`/`UPDATE`
-- No se pueden agregar constraints a tablas existentes (requiere
-  recreación de la tabla)
+- No se pueden agregar constraints a tablas existentes (requiere recreación de
+  la tabla)
 
 **Foreign keys**:
-- Deshabilitadas por defecto (deben habilitarse con
-  `PRAGMA foreign_keys = ON`)
-- No se pueden agregar a tablas existentes (requiere recreación de la
-  tabla)
+- Deshabilitadas por defecto (deben habilitarse con `PRAGMA foreign_keys = ON`)
+- No se pueden agregar a tablas existentes (requiere recreación de la tabla)
 
 ### Limitaciones conocidas
 
@@ -138,15 +135,13 @@ COMMIT;
 
 1. **Usa transacciones** — el DDL es transaccional, envuelve siempre en
    `BEGIN`/`COMMIT`
-2. **Planifica el schema con anticipación** — es difícil de modificar
-   después
-3. **Usa el patrón de recreación de tabla** — para operaciones de
-   `ALTER TABLE` no soportadas
+2. **Planifica el schema con anticipación** — es difícil de modificar después
+3. **Usa el patrón de recreación de tabla** — para operaciones de `ALTER TABLE`
+   no soportadas
 4. **Recrea índices y triggers** — después de recrear la tabla
-5. **Prueba primero en una copia** — especialmente para el patrón de
-   recreación de tabla
-6. **Habilita foreign keys** — `PRAGMA foreign_keys = ON` antes de alterar
-   el schema
-7. **Usa VACUUM** — para liberar espacio en disco después de `DROP TABLE`
-   o de recrear una tabla
-
+5. **Prueba primero en una copia** — especialmente para el patrón de recreación
+   de tabla
+6. **Habilita foreign keys** — `PRAGMA foreign_keys = ON` antes de alterar el
+   schema
+7. **Usa VACUUM** — para liberar espacio en disco después de `DROP TABLE` o de
+   recrear una tabla
