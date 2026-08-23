@@ -1,0 +1,39 @@
+---
+import { getCollection } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import DocsLayout from '../../layouts/DocsLayout.astro';
+import DocsIndex from '../../components/DocsIndex.astro';
+import Landing from '../../components/Landing.astro';
+import { pathsForVersion } from '../../data/docs';
+import { CURRENT } from '../../data/versions';
+import { DOCS_AT_ROOT } from '../../data/site';
+
+/**
+ * The Spanish counterpart of `index.astro`. Chrome components still render in
+ * English until they are wired to the dictionary; this route only proves that
+ * `/es/` resolves and carries `<html lang="es">`.
+ */
+const available = DOCS_AT_ROOT ? pathsForVersion(await getCollection('docs'), CURRENT.id) : [];
+---
+
+{
+  DOCS_AT_ROOT ? (
+    <DocsLayout
+      version={CURRENT}
+      available={available}
+      title="Documentation"
+      description="Guides for installing, connecting, querying, charting and governing DBFlux."
+    >
+      <DocsIndex versionId={CURRENT.id} available={available} />
+    </DocsLayout>
+  ) : (
+    <Base
+      title="DBFlux — a keyboard-first database client"
+      description="An extensible, keyboard-first data platform for Postgres, MySQL, SQL Server, MongoDB, Redis, DynamoDB and more. Open source, built in Rust on GPUI."
+      current="home"
+      locale="es"
+    >
+      <Landing />
+    </Base>
+  )
+}

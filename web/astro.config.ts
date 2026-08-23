@@ -116,6 +116,11 @@ function rehypeMermaid() {
 
 export default defineConfig({
   site: ORIGIN,
+  i18n: {
+    defaultLocale: 'en',
+    locales: ['en', 'es'],
+    routing: 'manual',
+  },
   integrations: [
     sitemap({
       // `/about/` belongs to the site host and says so in its canonical tag.

@@ -5,6 +5,8 @@ import BackToTop from '../components/BackToTop.astro';
 import Mermaid from '../components/Mermaid.astro';
 import SearchDialog from '../components/SearchDialog.astro';
 import { ORIGIN } from '../data/site';
+import { localeFromPathname, t } from '../i18n';
+import type { Locale } from '../i18n';
 import '../styles/global.css';
 
 interface Props {
@@ -18,6 +20,8 @@ interface Props {
   canonicalPath?: string;
   /** Which search index this page's dialog should load. */
   searchIndex?: string;
+  /** Active locale. Derived from the URL when the caller does not know it yet. */
+  locale?: Locale;
 }
 
 const {
@@ -28,6 +32,7 @@ const {
   noindex = false,
   canonicalPath,
   searchIndex = '/search-index.json',
+  locale = localeFromPathname(Astro.url.pathname),
 } = Astro.props;
 // Astro.site is unset when the config fails to load, and a crashed canonical tag
 // should not take the whole page down with it.
@@ -43,7 +48,7 @@ const socialImage = new URL('/brand/og-card.jpg', ORIGIN).href;
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang={locale}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -84,7 +89,7 @@ const socialImage = new URL('/brand/og-card.jpg', ORIGIN).href;
     />
   </head>
   <body data-wide={wide ? '' : undefined}>
-    <a class="skip-link" href="#main">Skip to content</a>
+    <a class="skip-link" href="#main">{t(locale, 'banner.skip_link')}</a>
     <SiteNav current={current} />
     <main id="main"><slot /></main>
     <SiteFooter />
