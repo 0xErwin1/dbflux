@@ -1,3 +1,10 @@
+components:
+  json_editor:
+    empty_error: Document cannot be empty
+    format: Format
+    compact: Compact
+    cancel: Cancel
+    save: Save
 errors:
   action:
     view_in_audit: View in Audit
@@ -52,6 +59,9 @@ modals:
       no_metrics: No metrics in this namespace.
       no_metrics_filtered: No metrics match the filter.
     cancel: Cancel
+  cell_editor:
+    title_json: Edit JSON
+    title_text: Edit Text
   create_dashboard:
     name_label: Dashboard name
     title: New dashboard
@@ -77,6 +87,8 @@ modals:
     documents_closed: Any open documents using this connection will be closed.
     cancel: Cancel
     confirm: Delete
+  document_preview:
+    title: Document Preview
   drop_table:
     title: Drop table
     confirm: Drop table
@@ -85,6 +97,17 @@ modals:
     confirm_prompt: 'Type "%{table}" to confirm'
     cascade_warning: "Dependent objects will also be dropped (CASCADE):"
     delete_warning: This will permanently delete the table and any dependent objects.
+  import_dashboard:
+    title: Import Dashboard from JSON
+    name_label: Dashboard name
+    name_placeholder: Dashboard name
+    json_label: Dashboard JSON
+    json_placeholder: "Paste dashboard JSON here…"
+    name_error: Name cannot be empty
+    format: Format
+    compact: Compact
+    cancel: Cancel
+    confirm: Import
   rename:
     placeholder: Enter a name
     title:

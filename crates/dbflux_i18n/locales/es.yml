@@ -1,3 +1,10 @@
+components:
+  json_editor:
+    empty_error: El documento no puede estar vacío
+    format: Formatear
+    compact: Compactar
+    cancel: Cancelar
+    save: Guardar
 errors:
   action:
     view_in_audit: Ver en auditoría
@@ -52,6 +59,9 @@ modals:
       no_metrics: No hay métricas en este espacio de nombres.
       no_metrics_filtered: Ninguna métrica coincide con el filtro.
     cancel: Cancelar
+  cell_editor:
+    title_json: Editar JSON
+    title_text: Editar texto
   create_dashboard:
     name_label: Nombre del dashboard
     title: Nuevo dashboard
@@ -77,6 +87,8 @@ modals:
     documents_closed: Se cerrarán los documentos abiertos que usen esta conexión.
     cancel: Cancelar
     confirm: Eliminar
+  document_preview:
+    title: Vista previa del documento
   drop_table:
     title: Eliminar tabla
     confirm: Eliminar tabla
@@ -85,6 +97,17 @@ modals:
     confirm_prompt: 'Escribe "%{table}" para confirmar'
     cascade_warning: "También se eliminarán los objetos dependientes (CASCADE):"
     delete_warning: Esto eliminará de forma permanente la tabla y cualquier objeto dependiente.
+  import_dashboard:
+    title: Importar dashboard desde JSON
+    name_label: Nombre del dashboard
+    name_placeholder: Nombre del dashboard
+    json_label: JSON del dashboard
+    json_placeholder: "Pega aquí el JSON del dashboard…"
+    name_error: El nombre no puede estar vacío
+    format: Formatear
+    compact: Compactar
+    cancel: Cancelar
+    confirm: Importar
   rename:
     placeholder: Escribe un nombre
     title:
