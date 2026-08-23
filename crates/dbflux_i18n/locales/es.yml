@@ -184,6 +184,14 @@ document:
           many: "%{count} filas se eliminarán de forma permanente. Esta acción no se puede deshacer."
         cancel: Cancelar
         delete: Eliminar
+      filter:
+        title: Filtro
+        cell_value: Valor de celda
+      order:
+        title: Orden
+        remove: Quitar orden
+      generate_sql:
+        title: Generar SQL
     grid:
       edit_bar:
         clean: Sin cambios pendientes

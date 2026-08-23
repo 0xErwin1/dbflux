@@ -152,6 +152,9 @@ impl DataGridPanel {
         let (_col_name_display, filter_submenu_count, filter_items, value_ops_count) =
             self.build_filter_items(menu, backend, cx);
 
+        let filter_title = dbflux_i18n::t!("document.data.context_menu.filter.title");
+        let cell_value_label = dbflux_i18n::t!("document.data.context_menu.filter.cell_value");
+
         let filter_label_color = if filter_selected && !filter_submenu_open {
             theme.accent_foreground
         } else {
@@ -207,7 +210,7 @@ impl DataGridPanel {
                                 .small()
                                 .color(filter_label_color),
                         )
-                        .child(Text::caption("Filter").color(filter_label_color)),
+                        .child(Text::caption(filter_title).color(filter_label_color)),
                 )
                 .child(Icon::new(AppIcon::ChevronRight).small().color(
                     if filter_selected && !filter_submenu_open {
@@ -222,6 +225,7 @@ impl DataGridPanel {
                         value_ops_count,
                         filter_submenu_count,
                         submenu_selected_index,
+                        cell_value_label,
                         theme,
                         cx,
                     ))
@@ -238,6 +242,7 @@ impl DataGridPanel {
         value_ops_count: usize,
         filter_submenu_count: usize,
         submenu_selected_index: usize,
+        cell_value_label: String,
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> Div {
@@ -269,7 +274,7 @@ impl DataGridPanel {
                     div()
                         .px(Spacing::SM)
                         .py(Spacing::XS)
-                        .child(Text::caption("Cell value").font_size(FontSizes::XS)),
+                        .child(Text::caption(cell_value_label).font_size(FontSizes::XS)),
                 )
             })
             .children(
@@ -384,6 +389,9 @@ impl DataGridPanel {
             .map(|c| c.name.clone())
             .unwrap_or_default();
 
+        let order_title = dbflux_i18n::t!("document.data.context_menu.order.title");
+        let remove_ordering_label = dbflux_i18n::t!("document.data.context_menu.order.remove");
+
         let order_label_color = if order_selected && !order_submenu_open {
             theme.accent_foreground
         } else {
@@ -439,7 +447,7 @@ impl DataGridPanel {
                                 .small()
                                 .color(order_label_color),
                         )
-                        .child(Text::caption("Order").color(order_label_color)),
+                        .child(Text::caption(order_title).color(order_label_color)),
                 )
                 .child(Icon::new(AppIcon::ChevronRight).small().color(
                     if order_selected && !order_submenu_open {
@@ -452,6 +460,7 @@ impl DataGridPanel {
                     d.child(Self::build_order_submenu_flyout(
                         &col_name_for_order,
                         submenu_selected_index,
+                        remove_ordering_label,
                         theme,
                         cx,
                     ))
@@ -466,6 +475,7 @@ impl DataGridPanel {
     fn build_order_submenu_flyout(
         col_name_for_order: &str,
         submenu_selected_index: usize,
+        remove_ordering_label: String,
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> Div {
@@ -486,7 +496,7 @@ impl DataGridPanel {
                 AppIcon::ArrowDown,
             ),
             (
-                "Remove ordering".to_string(),
+                remove_ordering_label,
                 ContextMenuAction::RemoveOrdering,
                 AppIcon::X,
             ),
@@ -616,6 +626,8 @@ impl DataGridPanel {
         let gen_sql_selected = selected_index == gen_sql_index;
         let submenu_selected_index = menu.submenu_selected_index;
 
+        let generate_sql_title = dbflux_i18n::t!("document.data.context_menu.generate_sql.title");
+
         let gen_sql_label_color = if gen_sql_selected && !sql_submenu_open {
             theme.accent_foreground
         } else {
@@ -665,7 +677,7 @@ impl DataGridPanel {
                         .items_center()
                         .gap(Spacing::SM)
                         .child(Icon::new(AppIcon::Code).small().color(gen_sql_label_color))
-                        .child(Text::caption("Generate SQL").color(gen_sql_label_color)),
+                        .child(Text::caption(generate_sql_title).color(gen_sql_label_color)),
                 )
                 .child(Icon::new(AppIcon::ChevronRight).small().color(
                     if gen_sql_selected && !sql_submenu_open {
@@ -1156,5 +1168,63 @@ impl DataGridPanel {
                 ),
         )
         .with_priority(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn context_menu_sections_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.data.context_menu.filter.title",
+            "document.data.context_menu.filter.cell_value",
+            "document.data.context_menu.order.title",
+            "document.data.context_menu.order.remove",
+            "document.data.context_menu.generate_sql.title",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn context_menu_filter_title_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.data.context_menu.filter.title", locale = "en");
+        let es = dbflux_i18n::t!("document.data.context_menu.filter.title", locale = "es");
+
+        assert_eq!(en, "Filter");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn render_menu_item_rows_hoists_translations_out_of_per_row_loop() {
+        let source = include_str!("sections.rs");
+
+        let function_name = "pub(super) fn render_menu_item_rows(";
+        let start = source
+            .find(function_name)
+            .unwrap_or_else(|| panic!("{function_name} not found in sections.rs"));
+        let after_signature = &source[start + function_name.len()..];
+        let end = after_signature
+            .find("\n    /// ")
+            .unwrap_or(after_signature.len());
+        let body = &after_signature[..end];
+
+        assert!(
+            !body.contains("dbflux_i18n::t!("),
+            "render_menu_item_rows must not call t! per row; hoist any translated \
+             label onto ContextMenuItem before this loop runs"
+        );
     }
 }
