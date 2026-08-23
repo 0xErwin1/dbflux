@@ -460,6 +460,27 @@ document:
         column: COLUMN
         references: REFERENCES
         row: ROW
+  query_builder:
+    chrome:
+      save: Save
+      reset: Reset
+      untitled_query: Untitled query
+    mode:
+      select: SELECT
+      update: UPDATE
+      delete: DELETE
+    status:
+      limit: Limit
+      offset: Offset
+      valid_lines:
+        one: "valid · %{count} line"
+        many: "valid · %{count} lines"
+      run: Run
+      apply_update: Apply Update
+      open_in_editor: Open in Editor
+      incomplete_aggregate_rows:
+        one: "%{count} aggregate row is incomplete and will be excluded from the query"
+        many: "%{count} aggregate rows are incomplete and will be excluded from the query"
   shared:
     refresh:
       off: Off

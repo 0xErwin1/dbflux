@@ -441,6 +441,62 @@ pub(crate) fn script_confirm_message_label(statement_count: usize) -> String {
     }
 }
 
+/// Label for the query builder's mode-switch bar entry (SELECT / UPDATE /
+/// DELETE).
+///
+/// Every arm routes through the catalog for translation consistency, but
+/// the `en`/`es` catalog values stay byte-identical because these are SQL
+/// statement names, not prose.
+pub(crate) fn builder_mode_label(
+    mode: crate::query_builder::mutation_state::BuilderMode,
+) -> String {
+    use crate::query_builder::mutation_state::BuilderMode;
+
+    match mode {
+        BuilderMode::Select => dbflux_i18n::t!("document.query_builder.mode.select"),
+        BuilderMode::Update => dbflux_i18n::t!("document.query_builder.mode.update"),
+        BuilderMode::Delete => dbflux_i18n::t!("document.query_builder.mode.delete"),
+    }
+}
+
+/// Label for the query builder's SQL preview line-count status line, with
+/// the line count interpolated.
+///
+/// Uses the singular catalog bucket only for exactly one line; every other
+/// count, including zero, uses the plural bucket.
+pub(crate) fn valid_lines_label(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.query_builder.status.valid_lines.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.query_builder.status.valid_lines.many",
+            count = count
+        )
+    }
+}
+
+/// Label for the query builder footer's incomplete-aggregate-row warning,
+/// with the row count interpolated.
+///
+/// Uses the singular catalog bucket only for exactly one incomplete row;
+/// every other count uses the plural bucket.
+pub(crate) fn incomplete_aggregate_rows_label(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.query_builder.status.incomplete_aggregate_rows.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.query_builder.status.incomplete_aggregate_rows.many",
+            count = count
+        )
+    }
+}
+
 /// Title for the dangerous-query confirmation modal, one per
 /// `DangerousQueryKind` variant.
 ///
@@ -560,13 +616,14 @@ pub(crate) fn dangerous_query_body(kind: dbflux_core::DangerousQueryKind) -> Str
 #[cfg(test)]
 mod tests {
     use super::{
-        MutationItemKind, bulk_delete_success_label, chart_degraded_copy, chart_dock_shape_label,
-        chart_rail_why_text, code_toolbar_shortcut_hint_label, copy_query_language_label,
-        dangerous_query_body, dangerous_query_title, delete_confirm_copy, delete_rows_label,
+        MutationItemKind, builder_mode_label, bulk_delete_success_label, chart_degraded_copy,
+        chart_dock_shape_label, chart_rail_why_text, code_toolbar_shortcut_hint_label,
+        copy_query_language_label, dangerous_query_body, dangerous_query_title,
+        delete_confirm_copy, delete_rows_label, incomplete_aggregate_rows_label,
         live_output_lines_label, live_output_truncated_label, partial_delete_label,
         pending_change_count_label, pending_edits_summary, refresh_policy_label,
         result_tab_count_label, row_count_label, script_confirm_message_label,
-        unsaved_changes_label, update_columns_label,
+        unsaved_changes_label, update_columns_label, valid_lines_label,
     };
     use dbflux_components::chart::ChartDetection;
     use dbflux_core::{DangerousQueryKind, QueryLanguage, RefreshPolicy};
@@ -1152,6 +1209,68 @@ mod tests {
         assert!(many.contains('3'));
         assert!(many.contains("statements in order"));
         assert_ne!(one, many);
+    }
+
+    #[test]
+    fn valid_lines_label_zero_one_many() {
+        assert_eq!(valid_lines_label(1), "valid · 1 line");
+        assert_eq!(valid_lines_label(2), "valid · 2 lines");
+        assert_eq!(valid_lines_label(0), "valid · 0 lines");
+    }
+
+    #[test]
+    fn incomplete_aggregate_rows_label_one_many() {
+        let one = incomplete_aggregate_rows_label(1);
+        let many = incomplete_aggregate_rows_label(3);
+
+        assert!(one.contains('1'));
+        assert!(one.contains("aggregate row is incomplete"));
+        assert!(many.contains('3'));
+        assert!(many.contains("aggregate rows are incomplete"));
+        assert_ne!(one, many);
+    }
+
+    #[test]
+    fn builder_mode_label_keeps_sql_keywords_literal_and_identical_across_locales() {
+        use crate::query_builder::mutation_state::BuilderMode;
+
+        assert_eq!(builder_mode_label(BuilderMode::Select), "SELECT");
+        assert_eq!(builder_mode_label(BuilderMode::Update), "UPDATE");
+        assert_eq!(builder_mode_label(BuilderMode::Delete), "DELETE");
+
+        for key in [
+            "document.query_builder.mode.select",
+            "document.query_builder.mode.update",
+            "document.query_builder.mode.delete",
+        ] {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert_eq!(en, es);
+        }
+    }
+
+    #[test]
+    fn query_builder_chrome_and_status_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.query_builder.chrome.save",
+            "document.query_builder.chrome.reset",
+            "document.query_builder.chrome.untitled_query",
+            "document.query_builder.status.limit",
+            "document.query_builder.status.offset",
+            "document.query_builder.status.run",
+            "document.query_builder.status.apply_update",
+            "document.query_builder.status.open_in_editor",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key);
+                assert_ne!(value, format!("{locale}.{key}"));
+                assert!(!value.is_empty());
+            }
+        }
     }
 
     #[test]

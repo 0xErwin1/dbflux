@@ -460,6 +460,27 @@ document:
         column: COLUMNA
         references: REFERENCIAS
         row: FILA
+  query_builder:
+    chrome:
+      save: Guardar
+      reset: Restablecer
+      untitled_query: Consulta sin título
+    mode:
+      select: SELECT
+      update: UPDATE
+      delete: DELETE
+    status:
+      limit: Límite
+      offset: Desplazamiento
+      valid_lines:
+        one: "válido · %{count} línea"
+        many: "válido · %{count} líneas"
+      run: Ejecutar
+      apply_update: Aplicar actualización
+      open_in_editor: Abrir en el editor
+      incomplete_aggregate_rows:
+        one: "%{count} fila agregada está incompleta y se excluirá de la consulta"
+        many: "%{count} filas agregadas están incompletas y se excluirán de la consulta"
   shared:
     refresh:
       off: Apagado
