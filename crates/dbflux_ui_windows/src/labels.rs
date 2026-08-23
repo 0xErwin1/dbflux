@@ -241,6 +241,26 @@ pub(crate) fn auth_profiles_login_failed(name: &str, error: &str) -> String {
     )
 }
 
+/// Formats the "N policies" caption shown next to an MCP role row.
+#[cfg(feature = "mcp")]
+pub(crate) fn mcp_role_policy_count(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("settings.mcp.field.policy_count.one")
+    } else {
+        dbflux_i18n::t!("settings.mcp.field.policy_count.many", count = count)
+    }
+}
+
+/// Formats the "N tools · M classes" caption shown next to an MCP policy row.
+#[cfg(feature = "mcp")]
+pub(crate) fn mcp_policy_tools_classes_summary(tools: usize, classes: usize) -> String {
+    dbflux_i18n::t!(
+        "settings.mcp.field.tools_classes_summary",
+        tools = tools,
+        classes = classes
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -444,5 +464,37 @@ mod tests {
 
         assert!(message.contains("prod-mongo"));
         assert!(message.contains("token expired"));
+    }
+
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn mcp_role_policy_count_uses_singular_form_for_one() {
+        use super::mcp_role_policy_count;
+
+        let message = mcp_role_policy_count(1);
+
+        assert_eq!(message, "1 policy");
+    }
+
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn mcp_role_policy_count_embeds_count_for_many() {
+        use super::mcp_role_policy_count;
+
+        let message = mcp_role_policy_count(3);
+
+        assert!(message.contains('3'));
+        assert_ne!(message, "1 policy");
+    }
+
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn mcp_policy_tools_classes_summary_embeds_both_counts() {
+        use super::mcp_policy_tools_classes_summary;
+
+        let message = mcp_policy_tools_classes_summary(4, 2);
+
+        assert!(message.contains('4'));
+        assert!(message.contains('2'));
     }
 }
