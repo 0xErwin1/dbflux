@@ -3275,6 +3275,7 @@ dependencies = [
  "dbflux_core",
  "dbflux_driver_mssql",
  "dbflux_export",
+ "dbflux_i18n",
  "dbflux_mcp",
  "dbflux_policy",
  "dbflux_storage",
