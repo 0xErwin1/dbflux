@@ -1,9 +1,10 @@
 ---
 import Icon from './Icon.astro';
 import BrandMark from './BrandMark.astro';
+import LanguagePicker from './LanguagePicker.astro';
 import { REPO } from '../data/nav';
 import { docsUrl, siteUrl } from '../data/site';
-import { localeFromPathname, t, withLocale } from '../i18n';
+import { LOCALES, LOCALE_NAMES, localeFromPathname, t, withLocale } from '../i18n';
 import type { Locale } from '../i18n';
 
 interface Props {
@@ -16,7 +17,7 @@ const { current, locale = localeFromPathname(Astro.url.pathname) } = Astro.props
 const LINKS = [
   { href: `${siteUrl()}#features`, label: t(locale, 'nav.features'), key: 'features' },
   { href: `${siteUrl()}#drivers`, label: t(locale, 'nav.drivers'), key: 'drivers' },
-  { href: docsUrl(''), label: t(locale, 'nav.docs'), key: 'docs' },
+  { href: docsUrl('', '', locale), label: t(locale, 'nav.docs'), key: 'docs' },
   { href: siteUrl('about/'), label: t(locale, 'nav.about'), key: 'about' },
 ] as const;
 
@@ -27,8 +28,12 @@ const LINKS = [
  */
 const pathname = Astro.url.pathname;
 const showSwitcher = current === 'home' || current === 'docs' || current === 'about';
-const switchTarget = withLocale(pathname, locale === 'es' ? 'en' : 'es');
-const switchHreflang = locale === 'es' ? 'en' : 'es';
+
+const localeLinks = LOCALES.map((target) => ({
+  locale: target,
+  href: withLocale(pathname, target),
+  label: LOCALE_NAMES[target],
+}));
 ---
 
 <header class="nav" data-nav>
@@ -53,13 +58,7 @@ const switchHreflang = locale === 'es' ? 'en' : 'es';
     </nav>
 
     <div class="nav__actions">
-      {
-        showSwitcher && (
-          <a class="nav__link nav__switch" href={switchTarget} hreflang={switchHreflang}>
-            {t(locale, 'nav.switch_locale')}
-          </a>
-        )
-      }
+      {showSwitcher && <LanguagePicker locale={locale} />}
       <a class="nav__link nav__link--icon" href={REPO} rel="noopener">
         <Icon name="github" size={16} />
         <span>{t(locale, 'nav.github')}</span>
@@ -83,11 +82,17 @@ const switchHreflang = locale === 'es' ? 'en' : 'es';
   <div class="nav__sheet" id="nav-sheet" hidden>
     {LINKS.map((link) => <a href={link.href}>{link.label}</a>)}
     {
-      showSwitcher && (
-        <a href={switchTarget} hreflang={switchHreflang}>
-          {t(locale, 'nav.switch_locale')}
-        </a>
-      )
+      showSwitcher &&
+        localeLinks.map((option) => (
+          <a
+            href={option.href}
+            hreflang={option.locale}
+            lang={option.locale}
+            aria-current={option.locale === locale ? 'true' : undefined}
+          >
+            {option.label}
+          </a>
+        ))
     }
     <a href={REPO} rel="noopener">
       {t(locale, 'nav.github')}

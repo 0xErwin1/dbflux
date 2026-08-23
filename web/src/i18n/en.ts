@@ -9,7 +9,7 @@ export const en = {
     github: 'GitHub',
     download: 'Download',
     menu: 'Menu',
-    switch_locale: 'Español',
+    language: 'Language',
   },
   footer: {
     product: 'Product',

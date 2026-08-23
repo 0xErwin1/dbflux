@@ -9,7 +9,7 @@ export const es: Dictionary = {
     github: 'GitHub',
     download: 'Descargar',
     menu: 'Menú',
-    switch_locale: 'English',
+    language: 'Idioma',
   },
   footer: {
     product: 'Producto',

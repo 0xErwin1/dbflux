@@ -23,16 +23,16 @@ const COLUMNS = [
   {
     title: t(locale, 'footer.docs'),
     links: [
-      { href: docsUrl('usage'), label: t(locale, 'footer.usage') },
-      { href: docsUrl('connections'), label: t(locale, 'footer.connecting') },
-      { href: docsUrl('mcp_ai_integration'), label: t(locale, 'footer.mcp') },
+      { href: docsUrl('usage', '', locale), label: t(locale, 'footer.usage') },
+      { href: docsUrl('connections', '', locale), label: t(locale, 'footer.connecting') },
+      { href: docsUrl('mcp_ai_integration', '', locale), label: t(locale, 'footer.mcp') },
     ],
   },
   {
     title: t(locale, 'footer.project'),
     links: [
       { href: '/about/', label: t(locale, 'footer.about') },
-      { href: docsUrl('contributing'), label: t(locale, 'footer.contributing') },
+      { href: docsUrl('contributing', '', locale), label: t(locale, 'footer.contributing') },
       { href: REPO, label: t(locale, 'footer.source') },
     ],
   },

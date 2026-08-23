@@ -7,6 +7,12 @@ export const LOCALES: readonly Locale[] = ['en', 'es'];
 
 export const DEFAULT_LOCALE: Locale = 'en';
 
+/** Native display name for each locale, used by the language picker. */
+export const LOCALE_NAMES: Record<Locale, string> = {
+  en: 'English',
+  es: 'Español',
+};
+
 /**
  * The complete shape of every chrome string the site renders.
  *
@@ -23,7 +29,7 @@ export interface Dictionary {
     github: string;
     download: string;
     menu: string;
-    switch_locale: string;
+    language: string;
   };
   footer: {
     product: string;
