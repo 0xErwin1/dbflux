@@ -935,9 +935,10 @@ impl DataGridPanel {
             && self.result.text_body.is_none()
             && self.result.raw_bytes.is_none()
         {
-            Toast::error("No results to export")
+            let message = dbflux_i18n::t!("document.data.context_menu.error.no_results_to_export");
+            Toast::error(message.clone())
                 .meta_right(now_hms())
-                .action(copy_action("No results to export"))
+                .action(copy_action(message))
                 .push(cx);
             return;
         }
@@ -2092,10 +2093,14 @@ impl DataGridPanel {
             Ok(v) => v,
             Err(e) => {
                 let toast_body = e.to_string();
-                Toast::error("Invalid JSON")
+                let title = dbflux_i18n::t!("document.data.context_menu.error.invalid_json");
+                Toast::error(title.clone())
                     .meta_right(now_hms())
                     .body(toast_body.clone())
-                    .action(copy_action(format!("Invalid JSON: {}", toast_body)))
+                    .action(copy_action(crate::labels::error_with_detail_clipboard(
+                        &title,
+                        &toast_body,
+                    )))
                     .push(cx);
                 return;
             }
@@ -2121,9 +2126,10 @@ impl DataGridPanel {
             };
 
             let Some(conn) = conn else {
-                Toast::error("Connection not available")
+                let message = dbflux_i18n::t!("document.data.grid.error.connection_not_available");
+                Toast::error(message.clone())
                     .meta_right(now_hms())
-                    .action(copy_action("Connection not available"))
+                    .action(copy_action(message))
                     .push(cx);
                 return;
             };
@@ -2131,9 +2137,12 @@ impl DataGridPanel {
             let doc_map = match new_doc {
                 serde_json::Value::Object(m) => m,
                 _ => {
-                    Toast::error("Document must be a JSON object")
+                    let message = dbflux_i18n::t!(
+                        "document.data.context_menu.error.document_must_be_json_object"
+                    );
+                    Toast::error(message.clone())
                         .meta_right(now_hms())
-                        .action(copy_action("Document must be a JSON object"))
+                        .action(copy_action(message))
                         .push(cx);
                     return;
                 }
@@ -2190,9 +2199,11 @@ impl DataGridPanel {
             match new_doc.get("_id") {
                 Some(id) => DocumentFilter::new(serde_json::json!({"_id": id})),
                 None => {
-                    Toast::error("Document must have an _id field")
+                    let message =
+                        dbflux_i18n::t!("document.data.context_menu.error.document_missing_id");
+                    Toast::error(message.clone())
                         .meta_right(now_hms())
-                        .action(copy_action("Document must have an _id field"))
+                        .action(copy_action(message))
                         .push(cx);
                     return;
                 }
@@ -2200,9 +2211,11 @@ impl DataGridPanel {
         } else {
             // Extract PK values from the current row
             let Some(table_state) = &self.grid_table.table_state else {
-                Toast::error("Table state not available")
+                let message =
+                    dbflux_i18n::t!("document.data.context_menu.error.table_state_not_available");
+                Toast::error(message.clone())
                     .meta_right(now_hms())
-                    .action(copy_action("Table state not available"))
+                    .action(copy_action(message))
                     .push(cx);
                 return;
             };
@@ -2218,9 +2231,11 @@ impl DataGridPanel {
             }
 
             if filter_obj.is_empty() {
-                Toast::error("Could not determine document primary key")
+                let message =
+                    dbflux_i18n::t!("document.data.context_menu.error.primary_key_not_determined");
+                Toast::error(message.clone())
                     .meta_right(now_hms())
-                    .action(copy_action("Could not determine document primary key"))
+                    .action(copy_action(message))
                     .push(cx);
                 return;
             }
@@ -2252,9 +2267,10 @@ impl DataGridPanel {
         };
 
         let Some(conn) = conn else {
-            Toast::error("Connection not available")
+            let message = dbflux_i18n::t!("document.data.grid.error.connection_not_available");
+            Toast::error(message.clone())
                 .meta_right(now_hms())
-                .action(copy_action("Connection not available"))
+                .action(copy_action(message))
                 .push(cx);
             return;
         };

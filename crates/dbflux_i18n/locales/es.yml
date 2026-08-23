@@ -483,6 +483,8 @@ document:
       clear: Limpiar
       group_label: "Agrupar:"
       loading: "Cargando…"
+      placeholder:
+        local: Local
       retry: Reintentar
       view_mode:
         chart: Gráfico
@@ -763,6 +765,61 @@ document:
         raw_expression_in_set:
           title: Expresión SQL cruda en SET
           body: "La cláusula SET contiene una expresión SQL cruda — evita el enlace de parámetros"
+    context_bar:
+      placeholder:
+        connection: Sin conexión
+        database: Base de datos
+        schema: Esquema
+      label:
+        connection: "Conexión:"
+        source: "Origen:"
+        database: "Base de datos:"
+        schema: "Esquema:"
+      fallback:
+        syntax: Sintaxis
+        sources: Orígenes
+        time: Hora
+        start: Inicio
+        end: Fin
+      apply: Aplicar
+      connect_error: "No se puede conectar a la base de datos '%{database}'"
+      connect_failed: "No se pudo conectar a la base de datos '%{database}': %{error}"
+    execution:
+      toast:
+        select_query: Selecciona el texto de la consulta a ejecutar
+        enter_query: Escribe una consulta para ejecutar
+        no_active_connection: No hay ninguna conexión activa
+        connection_not_found: Conexión no encontrada
+        auto_refresh_blocked: "Actualización automática bloqueada: la consulta modifica datos"
+        explain_unavailable: Explain no está disponible para scripts
+        enter_query_to_explain: Escribe una consulta para analizar con Explain
+        enter_script_content: Escribe contenido del script para ejecutar
+        write_query_first: Escribe primero una consulta para abrirla en una gráfica
+        connecting: "Conectando a la base de datos '%{database}', espera..."
+        redis_flush_disabled: FLUSHALL / FLUSHDB está deshabilitado en la configuración
+      result_title:
+        query_failed: Consulta fallida
+        script_failed: Script fallido
+      copy_error: Copiar error
+      result_tab_title: "Resultado %{index}"
+      error:
+        select_source: Selecciona al menos un origen
+        start_time_required: La hora de inicio es obligatoria
+        end_time_required: La hora de fin es obligatoria
+        start_before_end: La hora de inicio debe ser anterior a la hora de fin
+      hint_prefix: "%{message}\nSugerencia: %{hint}"
+    file_ops:
+      save_as:
+        title: Guardar script como
+        all_files: Todos los archivos
+      error:
+        save_failed: "No se pudo guardar el archivo: %{error}"
+        dialog_unavailable: "Error al guardar — el selector de archivos no está disponible y no se pudo crear el directorio alternativo: %{error}"
+        save_script_failed: "No se pudo guardar el script: %{error}"
+        auto_save_failed: "El guardado automático falló para %{path}"
+      native_picker_fallback: "Selector de archivos nativo no disponible — el script se guardó en %{path}. Instala xdg-desktop-portal, zenity o kdialog para tener un selector de guardado."
+    title:
+      untitled: Sin título
   dashboard:
     builder:
       preset:
@@ -928,6 +985,13 @@ document:
         remove: Quitar orden
       generate_sql:
         title: Generar SQL
+      error:
+        no_results_to_export: No hay resultados para exportar
+        invalid_json: JSON no válido
+        document_must_be_json_object: El documento debe ser un objeto JSON
+        document_missing_id: El documento debe tener un campo _id
+        table_state_not_available: Estado de la tabla no disponible
+        primary_key_not_determined: No se pudo determinar la clave primaria del documento
     grid:
       edit_bar:
         clean: Sin cambios pendientes
@@ -941,6 +1005,9 @@ document:
         builder: Constructor
         switch_to_document: Cambiar a vista de documento
         switch_to_table: Cambiar a vista de tabla
+      mode:
+        table: Tabla
+        document: Documento
       editing:
         aggregated: Los resultados agregados no se pueden editar
         no_primary_key: Esta tabla no tiene clave primaria; la edición está deshabilitada
@@ -985,6 +1052,17 @@ document:
         deleted:
           one: "%{count} eliminación"
           many: "%{count} eliminaciones"
+      error:
+        limit_must_be_positive: El límite debe ser mayor que 0
+        invalid_limit: Valor de límite no válido
+        connection_not_found: Conexión no encontrada
+        connection_not_available: Conexión no disponible
+        invalid_json_filter: Filtro JSON no válido
+      placeholder:
+        chart_name: Nombre del gráfico
+      toast:
+        query_imported: Consulta importada correctamente
+        mutation_queued: Mutación en cola para aprobación.
     mutation:
       confirm:
         delete:
@@ -1100,6 +1178,16 @@ document:
       back: Atrás
       continue: Continuar
       close: Cerrar
+  governance:
+    refresh: Actualizar pendientes
+    no_pending: No hay ejecuciones pendientes
+    pending_title: "Pendiente %{id}"
+    approval_context: Contexto de aprobación
+    execution_plan: Plan de ejecución
+    approve: Aprobar
+    reject: Rechazar
+    select_prompt: Selecciona una solicitud pendiente para ver los detalles.
+    load_failed: "No se pudo cargar la ejecución pendiente %{id}: %{error}"
   import_wizard:
     title: Importar datos
     rail:
@@ -1157,6 +1245,19 @@ document:
       skipped: "%{table}: omitida"
       failed: "%{table}: FALLIDA — %{error}"
       not_attempted: "%{table}: no intentada"
+  instance_inspector:
+    task_label: "Inspector: %{metric_id}"
+    connection_not_found: Conexión no encontrada
+    connection_error: "Error de conexión: %{detail}"
+    action_unavailable: "Acción cancelada — la conexión ya no está disponible. Reconecta e inténtalo de nuevo."
+    kill_default_label: Terminar
+    kill_confirm_body: Esta acción terminará la operación seleccionada. No se puede deshacer.
+    cancel: Cancelar
+    confirm: Confirmar
+    error_prefix: "Error: %{error}"
+    loading: "Cargando…"
+    empty: Sin datos. Conecta y haz clic en Actualizar.
+    kill_failed_cause: "La acción '%{action_label}' en el inspector '%{metric_id}' falló"
   key_value:
     add_member_modal:
       cancel: Cancelar
@@ -1578,6 +1679,7 @@ document:
       refresh: Actualizar
       tree: Árbol
       upload: Subir
+      filter_prefix_placeholder: "Filtrar este prefijo…"
     transfer:
       dialog_title: Guardar objeto como
       dialog_filter_all_files: Todos los archivos
@@ -1788,9 +1890,20 @@ document:
         drop: Eliminar tabla
   shared:
     add: Agregar
+    error_with_detail_clipboard: "%{title}: %{detail}"
     refresh:
       off: Apagado
       custom: Personalizado
+    result_warnings:
+      context:
+        query: resultado de consulta
+        table_browse: resultado de exploración de tabla
+        visual_query: resultado de consulta visual
+        collection_browse: resultado de exploración de colección
+        crud_returning: resultado RETURNING de la mutación
+        mutation_preview: resultado de vista previa de mutación
+      summary: "Tipo de base de datos no compatible '%{type_name}' en %{context}"
+      cause: "El %{context} contiene valores de tipo no compatible '%{type_name}'."
   tabs:
     menu:
       close: Cerrar

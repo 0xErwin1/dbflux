@@ -287,7 +287,7 @@ impl AuditDocument {
 
         let dropdown_timestamp_mode = cx.new(|_cx| {
             Dropdown::new("audit-timestamp-mode")
-                .placeholder("Local")
+                .placeholder(dbflux_i18n::t!("document.audit.filter.placeholder.local"))
                 .items(Self::timestamp_mode_items())
                 .selected_index(Some(0))
                 .toolbar_style(true)
@@ -295,21 +295,24 @@ impl AuditDocument {
 
         let multi_select_level = cx.new(|cx| {
             let items: Vec<DropdownItem> = Self::level_items();
-            let mut ms = MultiSelect::new("audit-level").placeholder("Level");
+            let mut ms = MultiSelect::new("audit-level")
+                .placeholder(dbflux_i18n::t!("document.audit.detail.level"));
             ms.set_items(items, cx);
             ms
         });
 
         let multi_select_category = cx.new(|cx| {
             let items: Vec<DropdownItem> = Self::category_items();
-            let mut ms = MultiSelect::new("audit-category").placeholder("Category");
+            let mut ms = MultiSelect::new("audit-category")
+                .placeholder(dbflux_i18n::t!("document.audit.detail.category"));
             ms.set_items(items, cx);
             ms
         });
 
         let multi_select_outcome = cx.new(|cx| {
             let items: Vec<DropdownItem> = Self::outcome_items();
-            let mut ms = MultiSelect::new("audit-outcome").placeholder("Outcome");
+            let mut ms = MultiSelect::new("audit-outcome")
+                .placeholder(dbflux_i18n::t!("document.audit.detail.outcome"));
             ms.set_items(items, cx);
             ms
         });

@@ -483,6 +483,8 @@ document:
       clear: Clear
       group_label: "Group:"
       loading: "Loading…"
+      placeholder:
+        local: Local
       retry: Retry
       view_mode:
         chart: Chart
@@ -763,6 +765,61 @@ document:
         raw_expression_in_set:
           title: Raw SQL expression in SET
           body: SET clause contains a raw SQL expression — bypasses parameter binding
+    context_bar:
+      placeholder:
+        connection: No connection
+        database: Database
+        schema: Schema
+      label:
+        connection: "Connection:"
+        source: "Source:"
+        database: "Database:"
+        schema: "Schema:"
+      fallback:
+        syntax: Syntax
+        sources: Sources
+        time: Time
+        start: Start
+        end: End
+      apply: Apply
+      connect_error: "Cannot connect to database '%{database}'"
+      connect_failed: "Failed to connect to database '%{database}': %{error}"
+    execution:
+      toast:
+        select_query: Select query text to run
+        enter_query: Enter a query to run
+        no_active_connection: No active connection
+        connection_not_found: Connection not found
+        auto_refresh_blocked: "Auto-refresh blocked: query modifies data"
+        explain_unavailable: Explain is not available for scripts
+        enter_query_to_explain: Enter a query to explain
+        enter_script_content: Enter script content to run
+        write_query_first: Write a query first to open it in a chart
+        connecting: "Connecting to database '%{database}', please wait..."
+        redis_flush_disabled: FLUSHALL / FLUSHDB is disabled in settings
+      result_title:
+        query_failed: Query failed
+        script_failed: Script failed
+      copy_error: Copy error
+      result_tab_title: "Result %{index}"
+      error:
+        select_source: Select at least one source
+        start_time_required: Start time is required
+        end_time_required: End time is required
+        start_before_end: Start time must be earlier than end time
+      hint_prefix: "%{message}\nHint: %{hint}"
+    file_ops:
+      save_as:
+        title: Save Script As
+        all_files: All Files
+      error:
+        save_failed: "Failed to save file: %{error}"
+        dialog_unavailable: "Save failed — file dialog unavailable and fallback directory could not be created: %{error}"
+        save_script_failed: "Failed to save script: %{error}"
+        auto_save_failed: "Auto-save failed for %{path}"
+      native_picker_fallback: "Native file picker unavailable — script saved to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
+    title:
+      untitled: Untitled
   dashboard:
     builder:
       preset:
@@ -928,6 +985,13 @@ document:
         remove: Remove ordering
       generate_sql:
         title: Generate SQL
+      error:
+        no_results_to_export: No results to export
+        invalid_json: Invalid JSON
+        document_must_be_json_object: Document must be a JSON object
+        document_missing_id: Document must have an _id field
+        table_state_not_available: Table state not available
+        primary_key_not_determined: Could not determine document primary key
     grid:
       edit_bar:
         clean: No unsaved changes
@@ -941,6 +1005,9 @@ document:
         builder: Builder
         switch_to_document: Switch to Document View
         switch_to_table: Switch to Table View
+      mode:
+        table: Table
+        document: Document
       editing:
         aggregated: Aggregated results cannot be edited
         no_primary_key: This table has no primary key - editing is disabled
@@ -985,6 +1052,17 @@ document:
         deleted:
           one: "%{count} delete"
           many: "%{count} deletes"
+      error:
+        limit_must_be_positive: Limit must be greater than 0
+        invalid_limit: Invalid limit value
+        connection_not_found: Connection not found
+        connection_not_available: Connection not available
+        invalid_json_filter: Invalid JSON filter
+      placeholder:
+        chart_name: Chart name
+      toast:
+        query_imported: Query imported successfully
+        mutation_queued: Mutation queued for approval.
     mutation:
       confirm:
         delete:
@@ -1100,6 +1178,16 @@ document:
       back: Back
       continue: Continue
       close: Close
+  governance:
+    refresh: Refresh Pending
+    no_pending: No pending executions
+    pending_title: "Pending %{id}"
+    approval_context: Approval context
+    execution_plan: Execution plan
+    approve: Approve
+    reject: Reject
+    select_prompt: Select a pending request to review details.
+    load_failed: "Failed to load pending execution %{id}: %{error}"
   import_wizard:
     title: Import Data
     rail:
@@ -1157,6 +1245,19 @@ document:
       skipped: "%{table}: skipped"
       failed: "%{table}: FAILED — %{error}"
       not_attempted: "%{table}: not attempted"
+  instance_inspector:
+    task_label: "Inspector: %{metric_id}"
+    connection_not_found: Connection not found
+    connection_error: "Connection error: %{detail}"
+    action_unavailable: "Action cancelled — connection is no longer available. Reconnect and try again."
+    kill_default_label: Kill
+    kill_confirm_body: This action will terminate the selected operation. It cannot be undone.
+    cancel: Cancel
+    confirm: Confirm
+    error_prefix: "Error: %{error}"
+    loading: "Loading…"
+    empty: No data. Connect and click Refresh.
+    kill_failed_cause: "Action '%{action_label}' on inspector '%{metric_id}' failed"
   key_value:
     add_member_modal:
       cancel: Cancel
@@ -1578,6 +1679,7 @@ document:
       refresh: Refresh
       tree: Tree
       upload: Upload
+      filter_prefix_placeholder: "Filter this prefix…"
     transfer:
       dialog_title: Save Object As
       dialog_filter_all_files: All Files
@@ -1788,9 +1890,20 @@ document:
         drop: Drop table
   shared:
     add: Add
+    error_with_detail_clipboard: "%{title}: %{detail}"
     refresh:
       off: Off
       custom: Custom
+    result_warnings:
+      context:
+        query: query result
+        table_browse: table browse result
+        visual_query: visual query result
+        collection_browse: collection browse result
+        crud_returning: mutation RETURNING result
+        mutation_preview: mutation preview result
+      summary: "Unsupported database type '%{type_name}' in %{context}"
+      cause: "The %{context} contains values of unsupported type '%{type_name}'."
   tabs:
     menu:
       close: Close
