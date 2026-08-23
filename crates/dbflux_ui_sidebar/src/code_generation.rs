@@ -204,7 +204,7 @@ impl Sidebar {
             Err(e) => {
                 log::error!("Code generation for view failed: {}", e);
                 self.pending_toast = Some(PendingToast {
-                    message: format!("Code generation failed: {}", e),
+                    message: crate::labels::code_generation_failed_label(&e.to_string()),
                     is_error: true,
                 });
                 cx.notify();
@@ -290,7 +290,7 @@ impl Sidebar {
                 Err(e) => {
                     log::error!("Code generation failed: {}", e);
                     self.pending_toast = Some(PendingToast {
-                        message: format!("Code generation failed: {}", e),
+                        message: crate::labels::code_generation_failed_label(&e.to_string()),
                         is_error: true,
                     });
                     cx.notify();

@@ -779,7 +779,7 @@ impl Sidebar {
         let load_task_id = app_state.update(cx, |state, _| {
             let (task_id, _) = state.start_task_for_profile(
                 TaskKind::LoadSchema,
-                format!("Listing buckets: {profile_name}"),
+                crate::labels::listing_buckets_task_label(&profile_name),
                 Some(profile_id),
             );
             task_id
@@ -805,7 +805,7 @@ impl Sidebar {
                         });
                     }
                     Err(message) => {
-                        let details = format!("Failed to list buckets: {message}");
+                        let details = crate::labels::list_buckets_failed_label(message);
                         app_state.update(cx, |state, _| {
                             state.fail_task_with_details(load_task_id, message.clone(), details);
                         });

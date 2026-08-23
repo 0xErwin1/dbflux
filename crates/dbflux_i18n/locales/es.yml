@@ -1025,6 +1025,11 @@ sidebar:
     connections_hint: Usa + para agregar una nueva conexión
     scripts_title: Aún no hay scripts
     scripts_hint: Usa + para crear un script nuevo o importar un archivo existente
+  error:
+    cannot_load_schema_types: No se pueden cargar los tipos de datos del esquema
+    cannot_load_schema_indexes: No se pueden cargar los índices del esquema
+    cannot_load_schema_foreign_keys: No se pueden cargar las claves foráneas del esquema
+    cannot_load_schema_routines: No se pueden cargar las rutinas del esquema
   filter:
     connections_placeholder: Filtrar conexiones y esquema...
     scripts_placeholder: Filtrar scripts...
@@ -1106,6 +1111,11 @@ sidebar:
     disconnect_hook_cancelled: Hook de desconexión cancelado
     post_disconnect_hook_cancelled: Hook posterior a la desconexión cancelado
     loading_event_streams: "Cargando flujos de eventos: %{name}"
+    listing_buckets: "Listando buckets: %{name}"
+    loading_database_schema: "Cargando esquema: %{name}"
+    connecting_to_database: "Conectando a la base de datos: %{name}"
+    refreshing_database: "Actualizando base de datos: %{name}"
+    refreshing_schema_object: "Actualizando objeto del esquema: %{name}"
     dropping:
       table: "Eliminando la tabla %{name}"
       view: "Eliminando la vista %{name}"
@@ -1144,6 +1154,19 @@ sidebar:
     load_failed:
       table: "Error al cargar el esquema de %{name}: %{error}"
       collection: "Error al cargar los flujos de eventos de %{name}: %{error}"
+      data_types: "Error al cargar los tipos de datos: %{error}"
+      indexes: "Error al cargar los índices: %{error}"
+      foreign_keys: "Error al cargar las claves foráneas: %{error}"
+      routines: "Error al cargar las rutinas: %{error}"
+    list_buckets_failed: "Error al listar buckets: %{error}"
+    code_generation_failed: "Error al generar el código: %{error}"
+    loading_event_streams: Cargando flujos de eventos...
+    load_schema_failed: "Error al cargar el esquema: %{error}"
+    connect_database_failed: "Error al conectar a la base de datos: %{error}"
+    refresh_database_failed: "Error al actualizar la base de datos: %{error}"
+    database_refresh_pending: La actualización de la base de datos ya está en curso
+    prepare_schema_object_refresh_failed: Error al preparar la actualización del objeto del esquema
+    refresh_schema_object_failed: "Error al actualizar el objeto del esquema: %{error}"
     connected:
       plain: "Conectado a %{name}"
       one: "Conectado a %{name} (con 1 advertencia de hook)"

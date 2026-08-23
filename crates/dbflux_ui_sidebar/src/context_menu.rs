@@ -1401,13 +1401,13 @@ impl Sidebar {
             }
             TableDetailsStatus::Loading => {
                 self.pending_toast = Some(PendingToast {
-                    message: "Loading event streams...".to_string(),
+                    message: crate::labels::loading_event_streams_toast_label(),
                     is_error: false,
                 });
             }
             TableDetailsStatus::NotFound => {
                 self.pending_toast = Some(PendingToast {
-                    message: "Event streams are not available for this collection".to_string(),
+                    message: dbflux_i18n::t!("sidebar.overlay.child_picker.unsupported"),
                     is_error: true,
                 });
             }
