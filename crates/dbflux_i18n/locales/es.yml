@@ -158,6 +158,7 @@ connection_manager:
     session_status_valid: "Estado de la sesión: válida"
     session_status_expired: "Estado de la sesión: expirada"
     session_status_login_required: "Estado de la sesión: requiere inicio de sesión"
+    ssh_config_incomplete: Configuración SSH incompleta
   driver_settings_title: Ajustes del driver
   driver_no_custom_settings: Este driver no tiene ajustes personalizados.
   mcp_disabled: MCP deshabilitado para esta conexión
@@ -175,6 +176,40 @@ connection_manager:
   mcp_policy_hint: Configura políticas en Ajustes → MCP → Políticas
   additional_policies_optional: Políticas adicionales (opcional)
   scope_policy_preview: Vista previa de alcance y políticas
+  tab:
+    main: Principal
+    settings: Ajustes
+    mcp: MCP
+  field:
+    name: Nombre
+    ssl_mode: Modo SSL
+    ca_certificate: Certificado de CA
+    client_cert: Certificado de cliente
+    client_key: Clave de cliente
+  section:
+    transport: TRANSPORTE
+  banner:
+    correct_following: Corrige lo siguiente
+    testing_connection: "Probando la conexión…"
+    connection_successful: Conexión correcta
+    connection_successful_warnings: Conexión correcta con advertencias
+    connection_failed: Fallo en la conexión
+  action:
+    copy: Copiar
+    back: Atrás
+    test_connection: Probar conexión
+    save: Guardar
+    browse: Examinar
+  window_title: Administrador de conexiones
+  driver_select:
+    search_placeholder: "Filtrar por nombre, driver, puerto…"
+    title: Nueva conexión
+    subtitle: elige un tipo de base de datos
+    empty_state: Ningún driver coincide con tu filtro
+    import_from_file: "Importar desde archivo…"
+    cancel: Cancelar
+    configure: Configurar
+    configure_named: "Configurar %{name}"
 document:
   code:
     toolbar:

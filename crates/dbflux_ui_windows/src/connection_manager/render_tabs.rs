@@ -28,7 +28,7 @@ impl ConnectionManagerWindow {
             .border_color(border_color)
             .child(self.render_tab_trigger(
                 "tab-main",
-                "Main",
+                dbflux_i18n::t!("connection_manager.tab.main"),
                 AppIcon::Plug,
                 ActiveTab::Main,
                 active_tab == ActiveTab::Main,
@@ -37,7 +37,7 @@ impl ConnectionManagerWindow {
             .when(show_access_tab, |d| {
                 d.child(self.render_tab_trigger(
                     "tab-access",
-                    "Access",
+                    dbflux_i18n::t!("access.tab_label"),
                     AppIcon::FingerprintPattern,
                     ActiveTab::Access,
                     active_tab == ActiveTab::Access,
@@ -46,7 +46,7 @@ impl ConnectionManagerWindow {
             })
             .child(self.render_tab_trigger(
                 "tab-settings",
-                "Settings",
+                dbflux_i18n::t!("connection_manager.tab.settings"),
                 AppIcon::Settings,
                 ActiveTab::Settings,
                 active_tab == ActiveTab::Settings,
@@ -54,7 +54,7 @@ impl ConnectionManagerWindow {
             ))
             .child(self.render_tab_trigger(
                 "tab-mcp",
-                "MCP",
+                dbflux_i18n::t!("connection_manager.tab.mcp"),
                 AppIcon::Lock,
                 ActiveTab::Mcp,
                 active_tab == ActiveTab::Mcp,
@@ -65,7 +65,7 @@ impl ConnectionManagerWindow {
     fn render_tab_trigger(
         &self,
         id: &'static str,
-        label: &'static str,
+        label: impl Into<SharedString>,
         icon: AppIcon,
         tab: ActiveTab,
         is_active: bool,
@@ -204,13 +204,21 @@ impl ConnectionManagerWindow {
             .child(ssl_control)
             .child(div().flex_1());
 
-        let ssl_row = Self::field_row_cm("SSL mode", false, ssl_control_row, None::<&str>, cx);
+        let ssl_row = Self::field_row_cm(
+            dbflux_i18n::t!("connection_manager.field.ssl_mode"),
+            false,
+            ssl_control_row,
+            None::<&str>,
+            cx,
+        );
 
         let mut section = div()
             .flex()
             .flex_col()
             .gap_2()
-            .child(SubSectionLabel::new("TRANSPORT"))
+            .child(SubSectionLabel::new(dbflux_i18n::t!(
+                "connection_manager.section.transport"
+            )))
             .child(ssl_row);
 
         // Cert path inputs — shown only when the driver declares ssl_cert_fields and the
@@ -223,7 +231,7 @@ impl ConnectionManagerWindow {
 
                 if mode_requires_root {
                     let ca_row = self.render_ssl_cert_picker_row(
-                        "CA certificate",
+                        dbflux_i18n::t!("connection_manager.field.ca_certificate"),
                         super::SslCertSlot::CaCert,
                         cx,
                     );
@@ -236,12 +244,12 @@ impl ConnectionManagerWindow {
 
                     if mode_is_cert_active {
                         let cert_row = self.render_ssl_cert_picker_row(
-                            "Client cert",
+                            dbflux_i18n::t!("connection_manager.field.client_cert"),
                             super::SslCertSlot::ClientCert,
                             cx,
                         );
                         let key_row = self.render_ssl_cert_picker_row(
-                            "Client key",
+                            dbflux_i18n::t!("connection_manager.field.client_key"),
                             super::SslCertSlot::ClientKey,
                             cx,
                         );
@@ -260,7 +268,7 @@ impl ConnectionManagerWindow {
     /// Backspace clears the selection.
     fn render_ssl_cert_picker_row(
         &self,
-        label: &'static str,
+        label: impl Into<SharedString>,
         slot: super::SslCertSlot,
         cx: &mut Context<Self>,
     ) -> AnyElement {
