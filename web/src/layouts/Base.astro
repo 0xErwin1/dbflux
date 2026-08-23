@@ -90,11 +90,11 @@ const socialImage = new URL('/brand/og-card.jpg', ORIGIN).href;
   </head>
   <body data-wide={wide ? '' : undefined}>
     <a class="skip-link" href="#main">{t(locale, 'banner.skip_link')}</a>
-    <SiteNav current={current} />
+    <SiteNav current={current} locale={locale} />
     <main id="main"><slot /></main>
-    <SiteFooter />
+    <SiteFooter locale={locale} />
     <BackToTop />
     <Mermaid />
-    <SearchDialog indexUrl={searchIndex} />
+    <SearchDialog indexUrl={searchIndex} locale={locale} />
   </body>
 </html>

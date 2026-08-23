@@ -48,7 +48,8 @@ export interface Dictionary {
     close: string;
     no_results: string;
     unavailable: string;
-    result_count: string;
+    result_count_one: string;
+    result_count_other: string;
   };
   versions: {
     label: string;

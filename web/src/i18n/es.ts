@@ -32,9 +32,10 @@ export const es: Dictionary = {
     move: 'mover',
     open: 'abrir',
     close: 'cerrar',
-    no_results: 'Ninguna página coincide con "{query}".',
+    no_results: 'Ninguna página coincide con “{query}”.',
     unavailable: 'La búsqueda no está disponible en este momento.',
-    result_count: '{n} resultado(s)',
+    result_count_one: '{n} resultado',
+    result_count_other: '{n} resultados',
   },
   versions: {
     label: 'Versión',
@@ -55,10 +56,10 @@ export const es: Dictionary = {
   docs_index: {
     title: 'Documentación',
     intro:
-      'Cada página aquí se genera a partir del markdown del directorio docs/ del repositorio, así que un cambio de comportamiento y el párrafo que lo describe se publican en el mismo commit.',
+      'Cada página aquí se genera a partir del markdown del directorio <code>docs/</code> del repositorio, así que un cambio de comportamiento y el párrafo que lo describe se publican en el mismo commit.',
     unfiled_title: 'Sin clasificar',
     unfiled_body:
-      'Estas páginas existen en esta versión pero no tienen un lugar en el orden de lectura declarado en src/data/nav.ts.',
+      'Estas páginas existen en esta versión pero no tienen un lugar en el orden de lectura declarado en <code>src/data/nav.ts</code>.',
   },
   landing: {
     title: 'Todas las bases de datos que usas, en una sola ventana controlada por teclado.',

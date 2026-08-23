@@ -9,9 +9,9 @@ import { CURRENT } from '../../data/versions';
 import { DOCS_AT_ROOT } from '../../data/site';
 
 /**
- * The Spanish counterpart of `index.astro`. Chrome components still render in
- * English until they are wired to the dictionary; this route only proves that
- * `/es/` resolves and carries `<html lang="es">`.
+ * The Spanish counterpart of `index.astro`. Documentation pages only exist in
+ * English so far — this route covers the `/es/` landing/index only, ahead of
+ * the locale-aware docs pipeline.
  */
 const available = DOCS_AT_ROOT ? pathsForVersion(await getCollection('docs'), CURRENT.id) : [];
 ---
@@ -23,8 +23,9 @@ const available = DOCS_AT_ROOT ? pathsForVersion(await getCollection('docs'), CU
       available={available}
       title="Documentation"
       description="Guides for installing, connecting, querying, charting and governing DBFlux."
+      locale="es"
     >
-      <DocsIndex versionId={CURRENT.id} available={available} />
+      <DocsIndex versionId={CURRENT.id} available={available} locale="es" />
     </DocsLayout>
   ) : (
     <Base

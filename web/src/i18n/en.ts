@@ -32,9 +32,10 @@ export const en = {
     move: 'move',
     open: 'open',
     close: 'close',
-    no_results: 'No page matches "{query}".',
+    no_results: 'No page matches “{query}”.',
     unavailable: 'Search is unavailable right now.',
-    result_count: '{n} result(s)',
+    result_count_one: '{n} result',
+    result_count_other: '{n} results',
   },
   versions: {
     label: 'Version',
@@ -55,10 +56,10 @@ export const en = {
   docs_index: {
     title: 'Documentation',
     intro:
-      "Every page here is rendered from the markdown in the repository's docs/ directory, so a change in behaviour and the paragraph describing it ship in the same commit.",
+      'Every page here is rendered from the markdown in the repository’s <code>docs/</code> directory, so a change in behaviour and the paragraph describing it ship in the same commit.',
     unfiled_title: 'Not yet filed',
     unfiled_body:
-      'These pages exist in this version but have no place in the reading order declared in src/data/nav.ts.',
+      'These pages exist in this version but have no place in the reading order declared in <code>src/data/nav.ts</code>.',
   },
   landing: {
     title: 'Every database you run, in one keyboard-driven window.',
