@@ -264,6 +264,65 @@ connection_manager:
     cancel: Cancel
     configure: Configure
     configure_named: "Configure %{name}"
+  export:
+    target:
+      connection: connection
+      auth_profile: auth profile
+      ssh_tunnel: SSH tunnel
+      proxy: proxy
+      bundle: bundle
+    title: Export
+    title_with_kind: "Export %{kind}"
+    placeholder:
+      output_path: "Path to output file…"
+    field:
+      credentials: Credentials
+      include_connection_password: Include connection password
+      include_proxy_credentials: Include proxy credentials
+      include_ssh_password: Include SSH password
+      embed_ssh_keys: Embed SSH private keys (requires encryption)
+      auth_export_mode: Auth profile export mode
+      reference_aws_profile: Reference (AWS profile)
+      disable_encryption: Disable encryption (force plaintext)
+      confirm_passphrase: Confirm passphrase
+      encryption: Encryption
+      output_file: Output file
+    auth_mode:
+      include: Include values
+      reference: Reference
+      required_on_import: Required on import
+      exclude: Exclude
+    hint:
+      connection_scope: This connection and its profiles will be exported.
+      profile_scope: This profile will be exported.
+      plaintext_warning: "Secrets will be written in cleartext. Only use this if the output file is stored securely."
+    error:
+      choose_output_path: Choose an output file path.
+      passphrase_or_plaintext: Enter a passphrase or enable force-plaintext mode.
+      passphrase_mismatch: Passphrase and confirmation do not match.
+      target_removed: This profile can no longer be exported; it may have been removed.
+      cannot_determine_output_path: "Cannot determine output path: %{error}"
+      failed: "Export failed: %{error}"
+      write_failed: "Failed to write export file: %{error}"
+    summary:
+      auth_profile_line: "Auth profile: %{name}"
+      auth_profile_line_reference: "Auth profile: %{name} (reference)"
+      proxy_line: "Proxy: %{name}"
+      ssh_line: "SSH tunnel: %{name}"
+    action:
+      export: Export
+    status:
+      exporting: "Exporting…"
+    banner:
+      failed: Export failed
+    result:
+      omitted_fields:
+        one: "%{count} field omitted — recipient must supply it on import."
+        many: "%{count} fields omitted — recipient must supply them on import."
+      warning: "Warning: %{message}"
+      success_title: "Exported to %{path}"
+    toast:
+      success: "Exported %{kind} to %{path}"
   import:
     placeholder:
       bundle_passphrase: Bundle passphrase
