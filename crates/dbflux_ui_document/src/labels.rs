@@ -1205,6 +1205,53 @@ pub(crate) fn delete_prefix_deleted_toast(count: u64, uri: &str) -> String {
     }
 }
 
+/// Object-count-and-size totals line for the recursive-delete modal's probe
+/// summary, shared between the running and settled states. The byte total is
+/// S3 data and stays outside the catalog.
+///
+/// Uses the singular catalog bucket only for exactly one object; every other
+/// count, including zero, uses the plural bucket.
+pub(crate) fn delete_prefix_probe_totals(object_count: u64, total_bytes: u64) -> String {
+    let objects_label = if object_count == 1 {
+        dbflux_i18n::t!(
+            "document.object_browser.status.objects.one",
+            count = object_count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.object_browser.status.objects.many",
+            count = object_count
+        )
+    };
+
+    format!(
+        "{objects_label} · {}",
+        crate::buckets_table::format_bytes(total_bytes)
+    )
+}
+
+/// Danger-button label for the recursive-delete modal, with the settled
+/// object count interpolated. `None` renders the generic label used while
+/// the probe is still counting.
+///
+/// Uses the singular catalog bucket only for exactly one object; every other
+/// count uses the plural bucket.
+pub(crate) fn delete_prefix_delete_button_label(object_count: Option<u64>) -> String {
+    match object_count {
+        Some(1) => dbflux_i18n::t!(
+            "document.object_browser.delete_prefix_modal.delete_button.one",
+            count = 1u64
+        ),
+        Some(count) => dbflux_i18n::t!(
+            "document.object_browser.delete_prefix_modal.delete_button.many",
+            count = count
+        ),
+        None => {
+            dbflux_i18n::t!("document.object_browser.delete_prefix_modal.delete_button.default")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1214,16 +1261,16 @@ mod tests {
         bool_op_label, builder_mode_label, bulk_delete_success_label, chart_degraded_copy,
         chart_dock_shape_label, chart_rail_why_text, code_toolbar_shortcut_hint_label,
         comparator_label, copy_query_language_label, dangerous_query_body, dangerous_query_title,
-        delete_confirm_copy, delete_prefix_deleted_toast, delete_rows_label,
-        execution_count_state_label, execution_mode_label, history_items_count_label,
-        history_tab_label, image_decode_error, image_header_error, incomplete_aggregate_rows_label,
-        join_kind_label, live_output_lines_label, live_output_truncated_label,
-        object_browser_status_summary, object_browser_versions_count_label, partial_delete_label,
-        pending_change_count_label, pending_edits_summary, presign_expiry_label,
-        presign_method_label, preview_gate_message, refresh_policy_label, result_tab_count_label,
-        row_count_label, schema_change_description, script_confirm_message_label,
-        sort_direction_label, table_action_description, unsaved_changes_label,
-        update_columns_label, valid_lines_label,
+        delete_confirm_copy, delete_prefix_delete_button_label, delete_prefix_deleted_toast,
+        delete_prefix_probe_totals, delete_rows_label, execution_count_state_label,
+        execution_mode_label, history_items_count_label, history_tab_label, image_decode_error,
+        image_header_error, incomplete_aggregate_rows_label, join_kind_label,
+        live_output_lines_label, live_output_truncated_label, object_browser_status_summary,
+        object_browser_versions_count_label, partial_delete_label, pending_change_count_label,
+        pending_edits_summary, presign_expiry_label, presign_method_label, preview_gate_message,
+        refresh_policy_label, result_tab_count_label, row_count_label, schema_change_description,
+        script_confirm_message_label, sort_direction_label, table_action_description,
+        unsaved_changes_label, update_columns_label, valid_lines_label,
     };
     use crate::object_browser::{PresignExpiry, PresignMethodChoice, PreviewGate};
     use crate::schema_diff::apply::TableLevelAction;
@@ -3160,6 +3207,122 @@ mod tests {
         assert_eq!(
             delete_prefix_deleted_toast(4, "s3://my-bucket/logs/"),
             "Deleted 4 objects under s3://my-bucket/logs/"
+        );
+    }
+
+    /// T20b: the recursive-delete modal's probe totals reuse the shared
+    /// object-count buckets and stay in the singular for exactly one object.
+    #[test]
+    fn delete_prefix_probe_totals_covers_singular_and_plural() {
+        assert_eq!(delete_prefix_probe_totals(1, 1024), "1 object · 1.0 KiB");
+        assert_eq!(delete_prefix_probe_totals(2, 2048), "2 objects · 2.0 KiB");
+    }
+
+    /// T20b: the danger button label distinguishes the still-counting state
+    /// from a settled singular/plural count.
+    #[test]
+    fn delete_prefix_delete_button_label_covers_default_singular_and_plural() {
+        assert_eq!(delete_prefix_delete_button_label(None), "Delete objects");
+        assert_eq!(
+            delete_prefix_delete_button_label(Some(1)),
+            "Delete 1 object"
+        );
+        assert_eq!(
+            delete_prefix_delete_button_label(Some(2)),
+            "Delete 2 objects"
+        );
+    }
+
+    /// T20b: every `document.object_browser.{delete_prefix_modal,upload,
+    /// transfer,context_menu,editor}.*` key resolves in both locales.
+    #[test]
+    fn object_browser_ops_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.object_browser.delete_prefix_modal.title",
+            "document.object_browser.delete_prefix_modal.body_intro",
+            "document.object_browser.delete_prefix_modal.counting",
+            "document.object_browser.delete_prefix_modal.counting_progress",
+            "document.object_browser.delete_prefix_modal.cancelled",
+            "document.object_browser.delete_prefix_modal.capped",
+            "document.object_browser.delete_prefix_modal.error",
+            "document.object_browser.delete_prefix_modal.cancel_probe",
+            "document.object_browser.delete_prefix_modal.first_keys_label",
+            "document.object_browser.delete_prefix_modal.remaining_keys",
+            "document.object_browser.delete_prefix_modal.confirm_hint",
+            "document.object_browser.delete_prefix_modal.batched_caption",
+            "document.object_browser.delete_prefix_modal.cancel",
+            "document.object_browser.delete_prefix_modal.delete_button.default",
+            "document.object_browser.delete_prefix_modal.delete_button.one",
+            "document.object_browser.delete_prefix_modal.delete_button.many",
+            "document.object_browser.upload.dialog_title",
+            "document.object_browser.upload.error.no_file_picker",
+            "document.object_browser.upload.toast.uploaded.one",
+            "document.object_browser.upload.toast.uploaded.many",
+            "document.object_browser.upload.toast.failed_suffix.one",
+            "document.object_browser.upload.toast.failed_suffix.many",
+            "document.object_browser.transfer.dialog_title",
+            "document.object_browser.transfer.dialog_filter_all_files",
+            "document.object_browser.transfer.error.fallback_dir_failed",
+            "document.object_browser.transfer.toast.saved",
+            "document.object_browser.transfer.toast.opened",
+            "document.object_browser.transfer.toast.no_handler",
+            "document.object_browser.context_menu.item.preview",
+            "document.object_browser.context_menu.item.open_in_editor",
+            "document.object_browser.context_menu.item.download",
+            "document.object_browser.context_menu.item.rename",
+            "document.object_browser.context_menu.item.presign",
+            "document.object_browser.context_menu.item.copy_uri",
+            "document.object_browser.context_menu.item.delete",
+            "document.object_browser.context_menu.item.collapse",
+            "document.object_browser.context_menu.item.expand",
+            "document.object_browser.context_menu.item.open",
+            "document.object_browser.context_menu.item.new_folder_inside",
+            "document.object_browser.context_menu.item.delete_folder",
+            "document.object_browser.editor.nav.open",
+            "document.object_browser.editor.nav.leave_bucket_root",
+            "document.object_browser.editor.nav.leave_for",
+            "document.object_browser.editor.nav.close_preview",
+            "document.object_browser.editor.nav.delete",
+            "document.object_browser.editor.nav.rename",
+            "document.object_browser.editor.unsaved_summary",
+            "document.object_browser.editor.toast.saved",
+            "document.object_browser.editor.footer.saving",
+            "document.object_browser.editor.footer.save",
+            "document.object_browser.editor.footer.discard",
+            "document.object_browser.editor.footer.find",
+            "document.object_browser.editor.dirty_badge",
+            "document.object_browser.editor.unsaved_confirm.title",
+            "document.object_browser.editor.unsaved_confirm.body",
+            "document.object_browser.editor.unsaved_confirm.cancel",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    /// T20b: the delete-prefix modal's title diverges between locales.
+    #[test]
+    fn delete_prefix_modal_title_differs_between_locales() {
+        assert_ne!(
+            dbflux_i18n::t!(
+                "document.object_browser.delete_prefix_modal.title",
+                locale = "en"
+            ),
+            dbflux_i18n::t!(
+                "document.object_browser.delete_prefix_modal.title",
+                locale = "es"
+            )
         );
     }
 }

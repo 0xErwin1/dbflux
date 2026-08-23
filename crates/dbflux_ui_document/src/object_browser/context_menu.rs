@@ -62,43 +62,44 @@ impl ObjectBrowserDocument {
     fn build_object_menu_items(&self) -> Vec<ObjectMenuItem> {
         vec![
             ObjectMenuItem {
-                label: "Preview".into(),
+                label: dbflux_i18n::t!("document.object_browser.context_menu.item.preview").into(),
                 action: ObjectMenuAction::Preview,
                 icon: AppIcon::Eye,
                 is_danger: false,
             },
             ObjectMenuItem {
-                label: "Open in editor".into(),
+                label: dbflux_i18n::t!("document.object_browser.context_menu.item.open_in_editor")
+                    .into(),
                 action: ObjectMenuAction::OpenInEditor,
                 icon: AppIcon::Maximize2,
                 is_danger: false,
             },
             ObjectMenuItem {
-                label: "Download".into(),
+                label: dbflux_i18n::t!("document.object_browser.context_menu.item.download").into(),
                 action: ObjectMenuAction::Download,
                 icon: AppIcon::Download,
                 is_danger: false,
             },
             ObjectMenuItem {
-                label: "Rename".into(),
+                label: dbflux_i18n::t!("document.object_browser.context_menu.item.rename").into(),
                 action: ObjectMenuAction::Rename,
                 icon: AppIcon::Pencil,
                 is_danger: false,
             },
             ObjectMenuItem {
-                label: "Presign".into(),
+                label: dbflux_i18n::t!("document.object_browser.context_menu.item.presign").into(),
                 action: ObjectMenuAction::Presign,
                 icon: AppIcon::Link2,
                 is_danger: false,
             },
             ObjectMenuItem {
-                label: "Copy S3 URI".into(),
+                label: dbflux_i18n::t!("document.object_browser.context_menu.item.copy_uri").into(),
                 action: ObjectMenuAction::CopyUri,
                 icon: AppIcon::Copy,
                 is_danger: false,
             },
             ObjectMenuItem {
-                label: "Delete".into(),
+                label: dbflux_i18n::t!("document.object_browser.context_menu.item.delete").into(),
                 action: ObjectMenuAction::DeleteObject,
                 icon: AppIcon::Delete,
                 is_danger: true,
@@ -113,10 +114,11 @@ impl ObjectBrowserDocument {
         let disclosure = if self.tree.is_tree_mode() {
             ObjectMenuItem {
                 label: if self.tree.is_expanded(prefix) {
-                    "Collapse".into()
+                    dbflux_i18n::t!("document.object_browser.context_menu.item.collapse")
                 } else {
-                    "Expand".into()
-                },
+                    dbflux_i18n::t!("document.object_browser.context_menu.item.expand")
+                }
+                .into(),
                 action: ObjectMenuAction::ToggleNode,
                 icon: if self.tree.is_expanded(prefix) {
                     AppIcon::ChevronDown
@@ -127,7 +129,7 @@ impl ObjectBrowserDocument {
             }
         } else {
             ObjectMenuItem {
-                label: "Open".into(),
+                label: dbflux_i18n::t!("document.object_browser.context_menu.item.open").into(),
                 action: ObjectMenuAction::OpenPrefix,
                 icon: AppIcon::Folder,
                 is_danger: false,
@@ -137,19 +139,23 @@ impl ObjectBrowserDocument {
         vec![
             disclosure,
             ObjectMenuItem {
-                label: "New folder inside".into(),
+                label: dbflux_i18n::t!(
+                    "document.object_browser.context_menu.item.new_folder_inside"
+                )
+                .into(),
                 action: ObjectMenuAction::NewFolderInside,
                 icon: AppIcon::Plus,
                 is_danger: false,
             },
             ObjectMenuItem {
-                label: "Copy S3 URI".into(),
+                label: dbflux_i18n::t!("document.object_browser.context_menu.item.copy_uri").into(),
                 action: ObjectMenuAction::CopyUri,
                 icon: AppIcon::Copy,
                 is_danger: false,
             },
             ObjectMenuItem {
-                label: "Delete folder".into(),
+                label: dbflux_i18n::t!("document.object_browser.context_menu.item.delete_folder")
+                    .into(),
                 action: ObjectMenuAction::DeletePrefix,
                 icon: AppIcon::Delete,
                 is_danger: true,
