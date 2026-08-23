@@ -108,6 +108,14 @@ modals:
     compact: Compactar
     cancel: Cancelar
     confirm: Importar
+  mutation_confirm:
+    title: Confirmar mutación
+    sample_unavailable: Vista previa de muestra no disponible
+    type_to_confirm_label: "Escribe el nombre de la tabla para confirmar:"
+    type_to_confirm_placeholder: Escribe el nombre de la tabla
+    opt_in_label: Entiendo que esta operación modificará datos
+    cancel: Cancelar
+    confirm: Confirmar
   rename:
     placeholder: Escribe un nombre
     title:
@@ -117,6 +125,29 @@ modals:
       empty_name: El nombre no puede estar vacío
     cancel: Cancelar
     confirm: Renombrar
+  schema_drift:
+    title: El esquema cambió desde que se abrió esta consulta
+    column_header: columna
+    local_header: caché local
+    remote_header: remoto
+    change:
+      new_column: columna nueva
+      removed: eliminada
+      type_changed: tipo modificado
+      nullability_changed: nulabilidad modificada
+      pk_changed: PK modificada
+      fk_changed: FK modificada
+      default_changed: valor por defecto modificado
+      index_added: índice agregado
+      index_removed: índice eliminado
+      cached: en caché
+      changed: modificado
+      primary_key: (clave primaria)
+      foreign_keys: (claves foráneas)
+    continue_stale: Continuar con el esquema desactualizado
+    cancel: Cancelar
+    refreshing: Actualizando…
+    refresh: Actualizar y volver a ejecutar
   tunnel_auth:
     title: Se requiere la frase de contraseña SSH
     prompt: 'Introduce la frase de contraseña del túnel "%{tunnel}"'
