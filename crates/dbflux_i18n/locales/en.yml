@@ -154,6 +154,7 @@ controls:
       many: "+%{count} more"
 connection_manager:
   placeholder:
+    seconds: seconds
     connection_name: Connection name
     password: Password
     key_passphrase_optional: Key passphrase (optional)
@@ -2998,7 +2999,6 @@ ssh:
   host: Host
   port: Port
   username: Username
-  host_user_required: Host and user are required
   private_key_short: Private key
   update: Update
   create: Create

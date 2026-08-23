@@ -1527,7 +1527,6 @@ mod tests {
         "ssh.host",
         "ssh.port",
         "ssh.username",
-        "ssh.host_user_required",
         "ssh.private_key_short",
         "ssh.update",
         "ssh.create",

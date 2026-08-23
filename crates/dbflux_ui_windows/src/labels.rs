@@ -794,6 +794,7 @@ mod tests {
     /// connection policy assignment, SSH tunnels, RPC services, proxies,
     /// driver settings, MCP governance persistence, and auth profiles.
     const FINAL_LEFTOVER_KEYS: &[&str] = &[
+        "connection_manager.placeholder.seconds",
         "connection_manager.placeholder.password",
         "connection_manager.placeholder.select_additional_roles",
         "connection_manager.placeholder.select_additional_policies",

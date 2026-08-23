@@ -523,7 +523,7 @@ impl ConnectionManagerWindow {
         });
         let conn_refresh_interval_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("seconds")
+                .placeholder(dbflux_i18n::t!("connection_manager.placeholder.seconds"))
                 .default_value("5")
         });
         let conn_confirm_dangerous_dropdown = cx.new(|_cx| {
