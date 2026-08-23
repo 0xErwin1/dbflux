@@ -762,6 +762,31 @@ document:
       key: Clave
       last_modified: Última modificación
       size: Tamaño
+    create_folder:
+      cancel: Cancelar
+      confirm: Crear
+      confirm_in_progress: "Creando…"
+      created_toast: "Carpeta creada en %{uri}"
+      hint: 'Se crea como una clave de cero bytes terminada en "/"'
+      location: "en %{uri}"
+      name_placeholder: nombre-carpeta
+      title: Nueva carpeta
+      error:
+        consecutive_slashes: El nombre de la carpeta no puede contener barras consecutivas.
+        empty: El nombre de la carpeta no puede estar vacío.
+        leading_trailing_slash: El nombre de la carpeta no puede empezar ni terminar con una barra.
+    delete:
+      body: '"%{key}" (%{size}) se eliminará. Esta acción no se puede deshacer.'
+      cancel: Cancelar
+      confirm: Eliminar
+      deleted_toast: "Eliminado %{uri}"
+      title: "¿Eliminar objeto?"
+      unknown_size: tamaño desconocido
+    delete_prefix:
+      versioning_note: "Este bucket tiene el versionado habilitado: los objetos eliminados se convierten en marcadores de eliminación, no se eliminan de forma permanente."
+      deleted_toast:
+        one: "Se eliminó %{count} objeto bajo %{uri}"
+        many: "Se eliminaron %{count} objetos bajo %{uri}"
     empty:
       bucket: Este bucket está vacío
       filtered: Ninguna clave coincide con este filtro
@@ -834,6 +859,17 @@ document:
           many: "%{count} versiones"
         loading: "Cargando…"
         view: Ver versiones
+    rename:
+      cancel: Cancelar
+      confirm: Renombrar
+      confirm_in_progress: "Renombrando…"
+      name_placeholder: nombre-objeto
+      renamed_toast: "Renombrado a %{uri}"
+      title: Renombrar objeto
+      error:
+        contains_slash: "El nombre no puede contener una barra: el cambio de nombre permanece en la misma carpeta."
+        empty: El nombre no puede estar vacío.
+        unchanged: El nuevo nombre debe ser diferente del nombre actual.
     status:
       folders:
         one: "%{count} carpeta"

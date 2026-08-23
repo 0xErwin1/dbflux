@@ -193,9 +193,7 @@ impl DeletePrefixConfirmState {
 fn versioning_note(versioning: Option<VersioningStatus>) -> Option<String> {
     match versioning {
         Some(VersioningStatus::Enabled) | Some(VersioningStatus::Suspended) => Some(
-            "This bucket has versioning enabled — deleted objects become delete markers, \
-             not permanently removed."
-                .to_string(),
+            dbflux_i18n::t!("document.object_browser.delete_prefix.versioning_note"),
         ),
         _ => None,
     }
@@ -222,7 +220,10 @@ impl ObjectBrowserDocument {
         cx.notify();
 
         let Some(connection) = self.get_connection(cx) else {
-            self.mark_probe_error(generation, "Connection is no longer active".to_string());
+            self.mark_probe_error(
+                generation,
+                dbflux_i18n::t!("document.object_browser.error.connection_unavailable"),
+            );
             cx.notify();
             return;
         };
@@ -262,9 +263,9 @@ impl ObjectBrowserDocument {
                                 &prefix_for_call,
                                 token.as_deref(),
                             ),
-                            None => Err(DbError::NotSupported(
-                                "Object-store API unavailable".to_string(),
-                            )),
+                            None => Err(DbError::NotSupported(dbflux_i18n::t!(
+                                "document.object_browser.error.api_unavailable"
+                            ))),
                         }
                     })
                     .await;
@@ -358,7 +359,10 @@ impl ObjectBrowserDocument {
 
         let Some(connection) = self.get_connection(cx) else {
             report_error(
-                UserFacingError::new(ErrorKind::Storage, "Connection is no longer active"),
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    dbflux_i18n::t!("document.object_browser.error.connection_unavailable"),
+                ),
                 cx,
             );
             return;
@@ -377,7 +381,9 @@ impl ObjectBrowserDocument {
                     let target = target.clone();
                     async move {
                         let api = connection.object_store_api().ok_or_else(|| {
-                            DbError::NotSupported("Object-store API unavailable".to_string())
+                            DbError::NotSupported(dbflux_i18n::t!(
+                                "document.object_browser.error.api_unavailable"
+                            ))
                         })?;
                         api.delete_prefix(&bucket, &target)
                     }
@@ -396,14 +402,9 @@ impl ObjectBrowserDocument {
             match &result {
                 Ok(outcome) => {
                     cx.update(|cx| {
-                        let word = if outcome.deleted_count == 1 {
-                            "object"
-                        } else {
-                            "objects"
-                        };
-                        Toast::success(format!(
-                            "Deleted {} {word} under s3://{bucket}/{target}",
-                            outcome.deleted_count
+                        Toast::success(crate::labels::delete_prefix_deleted_toast(
+                            outcome.deleted_count,
+                            &format!("s3://{bucket}/{target}"),
                         ))
                         .meta_right(now_hms())
                         .push(cx);

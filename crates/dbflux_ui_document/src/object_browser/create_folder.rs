@@ -28,15 +28,21 @@ use uuid::Uuid;
 /// prefix, so any nesting must be typed as separate creates.
 pub fn folder_name_error(name: &str) -> Option<String> {
     if name.is_empty() {
-        return Some("Folder name cannot be empty.".to_string());
+        return Some(dbflux_i18n::t!(
+            "document.object_browser.create_folder.error.empty"
+        ));
     }
 
     if name.starts_with('/') || name.ends_with('/') {
-        return Some("Folder name cannot start or end with a slash.".to_string());
+        return Some(dbflux_i18n::t!(
+            "document.object_browser.create_folder.error.leading_trailing_slash"
+        ));
     }
 
     if name.contains("//") {
-        return Some("Folder name cannot contain consecutive slashes.".to_string());
+        return Some(dbflux_i18n::t!(
+            "document.object_browser.create_folder.error.consecutive_slashes"
+        ));
     }
 
     None
@@ -67,7 +73,11 @@ impl ObjectBrowserDocument {
             return;
         }
 
-        let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("folder-name"));
+        let name_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "document.object_browser.create_folder.name_placeholder"
+            ))
+        });
 
         let subscription =
             cx.subscribe(
@@ -132,11 +142,12 @@ impl ObjectBrowserDocument {
         cx.notify();
 
         let Some(connection) = self.get_connection(cx) else {
+            let message = dbflux_i18n::t!("document.object_browser.error.connection_unavailable");
             report_error(
-                UserFacingError::new(ErrorKind::Storage, "Connection is no longer active"),
+                UserFacingError::new(ErrorKind::Storage, message.clone()),
                 cx,
             );
-            self.apply_folder_created(key, Err("Connection is no longer active".to_string()), cx);
+            self.apply_folder_created(key, Err(message), cx);
             return;
         };
 
@@ -154,7 +165,9 @@ impl ObjectBrowserDocument {
                     let key = key_for_task.clone();
                     async move {
                         let api = connection.object_store_api().ok_or_else(|| {
-                            DbError::NotSupported("Object-store API unavailable".to_string())
+                            DbError::NotSupported(dbflux_i18n::t!(
+                                "document.object_browser.error.api_unavailable"
+                            ))
                         })?;
                         api.put_object(&bucket, &key, Vec::new(), None)
                     }
@@ -204,9 +217,12 @@ impl ObjectBrowserDocument {
                     .unwrap_or_else(|| self.tree.current_prefix.clone());
 
                 self.new_folder = None;
-                Toast::success(format!("Created folder s3://{}/{key}", self.bucket))
-                    .meta_right(now_hms())
-                    .push(cx);
+                Toast::success(dbflux_i18n::t!(
+                    "document.object_browser.create_folder.created_toast",
+                    uri = format!("s3://{}/{key}", self.bucket)
+                ))
+                .meta_right(now_hms())
+                .push(cx);
                 self.reload_prefix(parent, cx);
             }
             Err(message) => {
@@ -244,11 +260,16 @@ impl ObjectBrowserDocument {
                     .items_center()
                     .gap(Spacing::SM)
                     .child(Icon::new(AppIcon::Folder).size(Heights::ICON_MD).muted())
-                    .child(Text::heading("New folder")),
+                    .child(Text::heading(dbflux_i18n::t!(
+                        "document.object_browser.create_folder.title"
+                    ))),
             )
             .child(
-                Text::caption(format!("in s3://{}/{}", self.bucket, state.parent))
-                    .muted_foreground(),
+                Text::caption(dbflux_i18n::t!(
+                    "document.object_browser.create_folder.location",
+                    uri = format!("s3://{}/{}", self.bucket, state.parent)
+                ))
+                .muted_foreground(),
             )
             .child(
                 div()
@@ -258,8 +279,10 @@ impl ObjectBrowserDocument {
                     .child(Input::new(&state.name_input).small().w_full())
                     .child(match &name_error {
                         Some(error) => Text::caption(error.clone()).danger(),
-                        None => Text::caption("Created as a zero-byte key ending in \"/\"")
-                            .muted_foreground(),
+                        None => Text::caption(dbflux_i18n::t!(
+                            "document.object_browser.create_folder.hint"
+                        ))
+                        .muted_foreground(),
                     }),
             );
 
@@ -286,7 +309,9 @@ impl ObjectBrowserDocument {
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.close_new_folder(cx);
                         }))
-                        .child(Text::caption("Cancel")),
+                        .child(Text::caption(dbflux_i18n::t!(
+                            "document.object_browser.create_folder.cancel"
+                        ))),
                 )
                 .child(
                     div()
@@ -312,14 +337,14 @@ impl ObjectBrowserDocument {
                             .size(Heights::ICON_SM)
                             .color(theme.primary_foreground),
                         )
-                        .child(
-                            Text::caption(if state.submitting {
-                                "Creating…"
+                        .child({
+                            let key = if state.submitting {
+                                "document.object_browser.create_folder.confirm_in_progress"
                             } else {
-                                "Create"
-                            })
-                            .color(theme.primary_foreground),
-                        ),
+                                "document.object_browser.create_folder.confirm"
+                            };
+                            Text::caption(dbflux_i18n::t!(key)).color(theme.primary_foreground)
+                        }),
                 ),
         );
 

@@ -109,7 +109,10 @@ impl ObjectBrowserDocument {
 
         let Some(connection) = self.get_connection(cx) else {
             report_error(
-                UserFacingError::new(ErrorKind::Storage, "Connection is no longer active"),
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    dbflux_i18n::t!("document.object_browser.error.connection_unavailable"),
+                ),
                 cx,
             );
             return;
@@ -129,7 +132,9 @@ impl ObjectBrowserDocument {
                     let key = key.clone();
                     async move {
                         let api = connection.object_store_api().ok_or_else(|| {
-                            DbError::NotSupported("Object-store API unavailable".to_string())
+                            DbError::NotSupported(dbflux_i18n::t!(
+                                "document.object_browser.error.api_unavailable"
+                            ))
                         })?;
                         api.delete_object(&bucket, &key)
                     }
@@ -147,9 +152,12 @@ impl ObjectBrowserDocument {
             match &result {
                 Ok(()) => {
                     cx.update(|cx| {
-                        Toast::success(format!("Deleted s3://{bucket}/{key}"))
-                            .meta_right(now_hms())
-                            .push(cx);
+                        Toast::success(dbflux_i18n::t!(
+                            "document.object_browser.delete.deleted_toast",
+                            uri = format!("s3://{bucket}/{key}")
+                        ))
+                        .meta_right(now_hms())
+                        .push(cx);
                     })
                     .ok();
                 }
@@ -183,7 +191,7 @@ impl ObjectBrowserDocument {
         let size_label = pending
             .size_bytes
             .map(crate::buckets_table::format_bytes)
-            .unwrap_or_else(|| "unknown size".to_string());
+            .unwrap_or_else(|| dbflux_i18n::t!("document.object_browser.delete.unknown_size"));
 
         div()
             .id("object-browser-delete-overlay")
@@ -214,11 +222,14 @@ impl ObjectBrowserDocument {
                                     .size(Heights::ICON_MD)
                                     .warning(),
                             )
-                            .child(Text::heading("Delete object?")),
+                            .child(Text::heading(dbflux_i18n::t!(
+                                "document.object_browser.delete.title"
+                            ))),
                     )
-                    .child(Text::muted(format!(
-                        "\"{}\" ({size_label}) will be removed. This cannot be undone.",
-                        pending.key
+                    .child(Text::muted(dbflux_i18n::t!(
+                        "document.object_browser.delete.body",
+                        key = pending.key.as_str(),
+                        size = size_label.as_str()
                     )))
                     .child(
                         div()
@@ -239,7 +250,9 @@ impl ObjectBrowserDocument {
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.cancel_delete_object(cx);
                                     }))
-                                    .child(Text::caption("Cancel")),
+                                    .child(Text::caption(dbflux_i18n::t!(
+                                        "document.object_browser.delete.cancel"
+                                    ))),
                             )
                             .child(
                                 div()
@@ -261,7 +274,12 @@ impl ObjectBrowserDocument {
                                             .size(Heights::ICON_SM)
                                             .color(theme.background),
                                     )
-                                    .child(Text::caption("Delete").color(theme.background)),
+                                    .child(
+                                        Text::caption(dbflux_i18n::t!(
+                                            "document.object_browser.delete.confirm"
+                                        ))
+                                        .color(theme.background),
+                                    ),
                             ),
                     ),
             )
