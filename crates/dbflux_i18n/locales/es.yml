@@ -992,6 +992,27 @@ document:
         document_missing_id: El documento debe tener un campo _id
         table_state_not_available: Estado de la tabla no disponible
         primary_key_not_determined: No se pudo determinar la clave primaria del documento
+      export:
+        error:
+          dialog_unavailable_fallback_failed: "Error al exportar — el selector de archivos no está disponible y no se pudo crear el directorio de reserva: %{error}"
+          failed: "Error al exportar: %{error}"
+        toast:
+          native_picker_fallback: "Selector de archivos nativo no disponible — se exportó a %{path} en su lugar. Instala xdg-desktop-portal, zenity o kdialog para obtener un diálogo de guardado."
+          exported: "Exportado a %{path}"
+      clipboard:
+        error:
+          binary_unsupported: El binario sin procesar no se puede copiar al portapapeles — elige Hex o Base64 en su lugar.
+          non_utf8: "No se puede copiar una salida que no es UTF-8: %{error}"
+          failed: "Error al copiar: %{error}"
+        toast:
+          copied: "Copiado %{format} (%{bytes} bytes) al portapapeles"
+      document:
+        toast:
+          inserted: Documento insertado
+          updated: Documento actualizado
+        error:
+          insert_failed: "Error al insertar el documento: %{error}"
+          update_failed: "Error al actualizar el documento: %{error}"
     grid:
       edit_bar:
         clean: Sin cambios pendientes
@@ -1058,11 +1079,22 @@ document:
         connection_not_found: Conexión no encontrada
         connection_not_available: Conexión no disponible
         invalid_json_filter: Filtro JSON no válido
+        chart_save_failed: 'No se pudo guardar el gráfico "%{name}": %{error}'
       placeholder:
         chart_name: Nombre del gráfico
+      filter:
+        open_in_builder: Abrir en el generador
       toast:
         query_imported: Consulta importada correctamente
         mutation_queued: Mutación en cola para aprobación.
+        chart_saved: 'Gráfico "%{name}" guardado'
+    saved_query:
+      toast:
+        saved_as: 'Guardada como "%{name}"'
+      error:
+        already_exists: 'Ya existe una consulta guardada con el nombre "%{name}"'
+        target_connection_unavailable: La conexión de destino no está disponible
+        import_failed: "Error al importar: no se encontró la tabla de origen en la conexión de destino"
     mutation:
       confirm:
         delete:
@@ -1090,6 +1122,13 @@ document:
         delete_identity_failed: "No se puede eliminar: no se pudo identificar la fila"
         bulk_delete_no_rows_identified: "No se puede eliminar: no se pudo identificar ninguna fila"
         bulk_delete_no_documents_identified: "No se puede eliminar: no se pudo identificar ningún documento"
+        read_only_connection: Esta conexión es de solo lectura. No se permiten mutaciones.
+        approval_queue_failed: "No se pudo encolar la mutación para aprobación: %{error}"
+        approval_requires_mcp: Las mutaciones en esta conexión requieren aprobación. Activa la función MCP para habilitar el flujo de aprobación.
+        connection_not_found: "Conexión no encontrada — no se puede ejecutar la mutación."
+        chunked_requires_primary_key: "El modo por lotes requiere una clave primaria — no se encontró ninguna para esta tabla."
+        chunked_execution_failed: "La mutación por lotes en '%{table}' falló: %{error}"
+        execution_failed: "La mutación en '%{table}' falló: %{error}"
       toast:
         document_updated: Documento actualizado
         saved: Guardado
@@ -1102,6 +1141,14 @@ document:
         partial_delete:
           row: "Se eliminaron %{done} de %{total} fila(s); luego falló: %{error}"
           document: "Se eliminaron %{done} de %{total} documento(s); luego falló: %{error}"
+        chunk_size_reduced: "Tamaño de lote reducido de %{original} a %{effective} — el límite de parámetros del controlador forzó el piso del lote por debajo de %{floor}. El procesamiento será más lento de lo esperado."
+        chunk_size_adjusted: "Tamaño de lote ajustado de %{original} a %{effective} para mantenerse dentro de los límites de parámetros del controlador."
+        execution_completed:
+          one: "Mutación completada: %{count} fila afectada"
+          many: "Mutación completada: %{count} filas afectadas"
+        execution_cancelled:
+          one: "Mutación cancelada después de procesar %{count} fila"
+          many: "Mutación cancelada después de procesar %{count} filas"
     row_inspector:
       badge:
         primary_key: PK
@@ -1370,6 +1417,9 @@ document:
       delete_member:
         title: ¿Eliminar miembro?
         message: '¿Eliminar "%{member}"? Esta acción no se puede deshacer.'
+      delete_confirm:
+        cancel: Cancelar
+        delete: Eliminar
       unknown_type: Desconocido
       value_header: Valor
       id_header: ID
@@ -1472,6 +1522,8 @@ document:
       header_target: Destino
       header_mapping_mode: Modo de mapeo
       header_transform: Transformación
+      error:
+        target_schema_read_failed: "No se pudo leer el esquema de la tabla de destino: %{error}"
     source_target:
       source_title: Origen
       target_title: Destino
@@ -1495,6 +1547,8 @@ document:
       key: Clave
       last_modified: Última modificación
       size: Tamaño
+    toast:
+      copied: "Copiado %{uri}"
     context_menu:
       item:
         preview: Vista previa
@@ -1890,10 +1944,14 @@ document:
         drop: Eliminar tabla
   shared:
     add: Agregar
+    error_prefix: "Error: %{message}"
     error_with_detail_clipboard: "%{title}: %{detail}"
+    hint:
+      enter_save_esc_cancel: "Enter para guardar, Esc para cancelar"
     refresh:
       off: Apagado
       custom: Personalizado
+      on_open: Al abrir
     result_warnings:
       context:
         query: resultado de consulta

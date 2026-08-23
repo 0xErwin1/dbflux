@@ -1763,36 +1763,269 @@ pub(crate) fn error_with_detail_clipboard(title: &str, detail: &str) -> String {
     )
 }
 
+/// Generic `"Error: {message}"` prefix used by inline error captions that
+/// have no more specific catalog bucket of their own.
+pub(crate) fn shared_error_prefix(message: &str) -> String {
+    dbflux_i18n::t!("document.shared.error_prefix", message = message)
+}
+
+/// Toast text after a saved query is stored under a new name.
+pub(crate) fn saved_query_saved_as_toast(name: &str) -> String {
+    dbflux_i18n::t!("document.data.saved_query.toast.saved_as", name = name)
+}
+
+/// Error text when a saved query name collides with an existing one.
+pub(crate) fn saved_query_already_exists_error(name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.data.saved_query.error.already_exists",
+        name = name
+    )
+}
+
+/// Error text when queueing a builder-driven mutation for MCP approval fails.
+///
+/// Only reachable from the `mcp`-gated approval flow in
+/// `DataGridPanel::on_mutation_run_requested` / `handle_mutation_confirm_outcome`.
+#[cfg(feature = "mcp")]
+pub(crate) fn mutation_approval_queue_failed_error(error: &str) -> String {
+    dbflux_i18n::t!(
+        "document.data.mutation.error.approval_queue_failed",
+        error = error
+    )
+}
+
+/// Toast shown when the effective chunk size for a chunked mutation had to
+/// be recomputed to stay within the driver's parameter limit.
+///
+/// Below `floor` this renders as a warning (processing will be slower);
+/// at or above it, as an informational adjustment notice. The caller
+/// chooses which toast severity to push based on the same floor check.
+pub(crate) fn mutation_chunk_size_reduced_toast(
+    original: u32,
+    effective: u32,
+    floor: u32,
+) -> String {
+    dbflux_i18n::t!(
+        "document.data.mutation.toast.chunk_size_reduced",
+        original = original,
+        effective = effective,
+        floor = floor
+    )
+}
+
+pub(crate) fn mutation_chunk_size_adjusted_toast(original: u32, effective: u32) -> String {
+    dbflux_i18n::t!(
+        "document.data.mutation.toast.chunk_size_adjusted",
+        original = original,
+        effective = effective
+    )
+}
+
+/// Error text for a chunked builder-mutation execution failure on `table`.
+pub(crate) fn mutation_chunked_execution_failed_error(table: &str, error: &str) -> String {
+    dbflux_i18n::t!(
+        "document.data.mutation.error.chunked_execution_failed",
+        table = table,
+        error = error
+    )
+}
+
+/// Error text for a direct or single-transaction builder-mutation execution
+/// failure on `table`.
+pub(crate) fn mutation_execution_failed_error(table: &str, error: &str) -> String {
+    dbflux_i18n::t!(
+        "document.data.mutation.error.execution_failed",
+        table = table,
+        error = error
+    )
+}
+
+/// Toast text for a builder mutation that completed, with the affected row
+/// count interpolated.
+///
+/// Uses the singular catalog bucket only for exactly one row; every other
+/// count, including zero, uses the plural bucket.
+pub(crate) fn mutation_execution_completed_toast(rows_affected: u64) -> String {
+    if rows_affected == 1 {
+        dbflux_i18n::t!(
+            "document.data.mutation.toast.execution_completed.one",
+            count = rows_affected
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.data.mutation.toast.execution_completed.many",
+            count = rows_affected
+        )
+    }
+}
+
+/// Toast text for a builder mutation cancelled partway through, with the
+/// number of rows already processed interpolated.
+///
+/// Uses the singular catalog bucket only for exactly one row; every other
+/// count, including zero, uses the plural bucket.
+pub(crate) fn mutation_execution_cancelled_toast(rows_affected: u64) -> String {
+    if rows_affected == 1 {
+        dbflux_i18n::t!(
+            "document.data.mutation.toast.execution_cancelled.one",
+            count = rows_affected
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.data.mutation.toast.execution_cancelled.many",
+            count = rows_affected
+        )
+    }
+}
+
+/// Toast text after a collection chart is saved under `name`.
+pub(crate) fn chart_saved_toast(name: &str) -> String {
+    dbflux_i18n::t!("document.data.grid.toast.chart_saved", name = name)
+}
+
+/// Error text when saving a collection chart under `name` fails.
+pub(crate) fn chart_save_failed_error(name: &str, error: &str) -> String {
+    dbflux_i18n::t!(
+        "document.data.grid.error.chart_save_failed",
+        name = name,
+        error = error
+    )
+}
+
+/// Error text when the native export file dialog is unavailable and the
+/// fallback export directory could not be created either.
+pub(crate) fn context_menu_export_dialog_fallback_failed_error(error: &str) -> String {
+    dbflux_i18n::t!(
+        "document.data.context_menu.export.error.dialog_unavailable_fallback_failed",
+        error = error
+    )
+}
+
+/// Toast text when the export succeeded through the fallback path because
+/// no native file picker was available.
+pub(crate) fn context_menu_export_native_picker_fallback_toast(path: &str) -> String {
+    dbflux_i18n::t!(
+        "document.data.context_menu.export.toast.native_picker_fallback",
+        path = path
+    )
+}
+
+/// Toast text after a successful export through the native file picker.
+pub(crate) fn context_menu_export_exported_toast(path: &str) -> String {
+    dbflux_i18n::t!(
+        "document.data.context_menu.export.toast.exported",
+        path = path
+    )
+}
+
+/// Error text when writing the export file fails.
+pub(crate) fn context_menu_export_failed_error(error: &str) -> String {
+    dbflux_i18n::t!(
+        "document.data.context_menu.export.error.failed",
+        error = error
+    )
+}
+
+/// Toast text after a result set is copied to the clipboard in `format`.
+pub(crate) fn context_menu_clipboard_copied_toast(format: &str, bytes: usize) -> String {
+    dbflux_i18n::t!(
+        "document.data.context_menu.clipboard.toast.copied",
+        format = format,
+        bytes = bytes
+    )
+}
+
+/// Error text when the exported buffer is not valid UTF-8 and therefore
+/// cannot be copied to the clipboard as text.
+pub(crate) fn context_menu_clipboard_non_utf8_error(error: &str) -> String {
+    dbflux_i18n::t!(
+        "document.data.context_menu.clipboard.error.non_utf8",
+        error = error
+    )
+}
+
+/// Error text when the export step that feeds the clipboard copy fails.
+pub(crate) fn context_menu_clipboard_copy_failed_error(error: &str) -> String {
+    dbflux_i18n::t!(
+        "document.data.context_menu.clipboard.error.failed",
+        error = error
+    )
+}
+
+/// Error text when inserting a document from the context-menu editor fails.
+pub(crate) fn context_menu_document_insert_failed_error(error: &str) -> String {
+    dbflux_i18n::t!(
+        "document.data.context_menu.document.error.insert_failed",
+        error = error
+    )
+}
+
+/// Error text when updating a document from the context-menu editor fails.
+pub(crate) fn context_menu_document_update_failed_error(error: &str) -> String {
+    dbflux_i18n::t!(
+        "document.data.context_menu.document.error.update_failed",
+        error = error
+    )
+}
+
+/// Toast text after an object's canonical `s3://bucket/key` URI is copied
+/// to the clipboard.
+pub(crate) fn object_browser_copied_uri_toast(uri: &str) -> String {
+    dbflux_i18n::t!("document.object_browser.toast.copied", uri = uri)
+}
+
+/// Error text when the migrate wizard's column-mapping grid cannot read the
+/// target table's schema.
+pub(crate) fn migrate_wizard_target_schema_read_failed_error(error: &str) -> String {
+    dbflux_i18n::t!(
+        "document.migrate_wizard.mapping.error.target_schema_read_failed",
+        error = error
+    )
+}
+
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "mcp")]
+    use super::mutation_approval_queue_failed_error;
     use super::{
         MutationItemKind, add_member_modal_placeholders, add_member_modal_section_label,
         add_member_modal_title, agg_fn_display, assignment_value_kind_label,
         audit_actor_type_label, audit_category_label, audit_level_label, audit_outcome_label,
         bool_op_label, bucket_encryption_choice_label, buckets_table_summary_line,
         builder_mode_label, bulk_delete_success_label, chart_degraded_copy, chart_dock_shape_label,
-        chart_rail_why_text, chart_toolbar_points_label, code_toolbar_shortcut_hint_label,
-        comparator_label, configure_chart_kind_label, copy_query_language_label,
-        dangerous_query_body, dangerous_query_title, delete_confirm_copy,
-        delete_prefix_delete_button_label, delete_prefix_deleted_toast, delete_prefix_probe_totals,
-        delete_rows_label, error_with_detail_clipboard, execution_count_state_label,
-        execution_mode_label, export_running_position_label, export_running_rows_label,
-        export_summary_label, export_table_status_line, history_items_count_label,
-        history_tab_label, image_decode_error, image_header_error, import_mapping_mode_label,
-        import_rail_labels, import_summary_label, import_table_status_line,
-        incomplete_aggregate_rows_label, join_kind_label, live_output_lines_label,
-        live_output_truncated_label, metric_picker_custom_dropdown_label,
+        chart_rail_why_text, chart_save_failed_error, chart_saved_toast,
+        chart_toolbar_points_label, code_toolbar_shortcut_hint_label, comparator_label,
+        configure_chart_kind_label, context_menu_clipboard_copied_toast,
+        context_menu_clipboard_copy_failed_error, context_menu_clipboard_non_utf8_error,
+        context_menu_document_insert_failed_error, context_menu_document_update_failed_error,
+        context_menu_export_dialog_fallback_failed_error, context_menu_export_exported_toast,
+        context_menu_export_failed_error, context_menu_export_native_picker_fallback_toast,
+        copy_query_language_label, dangerous_query_body, dangerous_query_title,
+        delete_confirm_copy, delete_prefix_delete_button_label, delete_prefix_deleted_toast,
+        delete_prefix_probe_totals, delete_rows_label, error_with_detail_clipboard,
+        execution_count_state_label, execution_mode_label, export_running_position_label,
+        export_running_rows_label, export_summary_label, export_table_status_line,
+        history_items_count_label, history_tab_label, image_decode_error, image_header_error,
+        import_mapping_mode_label, import_rail_labels, import_summary_label,
+        import_table_status_line, incomplete_aggregate_rows_label, join_kind_label,
+        live_output_lines_label, live_output_truncated_label, metric_picker_custom_dropdown_label,
         metric_picker_dimensions_error_label, metric_picker_period_error_label,
         metric_picker_period_not_a_number_error, metric_picker_statistic_error_label,
         migrate_mapping_unmapped_count_label, migrate_running_position_label,
         migrate_running_rows_label, migrate_source_target_checked_count_label,
-        migrate_summary_label, migrate_table_status_line, object_browser_status_summary,
-        object_browser_versions_count_label, partial_delete_label, pending_change_count_label,
-        pending_edits_summary, presign_expiry_label, presign_method_label, preview_gate_message,
-        refresh_policy_label, result_tab_count_label, row_count_label, schema_change_description,
-        script_confirm_message_label, sort_direction_label, source_window_error_message,
-        syntax_error_with_hint, table_action_description, unsaved_changes_label,
-        update_columns_label, valid_lines_label, versioning_off_label, versioning_status_label,
+        migrate_summary_label, migrate_table_status_line,
+        migrate_wizard_target_schema_read_failed_error, mutation_chunk_size_adjusted_toast,
+        mutation_chunk_size_reduced_toast, mutation_chunked_execution_failed_error,
+        mutation_execution_cancelled_toast, mutation_execution_completed_toast,
+        mutation_execution_failed_error, object_browser_copied_uri_toast,
+        object_browser_status_summary, object_browser_versions_count_label, partial_delete_label,
+        pending_change_count_label, pending_edits_summary, presign_expiry_label,
+        presign_method_label, preview_gate_message, refresh_policy_label, result_tab_count_label,
+        row_count_label, saved_query_already_exists_error, saved_query_saved_as_toast,
+        schema_change_description, script_confirm_message_label, shared_error_prefix,
+        sort_direction_label, source_window_error_message, syntax_error_with_hint,
+        table_action_description, unsaved_changes_label, update_columns_label, valid_lines_label,
+        versioning_off_label, versioning_status_label,
     };
     use crate::buckets_table::BucketEncryptionChoice;
     use crate::object_browser::{PresignExpiry, PresignMethodChoice, PreviewGate};
@@ -5183,5 +5416,318 @@ mod tests {
         assert!(value.contains("Invalid JSON filter"));
         assert!(value.contains("unexpected end of input"));
         assert_ne!(value, "document.shared.error_with_detail_clipboard");
+    }
+
+    /// Every catalog key introduced to fix the sdd-verify F1–F10 findings
+    /// resolves to real copy — not an empty string, not the raw key, and not
+    /// the `{locale}.{key}` fallback rust-i18n emits for a missing entry.
+    #[test]
+    fn verify_findings_keys_resolve_in_both_locales() {
+        let keys = [
+            // F1: saved query + builder mutation flow.
+            "document.data.saved_query.toast.saved_as",
+            "document.data.saved_query.error.already_exists",
+            "document.data.saved_query.error.target_connection_unavailable",
+            "document.data.saved_query.error.import_failed",
+            "document.data.mutation.error.read_only_connection",
+            "document.data.mutation.error.approval_queue_failed",
+            "document.data.mutation.error.approval_requires_mcp",
+            "document.data.mutation.error.connection_not_found",
+            "document.data.mutation.error.chunked_requires_primary_key",
+            "document.data.mutation.error.chunked_execution_failed",
+            "document.data.mutation.error.execution_failed",
+            "document.data.mutation.toast.chunk_size_reduced",
+            "document.data.mutation.toast.chunk_size_adjusted",
+            "document.data.mutation.toast.execution_completed.one",
+            "document.data.mutation.toast.execution_completed.many",
+            "document.data.mutation.toast.execution_cancelled.one",
+            "document.data.mutation.toast.execution_cancelled.many",
+            // F2: collection-chart save toast.
+            "document.data.grid.toast.chart_saved",
+            "document.data.grid.error.chart_save_failed",
+            // F3: export / clipboard / document context-menu flows.
+            "document.data.context_menu.export.error.dialog_unavailable_fallback_failed",
+            "document.data.context_menu.export.toast.native_picker_fallback",
+            "document.data.context_menu.export.toast.exported",
+            "document.data.context_menu.export.error.failed",
+            "document.data.context_menu.clipboard.error.binary_unsupported",
+            "document.data.context_menu.clipboard.toast.copied",
+            "document.data.context_menu.clipboard.error.non_utf8",
+            "document.data.context_menu.clipboard.error.failed",
+            "document.data.context_menu.document.toast.inserted",
+            "document.data.context_menu.document.toast.updated",
+            "document.data.context_menu.document.error.insert_failed",
+            "document.data.context_menu.document.error.update_failed",
+            // F4: object browser URI copy toast.
+            "document.object_browser.toast.copied",
+            // F5: key/member delete confirmation buttons.
+            "document.key_value.render.delete_confirm.cancel",
+            "document.key_value.render.delete_confirm.delete",
+            // F6: history modal save hint.
+            "document.shared.hint.enter_save_esc_cancel",
+            // F7: filter bar resolve-error action.
+            "document.data.grid.filter.open_in_builder",
+            // F8: migrate wizard column-mapping schema fetch error.
+            "document.migrate_wizard.mapping.error.target_schema_read_failed",
+            // F9: key-value render error prefix.
+            "document.shared.error_prefix",
+            // F10: dashboard refresh policy option resolver.
+            "document.shared.refresh.on_open",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn verify_findings_mutation_error_differs_between_locales() {
+        let en = dbflux_i18n::t!(
+            "document.data.mutation.error.read_only_connection",
+            locale = "en"
+        );
+        let es = dbflux_i18n::t!(
+            "document.data.mutation.error.read_only_connection",
+            locale = "es"
+        );
+
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn saved_query_saved_as_toast_interpolates_name() {
+        let value = saved_query_saved_as_toast("nightly orders");
+
+        assert!(value.contains("nightly orders"));
+        assert_ne!(value, "document.data.saved_query.toast.saved_as");
+    }
+
+    #[test]
+    fn saved_query_already_exists_error_interpolates_name() {
+        let value = saved_query_already_exists_error("nightly orders");
+
+        assert!(value.contains("nightly orders"));
+        assert_ne!(value, "document.data.saved_query.error.already_exists");
+    }
+
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn mutation_approval_queue_failed_error_interpolates_cause() {
+        let value = mutation_approval_queue_failed_error("policy engine unavailable");
+
+        assert!(value.contains("policy engine unavailable"));
+        assert_ne!(value, "document.data.mutation.error.approval_queue_failed");
+    }
+
+    #[test]
+    fn mutation_chunk_size_reduced_toast_interpolates_all_counts() {
+        let value = mutation_chunk_size_reduced_toast(5_000, 800, 1_000);
+
+        assert!(value.contains("5000"));
+        assert!(value.contains("800"));
+        assert!(value.contains("1000"));
+        assert_ne!(value, "document.data.mutation.toast.chunk_size_reduced");
+    }
+
+    #[test]
+    fn mutation_chunk_size_adjusted_toast_interpolates_both_sizes() {
+        let value = mutation_chunk_size_adjusted_toast(5_000, 1_200);
+
+        assert!(value.contains("5000"));
+        assert!(value.contains("1200"));
+        assert_ne!(value, "document.data.mutation.toast.chunk_size_adjusted");
+    }
+
+    #[test]
+    fn mutation_chunked_execution_failed_error_interpolates_table_and_error() {
+        let value = mutation_chunked_execution_failed_error("orders", "deadlock detected");
+
+        assert!(value.contains("orders"));
+        assert!(value.contains("deadlock detected"));
+        assert_ne!(
+            value,
+            "document.data.mutation.error.chunked_execution_failed"
+        );
+    }
+
+    #[test]
+    fn mutation_execution_failed_error_interpolates_table_and_error() {
+        let value = mutation_execution_failed_error("orders", "connection reset");
+
+        assert!(value.contains("orders"));
+        assert!(value.contains("connection reset"));
+        assert_ne!(value, "document.data.mutation.error.execution_failed");
+    }
+
+    #[test]
+    fn mutation_execution_completed_toast_uses_singular_bucket_for_one_row() {
+        let one = mutation_execution_completed_toast(1);
+        let many = mutation_execution_completed_toast(2);
+
+        assert_ne!(one, many);
+        assert!(one.contains('1'));
+        assert!(many.contains('2'));
+    }
+
+    #[test]
+    fn mutation_execution_completed_toast_uses_plural_bucket_for_zero_rows() {
+        let zero = mutation_execution_completed_toast(0);
+        let many = mutation_execution_completed_toast(2);
+
+        assert_eq!(
+            zero.replace('0', "2"),
+            many,
+            "zero rows should render through the plural bucket, like other counts above one"
+        );
+    }
+
+    #[test]
+    fn mutation_execution_cancelled_toast_uses_singular_bucket_for_one_row() {
+        let one = mutation_execution_cancelled_toast(1);
+        let many = mutation_execution_cancelled_toast(3);
+
+        assert_ne!(one, many);
+        assert!(one.contains('1'));
+        assert!(many.contains('3'));
+    }
+
+    #[test]
+    fn chart_saved_toast_interpolates_name() {
+        let value = chart_saved_toast("Latency p99");
+
+        assert!(value.contains("Latency p99"));
+        assert_ne!(value, "document.data.grid.toast.chart_saved");
+    }
+
+    #[test]
+    fn chart_save_failed_error_interpolates_name_and_cause() {
+        let value = chart_save_failed_error("Latency p99", "storage unavailable");
+
+        assert!(value.contains("Latency p99"));
+        assert!(value.contains("storage unavailable"));
+        assert_ne!(value, "document.data.grid.error.chart_save_failed");
+    }
+
+    #[test]
+    fn context_menu_export_dialog_fallback_failed_error_interpolates_cause() {
+        let value = context_menu_export_dialog_fallback_failed_error("permission denied");
+
+        assert!(value.contains("permission denied"));
+        assert_ne!(
+            value,
+            "document.data.context_menu.export.error.dialog_unavailable_fallback_failed"
+        );
+    }
+
+    #[test]
+    fn context_menu_export_native_picker_fallback_toast_interpolates_path() {
+        let value = context_menu_export_native_picker_fallback_toast("/tmp/export.csv");
+
+        assert!(value.contains("/tmp/export.csv"));
+        assert_ne!(
+            value,
+            "document.data.context_menu.export.toast.native_picker_fallback"
+        );
+    }
+
+    #[test]
+    fn context_menu_export_exported_toast_interpolates_path() {
+        let value = context_menu_export_exported_toast("/tmp/export.csv");
+
+        assert!(value.contains("/tmp/export.csv"));
+        assert_ne!(value, "document.data.context_menu.export.toast.exported");
+    }
+
+    #[test]
+    fn context_menu_export_failed_error_interpolates_cause() {
+        let value = context_menu_export_failed_error("disk full");
+
+        assert!(value.contains("disk full"));
+        assert_ne!(value, "document.data.context_menu.export.error.failed");
+    }
+
+    #[test]
+    fn context_menu_clipboard_copied_toast_interpolates_format_and_bytes() {
+        let value = context_menu_clipboard_copied_toast("CSV", 4096);
+
+        assert!(value.contains("CSV"));
+        assert!(value.contains("4096"));
+        assert_ne!(value, "document.data.context_menu.clipboard.toast.copied");
+    }
+
+    #[test]
+    fn context_menu_clipboard_non_utf8_error_interpolates_cause() {
+        let value = context_menu_clipboard_non_utf8_error("invalid byte sequence");
+
+        assert!(value.contains("invalid byte sequence"));
+        assert_ne!(value, "document.data.context_menu.clipboard.error.non_utf8");
+    }
+
+    #[test]
+    fn context_menu_clipboard_copy_failed_error_interpolates_cause() {
+        let value = context_menu_clipboard_copy_failed_error("encoder failure");
+
+        assert!(value.contains("encoder failure"));
+        assert_ne!(value, "document.data.context_menu.clipboard.error.failed");
+    }
+
+    #[test]
+    fn context_menu_document_insert_failed_error_interpolates_cause() {
+        let value = context_menu_document_insert_failed_error("duplicate key");
+
+        assert!(value.contains("duplicate key"));
+        assert_ne!(
+            value,
+            "document.data.context_menu.document.error.insert_failed"
+        );
+    }
+
+    #[test]
+    fn context_menu_document_update_failed_error_interpolates_cause() {
+        let value = context_menu_document_update_failed_error("version conflict");
+
+        assert!(value.contains("version conflict"));
+        assert_ne!(
+            value,
+            "document.data.context_menu.document.error.update_failed"
+        );
+    }
+
+    #[test]
+    fn object_browser_copied_uri_toast_interpolates_uri() {
+        let value = object_browser_copied_uri_toast("s3://bucket/key.json");
+
+        assert!(value.contains("s3://bucket/key.json"));
+        assert_ne!(value, "document.object_browser.toast.copied");
+    }
+
+    #[test]
+    fn migrate_wizard_target_schema_read_failed_error_interpolates_cause() {
+        let value = migrate_wizard_target_schema_read_failed_error("timeout");
+
+        assert!(value.contains("timeout"));
+        assert_ne!(
+            value,
+            "document.migrate_wizard.mapping.error.target_schema_read_failed"
+        );
+    }
+
+    #[test]
+    fn shared_error_prefix_interpolates_message() {
+        let value = shared_error_prefix("connection lost");
+
+        assert!(value.contains("connection lost"));
+        assert!(value.starts_with("Error"));
+        assert_ne!(value, "document.shared.error_prefix");
     }
 }

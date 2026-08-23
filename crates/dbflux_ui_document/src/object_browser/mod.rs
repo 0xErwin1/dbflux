@@ -736,7 +736,7 @@ impl ObjectBrowserDocument {
         let uri = format!("s3://{}/{key}", self.bucket);
 
         cx.write_to_clipboard(ClipboardItem::new_string(uri.clone()));
-        dbflux_ui_base::toast::Toast::success(format!("Copied {uri}"))
+        dbflux_ui_base::toast::Toast::success(crate::labels::object_browser_copied_uri_toast(&uri))
             .meta_right(dbflux_ui_base::toast::now_hms())
             .push(cx);
     }

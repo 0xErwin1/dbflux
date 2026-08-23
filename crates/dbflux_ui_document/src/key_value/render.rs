@@ -794,7 +794,7 @@ impl Render for super::KeyValueDocument {
                     )
             })
             .when_some(error_message, |this, message| {
-                this.child(Text::caption(format!("Error: {}", message)))
+                this.child(Text::caption(crate::labels::shared_error_prefix(&message)))
             })
             // Keys list
             .child(div().flex_1().overflow_y_scrollbar().children(
