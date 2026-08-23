@@ -411,12 +411,16 @@ impl ConnectionManagerWindow {
             })
             .collect();
 
-        let input_name = cx.new(|cx| InputState::new(window, cx).placeholder("Connection name"));
+        let input_name = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.connection_name"
+            ))
+        });
         let driver_filter_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Filter by name, driver, port…"));
         let input_password = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Password")
+                .placeholder(dbflux_i18n::t!("connection_manager.placeholder.password"))
                 .masked(true)
         });
         let host_value_source_selector =
@@ -440,31 +444,54 @@ impl ConnectionManagerWindow {
             cx.new(|cx| InputState::new(window, cx).placeholder("~/.ssh/id_rsa"));
         let input_ssh_key_passphrase = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Key passphrase (optional)")
+                .placeholder(dbflux_i18n::t!(
+                    "connection_manager.placeholder.key_passphrase_optional"
+                ))
                 .masked(true)
         });
         let input_ssh_password = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("SSH password")
+                .placeholder(dbflux_i18n::t!(
+                    "connection_manager.placeholder.ssh_password"
+                ))
                 .masked(true)
         });
 
-        let ssl_ca_cert_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Path to CA certificate"));
-        let ssl_client_cert_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Path to client certificate"));
-        let ssl_client_key_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Path to client key"));
+        let ssl_ca_cert_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.ca_cert_path"
+            ))
+        });
+        let ssl_client_cert_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.client_cert_path"
+            ))
+        });
+        let ssl_client_key_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.client_key_path"
+            ))
+        });
 
-        let ssh_tunnel_dropdown =
-            cx.new(|_cx| Dropdown::new("ssh-tunnel-dropdown").placeholder("Select SSH Tunnel"));
-        let proxy_dropdown =
-            cx.new(|_cx| Dropdown::new("proxy-dropdown").placeholder("Select Proxy"));
+        let ssh_tunnel_dropdown = cx.new(|_cx| {
+            Dropdown::new("ssh-tunnel-dropdown").placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.select_ssh_tunnel"
+            ))
+        });
+        let proxy_dropdown = cx.new(|_cx| {
+            Dropdown::new("proxy-dropdown").placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.select_proxy"
+            ))
+        });
 
-        let auth_profile_dropdown =
-            cx.new(|_cx| Dropdown::new("auth-profile-dropdown").placeholder("None"));
-        let access_method_dropdown =
-            cx.new(|_cx| Dropdown::new("access-method-dropdown").placeholder("Direct"));
+        let auth_profile_dropdown = cx.new(|_cx| {
+            Dropdown::new("auth-profile-dropdown")
+                .placeholder(dbflux_i18n::t!("connection_manager.placeholder.none"))
+        });
+        let access_method_dropdown = cx.new(|_cx| {
+            Dropdown::new("access-method-dropdown")
+                .placeholder(dbflux_i18n::t!("connection_manager.access_method.direct"))
+        });
 
         let input_ssm_instance_id =
             cx.new(|cx| InputState::new(window, cx).placeholder("i-0123456789abcdef0"));
@@ -484,27 +511,47 @@ impl ConnectionManagerWindow {
             Dropdown::new("ssm-auth-profile-dropdown").placeholder("Use Connection Auth Profile")
         });
 
-        let conn_refresh_policy_dropdown =
-            cx.new(|_cx| Dropdown::new("conn-refresh-policy").placeholder("Use Driver Default"));
+        let conn_refresh_policy_dropdown = cx.new(|_cx| {
+            Dropdown::new("conn-refresh-policy").placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.use_driver_default"
+            ))
+        });
         let conn_refresh_interval_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("seconds")
                 .default_value("5")
         });
-        let conn_confirm_dangerous_dropdown =
-            cx.new(|_cx| Dropdown::new("conn-confirm-dangerous").placeholder("Use Driver Default"));
-        let conn_requires_where_dropdown =
-            cx.new(|_cx| Dropdown::new("conn-requires-where").placeholder("Use Driver Default"));
-        let conn_requires_preview_dropdown =
-            cx.new(|_cx| Dropdown::new("conn-requires-preview").placeholder("Use Driver Default"));
-        let conn_pre_hook_dropdown =
-            cx.new(|_cx| Dropdown::new("conn-pre-hook").placeholder("No hook"));
-        let conn_post_hook_dropdown =
-            cx.new(|_cx| Dropdown::new("conn-post-hook").placeholder("No hook"));
-        let conn_pre_disconnect_hook_dropdown =
-            cx.new(|_cx| Dropdown::new("conn-pre-disconnect-hook").placeholder("No hook"));
-        let conn_post_disconnect_hook_dropdown =
-            cx.new(|_cx| Dropdown::new("conn-post-disconnect-hook").placeholder("No hook"));
+        let conn_confirm_dangerous_dropdown = cx.new(|_cx| {
+            Dropdown::new("conn-confirm-dangerous").placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.use_driver_default"
+            ))
+        });
+        let conn_requires_where_dropdown = cx.new(|_cx| {
+            Dropdown::new("conn-requires-where").placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.use_driver_default"
+            ))
+        });
+        let conn_requires_preview_dropdown = cx.new(|_cx| {
+            Dropdown::new("conn-requires-preview").placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.use_driver_default"
+            ))
+        });
+        let conn_pre_hook_dropdown = cx.new(|_cx| {
+            Dropdown::new("conn-pre-hook")
+                .placeholder(dbflux_i18n::t!("connection_manager.placeholder.no_hook"))
+        });
+        let conn_post_hook_dropdown = cx.new(|_cx| {
+            Dropdown::new("conn-post-hook")
+                .placeholder(dbflux_i18n::t!("connection_manager.placeholder.no_hook"))
+        });
+        let conn_pre_disconnect_hook_dropdown = cx.new(|_cx| {
+            Dropdown::new("conn-pre-disconnect-hook")
+                .placeholder(dbflux_i18n::t!("connection_manager.placeholder.no_hook"))
+        });
+        let conn_post_disconnect_hook_dropdown = cx.new(|_cx| {
+            Dropdown::new("conn-post-disconnect-hook")
+                .placeholder(dbflux_i18n::t!("connection_manager.placeholder.no_hook"))
+        });
         let conn_pre_hook_extra_input = cx
             .new(|cx| InputState::new(window, cx).placeholder("extra hook IDs (comma-separated)"));
         let conn_post_hook_extra_input = cx
@@ -513,15 +560,22 @@ impl ConnectionManagerWindow {
             .new(|cx| InputState::new(window, cx).placeholder("extra hook IDs (comma-separated)"));
         let conn_post_disconnect_hook_extra_input = cx
             .new(|cx| InputState::new(window, cx).placeholder("extra hook IDs (comma-separated)"));
-        let conn_mcp_actor_dropdown =
-            cx.new(|_cx| Dropdown::new("conn-mcp-actor").placeholder("Select trusted client"));
-        let conn_mcp_role_dropdown =
-            cx.new(|_cx| Dropdown::new("conn-mcp-role").placeholder("No role"));
+        let conn_mcp_actor_dropdown = cx.new(|_cx| {
+            Dropdown::new("conn-mcp-actor").placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.select_trusted_client"
+            ))
+        });
+        let conn_mcp_role_dropdown = cx.new(|_cx| {
+            Dropdown::new("conn-mcp-role")
+                .placeholder(dbflux_i18n::t!("connection_manager.placeholder.no_role"))
+        });
         let conn_mcp_role_multi_select = cx.new(|_cx| {
             MultiSelect::new("conn-mcp-extra-roles").placeholder("Select additional roles…")
         });
-        let conn_mcp_policy_dropdown =
-            cx.new(|_cx| Dropdown::new("conn-mcp-policy").placeholder("No policy"));
+        let conn_mcp_policy_dropdown = cx.new(|_cx| {
+            Dropdown::new("conn-mcp-policy")
+                .placeholder(dbflux_i18n::t!("connection_manager.placeholder.no_policy"))
+        });
         let conn_mcp_policy_multi_select = cx.new(|_cx| {
             MultiSelect::new("conn-mcp-extra-policies").placeholder("Select additional policies…")
         });
@@ -2551,7 +2605,8 @@ impl ConnectionManagerWindow {
         let reference_only = self.app_state.read(cx).reference_only_auth_provider_ids();
 
         let mut auth_items = vec![dbflux_components::controls::DropdownItem::with_value(
-            "None", "",
+            dbflux_i18n::t!("connection_manager.placeholder.none"),
+            "",
         )];
         let mut ssm_items = vec![dbflux_components::controls::DropdownItem::with_value(
             "Use Connection Auth Profile",
@@ -2596,12 +2651,12 @@ impl ConnectionManagerWindow {
         }
 
         auth_items.push(dbflux_components::controls::DropdownItem::with_value(
-            "New Auth Profile...",
+            dbflux_i18n::t!("connection_manager.new_auth_profile"),
             "__new_auth_profile__",
         ));
 
         ssm_items.push(dbflux_components::controls::DropdownItem::with_value(
-            "New Auth Profile...",
+            dbflux_i18n::t!("connection_manager.new_auth_profile"),
             "__new_auth_profile__",
         ));
 
@@ -2742,7 +2797,7 @@ impl ConnectionManagerWindow {
         let mut options = WindowOptions {
             app_id: Some(dbflux_core::ReleaseChannel::current().app_id().into()),
             titlebar: Some(TitlebarOptions {
-                title: Some("AWS SSO Wizard".into()),
+                title: Some(dbflux_i18n::t!("connection_manager.aws_sso_wizard_title").into()),
                 ..Default::default()
             }),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -2760,8 +2815,11 @@ impl ConnectionManagerWindow {
             cx.new(|cx| Root::new(wizard, window, cx))
         }) {
             report_error(
-                UserFacingError::new(ErrorKind::User, "Failed to open AWS SSO wizard window")
-                    .with_cause(format!("{error}")),
+                UserFacingError::new(
+                    ErrorKind::User,
+                    dbflux_i18n::t!("connection_manager.aws_sso_open_failed"),
+                )
+                .with_cause(format!("{error}")),
                 cx,
             );
         }
@@ -3320,7 +3378,7 @@ impl ConnectionManagerWindow {
 
         let task = cx.background_executor().spawn(async move {
             let dialog = rfd::FileDialog::new()
-                .set_title("Select SSH Private Key")
+                .set_title(dbflux_i18n::t!("connection_manager.select_ssh_key_title"))
                 .set_directory(&start_dir);
 
             dialog.pick_file()
@@ -3359,9 +3417,9 @@ impl ConnectionManagerWindow {
         let this = cx.entity().clone();
 
         let title = match slot {
-            SslCertSlot::CaCert => "Select CA certificate",
-            SslCertSlot::ClientCert => "Select client certificate",
-            SslCertSlot::ClientKey => "Select client key",
+            SslCertSlot::CaCert => dbflux_i18n::t!("connection_manager.select_ca_cert"),
+            SslCertSlot::ClientCert => dbflux_i18n::t!("connection_manager.select_client_cert"),
+            SslCertSlot::ClientKey => dbflux_i18n::t!("connection_manager.select_client_key"),
         };
 
         let start_dir = current_value
@@ -3375,8 +3433,14 @@ impl ConnectionManagerWindow {
             let dialog = rfd::FileDialog::new()
                 .set_title(title)
                 .set_directory(&start_dir)
-                .add_filter("Certificates / keys", &["pem", "crt", "cer", "key", "der"])
-                .add_filter("All files", &["*"]);
+                .add_filter(
+                    dbflux_i18n::t!("connection_manager.filter_certificates"),
+                    &["pem", "crt", "cer", "key", "der"],
+                )
+                .add_filter(
+                    dbflux_i18n::t!("connection_manager.filter_all_files"),
+                    &["*"],
+                );
 
             dialog.pick_file()
         });
@@ -3451,7 +3515,7 @@ impl ConnectionManagerWindow {
 
         let task = cx.background_executor().spawn(async move {
             let dialog = rfd::FileDialog::new()
-                .set_title("Select Database File")
+                .set_title(dbflux_i18n::t!("connection_manager.select_database_file"))
                 .set_directory(&start_dir);
             dialog.pick_file()
         });
@@ -3501,10 +3565,22 @@ impl ConnectionManagerWindow {
     /// Populate the access method dropdown with the unified access modes.
     fn populate_access_method_dropdown(&mut self, cx: &mut Context<Self>) {
         let items = vec![
-            dbflux_components::controls::DropdownItem::with_value("Direct", "direct"),
-            dbflux_components::controls::DropdownItem::with_value("SSH Tunnel", "ssh"),
-            dbflux_components::controls::DropdownItem::with_value("Proxy", "proxy"),
-            dbflux_components::controls::DropdownItem::with_value("SSM Port Forwarding", "ssm"),
+            dbflux_components::controls::DropdownItem::with_value(
+                dbflux_i18n::t!("connection_manager.access_method.direct"),
+                "direct",
+            ),
+            dbflux_components::controls::DropdownItem::with_value(
+                dbflux_i18n::t!("connection_manager.access_method.ssh_tunnel"),
+                "ssh",
+            ),
+            dbflux_components::controls::DropdownItem::with_value(
+                dbflux_i18n::t!("connection_manager.access_method.proxy"),
+                "proxy",
+            ),
+            dbflux_components::controls::DropdownItem::with_value(
+                dbflux_i18n::t!("connection_manager.access_method.ssm"),
+                "ssm",
+            ),
         ];
 
         let selected_index = self.access_tab_mode_to_dropdown_index();
@@ -3865,5 +3941,93 @@ mod tests {
             None,
             "Empty form must return None"
         );
+    }
+
+    const CONNECTION_MANAGER_PLACEHOLDER_KEYS: &[&str] = &[
+        "connection_manager.placeholder.connection_name",
+        "connection_manager.placeholder.password",
+        "connection_manager.placeholder.key_passphrase_optional",
+        "connection_manager.placeholder.ssh_password",
+        "connection_manager.placeholder.ca_cert_path",
+        "connection_manager.placeholder.client_cert_path",
+        "connection_manager.placeholder.client_key_path",
+        "connection_manager.placeholder.select_ssh_tunnel",
+        "connection_manager.placeholder.select_proxy",
+        "connection_manager.placeholder.none",
+        "connection_manager.placeholder.use_driver_default",
+        "connection_manager.placeholder.no_hook",
+        "connection_manager.placeholder.select_trusted_client",
+        "connection_manager.placeholder.no_role",
+        "connection_manager.placeholder.no_policy",
+        "connection_manager.access_method.direct",
+        "connection_manager.access_method.ssh_tunnel",
+        "connection_manager.access_method.proxy",
+        "connection_manager.access_method.ssm",
+        "connection_manager.new_auth_profile",
+        "connection_manager.aws_sso_wizard_title",
+        "connection_manager.aws_sso_open_failed",
+        "connection_manager.select_ssh_key_title",
+        "connection_manager.select_ca_cert",
+        "connection_manager.select_client_cert",
+        "connection_manager.select_client_key",
+        "connection_manager.filter_certificates",
+        "connection_manager.filter_all_files",
+        "connection_manager.select_database_file",
+    ];
+
+    #[test]
+    fn connection_manager_placeholder_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in CONNECTION_MANAGER_PLACEHOLDER_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn connection_manager_access_method_differs_between_locales() {
+        let en = dbflux_i18n::t!("connection_manager.access_method.ssh_tunnel", locale = "en");
+        let es = dbflux_i18n::t!("connection_manager.access_method.ssh_tunnel", locale = "es");
+
+        assert_ne!(
+            en, es,
+            "connection_manager.access_method.ssh_tunnel should differ between en and es"
+        );
+    }
+
+    #[test]
+    fn connection_manager_new_auth_profile_exact_values() {
+        let en = dbflux_i18n::t!("connection_manager.new_auth_profile", locale = "en");
+        let es = dbflux_i18n::t!("connection_manager.new_auth_profile", locale = "es");
+
+        assert_eq!(en, "New Auth Profile...");
+        assert_eq!(es, "Nuevo perfil de autenticación...");
+    }
+
+    #[test]
+    fn access_method_dropdown_item_value_ids_stay_untranslated() {
+        for locale in ["en", "es"] {
+            let label = dbflux_i18n::t!(
+                "connection_manager.access_method.ssh_tunnel",
+                locale = locale
+            );
+            let item = dbflux_components::controls::DropdownItem::with_value(label, "ssh");
+
+            assert_eq!(
+                item.value, "ssh",
+                "dropdown item id must stay untranslated for locale {locale}"
+            );
+        }
     }
 }
