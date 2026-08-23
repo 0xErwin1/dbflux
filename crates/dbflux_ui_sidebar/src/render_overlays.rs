@@ -126,7 +126,7 @@ impl Sidebar {
                         .items_center()
                         .gap(Spacing::SM)
                         .child(Icon::new(AppIcon::Folder).size(Heights::ICON_SM).muted())
-                        .child("New Folder"),
+                        .child(dbflux_i18n::t!("sidebar.overlay.add_folder")),
                 ),
         )
         .child(
@@ -149,7 +149,7 @@ impl Sidebar {
                         .items_center()
                         .gap(Spacing::SM)
                         .child(Icon::new(AppIcon::Plug).size(Heights::ICON_SM).muted())
-                        .child("New Connection"),
+                        .child(dbflux_i18n::t!("sidebar.overlay.add_connection")),
                 ),
         )
     }
@@ -187,7 +187,7 @@ impl Sidebar {
                                 .size(Heights::ICON_SM)
                                 .muted(),
                         )
-                        .child("New File"),
+                        .child(dbflux_i18n::t!("sidebar.overlay.add_script_file")),
                 ),
         )
         .child(
@@ -210,7 +210,7 @@ impl Sidebar {
                         .items_center()
                         .gap(Spacing::SM)
                         .child(Icon::new(AppIcon::Folder).size(Heights::ICON_SM).muted())
-                        .child("New Folder"),
+                        .child(dbflux_i18n::t!("sidebar.overlay.add_script_folder")),
                 ),
         )
         .child(
@@ -233,7 +233,7 @@ impl Sidebar {
                         .items_center()
                         .gap(Spacing::SM)
                         .child(Icon::new(AppIcon::Download).size(Heights::ICON_SM).muted())
-                        .child("Import File"),
+                        .child(dbflux_i18n::t!("sidebar.overlay.import_file")),
                 ),
         )
     }
@@ -255,14 +255,16 @@ impl Sidebar {
 
         let Some(collection) = self.collection_info_for_item(item_id, cx) else {
             self.pending_toast = Some(PendingToast {
-                message: "Event streams are not available for this collection".to_string(),
+                message: dbflux_i18n::t!("sidebar.overlay.child_picker.unsupported"),
                 is_error: true,
             });
             return;
         };
 
-        let filter_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Filter stream names..."));
+        let filter_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("sidebar.filter.stream_placeholder"))
+        });
         let input_for_subscription = filter_input.clone();
         let filter_subscription = cx.subscribe_in(
             &input_for_subscription,
@@ -314,7 +316,7 @@ impl Sidebar {
             profile_id,
             database,
             collection: name.clone(),
-            title: format!("Event streams: {}", name),
+            title: super::labels::child_picker_title(&name),
             focus_handle: focus_handle.clone(),
             children,
             filter_input,
@@ -474,9 +476,9 @@ impl Sidebar {
         let can_prev = page > 0;
         let can_next = page + 1 < page_count;
         let page_label = if total == 0 {
-            "Page 0/0".to_string()
+            super::labels::page_label(0, 0, 0, 0)
         } else {
-            format!("Page {}/{} ({}-{})", page + 1, page_count, start + 1, end)
+            super::labels::page_label(page + 1, page_count, start + 1, end)
         };
 
         div()
@@ -526,7 +528,9 @@ impl Sidebar {
                                 });
                             })
                             .flex_1()
-                            .child(Text::caption("Stream name")),
+                            .child(Text::caption(dbflux_i18n::t!(
+                                "sidebar.overlay.child_picker.column_name"
+                            ))),
                     )
                     .child(
                         div()
@@ -549,7 +553,9 @@ impl Sidebar {
                                 });
                             })
                             .flex_1()
-                            .child(Text::caption("Last event")),
+                            .child(Text::caption(dbflux_i18n::t!(
+                                "sidebar.overlay.child_picker.column_last_event"
+                            ))),
                     ),
             )
             .child(
@@ -560,7 +566,8 @@ impl Sidebar {
                     .when(visible_rows.is_empty(), |el| {
                         el.child(
                             div().px(Spacing::MD).py(Spacing::SM).child(
-                                Text::muted("No event streams found").font_size(FontSizes::SM),
+                                Text::muted(dbflux_i18n::t!("sidebar.overlay.child_picker.empty"))
+                                    .font_size(FontSizes::SM),
                             ),
                         )
                     })
@@ -647,13 +654,15 @@ impl Sidebar {
                                     theme.muted_foreground
                                 },
                             ))
-                            .child(Text::caption("Prev").font_size(FontSizes::XS).color(
-                                if can_prev {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                },
-                            )),
+                            .child(
+                                Text::caption(dbflux_i18n::t!("sidebar.overlay.child_picker.prev"))
+                                    .font_size(FontSizes::XS)
+                                    .color(if can_prev {
+                                        theme.foreground
+                                    } else {
+                                        theme.muted_foreground
+                                    }),
+                            ),
                     )
                     .child(Text::caption(page_label).font_size(FontSizes::XS))
                     .child(
@@ -682,13 +691,15 @@ impl Sidebar {
                                     })
                             })
                             .when(!can_next, |d| d.opacity(0.5))
-                            .child(Text::caption("Next").font_size(FontSizes::XS).color(
-                                if can_next {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                },
-                            ))
+                            .child(
+                                Text::caption(dbflux_i18n::t!("sidebar.overlay.child_picker.next"))
+                                    .font_size(FontSizes::XS)
+                                    .color(if can_next {
+                                        theme.foreground
+                                    } else {
+                                        theme.muted_foreground
+                                    }),
+                            )
                             .child(Icon::new(AppIcon::ChevronRight).size(Spacing::MD).color(
                                 if can_next {
                                     theme.foreground

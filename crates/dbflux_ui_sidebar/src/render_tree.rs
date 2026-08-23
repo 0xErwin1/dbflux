@@ -99,7 +99,10 @@ pub(super) fn render_tree_item(
                         .size(Spacing::MD)
                         .color(theme.muted_foreground),
                 )
-                .child(Text::caption("Loading…").color(theme.muted_foreground)),
+                .child(
+                    Text::caption(dbflux_i18n::t!("sidebar.tree.status.loading"))
+                        .color(theme.muted_foreground),
+                ),
         );
     }
 
