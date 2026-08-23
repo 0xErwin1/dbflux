@@ -21,6 +21,7 @@ use uuid::Uuid;
 use dbflux_ui_base::AppStateEntity;
 
 use crate::data_grid_panel::DataGridPanel;
+use crate::labels::{agg_fn_display, comparator_label, join_kind_label};
 use crate::query_builder::completion::{
     AliasBinding, CompletionMode, SchemaCache, SchemaCompletionProvider,
 };
@@ -949,22 +950,6 @@ const JOIN_KIND_ORDER: &[JoinKind] = &[
     JoinKind::Full,
 ];
 
-fn comparator_label(c: Comparator) -> &'static str {
-    match c {
-        Comparator::Eq => "=",
-        Comparator::Neq => "≠",
-        Comparator::Gt => ">",
-        Comparator::Lt => "<",
-        Comparator::Gte => "≥",
-        Comparator::Lte => "≤",
-        Comparator::Like => "LIKE",
-        Comparator::ILike => "ILIKE",
-        Comparator::In => "IN",
-        Comparator::IsNull => "IS NULL",
-        Comparator::IsNotNull => "IS NOT NULL",
-    }
-}
-
 fn comparator_value(c: Comparator) -> &'static str {
     // Stable identifier per variant; matches the label except for spaces in
     // multi-word operators, which would otherwise be ambiguous with other UI
@@ -984,15 +969,6 @@ fn comparator_value(c: Comparator) -> &'static str {
     }
 }
 
-fn join_kind_label(k: JoinKind) -> &'static str {
-    match k {
-        JoinKind::Inner => "INNER",
-        JoinKind::Left => "LEFT",
-        JoinKind::Right => "RIGHT",
-        JoinKind::Full => "FULL",
-    }
-}
-
 pub(crate) const AGG_FN_ORDER: &[AggFn] = &[
     AggFn::CountStar,
     AggFn::Count,
@@ -1002,18 +978,6 @@ pub(crate) const AGG_FN_ORDER: &[AggFn] = &[
     AggFn::Min,
     AggFn::Max,
 ];
-
-pub(crate) fn agg_fn_display(f: AggFn) -> &'static str {
-    match f {
-        AggFn::CountStar => "COUNT(*)",
-        AggFn::Count => "COUNT",
-        AggFn::CountDistinct => "COUNT DISTINCT",
-        AggFn::Sum => "SUM",
-        AggFn::Avg => "AVG",
-        AggFn::Min => "MIN",
-        AggFn::Max => "MAX",
-    }
-}
 
 // ---------------------------------------------------------------------------
 // GPUI integration
