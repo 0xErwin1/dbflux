@@ -322,8 +322,7 @@ impl DdlApplyExecutor {
             MutationPolicy::ApprovalRequired => return Ok(DdlApplyOutcome::Deferred),
             MutationPolicy::ReadOnly => {
                 return Ok(DdlApplyOutcome::Blocked {
-                    reason: "This connection is read-only. Schema changes are not allowed."
-                        .to_string(),
+                    reason: dbflux_i18n::t!("document.schema_diff.apply.read_only"),
                 });
             }
             MutationPolicy::Allowed => {}

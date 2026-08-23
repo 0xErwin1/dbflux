@@ -951,6 +951,109 @@ pub(crate) fn audit_actor_type_label(actor_type: dbflux_core::EventActorType) ->
     }
 }
 
+/// Qualifies a table name with its schema for the schema-diff description
+/// helpers, mirroring `schema_diff::view::qualified` (kept as a small local
+/// copy since that helper is private to its own module). Object names are
+/// data, never translated.
+fn qualified_table_name(schema: Option<&str>, name: &str) -> String {
+    match schema {
+        Some(schema) => format!("{schema}.{name}"),
+        None => name.to_string(),
+    }
+}
+
+/// Human-readable description of a single [`dbflux_core::SchemaChange`] for
+/// the schema-diff row list, mirroring the pre-i18n `describe_change`
+/// output for `en` while routing every arm through the translation catalog.
+///
+/// Exhaustive by construction (no wildcard arm) so a new `SchemaChange`
+/// variant fails this crate's build until its catalog key is added here.
+/// Column/index names, type names, and default values are data and are
+/// interpolated verbatim, never translated.
+pub(crate) fn schema_change_description(change: &dbflux_core::SchemaChange) -> String {
+    use dbflux_core::SchemaChange;
+
+    match change {
+        SchemaChange::ColumnAdded(column) => dbflux_i18n::t!(
+            "document.schema_diff.change.column_added",
+            name = column.name.as_str(),
+            type_name = column.type_name.as_str()
+        ),
+        SchemaChange::ColumnRemoved(column) => dbflux_i18n::t!(
+            "document.schema_diff.change.column_removed",
+            name = column.name.as_str()
+        ),
+        SchemaChange::ColumnTypeChanged { before, after } => dbflux_i18n::t!(
+            "document.schema_diff.change.type_changed",
+            column = before.name.as_str(),
+            before = before.type_name.as_str(),
+            after = after.type_name.as_str()
+        ),
+        SchemaChange::NullabilityChanged { column, after, .. } => {
+            if *after {
+                dbflux_i18n::t!(
+                    "document.schema_diff.change.nullable",
+                    column = column.as_str()
+                )
+            } else {
+                dbflux_i18n::t!(
+                    "document.schema_diff.change.not_null",
+                    column = column.as_str()
+                )
+            }
+        }
+        SchemaChange::DefaultChanged { column, after, .. } => match after {
+            Some(value) => dbflux_i18n::t!(
+                "document.schema_diff.change.default_set",
+                column = column.as_str(),
+                value = value.as_str()
+            ),
+            None => dbflux_i18n::t!(
+                "document.schema_diff.change.default_dropped",
+                column = column.as_str()
+            ),
+        },
+        SchemaChange::PrimaryKeyChanged { .. } => {
+            dbflux_i18n::t!("document.schema_diff.change.primary_key_changed")
+        }
+        SchemaChange::ForeignKeyChanged => {
+            dbflux_i18n::t!("document.schema_diff.change.foreign_key_changed")
+        }
+        SchemaChange::IndexAdded(index) => dbflux_i18n::t!(
+            "document.schema_diff.change.index_added",
+            name = index.name.as_str()
+        ),
+        SchemaChange::IndexRemoved(index) => dbflux_i18n::t!(
+            "document.schema_diff.change.index_removed",
+            name = index.name.as_str()
+        ),
+    }
+}
+
+/// Human-readable description of a single
+/// [`crate::schema_diff::apply::TableLevelAction`] for the schema-diff row
+/// list, mirroring the pre-i18n `describe_table_action` output for `en`
+/// while routing every arm through the translation catalog.
+///
+/// Exhaustive by construction (no wildcard arm) so a new `TableLevelAction`
+/// variant fails this crate's build until its catalog key is added here.
+pub(crate) fn table_action_description(
+    action: &crate::schema_diff::apply::TableLevelAction,
+) -> String {
+    use crate::schema_diff::apply::TableLevelAction;
+
+    match action {
+        TableLevelAction::Create(info) => dbflux_i18n::t!(
+            "document.schema_diff.table_action.create",
+            table = qualified_table_name(info.schema.as_deref(), &info.name)
+        ),
+        TableLevelAction::Drop(table) => dbflux_i18n::t!(
+            "document.schema_diff.table_action.drop",
+            table = qualified_table_name(table.schema.as_deref(), &table.name)
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -964,14 +1067,16 @@ mod tests {
         history_items_count_label, history_tab_label, incomplete_aggregate_rows_label,
         join_kind_label, live_output_lines_label, live_output_truncated_label,
         partial_delete_label, pending_change_count_label, pending_edits_summary,
-        refresh_policy_label, result_tab_count_label, row_count_label,
-        script_confirm_message_label, sort_direction_label, unsaved_changes_label,
-        update_columns_label, valid_lines_label,
+        refresh_policy_label, result_tab_count_label, row_count_label, schema_change_description,
+        script_confirm_message_label, sort_direction_label, table_action_description,
+        unsaved_changes_label, update_columns_label, valid_lines_label,
     };
+    use crate::schema_diff::apply::TableLevelAction;
     use dbflux_components::chart::ChartDetection;
     use dbflux_core::{
-        DangerousQueryKind, EventActorType, EventCategory, EventOutcome, EventSeverity,
-        QueryLanguage, RefreshPolicy,
+        ColumnSnapshot, DangerousQueryKind, EventActorType, EventCategory, EventOutcome,
+        EventSeverity, IndexSnapshot, QueryLanguage, RefreshPolicy, SchemaChange, TableInfo,
+        TableRef,
     };
 
     const ALL_DANGEROUS_QUERY_KINDS: &[DangerousQueryKind] = &[
@@ -2333,6 +2438,185 @@ mod tests {
         let es = dbflux_i18n::t!("document.audit.actor.mcp_client", locale = "es");
 
         assert_eq!(en, "MCP Client");
+        assert_ne!(en, es);
+    }
+
+    // ── i18n: schema_change_description / table_action_description ────────
+
+    fn column(name: &str, type_name: &str) -> ColumnSnapshot {
+        ColumnSnapshot {
+            name: name.to_string(),
+            type_name: type_name.to_string(),
+            nullable: true,
+            is_primary_key: false,
+            default_value: None,
+        }
+    }
+
+    fn index(name: &str) -> IndexSnapshot {
+        IndexSnapshot {
+            name: name.to_string(),
+            columns: vec!["id".to_string()],
+            is_unique: false,
+        }
+    }
+
+    /// Every `SchemaChange` construction the exhaustive match must cover,
+    /// including both branches of `NullabilityChanged` and `DefaultChanged`.
+    fn all_schema_changes() -> Vec<SchemaChange> {
+        vec![
+            SchemaChange::ColumnAdded(column("email", "text")),
+            SchemaChange::ColumnRemoved(column("legacy", "text")),
+            SchemaChange::ColumnTypeChanged {
+                before: column("id", "integer"),
+                after: column("id", "bigint"),
+            },
+            SchemaChange::NullabilityChanged {
+                column: "email".to_string(),
+                before: false,
+                after: true,
+            },
+            SchemaChange::NullabilityChanged {
+                column: "email".to_string(),
+                before: true,
+                after: false,
+            },
+            SchemaChange::DefaultChanged {
+                column: "status".to_string(),
+                before: None,
+                after: Some("'active'".to_string()),
+            },
+            SchemaChange::DefaultChanged {
+                column: "status".to_string(),
+                before: Some("'active'".to_string()),
+                after: None,
+            },
+            SchemaChange::PrimaryKeyChanged {
+                before: vec!["id".to_string()],
+                after: vec!["uuid".to_string()],
+            },
+            SchemaChange::ForeignKeyChanged,
+            SchemaChange::IndexAdded(index("idx_email")),
+            SchemaChange::IndexRemoved(index("idx_email")),
+        ]
+    }
+
+    #[test]
+    fn schema_change_description_matches_pre_i18n_english_output() {
+        let expected = [
+            "Add column email text",
+            "Drop column legacy",
+            "Change id type integer → bigint",
+            "Make email nullable",
+            "Make email NOT NULL",
+            "Set default on status to 'active'",
+            "Drop default on status",
+            "Change primary key",
+            "Change foreign keys",
+            "Add index idx_email",
+            "Drop index idx_email",
+        ];
+
+        for (change, expected) in all_schema_changes().iter().zip(expected) {
+            assert_eq!(
+                schema_change_description(change),
+                expected,
+                "unexpected description for {change:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn schema_change_description_keys_resolve_in_both_locales() {
+        const SCHEMA_CHANGE_KEYS: &[&str] = &[
+            "document.schema_diff.change.column_added",
+            "document.schema_diff.change.column_removed",
+            "document.schema_diff.change.default_dropped",
+            "document.schema_diff.change.default_set",
+            "document.schema_diff.change.foreign_key_changed",
+            "document.schema_diff.change.index_added",
+            "document.schema_diff.change.index_removed",
+            "document.schema_diff.change.not_null",
+            "document.schema_diff.change.nullable",
+            "document.schema_diff.change.primary_key_changed",
+            "document.schema_diff.change.type_changed",
+        ];
+
+        for key in SCHEMA_CHANGE_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(*key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, *key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn schema_change_description_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.schema_diff.change.column_removed", locale = "en");
+        let es = dbflux_i18n::t!("document.schema_diff.change.column_removed", locale = "es");
+
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn table_action_description_matches_pre_i18n_english_output() {
+        let table_info = TableInfo {
+            name: "orders".to_string(),
+            schema: Some("public".to_string()),
+            columns: None,
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: Default::default(),
+            child_items: None,
+            storage_hints: None,
+        };
+        let create = TableLevelAction::Create(table_info);
+        let drop = TableLevelAction::Drop(TableRef {
+            schema: Some("public".to_string()),
+            name: "orders".to_string(),
+        });
+
+        assert_eq!(
+            table_action_description(&create),
+            "Create table public.orders"
+        );
+        assert_eq!(table_action_description(&drop), "Drop table public.orders");
+    }
+
+    #[test]
+    fn table_action_description_keys_resolve_in_both_locales() {
+        for key in [
+            "document.schema_diff.table_action.create",
+            "document.schema_diff.table_action.drop",
+        ] {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn table_action_description_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.schema_diff.table_action.create", locale = "en");
+        let es = dbflux_i18n::t!("document.schema_diff.table_action.create", locale = "es");
+
         assert_ne!(en, es);
     }
 }
