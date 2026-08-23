@@ -267,7 +267,7 @@ impl TasksPanel {
 
                 if lines.len() > 40 {
                     lines.truncate(40);
-                    lines.push("... output truncated in panel".to_string());
+                    lines.push(dbflux_i18n::t!("tasks_panel.output_truncated"));
                 }
 
                 el.child(
@@ -323,7 +323,7 @@ impl Render for TasksPanel {
                         .items_center()
                         .justify_center()
                         .py_4()
-                        .child(Text::muted("No background tasks")),
+                        .child(Text::muted(dbflux_i18n::t!("tasks_panel.empty"))),
                 )
             })
             .children(task_rows)
