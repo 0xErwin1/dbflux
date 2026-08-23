@@ -123,6 +123,11 @@ connection_manager:
     proxy: Proxy
     ssm: SSM Port Forwarding
   overrides:
+    refresh_policy: "Refresh policy"
+    refresh_interval: "Refresh interval (s)"
+    confirm_dangerous: "Confirm dangerous queries"
+    requires_where: "Requires WHERE clause"
+    requires_preview: "Requires preview"
     default_caption: "Default: %{value}"
     default_seconds_caption: "Default: %{value}s"
     on: "On"

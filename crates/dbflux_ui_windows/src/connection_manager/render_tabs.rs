@@ -374,12 +374,9 @@ impl ConnectionManagerWindow {
                                 cx.notify();
                             })),
                     )
-                    .child(
-                        div()
-                            .w(px(180.0))
-                            .text_sm()
-                            .child(dbflux_i18n::t!("settings.general.refresh_policy.label")),
-                    )
+                    .child(div().w(px(180.0)).text_sm().child(dbflux_i18n::t!(
+                        "connection_manager.overrides.refresh_policy"
+                    )))
                     .child(
                         div()
                             .min_w(px(160.0))
@@ -430,12 +427,9 @@ impl ConnectionManagerWindow {
                                 cx.notify();
                             })),
                     )
-                    .child(
-                        div()
-                            .w(px(180.0))
-                            .text_sm()
-                            .child(dbflux_i18n::t!("settings.general.refresh_interval.label")),
-                    )
+                    .child(div().w(px(180.0)).text_sm().child(dbflux_i18n::t!(
+                        "connection_manager.overrides.refresh_interval"
+                    )))
                     .child(
                         div()
                             .w(px(100.0))
@@ -473,12 +467,9 @@ impl ConnectionManagerWindow {
                         |d| d.border_color(gpui::transparent_black()),
                     )
                     .p(px(2.0))
-                    .child(
-                        div()
-                            .w(px(200.0))
-                            .text_sm()
-                            .child(dbflux_i18n::t!("settings.general.confirm_dangerous.label")),
-                    )
+                    .child(div().w(px(200.0)).text_sm().child(dbflux_i18n::t!(
+                        "connection_manager.overrides.confirm_dangerous"
+                    )))
                     .child(
                         div()
                             .min_w(px(160.0))
@@ -509,12 +500,9 @@ impl ConnectionManagerWindow {
                         |d| d.border_color(gpui::transparent_black()),
                     )
                     .p(px(2.0))
-                    .child(
-                        div()
-                            .w(px(200.0))
-                            .text_sm()
-                            .child(dbflux_i18n::t!("settings.general.requires_where.label")),
-                    )
+                    .child(div().w(px(200.0)).text_sm().child(dbflux_i18n::t!(
+                        "connection_manager.overrides.requires_where"
+                    )))
                     .child(
                         div()
                             .min_w(px(160.0))
@@ -545,12 +533,9 @@ impl ConnectionManagerWindow {
                         |d| d.border_color(gpui::transparent_black()),
                     )
                     .p(px(2.0))
-                    .child(
-                        div()
-                            .w(px(200.0))
-                            .text_sm()
-                            .child(dbflux_i18n::t!("settings.general.requires_preview.label")),
-                    )
+                    .child(div().w(px(200.0)).text_sm().child(dbflux_i18n::t!(
+                        "connection_manager.overrides.requires_preview"
+                    )))
                     .child(
                         div()
                             .min_w(px(160.0))
@@ -924,25 +909,39 @@ mod connection_overrides_i18n_tests {
     }
 
     #[test]
-    fn connection_overrides_reuses_settings_general_keys() {
-        let refresh_policy_label =
-            dbflux_i18n::t!("settings.general.refresh_policy.label", locale = "en");
-        let refresh_interval_label =
-            dbflux_i18n::t!("settings.general.refresh_interval.label", locale = "en");
-        let confirm_dangerous_label =
-            dbflux_i18n::t!("settings.general.confirm_dangerous.label", locale = "en");
-        let requires_where_label =
-            dbflux_i18n::t!("settings.general.requires_where.label", locale = "en");
-        let requires_preview_label =
-            dbflux_i18n::t!("settings.general.requires_preview.label", locale = "en");
-
-        assert_eq!(refresh_policy_label, "Default refresh policy");
-        assert_eq!(refresh_interval_label, "Default refresh interval (seconds)");
-        assert_eq!(confirm_dangerous_label, "Confirm dangerous queries");
-        assert_eq!(requires_where_label, "Require WHERE for DELETE/UPDATE");
+    fn connection_overrides_keep_their_own_row_labels() {
         assert_eq!(
-            requires_preview_label,
-            "Always require preview (ignore suppressions)"
+            dbflux_i18n::t!("connection_manager.overrides.refresh_policy", locale = "en"),
+            "Refresh policy"
+        );
+        assert_eq!(
+            dbflux_i18n::t!(
+                "connection_manager.overrides.refresh_interval",
+                locale = "en"
+            ),
+            "Refresh interval (s)"
+        );
+        assert_eq!(
+            dbflux_i18n::t!(
+                "connection_manager.overrides.confirm_dangerous",
+                locale = "en"
+            ),
+            "Confirm dangerous queries"
+        );
+        assert_eq!(
+            dbflux_i18n::t!("connection_manager.overrides.requires_where", locale = "en"),
+            "Requires WHERE clause"
+        );
+        assert_eq!(
+            dbflux_i18n::t!(
+                "connection_manager.overrides.requires_preview",
+                locale = "en"
+            ),
+            "Requires preview"
+        );
+        assert_ne!(
+            dbflux_i18n::t!("connection_manager.overrides.requires_where", locale = "en"),
+            dbflux_i18n::t!("connection_manager.overrides.requires_where", locale = "es")
         );
     }
 

@@ -123,6 +123,11 @@ connection_manager:
     proxy: Proxy
     ssm: Reenvío de puertos SSM
   overrides:
+    refresh_policy: "Política de actualización"
+    refresh_interval: "Intervalo de actualización (s)"
+    confirm_dangerous: "Confirmar consultas peligrosas"
+    requires_where: "Requiere cláusula WHERE"
+    requires_preview: "Requiere previsualización"
     default_caption: "Predeterminado: %{value}"
     default_seconds_caption: "Predeterminado: %{value}s"
     on: Activado
