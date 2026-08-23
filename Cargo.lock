@@ -3250,6 +3250,7 @@ dependencies = [
  "dbflux_aws",
  "dbflux_components",
  "dbflux_core",
+ "dbflux_i18n",
  "dbflux_mcp",
  "dbflux_storage",
  "gpui",

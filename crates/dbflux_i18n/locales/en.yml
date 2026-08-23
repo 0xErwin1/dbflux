@@ -1,3 +1,38 @@
+errors:
+  action:
+    view_in_audit: View in Audit
+  correlation:
+    detail: "Correlation: %{id}"
+    clipboard: "%{summary}\nCorrelation: %{id}"
+modals:
+  rename:
+    placeholder: Enter a name
+    title:
+      dashboard: Rename dashboard
+      saved_chart: Rename saved chart
+    validation:
+      empty_name: Name cannot be empty
+    cancel: Cancel
+    confirm: Rename
+  create_dashboard:
+    name_label: Dashboard name
+    title: New dashboard
+    validation:
+      empty_name: Name cannot be empty
+    cancel: Cancel
+    confirm: Create
+  delete_confirm:
+    dashboard:
+      title: Delete dashboard
+      body: 'Delete dashboard "%{name}"? This cannot be undone.'
+    saved_chart:
+      title: Delete saved chart
+      body: 'Delete saved chart "%{name}"? This cannot be undone.'
+      orphan_warning:
+        one: "This chart is used in 1 dashboard: %{names}. Panels that reference it will show broken placeholders."
+        many: "This chart is used in %{count} dashboards: %{names}. Panels that reference it will show broken placeholders."
+    cancel: Cancel
+    confirm: Delete
 settings:
   general:
     header:
@@ -75,3 +110,8 @@ settings:
       button: Save
       error: "Failed to save general settings: %{error}"
       success: Settings saved. Some changes apply on next startup.
+toast:
+  action:
+    copy: Copy
+    show_details: Show details
+    hide_details: Hide details

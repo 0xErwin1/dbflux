@@ -30,9 +30,11 @@ pub fn now_hms() -> String {
 /// what the user saw, even if the toast is later dismissed.
 pub fn copy_action(payload: impl Into<String>) -> ToastAction {
     let payload = payload.into();
-    ToastAction::new("copy-error", "Copy").on_click(move |cx: &mut App| {
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string(payload.clone()));
-    })
+    ToastAction::new("copy-error", dbflux_i18n::t!("toast.action.copy")).on_click(
+        move |cx: &mut App| {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(payload.clone()));
+        },
+    )
 }
 
 /// Toast visual variant. Drives icon, accent stripe, banner colors, and the
@@ -382,6 +384,38 @@ impl Default for ToastHost {
 }
 
 #[cfg(test)]
+mod i18n_tests {
+    const TOAST_ACTION_KEYS: &[&str] = &[
+        "toast.action.copy",
+        "toast.action.show_details",
+        "toast.action.hide_details",
+    ];
+
+    #[test]
+    fn toast_catalog_keys_resolve() {
+        for key in TOAST_ACTION_KEYS {
+            let english = dbflux_i18n::t!(key);
+            let spanish = dbflux_i18n::t!(key, locale = "es");
+
+            assert!(!english.is_empty(), "empty English translation for {key}");
+            assert_ne!(english, *key, "missing English translation for {key}");
+            assert!(!spanish.is_empty(), "empty Spanish translation for {key}");
+            assert_ne!(spanish, *key, "missing Spanish translation for {key}");
+        }
+    }
+
+    #[test]
+    fn toast_copy_label_differs_between_locales() {
+        let english = dbflux_i18n::t!("toast.action.copy", locale = "en");
+        let spanish = dbflux_i18n::t!("toast.action.copy", locale = "es");
+
+        assert_eq!(english, "Copy");
+        assert_eq!(spanish, "Copiar");
+        assert_ne!(english, spanish);
+    }
+}
+
+#[cfg(test)]
 impl ToastHost {
     /// Returns the number of currently-visible toasts. For use in tests only.
     pub fn toast_count(&self) -> usize {
@@ -584,10 +618,10 @@ impl ToastHost {
         }
 
         if can_collapse {
-            let label: SharedString = if is_collapsed {
-                "Show details".into()
+            let label: String = if is_collapsed {
+                dbflux_i18n::t!("toast.action.show_details")
             } else {
-                "Hide details".into()
+                dbflux_i18n::t!("toast.action.hide_details")
             };
             let toggle = gpui::div()
                 .id(("toast-toggle", toast_id))
@@ -653,9 +687,11 @@ pub fn flush_pending_toast<T>(
         Toast::error(toast.message)
             .meta_right(now_hms())
             .action(
-                ToastAction::new("copy-error", "Copy").on_click(move |cx: &mut App| {
-                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(payload.clone()));
-                }),
+                ToastAction::new("copy-error", dbflux_i18n::t!("toast.action.copy")).on_click(
+                    move |cx: &mut App| {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(payload.clone()));
+                    },
+                ),
             )
             .push(cx);
     } else {
