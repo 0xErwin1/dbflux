@@ -134,10 +134,7 @@ const showsFallback = locale !== DEFAULT_LOCALE && !translated;
       {
         editPath && (
           <div class="toc__edit">
-            <a
-              href={`https://github.com/0xErwin1/dbflux/blob/main/docs/${editPath}`}
-              rel="noopener"
-            >
+            <a href={`https://github.com/0xErwin1/dbflux/blob/main/${editPath}`} rel="noopener">
               {t(locale, 'docs_tree.edit_page')}
             </a>
             <a href="https://github.com/0xErwin1/dbflux/issues/new" rel="noopener">

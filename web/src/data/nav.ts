@@ -1,4 +1,7 @@
 import { docsUrl } from './site';
+import { CURRENT } from './versions';
+import { DEFAULT_LOCALE } from '../i18n';
+import type { Locale } from '../i18n';
 
 export const REPO = 'https://github.com/0xErwin1/dbflux';
 
@@ -99,17 +102,41 @@ export const REPO_URL = REPO;
  * Map a repository path to the page that renders it, or to the repository when
  * the site does not host it.
  *
+ * `locale` selects the URL prefix for a repository path that does not itself
+ * say which locale it belongs to (a driver README, `ARCHITECTURE.md`, or an
+ * English `docs/<page>.md`) — typically the locale of the page doing the
+ * linking. A `docs/es/<page>.md` path is unambiguous on its own and always
+ * resolves to its Spanish route regardless of `locale`, matching the id
+ * `content.config.ts` assigns it.
+ *
+ * `versionId` selects the URL's version prefix, matching the version of the
+ * page doing the linking (e.g. `nightly` for a link written inside nightly's
+ * own documentation). Left unset, it resolves against the current release —
+ * correct for the common case, but wrong for a version-exclusive page (a
+ * driver only shipped in `nightly`) linking to another page that only exists
+ * in that same version.
+ *
  * Kept in step with the patterns in `src/content.config.ts`.
  */
-export function routeForRepoPath(path: string): string {
+export function routeForRepoPath(
+  path: string,
+  locale: Locale = DEFAULT_LOCALE,
+  versionId?: string,
+): string {
+  const versionPrefix =
+    versionId === undefined ? undefined : versionId === CURRENT.id ? '' : versionId;
+
   const driver = path.match(/^crates\/dbflux_driver_([^/]+)\/README\.md$/);
-  if (driver) return docsUrl(`drivers/${driver[1]}`);
+  if (driver) return docsUrl(`drivers/${driver[1]}`, versionPrefix, locale);
+
+  const esDoc = path.match(/^docs\/es\/([^/]+)\.md$/);
+  if (esDoc) return docsUrl(esDoc[1].toLowerCase(), versionPrefix, 'es');
 
   const doc = path.match(/^docs\/([^/]+)\.md$/);
-  if (doc) return docsUrl(doc[1].toLowerCase());
+  if (doc) return docsUrl(doc[1].toLowerCase(), versionPrefix, locale);
 
-  if (path === 'ARCHITECTURE.md') return docsUrl('architecture');
-  if (path === 'CONTRIBUTING.md') return docsUrl('contributing');
+  if (path === 'ARCHITECTURE.md') return docsUrl('architecture', versionPrefix, locale);
+  if (path === 'CONTRIBUTING.md') return docsUrl('contributing', versionPrefix, locale);
 
   return `${REPO}/blob/main/${path}`;
 }
@@ -125,7 +152,7 @@ export function titleForRepoPath(path: string): string | null {
   const driver = path.match(/^crates\/dbflux_driver_([^/]+)\/README\.md$/);
   if (driver) return DOC_TITLES[`drivers/${driver[1]}`] ?? null;
 
-  const doc = path.match(/^docs\/([^/]+)\.md$/);
+  const doc = path.match(/^docs\/(?:es\/)?([^/]+)\.md$/);
   if (doc) return DOC_TITLES[doc[1].toLowerCase()] ?? null;
 
   if (path === 'ARCHITECTURE.md') return DOC_TITLES.architecture ?? null;

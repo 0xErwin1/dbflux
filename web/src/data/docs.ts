@@ -67,4 +67,20 @@ export function sectionsFor(available: readonly string[]): {
   return { sections, unfiled: available.filter((path) => !listed.has(path)).sort() };
 }
 
+/**
+ * The repository path a materialised doc file was copied from, for the
+ * "Edit this page" link.
+ *
+ * `entry.filePath` (from the `glob` loader) is relative to the site root,
+ * e.g. `.versions/v0.7/docs/es/SETTINGS.md` or
+ * `.versions/v0.7/crates/dbflux_driver_postgres/README.md` — stripping the
+ * `.versions/<versionId>/` mirror prefix recovers the real path in the
+ * repository (`docs/es/SETTINGS.md`, `crates/dbflux_driver_postgres/README.md`).
+ */
+export function repoPathFor(filePath: string, versionId: string): string {
+  const prefix = `.versions/${versionId}/`;
+
+  return filePath.startsWith(prefix) ? filePath.slice(prefix.length) : filePath;
+}
+
 export { docTitle };
