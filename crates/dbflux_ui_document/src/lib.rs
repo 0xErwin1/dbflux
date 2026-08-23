@@ -28,6 +28,7 @@ pub mod history_modal;
 pub mod import_wizard;
 pub mod instance_inspector;
 mod key_value;
+mod labels;
 pub mod migrate_wizard;
 mod new_key_modal;
 pub mod object_browser;

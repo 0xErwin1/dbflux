@@ -5,6 +5,22 @@ components:
     compact: Compactar
     cancel: Cancelar
     save: Guardar
+document:
+  data:
+    grid:
+      edit_bar:
+        clean: Sin cambios pendientes
+        dirty:
+          one: "%{count} cambio sin guardar"
+          many: "%{count} cambios sin guardar"
+  tabs:
+    menu:
+      close: Cerrar
+      close_all: Cerrar todas
+      close_left: Cerrar a la izquierda
+      close_others: Cerrar las demás
+      close_right: Cerrar a la derecha
+    unsaved_changes: Cambios sin guardar
 errors:
   action:
     view_in_audit: Ver en auditoría

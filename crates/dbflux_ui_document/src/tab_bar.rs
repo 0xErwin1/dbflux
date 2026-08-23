@@ -100,12 +100,14 @@ impl TabBar {
 
     pub fn build_tab_menu_items() -> Vec<MenuItem> {
         vec![
-            MenuItem::new("Close").icon(AppIcon::X),
-            MenuItem::new("Close Others").icon(AppIcon::X),
-            MenuItem::new("Close All").icon(AppIcon::X),
+            MenuItem::new(dbflux_i18n::t!("document.tabs.menu.close")).icon(AppIcon::X),
+            MenuItem::new(dbflux_i18n::t!("document.tabs.menu.close_others")).icon(AppIcon::X),
+            MenuItem::new(dbflux_i18n::t!("document.tabs.menu.close_all")).icon(AppIcon::X),
             MenuItem::separator(),
-            MenuItem::new("Close to the Left").icon(AppIcon::ChevronLeft),
-            MenuItem::new("Close to the Right").icon(AppIcon::ChevronRight),
+            MenuItem::new(dbflux_i18n::t!("document.tabs.menu.close_left"))
+                .icon(AppIcon::ChevronLeft),
+            MenuItem::new(dbflux_i18n::t!("document.tabs.menu.close_right"))
+                .icon(AppIcon::ChevronRight),
         ]
     }
 
@@ -376,9 +378,7 @@ impl TabBar {
             .when(is_dirty, |el| {
                 let dot_color = SemBannerColors::for_current(cx).warning_bg;
                 let tooltip_text: SharedString = change_summary
-                    .as_deref()
-                    .unwrap_or("Unsaved changes")
-                    .to_string()
+                    .unwrap_or_else(|| dbflux_i18n::t!("document.tabs.unsaved_changes"))
                     .into();
 
                 el.child(
@@ -491,18 +491,60 @@ mod tests {
         let items = TabBar::build_tab_menu_items();
 
         assert_eq!(items.len(), 6);
-        assert_eq!(items[TAB_MENU_CLOSE].label.as_ref(), "Close");
-        assert_eq!(items[TAB_MENU_CLOSE_OTHERS].label.as_ref(), "Close Others");
-        assert_eq!(items[TAB_MENU_CLOSE_ALL].label.as_ref(), "Close All");
+        assert_eq!(
+            items[TAB_MENU_CLOSE].label.as_ref(),
+            dbflux_i18n::t!("document.tabs.menu.close", locale = "en")
+        );
+        assert_eq!(
+            items[TAB_MENU_CLOSE_OTHERS].label.as_ref(),
+            dbflux_i18n::t!("document.tabs.menu.close_others", locale = "en")
+        );
+        assert_eq!(
+            items[TAB_MENU_CLOSE_ALL].label.as_ref(),
+            dbflux_i18n::t!("document.tabs.menu.close_all", locale = "en")
+        );
         assert!(items[TAB_MENU_SEPARATOR].is_separator);
         assert_eq!(
             items[TAB_MENU_CLOSE_LEFT].label.as_ref(),
-            "Close to the Left"
+            dbflux_i18n::t!("document.tabs.menu.close_left", locale = "en")
         );
         assert_eq!(
             items[TAB_MENU_CLOSE_RIGHT].label.as_ref(),
-            "Close to the Right"
+            dbflux_i18n::t!("document.tabs.menu.close_right", locale = "en")
         );
+    }
+
+    #[test]
+    fn tab_menu_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.tabs.menu.close",
+            "document.tabs.menu.close_others",
+            "document.tabs.menu.close_all",
+            "document.tabs.menu.close_left",
+            "document.tabs.menu.close_right",
+            "document.tabs.unsaved_changes",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+                assert!(!value.is_empty(), "{locale}.{key} resolved empty");
+                assert_ne!(value, key, "{locale}.{key} resolved to the raw key");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{locale}.{key} resolved to the missing-translation sentinel"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tab_menu_close_differs_between_locales() {
+        let english = dbflux_i18n::t!("document.tabs.menu.close", locale = "en");
+        let spanish = dbflux_i18n::t!("document.tabs.menu.close", locale = "es");
+
+        assert_ne!(english, spanish);
     }
 
     #[test]
