@@ -1,6 +1,6 @@
 ---
 import Icon from '../components/Icon.astro';
-import { docTitle, sectionsFor } from '../data/docs';
+import { localizedDocTitle, sectionsFor } from '../data/docs';
 import type { DocsVersion } from '../data/versions';
 import { docsHref } from '../data/versions';
 import { localeFromPathname, t } from '../i18n';
@@ -12,6 +12,8 @@ interface Props {
   current?: string;
   available: readonly string[];
   locale?: Locale;
+  /** Spanish page titles sourced from each translated doc's own H1 — see `docs.ts`. */
+  esTitles?: Readonly<Record<string, string>>;
 }
 
 const {
@@ -19,6 +21,7 @@ const {
   current,
   available,
   locale = localeFromPathname(Astro.url.pathname),
+  esTitles = {},
 } = Astro.props;
 
 const sections = sectionsFor(available).sections.map((section) => ({
@@ -53,7 +56,7 @@ const sections = sectionsFor(available).sections.map((section) => ({
                     href={docsHref(`${version.id}/${id}`, locale)}
                     aria-current={id === current ? 'page' : undefined}
                   >
-                    {docTitle(id)}
+                    {localizedDocTitle(id, locale, esTitles)}
                   </a>
                 </li>
               ))}

@@ -2,7 +2,6 @@
 import Base from '../layouts/Base.astro';
 import DocsTree from '../components/DocsTree.astro';
 import VersionPicker from '../components/VersionPicker.astro';
-import { docTitle } from '../data/nav';
 import type { DocsVersion } from '../data/versions';
 import { CURRENT, docsHref, versionHome, versionLabel } from '../data/versions';
 import { docsUrl } from '../data/site';
@@ -31,6 +30,8 @@ interface Props {
    * untranslated notice below and forces `noindex` regardless of `version`.
    */
   translated?: boolean;
+  /** Spanish page titles sourced from each translated doc's own H1 — see `docs.ts`. */
+  esTitles?: Readonly<Record<string, string>>;
 }
 
 const {
@@ -43,6 +44,7 @@ const {
   editPath,
   locale = localeFromPathname(Astro.url.pathname),
   translated = false,
+  esTitles = {},
 } = Astro.props;
 const onThisPage = headings.filter((heading) => heading.depth === 2);
 
@@ -90,7 +92,13 @@ const showsFallback = locale !== DEFAULT_LOCALE && !translated;
 
     <aside class="docs__rail" id="docs-rail">
       <VersionPicker version={version} currentPath={currentPath} locale={locale} />
-      <DocsTree version={version} current={currentPath} available={available} locale={locale} />
+      <DocsTree
+        version={version}
+        current={currentPath}
+        available={available}
+        locale={locale}
+        esTitles={esTitles}
+      />
     </aside>
 
     <article class="docs__body">
@@ -98,7 +106,7 @@ const showsFallback = locale !== DEFAULT_LOCALE && !translated;
         <a href={versionHome(version, locale)}>{t(locale, 'docs_tree.crumb_docs')}</a>
         <span>/</span>
         <span class="crumbs__here">
-          {currentPath ? docTitle(currentPath) : t(locale, 'docs_tree.crumb_overview')}
+          {currentPath ? title : t(locale, 'docs_tree.crumb_overview')}
         </span>
       </p>
       {
