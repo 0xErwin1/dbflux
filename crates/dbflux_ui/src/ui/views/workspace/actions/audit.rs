@@ -1,4 +1,9 @@
 use super::*;
+use crate::ui::labels::{
+    audit_focus_existing_viewer_message, audit_mcp_governance_persisted_message,
+    audit_open_viewer_failed_message, audit_opened_mcp_approvals_message,
+    audit_opened_viewer_message, audit_persist_mcp_governance_failed_message,
+};
 
 impl Workspace {
     /// Opens the global audit viewer as a document tab.
@@ -32,7 +37,7 @@ impl Workspace {
             });
 
             self.set_focus(crate::keymap::FocusTarget::Document, window, cx);
-            Toast::info("Focusing existing audit viewer")
+            Toast::info(audit_focus_existing_viewer_message())
                 .meta_right(now_hms())
                 .push(cx);
             return;
@@ -44,10 +49,7 @@ impl Workspace {
             Ok(repo) => repo,
             Err(e) => {
                 report_error(
-                    UserFacingError::new(
-                        ErrorKind::Storage,
-                        format!("Cannot open audit viewer: {e}"),
-                    ),
+                    UserFacingError::new(ErrorKind::Storage, audit_open_viewer_failed_message(e)),
                     cx,
                 );
                 return;
@@ -61,7 +63,7 @@ impl Workspace {
         });
 
         self.set_focus(crate::keymap::FocusTarget::Document, window, cx);
-        Toast::info("Opened audit viewer")
+        Toast::info(audit_opened_viewer_message())
             .meta_right(now_hms())
             .push(cx);
     }
@@ -110,7 +112,7 @@ impl Workspace {
                         report_error(
                             UserFacingError::new(
                                 ErrorKind::Storage,
-                                format!("Cannot open audit viewer: {e}"),
+                                audit_open_viewer_failed_message(e),
                             ),
                             cx,
                         );
@@ -151,7 +153,7 @@ impl Workspace {
         });
 
         self.active_governance_panel = Some(super::GovernancePanel::Approvals);
-        Toast::info("Opened MCP approvals")
+        Toast::info(audit_opened_mcp_approvals_message())
             .meta_right(now_hms())
             .push(cx);
     }
@@ -167,7 +169,7 @@ impl Workspace {
                 report_error(
                     UserFacingError::new(
                         ErrorKind::Config,
-                        format!("Failed to persist MCP governance: {e}"),
+                        audit_persist_mcp_governance_failed_message(e),
                     ),
                     cx,
                 );
@@ -179,7 +181,7 @@ impl Workspace {
             }
         });
 
-        Toast::info("MCP governance state persisted")
+        Toast::info(audit_mcp_governance_persisted_message())
             .meta_right(now_hms())
             .push(cx);
     }
