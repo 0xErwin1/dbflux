@@ -473,8 +473,10 @@ impl ConnectionManagerWindow {
                             .flex_col()
                             .items_center()
                             .gap_2()
-                            .child(Text::muted("No proxy profiles configured"))
-                            .child(Text::caption("Add proxies in Settings > Proxies")),
+                            .child(Text::muted(dbflux_i18n::t!("access.proxy_no_profiles")))
+                            .child(Text::caption(dbflux_i18n::t!(
+                                "access.proxy_no_profiles_hint"
+                            ))),
                     )
                     .into_any_element(),
             );
@@ -487,7 +489,7 @@ impl ConnectionManagerWindow {
                 let label = if p.enabled {
                     p.name.clone()
                 } else {
-                    format!("{} (disabled)", p.name)
+                    crate::labels::access_proxy_disabled_label(&p.name)
                 };
 
                 DropdownItem::with_value(&label, p.id.to_string())
@@ -518,7 +520,7 @@ impl ConnectionManagerWindow {
             .flex()
             .flex_col()
             .gap_2()
-            .child(Label::new("Select Proxy"))
+            .child(Label::new(dbflux_i18n::t!("access.select_proxy")))
             .child(
                 div()
                     .flex()
@@ -535,7 +537,7 @@ impl ConnectionManagerWindow {
                                     dd.border_color(gpui::transparent_black())
                                 })
                                 .child(
-                                    Button::new("clear-proxy", "Clear")
+                                    Button::new("clear-proxy", dbflux_i18n::t!("access.clear"))
                                         .small()
                                         .ghost()
                                         .on_click(cx.listener(|this, _, _, cx| {
@@ -555,22 +557,36 @@ impl ConnectionManagerWindow {
             let kind_label = format!("{:?}", proxy.kind);
             let host_port = format!("{}:{}", proxy.host, proxy.port);
             let auth_label = format!("{:?}", proxy.auth);
-            let enabled_label = if proxy.enabled { "Yes" } else { "No" };
-            let no_proxy_label = proxy.no_proxy.as_deref().unwrap_or("(none)").to_string();
+            let enabled_label = if proxy.enabled {
+                dbflux_i18n::t!("access.value_yes")
+            } else {
+                dbflux_i18n::t!("access.value_no")
+            };
+            let no_proxy_label = proxy
+                .no_proxy
+                .clone()
+                .unwrap_or_else(|| dbflux_i18n::t!("access.no_proxy_placeholder"));
 
             let edit_focused = show_focus && focus == FormFocus::ProxyEditInSettings;
 
+            let proxy_details_title = dbflux_i18n::t!("access.proxy_details");
+            let proxy_type_label = dbflux_i18n::t!("access.proxy_type");
+            let proxy_host_label = dbflux_i18n::t!("access.proxy_host");
+            let proxy_auth_label = dbflux_i18n::t!("access.proxy_auth");
+            let proxy_enabled_label = dbflux_i18n::t!("access.proxy_enabled");
+            let proxy_no_proxy_label = dbflux_i18n::t!("access.proxy_no_proxy");
+
             let details = self.render_section(
-                "Proxy Details",
+                &proxy_details_title,
                 div()
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(self.render_readonly_row("Type", &kind_label, &theme))
-                    .child(self.render_readonly_row("Host", &host_port, &theme))
-                    .child(self.render_readonly_row("Auth", &auth_label, &theme))
-                    .child(self.render_readonly_row("Enabled", enabled_label, &theme))
-                    .child(self.render_readonly_row("No Proxy", &no_proxy_label, &theme))
+                    .child(self.render_readonly_row(&proxy_type_label, &kind_label, &theme))
+                    .child(self.render_readonly_row(&proxy_host_label, &host_port, &theme))
+                    .child(self.render_readonly_row(&proxy_auth_label, &auth_label, &theme))
+                    .child(self.render_readonly_row(&proxy_enabled_label, &enabled_label, &theme))
+                    .child(self.render_readonly_row(&proxy_no_proxy_label, &no_proxy_label, &theme))
                     .child(
                         div()
                             .mt_1()
@@ -579,10 +595,13 @@ impl ConnectionManagerWindow {
                             .when(edit_focused, |d| d.border_color(ring_color))
                             .when(!edit_focused, |d| d.border_color(gpui::transparent_black()))
                             .child(
-                                Button::new("proxy-edit-in-settings", "Edit in Settings")
-                                    .small()
-                                    .ghost()
-                                    .icon(Icon::new(AppIcon::ExternalLink)),
+                                Button::new(
+                                    "proxy-edit-in-settings",
+                                    dbflux_i18n::t!("access.edit_in_settings"),
+                                )
+                                .small()
+                                .ghost()
+                                .icon(Icon::new(AppIcon::ExternalLink)),
                             ),
                     ),
                 &theme,
@@ -1353,5 +1372,63 @@ mod tests {
 
         assert_eq!(en, "Instance ID");
         assert_eq!(es, "ID de instancia");
+    }
+
+    const ACCESS_PROXY_KEYS: &[&str] = &[
+        "access.proxy_no_profiles",
+        "access.proxy_no_profiles_hint",
+        "access.proxy_disabled_label",
+        "access.select_proxy",
+        "access.clear",
+        "access.proxy_details",
+        "access.proxy_type",
+        "access.proxy_host",
+        "access.proxy_auth",
+        "access.proxy_enabled",
+        "access.proxy_no_proxy",
+        "access.value_yes",
+        "access.value_no",
+        "access.no_proxy_placeholder",
+        "access.edit_in_settings",
+    ];
+
+    #[test]
+    fn access_proxy_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in ACCESS_PROXY_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn access_proxy_details_differs_between_locales() {
+        let en = dbflux_i18n::t!("access.proxy_details", locale = "en");
+        let es = dbflux_i18n::t!("access.proxy_details", locale = "es");
+
+        assert_ne!(
+            en, es,
+            "access.proxy_details should differ between en and es"
+        );
+    }
+
+    #[test]
+    fn access_select_proxy_label_exact_values() {
+        let en = dbflux_i18n::t!("access.select_proxy", locale = "en");
+        let es = dbflux_i18n::t!("access.select_proxy", locale = "es");
+
+        assert_eq!(en, "Select Proxy");
+        assert_eq!(es, "Seleccionar proxy");
     }
 }

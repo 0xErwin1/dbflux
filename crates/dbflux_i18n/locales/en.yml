@@ -14,6 +14,21 @@ access:
   ssm_remote_port: Remote Port
   ssm_port_hint: DBFlux and the OS auto-assign the local tunnel port. Only Remote Port is configurable here.
   auth_profile: Auth Profile
+  proxy_no_profiles: No proxy profiles configured
+  proxy_no_profiles_hint: Add proxies in Settings > Proxies
+  proxy_disabled_label: "%{name} (disabled)"
+  select_proxy: Select Proxy
+  clear: Clear
+  proxy_details: Proxy Details
+  proxy_type: Type
+  proxy_host: Host
+  proxy_auth: Auth
+  proxy_enabled: Enabled
+  proxy_no_proxy: No Proxy
+  value_yes: "Yes"
+  value_no: "No"
+  no_proxy_placeholder: (none)
+  edit_in_settings: Edit in Settings
 chart:
   axis_bar:
     group: Group
