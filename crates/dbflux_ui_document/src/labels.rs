@@ -441,18 +441,153 @@ pub(crate) fn script_confirm_message_label(statement_count: usize) -> String {
     }
 }
 
+/// Title for the dangerous-query confirmation modal, one per
+/// `DangerousQueryKind` variant.
+///
+/// Exhaustive by construction (no wildcard arm) so a new variant added to
+/// `dbflux_core::DangerousQueryKind` fails this crate's build until its
+/// catalog key is added here.
+pub(crate) fn dangerous_query_title(kind: dbflux_core::DangerousQueryKind) -> String {
+    use dbflux_core::DangerousQueryKind;
+
+    match kind {
+        DangerousQueryKind::DeleteNoWhere => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.delete_no_where.title")
+        }
+        DangerousQueryKind::UpdateNoWhere => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.update_no_where.title")
+        }
+        DangerousQueryKind::Truncate => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.truncate.title")
+        }
+        DangerousQueryKind::Drop => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.drop.title")
+        }
+        DangerousQueryKind::Alter => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.alter.title")
+        }
+        DangerousQueryKind::Script => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.script.title")
+        }
+        DangerousQueryKind::MongoDeleteMany => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.mongo_delete_many.title")
+        }
+        DangerousQueryKind::MongoUpdateMany => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.mongo_update_many.title")
+        }
+        DangerousQueryKind::MongoDropCollection => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.mongo_drop_collection.title")
+        }
+        DangerousQueryKind::MongoDropDatabase => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.mongo_drop_database.title")
+        }
+        DangerousQueryKind::RedisFlushAll => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.redis_flush_all.title")
+        }
+        DangerousQueryKind::RedisFlushDb => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.redis_flush_db.title")
+        }
+        DangerousQueryKind::RedisMultiDelete => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.redis_multi_delete.title")
+        }
+        DangerousQueryKind::RedisKeysPattern => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.redis_keys_pattern.title")
+        }
+        DangerousQueryKind::RawExpressionInSet => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.raw_expression_in_set.title")
+        }
+    }
+}
+
+/// Body for the dangerous-query confirmation modal, one per
+/// `DangerousQueryKind` variant.
+///
+/// The English catalog value must stay identical to
+/// `DangerousQueryKind::message()` (see the parity test below); the Spanish
+/// value is an independent translation of the same warning.
+pub(crate) fn dangerous_query_body(kind: dbflux_core::DangerousQueryKind) -> String {
+    use dbflux_core::DangerousQueryKind;
+
+    match kind {
+        DangerousQueryKind::DeleteNoWhere => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.delete_no_where.body")
+        }
+        DangerousQueryKind::UpdateNoWhere => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.update_no_where.body")
+        }
+        DangerousQueryKind::Truncate => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.truncate.body")
+        }
+        DangerousQueryKind::Drop => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.drop.body")
+        }
+        DangerousQueryKind::Alter => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.alter.body")
+        }
+        DangerousQueryKind::Script => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.script.body")
+        }
+        DangerousQueryKind::MongoDeleteMany => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.mongo_delete_many.body")
+        }
+        DangerousQueryKind::MongoUpdateMany => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.mongo_update_many.body")
+        }
+        DangerousQueryKind::MongoDropCollection => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.mongo_drop_collection.body")
+        }
+        DangerousQueryKind::MongoDropDatabase => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.mongo_drop_database.body")
+        }
+        DangerousQueryKind::RedisFlushAll => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.redis_flush_all.body")
+        }
+        DangerousQueryKind::RedisFlushDb => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.redis_flush_db.body")
+        }
+        DangerousQueryKind::RedisMultiDelete => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.redis_multi_delete.body")
+        }
+        DangerousQueryKind::RedisKeysPattern => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.redis_keys_pattern.body")
+        }
+        DangerousQueryKind::RawExpressionInSet => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.raw_expression_in_set.body")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         MutationItemKind, bulk_delete_success_label, chart_degraded_copy, chart_dock_shape_label,
         chart_rail_why_text, code_toolbar_shortcut_hint_label, copy_query_language_label,
-        delete_confirm_copy, delete_rows_label, live_output_lines_label,
-        live_output_truncated_label, partial_delete_label, pending_change_count_label,
-        pending_edits_summary, refresh_policy_label, result_tab_count_label, row_count_label,
-        script_confirm_message_label, unsaved_changes_label, update_columns_label,
+        dangerous_query_body, dangerous_query_title, delete_confirm_copy, delete_rows_label,
+        live_output_lines_label, live_output_truncated_label, partial_delete_label,
+        pending_change_count_label, pending_edits_summary, refresh_policy_label,
+        result_tab_count_label, row_count_label, script_confirm_message_label,
+        unsaved_changes_label, update_columns_label,
     };
     use dbflux_components::chart::ChartDetection;
-    use dbflux_core::{QueryLanguage, RefreshPolicy};
+    use dbflux_core::{DangerousQueryKind, QueryLanguage, RefreshPolicy};
+
+    const ALL_DANGEROUS_QUERY_KINDS: &[DangerousQueryKind] = &[
+        DangerousQueryKind::DeleteNoWhere,
+        DangerousQueryKind::UpdateNoWhere,
+        DangerousQueryKind::Truncate,
+        DangerousQueryKind::Drop,
+        DangerousQueryKind::Alter,
+        DangerousQueryKind::Script,
+        DangerousQueryKind::MongoDeleteMany,
+        DangerousQueryKind::MongoUpdateMany,
+        DangerousQueryKind::MongoDropCollection,
+        DangerousQueryKind::MongoDropDatabase,
+        DangerousQueryKind::RedisFlushAll,
+        DangerousQueryKind::RedisFlushDb,
+        DangerousQueryKind::RedisMultiDelete,
+        DangerousQueryKind::RedisKeysPattern,
+        DangerousQueryKind::RawExpressionInSet,
+    ];
 
     #[test]
     fn unsaved_changes_label_zero_one_many() {
@@ -1017,5 +1152,165 @@ mod tests {
         assert!(many.contains('3'));
         assert!(many.contains("statements in order"));
         assert_ne!(one, many);
+    }
+
+    #[test]
+    fn dangerous_query_body_matches_core_message_in_en() {
+        for kind in ALL_DANGEROUS_QUERY_KINDS {
+            let body = dbflux_i18n::t!(dangerous_query_body_key(*kind), locale = "en");
+
+            assert_eq!(
+                body,
+                kind.message(),
+                "en body for {kind:?} must match DangerousQueryKind::message()"
+            );
+        }
+    }
+
+    #[test]
+    fn dangerous_query_copy_differs_between_locales() {
+        // Titles for pure SQL/Redis command names (TRUNCATE, DROP, ALTER,
+        // FLUSHALL, FLUSHDB) are legitimately identical across locales —
+        // only the body sentence carries the translation for those kinds.
+        let title_may_stay_literal = |kind: DangerousQueryKind| {
+            matches!(
+                kind,
+                DangerousQueryKind::Truncate
+                    | DangerousQueryKind::Drop
+                    | DangerousQueryKind::Alter
+                    | DangerousQueryKind::RedisFlushAll
+                    | DangerousQueryKind::RedisFlushDb
+                    | DangerousQueryKind::MongoDropDatabase
+            )
+        };
+
+        for kind in ALL_DANGEROUS_QUERY_KINDS {
+            let title_en = dbflux_i18n::t!(dangerous_query_title_key(*kind), locale = "en");
+            let title_es = dbflux_i18n::t!(dangerous_query_title_key(*kind), locale = "es");
+            let body_en = dbflux_i18n::t!(dangerous_query_body_key(*kind), locale = "en");
+            let body_es = dbflux_i18n::t!(dangerous_query_body_key(*kind), locale = "es");
+
+            if !title_may_stay_literal(*kind) {
+                assert_ne!(title_en, title_es, "title for {kind:?} did not translate");
+            }
+            assert_ne!(body_en, body_es, "body for {kind:?} did not translate");
+
+            assert_eq!(dangerous_query_title(*kind), title_en);
+            assert_eq!(dangerous_query_body(*kind), body_en);
+        }
+    }
+
+    #[test]
+    fn dangerous_query_keys_resolve_in_both_locales() {
+        let mut keys = vec![
+            "document.code.dangerous_query.fallback.title".to_string(),
+            "document.code.dangerous_query.fallback.body".to_string(),
+            "document.code.dangerous_query.dont_ask_again".to_string(),
+            "document.code.dangerous_query.cancel".to_string(),
+            "document.code.dangerous_query.run_anyway".to_string(),
+        ];
+
+        for kind in ALL_DANGEROUS_QUERY_KINDS {
+            keys.push(dangerous_query_title_key(*kind).to_string());
+            keys.push(dangerous_query_body_key(*kind).to_string());
+        }
+
+        for key in &keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, *key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    fn dangerous_query_title_key(kind: DangerousQueryKind) -> &'static str {
+        match kind {
+            DangerousQueryKind::DeleteNoWhere => {
+                "document.code.dangerous_query.kind.delete_no_where.title"
+            }
+            DangerousQueryKind::UpdateNoWhere => {
+                "document.code.dangerous_query.kind.update_no_where.title"
+            }
+            DangerousQueryKind::Truncate => "document.code.dangerous_query.kind.truncate.title",
+            DangerousQueryKind::Drop => "document.code.dangerous_query.kind.drop.title",
+            DangerousQueryKind::Alter => "document.code.dangerous_query.kind.alter.title",
+            DangerousQueryKind::Script => "document.code.dangerous_query.kind.script.title",
+            DangerousQueryKind::MongoDeleteMany => {
+                "document.code.dangerous_query.kind.mongo_delete_many.title"
+            }
+            DangerousQueryKind::MongoUpdateMany => {
+                "document.code.dangerous_query.kind.mongo_update_many.title"
+            }
+            DangerousQueryKind::MongoDropCollection => {
+                "document.code.dangerous_query.kind.mongo_drop_collection.title"
+            }
+            DangerousQueryKind::MongoDropDatabase => {
+                "document.code.dangerous_query.kind.mongo_drop_database.title"
+            }
+            DangerousQueryKind::RedisFlushAll => {
+                "document.code.dangerous_query.kind.redis_flush_all.title"
+            }
+            DangerousQueryKind::RedisFlushDb => {
+                "document.code.dangerous_query.kind.redis_flush_db.title"
+            }
+            DangerousQueryKind::RedisMultiDelete => {
+                "document.code.dangerous_query.kind.redis_multi_delete.title"
+            }
+            DangerousQueryKind::RedisKeysPattern => {
+                "document.code.dangerous_query.kind.redis_keys_pattern.title"
+            }
+            DangerousQueryKind::RawExpressionInSet => {
+                "document.code.dangerous_query.kind.raw_expression_in_set.title"
+            }
+        }
+    }
+
+    fn dangerous_query_body_key(kind: DangerousQueryKind) -> &'static str {
+        match kind {
+            DangerousQueryKind::DeleteNoWhere => {
+                "document.code.dangerous_query.kind.delete_no_where.body"
+            }
+            DangerousQueryKind::UpdateNoWhere => {
+                "document.code.dangerous_query.kind.update_no_where.body"
+            }
+            DangerousQueryKind::Truncate => "document.code.dangerous_query.kind.truncate.body",
+            DangerousQueryKind::Drop => "document.code.dangerous_query.kind.drop.body",
+            DangerousQueryKind::Alter => "document.code.dangerous_query.kind.alter.body",
+            DangerousQueryKind::Script => "document.code.dangerous_query.kind.script.body",
+            DangerousQueryKind::MongoDeleteMany => {
+                "document.code.dangerous_query.kind.mongo_delete_many.body"
+            }
+            DangerousQueryKind::MongoUpdateMany => {
+                "document.code.dangerous_query.kind.mongo_update_many.body"
+            }
+            DangerousQueryKind::MongoDropCollection => {
+                "document.code.dangerous_query.kind.mongo_drop_collection.body"
+            }
+            DangerousQueryKind::MongoDropDatabase => {
+                "document.code.dangerous_query.kind.mongo_drop_database.body"
+            }
+            DangerousQueryKind::RedisFlushAll => {
+                "document.code.dangerous_query.kind.redis_flush_all.body"
+            }
+            DangerousQueryKind::RedisFlushDb => {
+                "document.code.dangerous_query.kind.redis_flush_db.body"
+            }
+            DangerousQueryKind::RedisMultiDelete => {
+                "document.code.dangerous_query.kind.redis_multi_delete.body"
+            }
+            DangerousQueryKind::RedisKeysPattern => {
+                "document.code.dangerous_query.kind.redis_keys_pattern.body"
+            }
+            DangerousQueryKind::RawExpressionInSet => {
+                "document.code.dangerous_query.kind.raw_expression_in_set.body"
+            }
+        }
     }
 }

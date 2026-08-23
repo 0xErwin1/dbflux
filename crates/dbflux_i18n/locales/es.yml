@@ -173,6 +173,59 @@ document:
         many: "No hay texto seleccionado, por lo que se ejecutará todo el script como %{count} sentencias en orden. ¿Continuar?"
       cancel: Cancelar
       run: Ejecutar script
+    dangerous_query:
+      fallback:
+        title: Advertencia
+        body: Esta consulta puede ser peligrosa.
+      dont_ask_again: No volver a preguntar
+      cancel: Cancelar
+      run_anyway: Ejecutar de todos modos
+      kind:
+        delete_no_where:
+          title: DELETE sin WHERE
+          body: DELETE sin WHERE puede afectar todas las filas
+        update_no_where:
+          title: UPDATE sin WHERE
+          body: UPDATE sin WHERE puede afectar todas las filas
+        truncate:
+          title: TRUNCATE
+          body: TRUNCATE eliminará todas las filas
+        drop:
+          title: DROP
+          body: DROP eliminará permanentemente el objeto
+        alter:
+          title: ALTER
+          body: ALTER modificará la estructura
+        script:
+          title: Script peligroso
+          body: Este script contiene sentencias potencialmente destructivas
+        mongo_delete_many:
+          title: deleteMany con filtro vacío
+          body: deleteMany con filtro vacío eliminará todos los documentos
+        mongo_update_many:
+          title: updateMany con filtro vacío
+          body: updateMany con filtro vacío actualizará todos los documentos
+        mongo_drop_collection:
+          title: drop() de colección
+          body: drop() eliminará permanentemente la colección
+        mongo_drop_database:
+          title: dropDatabase()
+          body: dropDatabase() eliminará permanentemente toda la base de datos
+        redis_flush_all:
+          title: FLUSHALL
+          body: FLUSHALL eliminará todas las claves en todas las bases de datos
+        redis_flush_db:
+          title: FLUSHDB
+          body: FLUSHDB eliminará todas las claves en la base de datos actual
+        redis_multi_delete:
+          title: DEL (múltiples claves)
+          body: DEL con múltiples claves las eliminará todas
+        redis_keys_pattern:
+          title: Patrón KEYS
+          body: KEYS con un patrón es un riesgo de rendimiento en bases de datos grandes
+        raw_expression_in_set:
+          title: Expresión SQL cruda en SET
+          body: "La cláusula SET contiene una expresión SQL cruda — evita el enlace de parámetros"
   data:
     chart_dock:
       toolbar:

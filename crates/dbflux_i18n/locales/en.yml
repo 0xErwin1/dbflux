@@ -173,6 +173,59 @@ document:
         many: "No text is selected, so the entire script will run as %{count} statements in order. Continue?"
       cancel: Cancel
       run: Run Script
+    dangerous_query:
+      fallback:
+        title: Warning
+        body: This query may be dangerous.
+      dont_ask_again: "Don't ask again"
+      cancel: Cancel
+      run_anyway: Run Anyway
+      kind:
+        delete_no_where:
+          title: DELETE without WHERE
+          body: DELETE without WHERE may affect all rows
+        update_no_where:
+          title: UPDATE without WHERE
+          body: UPDATE without WHERE may affect all rows
+        truncate:
+          title: TRUNCATE
+          body: TRUNCATE will delete all rows
+        drop:
+          title: DROP
+          body: DROP will permanently remove the object
+        alter:
+          title: ALTER
+          body: ALTER will modify the structure
+        script:
+          title: Dangerous Script
+          body: This script contains potentially destructive statements
+        mongo_delete_many:
+          title: deleteMany with empty filter
+          body: deleteMany with empty filter will delete all documents
+        mongo_update_many:
+          title: updateMany with empty filter
+          body: updateMany with empty filter will update all documents
+        mongo_drop_collection:
+          title: drop() collection
+          body: drop() will permanently remove the collection
+        mongo_drop_database:
+          title: dropDatabase()
+          body: dropDatabase() will permanently remove the entire database
+        redis_flush_all:
+          title: FLUSHALL
+          body: FLUSHALL will delete all keys in all databases
+        redis_flush_db:
+          title: FLUSHDB
+          body: FLUSHDB will delete all keys in the current database
+        redis_multi_delete:
+          title: DEL (multiple keys)
+          body: DEL with multiple keys will delete them all
+        redis_keys_pattern:
+          title: KEYS pattern
+          body: KEYS with a pattern is a performance hazard on large databases
+        raw_expression_in_set:
+          title: Raw SQL expression in SET
+          body: SET clause contains a raw SQL expression — bypasses parameter binding
   data:
     chart_dock:
       toolbar:
