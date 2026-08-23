@@ -1054,6 +1054,84 @@ pub(crate) fn table_action_description(
     }
 }
 
+/// Explanation shown in place of the object browser's preview pane when
+/// [`crate::object_browser::PreviewGate`] refuses to fetch the object's
+/// bytes, or `None` when the object is previewable.
+///
+/// Exhaustive by construction (no wildcard arm) so a new `PreviewGate`
+/// variant fails this crate's build until its catalog key is added here.
+/// Sizes are S3 data and are interpolated verbatim, never translated.
+pub(crate) fn preview_gate_message(gate: &crate::object_browser::PreviewGate) -> Option<String> {
+    use crate::buckets_table::format_bytes;
+    use crate::object_browser::PreviewGate;
+
+    match gate {
+        PreviewGate::Allowed => None,
+        PreviewGate::TooLarge {
+            size_bytes,
+            limit_bytes,
+        } => Some(dbflux_i18n::t!(
+            "document.object_browser.gate.too_large",
+            size = format_bytes(*size_bytes),
+            limit = format_bytes(*limit_bytes)
+        )),
+        PreviewGate::Archived => Some(dbflux_i18n::t!("document.object_browser.gate.archived")),
+    }
+}
+
+/// Footer summary for the object browser listing: how many folders and
+/// objects are shown, and their total size. The size is S3 data and stays
+/// outside the catalog.
+pub(crate) fn object_browser_status_summary(
+    folders: usize,
+    objects: usize,
+    total_bytes: u64,
+) -> String {
+    let folders_label = if folders == 1 {
+        dbflux_i18n::t!(
+            "document.object_browser.status.folders.one",
+            count = folders
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.object_browser.status.folders.many",
+            count = folders
+        )
+    };
+    let objects_label = if objects == 1 {
+        dbflux_i18n::t!(
+            "document.object_browser.status.objects.one",
+            count = objects
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.object_browser.status.objects.many",
+            count = objects
+        )
+    };
+
+    format!(
+        "{folders_label} · {objects_label} · {}",
+        crate::buckets_table::format_bytes(total_bytes)
+    )
+}
+
+/// Version count shown in the object preview pane's metadata row when the
+/// version list has been fetched on demand.
+pub(crate) fn object_browser_versions_count_label(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.object_browser.preview.versions.count.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.object_browser.preview.versions.count.many",
+            count = count
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1066,11 +1144,13 @@ mod tests {
         delete_confirm_copy, delete_rows_label, execution_count_state_label, execution_mode_label,
         history_items_count_label, history_tab_label, incomplete_aggregate_rows_label,
         join_kind_label, live_output_lines_label, live_output_truncated_label,
-        partial_delete_label, pending_change_count_label, pending_edits_summary,
+        object_browser_status_summary, object_browser_versions_count_label, partial_delete_label,
+        pending_change_count_label, pending_edits_summary, preview_gate_message,
         refresh_policy_label, result_tab_count_label, row_count_label, schema_change_description,
         script_confirm_message_label, sort_direction_label, table_action_description,
         unsaved_changes_label, update_columns_label, valid_lines_label,
     };
+    use crate::object_browser::PreviewGate;
     use crate::schema_diff::apply::TableLevelAction;
     use dbflux_components::chart::ChartDetection;
     use dbflux_core::{
@@ -2618,5 +2698,154 @@ mod tests {
         let es = dbflux_i18n::t!("document.schema_diff.table_action.create", locale = "es");
 
         assert_ne!(en, es);
+    }
+
+    /// T19: every `document.object_browser.*` key resolves in both locales.
+    #[test]
+    fn object_browser_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.object_browser.toolbar.tree",
+            "document.object_browser.toolbar.upload",
+            "document.object_browser.toolbar.new_folder",
+            "document.object_browser.toolbar.refresh",
+            "document.object_browser.columns.key",
+            "document.object_browser.columns.size",
+            "document.object_browser.columns.class",
+            "document.object_browser.columns.last_modified",
+            "document.object_browser.status.folders.one",
+            "document.object_browser.status.folders.many",
+            "document.object_browser.status.objects.one",
+            "document.object_browser.status.objects.many",
+            "document.object_browser.status.retry",
+            "document.object_browser.status.tree_mode",
+            "document.object_browser.status.load_more",
+            "document.object_browser.status.loading_more",
+            "document.object_browser.status.key_hint.open",
+            "document.object_browser.status.key_hint.preview",
+            "document.object_browser.status.key_hint.up",
+            "document.object_browser.status.key_hint.filter",
+            "document.object_browser.status.key_hint.delete",
+            "document.object_browser.status.key_hint.rename",
+            "document.object_browser.empty.loading",
+            "document.object_browser.empty.filtered",
+            "document.object_browser.empty.bucket",
+            "document.object_browser.empty.prefix",
+            "document.object_browser.gate.too_large",
+            "document.object_browser.gate.archived",
+            "document.object_browser.preview.header.open_in_editor",
+            "document.object_browser.preview.header.open_in_system_viewer",
+            "document.object_browser.preview.body.fit_to_width",
+            "document.object_browser.preview.body.loading",
+            "document.object_browser.preview.body.loading_metadata",
+            "document.object_browser.preview.body.unpreviewable.pdf",
+            "document.object_browser.preview.body.unpreviewable.generic",
+            "document.object_browser.preview.versions.loading",
+            "document.object_browser.preview.versions.view",
+            "document.object_browser.preview.versions.count.one",
+            "document.object_browser.preview.versions.count.many",
+            "document.object_browser.preview.action.download",
+            "document.object_browser.preview.action.open",
+            "document.object_browser.preview.action.copy_uri",
+            "document.object_browser.preview.action.presign",
+            "document.object_browser.preview.action.delete",
+            "document.object_browser.metadata.section",
+            "document.object_browser.metadata.key",
+            "document.object_browser.metadata.size",
+            "document.object_browser.metadata.content_type",
+            "document.object_browser.metadata.last_modified",
+            "document.object_browser.metadata.etag",
+            "document.object_browser.metadata.storage_class",
+            "document.object_browser.metadata.encryption",
+            "document.object_browser.metadata.versions",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    /// T19: at least one object browser key must actually diverge between
+    /// locales, so the parity loop above cannot pass on English fallbacks
+    /// copied verbatim into `es.yml`.
+    #[test]
+    fn object_browser_toolbar_upload_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.object_browser.toolbar.upload", locale = "en");
+        let es = dbflux_i18n::t!("document.object_browser.toolbar.upload", locale = "es");
+
+        assert_ne!(en, es);
+    }
+
+    /// T19: the gate is exhaustive over every `PreviewGate` variant, and the
+    /// size-bound explanation interpolates the exact refused/limit sizes.
+    #[test]
+    fn preview_gate_message_covers_all_variants() {
+        assert_eq!(preview_gate_message(&PreviewGate::Allowed), None);
+
+        let too_large = preview_gate_message(&PreviewGate::TooLarge {
+            size_bytes: 20 * 1024 * 1024,
+            limit_bytes: 10 * 1024 * 1024,
+        })
+        .expect("TooLarge always explains itself");
+        assert!(too_large.contains("10.0 MiB"));
+        assert!(too_large.contains("20.0 MiB"));
+
+        let archived =
+            preview_gate_message(&PreviewGate::Archived).expect("Archived explains itself");
+        assert!(!archived.is_empty());
+    }
+
+    /// T19: both refusal explanations translate. The `t!` macro has no arm
+    /// combining named interpolation with an explicit `locale =` override
+    /// (only `(key)` / `(key, locale=)` / `(key, name=value+)`), so the
+    /// interpolated-value coverage above and this locale-divergence check
+    /// stay two separate assertions, matching the schema_diff PR 17
+    /// precedent.
+    #[test]
+    fn preview_gate_message_differs_between_locales() {
+        let too_large_en = dbflux_i18n::t!("document.object_browser.gate.too_large", locale = "en");
+        let too_large_es = dbflux_i18n::t!("document.object_browser.gate.too_large", locale = "es");
+
+        assert_ne!(too_large_en, too_large_es);
+
+        let archived_en = preview_gate_message(&PreviewGate::Archived).unwrap();
+        let archived_es = dbflux_i18n::t!("document.object_browser.gate.archived", locale = "es");
+
+        assert_ne!(archived_en, archived_es);
+    }
+
+    /// T19: the footer summary covers the singular/plural boundary
+    /// independently for folders and objects.
+    #[test]
+    fn object_browser_status_summary_covers_singular_and_plural() {
+        assert_eq!(
+            object_browser_status_summary(1, 2, 2048),
+            "1 folder · 2 objects · 2.0 KiB"
+        );
+        assert_eq!(
+            object_browser_status_summary(0, 0, 0),
+            "0 folders · 0 objects · 0 B"
+        );
+        assert_eq!(
+            object_browser_status_summary(2, 1, 512),
+            "2 folders · 1 object · 512 B"
+        );
+    }
+
+    /// T19: the on-demand version count uses the singular bucket only for
+    /// exactly one version.
+    #[test]
+    fn object_browser_versions_count_label_covers_singular_and_plural() {
+        assert_eq!(object_browser_versions_count_label(1), "1 version");
+        assert_eq!(object_browser_versions_count_label(3), "3 versions");
     }
 }

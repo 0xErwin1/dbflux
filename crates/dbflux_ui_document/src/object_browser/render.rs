@@ -11,6 +11,7 @@ use super::tree::{ObjectTreeEntry, ObjectTreeNodeId, PrefixLoadState};
 use super::{ListingRow, ObjectBrowserDocument, ObjectBrowserFocusMode, VisibleRow};
 use crate::buckets_table::format_bytes;
 use crate::handle::DocumentEvent;
+use crate::labels::object_browser_status_summary;
 use crate::types::DocumentState;
 use dbflux_components::controls::Input;
 use dbflux_components::icons::AppIcon;
@@ -107,13 +108,7 @@ pub(super) fn summary_line(rows: &[VisibleRow]) -> String {
         })
         .sum();
 
-    let folder_word = if folders == 1 { "folder" } else { "folders" };
-    let object_word = if objects == 1 { "object" } else { "objects" };
-
-    format!(
-        "{folders} {folder_word} · {objects} {object_word} · {}",
-        format_bytes(total_bytes)
-    )
+    object_browser_status_summary(folders, objects, total_bytes)
 }
 
 impl ObjectBrowserDocument {
@@ -209,35 +204,32 @@ impl ObjectBrowserDocument {
         // Ghost buttons: no border, background only on hover — and, for the
         // toggles among them, a tinted background while active, the same way
         // the result-view switcher marks its current mode.
-        let action_button = |id: &'static str,
-                             icon: AppIcon,
-                             label: &'static str,
-                             active: bool,
-                             cx: &Context<Self>| {
-            let theme = cx.theme();
+        let action_button =
+            |id: &'static str, icon: AppIcon, label: String, active: bool, cx: &Context<Self>| {
+                let theme = cx.theme();
 
-            div()
-                .id(id)
-                .flex()
-                .items_center()
-                .gap(Spacing::XS)
-                .h(Heights::CONTROL)
-                .px(Spacing::SM)
-                .rounded(Radii::SM)
-                .cursor_pointer()
-                .when(active, |d| d.bg(theme.primary))
-                .when(!active, |d| d.hover(|d| d.bg(theme.secondary)))
-                .child(if active {
-                    Icon::new(icon).small().color(theme.primary_foreground)
-                } else {
-                    Icon::new(icon).small().muted()
-                })
-                .child(if active {
-                    Text::caption(label).color(theme.primary_foreground)
-                } else {
-                    Text::caption(label)
-                })
-        };
+                div()
+                    .id(id)
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .h(Heights::CONTROL)
+                    .px(Spacing::SM)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .when(active, |d| d.bg(theme.primary))
+                    .when(!active, |d| d.hover(|d| d.bg(theme.secondary)))
+                    .child(if active {
+                        Icon::new(icon).small().color(theme.primary_foreground)
+                    } else {
+                        Icon::new(icon).small().muted()
+                    })
+                    .child(if active {
+                        Text::caption(label).color(theme.primary_foreground)
+                    } else {
+                        Text::caption(label)
+                    })
+            };
 
         div()
             .flex()
@@ -285,7 +277,7 @@ impl ObjectBrowserDocument {
                         action_button(
                             "object-browser-tree-mode",
                             AppIcon::Layers,
-                            "Tree",
+                            dbflux_i18n::t!("document.object_browser.toolbar.tree"),
                             tree_mode_on,
                             cx,
                         )
@@ -297,7 +289,7 @@ impl ObjectBrowserDocument {
                         action_button(
                             "object-browser-upload",
                             AppIcon::ArrowUp,
-                            "Upload",
+                            dbflux_i18n::t!("document.object_browser.toolbar.upload"),
                             false,
                             cx,
                         )
@@ -309,7 +301,7 @@ impl ObjectBrowserDocument {
                         action_button(
                             "object-browser-new-folder",
                             AppIcon::Folder,
-                            "New folder",
+                            dbflux_i18n::t!("document.object_browser.toolbar.new_folder"),
                             false,
                             cx,
                         )
@@ -325,7 +317,7 @@ impl ObjectBrowserDocument {
                             } else {
                                 AppIcon::RefreshCcw
                             },
-                            "Refresh",
+                            dbflux_i18n::t!("document.object_browser.toolbar.refresh"),
                             false,
                             cx,
                         )
@@ -348,20 +340,24 @@ impl ObjectBrowserDocument {
             .border_b_1()
             .border_color(theme.border)
             .bg(theme.secondary)
-            .child(div().flex_1().child(Text::caption("Key")))
+            .child(div().flex_1().child(Text::caption(dbflux_i18n::t!(
+                "document.object_browser.columns.key"
+            ))))
             .child(
                 div()
                     .w(SIZE_WIDTH)
                     .flex()
                     .justify_end()
-                    .child(Text::caption("Size")),
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "document.object_browser.columns.size"
+                    ))),
             )
-            .child(div().w(CLASS_WIDTH).child(Text::caption("Class")))
-            .child(
-                div()
-                    .w(MODIFIED_WIDTH)
-                    .child(Text::caption("Last modified")),
-            )
+            .child(div().w(CLASS_WIDTH).child(Text::caption(dbflux_i18n::t!(
+                "document.object_browser.columns.class"
+            ))))
+            .child(div().w(MODIFIED_WIDTH).child(Text::caption(dbflux_i18n::t!(
+                "document.object_browser.columns.last_modified"
+            ))))
     }
 
     pub(super) fn render_storage_class(
@@ -622,9 +618,9 @@ impl ObjectBrowserDocument {
                 .muted(),
             )
             .child(Text::caption(if loading {
-                "Loading more…"
+                dbflux_i18n::t!("document.object_browser.status.loading_more")
             } else {
-                "Load more"
+                dbflux_i18n::t!("document.object_browser.status.load_more")
             }))
     }
 
@@ -667,23 +663,25 @@ impl ObjectBrowserDocument {
                         this.reload_current_prefix(cx);
                     }))
                     .child(Icon::new(AppIcon::RefreshCcw).small().muted())
-                    .child(Text::caption("Retry")),
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "document.object_browser.status.retry"
+                    ))),
             )
     }
 
     fn render_empty_state(&self, loading: bool) -> AnyElement {
         let message = if loading {
-            "Loading objects…".to_string()
+            dbflux_i18n::t!("document.object_browser.empty.loading")
         } else if self
             .tree
             .level(&self.tree.current_prefix)
             .is_some_and(|level| !level.filter.trim().is_empty())
         {
-            "No keys match this filter".to_string()
+            dbflux_i18n::t!("document.object_browser.empty.filtered")
         } else if self.tree.current_prefix.is_empty() {
-            "This bucket is empty".to_string()
+            dbflux_i18n::t!("document.object_browser.empty.bucket")
         } else {
-            "This prefix is empty".to_string()
+            dbflux_i18n::t!("document.object_browser.empty.prefix")
         };
 
         div()
@@ -726,7 +724,12 @@ impl ObjectBrowserDocument {
                             .child(Text::caption(summary_line(rows))),
                     )
                     .when(tree_mode_on, |this| {
-                        this.child(Text::caption("tree mode").muted_foreground())
+                        this.child(
+                            Text::caption(dbflux_i18n::t!(
+                                "document.object_browser.status.tree_mode"
+                            ))
+                            .muted_foreground(),
+                        )
                     }),
             )
             .child(
@@ -734,12 +737,24 @@ impl ObjectBrowserDocument {
                     .flex()
                     .items_center()
                     .gap(Spacing::MD)
-                    .child(Text::key_hint("Enter open"))
-                    .child(Text::key_hint("Space preview"))
-                    .child(Text::key_hint("← up a level"))
-                    .child(Text::key_hint("/ filter"))
-                    .child(Text::key_hint("x delete"))
-                    .child(Text::key_hint("r rename")),
+                    .child(Text::key_hint(dbflux_i18n::t!(
+                        "document.object_browser.status.key_hint.open"
+                    )))
+                    .child(Text::key_hint(dbflux_i18n::t!(
+                        "document.object_browser.status.key_hint.preview"
+                    )))
+                    .child(Text::key_hint(dbflux_i18n::t!(
+                        "document.object_browser.status.key_hint.up"
+                    )))
+                    .child(Text::key_hint(dbflux_i18n::t!(
+                        "document.object_browser.status.key_hint.filter"
+                    )))
+                    .child(Text::key_hint(dbflux_i18n::t!(
+                        "document.object_browser.status.key_hint.delete"
+                    )))
+                    .child(Text::key_hint(dbflux_i18n::t!(
+                        "document.object_browser.status.key_hint.rename"
+                    ))),
             )
     }
 }

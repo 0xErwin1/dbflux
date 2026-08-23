@@ -756,6 +756,76 @@ document:
         no_limit: Sin límite
         missing: Ausente
         expired: Expirado
+  object_browser:
+    columns:
+      class: Clase
+      key: Clave
+      last_modified: Última modificación
+      size: Tamaño
+    empty:
+      bucket: Este bucket está vacío
+      filtered: Ninguna clave coincide con este filtro
+      loading: "Cargando objetos…"
+      prefix: Este prefijo está vacío
+    gate:
+      archived: "Este objeto está archivado y no se puede previsualizar. Restáuralo en tu consola de S3 para acceder a su contenido."
+      too_large: "Este objeto pesa %{size} y supera el límite de %{limit} para la vista previa. Descárgalo para inspeccionar su contenido."
+    metadata:
+      content_type: Tipo de contenido
+      encryption: Cifrado
+      etag: ETag
+      key: Clave
+      last_modified: Última modificación
+      section: Objeto
+      size: Tamaño
+      storage_class: Clase de almacenamiento
+      versions: Versiones
+    preview:
+      action:
+        copy_uri: Copiar URI
+        delete: Eliminar
+        download: Descargar
+        open: Abrir
+        presign: Prefirmar
+      body:
+        fit_to_width: Ajustar al ancho
+        loading: "Cargando vista previa…"
+        loading_metadata: "Cargando metadatos…"
+        unpreviewable:
+          generic: "Este tipo de archivo no tiene vista previa en la aplicación. Descarga este objeto o ábrelo en tu visor del sistema."
+          pdf: "Los PDF no se renderizan en la aplicación. Descarga este objeto o ábrelo en tu visor del sistema."
+      header:
+        open_in_editor: Abrir en el editor
+        open_in_system_viewer: Abrir en el visor del sistema
+      versions:
+        count:
+          one: "%{count} versión"
+          many: "%{count} versiones"
+        loading: "Cargando…"
+        view: Ver versiones
+    status:
+      folders:
+        one: "%{count} carpeta"
+        many: "%{count} carpetas"
+      key_hint:
+        delete: x eliminar
+        filter: / filtrar
+        open: Enter abrir
+        preview: Espacio previsualizar
+        rename: r renombrar
+        up: "← subir un nivel"
+      load_more: Cargar más
+      loading_more: "Cargando más…"
+      objects:
+        one: "%{count} objeto"
+        many: "%{count} objetos"
+      retry: Reintentar
+      tree_mode: modo árbol
+    toolbar:
+      new_folder: Nueva carpeta
+      refresh: Actualizar
+      tree: Árbol
+      upload: Subir
   query_builder:
     aggregate:
       fn:
