@@ -413,8 +413,11 @@ impl Sidebar {
             Err(e) => {
                 if e != "Schema types already cached" {
                     report_error(
-                        UserFacingError::new(ErrorKind::Network, "Cannot load schema types")
-                            .with_cause(e),
+                        UserFacingError::new(
+                            ErrorKind::Network,
+                            crate::labels::cannot_load_schema_types_label(),
+                        )
+                        .with_cause(e),
                         cx,
                     );
                 }
@@ -431,7 +434,7 @@ impl Sidebar {
             None,
             task,
             "Failed to fetch schema types",
-            |error| format!("Failed to load data types: {}", error),
+            crate::labels::data_types_load_failed_label,
             |app_state, res, cx| {
                 app_state.update(cx, |state, cx| {
                     state.set_schema_types(res.profile_id, res.database, res.schema, res.types);
@@ -461,8 +464,11 @@ impl Sidebar {
             Err(e) => {
                 if e != "Schema indexes already cached" {
                     report_error(
-                        UserFacingError::new(ErrorKind::Network, "Cannot load schema indexes")
-                            .with_cause(e),
+                        UserFacingError::new(
+                            ErrorKind::Network,
+                            crate::labels::cannot_load_schema_indexes_label(),
+                        )
+                        .with_cause(e),
                         cx,
                     );
                 }
@@ -479,7 +485,7 @@ impl Sidebar {
             None,
             task,
             "Failed to fetch schema indexes",
-            |error| format!("Failed to load indexes: {}", error),
+            crate::labels::indexes_load_failed_label,
             |app_state, res, cx| {
                 app_state.update(cx, |state, cx| {
                     state.set_schema_indexes(res.profile_id, res.database, res.schema, res.indexes);
@@ -509,8 +515,11 @@ impl Sidebar {
             Err(e) => {
                 if e != "Schema foreign keys already cached" {
                     report_error(
-                        UserFacingError::new(ErrorKind::Network, "Cannot load schema foreign keys")
-                            .with_cause(e),
+                        UserFacingError::new(
+                            ErrorKind::Network,
+                            crate::labels::cannot_load_schema_foreign_keys_label(),
+                        )
+                        .with_cause(e),
                         cx,
                     );
                 }
@@ -527,7 +536,7 @@ impl Sidebar {
             None,
             task,
             "Failed to fetch schema foreign keys",
-            |error| format!("Failed to load foreign keys: {}", error),
+            crate::labels::foreign_keys_load_failed_label,
             |app_state, res, cx| {
                 app_state.update(cx, |state, cx| {
                     state.set_schema_foreign_keys(
@@ -561,8 +570,11 @@ impl Sidebar {
             Err(e) => {
                 if e != "Schema routines already cached" {
                     report_error(
-                        UserFacingError::new(ErrorKind::Network, "Cannot load schema routines")
-                            .with_cause(e),
+                        UserFacingError::new(
+                            ErrorKind::Network,
+                            crate::labels::cannot_load_schema_routines_label(),
+                        )
+                        .with_cause(e),
                         cx,
                     );
                 }
@@ -579,7 +591,7 @@ impl Sidebar {
             None,
             task,
             "Failed to fetch schema routines",
-            |error| format!("Failed to load routines: {}", error),
+            crate::labels::routines_load_failed_label,
             |app_state, res, cx| {
                 app_state.update(cx, |state, cx| {
                     state.set_schema_routines(

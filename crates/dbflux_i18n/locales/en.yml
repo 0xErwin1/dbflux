@@ -989,6 +989,11 @@ sidebar:
     connections_hint: Use + to add a new connection
     scripts_title: No scripts yet
     scripts_hint: Use + to create a new script or import an existing file
+  error:
+    cannot_load_schema_types: Cannot load schema types
+    cannot_load_schema_indexes: Cannot load schema indexes
+    cannot_load_schema_foreign_keys: Cannot load schema foreign keys
+    cannot_load_schema_routines: Cannot load schema routines
   filter:
     connections_placeholder: Filter connections and schema...
     scripts_placeholder: Filter scripts...
@@ -1070,6 +1075,11 @@ sidebar:
     disconnect_hook_cancelled: Disconnect hook cancelled
     post_disconnect_hook_cancelled: Post-disconnect hook cancelled
     loading_event_streams: "Loading event streams: %{name}"
+    listing_buckets: "Listing buckets: %{name}"
+    loading_database_schema: "Loading schema: %{name}"
+    connecting_to_database: "Connecting to database: %{name}"
+    refreshing_database: "Refreshing database: %{name}"
+    refreshing_schema_object: "Refreshing schema object: %{name}"
     dropping:
       table: "Dropping table %{name}"
       view: "Dropping view %{name}"
@@ -1108,6 +1118,19 @@ sidebar:
     load_failed:
       table: "Failed to load %{name} schema: %{error}"
       collection: "Failed to load event streams for %{name}: %{error}"
+      data_types: "Failed to load data types: %{error}"
+      indexes: "Failed to load indexes: %{error}"
+      foreign_keys: "Failed to load foreign keys: %{error}"
+      routines: "Failed to load routines: %{error}"
+    list_buckets_failed: "Failed to list buckets: %{error}"
+    code_generation_failed: "Code generation failed: %{error}"
+    loading_event_streams: Loading event streams...
+    load_schema_failed: "Failed to load schema: %{error}"
+    connect_database_failed: "Failed to connect to database: %{error}"
+    refresh_database_failed: "Failed to refresh database: %{error}"
+    database_refresh_pending: Database refresh already pending
+    prepare_schema_object_refresh_failed: Failed to prepare schema object refresh
+    refresh_schema_object_failed: "Failed to refresh schema object: %{error}"
     connected:
       plain: "Connected to %{name}"
       one: "Connected to %{name} (with 1 hook warning)"

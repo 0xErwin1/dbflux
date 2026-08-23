@@ -567,6 +567,123 @@ pub(crate) fn schema_snapshot_failed_label(error: &str) -> String {
     dbflux_i18n::t!("sidebar.toast.schema_snapshot_failed", error = error)
 }
 
+/// Translated `UserFacingError` message for a failed schema-types fetch.
+pub(crate) fn cannot_load_schema_types_label() -> String {
+    dbflux_i18n::t!("sidebar.error.cannot_load_schema_types")
+}
+
+/// Translated `UserFacingError` message for a failed schema-indexes fetch.
+pub(crate) fn cannot_load_schema_indexes_label() -> String {
+    dbflux_i18n::t!("sidebar.error.cannot_load_schema_indexes")
+}
+
+/// Translated `UserFacingError` message for a failed foreign-keys fetch.
+pub(crate) fn cannot_load_schema_foreign_keys_label() -> String {
+    dbflux_i18n::t!("sidebar.error.cannot_load_schema_foreign_keys")
+}
+
+/// Translated `UserFacingError` message for a failed routines fetch.
+pub(crate) fn cannot_load_schema_routines_label() -> String {
+    dbflux_i18n::t!("sidebar.error.cannot_load_schema_routines")
+}
+
+/// Translated toast reported when loading a schema's data types fails.
+pub(crate) fn data_types_load_failed_label(error: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.load_failed.data_types", error = error)
+}
+
+/// Translated toast reported when loading a schema's indexes fails.
+pub(crate) fn indexes_load_failed_label(error: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.load_failed.indexes", error = error)
+}
+
+/// Translated toast reported when loading a schema's foreign keys fails.
+pub(crate) fn foreign_keys_load_failed_label(error: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.load_failed.foreign_keys", error = error)
+}
+
+/// Translated toast reported when loading a schema's routines fails.
+pub(crate) fn routines_load_failed_label(error: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.load_failed.routines", error = error)
+}
+
+/// Translated task-panel label for a background bucket listing, e.g.
+/// `"Listing buckets: prod-db"`.
+pub(crate) fn listing_buckets_task_label(name: &str) -> String {
+    dbflux_i18n::t!("sidebar.task.listing_buckets", name = name)
+}
+
+/// Translated task-failure detail reported when listing buckets fails.
+pub(crate) fn list_buckets_failed_label(error: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.list_buckets_failed", error = error)
+}
+
+/// Translated toast reported when SQL/query code generation fails.
+pub(crate) fn code_generation_failed_label(error: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.code_generation_failed", error = error)
+}
+
+/// Translated toast shown while an event-stream child-picker fetch is still
+/// loading in the background.
+pub(crate) fn loading_event_streams_toast_label() -> String {
+    dbflux_i18n::t!("sidebar.toast.loading_event_streams")
+}
+
+/// Translated task-panel label for a database schema fetch, e.g. `"Loading
+/// schema: orders"`.
+pub(crate) fn loading_database_schema_task_label(name: &str) -> String {
+    dbflux_i18n::t!("sidebar.task.loading_database_schema", name = name)
+}
+
+/// Translated toast reported when loading a database's schema fails.
+pub(crate) fn load_schema_failed_label(error: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.load_schema_failed", error = error)
+}
+
+/// Translated task-panel label for a per-database connection switch, e.g.
+/// `"Connecting to database: orders"`.
+pub(crate) fn connecting_to_database_task_label(name: &str) -> String {
+    dbflux_i18n::t!("sidebar.task.connecting_to_database", name = name)
+}
+
+/// Translated toast reported when switching the active database fails.
+pub(crate) fn connect_database_failed_label(error: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.connect_database_failed", error = error)
+}
+
+/// Translated task-panel label for a database schema refresh, e.g.
+/// `"Refreshing database: orders"`.
+pub(crate) fn refreshing_database_task_label(name: &str) -> String {
+    dbflux_i18n::t!("sidebar.task.refreshing_database", name = name)
+}
+
+/// Translated toast reported when a database schema refresh fails.
+pub(crate) fn refresh_database_failed_label(error: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.refresh_database_failed", error = error)
+}
+
+/// Translated toast shown when a database refresh is rejected because one is
+/// already running for that database.
+pub(crate) fn database_refresh_pending_label() -> String {
+    dbflux_i18n::t!("sidebar.toast.database_refresh_pending")
+}
+
+/// Translated task-panel label for a schema-object refresh, e.g.
+/// `"Refreshing schema object: orders"`.
+pub(crate) fn refreshing_schema_object_task_label(name: &str) -> String {
+    dbflux_i18n::t!("sidebar.task.refreshing_schema_object", name = name)
+}
+
+/// Translated toast shown when preparing a schema-object refresh fails.
+pub(crate) fn prepare_schema_object_refresh_failed_label() -> String {
+    dbflux_i18n::t!("sidebar.toast.prepare_schema_object_refresh_failed")
+}
+
+/// Translated toast reported when a schema-object refresh fails.
+pub(crate) fn refresh_schema_object_failed_label(error: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.refresh_schema_object_failed", error = error)
+}
+
 /// Translated task-panel label for the current pipeline stage, shown as a
 /// subtask under the pipeline connect task. Returns `None` for stages with
 /// no user-facing subtask (idle and terminal states).
@@ -1577,6 +1694,107 @@ mod tests {
         assert_eq!(
             label,
             dbflux_i18n::t!("sidebar.toast.schema_snapshot_failed", error = "disk full")
+        );
+    }
+
+    const E1_KEYS: [&str; 22] = [
+        "sidebar.error.cannot_load_schema_types",
+        "sidebar.error.cannot_load_schema_indexes",
+        "sidebar.error.cannot_load_schema_foreign_keys",
+        "sidebar.error.cannot_load_schema_routines",
+        "sidebar.toast.load_failed.data_types",
+        "sidebar.toast.load_failed.indexes",
+        "sidebar.toast.load_failed.foreign_keys",
+        "sidebar.toast.load_failed.routines",
+        "sidebar.task.listing_buckets",
+        "sidebar.toast.list_buckets_failed",
+        "sidebar.toast.code_generation_failed",
+        "sidebar.toast.loading_event_streams",
+        "sidebar.task.loading_database_schema",
+        "sidebar.toast.load_schema_failed",
+        "sidebar.task.connecting_to_database",
+        "sidebar.toast.connect_database_failed",
+        "sidebar.task.refreshing_database",
+        "sidebar.toast.refresh_database_failed",
+        "sidebar.toast.database_refresh_pending",
+        "sidebar.task.refreshing_schema_object",
+        "sidebar.toast.prepare_schema_object_refresh_failed",
+        "sidebar.toast.refresh_schema_object_failed",
+    ];
+
+    #[test]
+    fn sidebar_e1_keys_resolve_in_both_locales() {
+        for key in E1_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key, "missing translation for {locale}.{key}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "translation fell back to the miss sentinel for {locale}.{key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sidebar_task_refreshing_database_diverges_between_locales() {
+        let english = dbflux_i18n::t!("sidebar.task.refreshing_database", locale = "en");
+        let spanish = dbflux_i18n::t!("sidebar.task.refreshing_database", locale = "es");
+
+        assert_ne!(english, spanish);
+    }
+
+    #[test]
+    fn cannot_load_schema_types_label_is_stable() {
+        assert_eq!(
+            super::cannot_load_schema_types_label(),
+            dbflux_i18n::t!("sidebar.error.cannot_load_schema_types")
+        );
+    }
+
+    #[test]
+    fn data_types_load_failed_label_includes_the_error() {
+        let label = super::data_types_load_failed_label("connection reset");
+
+        assert!(label.contains("connection reset"));
+        assert_eq!(
+            label,
+            dbflux_i18n::t!(
+                "sidebar.toast.load_failed.data_types",
+                error = "connection reset"
+            )
+        );
+    }
+
+    #[test]
+    fn listing_buckets_task_label_includes_the_profile_name() {
+        let label = super::listing_buckets_task_label("prod-db");
+
+        assert!(label.contains("prod-db"));
+        assert_eq!(
+            label,
+            dbflux_i18n::t!("sidebar.task.listing_buckets", name = "prod-db")
+        );
+    }
+
+    #[test]
+    fn refreshing_database_task_label_includes_the_database_name() {
+        let label = super::refreshing_database_task_label("orders");
+
+        assert!(label.contains("orders"));
+        assert_eq!(
+            label,
+            dbflux_i18n::t!("sidebar.task.refreshing_database", name = "orders")
+        );
+    }
+
+    #[test]
+    fn database_refresh_pending_label_is_stable() {
+        assert_eq!(
+            super::database_refresh_pending_label(),
+            dbflux_i18n::t!("sidebar.toast.database_refresh_pending")
         );
     }
 }
