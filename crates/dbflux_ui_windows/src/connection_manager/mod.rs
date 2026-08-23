@@ -416,8 +416,11 @@ impl ConnectionManagerWindow {
                 "connection_manager.placeholder.connection_name"
             ))
         });
-        let driver_filter_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Filter by name, driver, port…"));
+        let driver_filter_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.driver_select.search_placeholder"
+            ))
+        });
         let input_password = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(dbflux_i18n::t!("connection_manager.placeholder.password"))
@@ -3373,7 +3376,9 @@ impl ConnectionManagerWindow {
 
         let Some((ssh_config, ssh_secret)) = self.effective_ssh_test_target(cx) else {
             self.ssh_test_status = TestStatus::Failed;
-            self.ssh_test_error = Some("SSH configuration incomplete".to_string());
+            self.ssh_test_error = Some(dbflux_i18n::t!(
+                "connection_manager.auth.ssh_config_incomplete"
+            ));
             cx.notify();
             return;
         };
@@ -4125,5 +4130,90 @@ mod tests {
         let en = dbflux_i18n::t!("connection_manager.auth.login_completed", locale = "en");
 
         assert_eq!(en, "Auth-provider login completed.");
+    }
+
+    // --- dialog / tab / driver-select i18n (PR14) ---
+
+    const CONNECTION_MANAGER_DIALOG_KEYS: &[&str] = &[
+        "connection_manager.tab.main",
+        "connection_manager.tab.settings",
+        "connection_manager.tab.mcp",
+        "connection_manager.field.name",
+        "connection_manager.field.ssl_mode",
+        "connection_manager.field.ca_certificate",
+        "connection_manager.field.client_cert",
+        "connection_manager.field.client_key",
+        "connection_manager.section.transport",
+        "connection_manager.banner.correct_following",
+        "connection_manager.banner.testing_connection",
+        "connection_manager.banner.connection_successful",
+        "connection_manager.banner.connection_successful_warnings",
+        "connection_manager.banner.connection_failed",
+        "connection_manager.action.copy",
+        "connection_manager.action.back",
+        "connection_manager.action.test_connection",
+        "connection_manager.action.save",
+        "connection_manager.action.browse",
+        "connection_manager.window_title",
+        "connection_manager.driver_select.search_placeholder",
+        "connection_manager.driver_select.title",
+        "connection_manager.driver_select.subtitle",
+        "connection_manager.driver_select.empty_state",
+        "connection_manager.driver_select.import_from_file",
+        "connection_manager.driver_select.cancel",
+        "connection_manager.driver_select.configure",
+        "connection_manager.driver_select.configure_named",
+        "connection_manager.auth.ssh_config_incomplete",
+    ];
+
+    #[test]
+    fn connection_manager_dialog_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in CONNECTION_MANAGER_DIALOG_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn connection_manager_window_title_differs_between_locales() {
+        let en = dbflux_i18n::t!("connection_manager.window_title", locale = "en");
+        let es = dbflux_i18n::t!("connection_manager.window_title", locale = "es");
+
+        assert_ne!(
+            en, es,
+            "connection_manager.window_title should differ between en and es"
+        );
+    }
+
+    #[test]
+    fn connection_manager_window_title_exact_values() {
+        let en = dbflux_i18n::t!("connection_manager.window_title", locale = "en");
+        let es = dbflux_i18n::t!("connection_manager.window_title", locale = "es");
+
+        assert_eq!(en, "Connection Manager");
+        assert_eq!(es, "Administrador de conexiones");
+    }
+
+    #[test]
+    fn connection_manager_banner_connection_failed_differs_between_locales() {
+        let en = dbflux_i18n::t!("connection_manager.banner.connection_failed", locale = "en");
+        let es = dbflux_i18n::t!("connection_manager.banner.connection_failed", locale = "es");
+
+        assert_ne!(
+            en, es,
+            "connection_manager.banner.connection_failed should differ between en and es"
+        );
     }
 }

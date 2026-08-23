@@ -155,6 +155,15 @@ pub(crate) fn mcp_preview_summary(actor: &str, role: &str, policy: &str) -> Stri
     )
 }
 
+/// Formats the "Configure <driver name>" call-to-action label shown in the driver picker
+/// footer once a driver card is focused.
+pub(crate) fn driver_select_configure(name: &str) -> String {
+    dbflux_i18n::t!(
+        "connection_manager.driver_select.configure_named",
+        name = name
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -295,6 +304,13 @@ mod tests {
             message,
             "Actor 'prod-agent' | role: read-only | policy: strict"
         );
+    }
+
+    #[test]
+    fn driver_select_configure_embeds_driver_name_untouched() {
+        let message = super::driver_select_configure("MongoDB");
+
+        assert!(message.contains("MongoDB"));
     }
 
     #[test]

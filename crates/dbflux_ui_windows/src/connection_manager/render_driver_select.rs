@@ -95,9 +95,15 @@ impl ConnectionManagerWindow {
                             .size(Heights::ICON_MD)
                             .color(muted),
                     )
-                    .child(Text::heading("New Connection").font_size(FontSizes::LG))
+                    .child(
+                        Text::heading(dbflux_i18n::t!("connection_manager.driver_select.title"))
+                            .font_size(FontSizes::LG),
+                    )
                     .child(div().text_size(FontSizes::SM).text_color(muted).child("·"))
-                    .child(Text::muted("choose a database type").font_size(FontSizes::SM)),
+                    .child(
+                        Text::muted(dbflux_i18n::t!("connection_manager.driver_select.subtitle"))
+                            .font_size(FontSizes::SM),
+                    ),
             )
             .child(
                 div()
@@ -157,14 +163,11 @@ impl ConnectionManagerWindow {
         }
 
         if !rendered_any {
-            body = body.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .py_8()
-                    .child(Text::muted("No drivers match your filter")),
-            );
+            body = body.child(div().flex().items_center().justify_center().py_8().child(
+                Text::muted(dbflux_i18n::t!(
+                    "connection_manager.driver_select.empty_state"
+                )),
+            ));
         }
 
         body
@@ -234,8 +237,8 @@ impl ConnectionManagerWindow {
         let theme = cx.theme();
         let cta_label = focused_driver
             .as_ref()
-            .map(|d| format!("Configure {}", d.name))
-            .unwrap_or_else(|| "Configure".to_string());
+            .map(|d| crate::labels::driver_select_configure(&d.name))
+            .unwrap_or_else(|| dbflux_i18n::t!("connection_manager.driver_select.configure"));
         let cta_id = focused_driver
             .as_ref()
             .map(|d| d.id.clone())
@@ -259,19 +262,25 @@ impl ConnectionManagerWindow {
                     .items_center()
                     .gap_2()
                     .child(
-                        Button::new("cm-driver-import", "Import from file\u{2026}")
-                            .small()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_import(window, cx);
-                            })),
+                        Button::new(
+                            "cm-driver-import",
+                            dbflux_i18n::t!("connection_manager.driver_select.import_from_file"),
+                        )
+                        .small()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_import(window, cx);
+                        })),
                     )
                     .child(
-                        Button::new("cm-driver-cancel", "Cancel")
-                            .small()
-                            .on_click(cx.listener(|_, _, window, cx| {
-                                cx.emit(DismissEvent);
-                                window.remove_window();
-                            })),
+                        Button::new(
+                            "cm-driver-cancel",
+                            dbflux_i18n::t!("connection_manager.driver_select.cancel"),
+                        )
+                        .small()
+                        .on_click(cx.listener(|_, _, window, cx| {
+                            cx.emit(DismissEvent);
+                            window.remove_window();
+                        })),
                     )
                     .child({
                         let mut cta = Button::new("cm-driver-configure", cta_label)

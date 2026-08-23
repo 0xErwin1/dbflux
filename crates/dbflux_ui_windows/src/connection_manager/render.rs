@@ -199,7 +199,9 @@ impl ConnectionManagerWindow {
                                             cx.notify();
                                         })),
                                 )
-                                .child(Body::new("Save")),
+                                .child(Body::new(dbflux_i18n::t!(
+                                    "connection_manager.action.save"
+                                ))),
                         )
                     }),
             )
@@ -330,7 +332,7 @@ impl ConnectionManagerWindow {
                     })
                     .child(div().flex_1())
                     .child(self.form_field_input_inline(
-                        "Name",
+                        &dbflux_i18n::t!("connection_manager.field.name"),
                         &self.form.input_name,
                         show_focus && focus == FormFocus::Name,
                         ring_color,
@@ -354,8 +356,11 @@ impl ConnectionManagerWindow {
                     .when(!validation_errors.is_empty(), |d| {
                         let combined = validation_errors.join("\n");
                         d.child(
-                            BannerBlock::new(BannerVariant::Danger, "Please correct the following")
-                                .with_body(combined),
+                            BannerBlock::new(
+                                BannerVariant::Danger,
+                                dbflux_i18n::t!("connection_manager.banner.correct_following"),
+                            )
+                            .with_body(combined),
                         )
                     })
                     .children(tab_content),
@@ -371,18 +376,21 @@ impl ConnectionManagerWindow {
                     .when(test_status != TestStatus::None, |d| {
                         let banners = SemBannerColors::for_current(cx);
                         let banner = match test_status {
-                            TestStatus::Testing => {
-                                BannerBlock::new(BannerVariant::Info, "Testing connection\u{2026}")
-                                    .with_icon(
-                                        AppIconElement::new(AppIcon::Loader)
-                                            .size(Heights::ICON_SM)
-                                            .color(banners.info_fg),
-                                    )
-                            }
+                            TestStatus::Testing => BannerBlock::new(
+                                BannerVariant::Info,
+                                dbflux_i18n::t!("connection_manager.banner.testing_connection"),
+                            )
+                            .with_icon(
+                                AppIconElement::new(AppIcon::Loader)
+                                    .size(Heights::ICON_SM)
+                                    .color(banners.info_fg),
+                            ),
                             TestStatus::Success => {
                                 let mut banner = BannerBlock::new(
                                     BannerVariant::Success,
-                                    "Connection successful",
+                                    dbflux_i18n::t!(
+                                        "connection_manager.banner.connection_successful"
+                                    ),
                                 )
                                 .with_icon(
                                     AppIconElement::new(AppIcon::CircleCheck)
@@ -397,7 +405,9 @@ impl ConnectionManagerWindow {
                             TestStatus::SuccessWithWarning => {
                                 let mut banner = BannerBlock::new(
                                     BannerVariant::Warning,
-                                    "Connection successful with warnings",
+                                    dbflux_i18n::t!(
+                                        "connection_manager.banner.connection_successful_warnings"
+                                    ),
                                 )
                                 .with_icon(
                                     AppIconElement::new(AppIcon::Info)
@@ -410,28 +420,37 @@ impl ConnectionManagerWindow {
                                 banner
                             }
                             TestStatus::Failed => {
-                                let message =
-                                    test_error.unwrap_or_else(|| "Connection failed".to_string());
+                                let message = test_error.unwrap_or_else(|| {
+                                    dbflux_i18n::t!("connection_manager.banner.connection_failed")
+                                });
                                 let message_to_copy = message.clone();
-                                BannerBlock::new(BannerVariant::Danger, "Connection failed")
-                                    .with_body(message)
-                                    .with_icon(
-                                        AppIconElement::new(AppIcon::Info)
-                                            .size(Heights::ICON_SM)
-                                            .color(banners.error_fg),
+                                BannerBlock::new(
+                                    BannerVariant::Danger,
+                                    dbflux_i18n::t!("connection_manager.banner.connection_failed"),
+                                )
+                                .with_body(message)
+                                .with_icon(
+                                    AppIconElement::new(AppIcon::Info)
+                                        .size(Heights::ICON_SM)
+                                        .color(banners.error_fg),
+                                )
+                                .with_actions(
+                                    Button::new(
+                                        "copy-test-connection-error",
+                                        dbflux_i18n::t!("connection_manager.action.copy"),
                                     )
-                                    .with_actions(
-                                        Button::new("copy-test-connection-error", "Copy")
-                                            .ghost()
-                                            .small()
-                                            .text_color(gpui::white())
-                                            .icon(Icon::new(AppIcon::Copy))
-                                            .on_click(move |_, _, cx| {
-                                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                                    message_to_copy.clone(),
-                                                ));
-                                            }),
-                                    )
+                                    .ghost()
+                                    .small()
+                                    .text_color(gpui::white())
+                                    .icon(Icon::new(AppIcon::Copy))
+                                    .on_click(
+                                        move |_, _, cx| {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                message_to_copy.clone(),
+                                            ));
+                                        },
+                                    ),
+                                )
                             }
                             TestStatus::None => unreachable!("guarded by when condition"),
                         };
@@ -445,13 +464,18 @@ impl ConnectionManagerWindow {
                             .gap_2()
                             .when(!is_editing, |d| {
                                 d.child(
-                                    Button::new("footer-back", "Back")
-                                        .ghost()
-                                        .icon(Icon::new(AppIcon::ChevronLeft))
-                                        .small()
-                                        .on_click(cx.listener(|this, _, window, cx| {
+                                    Button::new(
+                                        "footer-back",
+                                        dbflux_i18n::t!("connection_manager.action.back"),
+                                    )
+                                    .ghost()
+                                    .icon(Icon::new(AppIcon::ChevronLeft))
+                                    .small()
+                                    .on_click(cx.listener(
+                                        |this, _, window, cx| {
                                             this.back_to_driver_select(window, cx);
-                                        })),
+                                        },
+                                    )),
                                 )
                             })
                             .child(div().flex_1())
@@ -464,14 +488,21 @@ impl ConnectionManagerWindow {
                                         d.border_color(gpui::transparent_black())
                                     })
                                     .child(
-                                        Button::new("test-connection", "Test Connection")
-                                            .ghost()
-                                            .icon(Icon::new(AppIcon::ExternalLink))
-                                            .small()
-                                            .disabled(test_status == TestStatus::Testing)
-                                            .on_click(cx.listener(|this, _, window, cx| {
+                                        Button::new(
+                                            "test-connection",
+                                            dbflux_i18n::t!(
+                                                "connection_manager.action.test_connection"
+                                            ),
+                                        )
+                                        .ghost()
+                                        .icon(Icon::new(AppIcon::ExternalLink))
+                                        .small()
+                                        .disabled(test_status == TestStatus::Testing)
+                                        .on_click(
+                                            cx.listener(|this, _, window, cx| {
                                                 this.test_connection(window, cx);
-                                            })),
+                                            }),
+                                        ),
                                     ),
                             )
                             .child(
@@ -483,13 +514,18 @@ impl ConnectionManagerWindow {
                                         d.border_color(gpui::transparent_black())
                                     })
                                     .child(
-                                        Button::new("save-connection", "Save")
-                                            .primary()
-                                            .icon(Icon::new(AppIcon::Check))
-                                            .small()
-                                            .on_click(cx.listener(|this, _, window, cx| {
+                                        Button::new(
+                                            "save-connection",
+                                            dbflux_i18n::t!("connection_manager.action.save"),
+                                        )
+                                        .primary()
+                                        .icon(Icon::new(AppIcon::Check))
+                                        .small()
+                                        .on_click(
+                                            cx.listener(|this, _, window, cx| {
                                                 this.save_profile(window, cx);
-                                            })),
+                                            }),
+                                        ),
                                     ),
                             ),
                     ),
@@ -682,12 +718,17 @@ impl ConnectionManagerWindow {
                                 d.border_color(gpui::transparent_black())
                             })
                             .child(
-                                Button::new("browse-file-path", "Browse")
-                                    .small()
-                                    .ghost()
-                                    .on_click(cx.listener(|this, _, window, cx| {
+                                Button::new(
+                                    "browse-file-path",
+                                    dbflux_i18n::t!("connection_manager.action.browse"),
+                                )
+                                .small()
+                                .ghost()
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| {
                                         this.browse_file_path(window, cx);
-                                    })),
+                                    },
+                                )),
                             ),
                     );
 
@@ -1229,7 +1270,11 @@ impl Render for ConnectionManagerWindow {
             state.set_masked(!show_ssh_password, window, cx);
         });
 
-        let csd_title_bar = platform::render_csd_title_bar(window, cx, "Connection Manager");
+        let csd_title_bar = platform::render_csd_title_bar(
+            window,
+            cx,
+            &dbflux_i18n::t!("connection_manager.window_title"),
+        );
 
         let theme = cx.theme();
 
