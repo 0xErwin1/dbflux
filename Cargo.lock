@@ -2721,6 +2721,7 @@ version = "0.8.0-dev.0"
 dependencies = [
  "chrono",
  "dbflux_core",
+ "dbflux_i18n",
  "gpui",
  "gpui-component",
  "log",

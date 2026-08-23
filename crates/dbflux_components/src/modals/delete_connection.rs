@@ -85,20 +85,19 @@ impl Render for ModalDeleteConnection {
                     .flex()
                     .items_start()
                     .gap(Spacing::SM)
-                    .child(Icon::new(AppIcon::TriangleAlert).size(Heights::ICON_SM).color(theme.danger))
+                    .child(
+                        Icon::new(AppIcon::TriangleAlert)
+                            .size(Heights::ICON_SM)
+                            .color(theme.danger),
+                    )
                     .child(
                         // flex_1 + min_w_0 lets the description wrap to the
                         // modal's width instead of overflowing past the
                         // card edge (same pattern as the toast/banner fix).
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                Text::body(
-                                    "You're about to delete the following connection. This can't be undone.",
-                                )
+                        div().flex_1().min_w_0().child(
+                            Text::body(dbflux_i18n::t!("modals.delete_connection.warning"))
                                 .into_any_element(),
-                            ),
+                        ),
                     ),
             )
             .child(
@@ -119,7 +118,7 @@ impl Render for ModalDeleteConnection {
                     div()
                         .text_size(FontSizes::SM)
                         .text_color(theme.muted_foreground)
-                        .child("Any open documents using this connection will be closed."),
+                        .child(dbflux_i18n::t!("modals.delete_connection.documents_closed")),
                 )
             });
 
@@ -139,23 +138,55 @@ impl Render for ModalDeleteConnection {
             .gap(Spacing::SM)
             .child(
                 Button::new("delete-conn-cancel")
-                    .label("Cancel")
+                    .label(dbflux_i18n::t!("modals.delete_connection.cancel"))
                     .on_click(on_cancel),
             )
             .child(
                 Button::new("delete-conn-confirm")
-                    .label("Delete")
+                    .label(dbflux_i18n::t!("modals.delete_connection.confirm"))
                     .danger()
                     .on_click(on_confirm),
             );
 
         ModalShell::new(
-            "Delete connection",
+            dbflux_i18n::t!("modals.delete_connection.title"),
             body.into_any_element(),
             footer.into_any_element(),
         )
         .variant(ModalVariant::Danger)
         .width(px(460.0))
         .into_any_element()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests — translation key resolution
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn delete_connection_keys_resolve_in_both_locales() {
+        let keys = [
+            "modals.delete_connection.title",
+            "modals.delete_connection.warning",
+            "modals.delete_connection.documents_closed",
+            "modals.delete_connection.cancel",
+            "modals.delete_connection.confirm",
+        ];
+
+        for key in keys {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert!(!en.is_empty() && en != key, "en missing for {key}");
+            assert!(!es.is_empty() && es != key, "es missing for {key}");
+        }
+    }
+
+    #[test]
+    fn delete_connection_confirm_diverges_between_locales() {
+        let en = dbflux_i18n::t!("modals.delete_connection.confirm", locale = "en");
+        let es = dbflux_i18n::t!("modals.delete_connection.confirm", locale = "es");
+        assert_ne!(en, es);
     }
 }

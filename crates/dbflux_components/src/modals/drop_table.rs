@@ -61,6 +61,12 @@ fn relation_kind_label(kind: &RelationKind) -> &'static str {
     }
 }
 
+/// Confirmation hint shown while the typed table name does not yet match,
+/// with the expected table name interpolated into the translated prompt.
+fn confirm_hint(table: &str) -> String {
+    dbflux_i18n::t!("modals.drop_table.confirm_prompt", table = table)
+}
+
 /// Modal entity for "drop table" with TypeToConfirm gate.
 ///
 /// Uses `ModalShell::Danger` (560 px). The "Drop table" button is disabled
@@ -77,8 +83,10 @@ pub struct ModalDropTable {
 
 impl ModalDropTable {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let confirm_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Type table name to confirm"));
+        let confirm_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("modals.drop_table.confirm_placeholder"))
+        });
         Self {
             request: None,
             visible: false,
@@ -172,7 +180,7 @@ impl Render for ModalDropTable {
                     .text_size(FontSizes::XS)
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(theme.muted_foreground)
-                    .child("Dependent objects will also be dropped (CASCADE):"),
+                    .child(dbflux_i18n::t!("modals.drop_table.cascade_warning")),
             );
 
             for dep in &dependents {
@@ -226,7 +234,7 @@ impl Render for ModalDropTable {
                 div()
                     .text_size(FontSizes::XS)
                     .text_color(theme.muted_foreground)
-                    .child(format!("Type \"{}\" to confirm", table_name))
+                    .child(confirm_hint(&table_name))
                     .into_any_element(),
             )
         } else {
@@ -238,8 +246,7 @@ impl Render for ModalDropTable {
             .flex_col()
             .gap(Spacing::MD)
             .child(
-                Text::body("This will permanently delete the table and any dependent objects.")
-                    .into_any_element(),
+                Text::body(dbflux_i18n::t!("modals.drop_table.delete_warning")).into_any_element(),
             )
             .child(name_badge)
             .when(has_deps, |el| el.child(dependents_section))
@@ -263,12 +270,12 @@ impl Render for ModalDropTable {
             .gap(Spacing::SM)
             .child(
                 Button::new("drop-table-cancel")
-                    .label("Cancel")
+                    .label(dbflux_i18n::t!("modals.drop_table.cancel"))
                     .on_click(on_cancel),
             )
             .child(if drop_enabled {
                 Button::new("drop-table-confirm")
-                    .label("Drop table")
+                    .label(dbflux_i18n::t!("modals.drop_table.confirm"))
                     .danger()
                     .on_click(on_drop)
                     .into_any_element()
@@ -286,13 +293,13 @@ impl Render for ModalDropTable {
                         div()
                             .text_size(FontSizes::SM)
                             .text_color(theme.background)
-                            .child("Drop table"),
+                            .child(dbflux_i18n::t!("modals.drop_table.confirm")),
                     )
                     .into_any_element()
             });
 
         ModalShell::new(
-            "Drop table",
+            dbflux_i18n::t!("modals.drop_table.title"),
             body.into_any_element(),
             footer.into_any_element(),
         )
@@ -354,5 +361,42 @@ mod tests {
     fn sql_preview_no_schema_with_deps() {
         let r = request("orders", None, vec![view_dep("public.order_view")]);
         assert_eq!(r.sql_preview(), "DROP TABLE \"orders\"\n  CASCADE;");
+    }
+
+    #[test]
+    fn drop_table_keys_resolve_in_both_locales() {
+        let keys = [
+            "modals.drop_table.title",
+            "modals.drop_table.confirm",
+            "modals.drop_table.cancel",
+            "modals.drop_table.confirm_placeholder",
+            "modals.drop_table.confirm_prompt",
+            "modals.drop_table.cascade_warning",
+            "modals.drop_table.delete_warning",
+        ];
+
+        for key in keys {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert!(!en.is_empty() && en != key, "en missing for {key}");
+            assert!(!es.is_empty() && es != key, "es missing for {key}");
+        }
+    }
+
+    #[test]
+    fn drop_table_title_diverges_between_locales() {
+        let en = dbflux_i18n::t!("modals.drop_table.title", locale = "en");
+        let es = dbflux_i18n::t!("modals.drop_table.title", locale = "es");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn confirm_hint_interpolates_table_name() {
+        let hint = confirm_hint("orders");
+        assert!(hint.contains("orders"));
+        assert_eq!(
+            hint,
+            dbflux_i18n::t!("modals.drop_table.confirm_prompt", table = "orders")
+        );
     }
 }
