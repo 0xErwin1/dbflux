@@ -8,7 +8,7 @@ An extensible, keyboard-first data platform delivered as a Rust + GPUI desktop c
 
 DBFlux is an open-source desktop client with built-in drivers for relational and non-relational databases. Its core contracts are driver-neutral, and external drivers can integrate over RPC.
 
-The client focuses on performance, a clean UX, and keyboard-first workflows. The long-term goal is to provide a fully open-source alternative to DBeaver.
+The client focuses on performance, a clean UX, and keyboard-first workflows. The long-term goal is one fully open-source client for every database you work with.
 
 ![DBFlux](resources/dbflux.png)
 
@@ -22,13 +22,13 @@ Choose the path that matches what you want to do.
 
 ### Start here
 
-| Goal | Guide |
-|------|-------|
-| Create a connection | Start with the [Usage Guide](docs/USAGE.md#1-first-launch-and-creating-a-connection). For SSH tunnels, proxies, AWS SSO, and value sources, use [Connecting — Advanced Setup](docs/CONNECTIONS.md). |
-| Run queries and follow common workflows | Follow the [Usage Guide](docs/USAGE.md) for querying, browsing results, charting, exporting, and keyboard navigation. |
-| View audit events | Open the audit viewer with the [Dashboards & Audit User Guide](docs/DASHBOARDS_AND_AUDIT.md#audit-viewer). |
-| Use MCP | Follow the [AI + MCP Integration Guide](docs/MCP_AI_INTEGRATION.md). |
-| Check driver support and limitations | Use [Drivers Overview](docs/DRIVERS.md), the canonical capability and limitations overview. |
+| Goal                                    | Guide                                                                                                                                                                                               |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Create a connection                     | Start with the [Usage Guide](docs/USAGE.md#1-first-launch-and-creating-a-connection). For SSH tunnels, proxies, AWS SSO, and value sources, use [Connecting — Advanced Setup](docs/CONNECTIONS.md). |
+| Run queries and follow common workflows | Follow the [Usage Guide](docs/USAGE.md) for querying, browsing results, charting, exporting, and keyboard navigation.                                                                               |
+| View audit events                       | Open the audit viewer with the [Dashboards & Audit User Guide](docs/DASHBOARDS_AND_AUDIT.md#audit-viewer).                                                                                          |
+| Use MCP                                 | Follow the [AI + MCP Integration Guide](docs/MCP_AI_INTEGRATION.md).                                                                                                                                |
+| Check driver support and limitations    | Use [Drivers Overview](docs/DRIVERS.md), the canonical capability and limitations overview.                                                                                                         |
 
 ### More user guides
 
@@ -186,27 +186,32 @@ your package manager (included below). Windows and macOS use their default
 linker and are unaffected.
 
 **Ubuntu/Debian:**
+
 ```bash
 sudo apt install pkg-config libssl-dev libdbus-1-dev libxkbcommon-dev mold
 ```
 
 **Fedora:**
+
 ```bash
 sudo dnf install pkg-config openssl-devel dbus-devel libxkbcommon-devel mold
 ```
 
 **Arch:**
+
 ```bash
 sudo pacman -S pkg-config openssl dbus libxkbcommon mold
 ```
 
 **macOS:**
+
 ```bash
 # Xcode Command Line Tools (required)
 xcode-select --install
 ```
 
 **Windows:**
+
 ```powershell
 # Visual Studio Build Tools with C++ workload (required)
 # Download from: https://visualstudio.microsoft.com/visual-cpp-build-tools/

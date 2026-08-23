@@ -24,7 +24,7 @@ export const en = {
     about: 'About',
     contributing: 'Contributing',
     source: 'Source',
-    tagline: 'A fully open-source alternative to DBeaver, built in the open.',
+    tagline: 'A fully open-source, keyboard-first database client, built in the open.',
     license: 'MIT or Apache-2.0, at your option.',
   },
   search: {
@@ -181,7 +181,7 @@ export const en = {
     intro_p2:
       'That constraint is enforced in the code, not in a style guide. The interface adapts through capability flags and metadata, so a document store gets a document view and a time-series store gets a range picker without a single branch on a driver name. Adding a database is writing a driver, not patching the app.',
     intro_p3:
-      'The long-term goal is stated plainly on the README: a fully open-source alternative to DBeaver. Rust and GPUI are how it stays fast enough to be worth switching to.',
+      'The long-term goal is stated plainly on the README: one fully open-source client for every database you work with. Rust and GPUI are how it stays fast enough to be worth switching to.',
     principles_eyebrow: 'Principles',
     principle: {
       p01: {
