@@ -452,11 +452,52 @@ settings:
       unreadable:
         title: Unreadable hook rows
         hint: Unreadable — cannot be edited
+    form:
+      title:
+        edit: Edit Hook
+        new: New Hook
+      id: Hook ID
+      kind: Type
+      command: Command
+      args: Arguments
+      args_hint: Arguments separated by spaces
+      language: Language
+      file_path: File Path
+      file_path_hint: Scripts are edited in the app editor and stored under hooks/ by default
+      open_in_app: Open in App
+      open_in_editor: Open in Editor
+      interpreter: Interpreter
+      interpreter_hint: "Leave empty for %{default_interpreter}"
+      interpreter_auto: "auto (%{value})"
+      interpreter_unsupported: Unsupported on this platform
+      capabilities: Capabilities
+      capability:
+        logging: Logging
+        env_read: Environment read
+        connection_metadata: Connection metadata
+        process_run: Controlled process run
+        process_run_hint: "Enables `dbflux.process.run(...)` without exposing the Lua `os` library"
+      execution_mode: Execution Mode
+      execution_mode_hint: Detached runs in background and does not block connect/disconnect
+      ready_signal: Ready Signal
+      ready_signal_hint: DBFlux waits for this text in hook output before continuing. Required for detached pre-connect hooks.
+      cwd: Working Directory
+      env: Environment
+      env_hint: Comma-separated KEY=value pairs
+      env_denylist: Env Denylist
+      env_denylist_hint: Comma-separated variable names to strip from inherited env
+      timeout: Timeout (ms)
+      resolved_command: Resolved Command
+      enabled: Enabled
+      inherit_env: Inherit parent environment
+      on_failure: On Failure
+      preview_placeholder: "<enter a command>"
     status:
       unsupported_platform: Unsupported on this platform
       script_missing: Script file does not exist yet
       interpreter_missing: "Interpreter '%{interpreter}' was not found in PATH"
       language_unsupported: Selected language is unsupported on this platform
+      lua_process_run_warning: "Lua process.run is enabled: this hook can execute external programs with your user permissions. The program allowlist is a convenience filter, not a security isolation boundary — a program earlier on $PATH can be substituted under the same name."
     error:
       open_script: "Failed to open script: %{error}"
       command_not_editable: Commands do not open in the script editor

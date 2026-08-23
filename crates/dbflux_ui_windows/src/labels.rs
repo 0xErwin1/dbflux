@@ -80,12 +80,26 @@ pub(crate) fn hooks_env_pair_invalid(pair: &str) -> String {
     dbflux_i18n::t!("settings.hooks.validation.env_pair", pair = pair)
 }
 
+/// Formats the "auto (<interpreter>)" placeholder shown when the interpreter field is empty.
+pub(crate) fn hooks_interpreter_auto_label(value: &str) -> String {
+    dbflux_i18n::t!("settings.hooks.form.interpreter_auto", value = value)
+}
+
+/// Formats the "Leave empty for <default interpreter>" hint under the interpreter field.
+pub(crate) fn hooks_form_interpreter_hint(default_interpreter: &str) -> String {
+    dbflux_i18n::t!(
+        "settings.hooks.form.interpreter_hint",
+        default_interpreter = default_interpreter
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         hooks_create_dir_failed, hooks_delete_message, hooks_delete_unreadable_message,
-        hooks_duplicate_id, hooks_env_pair_invalid, hooks_interpreter_missing,
-        hooks_open_script_failed, hooks_write_script_failed,
+        hooks_duplicate_id, hooks_env_pair_invalid, hooks_form_interpreter_hint,
+        hooks_interpreter_auto_label, hooks_interpreter_missing, hooks_open_script_failed,
+        hooks_write_script_failed,
     };
 
     #[test]
@@ -148,5 +162,19 @@ mod tests {
         let message = hooks_env_pair_invalid("FOO");
 
         assert_eq!(message, "Invalid env pair 'FOO'. Expected KEY=value format");
+    }
+
+    #[test]
+    fn hooks_interpreter_auto_label_embeds_interpreter() {
+        let message = hooks_interpreter_auto_label("python3");
+
+        assert_eq!(message, "auto (python3)");
+    }
+
+    #[test]
+    fn hooks_form_interpreter_hint_embeds_default_interpreter() {
+        let message = hooks_form_interpreter_hint("auto (python3)");
+
+        assert_eq!(message, "Leave empty for auto (python3)");
     }
 }
