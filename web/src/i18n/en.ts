@@ -52,6 +52,7 @@ export const en = {
     edit_page: 'Edit this page',
     report_issue: 'Report an issue',
     not_translated: 'This page has not been translated yet. Showing the English version.',
+    view_in_english: 'View in English',
   },
   docs_index: {
     title: 'Documentation',

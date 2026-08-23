@@ -4,9 +4,9 @@ import DocsTree from '../components/DocsTree.astro';
 import VersionPicker from '../components/VersionPicker.astro';
 import { docTitle } from '../data/nav';
 import type { DocsVersion } from '../data/versions';
-import { CURRENT, versionHome, versionLabel } from '../data/versions';
+import { CURRENT, docsHref, versionHome, versionLabel } from '../data/versions';
 import { docsUrl } from '../data/site';
-import { localeFromPathname, t } from '../i18n';
+import { DEFAULT_LOCALE, localeFromPathname, t } from '../i18n';
 import type { Locale } from '../i18n';
 
 interface Heading {
@@ -25,7 +25,11 @@ interface Props {
   description: string;
   editPath?: string;
   locale?: Locale;
-  /** Forwarded to `Base` — see its `translated` prop. Only the docs index is today. */
+  /**
+   * Forwarded to `Base` — see its `translated` prop. `false` on a non-English
+   * page means it is showing the English fallback, which also drives the
+   * untranslated notice below and forces `noindex` regardless of `version`.
+   */
   translated?: boolean;
 }
 
@@ -52,6 +56,13 @@ const suffix = isCurrent ? '' : ` (${versionLabel(version)})`;
  * active locale is passed through rather than always resolving to English.
  */
 const canonicalPath = isCurrent ? undefined : docsUrl(currentPath ?? '', undefined, locale);
+
+/**
+ * A non-English page that fell back to the English body (no Spanish sibling
+ * yet) must stay out of search results: it would otherwise index as a
+ * near-duplicate of the canonical English page under a different URL.
+ */
+const showsFallback = locale !== DEFAULT_LOCALE && !translated;
 ---
 
 <Base
@@ -59,7 +70,7 @@ const canonicalPath = isCurrent ? undefined : docsUrl(currentPath ?? '', undefin
   description={description}
   current="docs"
   wide
-  noindex={version.noindex}
+  noindex={version.noindex || showsFallback}
   canonicalPath={canonicalPath}
   searchIndex={isCurrent ? '/search-index.json' : `/${version.id}/search-index.json`}
   locale={locale}
@@ -84,12 +95,22 @@ const canonicalPath = isCurrent ? undefined : docsUrl(currentPath ?? '', undefin
 
     <article class="docs__body">
       <p class="crumbs">
-        <a href={versionHome(version)}>{t(locale, 'docs_tree.crumb_docs')}</a>
+        <a href={versionHome(version, locale)}>{t(locale, 'docs_tree.crumb_docs')}</a>
         <span>/</span>
         <span class="crumbs__here">
           {currentPath ? docTitle(currentPath) : t(locale, 'docs_tree.crumb_overview')}
         </span>
       </p>
+      {
+        showsFallback && currentPath && (
+          <p class="docs__fallback-notice" role="status">
+            {t(locale, 'docs_tree.not_translated')}{' '}
+            <a href={docsHref(`${version.id}/${currentPath}`, DEFAULT_LOCALE)}>
+              {t(locale, 'docs_tree.view_in_english')}
+            </a>
+          </p>
+        )
+      }
       <div class="prose"><slot /></div>
     </article>
 
@@ -207,6 +228,20 @@ const canonicalPath = isCurrent ? undefined : docsUrl(currentPath ?? '', undefin
 
   .crumbs__here {
     color: var(--text) !important;
+  }
+
+  .docs__fallback-notice {
+    margin: 0 0 var(--s-6);
+    padding: var(--s-4) var(--s-5);
+    background: var(--panel);
+    border: var(--bw) solid var(--border);
+    border-left: var(--bw-emphasis) solid var(--accent);
+    font-size: var(--fs-small);
+    color: var(--text-muted);
+  }
+
+  .docs__fallback-notice a {
+    color: var(--text);
   }
 
   .toc__title {
