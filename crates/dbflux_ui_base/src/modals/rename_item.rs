@@ -47,7 +47,9 @@ pub struct ModalRenameItem {
 
 impl ModalRenameItem {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Enter a name"));
+        let input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!("modals.rename.placeholder"))
+        });
 
         Self {
             request: None,
@@ -102,7 +104,7 @@ impl ModalRenameItem {
         let name = self.input.read(cx).value().trim().to_string();
 
         if name.is_empty() {
-            self.validation_error = Some("Name cannot be empty".to_string());
+            self.validation_error = Some(dbflux_i18n::t!("modals.rename.validation.empty_name"));
             cx.notify();
             return;
         }
@@ -133,8 +135,8 @@ impl Render for ModalRenameItem {
         };
 
         let title = match &request.target {
-            RenameTarget::Dashboard { .. } => "Rename dashboard",
-            RenameTarget::SavedChart { .. } => "Rename saved chart",
+            RenameTarget::Dashboard { .. } => dbflux_i18n::t!("modals.rename.title.dashboard"),
+            RenameTarget::SavedChart { .. } => dbflux_i18n::t!("modals.rename.title.saved_chart"),
         };
 
         let validation_error = self.validation_error.clone();
@@ -160,11 +162,20 @@ impl Render for ModalRenameItem {
             .flex()
             .items_center()
             .gap(Spacing::SM)
-            .child(Button::new("rename-item-cancel", "Cancel").on_click(on_cancel))
             .child(
-                Button::new("rename-item-confirm", "Rename")
-                    .primary()
-                    .on_click(on_confirm),
+                Button::new(
+                    "rename-item-cancel",
+                    dbflux_i18n::t!("modals.rename.cancel"),
+                )
+                .on_click(on_cancel),
+            )
+            .child(
+                Button::new(
+                    "rename-item-confirm",
+                    dbflux_i18n::t!("modals.rename.confirm"),
+                )
+                .primary()
+                .on_click(on_confirm),
             );
 
         ModalShell::new(title, body.into_any_element(), footer.into_any_element())
@@ -256,5 +267,37 @@ mod tests {
             }
             _ => panic!("Expected Confirmed variant"),
         }
+    }
+
+    const RENAME_MODAL_KEYS: &[&str] = &[
+        "modals.rename.placeholder",
+        "modals.rename.title.dashboard",
+        "modals.rename.title.saved_chart",
+        "modals.rename.validation.empty_name",
+        "modals.rename.cancel",
+        "modals.rename.confirm",
+    ];
+
+    #[test]
+    fn rename_modal_catalog_keys_resolve() {
+        for key in RENAME_MODAL_KEYS {
+            let english = dbflux_i18n::t!(key);
+            let spanish = dbflux_i18n::t!(key, locale = "es");
+
+            assert!(!english.is_empty(), "empty English translation for {key}");
+            assert_ne!(english, *key, "missing English translation for {key}");
+            assert!(!spanish.is_empty(), "empty Spanish translation for {key}");
+            assert_ne!(spanish, *key, "missing Spanish translation for {key}");
+        }
+    }
+
+    #[test]
+    fn rename_modal_title_differs_between_locales() {
+        let english = dbflux_i18n::t!("modals.rename.title.dashboard", locale = "en");
+        let spanish = dbflux_i18n::t!("modals.rename.title.dashboard", locale = "es");
+
+        assert_eq!(english, "Rename dashboard");
+        assert_eq!(spanish, "Renombrar dashboard");
+        assert_ne!(english, spanish);
     }
 }

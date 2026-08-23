@@ -1,3 +1,38 @@
+errors:
+  action:
+    view_in_audit: Ver en auditoría
+  correlation:
+    detail: "Correlación: %{id}"
+    clipboard: "%{summary}\nCorrelación: %{id}"
+modals:
+  rename:
+    placeholder: Escribe un nombre
+    title:
+      dashboard: Renombrar dashboard
+      saved_chart: Renombrar gráfico guardado
+    validation:
+      empty_name: El nombre no puede estar vacío
+    cancel: Cancelar
+    confirm: Renombrar
+  create_dashboard:
+    name_label: Nombre del dashboard
+    title: Nuevo dashboard
+    validation:
+      empty_name: El nombre no puede estar vacío
+    cancel: Cancelar
+    confirm: Crear
+  delete_confirm:
+    dashboard:
+      title: Eliminar dashboard
+      body: '¿Eliminar el dashboard "%{name}"? Esta acción no se puede deshacer.'
+    saved_chart:
+      title: Eliminar gráfico guardado
+      body: '¿Eliminar el gráfico guardado "%{name}"? Esta acción no se puede deshacer.'
+      orphan_warning:
+        one: "Este gráfico se usa en 1 dashboard: %{names}. Los paneles que lo referencian mostrarán marcadores rotos."
+        many: "Este gráfico se usa en %{count} dashboards: %{names}. Los paneles que lo referencian mostrarán marcadores rotos."
+    cancel: Cancelar
+    confirm: Eliminar
 settings:
   general:
     header:
@@ -75,3 +110,8 @@ settings:
       button: Guardar
       error: "No se pudo guardar la configuración general: %{error}"
       success: Configuración guardada. Algunos cambios se aplican al reiniciar.
+toast:
+  action:
+    copy: Copiar
+    show_details: Mostrar detalles
+    hide_details: Ocultar detalles
