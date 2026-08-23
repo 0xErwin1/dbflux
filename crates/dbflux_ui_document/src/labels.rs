@@ -185,11 +185,75 @@ pub(crate) fn chart_degraded_copy(
     }
 }
 
+/// Row/column shape summary shown above the chart dock's degraded-state
+/// column chips, with the row and column counts pluralized independently.
+pub(crate) fn chart_dock_shape_label(rows: usize, columns: usize) -> String {
+    let rows_label = if rows == 1 {
+        dbflux_i18n::t!("document.data.chart_dock.rail.shape.rows.one", count = rows)
+    } else {
+        dbflux_i18n::t!(
+            "document.data.chart_dock.rail.shape.rows.many",
+            count = rows
+        )
+    };
+    let columns_label = if columns == 1 {
+        dbflux_i18n::t!(
+            "document.data.chart_dock.rail.shape.columns.one",
+            count = columns
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.data.chart_dock.rail.shape.columns.many",
+            count = columns
+        )
+    };
+
+    dbflux_i18n::t!(
+        "document.data.chart_dock.rail.shape.template",
+        rows = rows_label,
+        columns = columns_label
+    )
+}
+
+/// WHY-panel explanation text for the chart rail's configure tab, with the
+/// numeric- and timestamp-like column counts pluralized independently.
+pub(crate) fn chart_rail_why_text(numeric_columns: usize, timestamp_columns: usize) -> String {
+    let numeric = if numeric_columns == 1 {
+        dbflux_i18n::t!(
+            "document.data.chart_dock.configure.why.numeric.one",
+            count = numeric_columns
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.data.chart_dock.configure.why.numeric.many",
+            count = numeric_columns
+        )
+    };
+    let timestamp = if timestamp_columns == 1 {
+        dbflux_i18n::t!(
+            "document.data.chart_dock.configure.why.timestamp.one",
+            count = timestamp_columns
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.data.chart_dock.configure.why.timestamp.many",
+            count = timestamp_columns
+        )
+    };
+
+    dbflux_i18n::t!(
+        "document.data.chart_dock.configure.why.template",
+        numeric = numeric,
+        timestamp = timestamp
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        chart_degraded_copy, pending_change_count_label, pending_edits_summary,
-        refresh_policy_label, row_count_label, unsaved_changes_label,
+        chart_degraded_copy, chart_dock_shape_label, chart_rail_why_text,
+        pending_change_count_label, pending_edits_summary, refresh_policy_label, row_count_label,
+        unsaved_changes_label,
     };
     use dbflux_components::chart::ChartDetection;
     use dbflux_core::RefreshPolicy;
@@ -335,5 +399,100 @@ mod tests {
         let no_time_copy = chart_degraded_copy(&Some(ChartDetection::NoTimeColumn));
 
         assert_eq!(none_copy, no_time_copy);
+    }
+
+    #[test]
+    fn chart_dock_part2_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.data.chart_dock.rail.shape.rows.one",
+            "document.data.chart_dock.rail.shape.rows.many",
+            "document.data.chart_dock.rail.shape.columns.one",
+            "document.data.chart_dock.rail.shape.columns.many",
+            "document.data.chart_dock.configure.why.numeric.one",
+            "document.data.chart_dock.configure.why.numeric.many",
+            "document.data.chart_dock.configure.why.timestamp.one",
+            "document.data.chart_dock.configure.why.timestamp.many",
+            "document.data.chart_dock.configure.why.title",
+            "document.data.chart_dock.configure.time_column.title",
+            "document.data.chart_dock.configure.series.title",
+            "document.data.chart_dock.configure.axis_stacking.title",
+            "document.data.chart_dock.configure.axis_stacking.y_axis",
+            "document.data.chart_dock.configure.axis_stacking.y_axis_value",
+            "document.data.chart_dock.configure.axis_stacking.stack",
+            "document.data.chart_dock.configure.axis_stacking.stack_value",
+            "document.data.chart_dock.configure.axis_stacking.interpolation",
+            "document.data.chart_dock.configure.axis_stacking.interpolation_value",
+            "document.data.chart_dock.configure.reset",
+            "document.data.chart_dock.stats.rebuilding",
+            "document.data.chart_dock.stats.no_stats",
+            "document.data.chart_dock.stats.unavailable",
+            "document.data.chart_dock.stats.title",
+            "document.data.chart_dock.stats.window.title",
+            "document.data.chart_dock.stats.window.start",
+            "document.data.chart_dock.stats.window.end",
+            "document.data.chart_dock.stats.window.span",
+            "document.data.chart_dock.stats.window.points",
+            "document.data.chart_dock.stats.source.title",
+            "document.data.chart_dock.stats.source.measurement",
+            "document.data.chart_dock.stats.source.field",
+            "document.data.chart_dock.stats.source.host",
+            "document.data.chart_dock.stats.source.region",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn chart_dock_configure_title_differs_between_locales() {
+        let en = dbflux_i18n::t!(
+            "document.data.chart_dock.configure.why.title",
+            locale = "en"
+        );
+        let es = dbflux_i18n::t!(
+            "document.data.chart_dock.configure.why.title",
+            locale = "es"
+        );
+
+        assert_eq!(en, "Why this panel");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn chart_dock_shape_label_zero_one_many() {
+        assert_eq!(chart_dock_shape_label(0, 0), "0 rows × 0 columns");
+        assert_eq!(chart_dock_shape_label(1, 1), "1 row × 1 column");
+        assert_eq!(chart_dock_shape_label(2, 5), "2 rows × 5 columns");
+    }
+
+    #[test]
+    fn chart_rail_why_text_zero_one_many() {
+        let zero = chart_rail_why_text(0, 0);
+        let one = chart_rail_why_text(1, 1);
+        let many = chart_rail_why_text(3, 2);
+
+        assert_eq!(
+            zero,
+            "The result has 0 numeric columns and 0 timestamp-like columns. \
+             Pick which one is the time axis and which series to plot."
+        );
+        assert_eq!(
+            one,
+            "The result has 1 numeric column and 1 timestamp-like column. \
+             Pick which one is the time axis and which series to plot."
+        );
+        assert!(many.contains("3 numeric columns"));
+        assert!(many.contains("2 timestamp-like columns"));
     }
 }

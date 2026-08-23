@@ -82,6 +82,55 @@ document:
         x_axis_label: X axis (time / label column)
         y_axis_label: Y axis (numeric columns)
         apply: Apply
+      rail:
+        shape:
+          rows:
+            one: "%{count} row"
+            many: "%{count} rows"
+          columns:
+            one: "%{count} column"
+            many: "%{count} columns"
+          template: "%{rows} × %{columns}"
+      configure:
+        why:
+          numeric:
+            one: "%{count} numeric column"
+            many: "%{count} numeric columns"
+          timestamp:
+            one: "%{count} timestamp-like column"
+            many: "%{count} timestamp-like columns"
+          template: "The result has %{numeric} and %{timestamp}. Pick which one is the time axis and which series to plot."
+          title: Why this panel
+        time_column:
+          title: Time column
+        series:
+          title: Series
+        axis_stacking:
+          title: Axis & Stacking
+          y_axis: y-axis
+          y_axis_value: linear · 0 → auto
+          stack: stack
+          stack_value: off (v0.6.0)
+          interpolation: interpolation
+          interpolation_value: linear
+        reset: Reset
+      stats:
+        rebuilding: "Rebuilding chart…"
+        no_stats: No stats available for this series.
+        unavailable: unavailable
+        title: Stats
+        window:
+          title: Window
+          start: start
+          end: end
+          span: span
+          points: points
+        source:
+          title: Source
+          measurement: measurement
+          field: field
+          host: host
+          region: region
     grid:
       edit_bar:
         clean: No unsaved changes
