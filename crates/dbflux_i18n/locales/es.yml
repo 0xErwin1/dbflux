@@ -1283,6 +1283,25 @@ settings:
     login_hint: Inicia sesión para cargar las opciones
     inherited_from: "Heredado de %{trigger}."
     inherited_from_named: "Heredado de %{trigger} '%{name}'."
+    mirror_label_fallback: Solo lectura — administrado externamente
+    conflict_message: "Este perfil se modificó en disco (%{label}) desde que lo abriste. Recarga para ver los valores actuales antes de guardar."
+    partial_saved_message: "%{written_label} se guardó correctamente, pero %{conflicted_label} se modificó en disco desde que abriste el formulario. Recarga para actualizar y volver a aplicar tus cambios."
+    login_required_hint: "Se requiere iniciar sesión — haz clic en Iniciar sesión para cargar las opciones desplegables."
+    session_expired_hint: La sesión expiró — vuelve a iniciar sesión para recargar las opciones
+    session_expired_click_hint: "La sesión expiró — haz clic en Iniciar sesión para actualizar las opciones desplegables."
+    select_before_login: Selecciona un proveedor antes de iniciar sesión.
+    interactive_login_unavailable: El inicio de sesión interactivo no está disponible para este proveedor.
+    fields_required_before_login: Completa el nombre del perfil y los campos del proveedor antes de iniciar sesión.
+    starting_login: "Iniciando sesión del proveedor de autenticación para el perfil '%{name}'..."
+    login_completed: "Inicio de sesión del proveedor de autenticación completado para el perfil '%{name}'."
+    login_failed: "Error al iniciar sesión del proveedor de autenticación para el perfil '%{name}': %{error}"
+    login_cancelled: Inicio de sesión cancelado por el usuario.
+    login_url_panel_description: Abre esta URL en tu navegador para terminar el inicio de sesión. DBFlux continuará automáticamente cuando completes la autenticación.
+    open_browser: Abrir navegador
+    copy_url: Copiar URL
+    login_action: Iniciar sesión
+    logging_in: "Iniciando sesión..."
+    runs_interactive_login_hint: Ejecuta el inicio de sesión interactivo de este perfil
   nav:
     general_group: General
     general: General
