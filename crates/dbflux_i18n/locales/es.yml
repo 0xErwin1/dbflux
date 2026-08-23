@@ -14,6 +14,21 @@ access:
   ssm_remote_port: Puerto remoto
   ssm_port_hint: DBFlux y el sistema operativo asignan automáticamente el puerto del túnel local. Aquí solo se puede configurar el puerto remoto.
   auth_profile: Perfil de autenticación
+  proxy_no_profiles: No hay perfiles de proxy configurados
+  proxy_no_profiles_hint: Agregar proxies en Ajustes > Proxies
+  proxy_disabled_label: "%{name} (deshabilitado)"
+  select_proxy: Seleccionar proxy
+  clear: Quitar
+  proxy_details: Detalles del proxy
+  proxy_type: Tipo
+  proxy_host: Host
+  proxy_auth: Autenticación
+  proxy_enabled: Habilitado
+  proxy_no_proxy: Sin proxy
+  value_yes: "Sí"
+  value_no: "No"
+  no_proxy_placeholder: (ninguno)
+  edit_in_settings: Editar en Ajustes
 chart:
   axis_bar:
     group: Grupo

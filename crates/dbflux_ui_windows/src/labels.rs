@@ -93,13 +93,18 @@ pub(crate) fn hooks_form_interpreter_hint(default_interpreter: &str) -> String {
     )
 }
 
+/// Formats the "<name> (disabled)" label shown for a disabled proxy in the proxy dropdown.
+pub(crate) fn access_proxy_disabled_label(name: &str) -> String {
+    dbflux_i18n::t!("access.proxy_disabled_label", name = name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        hooks_create_dir_failed, hooks_delete_message, hooks_delete_unreadable_message,
-        hooks_duplicate_id, hooks_env_pair_invalid, hooks_form_interpreter_hint,
-        hooks_interpreter_auto_label, hooks_interpreter_missing, hooks_open_script_failed,
-        hooks_write_script_failed,
+        access_proxy_disabled_label, hooks_create_dir_failed, hooks_delete_message,
+        hooks_delete_unreadable_message, hooks_duplicate_id, hooks_env_pair_invalid,
+        hooks_form_interpreter_hint, hooks_interpreter_auto_label, hooks_interpreter_missing,
+        hooks_open_script_failed, hooks_write_script_failed,
     };
 
     #[test]
@@ -176,5 +181,12 @@ mod tests {
         let message = hooks_form_interpreter_hint("auto (python3)");
 
         assert_eq!(message, "Leave empty for auto (python3)");
+    }
+
+    #[test]
+    fn access_proxy_disabled_label_embeds_proxy_name() {
+        let message = access_proxy_disabled_label("corporate-proxy");
+
+        assert_eq!(message, "corporate-proxy (disabled)");
     }
 }
