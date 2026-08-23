@@ -508,7 +508,9 @@ impl ConnectionManagerWindow {
         let ssm_remote_port_value_source_selector =
             cx.new(|cx| ValueSourceSelector::new("cm-ssm-remote-port", window, cx));
         let ssm_auth_profile_dropdown = cx.new(|_cx| {
-            Dropdown::new("ssm-auth-profile-dropdown").placeholder("Use Connection Auth Profile")
+            Dropdown::new("ssm-auth-profile-dropdown").placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.use_connection_auth_profile"
+            ))
         });
 
         let conn_refresh_policy_dropdown = cx.new(|_cx| {
@@ -552,14 +554,26 @@ impl ConnectionManagerWindow {
             Dropdown::new("conn-post-disconnect-hook")
                 .placeholder(dbflux_i18n::t!("connection_manager.placeholder.no_hook"))
         });
-        let conn_pre_hook_extra_input = cx
-            .new(|cx| InputState::new(window, cx).placeholder("extra hook IDs (comma-separated)"));
-        let conn_post_hook_extra_input = cx
-            .new(|cx| InputState::new(window, cx).placeholder("extra hook IDs (comma-separated)"));
-        let conn_pre_disconnect_hook_extra_input = cx
-            .new(|cx| InputState::new(window, cx).placeholder("extra hook IDs (comma-separated)"));
-        let conn_post_disconnect_hook_extra_input = cx
-            .new(|cx| InputState::new(window, cx).placeholder("extra hook IDs (comma-separated)"));
+        let conn_pre_hook_extra_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.extra_hook_ids"
+            ))
+        });
+        let conn_post_hook_extra_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.extra_hook_ids"
+            ))
+        });
+        let conn_pre_disconnect_hook_extra_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.extra_hook_ids"
+            ))
+        });
+        let conn_post_disconnect_hook_extra_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.extra_hook_ids"
+            ))
+        });
         let conn_mcp_actor_dropdown = cx.new(|_cx| {
             Dropdown::new("conn-mcp-actor").placeholder(dbflux_i18n::t!(
                 "connection_manager.placeholder.select_trusted_client"
@@ -1847,8 +1861,14 @@ impl ConnectionManagerWindow {
         let effective = self.resolve_driver_effective_settings(cx);
 
         let policy_items = vec![
-            dbflux_components::controls::DropdownItem::with_value("Manual", "manual"),
-            dbflux_components::controls::DropdownItem::with_value("Interval", "interval"),
+            dbflux_components::controls::DropdownItem::with_value(
+                dbflux_i18n::t!("settings.general.refresh_policy.option.manual"),
+                "manual",
+            ),
+            dbflux_components::controls::DropdownItem::with_value(
+                dbflux_i18n::t!("settings.general.refresh_policy.option.interval"),
+                "interval",
+            ),
         ];
         let policy_index = match overrides.refresh_policy.unwrap_or(effective.refresh_policy) {
             dbflux_core::RefreshPolicySetting::Manual => 0,
@@ -1871,9 +1891,18 @@ impl ConnectionManagerWindow {
             });
 
         let boolean_items = vec![
-            dbflux_components::controls::DropdownItem::with_value("Use Driver Default", "default"),
-            dbflux_components::controls::DropdownItem::with_value("On", "on"),
-            dbflux_components::controls::DropdownItem::with_value("Off", "off"),
+            dbflux_components::controls::DropdownItem::with_value(
+                dbflux_i18n::t!("connection_manager.placeholder.use_driver_default"),
+                "default",
+            ),
+            dbflux_components::controls::DropdownItem::with_value(
+                dbflux_i18n::t!("connection_manager.overrides.on"),
+                "on",
+            ),
+            dbflux_components::controls::DropdownItem::with_value(
+                dbflux_i18n::t!("connection_manager.overrides.off"),
+                "off",
+            ),
         ];
 
         let bool_index = |opt: Option<bool>| -> usize {
@@ -1904,7 +1933,8 @@ impl ConnectionManagerWindow {
             });
 
         let mut hook_items = vec![dbflux_components::controls::DropdownItem::with_value(
-            "No hook", "",
+            dbflux_i18n::t!("connection_manager.placeholder.no_hook"),
+            "",
         )];
 
         let hook_definitions = self.app_state.read(cx).hook_definitions().clone();
@@ -2609,7 +2639,7 @@ impl ConnectionManagerWindow {
             "",
         )];
         let mut ssm_items = vec![dbflux_components::controls::DropdownItem::with_value(
-            "Use Connection Auth Profile",
+            dbflux_i18n::t!("connection_manager.placeholder.use_connection_auth_profile"),
             "",
         )];
 
